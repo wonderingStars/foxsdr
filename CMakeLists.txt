@@ -27,6 +27,10 @@ endif()
 find_package(glfw3 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(OpenGL REQUIRED)
+# Audio output (P3+). Target name verified from the installed
+# portaudioTargets.cmake: plain `portaudio`, shared. The vcpkg toolchain's
+# applocal deployment copies its DLL next to the executables, same as glfw.
+find_package(portaudio CONFIG REQUIRED)
 
 # The pffft port has shipped under more than one target name; probe rather than
 # assume, and fall back to a plain library search so a source build also works.
@@ -77,6 +81,7 @@ target_link_libraries(cascade_lib PUBLIC
     glfw
     imgui::imgui
     OpenGL::GL
+    portaudio
     ${CASCADE_FFT_TARGET})
 
 # ---------------------------------------------------------------------------

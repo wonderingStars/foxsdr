@@ -1,0 +1,92 @@
+// Demodulator suite: the classic analog voice/CW modes behind one switchable
+// object, composed from the existing primitives (QuadDemod, Nco, FirDecimator)
+// rather than re-deriving any of them.
+//
+// SPDX-License-Identifier: MIT
+#pragma once
+
+#include <complex>
+#include <cstddef>
+#include <vector>
+
+#include "dsp/fir.hpp"
+#include "dsp/nco.hpp"
+#include "dsp/quad_demod.hpp"
+
+namespace cascade::dsp {
+
+enum class DemodMode { NFM, WFM, AM, DSB, USB, LSB, CW, RAW };
+
+// One demodulator per VFO. The channel arrives as complex baseband at
+// channelRateHz with the wanted signal already centered at DC (the VFO's
+// mixer + decimator upstream did the tuning); process() emits real audio at
+// the SAME rate, exactly one output sample per input sample. Resampling to
+// the sound card and level normalization (Agc) are separate downstream
+// stages — this object stays a pure, testable per-sample map.
+//
+// Per-mode methods (the details and coefficient derivations live in demod.cpp):
+//   NFM  quadrature discriminator (QuadDemod, gain 1): output is the
+//        instantaneous frequency in radians/sample, so amplitude is
+//        proportional to deviation by construction.
+//   WFM  NFM plus the broadcast-FM 75 us one-pole deemphasis.
+//   AM   envelope |x| followed by a one-pole DC blocker that removes the
+//        carrier's envelope mean.
+//   DSB  coherent product detector: with the carrier centered at DC the
+//        detector's multiply is by 1, leaving Re{x}.
+//   USB/LSB  Weaver-style selection: mix the wanted sideband to straddle DC
+//        with an Nco BFO, low-pass with a real-tap FIR (symmetric passband),
+//        mix back, take the real part.
+//   CW   USB with the input pre-shifted so a carrier on the VFO beats at
+//        700 Hz.
+//   RAW  Re{x} passthrough, for diagnostics.
+class Demodulator {
+public:
+    Demodulator(double channelRateHz);
+
+    // Selects the mode and resets ALL internal state (filter histories,
+    // oscillator phases, one-pole states). A mode switch starts a new stream:
+    // carrying state across would inject a transient that belongs to neither
+    // mode, so the first block after setMode() must match a fresh object.
+    void setMode(DemodMode m);
+    DemodMode mode() const { return mode_; }
+
+    // Demodulates n channel samples into n audio samples (1:1 rate; no
+    // decimation here). Returns n. State carries across calls, so any block
+    // split of a stream produces identical output to one big call.
+    std::size_t process(const std::complex<float>* in, std::size_t n, float* out);
+
+    // Clears internal state while keeping the mode; equivalent to
+    // setMode(mode()).
+    void reset();
+
+private:
+    void processSsb(const std::complex<float>* in, std::size_t n, float* out);
+
+    double rate_;
+    DemodMode mode_ = DemodMode::NFM;
+
+    // NFM/WFM discriminator. Gain 1 keeps the output in a physical unit
+    // (radians/sample); loudness normalization is the downstream Agc's job.
+    QuadDemod quad_{1.0f};
+
+    // WFM deemphasis one-pole: y[n] = (1-p)*x[n] + p*y[n-1]. Pole and state
+    // kept in double so the filter matches its analytic transfer function to
+    // well below any audio-relevant error.
+    double deemphPole_ = 0.0;
+    double deemphState_ = 0.0;
+
+    // AM DC blocker: y[n] = x[n] - x[n-1] + R*y[n-1].
+    double dcPole_ = 0.0;
+    double dcPrevIn_ = 0.0;
+    double dcPrevOut_ = 0.0;
+
+    // SSB/CW Weaver chain: BFO down-mix, sideband-select low-pass (decimation
+    // 1 = plain streaming FIR), BFO up-mix.
+    Nco shiftDown_;
+    Nco shiftUp_;
+    FirDecimator ssbFilter_;
+    std::vector<std::complex<float>> work_;      // down-mixed block
+    std::vector<std::complex<float>> filtered_;  // filter output (n+1 capacity)
+};
+
+}  // namespace cascade::dsp

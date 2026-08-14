@@ -1,0 +1,161 @@
+// PortAudio mono float32 audio output sink — implementation.
+//
+// SPDX-License-Identifier: MIT
+#include "sink/audio_out.hpp"
+
+#include <portaudio.h>
+
+#include <cstring>
+
+namespace cascade::sink {
+
+// The callback path may not lock. If either of these atomics fell back to a
+// lock-based implementation the volume load / underrun bump inside pullBlock
+// would block the realtime audio thread, so fail the build instead.
+static_assert(std::atomic<float>::is_always_lock_free,
+              "volume atomic must be lock-free for the audio callback");
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+              "underrun counter must be lock-free for the audio callback");
+
+namespace {
+
+// C trampoline handed to Pa_OpenStream. Deliberately does nothing beyond
+// pullBlock so every behavior the realtime thread executes is reachable —
+// and therefore testable — through the public static pullBlock().
+int paOutCallback(const void* /*input*/, void* output, unsigned long frameCount,
+                  const PaStreamCallbackTimeInfo* /*timeInfo*/,
+                  PaStreamCallbackFlags /*statusFlags*/, void* userData) {
+    AudioOut::pullBlock(userData, static_cast<float*>(output),
+                        static_cast<std::size_t>(frameCount));
+    return paContinue;  // stream runs until close(); starvation plays silence
+}
+
+}  // namespace
+
+AudioOut::AudioOut() : ring_(kRingCapacity) {
+    paOk_ = (Pa_Initialize() == paNoError);
+}
+
+AudioOut::~AudioOut() {
+    close();
+    // Guarded release: Pa_Terminate() must pair with a SUCCESSFUL
+    // Pa_Initialize() — PortAudio refcounts the pairs across instances.
+    if (paOk_) { Pa_Terminate(); }
+}
+
+std::vector<AudioDevice> AudioOut::listOutputDevices() {
+    std::vector<AudioDevice> devices;
+    if (!paOk_) { return devices; }
+    const PaDeviceIndex count = Pa_GetDeviceCount();
+    const PaDeviceIndex def = Pa_GetDefaultOutputDevice();
+    for (PaDeviceIndex i = 0; i < count; ++i) {
+        const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+        // Input-only devices (microphones) are not output sinks; skip them
+        // rather than presenting un-openable entries in the Sinks panel.
+        if (info == nullptr || info->maxOutputChannels < 1) { continue; }
+        devices.push_back(AudioDevice{
+            static_cast<int>(i),
+            info->name != nullptr ? std::string(info->name) : std::string(),
+            i == def});
+    }
+    return devices;
+}
+
+bool AudioOut::open(int deviceIndex, double sampleRateHz) {
+    if (!paOk_ || !(sampleRateHz > 0.0)) { return false; }
+    // Re-open semantics: switching device or rate through open() closes the
+    // old stream first. close() is idempotent, so this is safe when nothing
+    // is open yet.
+    close();
+
+    const PaDeviceIndex dev = (deviceIndex < 0)
+                                  ? Pa_GetDefaultOutputDevice()
+                                  : static_cast<PaDeviceIndex>(deviceIndex);
+    if (dev == paNoDevice || dev < 0 || dev >= Pa_GetDeviceCount()) {
+        return false;
+    }
+    const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
+    if (info == nullptr || info->maxOutputChannels < 1) { return false; }
+
+    // Drain anything left from a previous session so a reopen starts silent
+    // instead of replaying stale audio. Safe single-threaded consumption:
+    // no callback exists yet, so this thread is the only reader. Bounded by
+    // the ring's fill level, which cannot grow here (no producer is active
+    // during open()).
+    float scratch[256];
+    while (ring_.read(scratch, sizeof(scratch) / sizeof(scratch[0])) != 0) {}
+
+    PaStreamParameters out{};
+    out.device = dev;
+    out.channelCount = 1;  // mono: the demod chain produces a single channel
+    out.sampleFormat = paFloat32;
+    // Low-latency hint: an SDR should respond to tuning without an audible
+    // lag. PortAudio rounds this up to whatever the host API can honor.
+    out.suggestedLatency = info->defaultLowOutputLatency;
+    out.hostApiSpecificStreamInfo = nullptr;
+
+    PaStream* stream = nullptr;
+    // paNoFlag keeps PortAudio's default out-of-range clipping enabled: a
+    // demod transient beyond ±1.0 gets clamped instead of wrapping into
+    // full-scale noise on some host APIs.
+    if (Pa_OpenStream(&stream, nullptr, &out, sampleRateHz,
+                      paFramesPerBufferUnspecified, paNoFlag, &paOutCallback,
+                      this) != paNoError) {
+        return false;
+    }
+    if (Pa_StartStream(stream) != paNoError) {
+        Pa_CloseStream(stream);
+        return false;
+    }
+    stream_ = stream;
+    running_ = true;
+    return true;
+}
+
+void AudioOut::close() {
+    if (stream_ == nullptr) { return; }  // idempotent / close-without-open
+    // Abort rather than Stop: Stop would block until the device drains its
+    // queued buffers (tens of ms of already-heard audio); the stop button
+    // should cut output immediately. Any samples still in the ring are
+    // discarded by the next open()'s drain.
+    Pa_AbortStream(static_cast<PaStream*>(stream_));
+    Pa_CloseStream(static_cast<PaStream*>(stream_));
+    stream_ = nullptr;
+    running_ = false;
+}
+
+std::size_t AudioOut::write(const float* samples, std::size_t n) {
+    // SpscRing::write already caps at free space and never blocks; the
+    // accepted count is the whole contract.
+    return ring_.write(samples, n);
+}
+
+void AudioOut::setVolume(float v01) {
+    // Negated comparison so NaN (which fails every ordering test) lands on
+    // the silent side instead of poisoning every output sample.
+    if (!(v01 >= 0.0f)) { v01 = 0.0f; }
+    if (v01 > 1.0f) { v01 = 1.0f; }
+    volume_.store(v01, std::memory_order_relaxed);
+}
+
+std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t n) {
+    auto* ao = static_cast<AudioOut*>(self);
+    // Read straight into the device buffer, then scale in place — one pass,
+    // no intermediate storage, nothing the realtime thread must wait on.
+    const std::size_t got = ao->ring_.read(dst, n);
+    const float vol = ao->volume_.load(std::memory_order_relaxed);
+    for (std::size_t i = 0; i < got; ++i) { dst[i] *= vol; }
+    if (got < n) {
+        // Starved: the device buffer beyond `got` is whatever the host left
+        // there (often the previous period — an audible stutter-loop).
+        // Silence it and count ONE underrun event for this callback; the
+        // event count is what buffer-health UI wants, not a sample count.
+        // A got == n == 0 call never reaches here: a zero-length request
+        // cannot starve.
+        std::memset(dst + got, 0, (n - got) * sizeof(float));
+        ao->underruns_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return got;
+}
+
+}  // namespace cascade::sink
