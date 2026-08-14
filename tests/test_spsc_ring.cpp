@@ -7,6 +7,8 @@
 // SPDX-License-Identifier: MIT
 #include "dsp/spsc_ring.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <complex>
 #include <cstddef>
 #include <cstdio>
@@ -35,6 +37,10 @@ struct StressResult {
     long long firstBadIndex = -1;
     float firstBadValue = 0.0f;
     std::size_t totalRead = 0;
+    std::size_t totalWritten = 0;  // elements the ring actually accepted
+    double readSum = 0.0;          // sum of every value the consumer read
+    double writtenSum = 0.0;       // sum of every value write() accepted
+    bool completed = false;        // consumer finished by progress, not deadline
 };
 
 // Two-thread stress: the producer pushes `total` sequential float values in a
@@ -42,18 +48,31 @@ struct StressResult {
 // different, co-prime-length cycle so the two schedules keep sliding against
 // each other, exercising wrap, partial accept, full and empty continuously.
 // Deterministic schedules — no randomness needed, seeded or otherwise.
+//
+// Liveness: every spin loop is bounded by a shared 30 s steady_clock deadline
+// (a normal run finishes in well under a second). Whichever side hits the
+// deadline first raises `abortFlag`, the other side polls it, so both threads
+// always exit and join; runStress then reports completed == false instead of
+// hanging the test.
 StressResult runStress(std::size_t ringCapacity, std::size_t total) {
     SpscRing<float> ring(ringCapacity);
     StressResult res;
+    std::atomic<bool> abortFlag{false};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 
     static const std::size_t kProdChunks[] = {1, 3, 7, 13, 29, 61, 127, 251, 5, 97, 9};
     static const std::size_t kConsChunks[] = {2, 5, 11, 64, 1, 300, 17, 4, 128};
 
-    std::thread producer([&ring, total] {
+    double prodSum = 0.0;         // written by producer thread, read after join()
+    std::size_t prodWritten = 0;  // ditto
+
+    std::thread producer([&ring, &abortFlag, &prodSum, &prodWritten, total, deadline] {
         std::vector<float> chunk(256);  // >= max producer chunk size
         std::size_t written = 0;
         std::size_t sched = 0;
-        while (written < total) {
+        double sum = 0.0;
+        bool timedOut = false;
+        while (written < total && !timedOut && !abortFlag.load(std::memory_order_relaxed)) {
             std::size_t want = kProdChunks[sched % std::size(kProdChunks)];
             ++sched;
             if (want > total - written) { want = total - written; }
@@ -63,16 +82,37 @@ StressResult runStress(std::size_t ringCapacity, std::size_t total) {
             std::size_t done = 0;
             while (done < want) {
                 const std::size_t accepted = ring.write(chunk.data() + done, want - done);
-                if (accepted == 0) { std::this_thread::yield(); }
+                if (accepted == 0) {
+                    if (abortFlag.load(std::memory_order_relaxed) ||
+                        std::chrono::steady_clock::now() >= deadline) {
+                        timedOut = true;
+                        break;
+                    }
+                    std::this_thread::yield();
+                    continue;
+                }
+                // Values accepted this call are written+done .. written+done+accepted-1.
+                for (std::size_t i = 0; i < accepted; ++i) {
+                    sum += static_cast<double>(written + done + i);
+                }
                 done += accepted;
             }
-            written += want;
+            written += done;  // done == want unless the deadline expired mid-chunk
         }
+        if (timedOut) { abortFlag.store(true, std::memory_order_relaxed); }
+        prodSum = sum;
+        prodWritten = written;
     });
 
     std::vector<float> out(512);  // >= max consumer chunk size
     std::size_t sched = 0;
+    bool timedOut = false;
     while (res.totalRead < total) {
+        if (abortFlag.load(std::memory_order_relaxed) ||
+            std::chrono::steady_clock::now() >= deadline) {
+            timedOut = true;
+            break;
+        }
         std::size_t want = kConsChunks[sched % std::size(kConsChunks)];
         ++sched;
         if (want > total - res.totalRead) { want = total - res.totalRead; }
@@ -90,11 +130,16 @@ StressResult runStress(std::size_t ringCapacity, std::size_t total) {
                 }
                 ++res.mismatches;
             }
+            res.readSum += static_cast<double>(out[i]);
         }
         res.totalRead += got;
     }
+    res.completed = !timedOut && res.totalRead == total;
+    if (timedOut) { abortFlag.store(true, std::memory_order_relaxed); }
 
     producer.join();
+    res.writtenSum = prodSum;
+    res.totalWritten = prodWritten;
     return res;
 }
 
@@ -155,7 +200,17 @@ int main() {
         std::size_t readCount = 0;
         const std::size_t total = 100;
         float buf[8] = {};
+        // Liveness bound: ~40 productive iterations finish the job, so 100000
+        // is a generous retry cap. A ring that stops making progress (write or
+        // read pinned at 0) breaks out and fails below instead of spinning
+        // forever.
+        bool madeProgress = true;
+        std::size_t iters = 0;
         while (readCount < total) {
+            if (++iters > 100000u) {
+                madeProgress = false;
+                break;
+            }
             if (written < total) {
                 float chunk[5];
                 std::size_t want = 5;
@@ -171,6 +226,8 @@ int main() {
             }
             readCount += got;
         }
+        CHECK(madeProgress);  // wraparound loop finished by progress, not by cap
+        CHECK(readCount == total);
         CHECK(r.size() == written - readCount);
     }
 
@@ -209,9 +266,27 @@ int main() {
 
     // --- Two-thread stress: 1,000,000 floats, zero loss or duplication -------
     {
-        const StressResult res = runStress(1024, 1000000);
-        CHECK(res.totalRead == 1000000u);
+        const std::size_t kTotal = 1000000;
+        const StressResult res = runStress(1024, kTotal);
+        // The consumer must finish by reading every element, not by hitting the
+        // 30 s liveness deadline: a ring that stops accepting writes or stops
+        // yielding reads now fails here instead of hanging the test.
+        CHECK(res.completed);
+        if (!res.completed) {
+            std::printf("stress: liveness deadline expired — read %zu of %zu, ring accepted %zu\n",
+                        res.totalRead, kTotal, res.totalWritten);
+        }
+        CHECK(res.totalRead == kTotal);
+        CHECK(res.totalWritten == kTotal);
         CHECK(res.mismatches == 0);
+        // Conservation checksum, independent of the loop exit conditions: what
+        // the producer pushed and what the consumer read must both equal the
+        // analytic sum 0+1+...+999999. Every value and every partial sum is an
+        // integer below 2^53, so the double additions are exact in any order
+        // and the comparison can be exact too.
+        const double expectSum = 499999500000.0;  // kTotal*(kTotal-1)/2
+        CHECK(res.writtenSum == expectSum);
+        CHECK(res.readSum == expectSum);
         if (res.mismatches != 0) {
             std::printf("stress: %lld mismatches, first at index %lld (got %.1f)\n",
                         res.mismatches, res.firstBadIndex,

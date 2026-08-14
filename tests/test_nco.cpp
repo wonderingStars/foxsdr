@@ -155,6 +155,80 @@ int main() {
         }
     }
 
+    // --- mix() continuity: two half-blocks match one full block exactly ----
+    {
+        // Mirrors the generate() continuity test: mix() is the streaming block
+        // API, so consecutive calls on one Nco must continue the phase, not
+        // restart it.
+        const std::size_t n = 256;
+        const double f1 = 0.0123;
+        // Input tone built directly in-test, independent of the class under test.
+        std::vector<std::complex<float>> x(n);
+        for (std::size_t m = 0; m < n; ++m) {
+            const double a = kTwoPi * f1 * static_cast<double>(m);
+            x[m] = std::complex<float>(static_cast<float>(std::cos(a)),
+                                       static_cast<float>(std::sin(a)));
+        }
+        Nco full;
+        Nco halves;
+        full.setFrequency(0.0371);  // 128*f is not a whole number of cycles
+        halves.setFrequency(0.0371);
+        std::vector<std::complex<float>> whole(n);
+        std::vector<std::complex<float>> split(n);
+        full.mix(x.data(), whole.data(), n);
+        halves.mix(x.data(), split.data(), 128);
+        halves.mix(x.data() + 128, split.data() + 128, 128);
+        for (std::size_t i = 0; i < n; ++i) {
+            CHECK_NEAR(whole[i].real(), split[i].real(), 0.0);
+            CHECK_NEAR(whole[i].imag(), split[i].imag(), 0.0);
+        }
+    }
+
+    // --- interleaved generate()/mix(): one shared phase accumulator --------
+    {
+        // f is dyadic (3/32), so the cycle-domain accumulator is exact and the
+        // phase comparison below is bit-exact — a phase reset at the top of
+        // either API fails with no tolerance excuse.
+        const double f = 3.0 / 32.0;
+        const std::size_t n1 = 37;  // f*n1 = 111/32: fractional phase 0.46875
+        const std::size_t n2 = 41;
+        const double f1 = 5.0 / 64.0;
+        Nco nco;
+        nco.setFrequency(f);
+        std::vector<std::complex<float>> g(n1);
+        nco.generate(g.data(), n1);
+        // mix() must continue from phase f*n1, not restart at zero.
+        std::vector<std::complex<float>> x(n2);
+        for (std::size_t m = 0; m < n2; ++m) {
+            const double a = kTwoPi * f1 * static_cast<double>(m);
+            x[m] = std::complex<float>(static_cast<float>(std::cos(a)),
+                                       static_cast<float>(std::sin(a)));
+        }
+        std::vector<std::complex<float>> y(n2);
+        nco.mix(x.data(), y.data(), n2);
+        for (std::size_t k = 0; k < n2; ++k) {
+            const double a =
+                kTwoPi * std::fmod(f * static_cast<double>(n1 + k), 1.0);
+            const std::complex<double> expect =
+                std::complex<double>(x[k].real(), x[k].imag()) *
+                std::complex<double>(std::cos(a), std::sin(a));
+            CHECK_NEAR(y[k].real(), expect.real(), 1e-6);
+            CHECK_NEAR(y[k].imag(), expect.imag(), 1e-6);
+        }
+        // Accumulated phase after n1+n2 samples matches the closed form
+        // bit-exactly: both APIs provably advanced the same accumulator.
+        double cyc = std::fmod(f * static_cast<double>(n1 + n2), 1.0);
+        if (cyc >= 0.5) { cyc -= 1.0; }
+        CHECK_NEAR(nco.phase(), kTwoPi * cyc, 0.0);
+        // And a subsequent generate() continues from mix()'s final phase.
+        std::complex<float> next;
+        nco.generate(&next, 1);
+        const double aNext =
+            kTwoPi * std::fmod(f * static_cast<double>(n1 + n2), 1.0);
+        CHECK_NEAR(next.real(), std::cos(aNext), 1e-6);
+        CHECK_NEAR(next.imag(), std::sin(aNext), 1e-6);
+    }
+
     // --- long run: no magnitude loss, no phase drift over 1e6 samples ------
     {
         // f is dyadic (12345/2^16), so the cycle-domain accumulator is exact

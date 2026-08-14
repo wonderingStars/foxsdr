@@ -228,5 +228,30 @@ int main() {
         checkSameSignal(y, ref, 1e-5);
     }
 
+    // --- reset() clears the decimation phase, not just the history ---------
+    // The block above feeds a prefix whose length is a multiple of M, which
+    // leaves the phase counter at 0 by coincidence; a reset() that only zeroes
+    // history would still pass it. Here the prefix length 510 % 4 == 2 parks
+    // the phase mid-cycle, so post-reset output only matches a fresh decimator
+    // if reset() really rewinds the output grid to sample 0.
+    {
+        FirDecimator dec(taps, M);
+        const std::size_t prefixLen = 510;
+        static_assert(510 % 4 != 0, "prefix must park the phase mid-cycle");
+        std::vector<std::complex<float>> buf(dec.outputCapacity(x.size()));
+        (void)dec.process(x.data(), prefixLen, buf.data());
+        dec.reset();
+        std::vector<std::complex<float>> y(dec.outputCapacity(x.size()));
+        y.resize(dec.process(x.data(), x.size(), y.data()));
+        // Fresh behavior: first input sample lands on the output grid, so the
+        // very first output is h[0]*x[0] (zero history), exactly ref[0].
+        CHECK(!y.empty());
+        if (!y.empty()) {
+            CHECK_NEAR(y[0].real(), ref[0].real(), 1e-5);
+            CHECK_NEAR(y[0].imag(), ref[0].imag(), 1e-5);
+        }
+        checkSameSignal(y, ref, 1e-5);
+    }
+
     return testSummary("test_fir");
 }

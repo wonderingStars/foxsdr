@@ -7,6 +7,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -188,6 +189,66 @@ int main() {
             CHECK_NEAR(inPlace[i].real(), outOfPlace[i].real(), 1e-12);
             CHECK_NEAR(inPlace[i].imag(), outOfPlace[i].imag(), 1e-12);
         }
+    }
+
+    // Move semantics. The moved-to object must own the pffft resources
+    // outright: the moved-from object is destroyed FIRST, freshly freed
+    // heap blocks are deliberately re-allocated and scribbled on, and only
+    // then is the moved-to object used for a transform verified against the
+    // direct DFT. A move that leaves the source's pointers dangling either
+    // computes through clobbered memory (FAIL lines) or double-frees when
+    // the moved-to object destructs (crash) — both are red.
+    {
+        const std::size_t n = 32;
+        auto x = randomBlock(n, 0x5EEDFEEDu);
+        auto ref = directDft(x, -1.0);
+        double maxMag = 0.0;
+        for (std::size_t k = 0; k < n; ++k) {
+            maxMag = std::max(maxMag, std::abs(ref[k]));
+        }
+        const double tol = 1e-4 * maxMag;
+
+        // Move construction.
+        {
+            auto src = std::make_unique<ComplexFFT>(n);
+            ComplexFFT moved(std::move(*src));
+            CHECK(moved.size() == n);
+            CHECK(src->size() == 0);  // moved-from is the empty state
+            src.reset();              // moved-from destructs before any use
+            std::vector<std::vector<float>> clobber;
+            for (int i = 0; i < 8; ++i) {
+                clobber.emplace_back(2 * n, 12345.0f);  // reuse freed blocks
+            }
+            std::vector<std::complex<float>> got(n);
+            moved.forward(x.data(), got.data());
+            for (std::size_t k = 0; k < n; ++k) {
+                CHECK_NEAR(got[k].real(), ref[k].real(), tol);
+                CHECK_NEAR(got[k].imag(), ref[k].imag(), tol);
+            }
+        }  // moved destructs: a shallow move double-frees here
+
+        // Move assignment onto an object that already owns resources of a
+        // different size: old resources released, new ones adopted, and the
+        // moved-from object again destructs before the moved-to is used.
+        {
+            ComplexFFT moved(96);
+            {
+                ComplexFFT src(n);
+                moved = std::move(src);
+                CHECK(src.size() == 0);
+            }  // moved-from destructs before any use
+            CHECK(moved.size() == n);
+            std::vector<std::vector<float>> clobber;
+            for (int i = 0; i < 8; ++i) {
+                clobber.emplace_back(2 * n, -777.0f);  // reuse freed blocks
+            }
+            std::vector<std::complex<float>> got(n);
+            moved.forward(x.data(), got.data());
+            for (std::size_t k = 0; k < n; ++k) {
+                CHECK_NEAR(got[k].real(), ref[k].real(), tol);
+                CHECK_NEAR(got[k].imag(), ref[k].imag(), tol);
+            }
+        }  // moved destructs: a shallow move-assign double-frees here
     }
 
     return testSummary("test_fft");

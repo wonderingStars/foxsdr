@@ -7,6 +7,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "dsp/window.hpp"
@@ -244,6 +245,81 @@ int main() {
         fresh.process(b.data(), dbB.data());
         for (std::size_t i = 0; i < n; ++i) {
             CHECK_NEAR(db[i], dbB[i], 1e-9);
+        }
+    }
+
+    // setAlpha clamp, high side (documented: alpha > 1 clamps to exactly 1).
+    // With alpha = 1 no history may survive, so A then B must equal a fresh
+    // estimator's single-shot B bit-for-bit — asserted through the output.
+    {
+        SpectrumEstimator est(n, WindowType::Rectangular);
+        est.setAlpha(1.5f);
+        auto a = randomBlock(n, 0x600DA1FAu);
+        auto b = randomBlock(n, 0x600DA1FBu);
+        std::vector<float> db(n);
+        est.process(a.data(), db.data());
+        est.process(b.data(), db.data());
+
+        SpectrumEstimator fresh(n, WindowType::Rectangular);
+        std::vector<float> dbB(n);
+        fresh.process(b.data(), dbB.data());
+        for (std::size_t i = 0; i < n; ++i) {
+            CHECK_NEAR(db[i], dbB[i], 1e-9);
+        }
+    }
+
+    // setAlpha clamp, low side (documented: NaN, 0, and negative all clamp
+    // to 1e-4). Prime with block A, then feed block B enough times that
+    // alpha = 1e-4 provably moves the average (weight of A decays to
+    // e^-2 ~= 0.135) while alpha = 0 would freeze it at A and a stored NaN
+    // would poison every bin. Reference is the same EMA recurrence in double
+    // with alpha = 1e-4 over in-test DFT powers — observable output only.
+    {
+        auto a = randomBlock(n, 0x0A11CE01u);
+        auto b = randomBlock(n, 0x0A11CE02u);
+        auto pa = refShiftedPower(a, WindowType::Rectangular);
+        auto pb = refShiftedPower(b, WindowType::Rectangular);
+        const int reps = 20000;
+        const double alphaMin = 1e-4;  // documented clamp value
+        std::vector<double> refAvg = pa;  // first block primes the average
+        for (int r = 0; r < reps; ++r) {
+            for (std::size_t i = 0; i < n; ++i) {
+                refAvg[i] = alphaMin * pb[i] + (1.0 - alphaMin) * refAvg[i];
+            }
+        }
+        const float badAlphas[] = {std::numeric_limits<float>::quiet_NaN(),
+                                   0.0f, -0.5f};
+        for (const float bad : badAlphas) {
+            SpectrumEstimator est(n, WindowType::Rectangular);
+            est.setAlpha(bad);
+            std::vector<float> db(n);
+            est.process(a.data(), db.data());
+            for (int r = 0; r < reps; ++r) {
+                est.process(b.data(), db.data());
+            }
+            for (std::size_t i = 0; i < n; ++i) {
+                const double refDb =
+                    10.0 * std::log10(refAvg[i] > 1e-20 ? refAvg[i] : 1e-20);
+                CHECK_NEAR(db[i], refDb, 0.1);
+            }
+        }
+    }
+
+    // All-zero input: every output bin sits at the documented -200 dB floor
+    // (10*log10 of the 1e-20 linear power floor), first block and averaged
+    // follow-up alike — never -infinity.
+    {
+        SpectrumEstimator est(n, WindowType::Hann);
+        std::vector<std::complex<float>> zeros(n, {0.0f, 0.0f});
+        std::vector<float> db(n);
+        est.process(zeros.data(), db.data());
+        for (std::size_t i = 0; i < n; ++i) {
+            CHECK_NEAR(db[i], -200.0, 1e-3);
+        }
+        est.setAlpha(0.5f);
+        est.process(zeros.data(), db.data());
+        for (std::size_t i = 0; i < n; ++i) {
+            CHECK_NEAR(db[i], -200.0, 1e-3);
         }
     }
 

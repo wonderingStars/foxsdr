@@ -127,6 +127,45 @@ int main() {
         for (std::size_t i = 0; i < y.size(); ++i) { CHECK_NEAR(ySplit[i], y[i], 1e-9); }
     }
 
+    // --- QuadDemod: amplitude-insensitive (polar discriminator) -------------
+    // atan2 of x[n]*conj(x[n-1]) sees only phase: a common real positive
+    // magnitude scales both atan2 arguments equally. A tone scaled to 0.3 and
+    // the same tone under a varying (always-positive) AM envelope must both
+    // demodulate to the same constant 2*pi*f*gain.
+    {
+        const double f = 0.05;
+        const float gain = 2.5f;
+        const double expected = kTwoPi * f * static_cast<double>(gain);
+        const std::size_t N = 256;
+        auto tone = makeTone(f, N);
+
+        std::vector<std::complex<float>> scaled(N);
+        std::vector<std::complex<float>> am(N);
+        for (std::size_t i = 0; i < N; ++i) {
+            scaled[i] = 0.3f * tone[i];
+            // Envelope swings 0.1..0.9 — strongly amplitude-modulated but
+            // never zero, so the phase of every sample stays well defined.
+            const double env = 0.5 + 0.4 * std::sin(kTwoPi * 0.003 * static_cast<double>(i));
+            am[i] = static_cast<float>(env) * tone[i];
+        }
+
+        cascade::dsp::QuadDemod demodScaled(gain);
+        cascade::dsp::QuadDemod demodAm(gain);
+        std::vector<float> yScaled(N);
+        std::vector<float> yAm(N);
+        demodScaled.process(scaled.data(), yScaled.data(), N);
+        demodAm.process(am.data(), yAm.data(), N);
+
+        // Sample 0 is the absolute phase of a positive-real sample (zero)
+        // in both runs; every later sample must be the analytic constant,
+        // and the two runs must agree with each other.
+        for (std::size_t i = 1; i < N; ++i) {
+            CHECK_NEAR(yScaled[i], expected, 1e-4);
+            CHECK_NEAR(yAm[i], expected, 1e-4);
+            CHECK_NEAR(yScaled[i], yAm[i], 1e-4);
+        }
+    }
+
     // --- QuadDemod: synthesized FM round trip via direct DFT ----------------
     // Two deviations to show amplitude TRACKS deviation rather than merely
     // matching one lucky constant.
@@ -145,6 +184,17 @@ int main() {
         for (float v : out) { outMax = (v > outMax) ? v : outMax; }
         // First-order loop approaching from below: never exceeds target.
         CHECK(outMax <= 1.0f + 1e-3f);
+        // Decay SPEED, not just the settled endpoint. Below target the loop
+        // must use the SLOW rate: per-sample factor (1 - decay*|x|) = 0.9995,
+        // so analytically out[i] = target + (|x|*g0 - target) * 0.9995^i and
+        // out[500] = 1 - 0.95*0.9995^500 ~= 0.260 — still far below target.
+        // The fast attack rate applied on this side (factor 1 - 0.1*0.05 =
+        // 0.995) would already be at 1 - 0.95*0.995^500 ~= 0.922, so a
+        // mid-early sample well below target pins WHICH rate decays.
+        const double decayFactor = 1.0 - 0.01 * 0.05;
+        const double expected500 = 1.0 + (0.05 - 1.0) * std::pow(decayFactor, 500.0);
+        CHECK_NEAR(out[500], expected500, 0.02);
+        CHECK(out[500] < 0.5f);
         // Loop time constant is 1/(decay*|x|) = 2000 samples; by 12000 (6 tau)
         // the output must be within 2% of target, and fully settled by the end.
         CHECK_NEAR(out[12000], 1.0, 0.02);
@@ -160,6 +210,16 @@ int main() {
         std::vector<float> in(N, 8.0f);
         std::vector<float> out(N);
         agc.process(in.data(), out.data(), N);
+        // Attack SPEED, not just the settled endpoint. Above target the loop
+        // must use the FAST rate: per-sample factor (1 - attack*|x|) = 0.2,
+        // so analytically out[i] = target + (|x|*g0 - target) * 0.2^i and
+        // out[3] = 1 + 7*0.2^3 = 1.056 — within 6% of target after only
+        // three samples. The slow decay rate applied on this side (factor
+        // 1 - 0.01*8 = 0.92) would leave out[3] at 1 + 7*0.92^3 ~= 6.45,
+        // so an early sample near target pins WHICH rate attacks.
+        const double attackFactor = 1.0 - 0.1 * 8.0;
+        const double expected3 = 1.0 + (8.0 - 1.0) * std::pow(attackFactor, 3.0);
+        CHECK_NEAR(out[3], expected3, 1e-3);
         // Per-sample factor |1 - attack*|x|| = 0.2: settled long before N.
         CHECK_NEAR(out[N - 1], 1.0, 0.02);
         CHECK_NEAR(agc.gain(), 1.0 / 8.0, 0.01);
