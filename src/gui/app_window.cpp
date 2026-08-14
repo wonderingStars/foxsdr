@@ -4,9 +4,8 @@
 #include "gui/app_window.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 #include <imgui.h>
@@ -18,12 +17,29 @@
 #include <GLFW/glfw3.h>
 
 #include "core/version.hpp"
+#include "gui/spectrum_view.hpp"
+#include "gui/waterfall_view.hpp"
 
 namespace cascade::gui {
 
 namespace {
 
 constexpr float kMenuWidth = 260.0f;  // left column width per parity spec
+
+// Pipeline configuration. 2 MS/s at FFT 1024 publishes far more frames than
+// the GUI's ~60 fps polls; the latest-frame slot in Pipeline absorbs the
+// difference by design. Alpha 0.5 smooths the trace without visible lag.
+constexpr double kSampleRateHz = 2'000'000.0;
+constexpr std::size_t kFftSize = 1024;
+constexpr float kAveragingAlpha = 0.5f;
+// Waterfall history depth: 512 lines at one line per GUI frame is ~8.5 s of
+// scroll-back, plenty for a demo signal while keeping the texture small.
+constexpr int kWaterfallHistory = 512;
+
+// The Display sliders keep at least this many dB between min and max: a
+// thinner span renders as a near-solid waterfall and a wall-to-wall trace,
+// and a zero/inverted span would degrade to the widgets' flat-line fallback.
+constexpr float kMinDbSpan = 10.0f;
 
 // GLFW reports failures through this callback *before* glfwInit/CreateWindow
 // return their error codes, so printing here is what gives the user an actual
@@ -34,6 +50,23 @@ void glfwErrorCallback(int code, const char* description) {
 }
 
 }  // namespace
+
+AppWindow::AppWindow()
+    : pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha}),
+      spectrum_(std::make_unique<SpectrumView>()),
+      waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)) {
+    // Demo signal until real sources land (P4): two tones at distinct offsets
+    // and levels over a noise floor, so both display axes are visibly
+    // exercised — frequency (two peaks left and right of center) and
+    // amplitude (different heights / waterfall colors).
+    cascade::source::SigGen& gen = pipeline_.sigGen();
+    gen.setTone(0, 300000.0, -30.0f);
+    gen.setTone(1, -500000.0, -45.0f);
+    gen.setNoiseFloorDb(-90.0f);
+    spectrum_->setRange(dbMin_, dbMax_);
+}
+
+AppWindow::~AppWindow() = default;
 
 int AppWindow::run(int frames) {
     glfwSetErrorCallback(&glfwErrorCallback);
@@ -76,6 +109,14 @@ int AppWindow::run(int frames) {
         return 1;
     }
 
+    // A previous run() tore the waterfall down with its GL context (see the
+    // teardown below); re-create it against the new context so run() stays
+    // callable more than once.
+    if (!waterfall_) {
+        waterfall_ = std::make_unique<WaterfallView>(static_cast<int>(kFftSize),
+                                                     kWaterfallHistory);
+    }
+
     int rendered = 0;
     while (!glfwWindowShouldClose(window)) {
         // Exact-count contract: check before rendering so --frames N produces
@@ -100,6 +141,17 @@ int AppWindow::run(int frames) {
         glfwSwapBuffers(window);
         ++rendered;
     }
+
+    // Closing the window while receiving must not leave DSP threads pacing a
+    // dead display; stop before teardown so the join happens while the object
+    // graph is still fully alive.
+    pipeline_.stop();
+
+    // The waterfall owns a GL texture whose deletion requires the creating
+    // context to be current. AppWindow outlives that context (main() destroys
+    // it after run() returns), so the view is destroyed explicitly here, not
+    // left to ~AppWindow.
+    waterfall_.reset();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -147,8 +199,17 @@ void AppWindow::drawUi() {
 }
 
 void AppWindow::drawToolbar() {
-    if (ImGui::Button(playing_ ? "Stop" : "Play", ImVec2(64.0f, 0.0f))) {
-        playing_ = !playing_;  // placeholder: no pipeline to start yet
+    // The label reads the pipeline, not a local flag, so the button can never
+    // disagree with the actual thread state.
+    const bool running = pipeline_.running();
+    if (ImGui::Button(running ? "Stop" : "Play", ImVec2(64.0f, 0.0f))) {
+        if (running) {
+            // Joins both pipeline threads; they exit within ~10 ms, which is
+            // an acceptable one-off hitch on the GUI thread for a Stop click.
+            pipeline_.stop();
+        } else {
+            pipeline_.start();
+        }
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0f);
@@ -189,7 +250,7 @@ void AppWindow::drawFrequencyReadout() {
 
 void AppWindow::drawMenuColumn() {
     if (ImGui::CollapsingHeader("Source", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextDisabled("No source modules loaded yet");
+        ImGui::TextDisabled("Signal generator (demo tones)");
     }
     if (ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen)) {
         static const char* kModes[] = {"NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"};
@@ -215,11 +276,33 @@ void AppWindow::drawMenuColumn() {
         ImGui::TextDisabled("Audio sink not wired yet");
     }
     if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextDisabled("FFT / waterfall controls pending");
+        // One shared dB range drives both the spectrum axis and the waterfall
+        // colormap so the two panels always agree on what "hot" means.
+        const bool minChanged =
+            ImGui::SliderFloat("Min dB", &dbMin_, -160.0f, -20.0f, "%.0f");
+        const bool maxChanged =
+            ImGui::SliderFloat("Max dB", &dbMax_, -100.0f, 20.0f, "%.0f");
+        // Keep at least kMinDbSpan between the endpoints by pushing back the
+        // slider the user is actually dragging — correcting the *other* value
+        // would make an untouched slider jump under the user's eyes.
+        if (minChanged && dbMin_ > dbMax_ - kMinDbSpan) { dbMin_ = dbMax_ - kMinDbSpan; }
+        if (maxChanged && dbMax_ < dbMin_ + kMinDbSpan) { dbMax_ = dbMin_ + kMinDbSpan; }
+        if (minChanged || maxChanged) { spectrum_->setRange(dbMin_, dbMax_); }
     }
 }
 
 void AppWindow::drawCenterPanels() {
+    // Poll for a new spectrum frame every GUI frame. getLatestFrame compares
+    // against lastFrame_.seq, so this is one mutex lock returning false when
+    // nothing new arrived — cheap enough to run unconditionally, which also
+    // catches a frame published between the last poll and a Stop click.
+    if (pipeline_.getLatestFrame(lastFrame_)) {
+        // One waterfall line per *new* frame (not per GUI frame): duplicate
+        // lines would fake scroll speed while the pipeline is stalled.
+        waterfall_->addLine(lastFrame_.dbBins.data(),
+                            static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+    }
+
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float splitterThickness = 6.0f;
     const float usable = avail.y - splitterThickness;
@@ -228,7 +311,10 @@ void AppWindow::drawCenterPanels() {
     if (usable < 40.0f || avail.x < 40.0f) { return; }
 
     const float spectrumHeight = splitRatio_ * usable;
-    drawSpectrumPlaceholder(avail.x, spectrumHeight);
+    // Before the first frame lastFrame_.dbBins is empty; SpectrumView renders
+    // the background + grid for null bins, which is the wanted idle look.
+    const float* bins = lastFrame_.dbBins.empty() ? nullptr : lastFrame_.dbBins.data();
+    spectrum_->draw(bins, static_cast<int>(lastFrame_.dbBins.size()), avail.x, spectrumHeight);
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
@@ -250,56 +336,7 @@ void AppWindow::drawCenterPanels() {
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                                               ImGui::GetColorU32(gripColor));
 
-    drawWaterfallPlaceholder(avail.x, usable - spectrumHeight);
-}
-
-void AppWindow::drawSpectrumPlaceholder(float width, float height) {
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const ImVec2 p1(p0.x + width, p0.y + height);
-    drawList->AddRectFilled(p0, p1, IM_COL32(8, 10, 14, 255));
-
-    // Fake-but-plausible static spectrum: a jittered noise floor plus three
-    // Gaussian tone humps. Fixed-seed LCG, re-run identically every frame, so
-    // the placeholder is stable and smoke-test runs render identically.
-    constexpr int kPoints = 256;
-    std::uint32_t lcg = 0x12345678u;
-    auto next01 = [&lcg]() {
-        lcg = lcg * 1664525u + 1013904223u;
-        return static_cast<float>(lcg >> 8) / 16777216.0f;
-    };
-    struct Peak {
-        float center, amplitudeDb, sigma;
-    };
-    static constexpr Peak kPeaks[] = {
-        {0.22f, 48.0f, 0.010f},
-        {0.50f, 34.0f, 0.020f},
-        {0.74f, 22.0f, 0.008f},
-    };
-    ImVec2 points[kPoints];
-    for (int i = 0; i < kPoints; ++i) {
-        const float u = static_cast<float>(i) / static_cast<float>(kPoints - 1);
-        float db = -92.0f + 6.0f * next01();  // noise floor around -90 dBFS
-        for (const Peak& peak : kPeaks) {
-            const float d = (u - peak.center) / peak.sigma;
-            db += peak.amplitudeDb * std::exp(-0.5f * d * d);
-        }
-        // Map [-100, 0] dB onto the panel, 0 dB at the top edge.
-        const float yNorm = std::clamp(-db / 100.0f, 0.0f, 1.0f);
-        points[i] = ImVec2(p0.x + u * width, p0.y + yNorm * height);
-    }
-    drawList->AddPolyline(points, kPoints, IM_COL32(94, 189, 255, 255), ImDrawFlags_None, 1.5f);
-    ImGui::Dummy(ImVec2(width, height));
-}
-
-void AppWindow::drawWaterfallPlaceholder(float width, float height) {
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const ImVec2 p1(p0.x + width, p0.y + height);
-    // Near-black with a hint of blue — the low end of the eventual waterfall
-    // colormap, so the real GL-texture widget can replace this without a
-    // visual jump.
-    ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, IM_COL32(4, 5, 10, 255));
-    ImGui::Dummy(ImVec2(width, height));
+    waterfall_->draw(avail.x, usable - spectrumHeight);
 }
 
 }  // namespace cascade::gui

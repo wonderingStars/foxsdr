@@ -62,14 +62,15 @@ testable without threads.
 
 ## Phases
 
-- **P0 — Toolchain + shell** ✋gate: green MSVC build, ctest green, app opens an
-  ImGui window with the panel skeleton and `--frames N` self-test flag.
-- **P1 — DSP primitives** (parallel, one agent per module, tests mandatory):
-  SPSC ring; FFT wrapper + spectrum estimator; FIR design + decimator;
-  NCO/mixer; quadrature discriminator + AGC. ✋gate: all module tests green,
-  each independently verified.
-- **P2 — Render pipeline**: spectrum plot + waterfall GL texture w/ colormaps
-  fed by SigGen through the real DSP thread; 60 fps sustained.
+- **P0 — Toolchain + shell** — ✅ DONE 2026-08-14 (commits 9225769, 82f90f9).
+- **P1 — DSP primitives** — ✅ DONE 2026-08-14, adversarially verified and
+  mutation-hardened (82f90f9, a22b8e3): every module test proven to go red
+  against a targeted behavior deletion.
+- **P2 — Render pipeline** — stage 1 ✅ DONE (79a0827): SigGen, threaded
+  Pipeline, SpectrumView, WaterfallView, all contract-built and tested.
+  Stage 2 (in progress): GUI integration — Play/Stop drives the pipeline,
+  live spectrum + waterfall replace the placeholders, headless `--selftest`
+  proves tone-in → correct-bin-out end to end.
 - **P3 — Radio chain**: VFO wiring, WFM/NFM/AM/SSB/CW demods (each with
   synthesized-signal tests), PortAudio sink, squelch, S-meter.
 - **P4 — Hardware sources**: IQ file (WAV), SoapySDR enumeration + streaming;

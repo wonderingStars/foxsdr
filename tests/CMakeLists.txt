@@ -20,6 +20,13 @@ set_tests_properties(app_smoke PROPERTIES
     TIMEOUT 60
     PASS_REGULAR_EXPRESSION "rendered 3 frames")
 
+# End-to-end DSP proof, headless: tone in at +300 kHz must peak at the right
+# fftshifted bin. This is the wiring test the unit suites cannot provide.
+add_test(NAME app_selftest COMMAND cascade --selftest)
+set_tests_properties(app_selftest PROPERTIES
+    TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "selftest PASS")
+
 # CLI error contract: each malformed invocation must exit nonzero.
 add_test(NAME app_cli_bad_value COMMAND cascade --frames abc)
 add_test(NAME app_cli_negative COMMAND cascade --frames -1)

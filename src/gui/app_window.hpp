@@ -3,13 +3,29 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <memory>
+
+#include "core/pipeline.hpp"
+
 namespace cascade::gui {
+
+// Forward declarations keep ImGui types out of this header (waterfall_view.hpp
+// includes imgui.h), preserving the rule that main() never sees GUI headers.
+class SpectrumView;
+class WaterfallView;
 
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
 // headless harness) never needs GUI headers.
 class AppWindow {
 public:
+    // Constructs the render pipeline with the demo SigGen signal already
+    // configured, so the first Play click shows spectrum content immediately.
+    AppWindow();
+
+    // Out-of-line: the unique_ptr members delete forward-declared types.
+    ~AppWindow();
+
     // Runs the shell until the window is closed, or — when `frames` >= 0 —
     // for exactly that many rendered frames. The bounded mode is the
     // `--frames N` self-test contract that the app_smoke ctest entry relies
@@ -25,13 +41,26 @@ private:
     void drawFrequencyReadout();
     void drawMenuColumn();
     void drawCenterPanels();
-    void drawSpectrumPlaceholder(float width, float height);
-    void drawWaterfallPlaceholder(float width, float height);
 
-    // Placeholder UI state. None of it drives DSP yet; it exists so the shell
-    // already has the final layout and interactions while the pipeline is
-    // built underneath it.
-    bool playing_ = false;
+    // DSP pipeline plus the two live display widgets it feeds. The views are
+    // held by unique_ptr for two reasons: the forward declarations above, and
+    // the waterfall's GL texture, whose deletion needs the creating GL context
+    // current — run() tears the view down explicitly before destroying the
+    // context, because AppWindow itself outlives it (destroyed in main()).
+    cascade::core::Pipeline pipeline_;
+    std::unique_ptr<SpectrumView> spectrum_;
+    std::unique_ptr<WaterfallView> waterfall_;
+
+    // Newest frame received from the pipeline. Cached here (not just handed
+    // to the views) so the spectrum keeps drawing the last data after Stop —
+    // SpectrumView::draw takes bins per call and holds no history of its own.
+    cascade::core::SpectrumFrame lastFrame_;
+
+    // Display range for both the spectrum axis and the waterfall colormap.
+    float dbMin_ = -110.0f;
+    float dbMax_ = 0.0f;
+
+    // Placeholder UI state for controls that do not drive DSP yet.
     float volume_ = 0.5f;
     unsigned long long frequencyHz_ = 100000000ULL;  // 100 MHz per parity spec
     int modeIndex_ = 1;                              // WFM
