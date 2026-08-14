@@ -31,6 +31,10 @@ find_package(OpenGL REQUIRED)
 # portaudioTargets.cmake: plain `portaudio`, shared. The vcpkg toolchain's
 # applocal deployment copies its DLL next to the executables, same as glfw.
 find_package(portaudio CONFIG REQUIRED)
+# Hardware sources (P4+). Target verified from SoapySDRExport.cmake: plain
+# `SoapySDR`, shared. Vendor support (B200 via SoapyUHD, RTL dongles, etc.)
+# arrives through SoapySDR's runtime-loaded modules, keeping this tree MIT.
+find_package(SoapySDR CONFIG REQUIRED)
 
 # The pffft port has shipped under more than one target name; probe rather than
 # assume, and fall back to a plain library search so a source build also works.
@@ -82,6 +86,7 @@ target_link_libraries(cascade_lib PUBLIC
     imgui::imgui
     OpenGL::GL
     portaudio
+    SoapySDR
     ${CASCADE_FFT_TARGET})
 
 # ---------------------------------------------------------------------------
