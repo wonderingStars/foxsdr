@@ -7,8 +7,23 @@ foreach(src ${CASCADE_TESTS})
     target_link_libraries(${name} PRIVATE cascade_lib)
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME ${name} COMMAND ${name})
+    # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
+    # it forever — ctest's default per-test timeout is 1500 s.
+    set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endforeach()
 
-# The app doubles as a smoke test: --frames N renders N frames then exits 0.
-# (The pre-GUI stub accepts and ignores the flag under the same contract.)
+# The app doubles as a smoke test. The PASS_REGULAR_EXPRESSION makes the
+# exact-count half of the --frames contract observable: rendering N+1 frames
+# (or none) fails even though the exit code would still be 0.
 add_test(NAME app_smoke COMMAND cascade --frames 3)
+set_tests_properties(app_smoke PROPERTIES
+    TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "rendered 3 frames")
+
+# CLI error contract: each malformed invocation must exit nonzero.
+add_test(NAME app_cli_bad_value COMMAND cascade --frames abc)
+add_test(NAME app_cli_negative COMMAND cascade --frames -1)
+add_test(NAME app_cli_missing_value COMMAND cascade --frames)
+add_test(NAME app_cli_unknown_arg COMMAND cascade --bogus)
+set_tests_properties(app_cli_bad_value app_cli_negative app_cli_missing_value
+                     app_cli_unknown_arg PROPERTIES WILL_FAIL TRUE TIMEOUT 30)

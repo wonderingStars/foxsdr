@@ -3,7 +3,11 @@
 
 namespace cascade {
 
-// "0.1.0" — bump in version.cpp on every behavioral change.
+// Bump in version.cpp on every behavioral change.
 const char* versionString();
+
+// Product display name ("cascade" stays the internal/binary name — '+' is
+// hostile to filesystems and build targets).
+const char* appName();
 
 }  // namespace cascade
