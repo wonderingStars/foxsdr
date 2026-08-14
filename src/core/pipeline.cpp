@@ -1,6 +1,7 @@
 // Pipeline implementation. Pacing approach (documented per task):
 //
-// The source thread generates ~10 ms chunks and sleeps to ABSOLUTE deadlines
+// For FREE-RUNNING sources (selfPaced() == false: the generator, files) the
+// source thread reads ~10 ms chunks and sleeps to ABSOLUTE deadlines
 // (steady_clock, sleep_until, next += period) rather than sleeping a fixed
 // duration per chunk. Windows' default timer granularity (~15.6 ms) makes any
 // single sleep overshoot badly, but with absolute deadlines an overshoot is
@@ -9,6 +10,13 @@
 // 10 ms chunks keep stop() latency low without busy-spinning. If the thread
 // falls more than 250 ms behind (suspend, debugger, load spike) the schedule
 // resyncs to "now" instead of bursting an unbounded backlog.
+//
+// For SELF-PACED sources (hardware) the DEVICE is the clock: read() blocks
+// (bounded) until samples exist, so the loop just reads and writes the ring
+// with no pacing sleep at all — any sleep of our own would let a real-time
+// device's samples pile up and be lost. Zero returns (a bounded block that
+// timed out empty) are retried immediately; the bound on read() is also what
+// lets stop()/setSource() quiesce the thread promptly (see setSource).
 //
 // SPDX-License-Identifier: MIT
 #include "core/pipeline.hpp"
@@ -77,7 +85,7 @@ constexpr std::size_t kAudioTapSize = 4096;
 
 Pipeline::Pipeline(Config cfg)
     : cfg_(cfg),
-      sigGen_(cfg.sampleRateHz),
+      builtin_(cfg.sampleRateHz),
       ring_(ringCapacityFor(cfg)),
       estimator_(cfg.fftSize, cascade::dsp::WindowType::BlackmanHarris),
       vfo_(cfg.sampleRateHz, kVfoDecimation, kDefaultVfoBandwidthHz),
@@ -90,6 +98,7 @@ Pipeline::Pipeline(Config cfg)
                                            static_cast<double>(kVfoDecimation) +
                                        0.5)),
       tapBuf_(kAudioTapSize, 0.0f) {
+    active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     estimator_.setAlpha(cfg.averagingAlpha);
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
     fmScale_ = static_cast<float>(
@@ -108,7 +117,53 @@ Pipeline::~Pipeline() {
 }
 
 cascade::source::SigGen& Pipeline::sigGen() {
-    return sigGen_;
+    // Always the BUILT-IN generator, even while an external source is active:
+    // callers configure tones on it and those settings take effect whenever
+    // the generator is (re)selected. This keeps the pre-refactor surface
+    // byte-compatible.
+    return builtin_.sigGen();
+}
+
+void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    const bool live = run_.load(std::memory_order_relaxed);
+    if (live) {
+        // Quiesce handshake (documented in the header): flag the source loop
+        // down, abort any in-flight bounded read via the source's own stop()
+        // — the order matters, a read that returns after the flag flips must
+        // see srcRun_ false — then join. After the join no thread can touch
+        // the outgoing source.
+        srcRun_.store(false, std::memory_order_relaxed);
+        active_->stop();
+        if (srcThread_.joinable()) { srcThread_.join(); }
+    }
+    // Swap. Destroying the outgoing external source here is race-free: the
+    // source thread is joined (or never existed), and it was the only other
+    // toucher.
+    if (s) {
+        external_ = std::move(s);
+        active_ = external_.get();
+    } else {
+        external_.reset();
+        active_ = &builtin_;  // null restores the built-in generator
+    }
+    if (live) {
+        // Resume: start the incoming source BEFORE its thread exists so the
+        // first read() never races the device open, then respawn.
+        active_->start();
+        srcRun_.store(true, std::memory_order_relaxed);
+        srcThread_ = std::thread(&Pipeline::sourceThreadMain, this);
+    }
+}
+
+cascade::source::IqSource& Pipeline::activeSource() {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    return *active_;
+}
+
+const char* Pipeline::activeSourceName() {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    return active_->name();
 }
 
 void Pipeline::start() {
@@ -138,7 +193,14 @@ void Pipeline::start() {
     }
     signalDb_.store(-200.0f, std::memory_order_relaxed);
 
+    // Start the source before its thread exists so the first read() never
+    // races the device open. A failed start is not fatal to the pipeline:
+    // the thread runs, read() yields nothing, no frames appear, and the
+    // reason stays readable through activeSource().lastError().
+    active_->start();
+
     run_.store(true, std::memory_order_relaxed);
+    srcRun_.store(true, std::memory_order_relaxed);
     srcThread_ = std::thread(&Pipeline::sourceThreadMain, this);
     dspThread_ = std::thread(&Pipeline::dspThreadMain, this);
 }
@@ -146,8 +208,15 @@ void Pipeline::start() {
 void Pipeline::stop() {
     std::lock_guard<std::mutex> lk(controlMutex_);
     run_.store(false, std::memory_order_relaxed);
-    // Threads notice the flag within one sleep quantum (<= ~10 ms source,
-    // ~1 ms DSP); joinable() makes a second stop() a no-op.
+    srcRun_.store(false, std::memory_order_relaxed);
+    // Abort an in-flight bounded read BEFORE joining: a self-paced source
+    // may be parked inside read() waiting for samples, and its stop() is the
+    // contract's abort path (IqSource requires bounded/abortable reads for
+    // exactly this shutdown). Idempotent per contract, so calling it on a
+    // never-started or already-stopped source is harmless. Free-running
+    // threads instead notice the flags within one sleep quantum (<= ~10 ms
+    // source, ~1 ms DSP); joinable() makes a second stop() a no-op.
+    active_->stop();
     if (srcThread_.joinable()) { srcThread_.join(); }
     if (dspThread_.joinable()) { dspThread_.join(); }
 }
@@ -222,20 +291,51 @@ std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
 void Pipeline::sourceThreadMain() {
     using clock = std::chrono::steady_clock;
 
+    // Stable for this thread's entire lifetime: setSource only changes
+    // active_ after joining this thread (the quiesce handshake), and the
+    // spawn/join edges give the necessary happens-before, so one plain read
+    // here is race-free.
+    cascade::source::IqSource& src = *active_;
+
     constexpr double kChunkSec = 0.010;
     std::size_t chunk = static_cast<std::size_t>(cfg_.sampleRateHz * kChunkSec + 0.5);
     if (chunk == 0) { chunk = 1; }
     std::vector<std::complex<float>> buf(chunk);
 
+    if (src.selfPaced()) {
+        // The device paces: read() blocks (bounded) until samples arrive, so
+        // there is NO clock of our own — a pacing sleep here would let a
+        // real-time device's samples back up and be lost. A zero return
+        // (bounded block timed out with nothing available) is retried
+        // immediately; the source's block bound is what keeps this loop from
+        // spinning hot, and its abortable stop() is what lets stop() and
+        // setSource() get this thread out of read() promptly.
+        while (run_.load(std::memory_order_relaxed) &&
+               srcRun_.load(std::memory_order_relaxed)) {
+            const std::size_t got = src.read(buf.data(), chunk);
+            if (got != 0) {
+                // Same overflow policy as the free-running path: if the DSP
+                // side stalled and the ring is full, the excess is dropped
+                // (write() accepts what fits) — never block a live device.
+                ring_.write(buf.data(), got);
+            }
+        }
+        return;
+    }
+
+    // Free-running source: read() always fills the chunk immediately, so
+    // this loop supplies the real-time pacing (absolute deadlines, catch-up
+    // and stall-resync — see the file header comment).
     const auto period = std::chrono::duration_cast<clock::duration>(
         std::chrono::duration<double>(kChunkSec));
     auto next = clock::now() + period;
 
-    while (run_.load(std::memory_order_relaxed)) {
-        sigGen_.generate(buf.data(), chunk);
+    while (run_.load(std::memory_order_relaxed) &&
+           srcRun_.load(std::memory_order_relaxed)) {
+        const std::size_t got = src.read(buf.data(), chunk);
         // A real-time source must not block: if the DSP side stalled and the
         // ring is full, the overflow is dropped (write() accepts what fits).
-        ring_.write(buf.data(), chunk);
+        ring_.write(buf.data(), got);
 
         std::this_thread::sleep_until(next);
         next += period;

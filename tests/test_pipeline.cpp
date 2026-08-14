@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -78,6 +79,17 @@ int main() {
         Pipeline p(cfg);
         p.sigGen().setTone(0, toneHz, 0.0f);   // 0 dB = amplitude 1.0
         p.sigGen().setNoiseFloorDb(-300.0f);   // disabled: deterministic floor
+
+        // Source-abstraction surface (additive checks): the default active
+        // source is the built-in generator — free-running, named "Signal
+        // generator", reporting the configured rate and the documented
+        // 100 MHz nominal center. Everything below this block ran unchanged
+        // before the IqSource refactor and must behave identically.
+        CHECK(std::strcmp(p.activeSourceName(), "Signal generator") == 0);
+        CHECK(p.activeSource().selfPaced() == false);
+        CHECK(p.activeSource().sampleRateHz() == cfg.sampleRateHz);
+        CHECK_NEAR(p.activeSource().centerFrequencyHz(), 100.0e6, 1e-3);
+        CHECK(std::strcmp(p.activeSource().lastError(), "") == 0);
 
         // No frame before start.
         SpectrumFrame frame;

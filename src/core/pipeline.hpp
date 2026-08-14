@@ -1,7 +1,10 @@
-// Real-time render pipeline: a source thread paces SigGen into an SPSC ring,
-// a DSP thread drains it through SpectrumEstimator and publishes the newest
-// spectrum frame for the GUI to poll. The same DSP thread also runs the audio
-// chain (P3): every drained block is duplicated into
+// Real-time render pipeline: a source thread feeds the active IqSource into
+// an SPSC ring — pacing it with a real-time clock when the source is
+// free-running (the built-in signal generator), letting the device pace when
+// it is self-paced (hardware) — a DSP thread drains it through
+// SpectrumEstimator and publishes the newest spectrum frame for the GUI to
+// poll. The same DSP thread also runs the audio chain (P3): every drained
+// block is duplicated into
 //   Vfo (decimate-by-10) -> Demodulator -> Agc -> Squelch ->
 //   RationalResampler (channel rate -> 48 kHz) -> AudioOut::write.
 //
@@ -26,6 +29,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -38,7 +42,8 @@
 #include "dsp/squelch.hpp"
 #include "dsp/vfo.hpp"
 #include "sink/audio_out.hpp"
-#include "source/siggen.hpp"
+#include "source/iq_source.hpp"
+#include "source/siggen_source.hpp"
 
 namespace cascade::core {
 
@@ -76,6 +81,33 @@ public:
     void stop();                                  // idempotent; joins both threads
     bool running() const;
     bool getLatestFrame(SpectrumFrame& out);      // true iff a frame newer than out.seq was copied into out
+
+    // --- Source selection ----------------------------------------------------
+    // Replaces the IQ source feeding the ring; a null pointer restores the
+    // built-in SigGenSource (whose generator sigGen() keeps returning either
+    // way). Safe to call while the pipeline runs — the swap quiesces the
+    // source thread with this handshake, all under controlMutex_:
+    //   1. srcRun_ cleared            (the source loop is told to exit)
+    //   2. outgoing source stop()     (aborts an in-flight bounded read —
+    //      this is why IqSource::read must be bounded/abortable: a blocked
+    //      read with no abort path would stall the swap for its full bound)
+    //   3. srcThread_ joined          (after this NO thread can touch the
+    //      outgoing source, so destroying it is race-free by construction)
+    //   4. pointer swapped, outgoing source destroyed
+    //   5. incoming source start(), srcRun_ set, source thread respawned
+    // The DSP thread keeps running throughout, draining whatever the ring
+    // still holds, so consumers see at worst a brief frame-rate dip — never
+    // a stall, a deadlock, or a frame from a half-swapped source.
+    void setSource(std::unique_ptr<cascade::source::IqSource> s);
+
+    // The source currently feeding the ring (the built-in generator unless
+    // setSource installed something else). The reference — and any const
+    // char* obtained from it, including activeSourceName() — stays valid
+    // only until the next setSource(), which may destroy the object; per the
+    // IqSource threading contract both are meant for the GUI/control thread,
+    // the same thread that performs swaps.
+    cascade::source::IqSource& activeSource();
+    const char* activeSourceName();
 
     // --- Audio chain control (P3) -------------------------------------------
     // All of these are callable from any thread while the pipeline runs: they
@@ -129,7 +161,15 @@ private:
     void processAudioBlock(const std::complex<float>* in, std::size_t n);
 
     Config cfg_;
-    cascade::source::SigGen sigGen_;
+    // Built-in generator source: always alive (a member, not a unique_ptr)
+    // so setSource(nullptr) can restore it without allocation or failure.
+    // external_ holds a caller-installed source; active_ points at whichever
+    // of the two feeds the ring. active_ only changes while the source
+    // thread is quiesced (see setSource) or before it exists, so the thread
+    // reads it once at entry without locking.
+    cascade::source::SigGenSource builtin_;
+    std::unique_ptr<cascade::source::IqSource> external_;
+    cascade::source::IqSource* active_ = nullptr;  // ctor sets &builtin_
     cascade::dsp::SpscRing<std::complex<float>> ring_;
     cascade::dsp::SpectrumEstimator estimator_;   // touched only by the DSP thread while running
 
@@ -167,10 +207,14 @@ private:
     std::atomic<float> signalDb_{-200.0f};
     std::atomic<std::uint64_t> audioSamples_{0};
 
-    // Control operations (start/stop/dtor) serialize against each other; the
-    // threads themselves only ever read run_.
+    // Control operations (start/stop/setSource/dtor) serialize against each
+    // other under controlMutex_; the threads themselves only ever read the
+    // two flags. run_ gates BOTH threads (a stop); srcRun_ additionally
+    // gates just the source thread so setSource can quiesce it alone while
+    // the DSP thread keeps draining the ring.
     std::mutex controlMutex_;
     std::atomic<bool> run_{false};
+    std::atomic<bool> srcRun_{false};
     std::thread srcThread_;
     std::thread dspThread_;
 };
