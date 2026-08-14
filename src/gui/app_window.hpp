@@ -4,9 +4,13 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "core/pipeline.hpp"
+// For SoapyDeviceInfo and the non-owning SoapySource* below; the header
+// forward-declares the Soapy API types, so this pulls in no Soapy headers.
+#include "source/soapy_source.hpp"
 
 namespace cascade::gui {
 
@@ -41,6 +45,11 @@ private:
     void drawToolbar();
     void drawFrequencyReadout();
     void drawMenuColumn();
+    void drawSourceSection();
+    // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
+    // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
+    // (opens immediately; on failure the combo selection is left unchanged).
+    void selectSource(int idx);
     void drawCenterPanels();
 
     // DSP pipeline plus the two live display widgets it feeds. The views are
@@ -68,7 +77,6 @@ private:
     // tone 0 sits on the VFO — near-silent in WFM (an unmodulated carrier
     // demodulates to DC), a clean 700 Hz sidetone in CW.
     float volume_ = 0.5f;
-    unsigned long long frequencyHz_ = 100000000ULL;  // 100 MHz per parity spec
     int modeIndex_ = 1;                              // WFM
     float vfoOffsetKhz_ = 300.0f;
     int bandwidthIndex_ = 1;                         // 150k
@@ -78,6 +86,33 @@ private:
     std::vector<cascade::sink::AudioDevice> devices_;
     int deviceIndex_ = -1;
     float splitRatio_ = 0.4f;  // spectrum's share of the center area
+
+    // --- Source menu state (P4) ---------------------------------------------
+    // The frequency readout no longer keeps a mirror: it always displays
+    // pipeline_.activeSource().centerFrequencyHz() readback (nominal for the
+    // generator/file, real device readback for Soapy). The generator's 100 MHz
+    // default preserves the parity-spec startup display.
+    //
+    // Enumerated SoapySDR devices behind combo rows 2..N+1 (rows 0/1 are the
+    // generator and the IQ file). Filled at construction and by Refresh.
+    std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;
+    // Combo selection. -1 means "active device no longer in the list" (a
+    // Refresh dropped it); the preview then falls back to the active source
+    // name. Distinct from the ACTIVE source: selecting "IQ file" only shows
+    // the path controls — the pipeline keeps its source until Open succeeds.
+    int sourceSel_ = 0;
+    char iqPath_[512] = "";     // InputText buffer for the IQ file path
+    std::string sourceError_;   // red text under the Source controls; "" = none
+    // Non-owning view of the SoapySource installed in the pipeline (the
+    // pipeline owns it via setSource). Null whenever the active source is not
+    // Soapy; must be nulled BEFORE any setSource that destroys the object.
+    cascade::source::SoapySource* soapy_ = nullptr;
+    std::string soapyArgs_;     // args of the open device (re-find on Refresh)
+    int soapyRateIndex_ = 1;    // index into the 1/2/4/8 MS/s combo; 2M default
+    std::vector<std::string> soapyGainNames_;  // listGainNames() at open
+    std::vector<float> soapyGainsDb_;          // slider mirrors, one per name
+    bool soapyAgcSupported_ = false;
+    bool soapyAgc_ = false;
 };
 
 }  // namespace cascade::gui

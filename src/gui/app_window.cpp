@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -20,6 +22,7 @@
 #include "core/version.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/waterfall_view.hpp"
+#include "source/iq_file_source.hpp"
 
 namespace cascade::gui {
 
@@ -41,6 +44,39 @@ constexpr int kWaterfallHistory = 512;
 // thinner span renders as a near-solid waterfall and a wall-to-wall trace,
 // and a zero/inverted span would degrade to the widgets' flat-line fallback.
 constexpr float kMinDbSpan = 10.0f;
+
+// Source-menu error color: readable red on the dark theme, used for
+// open()/setter failures surfaced from IqSource::lastError().
+constexpr ImVec4 kErrorRed{1.0f, 0.35f, 0.35f, 1.0f};
+
+// Soapy sample-rate choices. 2 MS/s (index 1) is the default because it is
+// the rate the DSP chain was configured at (kSampleRateHz); the other rates
+// are offered per spec, with the ACTUAL device readback displayed alongside
+// — frequency-axis labeling that would make the other rates fully coherent
+// is P5 work.
+constexpr const char* kSoapyRateLabels[] = {"1 MS/s", "2 MS/s", "4 MS/s", "8 MS/s"};
+constexpr double kSoapyRateHz[] = {1.0e6, 2.0e6, 4.0e6, 8.0e6};
+constexpr int kSoapyRateCount = 4;
+constexpr int kSoapyRateDefaultIndex = 1;  // 2 MS/s
+
+// Gain sliders display 0..60 dB for every element (documented simplification:
+// true per-element ranges vary per driver — the B200's PGA spans 0..76 dB —
+// but SoapySDR clamps out-of-range requests, so a fixed display range costs
+// only the top of the dial, not correctness). 30 dB start: mid-dial, and the
+// value is PUSHED to the device at open so slider and hardware agree from the
+// first frame — there is no per-element gain getter on SoapySource to read
+// the boot value back from.
+constexpr float kSoapyGainMinDb = 0.0f;
+constexpr float kSoapyGainMaxDb = 60.0f;
+constexpr float kSoapyGainDefaultDb = 30.0f;
+
+// The frequency readout's 10 digit places, most significant first
+// (digit i steps by kPlaceHz[i] on a wheel tick over it).
+constexpr double kPlaceHz[10] = {1e9, 1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e0};
+
+// Largest value the fixed 10-digit field can show; the display clamps here
+// (a device readback cannot exceed it in practice — 9.99 GHz).
+constexpr double kMaxDisplayHz = 9999999999.0;
 
 // GLFW reports failures through this callback *before* glfwInit/CreateWindow
 // return their error codes, so printing here is what gives the user an actual
@@ -72,6 +108,10 @@ AppWindow::AppWindow()
     // as near-silence, and switching to CW yields the 700 Hz sidetone.
     pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
     pipeline_.audio().setVolume(volume_);
+    // One enumeration up front so the Source combo is populated from the
+    // first frame; the Refresh button re-runs it for hot-plug. enumerate()
+    // never throws and is simply empty on a machine with no vendor modules.
+    soapyDevices_ = cascade::source::SoapySource::enumerate();
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
         if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
@@ -238,8 +278,22 @@ void AppWindow::drawFrequencyReadout() {
     // The field width is constant so digits never shift as the tuned
     // frequency changes; the zeros (and separators) ahead of the first
     // significant digit are dimmed so the eye reads only the live value.
+    //
+    // The value shown is ALWAYS the active source's centerFrequencyHz()
+    // readback — nominal for the generator/file, real device readback for
+    // Soapy — so the display can never disagree with the hardware. Tuning:
+    // the mouse wheel over a digit steps the frequency by that digit's place
+    // value (clamped at 0) through setCenterFrequencyHz(); the change shows
+    // up via the same readback on the next frame. activeSource() is a
+    // GUI/control-thread call per the IqSource contract, and this IS that
+    // thread — the same one that performs source swaps.
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    const double hz = std::max(0.0, src.centerFrequencyHz());
+
     char digits[16];
-    std::snprintf(digits, sizeof(digits), "%010llu", frequencyHz_);
+    std::snprintf(digits, sizeof(digits), "%010llu",
+                  static_cast<unsigned long long>(
+                      std::llround(std::min(hz, kMaxDisplayHz))));
 
     const ImVec4 bright = ImGui::GetStyleColorVec4(ImGuiCol_Text);
     ImVec4 dim = bright;
@@ -258,15 +312,36 @@ void AppWindow::drawFrequencyReadout() {
         ImGui::PushStyleColor(ImGuiCol_Text, significant ? bright : dim);
         ImGui::TextUnformatted(cell);
         ImGui::PopStyleColor();
+
+        // Per-digit wheel tuning. A trailing separator belongs to the digit
+        // cell it follows, so hovering it tunes that digit — the natural
+        // reading. Fractional wheel deltas (touchpads) below one notch still
+        // step once, in the delta's direction.
+        if (ImGui::IsItemHovered()) {
+            const float wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f) {
+                double ticks = static_cast<double>(static_cast<long long>(wheel));
+                if (ticks == 0.0) { ticks = (wheel > 0.0f) ? 1.0 : -1.0; }
+                const double next = std::max(0.0, hz + ticks * kPlaceHz[i]);
+                // Failure (e.g. a tune the driver refuses) needs no handling
+                // here: the display follows the readback, which won't move.
+                src.setCenterFrequencyHz(next);
+            }
+        }
         if (i != 9) { ImGui::SameLine(0.0f, 0.0f); }
     }
     ImGui::PopFont();
 }
 
 void AppWindow::drawMenuColumn() {
-    if (ImGui::CollapsingHeader("Source", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextDisabled("Signal generator (demo tones)");
-    }
+    // The sections scroll inside an inner child sized to leave room for the
+    // status footer, so the footer stays pinned to the bottom of the column
+    // regardless of how many sections are open.
+    const float footerHeight = 2.0f * ImGui::GetTextLineHeightWithSpacing() +
+                               ImGui::GetStyle().ItemSpacing.y + 4.0f;
+    ImGui::BeginChild("##menu_sections", ImVec2(0.0f, -footerHeight),
+                      ImGuiChildFlags_None);
+    drawSourceSection();
     if (ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen)) {
         static const char* kModes[] = {"NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"};
         // Button order is the SDR++ parity layout; the enum order differs
@@ -367,6 +442,192 @@ void AppWindow::drawMenuColumn() {
         if (maxChanged && dbMax_ < dbMin_ + kMinDbSpan) { dbMax_ = dbMin_ + kMinDbSpan; }
         if (minChanged || maxChanged) { spectrum_->setRange(dbMin_, dbMax_); }
     }
+    ImGui::EndChild();
+
+    // Status footer: active source identity, its sample rate (device readback
+    // for Soapy, nominal otherwise), and the audio sink's cumulative underrun
+    // count — the buffer-health readout the parity spec's status bar calls
+    // for. Two clipped lines rather than one wrapped one: a long device name
+    // must not push the numbers out of the reserved footer space.
+    ImGui::Separator();
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    ImGui::TextUnformatted(src.name());
+    ImGui::Text("%.4g MS/s | underruns %llu", src.sampleRateHz() / 1.0e6,
+                static_cast<unsigned long long>(pipeline_.audio().underruns()));
+}
+
+void AppWindow::drawSourceSection() {
+    if (!ImGui::CollapsingHeader("Source", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+
+    // Row label for a combo index; -1 (active device dropped by a Refresh)
+    // falls back to the live source name so the preview is never a lie.
+    const auto rowLabel = [this](int idx) -> const char* {
+        if (idx == 0) { return "Signal generator"; }
+        if (idx == 1) { return "IQ file"; }
+        const int d = idx - 2;
+        if (d >= 0 && d < static_cast<int>(soapyDevices_.size())) {
+            return soapyDevices_[static_cast<std::size_t>(d)].label.c_str();
+        }
+        return pipeline_.activeSourceName();
+    };
+
+    const int rowCount = 2 + static_cast<int>(soapyDevices_.size());
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##source_select", rowLabel(sourceSel_))) {
+        for (int i = 0; i < rowCount; ++i) {
+            // PushID: two identical devices (same model, no serial in the
+            // label) must still be distinct rows.
+            ImGui::PushID(i);
+            if (ImGui::Selectable(rowLabel(i), i == sourceSel_)) { selectSource(i); }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::Button("Refresh")) {
+        soapyDevices_ = cascade::source::SoapySource::enumerate();
+        if (sourceSel_ >= 2 || sourceSel_ < 0) {
+            // Re-find the open device by its args (labels can repeat); if it
+            // vanished from the scan the device stays open and selected, and
+            // the preview falls back to its live name via rowLabel(-1).
+            sourceSel_ = -1;
+            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                if (soapy_ != nullptr && soapyDevices_[i].args == soapyArgs_) {
+                    sourceSel_ = 2 + static_cast<int>(i);
+                }
+            }
+        }
+    }
+
+    // IQ file controls, shown while the combo sits on "IQ file". The pipeline
+    // keeps its current source until Open succeeds: a failed open constructs
+    // and destroys a throwaway IqFileSource without ever touching the
+    // pipeline, so there is nothing to roll back.
+    if (sourceSel_ == 1) {
+        ImGui::SetNextItemWidth(-60.0f);
+        ImGui::InputText("##iq_path", iqPath_, sizeof(iqPath_));
+        ImGui::SameLine();
+        if (ImGui::Button("Open")) {
+            auto file = std::make_unique<cascade::source::IqFileSource>();
+            if (!file->open(iqPath_)) {
+                sourceError_ = file->lastError();
+            } else {
+                // Carry the displayed frequency over: a file's center is
+                // nominal anyway, and a readout that jumps to 0 on source
+                // switch would read as a tuning bug.
+                file->setCenterFrequencyHz(
+                    pipeline_.activeSource().centerFrequencyHz());
+                soapy_ = nullptr;  // before setSource destroys a live Soapy
+                soapyArgs_.clear();
+                sourceError_.clear();
+                pipeline_.setSource(std::move(file));
+            }
+        }
+    }
+
+    // Soapy device panel, shown while a Soapy source is INSTALLED in the
+    // pipeline (soapy_ tracks setSource, not the combo row, so the panel
+    // stays correct while e.g. the combo previews "IQ file" pre-Open).
+    if (soapy_ != nullptr) {
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::Combo("Rate", &soapyRateIndex_, kSoapyRateLabels, kSoapyRateCount)) {
+            if (!soapy_->setSampleRateHz(kSoapyRateHz[soapyRateIndex_])) {
+                sourceError_ = soapy_->lastError();
+            }
+        }
+        // Actual readback beside the request: drivers coerce, the DSP chain
+        // and the user must both see the rate the hardware really runs at.
+        ImGui::SameLine();
+        ImGui::Text("actual %.4g MS/s", soapy_->sampleRateHz() / 1.0e6);
+
+        if (soapyAgcSupported_) {
+            if (ImGui::Checkbox("Auto gain", &soapyAgc_)) {
+                if (!soapy_->setAutoGain(soapyAgc_)) {
+                    sourceError_ = soapy_->lastError();
+                    soapyAgc_ = !soapyAgc_;  // the device did not change mode
+                }
+            }
+        } else {
+            ImGui::TextDisabled("Auto gain: not supported");
+        }
+
+        // Manual gain sliders are meaningless while hardware AGC drives the
+        // stages, so grey them out rather than letting them silently fight.
+        ImGui::BeginDisabled(soapyAgc_);
+        for (std::size_t i = 0; i < soapyGainNames_.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::SliderFloat(soapyGainNames_[i].c_str(), &soapyGainsDb_[i],
+                                   kSoapyGainMinDb, kSoapyGainMaxDb, "%.0f dB")) {
+                if (!soapy_->setGainDb(soapyGainNames_[i],
+                                       static_cast<double>(soapyGainsDb_[i]))) {
+                    sourceError_ = soapy_->lastError();
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndDisabled();
+    }
+
+    if (!sourceError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", sourceError_.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+void AppWindow::selectSource(int idx) {
+    if (idx == sourceSel_) { return; }  // re-click on the current row: no-op
+    sourceError_.clear();
+
+    if (idx == 0) {
+        // Built-in generator: null restores it, and it cannot fail.
+        soapy_ = nullptr;  // before setSource destroys a live Soapy source
+        soapyArgs_.clear();
+        pipeline_.setSource(nullptr);
+        sourceSel_ = 0;
+        return;
+    }
+    if (idx == 1) {
+        // Show the path controls only; the switch happens on a successful
+        // Open (see drawSourceSection) so a typo can never kill a live source.
+        sourceSel_ = 1;
+        return;
+    }
+
+    const std::size_t d = static_cast<std::size_t>(idx - 2);
+    if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
+
+    auto dev = std::make_unique<cascade::source::SoapySource>();
+    if (!dev->open(soapyDevices_[d].args)) {
+        // Revert-the-combo contract: sourceSel_ was never changed, so the
+        // combo stays where it was; the reason lands in red below.
+        sourceError_ = dev->lastError();
+        return;
+    }
+    // Default the device to the DSP chain's design rate. A refusal is not
+    // fatal (the panel shows the actual readback either way) but is surfaced.
+    if (!dev->setSampleRateHz(kSoapyRateHz[kSoapyRateDefaultIndex])) {
+        sourceError_ = dev->lastError();
+    }
+    soapyRateIndex_ = kSoapyRateDefaultIndex;
+
+    // AGC probe doubling as initialization: explicitly select manual gain
+    // mode (matching the unchecked box). False means the driver has no gain
+    // mode — the documented "grey the checkbox" answer, not an error.
+    soapyAgcSupported_ = dev->setAutoGain(false);
+    soapyAgc_ = false;
+
+    // Push the sliders' starting gain so hardware and display agree (there
+    // is no per-element readback on SoapySource to initialize from).
+    soapyGainNames_ = dev->listGainNames();
+    soapyGainsDb_.assign(soapyGainNames_.size(), kSoapyGainDefaultDb);
+    for (const std::string& g : soapyGainNames_) {
+        dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
+    }
+
+    soapy_ = dev.get();
+    soapyArgs_ = soapyDevices_[d].args;
+    pipeline_.setSource(std::move(dev));
+    sourceSel_ = idx;
 }
 
 void AppWindow::drawCenterPanels() {

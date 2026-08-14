@@ -12,11 +12,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <thread>
 #include <vector>
 
 #include "core/pipeline.hpp"
 #include "gui/app_window.hpp"
+#include "source/soapy_source.hpp"
 
 namespace {
 
@@ -149,11 +151,105 @@ int runSelftest() {
     return 0;
 }
 
+// Bench diagnostic (hidden flag --soapy-check, deliberately absent from the
+// usage string and never a ctest entry — it needs real hardware): enumerate
+// SoapySDR, open the first RADIO device, set 2 MS/s / 100 MHz, and stream for
+// two seconds through a headless Pipeline. PASS requires >= 20 spectrum
+// frames and a rate readback within 1% of 2 MS/s. A machine with no device
+// (or no vendor modules) FAILs cleanly with a reason — that is the expected
+// answer off the bench, not a crash. The 30 s first-frame deadline covers a
+// cold USB device's firmware/FPGA load, which the open above already blocked
+// through once (UHD loads inside Device::make).
+//
+// "First RADIO device": SoapyAudio (driver=audio) advertises every sound
+// card as a SoapySDR device, so on a bench with that module installed the
+// literal first enumeration row is a Realtek codec, not the SDR. Rows whose
+// kwargs carry driver=audio are skipped — a sound card cannot satisfy a
+// 2 MS/s RF check and its constant presence would make "no device attached"
+// undetectable.
+int runSoapyCheck() {
+    const auto devices = cascade::source::SoapySource::enumerate();
+    const cascade::source::SoapyDeviceInfo* pick = nullptr;
+    for (const auto& d : devices) {
+        if (d.args.find("driver=audio") == std::string::npos) {
+            pick = &d;
+            break;
+        }
+    }
+    if (pick == nullptr) {
+        std::printf("soapy-check FAIL no SoapySDR radio devices enumerated\n");
+        return 1;
+    }
+    std::fprintf(stderr, "cascade: soapy-check device: %s (%s)\n",
+                 pick->label.c_str(), pick->args.c_str());
+
+    auto src = std::make_unique<cascade::source::SoapySource>();
+    if (!src->open(pick->args)) {
+        std::printf("soapy-check FAIL open: %s\n", src->lastError());
+        return 1;
+    }
+    if (!src->setSampleRateHz(2'000'000.0)) {
+        std::printf("soapy-check FAIL set rate: %s\n", src->lastError());
+        return 1;
+    }
+    if (!src->setCenterFrequencyHz(100'000'000.0)) {
+        std::printf("soapy-check FAIL tune: %s\n", src->lastError());
+        return 1;
+    }
+    const double actualRate = src->sampleRateHz();  // device readback, not echo
+
+    cascade::core::Pipeline::Config cfg;
+    cfg.sampleRateHz = 2'000'000.0;
+    cfg.fftSize = 1024;
+    cfg.averagingAlpha = 0.5f;
+    cfg.audioEnabled = false;  // bench diagnostic: no audio device wanted
+    cascade::core::Pipeline pipeline(cfg);
+    pipeline.setSource(std::move(src));
+    pipeline.start();
+
+    // Wait (bounded) for the stream to produce its first frame, then measure
+    // the frame count over exactly two seconds of steady streaming.
+    cascade::core::SpectrumFrame frame;
+    const auto firstDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < firstDeadline) {
+        pipeline.getLatestFrame(frame);
+        if (frame.seq >= 1) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (frame.seq < 1) {
+        pipeline.stop();
+        std::printf("soapy-check FAIL no spectrum frames within 30 s (%s)\n",
+                    pipeline.activeSource().lastError());
+        return 1;
+    }
+    const std::uint64_t seqAtStart = frame.seq;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    pipeline.getLatestFrame(frame);
+    const std::uint64_t frames = frame.seq - seqAtStart;
+    pipeline.stop();
+
+    if (frames < 20) {
+        std::printf("soapy-check FAIL only %llu frames in 2 s (>= 20 required)\n",
+                    static_cast<unsigned long long>(frames));
+        return 1;
+    }
+    if (std::fabs(actualRate - 2'000'000.0) > 0.01 * 2'000'000.0) {
+        std::printf("soapy-check FAIL rate readback %.0f not within 1%% of 2000000\n",
+                    actualRate);
+        return 1;
+    }
+    std::printf("soapy-check PASS frames=%llu rate=%.0f\n",
+                static_cast<unsigned long long>(frames), actualRate);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     int frames = -1;  // negative: run until the window is closed
     bool selftest = false;
+    bool soapyCheck = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
@@ -172,6 +268,11 @@ int main(int argc, char** argv) {
             ++i;  // consumed the value argument
         } else if (std::strcmp(argv[i], "--selftest") == 0) {
             selftest = true;
+        } else if (std::strcmp(argv[i], "--soapy-check") == 0) {
+            // Hidden bench diagnostic (see runSoapyCheck): not in the usage
+            // string on purpose — it requires attached hardware, so
+            // advertising it in CI-facing help would only invite red herrings.
+            soapyCheck = true;
         } else {
             std::fprintf(stderr,
                          "cascade: unknown argument '%s' (usage: cascade [--frames N] [--selftest])\n",
@@ -181,8 +282,10 @@ int main(int argc, char** argv) {
     }
 
     // Headless mode wins over --frames: a selftest that opened a window would
-    // defeat its purpose (running where no display exists).
+    // defeat its purpose (running where no display exists). Same for the
+    // hardware bench check, which is likewise headless.
     if (selftest) { return runSelftest(); }
+    if (soapyCheck) { return runSoapyCheck(); }
 
     cascade::gui::AppWindow app;
     return app.run(frames);
