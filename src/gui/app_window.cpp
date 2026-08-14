@@ -4,6 +4,7 @@
 #include "gui/app_window.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -52,7 +53,8 @@ void glfwErrorCallback(int code, const char* description) {
 }  // namespace
 
 AppWindow::AppWindow()
-    : pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha}),
+    : pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
+                                                /*audioEnabled=*/true}),
       spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)) {
     // Demo signal until real sources land (P4): two tones at distinct offsets
@@ -64,6 +66,17 @@ AppWindow::AppWindow()
     gen.setTone(1, -500000.0, -45.0f);
     gen.setNoiseFloorDb(-90.0f);
     spectrum_->setRange(dbMin_, dbMax_);
+
+    // Park the VFO on demo tone 0 so the receiver is tuned to something from
+    // the first Play: WFM (the default mode) renders an unmodulated carrier
+    // as near-silence, and switching to CW yields the 700 Hz sidetone.
+    pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
+    pipeline_.audio().setVolume(volume_);
+    devices_ = pipeline_.audio().listOutputDevices();
+    for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
+        if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
+    }
+    if (deviceIndex_ < 0 && !devices_.empty()) { deviceIndex_ = 0; }
 }
 
 AppWindow::~AppWindow() = default;
@@ -213,7 +226,9 @@ void AppWindow::drawToolbar() {
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0f);
-    ImGui::SliderFloat("##volume", &volume_, 0.0f, 1.0f, "Vol %.2f");
+    if (ImGui::SliderFloat("##volume", &volume_, 0.0f, 1.0f, "Vol %.2f")) {
+        pipeline_.audio().setVolume(volume_);
+    }
     ImGui::SameLine(0.0f, 24.0f);
     drawFrequencyReadout();
 }
@@ -254,9 +269,24 @@ void AppWindow::drawMenuColumn() {
     }
     if (ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen)) {
         static const char* kModes[] = {"NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"};
+        // Button order is the SDR++ parity layout; the enum order differs
+        // (LSB before CW), so the mapping is by name, never by index.
+        static constexpr cascade::dsp::DemodMode kModeMap[] = {
+            cascade::dsp::DemodMode::NFM, cascade::dsp::DemodMode::WFM,
+            cascade::dsp::DemodMode::AM,  cascade::dsp::DemodMode::DSB,
+            cascade::dsp::DemodMode::USB, cascade::dsp::DemodMode::CW,
+            cascade::dsp::DemodMode::LSB, cascade::dsp::DemodMode::RAW};
+        // Bandwidth options offered in the combo, widest first.
+        static const char* kBwLabels[] = {"200k", "150k", "12.5k", "10k", "6k", "3k"};
+        static constexpr double kBwHz[] = {200000.0, 150000.0, 12500.0,
+                                           10000.0,  6000.0,   3000.0};
+        // Per-mode default bandwidth (index into kBwHz), applied when a mode
+        // button is clicked; the combo below still allows any override.
+        // Rationale: WFM broadcast channel 150k; NFM two-way channel 12.5k;
+        // AM/DSB broadcast channel ~10k (both sidebands); SSB/CW voice/keying
+        // fits in 3k; RAW passes the full 200k channel for diagnostics.
+        static constexpr int kModeDefaultBw[] = {2, 1, 3, 3, 5, 5, 5, 0};
         constexpr int kColumns = 4;
-        // Cosmetic mode selector: remembers the pick, drives nothing until
-        // the demodulator chain exists.
         const float cellWidth =
             (ImGui::GetContentRegionAvail().x -
              static_cast<float>(kColumns - 1) * ImGui::GetStyle().ItemSpacing.x) /
@@ -268,12 +298,60 @@ void AppWindow::drawMenuColumn() {
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             }
-            if (ImGui::Button(kModes[i], ImVec2(cellWidth, 0.0f))) { modeIndex_ = i; }
+            if (ImGui::Button(kModes[i], ImVec2(cellWidth, 0.0f))) {
+                modeIndex_ = i;
+                pipeline_.setDemodMode(kModeMap[i]);
+                bandwidthIndex_ = kModeDefaultBw[i];
+                pipeline_.setVfoBandwidthHz(kBwHz[bandwidthIndex_]);
+            }
             if (selected) { ImGui::PopStyleColor(); }
         }
+
+        // VFO offset from the input center. The slider edits kHz (a 1 Hz-per-
+        // pixel float slider over a 1 MHz span would be unusable); the
+        // pipeline takes Hz.
+        if (ImGui::SliderFloat("VFO", &vfoOffsetKhz_, -500.0f, 500.0f, "%.0f kHz")) {
+            pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
+        }
+        if (ImGui::Combo("Bandwidth", &bandwidthIndex_, kBwLabels,
+                         static_cast<int>(sizeof(kBwLabels) / sizeof(kBwLabels[0])))) {
+            pipeline_.setVfoBandwidthHz(kBwHz[bandwidthIndex_]);
+        }
+        if (ImGui::SliderFloat("Squelch", &squelchDb_, -120.0f, 0.0f, "%.0f dB")) {
+            pipeline_.setSquelchDb(squelchDb_);
+        }
+
+        // S-meter: channel power mapped over the squelch slider's own
+        // [-120, 0] dB span, so the bar and the threshold share a scale.
+        const float sDb = pipeline_.signalPowerDb();
+        float frac = (sDb + 120.0f) / 120.0f;
+        frac = std::clamp(frac, 0.0f, 1.0f);
+        char overlay[32];
+        std::snprintf(overlay, sizeof(overlay), "%.1f dB", static_cast<double>(sDb));
+        ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
     }
     if (ImGui::CollapsingHeader("Sinks", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextDisabled("Audio sink not wired yet");
+        if (devices_.empty()) {
+            ImGui::TextDisabled("No audio output devices");
+        } else if (ImGui::BeginCombo(
+                       "Device",
+                       devices_[static_cast<std::size_t>(deviceIndex_)].name.c_str())) {
+            for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
+                const auto& dev = devices_[static_cast<std::size_t>(i)];
+                // PushID: PortAudio lists one physical device once per host
+                // API with an identical name; the index keeps ImGui IDs unique.
+                ImGui::PushID(i);
+                if (ImGui::Selectable(dev.name.c_str(), i == deviceIndex_)) {
+                    deviceIndex_ = i;
+                    // Re-open on change: open() closes the old stream first,
+                    // so this is the whole device-switch operation.
+                    pipeline_.audio().open(dev.index,
+                                           cascade::core::Pipeline::kAudioRateHz);
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
     }
     if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         // One shared dB range drives both the spectrum axis and the waterfall

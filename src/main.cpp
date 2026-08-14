@@ -3,14 +3,17 @@
 // Thin entry point: parse the command line, hand off to the GUI shell.
 // `--frames N` renders exactly N frames then exits 0 — the bounded-run
 // contract the app_smoke ctest entry relies on. `--selftest` runs the
-// pipeline headless (no window, no GL) and checks the demo signal's peak
-// lands on the right FFT bin. No flag: run until the window is closed.
+// pipeline headless (no window, no GL, no audio device) and checks that the
+// demo signal's peak lands on the right FFT bin AND that the audio chain
+// demodulates a CW carrier to its 700 Hz sidetone. No flag: run until the
+// window is closed.
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <vector>
 
 #include "core/pipeline.hpp"
 #include "gui/app_window.hpp"
@@ -26,6 +29,7 @@ int runSelftest() {
     cfg.sampleRateHz = 2'000'000.0;
     cfg.fftSize = 1024;
     cfg.averagingAlpha = 0.5f;
+    cfg.audioEnabled = false;  // the audio chain still runs; no device needed
 
     cascade::core::Pipeline pipeline(cfg);
     cascade::source::SigGen& gen = pipeline.sigGen();
@@ -44,9 +48,9 @@ int runSelftest() {
         if (frame.seq >= 5) { break; }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    pipeline.stop();
 
     if (frame.seq < 5) {
+        pipeline.stop();
         std::printf("selftest FAIL only %llu frames within 10 s\n",
                     static_cast<unsigned long long>(frame.seq));
         return 1;
@@ -67,10 +71,81 @@ int runSelftest() {
         static_cast<int>(std::lround(300000.0 / cfg.sampleRateHz *
                                      static_cast<double>(cfg.fftSize)));
     if (peakBin < expected - 2 || peakBin > expected + 2) {
+        pipeline.stop();
         std::printf("selftest FAIL peak_bin=%d expected=%d +/-2\n", peakBin, expected);
         return 1;
     }
-    std::printf("selftest PASS peak_bin=%d\n", peakBin);
+
+    // --- Audio-chain check (P3) ---------------------------------------------
+    // Tune the VFO onto demo tone 0 and demodulate it as CW: the carrier at
+    // the VFO center must beat at the 700 Hz sidetone. The chain is tapped
+    // BEFORE AudioOut (Pipeline::audioTap / audioSamplesProduced), so this
+    // verifies VFO -> demod -> AGC -> squelch -> resampler with no device.
+    pipeline.setDemodMode(cascade::dsp::DemodMode::CW);
+    pipeline.setVfoOffsetHz(300000.0);
+
+    // Let >= 24000 post-switch samples (0.5 s at 48 kHz) flow so the squelch
+    // has opened and the tap window holds pure steady-state CW audio.
+    const std::uint64_t base = pipeline.audioSamplesProduced();
+    std::uint64_t produced = 0;
+    const auto audioDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < audioDeadline) {
+        produced = pipeline.audioSamplesProduced() - base;
+        if (produced >= 24000) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (produced < 24000) {
+        pipeline.stop();
+        std::printf("selftest FAIL only %llu audio samples within 10 s\n",
+                    static_cast<unsigned long long>(produced));
+        return 1;
+    }
+
+    std::vector<float> window(4096);
+    const std::size_t got = pipeline.audioTap(window.data(), window.size());
+    pipeline.stop();
+    if (got < window.size()) {
+        std::printf("selftest FAIL audio tap returned %llu of %llu samples\n",
+                    static_cast<unsigned long long>(got),
+                    static_cast<unsigned long long>(window.size()));
+        return 1;
+    }
+
+    // Dominant DFT frequency over the captured window: direct DFT (no
+    // dependency on the FFT wrapper — an independent reference, per the
+    // testing protocol), rectangular window, bins 1..N/2 so DC never wins.
+    const std::size_t nWin = window.size();
+    std::size_t bestBin = 1;
+    double bestPow = -1.0;
+    for (std::size_t k = 1; k <= nWin / 2; ++k) {
+        double re = 0.0;
+        double im = 0.0;
+        const double w = -2.0 * 3.14159265358979323846 *
+                         static_cast<double>(k) / static_cast<double>(nWin);
+        for (std::size_t i = 0; i < nWin; ++i) {
+            const double angle = w * static_cast<double>(i);
+            const double x = static_cast<double>(window[i]);
+            re += x * std::cos(angle);
+            im += x * std::sin(angle);
+        }
+        const double p = re * re + im * im;
+        if (p > bestPow) {
+            bestPow = p;
+            bestBin = k;
+        }
+    }
+    const double audioHz = static_cast<double>(bestBin) *
+                           cascade::core::Pipeline::kAudioRateHz /
+                           static_cast<double>(nWin);
+
+    // CW sidetone is 700 Hz (dsp/demod.cpp kCwToneHz). +/-40 Hz covers the
+    // 48000/4096 = 11.7 Hz bin quantization with margin.
+    if (std::fabs(audioHz - 700.0) > 40.0) {
+        std::printf("selftest FAIL audio_hz=%.1f expected 700 +/-40\n", audioHz);
+        return 1;
+    }
+    std::printf("selftest PASS peak_bin=%d audio_hz=%.1f\n", peakBin, audioHz);
     return 0;
 }
 

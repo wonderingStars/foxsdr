@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include "core/pipeline.hpp"
 
@@ -60,10 +61,22 @@ private:
     float dbMin_ = -110.0f;
     float dbMax_ = 0.0f;
 
-    // Placeholder UI state for controls that do not drive DSP yet.
+    // Radio/Sinks control state. The pipeline owns the live DSP values; these
+    // mirrors exist because ImGui widgets edit by pointer. Defaults match the
+    // pipeline's own defaults (WFM, 150 kHz bandwidth, -50 dB squelch) except
+    // the VFO offset, which the constructor pushes to +300 kHz so the demo
+    // tone 0 sits on the VFO — near-silent in WFM (an unmodulated carrier
+    // demodulates to DC), a clean 700 Hz sidetone in CW.
     float volume_ = 0.5f;
     unsigned long long frequencyHz_ = 100000000ULL;  // 100 MHz per parity spec
     int modeIndex_ = 1;                              // WFM
+    float vfoOffsetKhz_ = 300.0f;
+    int bandwidthIndex_ = 1;                         // 150k
+    float squelchDb_ = -50.0f;
+    // Output devices, enumerated once at construction (a hot-plug refresh can
+    // come with the settings work in P5); index into devices_, -1 when empty.
+    std::vector<cascade::sink::AudioDevice> devices_;
+    int deviceIndex_ = -1;
     float splitRatio_ = 0.4f;  // spectrum's share of the center area
 };
 
