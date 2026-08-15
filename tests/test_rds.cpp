@@ -222,6 +222,12 @@ struct MpxOpts {
     double halfRateHz = kHalfBitRateHz;  // lets a bit-clock error be injected
     bool stereo = true;        // mono audio + 19 kHz pilot + 38 kHz L-R
     std::size_t leadSamples = 0;
+    // Uniform white noise added across the whole composite. The channel filter
+    // keeps only +/-3.2 kHz of it around 57 kHz, and 517 taps of averaging make
+    // what survives Gaussian, so a uniform generator is a fair stand-in for
+    // receiver noise and stays exactly reproducible from the seed.
+    double noiseAmp = 0.0;
+    std::uint32_t noiseSeed = 0x5EED1234u;
 };
 
 // Sums the modulated RDS subcarrier into a broadcast composite. The stereo
@@ -233,9 +239,15 @@ std::vector<float> makeComposite(const std::vector<int>& levels,
     const std::size_t dataSamples = static_cast<std::size_t>(
         std::ceil(static_cast<double>(levels.size()) / o.halfRateHz * o.fs));
     std::vector<float> mpx(o.leadSamples + dataSamples, 0.0f);
+    std::uint32_t nseed = o.noiseSeed;
     for (std::size_t i = 0; i < mpx.size(); ++i) {
         const double t = static_cast<double>(i) / o.fs;
         double v = 0.0;
+        if (o.noiseAmp > 0.0) {
+            nseed = nseed * 1664525u + 1013904223u;
+            v += o.noiseAmp *
+                 (static_cast<double>(nseed >> 8) * (2.0 / 16777216.0) - 1.0);
+        }
         if (o.stereo) {
             v += 0.45 * std::sin(kTwoPi * 1000.0 * t);   // L+R programme audio
             v += 0.09 * std::sin(kTwoPi * 19000.0 * t);  // stereo pilot
@@ -357,6 +369,121 @@ int main() {
             CHECK(!st.ta);
             CHECK(st.pty == 22u);
             CHECK(st.radioText.empty());  // no group 2 was ever sent
+        }
+    }
+
+    // --- Inverted line code decodes identically ------------------------------
+    // Every biphase half-bit negated. This is the convention question that
+    // cannot be settled from the standard without the document in hand: does a
+    // data 1 send (+,-) or (-,+)? The answer must not matter, because the
+    // differential coding makes d[k] = t[k] XOR t[k-1] invariant under a global
+    // inversion — the same property that absorbs the carrier loop's 180-degree
+    // ambiguity. An encoder and decoder that shared an inverted convention
+    // would pass every other test here and still fail on air, so this test
+    // fixes the polarity question by making it irrelevant.
+    {
+        const Payload p{0x4A7Bu, "INVERTED", "inverted line code", 12u, true,
+                        false};
+        MpxOpts o;
+        o.phase0 = 0.6;
+        const std::vector<std::uint8_t> bits = buildStream(p, 3);
+
+        std::vector<int> normal = biphaseLevels(bits, 0);
+        std::vector<int> flipped = normal;
+        for (int& lv : flipped) { lv = -lv; }
+
+        RdsDecoder dn(o.fs);
+        const RdsState sn = runDecoder(dn, makeComposite(normal, o));
+        RdsDecoder di(o.fs);
+        const RdsState si = runDecoder(di, makeComposite(flipped, o));
+
+        CHECK(dn.synced());
+        CHECK(di.synced());
+        CHECK(sn.ps == "INVERTED");
+        CHECK(si.ps == "INVERTED");      // the whole point
+        CHECK(si.pi == 0x4A7Bu);
+        CHECK(si.radioText == "inverted line code");
+        CHECK(si.pty == 12u);
+        CHECK(si.tp);
+        CHECK(!si.ta);
+        // Not merely "both work": inversion must be a no-op, so every field
+        // and both counters have to match the un-inverted run exactly.
+        CHECK(si.pi == sn.pi);
+        CHECK(si.ps == sn.ps);
+        CHECK(si.radioText == sn.radioText);
+        CHECK(si.groupsDecoded == sn.groupsDecoded);
+        CHECK(si.blockErrors == sn.blockErrors);
+        CHECK(sn.blockErrors == 0u);
+    }
+
+    // --- The other biphase pairing ------------------------------------------
+    // Delaying the transmission by ONE half-bit swaps which pairing of the
+    // half-bit stream is the correct one, forcing the decoder's energy metric
+    // to select the opposite alignment. Without that metric the bit boundary
+    // would be wrong half the time on air.
+    {
+        const Payload p{0x11C7u, "HALFSHIF", "", 4u, false, false};
+        MpxOpts o;
+        o.phase0 = 1.4;
+        o.stereo = false;
+        std::vector<int> shifted = biphaseLevels(buildStream(p, 3), 0);
+        shifted.insert(shifted.begin(), shifted.front());
+
+        RdsDecoder d(o.fs);
+        const RdsState st = runDecoder(d, makeComposite(shifted, o));
+        CHECK(d.synced());
+        CHECK(st.psValid);
+        CHECK(st.ps == "HALFSHIF");
+        CHECK(st.pi == 0x11C7u);
+    }
+
+    // --- Noisy channel: a sensitivity regression guard ------------------------
+    // Off-air measurement (2026-08-15, BBC Radio Lancashire on 95.5 MHz and
+    // Heart on 105.4 MHz) showed this decoder locking at block error rates of
+    // 7.6% and 32.7%. This test pins comparable behaviour synthetically so a
+    // future change that quietly costs several dB of sensitivity fails here
+    // rather than only on a bench radio.
+    {
+        const Payload p{0x2B8Du, "NOISYCH ", "noisy", 6u, true, true};
+        MpxOpts o;
+        o.phase0 = 2.0;
+        // 0.25 was chosen by measuring the cliff rather than guessing: across
+        // three noise seeds this decoder is reliable to 0.28 and starts failing
+        // at 0.32, so 0.25 sits about 2 dB inside the edge. Three seeds, not
+        // one, so the result cannot hinge on a single lucky noise realisation.
+        std::uint32_t totalErrors = 0;
+        for (std::uint32_t seed : {0x5EED1234u, 0x0BADF00Du, 0x13579BDFu}) {
+            MpxOpts o2 = o;
+            o2.noiseAmp = 0.25;
+            o2.noiseSeed = seed;
+            RdsDecoder d(o2.fs);
+            const RdsState st = runDecoder(d, encodeToMpx(p, 4, o2));
+            CHECK(d.synced());
+            CHECK(st.piValid);
+            CHECK(st.pi == 0x2B8Du);
+            CHECK(st.psValid);
+            // Noise must never produce WRONG characters — a block reaches the
+            // group decoder only after its checkword passes — so the recovered
+            // text is exact or absent, never corrupted.
+            CHECK(st.ps == "NOISYCH ");
+            CHECK(st.radioText == "noisy");
+            CHECK(st.groupsDecoded > 0u);
+            totalErrors += st.blockErrors;
+        }
+        // The noise is genuinely reaching the decoder: if it were not (a broken
+        // generator, a filter that removed it), every block would pass and this
+        // would be a test of nothing.
+        CHECK(totalErrors > 0u);
+
+        // And it does not hallucinate a station out of overwhelming noise.
+        {
+            MpxOpts o3 = o;
+            o3.noiseAmp = 3.0;
+            RdsDecoder d(o3.fs);
+            const RdsState st = runDecoder(d, encodeToMpx(p, 4, o3));
+            CHECK(!d.synced());
+            CHECK(!st.psValid);
+            CHECK(st.ps.empty());
         }
     }
 

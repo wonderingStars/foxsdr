@@ -7,6 +7,7 @@
 // demo signal's peak lands on the right FFT bin AND that the audio chain
 // demodulates a CW carrier to its 700 Hz sidetone. No flag: run until the
 // window is closed.
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -393,7 +394,51 @@ int runToneCheck() {
 // subcarrier on the FM composite, and the audio path's de-emphasis would
 // crush it (a 50 us one-pole is ~40 dB down at 57 kHz). So: Vfo -> WFM
 // discriminator with de-emphasis explicitly OFF -> RdsDecoder.
+// Diagnostic support for the above (added during the off-air RDS debug,
+// 2026-08-15). The B200 is USB-exclusive and a hardware run costs 45 s, so the
+// bench can CAPTURE the demodulated composite it feeds the decoder
+// (CASCADE_RDS_MPX=<path>, raw little-endian float32 at 250 kHz) and REPLAY it
+// later (CASCADE_RDS_REPLAY=<path>) with no radio attached. Replaying a real
+// broadcast turns a hardware-in-the-loop debug into an offline one that runs in
+// a second, and the capture doubles as a permanent off-air regression fixture.
+int runRdsReplay(const char* path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        std::printf("rds-check FAIL cannot open replay file %s\n", path);
+        return 1;
+    }
+    constexpr double kChanRate = 250'000.0;
+    cascade::dsp::RdsDecoder rds(kChanRate);
+    std::vector<float> block(65536);
+    std::uint64_t fed = 0;
+    while (in) {
+        in.read(reinterpret_cast<char*>(block.data()),
+                static_cast<std::streamsize>(block.size() * sizeof(float)));
+        const std::size_t got =
+            static_cast<std::size_t>(in.gcount()) / sizeof(float);
+        if (got == 0) { break; }
+        rds.process(block.data(), got);
+        fed += got;
+    }
+    const cascade::dsp::RdsState st = rds.state();
+    std::printf("rds-replay %s synced=%d pi=%04X piValid=%d ps=\"%s\" psValid=%d "
+                "pty=%u tp=%d ta=%d groups=%u blockErrors=%u fed=%llu (%.1f s)\n",
+                (st.piValid && st.psValid) ? "PASS" : "FAIL", rds.synced() ? 1 : 0,
+                st.pi, st.piValid ? 1 : 0, st.ps.c_str(), st.psValid ? 1 : 0,
+                static_cast<unsigned>(st.pty), st.tp ? 1 : 0, st.ta ? 1 : 0,
+                st.groupsDecoded, st.blockErrors,
+                static_cast<unsigned long long>(fed),
+                static_cast<double>(fed) / kChanRate);
+    if (!st.radioText.empty()) {
+        std::printf("rds-replay radiotext=\"%s\"\n", st.radioText.c_str());
+    }
+    return (st.piValid && st.psValid) ? 0 : 1;
+}
+
 int runRdsCheck(double centerHz) {
+    if (const char* replay = std::getenv("CASCADE_RDS_REPLAY")) {
+        return runRdsReplay(replay);
+    }
     if (!cascade::source::SoapySource::runtimeAvailable()) {
         std::printf("rds-check FAIL SoapySDR runtime not available\n");
         return 1;
@@ -420,7 +465,20 @@ int runRdsCheck(double centerHz) {
     // main carrier is the first thing to vanish in the noise. The GUI pushes a
     // default too; this path has no UI to do it.
     src.setAutoGain(false);
-    for (const std::string& g : src.listGainNames()) { src.setGainDb(g, 50.0); }
+    // CASCADE_RDS_GAIN overrides the 50 dB default (diagnostic: RDS sits at the
+    // top of the FM baseband where demodulator noise is worst, so it is the
+    // first thing lost to a poor carrier-to-noise ratio — gain is the cheapest
+    // variable to sweep when it fails to appear).
+    double gainDb = 50.0;
+    if (const char* g = std::getenv("CASCADE_RDS_GAIN")) {
+        const double v = std::strtod(g, nullptr);
+        if (v > 0.0) { gainDb = v; }
+    }
+    for (const std::string& g : src.listGainNames()) {
+        const bool ok = src.setGainDb(g, gainDb);
+        std::printf("rds-check gain %s := %.1f dB (%s)\n", g.c_str(), gainDb,
+                    ok ? "accepted" : "REFUSED");
+    }
     if (!src.start()) {
         std::printf("rds-check FAIL start: %s\n", src.lastError());
         return 1;
@@ -441,18 +499,58 @@ int runRdsCheck(double centerHz) {
     std::vector<std::complex<float>> chan(65536);
     std::vector<float> mpx(65536);
 
+    // Optional capture of the exact composite handed to the decoder.
+    std::ofstream capture;
+    if (const char* capPath = std::getenv("CASCADE_RDS_MPX")) {
+        capture.open(capPath, std::ios::binary | std::ios::trunc);
+        if (!capture) { std::printf("rds-check WARN cannot write %s\n", capPath); }
+    }
+    // Optional capture of the RAW IQ ahead of the channel filter, so the whole
+    // chain (channel bandwidth included) can be re-run offline. Capped and
+    // terminating, because 2 MS/s of complex float is 16 MB per second.
+    std::ofstream iqCapture;
+    std::uint64_t iqSamplesLeft = 0;
+    if (const char* iqPath = std::getenv("CASCADE_RDS_IQ")) {
+        iqCapture.open(iqPath, std::ios::binary | std::ios::trunc);
+        if (!iqCapture) { std::printf("rds-check WARN cannot write %s\n", iqPath); }
+        const char* secs = std::getenv("CASCADE_RDS_IQ_SECS");
+        const double s = secs ? std::strtod(secs, nullptr) : 10.0;
+        iqSamplesLeft = static_cast<std::uint64_t>((s > 0.0 ? s : 10.0) * kRate);
+    }
+
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
     std::uint64_t fedSamples = 0;
     while (std::chrono::steady_clock::now() < deadline) {
         const std::size_t got = src.read(raw.data(), raw.size());
         if (got == 0) { continue; }  // self-paced timeout: retry per contract
+        if (iqCapture && iqSamplesLeft > 0) {
+            const std::size_t take = static_cast<std::size_t>(
+                std::min<std::uint64_t>(iqSamplesLeft, got));
+            iqCapture.write(reinterpret_cast<const char*>(raw.data()),
+                            static_cast<std::streamsize>(
+                                take * sizeof(std::complex<float>)));
+            iqSamplesLeft -= take;
+            if (iqSamplesLeft == 0) {
+                iqCapture.close();
+                std::printf("rds-check IQ capture complete\n");
+                break;
+            }
+        }
         const std::size_t m = vfo.process(raw.data(), got, chan.data(), chan.size());
         if (m == 0) { continue; }
         demod.process(chan.data(), m, mpx.data());
+        if (capture) {
+            capture.write(reinterpret_cast<const char*>(mpx.data()),
+                          static_cast<std::streamsize>(m * sizeof(float)));
+        }
         rds.process(mpx.data(), m);
         fedSamples += m;
         const cascade::dsp::RdsState st = rds.state();
-        if (st.piValid && st.psValid) {
+        // CASCADE_RDS_FULL keeps running past the first good PS so the block
+        // error RATE and the complete RadioText can be observed, rather than
+        // just "it locked once".
+        static const bool kRunFull = std::getenv("CASCADE_RDS_FULL") != nullptr;
+        if (st.piValid && st.psValid && !kRunFull) {
             src.stop();
             std::printf("rds-check PASS pi=%04X ps=\"%s\" pty=%u groups=%u blockErrors=%u\n",
                         st.pi, st.ps.c_str(), static_cast<unsigned>(st.pty),
@@ -492,6 +590,18 @@ int runRdsCheck(double centerHz) {
         return (avgP > 0.0) ? 10.0 * std::log10(binP / avgP + 1e-30) : -200.0;
     };
 
+    if (st.piValid && st.psValid) {
+        std::printf("rds-check PASS(full) pi=%04X ps=\"%s\" pty=%u tp=%d ta=%d "
+                    "groups=%u blockErrors=%u (%.2f%% of blocks) synced=%d\n",
+                    st.pi, st.ps.c_str(), static_cast<unsigned>(st.pty),
+                    st.tp ? 1 : 0, st.ta ? 1 : 0, st.groupsDecoded, st.blockErrors,
+                    st.groupsDecoded ? 100.0 * st.blockErrors /
+                                           (4.0 * st.groupsDecoded)
+                                     : 0.0,
+                    rds.synced() ? 1 : 0);
+        std::printf("rds-check radiotext=\"%s\"\n", st.radioText.c_str());
+        return 0;
+    }
     std::printf("rds-check FAIL no PS within 45 s (synced=%d pi=%04X piValid=%d "
                 "groups=%u blockErrors=%u fed=%llu)\n",
                 rds.synced() ? 1 : 0, st.pi, st.piValid ? 1 : 0, st.groupsDecoded,
