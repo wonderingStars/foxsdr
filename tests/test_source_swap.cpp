@@ -147,6 +147,8 @@ public:
     static constexpr std::uint64_t kBatch = 2000;
     static constexpr std::int64_t kIntervalMs = 5;
     static constexpr milliseconds kReadTimeout{2};
+    // Reads forced to return empty before any data flows (see read()).
+    static constexpr int kForcedEmptyReads = 3;
 
     bool start() override {
         std::lock_guard<std::mutex> lk(m_);
@@ -174,6 +176,19 @@ public:
     std::size_t read(std::complex<float>* dst, std::size_t n) override {
         ReadScope scope(st_);
         if (dst == nullptr || n == 0) { return 0; }
+        // Deterministic starve window. The retry-after-empty property used to
+        // be left to timing luck ("a 2 ms timeout must expire inside a 5 ms
+        // batch interval"), which is only true on an idle machine: under load
+        // the reads land after data is already due and zeroReturns stays 0.
+        // Measured 13 failures in 40 isolated runs. Forcing the first few
+        // reads to return empty makes the property tested by construction
+        // instead of by hope — and tests it harder, since the pipeline now
+        // meets an empty source immediately at startup.
+        if (forcedEmpty_.load(std::memory_order_relaxed) > 0) {
+            forcedEmpty_.fetch_sub(1, std::memory_order_relaxed);
+            st_.zeroReturns.fetch_add(1);
+            return 0;
+        }
         std::unique_lock<std::mutex> lk(m_);
         // Bounded block: due samples, abort, or timeout — whichever first.
         cv_.wait_for(lk, kReadTimeout, [&] { return abort_ || dueNow() > given_; });
@@ -219,6 +234,7 @@ private:
     std::uint64_t given_ = 0;
     bool started_ = false;
     bool abort_ = false;
+    std::atomic<int> forcedEmpty_{kForcedEmptyReads};
 };
 
 // Self-paced fake that never has data: read() parks for up to 10 s waiting —
@@ -440,10 +456,12 @@ int main() {
             }));
             CHECK(mSt.delivered.load() == kTotal);  // source-side conservation
             CHECK(f.seq >= expectMin);              // >= floor(N/fft) - 1 frames
-            // The schedule guarantees empty bounded-block timeouts (2 ms
-            // timeout vs 5 ms batch interval); deliveries continued after
-            // them, so the pipeline retried rather than treating 0 as EOF.
-            CHECK(mSt.zeroReturns.load() > 0);
+            // The source forces its first kForcedEmptyReads reads to return
+            // empty (and may time out empty later too), so this is guaranteed
+            // by construction rather than by timing. Deliveries continued
+            // afterwards, which is the actual property: the pipeline retried
+            // instead of treating 0 as end-of-stream.
+            CHECK(mSt.zeroReturns.load() >= MeteredSource::kForcedEmptyReads);
 
             p.stop();
         }
