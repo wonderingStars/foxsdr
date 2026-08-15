@@ -36,6 +36,32 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
+## Plugins
+
+Decoders can be installed as separate native plugins, from an in-app
+catalogue ("Plugins" -> "Get plugins"). The catalogue is contacted only when
+you press Browse: nothing is fetched at startup, and no plugin ever updates
+itself.
+
+Security model, in one line: every download is https, sha256-verified against
+the catalogue before it is allowed to become a file, size-capped, refused on a
+cross-host redirect, and written under a sanitised bare filename inside the
+plugins directory.
+
+Compatibility is ABI-exact. A plugin must be built against this host's
+`src/core/plugin_abi.h` and declare exactly its ABI version — a near miss is
+refused rather than loaded, because a struct-layout difference becomes memory
+corruption days later. A plugin built for an older FoxSDR therefore needs a
+new build from its author; no update can fix it.
+
+Retirement: the catalogue may publish a minimum supported version per plugin.
+That floor is cached locally the moment a catalogue is seen, so it applies
+offline and forever after, and an installed plugin below it is **disabled** —
+renamed out of the scan, so it is never loaded into the process — and shown in
+red with a one-click Update when the catalogue has a newer build. Plugins the
+catalogue has never described (private or hand-installed builds) are left
+alone and keep loading.
+
 ## Installer
 
 A Windows installer (Inno Setup 6) lives under `installer/` — it packages

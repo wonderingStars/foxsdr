@@ -16,7 +16,7 @@
 ; SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #define AppName "FoxSDR"
-#define AppVersion "0.11.0"
+#define AppVersion "0.12.0"
 #define AppPublisher "Steven Fairclough"
 #define AppExe "cascade.exe"
 ; Install-dir leaf avoids '+' (some tools mishandle it in paths); display name keeps it.

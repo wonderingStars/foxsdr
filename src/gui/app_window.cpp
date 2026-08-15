@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -282,7 +283,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
-           a.pluginBrowserOpen == b.pluginBrowserOpen;
+           a.pluginBrowserOpen == b.pluginBrowserOpen &&
+           a.pluginLastUpdateCheck == b.pluginLastUpdateCheck;
 }
 
 // --- Plugin browser helpers (P9) ---------------------------------------------
@@ -590,9 +592,15 @@ int AppWindow::run(int frames) {
     // environment variable.
     pluginTestHook_.clear();
     pluginTestStarted_ = false;
+    pluginStatusHook_ = false;
     if (frames >= 0) {
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        // The enforcement diagnostic (see reportPluginStatus). Same rules: only
+        // in a bounded run, and silent unless asked for, so the
+        // byte-identical-stdout contract of a plain --frames run is untouched.
+        const char* status = std::getenv("CASCADE_PLUGIN_STATUS");
+        pluginStatusHook_ = (status != nullptr && *status != '\0');
     }
 
     int rendered = 0;
@@ -645,6 +653,11 @@ int AppWindow::run(int frames) {
     // the pipeline teardown below ends the sample flow they were taping.
     stopIqRecording();
     stopAudioRecording();
+
+    // The enforcement diagnostic, printed at the END so it reports the state
+    // the run actually finished in — including any retirement that a catalogue
+    // fetch during the run brought into force.
+    if (pluginStatusHook_) { reportPluginStatus(); }
 
     // Clean-exit save, unconditional: cheap, and it guarantees the on-disk
     // config matches the final session state even when the debounce never
@@ -1737,16 +1750,150 @@ void AppWindow::drawAudioFilterSection() {
 
 // --- Plugins (P7) ---------------------------------------------------------------
 
+const char* AppWindow::pluginQuarantineSuffix() { return ".disabled"; }
+
+bool AppWindow::restoreQuarantinedPlugins(std::string& error) {
+    error.clear();
+    const std::string suffix = pluginQuarantineSuffix();
+    std::error_code ec;
+    const std::filesystem::path dir(pluginDir_);
+    if (!std::filesystem::is_directory(dir, ec)) { return true; }
+
+    // Collected first, renamed after: renaming inside a directory_iterator
+    // walk is the classic way to get an implementation-defined half-listing.
+    std::vector<std::string> quarantined;
+    for (auto it = std::filesystem::directory_iterator(
+             dir, std::filesystem::directory_options::skip_permission_denied, ec);
+         !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+        std::error_code fec;
+        if (!it->is_regular_file(fec) || fec) { continue; }
+        const std::string name = it->path().filename().string();
+        if (name.size() <= suffix.size()) { continue; }
+        if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) { continue; }
+        // The live name this would restore to must be a name install() could
+        // itself have written. Anything else is not ours and is left alone —
+        // the same "unmanaged means unmanaged" rule the inventory follows.
+        const std::string base = name.substr(0, name.size() - suffix.size());
+        std::string safe;
+        std::string sanErr;
+        if (!cascade::core::PluginRepo::sanitiseFileName(base, safe, sanErr)) { continue; }
+        quarantined.push_back(safe);
+    }
+
+    for (const std::string& file : quarantined) {
+        const std::filesystem::path live = dir / file;
+        const std::filesystem::path aside = dir / (file + suffix);
+        std::error_code rec;
+        if (std::filesystem::exists(live, rec)) {
+            // An update (or a hand-install) landed while this copy was aside.
+            // The live file is the one that counts; the leftover is stale
+            // bytes under a hidden name, so it goes.
+            std::filesystem::remove(aside, rec);
+            if (rec) {
+                error = "cannot delete the superseded \"" + aside.string() + "\": " + rec.message();
+            }
+            continue;
+        }
+        std::filesystem::rename(aside, live, rec);
+        if (rec) {
+            error = "cannot re-enable \"" + live.string() + "\": " + rec.message();
+        }
+    }
+    return error.empty();
+}
+
+bool AppWindow::quarantineBlockedPlugins(std::string& error) {
+    error.clear();
+    const std::string suffix = pluginQuarantineSuffix();
+    const std::filesystem::path dir(pluginDir_);
+    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
+        std::string safe;
+        std::string sanErr;
+        if (!cascade::core::PluginRepo::sanitiseFileName(b.installed.file, safe, sanErr)) {
+            // A record whose file name is not sanitisable names no file this
+            // product could have installed, so there is nothing on disk to
+            // move; the row is still shown as blocked.
+            continue;
+        }
+        const std::filesystem::path live = dir / safe;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(live, ec)) { continue; }
+        const std::filesystem::path aside = dir / (safe + suffix);
+        std::filesystem::remove(aside, ec);  // a leftover from a crashed run
+        std::filesystem::rename(live, aside, ec);
+        if (ec) {
+            error = "\"" + safe + "\" is out of date but could not be disabled (" +
+                    ec.message() + "), so NO plugins were loaded this time.";
+            return false;
+        }
+    }
+    return true;
+}
+
 void AppWindow::rescanPlugins() {
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
     // nothing here reports a failure.
     pluginDir_ = cascade::core::PluginHost::defaultPluginDir();
+
+    // ONE ordered sequence, and the order is the feature (see the enforcement
+    // note in app_window.hpp). Nothing may hold a mapped module while files
+    // are renamed, so the unload comes first — the same unload-then-touch-the
+    // -file rule removeInstalledPlugin already follows.
+    pluginHost_.unloadAll();
+    pluginEnforceError_.clear();
+
+    // Un-quarantine BEFORE taking the inventory. Reconciliation and
+    // planUpdates both key off "is the file there", and a plugin that this
+    // code renamed aside last frame would otherwise read as deleted by the
+    // user — which planUpdates deliberately refuses to update, taking away the
+    // one remedy a retired plugin has.
+    std::string restoreError;
+    if (!restoreQuarantinedPlugins(restoreError)) { pluginEnforceError_ = restoreError; }
+
+    std::string invError;
+    // A corrupt or absent manifest is an ordinary state and its own kind of
+    // fail-open: nothing is recorded, so nothing is retired.
+    (void)cascade::core::PluginRepo::loadInventory(pluginDir_, pluginInventory_, invError);
+    pluginBlocked_ = cascade::core::PluginRepo::blockedPlugins(pluginInventory_.plugins,
+                                                               pluginInventory_.policies);
+
+    std::string quarantineError;
+    if (!quarantineBlockedPlugins(quarantineError)) {
+        // FAIL CLOSED. Scanning now would map the retired plugin along with
+        // everything else, which is the precise state this feature exists to
+        // prevent, so this run gets no plugins at all and says why.
+        pluginEnforceError_ = quarantineError;
+        return;
+    }
+
     pluginHost_.scan(pluginDir_);
 }
 
+std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const {
+    // Pure, and empty until the user has fetched a catalogue this session:
+    // catalog_ is only ever filled by the Browse button.
+    return cascade::core::PluginRepo::planUpdates(catalog_, pluginInventory_.plugins);
+}
+
 void AppWindow::drawPluginsSection() {
-    if (!ImGui::CollapsingHeader("Plugins")) { return; }
+    // THE BADGE. A user who never expands this section still has to learn that
+    // something they installed has stopped working — a silently shorter list
+    // is the same mystery the plugin host's per-file reasons exist to avoid.
+    // blockedCount() is the badge-cheap form of the same predicate the rows
+    // use, so the count and the rows can never disagree.
+    const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
+        pluginInventory_.plugins, pluginInventory_.policies);
+    char header[64];
+    if (blocked == 0u) {
+        // "###plugins" fixes the widget ID, so the open/closed state survives
+        // the label changing when a plugin is retired or updated.
+        std::snprintf(header, sizeof(header), "Plugins###plugins");
+    } else {
+        std::snprintf(header, sizeof(header), "Plugins (%d disabled)###plugins",
+                      static_cast<int>(blocked));
+    }
+    if (!ImGui::CollapsingHeader(header)) { return; }
 
     ImGui::TextDisabled("%s", pluginDir_.c_str());
     const float half = 0.5f * (ImGui::GetContentRegionAvail().x -
@@ -1762,6 +1909,8 @@ void AppWindow::drawPluginsSection() {
     }
 
     if (pluginBrowseOpen_) { drawPluginBrowser(); }
+
+    drawBlockedPluginRows();
 
     ImGui::SeparatorText("Installed");
     const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
@@ -1818,6 +1967,57 @@ void AppWindow::drawPluginsSection() {
     if (!pluginBrowseOpen_) { drawPluginResultText(); }
 }
 
+void AppWindow::drawBlockedPluginRows() {
+    // An enforcement failure outranks everything else on this panel: it is the
+    // one state where a retired plugin might otherwise have been loaded, and
+    // the answer taken (load nothing) is drastic enough that it must be said.
+    if (!pluginEnforceError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", pluginEnforceError_.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (pluginBlocked_.empty()) { return; }
+
+    ImGui::SeparatorText("Disabled");
+    const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
+    const bool busy = catalogPending_ || installPending_;
+    for (std::size_t i = 0; i < pluginBlocked_.size(); ++i) {
+        const cascade::core::BlockedPlugin& b = pluginBlocked_[i];
+        ImGui::PushID(static_cast<int>(1000 + i));
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        // VERBATIM. pluginBlockMessage() is user copy, not a log line: it
+        // already names the plugin, the version installed, what is required
+        // and what to do, and it deliberately says different things for a
+        // version floor and an ABI break. Re-wording it here would give the
+        // product two answers to the same question.
+        ImGui::TextWrapped("%s", b.message.c_str());
+        ImGui::PopStyleColor();
+
+        if (b.reason == cascade::core::PluginBlockReason::BelowMinimumVersion) {
+            const cascade::core::PluginUpdate* plan = nullptr;
+            for (const cascade::core::PluginUpdate& u : updates) {
+                if (u.id == b.installed.id) { plan = &u; break; }
+            }
+            if (plan != nullptr) {
+                ImGui::BeginDisabled(busy);
+                if (ImGui::Button("Update")) { startUpdate(*plan); }
+                ImGui::EndDisabled();
+            } else {
+                // No Update button, because there is nothing to click yet: a
+                // plan needs a catalogue, and nothing fetches one until the
+                // user asks. Say where the button lives rather than showing a
+                // dead one.
+                ImGui::TextDisabled("Press \"Get plugins\", then Browse, to fetch the update.");
+            }
+        }
+        // DELIBERATELY no Update button for an ABI mismatch: no catalogue
+        // update can fix it (the message says so), and offering the click
+        // anyway is a support ticket.
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+}
+
 // --- The catalogue browser (P9) --------------------------------------------
 
 void AppWindow::drawPluginBrowser() {
@@ -1866,6 +2066,31 @@ void AppWindow::drawPluginBrowser() {
         ImGui::PopStyleColor();
     }
     if (!catalogStatus_.empty()) { ImGui::TextDisabled("%s", catalogStatus_.c_str()); }
+
+    // --- Updates available ---------------------------------------------------
+    //
+    // OPT-IN, and it stays opt-in. This list is a pure function of the
+    // catalogue the user just fetched and what is installed; nothing here
+    // starts a fetch, and no plugin updates itself. One button, one plugin,
+    // one user decision — which is the same rule install() follows, because an
+    // update IS an install and it is the riskiest one.
+    const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
+    if (!updates.empty()) {
+        ImGui::SeparatorText("Updates available");
+        for (std::size_t i = 0; i < updates.size(); ++i) {
+            const cascade::core::PluginUpdate& u = updates[i];
+            ImGui::PushID(static_cast<int>(2000 + i));
+            const std::string label =
+                (u.entry != nullptr && !u.entry->name.empty()) ? u.entry->name : u.id;
+            ImGui::Text("%s %s -> %s", label.c_str(), u.fromVersion.c_str(),
+                        u.toVersion.c_str());
+            ImGui::TextDisabled("%s", u.reason.c_str());
+            ImGui::BeginDisabled(busy);
+            if (ImGui::Button("Update", ImVec2(-FLT_MIN, 0.0f))) { startUpdate(u); }
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+    }
 
     // --- The list ------------------------------------------------------------
     for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
@@ -1973,6 +2198,14 @@ bool AppWindow::catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e
         const std::string have = std::filesystem::path(lp.path).filename().string();
         if (equalsFileNameAscii(have, want)) { return true; }
     }
+    // The manifest too. A RETIRED plugin has been renamed out of the scan, so
+    // the host has no record of it — but the file is very much installed, and
+    // calling it absent would offer an Install where Update is the remedy.
+    // missingFromDisk rows are excluded: those name a file the user deleted,
+    // which really is not installed any more.
+    for (const cascade::core::InstalledPlugin& ip : pluginInventory_.plugins) {
+        if (!ip.missingFromDisk && equalsFileNameAscii(ip.file, want)) { return true; }
+    }
     return false;
 }
 
@@ -2027,7 +2260,8 @@ void AppWindow::startCatalogFetch() {
     catalogPending_ = true;
 
     const std::string url = pluginCatalogueUrl_;
-    catalogFuture_ = std::async(std::launch::async, [this, url] {
+    const std::string dir = pluginDir_;
+    catalogFuture_ = std::async(std::launch::async, [this, url, dir] {
         CatalogFetchResult r;
         if (url.find("://") == std::string::npos) {
             // No scheme at all: a local file (see readLocalCatalogue). A URL
@@ -2037,6 +2271,21 @@ void AppWindow::startCatalogFetch() {
         } else {
             r.ok = pluginRepo_.fetchIndex(url, r.error);
             if (r.ok) { r.entries = pluginRepo_.entries(); }
+        }
+        if (r.ok) {
+            // THE ONLY MOMENT A RETIREMENT FLOOR IS WRITTEN TO THIS MACHINE.
+            // Enforcement reads the cache and never the network, so a floor
+            // that is not cached here protects nobody — not the user who goes
+            // offline for a year, and not the one who never opens this browser
+            // again. It runs on the worker because it re-hashes every
+            // installed plugin.
+            std::string policyError;
+            if (!cascade::core::PluginRepo::cacheCataloguePolicies(dir, r.entries,
+                                                                   policyError)) {
+                r.policyError = "the catalogue loaded, but its plugin version policy could "
+                                "not be saved, so it will not be remembered: " +
+                                policyError;
+            }
         }
         return r;
     });
@@ -2057,6 +2306,38 @@ void AppWindow::startInstall(cascade::core::PluginCatalogEntry entry) {
             // match, file-name sanitisation, https, the byte cap, and the
             // sha256 that decides whether the temp file ever becomes a plugin.
             r.ok = pluginRepo_.install(e, dir, r.installedPath, r.error);
+            if (r.ok) {
+                // MANIFEST UPKEEP, without which the whole retirement feature
+                // silently no-ops: an unrecorded plugin has no id, no version
+                // and no cached policy, so pluginBlockReason() fails open for
+                // it forever. This is where a plain install becomes managed —
+                // applyUpdate() records itself, so this is the only install
+                // path that needs it.
+                (void)cascade::core::PluginRepo::recordInstall(dir, e, r.recordError);
+            }
+            return r;
+        });
+}
+
+void AppWindow::startUpdate(const cascade::core::PluginUpdate& u) {
+    if (catalogPending_ || installPending_ || u.entry == nullptr) { return; }
+    installError_.clear();
+    installReport_.clear();
+    installBusyName_ = u.entry->name;
+    installPending_ = true;
+    const std::string dir = pluginDir_;
+    // The plan's entry aliases catalog_, which the GUI may replace while this
+    // runs, so the worker owns a copy and the plan is re-pointed at it.
+    installFuture_ = std::async(
+        std::launch::async, [this, plan = u, entry = *u.entry, dir]() mutable {
+            PluginInstallResult r;
+            r.isUpdate = true;
+            r.name = entry.name;
+            plan.entry = &entry;
+            // applyUpdate is install() plus recordInstall(), in that order and
+            // with the same gauntlet — nothing here shortcuts it because "it
+            // is only an update".
+            r.ok = pluginRepo_.applyUpdate(plan, dir, r.installedPath, r.error);
             return r;
         });
 }
@@ -2073,6 +2354,18 @@ void AppWindow::pollPluginAsync() {
             catalogStatus_ = std::to_string(catalog_.size()) +
                              (catalog_.size() == 1u ? " plugin in the catalogue"
                                                     : " plugins in the catalogue");
+            // "When the user last chose to look" — recorded here, never acted
+            // on: no code path reads this to decide whether to fetch (see
+            // AppConfig::pluginLastUpdateCheck).
+            pluginLastUpdateCheck_ = static_cast<std::int64_t>(std::time(nullptr));
+            // The floors the worker just cached only take effect on the next
+            // scan, and a user who has just been told a plugin is retired
+            // should not have to restart to stop running it.
+            rescanPlugins();
+            // A cache-write failure is red text next to a catalogue that
+            // nevertheless loaded: the list is real, the policy behind it was
+            // not remembered, and both facts are shown.
+            if (!r.policyError.empty()) { catalogError_ = r.policyError; }
         } else {
             catalog_.clear();
             catalogError_ = r.error;
@@ -2085,13 +2378,28 @@ void AppWindow::pollPluginAsync() {
         PluginInstallResult r = installFuture_.get();
         installPending_ = false;
         installBusyName_.clear();
+        // The point of the rescan: the file is on disk, but it is not a
+        // PLUGIN until the host has loaded and validated it — and if it fails
+        // validation the user needs to see that here, immediately, rather
+        // than after a restart. It also re-runs enforcement, which is what
+        // makes an update lift the retirement in the same frame it lands.
+        //
+        // Run on the ONE failure that still changed the disk too: applyUpdate
+        // reports false with installedPath set when the new file installed but
+        // the manifest could not be written.
+        if (r.ok || !r.installedPath.empty()) { rescanPlugins(); }
         if (r.ok) {
-            // The point of the rescan: the file is on disk, but it is not a
-            // PLUGIN until the host has loaded and validated it — and if it
-            // fails validation the user needs to see that here, immediately,
-            // rather than after a restart.
-            rescanPlugins();
-            installReport_ = "Installed " + r.name + " to " + r.installedPath;
+            installReport_ = (r.isUpdate ? "Updated " : "Installed ") + r.name + " to " +
+                             r.installedPath;
+            if (!r.recordError.empty()) {
+                // Honest partial state: verified bytes are installed, but the
+                // plugin is unmanaged until a later install or catalogue fetch
+                // repairs the record — and an unmanaged plugin is never
+                // retired, which is the fail-open rule doing its job.
+                installError_ = r.name + " was installed, but its record could not be " +
+                                "written: " + r.recordError +
+                                ". It will not be version-checked until that is repaired.";
+            }
         } else {
             installError_ = r.error;
         }
@@ -2153,6 +2461,55 @@ void AppWindow::reportPluginTestResult() {
                     e.compatible ? 1 : 0, catalogEntryInstalled(e) ? 1 : 0,
                     e.legalNotice.empty() ? 0 : 1, e.licence.c_str(),
                     noAckText.c_str(), ackText.c_str());
+    }
+}
+
+void AppWindow::reportPluginStatus() {
+    // Bounded-run diagnostic only (CASCADE_PLUGIN_STATUS). It exists because
+    // "the plugin is disabled" is a claim about what is MAPPED in this
+    // process, and a screenshot of a red row proves nothing about that. Every
+    // number here is read from the live objects the GUI draws from.
+    const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
+    const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
+        pluginInventory_.plugins, pluginInventory_.policies);
+    std::printf("plugin status: dir=%s candidates=%d loaded=%d blocked=%d managed=%d "
+                "unmanaged=%d\n",
+                pluginDir_.c_str(), static_cast<int>(list.size()),
+                static_cast<int>(pluginHost_.loadedCount()), static_cast<int>(blocked),
+                static_cast<int>(pluginInventory_.plugins.size()),
+                static_cast<int>(pluginInventory_.unmanaged.size()));
+    if (!pluginEnforceError_.empty()) {
+        std::printf("plugin enforce: %s\n", pluginEnforceError_.c_str());
+    }
+    for (const cascade::core::LoadedPlugin& p : list) {
+        const std::string file = std::filesystem::path(p.path).filename().string();
+        std::printf("plugin host: file=%s loaded=%d name=%s version=%s error=%s\n",
+                    file.c_str(), p.loaded ? 1 : 0, p.name.c_str(), p.version.c_str(),
+                    p.error.empty() ? "-" : p.error.c_str());
+    }
+    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
+        // mapped=1 would mean enforcement failed: the host would have a record
+        // of a file it was supposed never to see.
+        int mapped = 0;
+        for (const cascade::core::LoadedPlugin& p : list) {
+            const std::string file = std::filesystem::path(p.path).filename().string();
+            if (equalsFileNameAscii(file, b.installed.file)) { mapped = 1; }
+        }
+        const char* reason =
+            b.reason == cascade::core::PluginBlockReason::AbiMismatch ? "abi-mismatch"
+                                                                      : "below-minimum-version";
+        std::printf("plugin blocked: id=%s file=%s version=%s floor=%s catalogue=%s "
+                    "reason=%s mapped=%d message=\"%s\"\n",
+                    b.installed.id.c_str(), b.installed.file.c_str(),
+                    b.installed.version.c_str(),
+                    b.policy.minSupportedVersion.empty() ? "-"
+                                                         : b.policy.minSupportedVersion.c_str(),
+                    b.policy.catalogueVersion.empty() ? "-" : b.policy.catalogueVersion.c_str(),
+                    reason, mapped, b.message.c_str());
+    }
+    for (const cascade::core::PluginUpdate& u : plannedPluginUpdates()) {
+        std::printf("plugin update: id=%s from=%s to=%s\n", u.id.c_str(),
+                    u.fromVersion.c_str(), u.toVersion.c_str());
     }
 }
 
@@ -2573,6 +2930,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
     std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
+    // Restored purely so it can be saved back unchanged when the user never
+    // browses this session. Nothing reads it to decide whether to fetch.
+    pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
 
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
@@ -2664,6 +3024,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.bandPlanOverlay = bandPlanOverlay_;
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
+    cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     return cfg;
 }
 

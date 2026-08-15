@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <string>
@@ -102,9 +103,14 @@ private:
     // pipeline applies them (notch -> auto-notch -> NR; see Pipeline).
     void drawAudioFilterSection();
     // Loaded plugins with their LICENCE, refused candidates with their
-    // reason, a Remove button per install, a Rescan button, and the "Get
-    // plugins" catalogue browser (drawPluginBrowser).
+    // reason, a Remove button per install, a Rescan button, the RETIRED
+    // plugins as red rows, and the "Get plugins" catalogue browser
+    // (drawPluginBrowser).
     void drawPluginsSection();
+    // The red rows: every plugin the cached catalogue policy retires, each
+    // carrying PluginRepo::pluginBlockMessage() verbatim. Drawn above the
+    // installed list because a disabled plugin is the news on this panel.
+    void drawBlockedPluginRows();
     // The catalogue half of the Plugins section: the URL field, the Browse /
     // Refresh button (the ONLY thing in the product that contacts the
     // catalogue origin), the in-flight progress + Cancel, the entry list and
@@ -385,6 +391,59 @@ private:
     cascade::core::PluginHost pluginHost_;
     std::string pluginDir_;
 
+    // --- Retirement enforcement (P11) -----------------------------------------
+    //
+    // WHY THERE IS A QUARANTINE STEP AND NOT JUST A RED ROW. A retired plugin
+    // that is merely painted red is still mapped into this process: its
+    // DllMain has run, its static initialisers are live, and its decoder
+    // callbacks are one click away. The whole point of the feature is that the
+    // stale CODE does not execute, so enforcement has to happen BEFORE
+    // LoadLibrary, not after.
+    //
+    // PluginHost::scan() takes a DIRECTORY and loads every ".dll" in it (there
+    // is no per-file load entry point, and plugin_host is fixed), so the only
+    // way to keep one file out of a scan is to make it not look like a plugin
+    // for the duration. rescanPlugins() therefore runs one ordered sequence:
+    //
+    //   unloadAll -> un-quarantine everything -> loadInventory (the disk is
+    //   now complete, so reconciliation and planUpdates see the truth) ->
+    //   blockedPlugins -> rename each blocked file to "<name>.dll.disabled"
+    //   -> scan.
+    //
+    // The renamed file has no plugin extension, so PluginHost never sees it
+    // and LoadLibrary is never called on it - not even once, not even at
+    // startup. The rename is reversible and local: drop the floor (or update
+    // the plugin) and the next rescan puts the name back.
+    //
+    // FAIL CLOSED on a failed rename. If a blocked file cannot be moved aside
+    // (locked, read-only), the scan is SKIPPED entirely and the reason is
+    // shown: loading every other plugin while the retired one loads with them
+    // would be exactly the state this exists to prevent.
+    static const char* pluginQuarantineSuffix();  // ".disabled"
+    // Renames every "<name>.dll.disabled" back to "<name>.dll". A leftover
+    // whose live name already exists (an update landed while it was aside) is
+    // DELETED instead - it is a copy of a file this code renamed, and keeping
+    // stale bytes around under a hidden name helps nobody.
+    bool restoreQuarantinedPlugins(std::string& error);
+    // Renames every currently blocked plugin file out of the scan's way.
+    bool quarantineBlockedPlugins(std::string& error);
+    // The manifest + cached policy, as of the last rescan and with the whole
+    // directory present (see the ordering above). Everything downstream -
+    // the red rows, the badge, planUpdates - reads THIS, not a fresh
+    // loadInventory, so nothing ever plans against a quarantined file.
+    cascade::core::PluginInventory pluginInventory_;
+    std::vector<cascade::core::BlockedPlugin> pluginBlocked_;
+    // Why enforcement could not be completed (red, above the list). Empty in
+    // the normal case, which is every case where nothing is retired.
+    std::string pluginEnforceError_;
+    // What the catalogue currently offers over what is installed. Pure, cheap,
+    // and empty until the user has fetched a catalogue this session - there is
+    // no startup fetch, so an update can only ever be offered on request.
+    std::vector<cascade::core::PluginUpdate> plannedPluginUpdates() const;
+    // AppConfig::pluginLastUpdateCheck, stamped when a catalogue fetch
+    // succeeds and persisted with the rest of the config.
+    std::int64_t pluginLastUpdateCheck_ = 0;
+
     // --- Plugin browser (P9) --------------------------------------------------
     //
     // THE PRIVACY PROMISE. Nothing here contacts the catalogue origin until
@@ -411,12 +470,27 @@ private:
         bool ok = false;
         std::vector<cascade::core::PluginCatalogEntry> entries;
         std::string error;
+        // cacheCataloguePolicies() runs on the SAME worker, immediately after
+        // a successful fetch: that call is the only moment a retirement floor
+        // is ever written to this machine, and deferring it to "some later
+        // fetch" would mean a user who browses once and never again is never
+        // protected. It is done off the GUI thread because it re-hashes every
+        // installed plugin. A failure here is reported, never swallowed - the
+        // catalogue still loaded, but the policy the user just saw was not
+        // remembered.
+        std::string policyError;
     };
     struct PluginInstallResult {
         bool ok = false;
         std::string name;           // display name, for the report
         std::string installedPath;  // set on success
         std::string error;          // verbatim from PluginRepo on failure
+        bool isUpdate = false;      // applyUpdate (records itself) vs install
+        // recordInstall's failure, for a PLAIN install only. The file is
+        // installed and verified either way; what failed is the manifest
+        // write, which leaves the plugin unmanaged (and therefore fail-open,
+        // never retired) until an install or a catalogue fetch repairs it.
+        std::string recordError;
     };
     std::future<CatalogFetchResult> catalogFuture_;
     std::future<PluginInstallResult> installFuture_;
@@ -433,13 +507,23 @@ private:
     // outlives the frame that spawned it, and catalog_ can be replaced by a
     // Refresh in the meantime.
     void startInstall(cascade::core::PluginCatalogEntry entry);
+    // Starts ONE user-requested update on the same worker slot as an install
+    // (PluginRepo has a single progress/cancel pair, so only one transfer runs
+    // at a time). The plan's `entry` aliases catalog_, which a Refresh can
+    // replace mid-transfer, so the worker takes its own COPY of the entry and
+    // re-points the plan at it before calling applyUpdate.
+    void startUpdate(const cascade::core::PluginUpdate& u);
     // Consumes finished catalogue/install futures; called once per frame from
     // drawUi, right beside pollSoapyAsync.
     void pollPluginAsync();
     // True if the catalogue entry's file name already exists in the plugins
     // directory, comparing against every record PluginHost produced — loaded
-    // AND refused. A refused DLL still occupies the name, so treating it as
-    // "not installed" would offer an install that could not replace it.
+    // AND refused — and against the manifest's own records. A refused DLL
+    // still occupies the name, so treating it as "not installed" would offer
+    // an install that could not replace it; and a RETIRED plugin has been
+    // renamed out of the scan, so the host has no record of it at all — the
+    // manifest is what keeps it from looking uninstalled and sending the user
+    // down an Install path when Update is the remedy.
     bool catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const;
 
     // THE INSTALL GATE, as one named predicate so the button, the tooltip and
@@ -485,6 +569,15 @@ private:
     // catalogError_), not from the future's payload, so what it reports is
     // exactly what the UI is about to draw.
     void reportPluginTestResult();
+
+    // CASCADE_PLUGIN_STATUS=1, honored ONLY by run(frames >= 0), like the hook
+    // above. Prints what the ENFORCEMENT decided: how many candidates the host
+    // actually mapped, what blockedCount() says, and one line per retired
+    // plugin including whether the host has any record of it (mapped=0 is the
+    // proof that the stale code is not in the process). It is printed at the
+    // end of the run so it reflects any catalogue fetch the run performed.
+    bool pluginStatusHook_ = false;
+    void reportPluginStatus();
 
     cascade::core::Scanner scanner_;
     double scanStartMhz_ = cascade::core::Scanner::Params{}.startHz / 1.0e6;
