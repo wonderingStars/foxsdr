@@ -110,6 +110,15 @@ constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
 constexpr double kModeSnapHz[8] = {12500.0, 100000.0, 9000.0, 1000.0,
                                    1000.0,  1000.0,   1000.0, 1000.0};
 
+// FM de-emphasis choices. Broadcast FM pre-emphasises treble at the
+// transmitter; the receiver must apply the matching inverse or the audio comes
+// out bright and hissy. 50 us is the standard across Europe, Africa, Asia and
+// Australia; 75 us in the Americas and South Korea. "Off" is for measurement
+// and for feeding flat audio to an external decoder.
+constexpr const char* kDeemphLabels[3] = {"50 us (EU/world)", "75 us (Americas)", "Off"};
+constexpr double kDeemphUs[3] = {50.0, 75.0, 0.0};
+constexpr int kDeemphCount = 3;
+
 // Height of the frequency tick strip. Placement decision (the spec left it
 // open): BETWEEN the spectrum and the waterfall, so one strip labels both
 // panels and stays clear of the spectrum's dB labels in the top-left corner.
@@ -718,6 +727,18 @@ void AppWindow::drawMenuColumn() {
         }
         if (ImGui::SliderFloat("Squelch", &squelchDb_, -120.0f, 0.0f, "%.0f dB")) {
             pipeline_.setSquelchDb(squelchDb_);
+        }
+        // Only meaningful for the FM modes; shown greyed elsewhere so the
+        // setting is discoverable without implying it does anything to SSB.
+        const bool fmMode = (modeIndex_ == 0 || modeIndex_ == 1);  // NFM, WFM
+        ImGui::BeginDisabled(!fmMode);
+        if (ImGui::Combo("De-emph", &deemphIndex_, kDeemphLabels, kDeemphCount)) {
+            pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
+        }
+        ImGui::EndDisabled();
+        if (fmMode && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Broadcast FM pre-emphasises treble; the receiver undoes it.\n"
+                              "50 us: Europe, Africa, Asia, Australia. 75 us: Americas, South Korea.");
         }
 
         // S-meter: channel power mapped over the squelch slider's own

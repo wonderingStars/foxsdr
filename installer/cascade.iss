@@ -101,6 +101,11 @@ Source: "{#VcCrtDir}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#VcCrtDir}\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; License + post-install notes (also shown as wizard pages).
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+; Third-party notices ship with the binary because MIT, BSD-3 and Zlib all
+; require their copyright and permission notices to accompany distribution --
+; a hard condition of the licences, not a courtesy, and one that applies to a
+; commercial release exactly as it does to a free one.
+Source: "THIRD-PARTY-LICENSES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "POSTINSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

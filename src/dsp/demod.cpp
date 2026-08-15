@@ -57,7 +57,10 @@ constexpr double kCwToneHz = 700.0;
 // the DC gain exactly with no frequency prewarping decision; the deemphasis
 // corner (1/(2*pi*tau) ~ 2.1 kHz) sits far below Nyquist at any WFM channel
 // rate, where the two mappings agree closely anyway.
-constexpr double kDeemphTauSec = 75e-6;
+// Default de-emphasis: 50 us. That is the standard everywhere except the
+// Americas and South Korea, so it is the correct global default; the setter
+// below makes it a user choice rather than a compile-time assumption.
+constexpr double kDefaultDeemphTauSec = 50e-6;
 
 // --- AM DC blocker -------------------------------------------------------
 // The envelope of an AM carrier is (carrier amplitude) + modulation: the
@@ -93,9 +96,28 @@ std::vector<float> designSsbTaps(double rate) {
 Demodulator::Demodulator(double channelRateHz)
     : rate_(channelRateHz), ssbFilter_(designSsbTaps(channelRateHz), 1) {
     assert(rate_ > 0.0);
-    deemphPole_ = std::exp(-1.0 / (rate_ * kDeemphTauSec));
+    deemphTauSec_ = kDefaultDeemphTauSec;
+    deemphPole_ = std::exp(-1.0 / (rate_ * deemphTauSec_));
     dcPole_ = std::exp(-kTwoPi * kAmDcCutoffHz / rate_);
     setMode(DemodMode::NFM);
+}
+
+void Demodulator::setDeemphasisUs(double us) {
+    // Reject nonsense rather than poisoning the filter with a NaN pole; 0 (and
+    // anything non-finite/negative treated as 0) means "no de-emphasis", which
+    // the process loop implements as a pole of exactly 0 — a pass-through,
+    // since y = (1-p)*x + p*y collapses to y = x at p = 0.
+    if (!(us > 0.0) || !std::isfinite(us)) {
+        deemphTauSec_ = 0.0;
+        deemphPole_ = 0.0;
+        deemphState_ = 0.0;
+        return;
+    }
+    deemphTauSec_ = us * 1.0e-6;
+    deemphPole_ = std::exp(-1.0 / (rate_ * deemphTauSec_));
+    // Clear the filter memory: carrying a state charged at the old time
+    // constant produces an audible thump on the switch.
+    deemphState_ = 0.0;
 }
 
 void Demodulator::setMode(DemodMode m) {

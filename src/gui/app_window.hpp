@@ -203,6 +203,8 @@ private:
     // inside the baseband span. Shared by click-to-tune and the drag path.
     void setVfoToAbsoluteHz(double wantAbsHz, bool snap);
 
+    int deemphIndex_ = 0;  // index into kDeemphUs; 0 = 50 us (global default)
+
     bool freqEditing_ = false;
     bool freqEditFocus_ = false;   // request keyboard focus on the first frame
     bool freqEditWasActive_ = false;  // field has held focus at least once

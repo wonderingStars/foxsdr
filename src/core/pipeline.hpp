@@ -128,6 +128,10 @@ public:
     // would blast or mute the first moments of the new mode.
     void setDemodMode(cascade::dsp::DemodMode m);
     cascade::dsp::DemodMode demodMode() const;
+    // WFM de-emphasis in microseconds: 50 (most of the world) / 75 (Americas,
+    // South Korea) / 0 = off. Survives mode changes and rate switches.
+    void setDeemphasisUs(double us);
+    double deemphasisUs() const;
 
     // VFO tuning offset from the input center, Hz (phase-continuous retune).
     void setVfoOffsetHz(double offsetHz);
@@ -309,6 +313,9 @@ private:
                                    // Squelch construction default)
     cascade::dsp::Vfo vfo_;
     cascade::dsp::Demodulator demod_;
+    // Mirrors the demod's de-emphasis so it survives the rebuild that a
+    // sample-rate change performs. Guarded by audioMutex_ like demod_ itself.
+    double deemphasisUs_ = 50.0;
     cascade::dsp::Agc agc_;
     cascade::dsp::Squelch squelch_;
     cascade::dsp::PowerMeter meter_;      // S-meter source (channel power)

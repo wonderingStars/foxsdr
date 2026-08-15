@@ -59,6 +59,16 @@ public:
     // setMode(mode()).
     void reset();
 
+    // WFM de-emphasis time constant, in MICROSECONDS. Broadcast FM applies a
+    // pre-emphasis curve at the transmitter and the receiver must undo it with
+    // the matching one: 50 us across Europe, Africa, Asia and Australia,
+    // 75 us in the Americas and South Korea. Using the wrong one is not
+    // cosmetic — the audio comes out audibly bright and hissy. 0 disables the
+    // filter entirely (useful for measurement, and for feeding an external
+    // decoder that wants flat audio). Default is 50 us.
+    void setDeemphasisUs(double us);
+    double deemphasisUs() const { return deemphTauSec_ * 1.0e6; }
+
 private:
     void processSsb(const std::complex<float>* in, std::size_t n, float* out);
 
@@ -72,6 +82,7 @@ private:
     // WFM deemphasis one-pole: y[n] = (1-p)*x[n] + p*y[n-1]. Pole and state
     // kept in double so the filter matches its analytic transfer function to
     // well below any audio-relevant error.
+    double deemphTauSec_ = 0.0;  // 0 = de-emphasis disabled (pole 0 = passthrough)
     double deemphPole_ = 0.0;
     double deemphState_ = 0.0;
 

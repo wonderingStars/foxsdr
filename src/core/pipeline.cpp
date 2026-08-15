@@ -280,6 +280,17 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
     return true;
 }
 
+void Pipeline::setDeemphasisUs(double us) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    deemphasisUs_ = us;
+    demod_.setDeemphasisUs(us);
+}
+
+double Pipeline::deemphasisUs() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return deemphasisUs_;
+}
+
 void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     demod_.setMode(m);  // resets the demod's internal state (its contract)
@@ -376,6 +387,10 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // scale the CW sidetone by oldChannel/newChannel.
         demod_ = cascade::dsp::Demodulator(chanRate);
         demod_.setMode(mode);
+        // A rebuilt demodulator starts at the library default, so the user's
+        // regional de-emphasis choice has to be re-applied or a rate change
+        // silently reverts it.
+        demod_.setDeemphasisUs(deemphasisUs_);
 
         // Squelch: reconstructed so its ~5 ms ramp and hold time stay real
         // time at the new channel rate; the requested threshold survives.

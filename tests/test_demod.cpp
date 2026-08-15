@@ -148,10 +148,16 @@ int main() {
         CHECK_NEAR(amp25 / amp125, 2.0, 0.04);
     }
 
-    // --- WFM: 75 us deemphasis attenuates 10 kHz vs 1 kHz analytically ------
-    {
+    // --- WFM deemphasis: both regional standards, pinned analytically -------
+    // Parameterized over tau because 50 us (Europe/Africa/Asia/Australia) and
+    // 75 us (Americas/South Korea) are BOTH correct depending on where the
+    // receiver is, and the default must never be what the test silently
+    // depends on — setting it explicitly is the point.
+    for (const double tauUs : {50.0, 75.0}) {
         Demodulator d(kFs);
         d.setMode(DemodMode::WFM);
+        d.setDeemphasisUs(tauUs);
+        CHECK_NEAR(d.deemphasisUs(), tauUs, 1e-9);
 
         // Same deviation both runs, so the pre-deemphasis amplitudes are
         // equal and any ratio between the recovered tones is the deemphasis
@@ -168,9 +174,9 @@ int main() {
         CHECK(dominantBin(y10.data(), kN, 1, kN / 2) == 1000);
         const double a10k = binAmp(y10.data(), kN, 1000);
 
-        // Analytic one-pole reference from the SPEC constant tau = 75 us:
+        // Analytic one-pole reference from the SPEC constant tau:
         // pole p = exp(-1/(fs*tau)), |H(w)| = (1-p)/sqrt(1 - 2p cos w + p^2).
-        const double p = std::exp(-1.0 / (kFs * 75e-6));
+        const double p = std::exp(-1.0 / (kFs * tauUs * 1.0e-6));
         auto mag = [p](double fHz) {
             const double w = kTwoPi * fHz / kFs;
             return (1.0 - p) / std::sqrt(1.0 - 2.0 * p * std::cos(w) + p * p);
@@ -182,6 +188,37 @@ int main() {
         // And the attenuation is real, not a no-op passing the ratio check:
         // analytically the ratio is ~0.25 (-12 dB) at these frequencies.
         CHECK(measured < 0.5);
+    }
+
+    // --- Deemphasis OFF is a true passthrough, and 50 != 75 -----------------
+    // Without this, setDeemphasisUs could quietly do nothing and the loop
+    // above would still pass at both settings.
+    {
+        const std::size_t warm = 256;
+        auto measureRatio = [&](double tauUs) {
+            Demodulator d(kFs);
+            d.setMode(DemodMode::WFM);
+            d.setDeemphasisUs(tauUs);
+            auto lo = makeFm(1000.0, 2500.0, warm + kN);
+            const double a1k = binAmp(demodTail(d, lo, warm).data(), kN, 100);
+            d.reset();
+            d.setDeemphasisUs(tauUs);  // reset() must not silently re-enable it
+            auto hi = makeFm(10000.0, 2500.0, warm + kN);
+            const double a10k = binAmp(demodTail(d, hi, warm).data(), kN, 1000);
+            return a10k / a1k;
+        };
+
+        // Off: 10 kHz and 1 kHz come back at the same level (flat response).
+        const double flat = measureRatio(0.0);
+        CHECK_NEAR(flat, 1.0, 0.05);
+
+        // 50 us rolls off LESS than 75 us at 10 kHz — the whole reason the
+        // setting exists. A stuck implementation returning one curve for both
+        // fails here even though each passes its own analytic check.
+        const double r50 = measureRatio(50.0);
+        const double r75 = measureRatio(75.0);
+        CHECK(r50 > r75);
+        CHECK(flat > r50);
     }
 
     // --- AM: 80% modulation, carrier NOT at DC, envelope + DC rejection -----
