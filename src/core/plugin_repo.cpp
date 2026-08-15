@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
@@ -103,6 +104,77 @@ bool isWellFormedSha256(const std::string& s) {
         }
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Version-string helpers (see PluginRepo::compareVersions for the contract).
+// Nothing here converts a segment to an integer: a catalogue is untrusted
+// input, and "999999999999999999999999" must compare, not overflow.
+// ---------------------------------------------------------------------------
+
+std::vector<std::string> splitVersionSegments(const std::string& v) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : v) {
+        if (c == '.') {
+            out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    out.push_back(cur);
+    return out;
+}
+
+bool allDigits(const std::string& s) {
+    if (s.empty()) {
+        return false;
+    }
+    for (char c : s) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string stripLeadingZeros(const std::string& s) {
+    std::size_t i = 0;
+    while (i + 1 < s.size() && s[i] == '0') {
+        ++i;
+    }
+    return s.substr(i);
+}
+
+// Numeric comparison of two digit strings of any length: longer wins once
+// leading zeros are gone, and equal lengths compare byte-wise (which for
+// digits IS numeric order).
+int compareDigitSegments(const std::string& a, const std::string& b) {
+    const std::string x = stripLeadingZeros(a);
+    const std::string y = stripLeadingZeros(b);
+    if (x.size() != y.size()) {
+        return x.size() < y.size() ? -1 : 1;
+    }
+    if (x == y) {
+        return 0;
+    }
+    return x < y ? -1 : 1;
+}
+
+std::int64_t nowUnix() {
+    return static_cast<std::int64_t>(std::time(nullptr));
+}
+
+// The manifest's own view of "is this a plugin file", matching what
+// sanitiseFileName() will accept and what PluginHost will scan.
+bool hasDllExtension(const std::string& name) {
+    if (name.size() <= 4) {
+        return false;
+    }
+    const std::string tail = name.substr(name.size() - 4);
+    return (lowerAscii(tail[0]) == '.' && lowerAscii(tail[1]) == 'd' &&
+            lowerAscii(tail[2]) == 'l' && lowerAscii(tail[3]) == 'l');
 }
 
 // ---------------------------------------------------------------------------
@@ -807,7 +879,10 @@ bool PluginRepo::parseIndex(const std::string& text, std::vector<PluginCatalogEn
             !wantString(pj, "summary", false, e.summary, where, error) ||
             !wantString(pj, "description", false, e.description, where, error) ||
             !wantString(pj, "homepage", false, e.homepage, where, error) ||
-            !wantString(pj, "legalNotice", false, e.legalNotice, where, error)) {
+            !wantString(pj, "legalNotice", false, e.legalNotice, where, error) ||
+            // The retirement floor. Optional, and absent is the normal case:
+            // a catalogue that says nothing retires nothing.
+            !wantString(pj, "minSupportedVersion", false, e.minSupportedVersion, where, error)) {
             return false;
         }
 
@@ -949,6 +1024,613 @@ bool PluginRepo::sha256File(const std::string& path, std::string& hexOut, std::s
     error = std::string("sha256: ") + "not supported on this platform";
     return false;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Version comparison
+// ---------------------------------------------------------------------------
+
+int PluginRepo::compareVersions(const std::string& a, const std::string& b) {
+    const std::vector<std::string> sa = splitVersionSegments(a);
+    const std::vector<std::string> sb = splitVersionSegments(b);
+    const std::size_t n = sa.size() > sb.size() ? sa.size() : sb.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        // A segment past the end - or an empty one from "1..2" or a trailing
+        // dot - is zero, which is what makes "1.2" and "1.2.0" the same
+        // version rather than two versions with an arbitrary order.
+        std::string x = i < sa.size() ? sa[i] : std::string();
+        std::string y = i < sb.size() ? sb[i] : std::string();
+        if (x.empty()) {
+            x = "0";
+        }
+        if (y.empty()) {
+            y = "0";
+        }
+        const bool nx = allDigits(x);
+        const bool ny = allDigits(y);
+        if (nx && ny) {
+            const int c = compareDigitSegments(x, y);
+            if (c != 0) {
+                return c;
+            }
+        } else if (nx != ny) {
+            // A number outranks a non-number: "1.0.0" > "1.0.0-rc1", and an
+            // unparseable version can never masquerade as newer.
+            return nx ? 1 : -1;
+        } else if (x != y) {
+            return x < y ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// The local manifest
+// ---------------------------------------------------------------------------
+
+const char* PluginRepo::manifestFileName() { return "installed.json"; }
+
+std::string PluginRepo::manifestPath(const std::string& pluginsDir) {
+    return (fs::path(pluginsDir) / manifestFileName()).string();
+}
+
+bool PluginRepo::parseManifest(const std::string& text, std::vector<InstalledPlugin>& plugins,
+                               std::vector<CachedPolicy>& policies,
+                               std::vector<std::string>& notes, std::string& error) {
+    plugins.clear();
+    policies.clear();
+    error.clear();
+
+    const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded()) {
+        error = "plugin manifest: not valid JSON";
+        return false;
+    }
+    if (!j.is_object()) {
+        error = "plugin manifest: the root is not a JSON object";
+        return false;
+    }
+    {
+        // Absent schemaVersion is tolerated (assumed 1); a DIFFERENT one is
+        // not, because a future schema may reinterpret the retirement floor,
+        // and a floor this code misread would either brick a working plugin
+        // or fail to retire a broken one.
+        const auto it = j.find("schemaVersion");
+        if (it != j.end() && (!it->is_number_integer() || it->get<int>() != 1)) {
+            error = "plugin manifest: unsupported schemaVersion (expected 1)";
+            return false;
+        }
+    }
+
+    const auto pluginsIt = j.find("plugins");
+    if (pluginsIt != j.end() && !pluginsIt->is_null()) {
+        if (!pluginsIt->is_array()) {
+            error = "plugin manifest: \"plugins\" is not an array";
+            return false;
+        }
+        std::size_t idx = 0;
+        for (const json& pj : *pluginsIt) {
+            const std::string where = "manifest record " + std::to_string(idx);
+            ++idx;
+            if (!pj.is_object()) {
+                notes.push_back(where + " is not an object; ignored");
+                continue;
+            }
+            InstalledPlugin r;
+            std::string ignoredError;
+            if (!wantString(pj, "id", true, r.id, where, ignoredError) ||
+                !wantString(pj, "version", true, r.version, where, ignoredError) ||
+                !wantString(pj, "file", true, r.file, where, ignoredError)) {
+                notes.push_back(where + " has no usable id/version/file; ignored");
+                continue;
+            }
+            (void)wantString(pj, "name", false, r.name, where, ignoredError);
+            // A manifest is a file on disk that a user, an installer or a bad
+            // shutdown can have written. Its file name is put through exactly
+            // the same guard as one that came off the wire, BEFORE any code
+            // below joins it to a directory.
+            std::string safeName;
+            std::string nameError;
+            if (!sanitiseFileName(r.file, safeName, nameError)) {
+                notes.push_back(where + " (\"" + r.id + "\") names an unusable file: " +
+                                nameError + "; ignored");
+                continue;
+            }
+            std::string sha;
+            (void)wantString(pj, "sha256", false, sha, where, ignoredError);
+            if (!sha.empty() && !isWellFormedSha256(sha)) {
+                notes.push_back(where + " (\"" + r.id + "\") has a malformed sha256; discarded");
+                sha.clear();
+            }
+            r.sha256 = toLowerAscii(sha);
+
+            const auto abiIt = pj.find("abiVersion");
+            if (abiIt != pj.end() && abiIt->is_number_unsigned()) {
+                const std::uint64_t v = abiIt->get<std::uint64_t>();
+                // Out of range stays 0, i.e. "not recorded", i.e. fail open.
+                r.abiVersion = v <= 0xFFFFFFFFull ? static_cast<std::uint32_t>(v) : 0u;
+            }
+            const auto atIt = pj.find("installedAt");
+            if (atIt != pj.end() && atIt->is_number_integer()) {
+                r.installedAtUnix = atIt->get<std::int64_t>();
+            }
+
+            bool duplicate = false;
+            for (const InstalledPlugin& existing : plugins) {
+                if (existing.id == r.id) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                notes.push_back(where + " repeats id \"" + r.id + "\"; the later record is ignored");
+                continue;
+            }
+            plugins.push_back(std::move(r));
+        }
+    }
+
+    const auto polIt = j.find("policies");
+    if (polIt != j.end() && !polIt->is_null()) {
+        if (!polIt->is_array()) {
+            error = "plugin manifest: \"policies\" is not an array";
+            plugins.clear();
+            return false;
+        }
+        std::size_t idx = 0;
+        for (const json& pj : *polIt) {
+            const std::string where = "manifest policy " + std::to_string(idx);
+            ++idx;
+            if (!pj.is_object()) {
+                notes.push_back(where + " is not an object; ignored");
+                continue;
+            }
+            CachedPolicy p;
+            std::string ignoredError;
+            if (!wantString(pj, "id", true, p.id, where, ignoredError)) {
+                notes.push_back(where + " has no id; ignored");
+                continue;
+            }
+            (void)wantString(pj, "minSupportedVersion", false, p.minSupportedVersion, where,
+                             ignoredError);
+            (void)wantString(pj, "catalogueVersion", false, p.catalogueVersion, where,
+                             ignoredError);
+            const auto abiIt = pj.find("abiVersion");
+            if (abiIt != pj.end() && abiIt->is_number_unsigned()) {
+                const std::uint64_t v = abiIt->get<std::uint64_t>();
+                p.abiVersion = v <= 0xFFFFFFFFull ? static_cast<std::uint32_t>(v) : 0u;
+            }
+            p.known = true;
+            bool duplicate = false;
+            for (const CachedPolicy& existing : policies) {
+                if (existing.id == p.id) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                notes.push_back(where + " repeats id \"" + p.id + "\"; the later policy is ignored");
+                continue;
+            }
+            policies.push_back(std::move(p));
+        }
+    }
+    return true;
+}
+
+std::string PluginRepo::serialiseManifest(const std::vector<InstalledPlugin>& plugins,
+                                          const std::vector<CachedPolicy>& policies) {
+    json j;
+    j["schemaVersion"] = 1;
+    json arr = json::array();
+    for (const InstalledPlugin& r : plugins) {
+        json e;
+        e["id"] = r.id;
+        e["name"] = r.name;
+        e["version"] = r.version;
+        e["file"] = r.file;
+        e["sha256"] = r.sha256;
+        e["abiVersion"] = r.abiVersion;
+        e["installedAt"] = r.installedAtUnix;
+        arr.push_back(std::move(e));
+    }
+    j["plugins"] = std::move(arr);
+    json pols = json::array();
+    for (const CachedPolicy& p : policies) {
+        if (!p.known) {
+            continue;  // an unknown policy is the absence of a row, not a row
+        }
+        json e;
+        e["id"] = p.id;
+        e["minSupportedVersion"] = p.minSupportedVersion;
+        e["catalogueVersion"] = p.catalogueVersion;
+        e["abiVersion"] = p.abiVersion;
+        pols.push_back(std::move(e));
+    }
+    j["policies"] = std::move(pols);
+    return j.dump(4) + "\n";
+}
+
+bool PluginRepo::saveManifest(const std::string& pluginsDir,
+                              const std::vector<InstalledPlugin>& plugins,
+                              const std::vector<CachedPolicy>& policies, std::string& error) {
+    error.clear();
+    std::error_code ec;
+    fs::create_directories(fs::path(pluginsDir), ec);
+    if (!fs::is_directory(fs::path(pluginsDir), ec)) {
+        error = "plugin manifest: cannot create the plugins directory \"" + pluginsDir + "\"";
+        return false;
+    }
+
+    const fs::path target(manifestPath(pluginsDir));
+    const std::string text = serialiseManifest(plugins, policies);
+
+    // Same atomic route as ConfigStore, for the same reason: a torn manifest
+    // reads as corrupt, and a corrupt manifest silently forgets every cached
+    // retirement floor.
+#ifdef _WIN32
+    const int pid = _getpid();
+#else
+    const int pid = static_cast<int>(getpid());
+#endif
+    fs::path tmp = target;
+    tmp += "." + std::to_string(pid) + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            error = "plugin manifest: cannot create temp file \"" + tmp.string() + "\"";
+            return false;
+        }
+        f.write(text.data(), static_cast<std::streamsize>(text.size()));
+        f.flush();
+        if (!f) {
+            f.close();
+            std::error_code ignored;
+            fs::remove(tmp, ignored);
+            error = "plugin manifest: write to \"" + tmp.string() + "\" failed";
+            return false;
+        }
+    }
+    fs::rename(tmp, target, ec);
+    if (ec) {
+        std::error_code ignored;
+        fs::remove(tmp, ignored);
+        error = "plugin manifest: atomic replace of \"" + target.string() +
+                "\" failed: " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+bool PluginRepo::loadInventory(const std::string& pluginsDir, PluginInventory& out,
+                               std::string& error) {
+    out = PluginInventory{};
+    error.clear();
+
+    // ---- The manifest, if there is one ------------------------------------
+    const fs::path mpath(manifestPath(pluginsDir));
+    std::error_code ec;
+    bool ok = true;
+    if (fs::exists(mpath, ec)) {
+        out.manifestPresent = true;
+        std::ifstream f(mpath, std::ios::binary);
+        if (!f) {
+            error = "plugin manifest: cannot open \"" + mpath.string() + "\" for reading";
+            out.notes.push_back(error + "; treating every installed plugin as unmanaged");
+            ok = false;
+        } else {
+            const std::string text((std::istreambuf_iterator<char>(f)),
+                                   std::istreambuf_iterator<char>());
+            if (!parseManifest(text, out.plugins, out.policies, out.notes, error)) {
+                out.notes.push_back(error + "; treating every installed plugin as unmanaged");
+                out.plugins.clear();
+                out.policies.clear();
+                ok = false;
+            } else {
+                out.manifestUsable = true;
+            }
+        }
+    } else {
+        // Not an error, and emphatically not a reason to block anything: a
+        // first run, or plugins dropped in by hand, look exactly like this.
+        out.notes.push_back("no plugin manifest yet; nothing is recorded as installed");
+    }
+
+    // ---- What is actually on disk -----------------------------------------
+    std::vector<std::string> onDisk;
+    if (fs::is_directory(fs::path(pluginsDir), ec)) {
+        for (auto it = fs::directory_iterator(fs::path(pluginsDir), ec);
+             !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            std::error_code fec;
+            if (!it->is_regular_file(fec)) {
+                continue;
+            }
+            const std::string name = it->path().filename().string();
+            if (hasDllExtension(name)) {
+                onDisk.push_back(name);
+            }
+        }
+    } else {
+        out.notes.push_back("the plugins directory \"" + pluginsDir + "\" does not exist");
+    }
+
+    // ---- Reconcile: the manifest is a record, the disk is the truth --------
+    std::vector<bool> claimed(onDisk.size(), false);
+    for (InstalledPlugin& r : out.plugins) {
+        std::size_t found = onDisk.size();
+        for (std::size_t i = 0; i < onDisk.size(); ++i) {
+            if (iequalsAscii(onDisk[i], r.file)) {  // NTFS is case-insensitive
+                found = i;
+                break;
+            }
+        }
+        if (found == onDisk.size()) {
+            r.missingFromDisk = true;
+            out.notes.push_back("\"" + r.id + "\" is recorded as installed but its file \"" +
+                                r.file + "\" is not there");
+            continue;
+        }
+        claimed[found] = true;
+        if (r.sha256.empty()) {
+            continue;
+        }
+        // Re-hash rather than assume. A record that says "these bytes" and a
+        // file that is different bytes is worth saying out loud - it is either
+        // a manual overwrite or something worse.
+        std::string actual;
+        std::string hashError;
+        const fs::path full = fs::path(pluginsDir) / r.file;
+        if (!sha256File(full.string(), actual, hashError)) {
+            out.notes.push_back("cannot verify \"" + r.file + "\": " + hashError);
+        } else if (!sha256Matches(r.sha256, actual)) {
+            r.digestMismatch = true;
+            out.notes.push_back("\"" + r.file + "\" is not the file that was installed for \"" +
+                                r.id + "\" (recorded " + r.sha256 + ", found " + actual + ")");
+        }
+    }
+    for (std::size_t i = 0; i < onDisk.size(); ++i) {
+        if (!claimed[i]) {
+            out.unmanaged.push_back(onDisk[i]);
+            out.notes.push_back("\"" + onDisk[i] +
+                                "\" is installed but not recorded; it is left alone");
+        }
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Cached catalogue policy
+// ---------------------------------------------------------------------------
+
+CachedPolicy PluginRepo::policyFor(const std::vector<CachedPolicy>& policies,
+                                   const std::string& id) {
+    for (const CachedPolicy& p : policies) {
+        if (p.id == id) {
+            return p;
+        }
+    }
+    CachedPolicy none;
+    none.id = id;
+    none.known = false;  // explicit: this is THE fail-open state
+    return none;
+}
+
+void PluginRepo::mergePolicies(std::vector<CachedPolicy>& cached,
+                               const std::vector<PluginCatalogEntry>& catalogue) {
+    for (const PluginCatalogEntry& e : catalogue) {
+        if (e.id.empty()) {
+            continue;
+        }
+        CachedPolicy fresh;
+        fresh.id = e.id;
+        fresh.known = true;
+        fresh.minSupportedVersion = e.minSupportedVersion;
+        fresh.catalogueVersion = e.version;
+        fresh.abiVersion = e.abiVersion;
+        bool replaced = false;
+        for (CachedPolicy& p : cached) {
+            if (p.id == e.id) {
+                p = fresh;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            cached.push_back(std::move(fresh));
+        }
+    }
+    // Ids the catalogue did not mention keep whatever they had. Deliberate:
+    // an empty, truncated or substituted catalogue must not be able to lift a
+    // retirement floor that was already published.
+}
+
+bool PluginRepo::cacheCataloguePolicies(const std::string& pluginsDir,
+                                        const std::vector<PluginCatalogEntry>& catalogue,
+                                        std::string& error) {
+    PluginInventory inv;
+    std::string loadError;
+    // A corrupt manifest is not a reason to refuse to cache the new policy;
+    // it is a reason to write a fresh one. What is lost is the record of
+    // which plugins are installed (they degrade to unmanaged, i.e. fail open),
+    // never a floor - the floors are being rewritten from the catalogue here.
+    (void)loadInventory(pluginsDir, inv, loadError);
+    mergePolicies(inv.policies, catalogue);
+    return saveManifest(pluginsDir, inv.plugins, inv.policies, error);
+}
+
+// ---------------------------------------------------------------------------
+// Retirement
+// ---------------------------------------------------------------------------
+
+PluginBlockReason PluginRepo::pluginBlockReason(const InstalledPlugin& installed,
+                                                const CachedPolicy& policy) {
+    // ABI first. It is the harder break and the different remedy, so a plugin
+    // that is BOTH stale and built for the wrong ABI must be reported as the
+    // one an update cannot fix.
+    //
+    // 0 means "the manifest never recorded it" - unknown, not wrong. Blocking
+    // on that would retire every plugin recorded by an older build of this
+    // product, which is the fail-open rule's whole point.
+    if (installed.abiVersion != 0 &&
+        installed.abiVersion != static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)) {
+        return PluginBlockReason::AbiMismatch;
+    }
+    // No catalogue has ever described this plugin: a private build, an
+    // enterprise plugin, or simply a user who has never opened the browser.
+    // Nothing is known, so nothing is enforced.
+    if (!policy.known || policy.minSupportedVersion.empty()) {
+        return PluginBlockReason::None;
+    }
+    // A record with no version tells us nothing about which side of the floor
+    // it is on. Same rule: no information, no block.
+    if (installed.version.empty()) {
+        return PluginBlockReason::None;
+    }
+    if (compareVersions(installed.version, policy.minSupportedVersion) < 0) {
+        return PluginBlockReason::BelowMinimumVersion;
+    }
+    return PluginBlockReason::None;
+}
+
+std::string PluginRepo::pluginBlockMessage(const InstalledPlugin& installed,
+                                           const CachedPolicy& policy) {
+    const PluginBlockReason r = pluginBlockReason(installed, policy);
+    // The label the user recognises: the display name if we recorded one, the
+    // file name if not. Never the id, which is a machine key.
+    const std::string label = !installed.name.empty()
+                                  ? installed.name
+                                  : (!installed.file.empty() ? installed.file : installed.id);
+    const std::string versioned =
+        installed.version.empty() ? label : (label + " " + installed.version);
+
+    switch (r) {
+        case PluginBlockReason::None:
+            return std::string();
+
+        case PluginBlockReason::AbiMismatch:
+            // No "ABI", no version numbers the user cannot act on, and NO
+            // instruction to update: if the author has not published a build
+            // for this release, updating cannot possibly help, and sending
+            // someone round that loop is worse than telling them the truth.
+            return versioned + " was built for a different version of FoxSDR and has been " +
+                   "disabled. It needs a new build from the plugin's author before it can be " +
+                   "used again.";
+
+        case PluginBlockReason::BelowMinimumVersion: {
+            std::string m = versioned + " is out of date and has been disabled. Version " +
+                            policy.minSupportedVersion + " or newer is required.";
+            if (!policy.catalogueVersion.empty() &&
+                compareVersions(policy.catalogueVersion, installed.version) > 0) {
+                // The one-click case, and the only one where "Update it" is
+                // true: the last catalogue we saw really did have a newer build.
+                m += " Version " + policy.catalogueVersion +
+                     " is available - update it to use it again.";
+            } else {
+                m += " No newer version was in the last plugin catalogue seen, so check for "
+                     "updates or ask the plugin's author for a current build.";
+            }
+            return m;
+        }
+    }
+    return std::string();
+}
+
+std::vector<BlockedPlugin> PluginRepo::blockedPlugins(
+    const std::vector<InstalledPlugin>& installed, const std::vector<CachedPolicy>& policies) {
+    std::vector<BlockedPlugin> out;
+    for (const InstalledPlugin& p : installed) {
+        const CachedPolicy policy = policyFor(policies, p.id);
+        const PluginBlockReason r = pluginBlockReason(p, policy);
+        if (r == PluginBlockReason::None) {
+            continue;
+        }
+        BlockedPlugin b;
+        b.installed = p;
+        b.policy = policy;
+        b.reason = r;
+        b.message = pluginBlockMessage(p, policy);
+        out.push_back(std::move(b));
+    }
+    return out;
+}
+
+std::size_t PluginRepo::blockedCount(const std::vector<InstalledPlugin>& installed,
+                                     const std::vector<CachedPolicy>& policies) {
+    std::size_t n = 0;
+    for (const InstalledPlugin& p : installed) {
+        if (pluginBlockReason(p, policyFor(policies, p.id)) != PluginBlockReason::None) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+// ---------------------------------------------------------------------------
+// Update planning
+// ---------------------------------------------------------------------------
+
+std::vector<PluginUpdate> PluginRepo::planUpdates(const std::vector<PluginCatalogEntry>& catalogue,
+                                                  const std::vector<InstalledPlugin>& installed) {
+    std::vector<PluginUpdate> out;
+    for (const PluginCatalogEntry& e : catalogue) {
+        if (e.id.empty()) {
+            continue;
+        }
+        const InstalledPlugin* have = nullptr;
+        for (const InstalledPlugin& p : installed) {
+            if (p.id == e.id) {
+                have = &p;
+                break;
+            }
+        }
+        // Not installed: this is an update planner, not an installer. A
+        // catalogue entry nobody has is a browser listing, nothing more.
+        if (have == nullptr) {
+            continue;
+        }
+        // The user deleted the file. Updating would put it back, which is not
+        // what "update" means to anyone.
+        if (have->missingFromDisk) {
+            continue;
+        }
+        // Rule 5, again: an entry this host cannot load is not an upgrade.
+        if (e.abiVersion != static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)) {
+            continue;
+        }
+        if (e.thisPlatform() == nullptr) {
+            continue;
+        }
+
+        const int cmp = compareVersions(e.version, have->version);
+        if (cmp < 0) {
+            // NEVER a downgrade. Not for a floor, not for an ABI mismatch, not
+            // for anything: a catalogue that has gone backwards is a mistake
+            // or an attack, and replacing a working newer plugin with an older
+            // one serves neither case.
+            continue;
+        }
+
+        PluginUpdate u;
+        if (cmp > 0) {
+            u.reason = "version " + e.version + " replaces the installed " + have->version;
+        } else if (have->abiVersion != 0 &&
+                   have->abiVersion != static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)) {
+            // Same version number, but the installed build cannot run here and
+            // the catalogue's build can. A rebuild at the same version is the
+            // one case where "same version" is still worth downloading.
+            u.reason = "the installed build does not work with this version of FoxSDR; the "
+                       "catalogue has a rebuilt " +
+                       e.version;
+        } else {
+            continue;  // same version, same ABI: already up to date
+        }
+        u.id = e.id;
+        u.fromVersion = have->version;
+        u.toVersion = e.version;
+        u.entry = &e;
+        out.push_back(std::move(u));
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1109,6 +1791,84 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
     error = std::string("plugin install: ") + "not supported on this platform";
     return false;
 #endif
+}
+
+bool PluginRepo::recordInstall(const std::string& pluginsDir, const PluginCatalogEntry& e,
+                               std::string& error) {
+    error.clear();
+    if (e.id.empty()) {
+        error = "cannot record an install for a catalogue entry with no id";
+        return false;
+    }
+    const PluginPlatform* p = e.thisPlatform();
+    if (p == nullptr) {
+        error = "\"" + e.name + "\" has no build for " + hostOs() + "/" + hostArch();
+        return false;
+    }
+    std::string safeName;
+    if (!sanitiseFileName(p->file, safeName, error)) {
+        error = "\"" + e.name + "\": " + error;
+        return false;
+    }
+
+    PluginInventory inv;
+    std::string loadError;
+    (void)loadInventory(pluginsDir, inv, loadError);  // corrupt or absent: start fresh
+
+    InstalledPlugin r;
+    r.id = e.id;
+    r.name = e.name;
+    r.version = e.version;
+    r.file = safeName;
+    // The catalogue's digest, which install() has already proved equal to the
+    // bytes on disk. Re-hashing here would compare the file against itself.
+    r.sha256 = toLowerAscii(p->sha256);
+    r.abiVersion = e.abiVersion;
+    r.installedAtUnix = nowUnix();
+
+    bool replaced = false;
+    for (InstalledPlugin& existing : inv.plugins) {
+        if (existing.id == r.id) {
+            existing = r;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        inv.plugins.push_back(r);
+    }
+    // The policy that came with this entry is cached in the same write: the
+    // floor must be remembered from the moment the catalogue was seen, not
+    // from some later fetch that may never happen.
+    const std::vector<PluginCatalogEntry> one{e};
+    mergePolicies(inv.policies, one);
+    return saveManifest(pluginsDir, inv.plugins, inv.policies, error);
+}
+
+bool PluginRepo::applyUpdate(const PluginUpdate& u, const std::string& pluginsDir,
+                             std::string& installedPath, std::string& error) {
+    installedPath.clear();
+    error.clear();
+    if (u.entry == nullptr) {
+        error = "update plan for \"" + u.id + "\" has no catalogue entry";
+        return false;
+    }
+    // The whole gauntlet, unchanged and unshortcut: ABI, platform, filename
+    // sanitiser, sha256 format, https, then download-to-temp, hash-while
+    // -streaming, verify, and only then rename over the installed file. If any
+    // of that fails, the old plugin is still sitting there untouched.
+    if (!install(*u.entry, pluginsDir, installedPath, error)) {
+        return false;
+    }
+    // Only now, with a verified file in place, is the record changed.
+    std::string recordError;
+    if (!recordInstall(pluginsDir, *u.entry, recordError)) {
+        error = "\"" + u.entry->name + "\" was updated to " + u.toVersion +
+                ", but its record could not be written: " + recordError +
+                ". Running the update again will repair it.";
+        return false;
+    }
+    return true;
 }
 
 bool PluginRepo::remove(const std::string& pluginsDir, const std::string& fileName,

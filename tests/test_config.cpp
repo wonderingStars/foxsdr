@@ -94,6 +94,9 @@ AppConfig junkConfig() {
     // junk, so a load path that forgets to assign it is caught).
     c.pluginCatalogueUrl = "garbage";
     c.pluginBrowserOpen = true;
+    // P10: away from its default AND out of range, so a load path that forgets
+    // to assign it is caught by the same rule as every other field.
+    c.pluginLastUpdateCheck = -999;
     return c;
 }
 
@@ -124,6 +127,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
+    CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
 }
 
 }  // namespace
@@ -185,6 +189,8 @@ int main() {
         // came back rather than either end's fallback.
         in.pluginCatalogueUrl = "https://plugins.example.invalid/team/index.json";
         in.pluginBrowserOpen = true;
+        // P10: a timestamp past 2038, which is why the field is 64-bit.
+        in.pluginLastUpdateCheck = 4102444800;  // 2100-01-01T00:00:00Z
 
         const std::string path = p("nested/deeper/config.json");
         std::string err = "stale";
@@ -477,6 +483,48 @@ int main() {
         CHECK(ConfigStore::load(rt, back, err));
         CHECK(back.pluginCatalogueUrl == in.pluginCatalogueUrl);
         CHECK(back.pluginBrowserOpen);
+    }
+
+    // --- P10 plugin version policy -------------------------------------------
+    {
+        const std::string path = p("plugin_policy.json");
+        const AppConfig d;
+
+        // "Never checked" is the default, and there is deliberately NO
+        // auto-update switch in this struct: nothing in the product fetches a
+        // catalogue on its own, so there is no setting that could turn a
+        // launch into a network call. Retirement is enforced from the locally
+        // cached policy instead (see PluginRepo), which needs no network and
+        // therefore needs no consent to collect an IP address.
+        CHECK(d.pluginLastUpdateCheck == 0);
+
+        // An ordinary timestamp loads verbatim.
+        CHECK(writeText(path, "{\"pluginLastUpdateCheck\":1755200000}\n"));
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginLastUpdateCheck == 1755200000);
+
+        // Past 2038: the field is 64-bit precisely so this does not wrap.
+        CHECK(writeText(path, "{\"pluginLastUpdateCheck\":4102444800}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginLastUpdateCheck == 4102444800);
+
+        // Negative (hand-edit, or a clock that went backwards) resets to
+        // "never" rather than reporting a time before the epoch to the UI.
+        CHECK(writeText(path, "{\"pluginLastUpdateCheck\":-1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginLastUpdateCheck == 0);
+
+        // Wrong types keep the default, like every other field.
+        CHECK(writeText(path, "{\"pluginLastUpdateCheck\":\"yesterday\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginLastUpdateCheck == d.pluginLastUpdateCheck);
+        CHECK(writeText(path, "{\"pluginLastUpdateCheck\":1.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginLastUpdateCheck == d.pluginLastUpdateCheck);
     }
 
 #ifdef _WIN32

@@ -47,6 +47,9 @@
 //     download URL inside the fetched index is re-checked there too. Validating
 //     the string here as well would only add a second, weaker copy of a rule
 //     that has exactly one enforcement point today.
+//   - pluginLastUpdateCheck: a negative value resets to 0 ("never"). A time
+//     before the epoch is either a hand-edit or a clock that went backwards,
+//     and "never checked" is the only honest reading of either.
 //
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
@@ -56,6 +59,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 // For PluginRepo::defaultIndexUrl(), which IS the default value of
@@ -126,6 +130,29 @@ struct AppConfig {
     // and a config field that could reinstate a network call behind the
     // user's back would break it.
     bool pluginBrowserOpen = false;
+
+    // --- Plugin version policy (P10) ------------------------------------------
+    // When a plugin catalogue was last successfully seen, in seconds since the
+    // Unix epoch; 0 means never. It exists so the UI can say how old the
+    // cached retirement policy is ("last checked 3 weeks ago") next to a
+    // blocked plugin, which is the difference between an explanation and a
+    // mystery.
+    //
+    // NOTE WHAT IS NOT HERE: there is no pluginAutoUpdate flag, because there
+    // is no auto-update. Nothing in this product fetches a catalogue, still
+    // less a native DLL, without the user asking. The staleness problem is
+    // solved locally instead - PluginRepo caches the catalogue's
+    // minSupportedVersion floor and refuses to load anything below it, with or
+    // without a network - so keeping users off stale plugins never requires a
+    // background download. A "check for updates on launch" setting would be a
+    // background network call in a product that promises none, and in the
+    // UK/EU an IP address arriving at our server on every launch is personal
+    // data being collected by default. This field records when the user last
+    // chose to look; it never causes a look.
+    //
+    // Sanitized on load: a negative value (hand-edit, or a clock that went
+    // backwards) resets to 0, i.e. "never", which is the honest reading.
+    std::int64_t pluginLastUpdateCheck = 0;
 };
 
 class ConfigStore {

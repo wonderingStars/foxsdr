@@ -59,6 +59,13 @@ void getInt(const json& j, const char* key, int& dst) {
     if (it != j.end() && it->is_number_integer()) { dst = it->get<int>(); }
 }
 
+// Unix timestamps need the full 64-bit range: an int field would overflow in
+// 2038 and start reporting negative "last checked" times to the UI.
+void getInt64(const json& j, const char* key, std::int64_t& dst) {
+    const auto it = j.find(key);
+    if (it != j.end() && it->is_number_integer()) { dst = it->get<std::int64_t>(); }
+}
+
 float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
@@ -154,6 +161,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
+    getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
 
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
@@ -180,6 +188,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // PluginRepo and not in a second place here.
     if (out.pluginCatalogueUrl.empty()) {
         out.pluginCatalogueUrl = defaults.pluginCatalogueUrl;
+    }
+    // A timestamp before the epoch is a hand-edit or a backwards clock; either
+    // way "never checked" is the only reading that cannot mislead the UI.
+    if (out.pluginLastUpdateCheck < 0) {
+        out.pluginLastUpdateCheck = 0;
     }
     return true;
 }
@@ -227,6 +240,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
+    j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the
