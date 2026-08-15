@@ -21,6 +21,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
+#include "core/plugin_repo.hpp"  // defaultIndexUrl(), the default catalogue URL
+
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -88,6 +90,10 @@ AppConfig junkConfig() {
     c.notchQ = 1e9;
     c.autoNotch = true;
     c.bandPlanOverlay = false;
+    // P9 fields, both away from their defaults (and the URL empty-adjacent
+    // junk, so a load path that forgets to assign it is caught).
+    c.pluginCatalogueUrl = "garbage";
+    c.pluginBrowserOpen = true;
     return c;
 }
 
@@ -116,6 +122,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.notchQ == b.notchQ);
     CHECK(a.autoNotch == b.autoNotch);
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
+    CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
+    CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
 }
 
 }  // namespace
@@ -172,6 +180,11 @@ int main() {
         in.notchQ = 42.25;
         in.autoNotch = true;
         in.bandPlanOverlay = false;
+        // P9: the enterprise escape hatch. A URL that is neither the default
+        // nor junkConfig()'s value, so the roundtrip proves the FILE is what
+        // came back rather than either end's fallback.
+        in.pluginCatalogueUrl = "https://plugins.example.invalid/team/index.json";
+        in.pluginBrowserOpen = true;
 
         const std::string path = p("nested/deeper/config.json");
         std::string err = "stale";
@@ -405,6 +418,65 @@ int main() {
         CHECK(d.deemphasisIndex == 0);
         CHECK(d.stereoEnabled);
         CHECK(d.bandPlanOverlay);
+    }
+
+    // --- P9 plugin browser settings -------------------------------------------
+    {
+        const std::string path = p("plugin_browser.json");
+
+        // The default catalogue URL is PluginRepo's, not a copied literal.
+        // Asserting the identity (rather than the string) is the point: two
+        // copies of a security-relevant origin that can drift is the bug.
+        const AppConfig d;
+        CHECK(d.pluginCatalogueUrl == cascade::core::PluginRepo::defaultIndexUrl());
+        CHECK(!d.pluginCatalogueUrl.empty());
+        CHECK(!d.pluginBrowserOpen);  // the browser starts closed
+
+        // An EMPTY url is a hand-edit, not "disable the catalogue": it must
+        // come back as the default rather than leaving the browser pointed at
+        // nothing it could ever fetch.
+        CHECK(writeText(path, "{\"pluginCatalogueUrl\":\"\"}\n"));
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginCatalogueUrl == d.pluginCatalogueUrl);
+
+        // A non-default https URL is kept verbatim — this is the whole point
+        // of the field, and validating it a second time here would only add a
+        // weaker copy of PluginRepo's rule.
+        CHECK(writeText(path,
+                        "{\"pluginCatalogueUrl\":\"https://mirror.example.invalid/i.json\","
+                        "\"pluginBrowserOpen\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginCatalogueUrl == "https://mirror.example.invalid/i.json");
+        CHECK(out.pluginBrowserOpen);
+
+        // A LOCAL path is also kept verbatim: an enterprise catalogue on a
+        // share is a supported deployment, and the loader is not the place
+        // that decides what a catalogue location may look like.
+        CHECK(writeText(path,
+                        "{\"pluginCatalogueUrl\":\"C:/deploy/foxsdr/index.json\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginCatalogueUrl == "C:/deploy/foxsdr/index.json");
+
+        // Wrong types keep the defaults, like every other field.
+        CHECK(writeText(path,
+                        "{\"pluginCatalogueUrl\":42,\"pluginBrowserOpen\":\"yes\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginCatalogueUrl == d.pluginCatalogueUrl);
+        CHECK(out.pluginBrowserOpen == d.pluginBrowserOpen);
+
+        // And both survive a save/load roundtrip through a file the store
+        // wrote itself (the path the app actually uses).
+        AppConfig in;
+        in.pluginCatalogueUrl = "\\\\corp-share\\sdr\\plugins\\index.json";
+        in.pluginBrowserOpen = true;
+        const std::string rt = p("plugin_browser_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginCatalogueUrl == in.pluginCatalogueUrl);
+        CHECK(back.pluginBrowserOpen);
     }
 
 #ifdef _WIN32

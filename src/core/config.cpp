@@ -152,6 +152,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "notchQ", out.notchQ);
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
+    getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
+    getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
 
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
@@ -170,6 +172,14 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.sourceKind != "siggen" && out.sourceKind != "file" &&
         out.sourceKind != "soapy") {
         out.sourceKind = defaults.sourceKind;
+    }
+    // An empty catalogue URL is a hand-edit (or a deleted value), not a
+    // request for "no catalogue": restore the published default rather than
+    // leaving the browser with nothing it could ever fetch. Any non-empty
+    // value is kept verbatim — see the header for why validation lives in
+    // PluginRepo and not in a second place here.
+    if (out.pluginCatalogueUrl.empty()) {
+        out.pluginCatalogueUrl = defaults.pluginCatalogueUrl;
     }
     return true;
 }
@@ -215,6 +225,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["notchQ"] = cfg.notchQ;
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
+    j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
+    j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the

@@ -39,6 +39,14 @@
 //                                         negative from a hand-edited file
 //                                         should never reach a slider)
 //   - notchQ      clamped to [0.1, 1000] (the Notch's own useful range)
+//   - pluginCatalogueUrl: an EMPTY value resets to PluginRepo::defaultIndexUrl().
+//     Anything else is kept verbatim — deliberately, because this field is the
+//     enterprise escape hatch (point the browser at your own catalogue) and the
+//     component that consumes it already refuses everything it must refuse: a
+//     non-https URL never reaches the transport (PluginRepo rule 1), and every
+//     download URL inside the fetched index is re-checked there too. Validating
+//     the string here as well would only add a second, weaker copy of a rule
+//     that has exactly one enforcement point today.
 //
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
@@ -49,6 +57,13 @@
 #pragma once
 
 #include <string>
+
+// For PluginRepo::defaultIndexUrl(), which IS the default value of
+// pluginCatalogueUrl below. Spelling the default as a call rather than as a
+// copied string literal is deliberate: the catalogue origin is a security
+// -relevant constant, and two copies of it that can drift is exactly how a
+// build ends up quietly pointing at the wrong host.
+#include "core/plugin_repo.hpp"
 
 namespace cascade::core {
 
@@ -85,6 +100,32 @@ struct AppConfig {
     double notchQ = 30.0;
     bool autoNotch = false;
     bool bandPlanOverlay = true;
+
+    // --- Plugin browser settings (P9) -----------------------------------------
+    // Where the in-app plugin browser looks for its catalogue. Persisted so a
+    // user — or an enterprise deploying cascade — can point the browser at
+    // their own index.json instead of the published one, without a rebuild.
+    //
+    // Two forms are accepted by the browser:
+    //   - an https:// URL, fetched over the network (PluginRepo::fetchIndex,
+    //     with every rule in plugin_repo.hpp applied);
+    //   - a plain filesystem path (no "://" scheme), read directly and parsed
+    //     with PluginRepo::parseIndex — no network involved at all. This is
+    //     what makes a catalogue on a corporate share usable, and it is also
+    //     the only way the catalogue UI's success path can be exercised
+    //     offline. It grants no new powers: every DOWNLOAD url inside such an
+    //     index must still be https, because install() checks it.
+    // A URL with any other scheme (http://, ftp://, file://) reaches
+    // fetchIndex and is refused there, which is where that decision belongs.
+    std::string pluginCatalogueUrl = PluginRepo::defaultIndexUrl();
+
+    // Whether the "Get plugins" browser was left open. Purely cosmetic
+    // restore of where the user was — it does NOT cause a fetch on startup.
+    // Nothing in this product touches the catalogue origin until the user
+    // presses Browse; that promise is what the browser's privacy note makes,
+    // and a config field that could reinstate a network call behind the
+    // user's back would break it.
+    bool pluginBrowserOpen = false;
 };
 
 class ConfigStore {

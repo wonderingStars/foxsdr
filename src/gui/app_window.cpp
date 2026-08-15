@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -22,6 +23,11 @@
 #include <GLFW/glfw3.h>
 
 #include "core/version.hpp"
+// Generated window-icon pixels. Reached by a path relative to this file
+// because resources/ is deliberately not on any target's include path — the
+// icon is an asset, not a source root, and adding an include directory for one
+// generated header would be a worse trade than a two-segment relative include.
+#include "../../resources/icon/foxsdr_icon_rgba.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/waterfall_view.hpp"
 #include "source/iq_file_source.hpp"
@@ -228,6 +234,36 @@ void glfwErrorCallback(int code, const char* description) {
                  description ? description : "(no description)");
 }
 
+// Applies the FoxSDR mark to the window's title-bar, taskbar and Alt-Tab
+// slots. The executable's own RT_GROUP_ICON (resources/icon/foxsdr.rc) is what
+// Explorer shows; this is the separate, runtime-owned window icon, and setting
+// both is what stops the shipped app ever showing the blank default.
+//
+// The pixels are COMPILED IN from resources/icon/foxsdr_icon_rgba.hpp rather
+// than decoded from a .ico at runtime or pulled back out of the executable's
+// resources with LoadImage/GetIconInfo. A raw RGBA array needs no
+// image-decoding dependency (this tree's whole premise is a small,
+// licence-audited dependency set), no Win32-only code path in an otherwise
+// portable shell, and no GDI/DIB handle lifetime to leak. GLFW copies the
+// pixel data before returning, so the arrays need no lifetime management.
+//
+// Best-effort by construction: glfwSetWindowIcon returns void, and any
+// platform-level refusal surfaces through glfwErrorCallback as one printed
+// line. Nothing here can fail the caller — a missing icon must never stop the
+// app starting.
+void applyWindowIcon(GLFWwindow* window) {
+    if (window == nullptr) { return; }
+    // GLFWimage::pixels is a non-const unsigned char*; the cast is safe
+    // because GLFW only reads the buffer (it copies it during the call).
+    const GLFWimage images[] = {
+        {icon::kSize16, icon::kSize16, const_cast<unsigned char*>(icon::kPixels16)},
+        {icon::kSize32, icon::kSize32, const_cast<unsigned char*>(icon::kPixels32)},
+        {icon::kSize48, icon::kSize48, const_cast<unsigned char*>(icon::kPixels48)},
+    };
+    glfwSetWindowIcon(window, static_cast<int>(sizeof(images) / sizeof(images[0])),
+                      images);
+}
+
 // Field-wise AppConfig comparison for the save debounce. Exact float
 // compares are correct here: both sides come from the same currentConfig()
 // code path, so any difference is a real user-visible change, never noise.
@@ -244,7 +280,64 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.nrEnabled == b.nrEnabled && a.nrStrength == b.nrStrength &&
            a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
-           a.bandPlanOverlay == b.bandPlanOverlay;
+           a.bandPlanOverlay == b.bandPlanOverlay &&
+           a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
+           a.pluginBrowserOpen == b.pluginBrowserOpen;
+}
+
+// --- Plugin browser helpers (P9) ---------------------------------------------
+
+// ASCII case-insensitive equality. Used only to compare plugin FILE NAMES,
+// which sanitiseFileName() has already restricted to [A-Za-z0-9._-] — so a
+// byte-wise ASCII fold is the whole of the correct comparison here, with no
+// locale or Unicode case-folding question to get wrong.
+bool equalsFileNameAscii(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) { return false; }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        char ca = a[i];
+        char cb = b[i];
+        if (ca >= 'A' && ca <= 'Z') { ca = static_cast<char>(ca - 'A' + 'a'); }
+        if (cb >= 'A' && cb <= 'Z') { cb = static_cast<char>(cb - 'A' + 'a'); }
+        if (ca != cb) { return false; }
+    }
+    return true;
+}
+
+// Reads a catalogue index from the LOCAL filesystem and parses it with the
+// same parseIndex() the network path uses. See AppConfig::pluginCatalogueUrl
+// for why this form exists: a catalogue on a corporate share, and the only
+// way the success path of this UI can be exercised without a live server.
+//
+// It grants nothing the network path does not already allow. parseIndex still
+// refuses every non-https download URL and every malformed sha256, and
+// install() re-checks both before it opens a socket — so the worst a hostile
+// local index can do is offer an entry that install() then refuses.
+// The same kMaxIndexBytes cap applies, because "it is on our own disk" is not
+// a reason to read a 4 GB document into memory.
+bool readLocalCatalogue(const std::string& path,
+                        std::vector<cascade::core::PluginCatalogEntry>& out,
+                        std::string& error) {
+    out.clear();
+    error.clear();
+    std::error_code ec;
+    const std::uintmax_t size = std::filesystem::file_size(std::filesystem::path(path), ec);
+    if (ec) {
+        error = "cannot read the catalogue file \"" + path + "\": " + ec.message();
+        return false;
+    }
+    if (size > cascade::core::PluginRepo::kMaxIndexBytes) {
+        error = "the catalogue file \"" + path + "\" is larger than the " +
+                std::to_string(cascade::core::PluginRepo::kMaxIndexBytes) + "-byte limit";
+        return false;
+    }
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        error = "cannot open the catalogue file \"" + path + "\"";
+        return false;
+    }
+    const std::string text((std::istreambuf_iterator<char>(f)),
+                           std::istreambuf_iterator<char>());
+    return cascade::core::PluginRepo::parseIndex(text, out, error);
 }
 
 // --- Band plan overlay constants (P7) ----------------------------------------
@@ -349,6 +442,12 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // a build tree — and every bounded --frames CI run takes this path.
     loadBandPlan();
     rescanPlugins();
+    // The catalogue URL starts at the published default and is overwritten by
+    // a config restore if the user (or an enterprise deployment) changed it.
+    // Setting it here is NOT a fetch: nothing contacts the origin until the
+    // Browse button is pressed.
+    pluginCatalogueUrl_ = cascade::core::AppConfig{}.pluginCatalogueUrl;
+    std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
     // DELIBERATELY no SoapySDR enumeration here. Enumeration loads vendor
     // modules (SoapyUHD -> uhd.dll -> libusb) whose USB discovery faulted
     // in-process in ~2% of measured `--frames 1` runs (0xC0000005 inside
@@ -407,6 +506,15 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
 }
 
 AppWindow::~AppWindow() {
+    // A catalogue fetch or a plugin download may still be in flight. The
+    // std::async futures below block in their own destructors until the
+    // worker returns, so without this an app closed mid-download would sit
+    // there, apparently hung, for as long as the transfer took. cancel() is
+    // thread-safe by contract and makes the worker fail out with "cancelled",
+    // deleting its temp file on the way — so teardown stays bounded and no
+    // partial DLL is left behind. Harmless when nothing is running.
+    pluginRepo_.cancel();
+
     // Safety net (run()'s teardown already does this on the normal path):
     // the recorder members are destroyed before pipeline_ (reverse
     // declaration order), so any tap still installed must be uninstalled
@@ -430,6 +538,10 @@ int AppWindow::run(int frames) {
         glfwTerminate();
         return 1;
     }
+    // Before the context is made current: purely a window-manager property,
+    // independent of GL, so even a run that fails at backend init has already
+    // shown the right icon.
+    applyWindowIcon(window);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);  // vsync: the GUI thread paces itself off the display
 
@@ -471,7 +583,20 @@ int AppWindow::run(int frames) {
     // DSP threads it does not need.
     if (frames < 0) { pipeline_.start(); }
 
+    // Bounded-run plugin-catalogue hook (see app_window.hpp). Read HERE, not
+    // in the constructor, because only run() knows whether this is a bounded
+    // CI run — and the hook is honored in no other mode, so an interactive
+    // session can never be pointed at a different catalogue by a stray
+    // environment variable.
+    pluginTestHook_.clear();
+    pluginTestStarted_ = false;
+    if (frames >= 0) {
+        const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
+        if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+    }
+
     int rendered = 0;
+    frameCounter_ = 0;
     while (!glfwWindowShouldClose(window)) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
@@ -481,6 +606,20 @@ int AppWindow::run(int frames) {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+        frameCounter_ = rendered;
+        // The hook's ONE fetch, started on the first frame so the rest of the
+        // bounded run proves the window keeps rendering while it is in
+        // flight. Everything else about the browser is unchanged — this is
+        // the button press a headless run cannot make.
+        if (!pluginTestHook_.empty() && !pluginTestStarted_) {
+            pluginTestStarted_ = true;
+            pluginCatalogueUrl_ = pluginTestHook_;
+            std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s",
+                          pluginCatalogueUrl_.c_str());
+            pluginBrowseOpen_ = true;
+            startCatalogFetch();
+        }
 
         drawUi();
 
@@ -578,6 +717,8 @@ void AppWindow::drawUi() {
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
     pollSoapyAsync();
+    // Same contract for the catalogue fetch / plugin download.
+    pollPluginAsync();
 }
 
 void AppWindow::drawToolbar() {
@@ -1608,15 +1749,35 @@ void AppWindow::drawPluginsSection() {
     if (!ImGui::CollapsingHeader("Plugins")) { return; }
 
     ImGui::TextDisabled("%s", pluginDir_.c_str());
-    if (ImGui::Button("Rescan", ImVec2(-FLT_MIN, 0.0f))) { rescanPlugins(); }
+    const float half = 0.5f * (ImGui::GetContentRegionAvail().x -
+                               ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::Button("Rescan", ImVec2(half, 0.0f))) { rescanPlugins(); }
+    ImGui::SameLine();
+    if (ImGui::Button(pluginBrowseOpen_ ? "Hide browser" : "Get plugins",
+                      ImVec2(half, 0.0f))) {
+        // Opening the browser is NOT a fetch. The view appears with an empty
+        // list and a Browse button; the catalogue origin is contacted only
+        // when that button is pressed.
+        pluginBrowseOpen_ = !pluginBrowseOpen_;
+    }
 
+    if (pluginBrowseOpen_) { drawPluginBrowser(); }
+
+    ImGui::SeparatorText("Installed");
     const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
     if (list.empty()) {
         ImGui::TextDisabled("No plugins installed");
+        // Still report a remove that just emptied the list — or one that
+        // failed, which is exactly when the user needs to be told.
+        if (!pluginBrowseOpen_) { drawPluginResultText(); }
         return;
     }
+    // Removal is deferred past the loop: removeInstalledPlugin() rescans,
+    // which replaces the very vector this loop is walking.
+    std::string removeFile;
     for (std::size_t i = 0; i < list.size(); ++i) {
         const cascade::core::LoadedPlugin& p = list[i];
+        const std::string file = std::filesystem::path(p.path).filename().string();
         ImGui::PushID(static_cast<int>(i));
         if (p.loaded) {
             ImGui::Text("%s %s", p.name.c_str(), p.version.c_str());
@@ -1630,12 +1791,368 @@ void AppWindow::drawPluginsSection() {
             // A refused candidate is shown WITH ITS REASON rather than
             // omitted — "my plugin does not appear" with no explanation is
             // the support ticket the host was designed to prevent.
-            const std::string file =
-                std::filesystem::path(p.path).filename().string();
             ImGui::TextColored(kErrorRed, "%s", file.c_str());
             ImGui::TextWrapped("%s", p.error.c_str());
         }
+        // Two-step removal. Deleting a plugin is deleting a file the user
+        // downloaded and may not be able to get back (a catalogue entry can
+        // disappear), so a single mis-click must not do it.
+        if (removeConfirmIdx_ == static_cast<int>(i)) {
+            ImGui::TextWrapped("Delete %s?", file.c_str());
+            if (ImGui::Button("Confirm delete")) {
+                removeFile = file;
+                removeConfirmIdx_ = -1;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel##rm")) { removeConfirmIdx_ = -1; }
+        } else if (ImGui::SmallButton("Remove")) {
+            removeConfirmIdx_ = static_cast<int>(i);
+        }
+        ImGui::Separator();
         ImGui::PopID();
+    }
+    if (!removeFile.empty()) { removeInstalledPlugin(removeFile); }
+    // Only when the browser is collapsed: with it open the same text has
+    // already been drawn under the Install button, and printing it twice in
+    // one column reads as two separate failures.
+    if (!pluginBrowseOpen_) { drawPluginResultText(); }
+}
+
+// --- The catalogue browser (P9) --------------------------------------------
+
+void AppWindow::drawPluginBrowser() {
+    ImGui::SeparatorText("Get plugins");
+    // Stated in the UI, not just in the code: this is a promise to the user,
+    // and a promise nobody can see is worth nothing.
+    ImGui::TextWrapped("Nothing is downloaded, and the catalogue is not "
+                       "contacted, until you press Browse.");
+
+    // Catalogue URL. Committed on deactivate-after-edit rather than per
+    // keystroke, so a half-typed host is never what a Browse would use.
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##catalogue_url", "catalogue index.json URL",
+                             pluginUrlBuf_, sizeof(pluginUrlBuf_));
+    if (ImGui::IsItemDeactivatedAfterEdit()) { pluginCatalogueUrl_ = pluginUrlBuf_; }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("An https:// catalogue, or a path to a local index.json.\n"
+                          "Plugin downloads are always https and always sha256-verified.");
+    }
+
+    const bool busy = catalogPending_ || installPending_;
+    if (busy) {
+        // Progress + Cancel. PluginRepo::progress() stays at 0 when the
+        // server sends no Content-Length, which is deliberate on its side —
+        // the bar then simply does not move rather than inventing a figure.
+        if (installPending_) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Downloading %s...",
+                               installBusyName_.c_str());
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Fetching catalogue...");
+        }
+        ImGui::ProgressBar(pluginRepo_.progress(), ImVec2(-FLT_MIN, 0.0f));
+        if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) { pluginRepo_.cancel(); }
+    } else if (ImGui::Button(catalog_.empty() ? "Browse catalogue"
+                                              : "Refresh catalogue",
+                             ImVec2(-FLT_MIN, 0.0f))) {
+        startCatalogFetch();
+    }
+
+    // A fetch failure is shown verbatim and in red. The published catalogue
+    // repository may be private, in which case this is an HTTP 404 — an
+    // ordinary, supported state, so the app carries on exactly as before.
+    if (!catalogError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", catalogError_.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (!catalogStatus_.empty()) { ImGui::TextDisabled("%s", catalogStatus_.c_str()); }
+
+    // --- The list ------------------------------------------------------------
+    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+        const cascade::core::PluginCatalogEntry& e =
+            catalog_[static_cast<std::size_t>(i)];
+        const bool installed = catalogEntryInstalled(e);
+        ImGui::PushID(i);
+        char label[256];
+        std::snprintf(label, sizeof(label), "%s %s%s", e.name.c_str(), e.version.c_str(),
+                      installed ? "  [installed]" : (e.compatible ? "" : "  [incompatible]"));
+        if (ImGui::Selectable(label, i == catalogSel_)) {
+            catalogSel_ = i;
+            // The acknowledgement belongs to ONE entry. Carrying a tick from
+            // the plugin the user just read about over to the next one would
+            // hand out consent nobody gave.
+            legalAck_ = false;
+            installError_.clear();
+            installReport_.clear();
+        }
+        // Author and LICENCE on every row, not only in the detail pane: the
+        // terms a plugin arrives under are part of choosing it, not a detail
+        // to discover after installing.
+        ImGui::TextDisabled("by %s | licence: %s",
+                            e.author.empty() ? "(unknown)" : e.author.c_str(),
+                            e.licence.empty() ? "(none declared)" : e.licence.c_str());
+        if (!e.compatible) {
+            ImGui::TextColored(kErrorRed, "not compatible with this version");
+        }
+        ImGui::PopID();
+    }
+
+    // --- Detail pane + install gate -----------------------------------------
+    if (catalogSel_ >= 0 && catalogSel_ < static_cast<int>(catalog_.size())) {
+        const cascade::core::PluginCatalogEntry& e =
+            catalog_[static_cast<std::size_t>(catalogSel_)];
+        ImGui::Separator();
+        ImGui::Text("%s %s", e.name.c_str(), e.version.c_str());
+        ImGui::TextDisabled("by %s", e.author.empty() ? "(unknown)" : e.author.c_str());
+        // NOT TextDisabled. The licence is the one line in this pane the user
+        // is legally obliged to have seen before installing, so it is drawn
+        // at full contrast, above the button, every time.
+        ImGui::TextWrapped("Licence: %s",
+                           e.licence.empty() ? "(none declared)" : e.licence.c_str());
+        const std::string& body = e.description.empty() ? e.summary : e.description;
+        if (!body.empty()) { ImGui::TextWrapped("%s", body.c_str()); }
+        if (!e.homepage.empty()) { ImGui::TextDisabled("%s", e.homepage.c_str()); }
+        const cascade::core::PluginPlatform* plat = e.thisPlatform();
+        if (plat != nullptr && plat->sizeBytes > 0) {
+            ImGui::TextDisabled("%s | %.2f MB", plat->file.c_str(),
+                                static_cast<double>(plat->sizeBytes) / 1.0e6);
+        }
+
+        // THE LEGAL NOTICE. Some decoders demodulate transmissions whose
+        // interception is an offence in some countries; the notice is the
+        // author telling the user that, and it is not decoration. Install
+        // stays disabled until the box is ticked (pluginInstallBlockedReason).
+        if (!e.legalNotice.empty()) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Legal notice");
+            ImGui::TextWrapped("%s", e.legalNotice.c_str());
+            ImGui::Checkbox("I have read this notice and accept responsibility",
+                            &legalAck_);
+        }
+
+        const std::string blocked = pluginInstallBlockedReason(catalogSel_, legalAck_);
+        ImGui::BeginDisabled(!blocked.empty());
+        if (ImGui::Button("Install", ImVec2(-FLT_MIN, 0.0f))) { startInstall(e); }
+        ImGui::EndDisabled();
+        if (!blocked.empty()) { ImGui::TextDisabled("Install disabled: %s", blocked.c_str()); }
+    }
+
+    // Directly under the Install button, which is where the user is looking.
+    drawPluginResultText();
+}
+
+void AppWindow::drawPluginResultText() {
+    // The failure is PluginRepo's own text, verbatim and in red — a sha256
+    // mismatch names both digests and must be the most visible thing on the
+    // panel, because it means the bytes that arrived were not the bytes the
+    // catalogue vouched for. Paraphrasing it, or reducing it to "install
+    // failed", would throw away the only evidence the user has.
+    if (!installError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", installError_.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (!installReport_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 1.0f, 0.45f, 1.0f));
+        ImGui::TextWrapped("%s", installReport_.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+bool AppWindow::catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const {
+    const cascade::core::PluginPlatform* p = e.thisPlatform();
+    if (p == nullptr) { return false; }
+    // Compare the SANITISED name — the exact name install() would write — so
+    // a catalogue that spells its file oddly cannot make an already-installed
+    // plugin look absent (and offer a second install that would then land
+    // under a different name).
+    std::string want;
+    std::string err;
+    if (!cascade::core::PluginRepo::sanitiseFileName(p->file, want, err)) { return false; }
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        const std::string have = std::filesystem::path(lp.path).filename().string();
+        if (equalsFileNameAscii(have, want)) { return true; }
+    }
+    return false;
+}
+
+std::string AppWindow::pluginInstallBlockedReason(int idx, bool acknowledged) const {
+    if (idx < 0 || idx >= static_cast<int>(catalog_.size())) {
+        return "no plugin selected";
+    }
+    // One transfer at a time. PluginRepo has a single progress/cancel pair,
+    // so two concurrent operations would share one progress bar and one
+    // Cancel button — and a cancel would hit whichever happened to look.
+    if (catalogPending_ || installPending_) { return "a transfer is already in progress"; }
+
+    const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(idx)];
+    // Same exact-match rule as the loader and as install() itself: a near-miss
+    // ABI is how a struct layout change becomes memory corruption days later.
+    if (e.abiVersion != static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)) {
+        return "not compatible with this version (built for plugin ABI " +
+               std::to_string(e.abiVersion) + ", this build requires exactly " +
+               std::to_string(CASCADE_PLUGIN_ABI_VERSION) + ")";
+    }
+    if (e.thisPlatform() == nullptr) {
+        return std::string("no build for ") + cascade::core::PluginRepo::hostOs() + "/" +
+               cascade::core::PluginRepo::hostArch();
+    }
+    // No licence, no install. The plugin host already refuses to LOAD a module
+    // that declares no licence (PluginRejection::MissingLicence), so an entry
+    // with no licence in the catalogue is at best a download that could never
+    // run — and at worst code whose terms nobody can see. Either way the user
+    // cannot have "seen the licence" if there is not one.
+    if (e.licence.empty()) { return "the catalogue entry declares no licence"; }
+    if (catalogEntryInstalled(e)) { return "already installed"; }
+    // THE ACKNOWLEDGEMENT GATE, last so it is the final thing standing between
+    // a compatible, licensed, not-yet-installed plugin and the download.
+    if (!e.legalNotice.empty() && !acknowledged) {
+        return "the legal notice must be acknowledged first";
+    }
+    return {};
+}
+
+void AppWindow::startCatalogFetch() {
+    if (catalogPending_ || installPending_) { return; }
+    // A catalogue that could not be verified this time must not keep offering
+    // installs from last time — the same all-or-nothing stance fetchIndex
+    // takes with its own entries().
+    catalog_.clear();
+    catalogSel_ = -1;
+    legalAck_ = false;
+    catalogError_.clear();
+    catalogStatus_.clear();
+    installError_.clear();
+    installReport_.clear();
+    catalogPending_ = true;
+
+    const std::string url = pluginCatalogueUrl_;
+    catalogFuture_ = std::async(std::launch::async, [this, url] {
+        CatalogFetchResult r;
+        if (url.find("://") == std::string::npos) {
+            // No scheme at all: a local file (see readLocalCatalogue). A URL
+            // WITH a scheme — including http:// — goes to fetchIndex, which
+            // is the single place the https-only rule is enforced.
+            r.ok = readLocalCatalogue(url, r.entries, r.error);
+        } else {
+            r.ok = pluginRepo_.fetchIndex(url, r.error);
+            if (r.ok) { r.entries = pluginRepo_.entries(); }
+        }
+        return r;
+    });
+}
+
+void AppWindow::startInstall(cascade::core::PluginCatalogEntry entry) {
+    if (catalogPending_ || installPending_) { return; }
+    installError_.clear();
+    installReport_.clear();
+    installBusyName_ = entry.name;
+    installPending_ = true;
+    const std::string dir = pluginDir_;
+    installFuture_ = std::async(
+        std::launch::async, [this, e = std::move(entry), dir]() {
+            PluginInstallResult r;
+            r.name = e.name;
+            // Every security rule lives inside install(): ABI match, platform
+            // match, file-name sanitisation, https, the byte cap, and the
+            // sha256 that decides whether the temp file ever becomes a plugin.
+            r.ok = pluginRepo_.install(e, dir, r.installedPath, r.error);
+            return r;
+        });
+}
+
+void AppWindow::pollPluginAsync() {
+    constexpr auto kNoWait = std::chrono::seconds(0);
+
+    if (catalogPending_ && catalogFuture_.valid() &&
+        catalogFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        CatalogFetchResult r = catalogFuture_.get();
+        catalogPending_ = false;
+        if (r.ok) {
+            catalog_ = std::move(r.entries);
+            catalogStatus_ = std::to_string(catalog_.size()) +
+                             (catalog_.size() == 1u ? " plugin in the catalogue"
+                                                    : " plugins in the catalogue");
+        } else {
+            catalog_.clear();
+            catalogError_ = r.error;
+        }
+        if (!pluginTestHook_.empty()) { reportPluginTestResult(); }
+    }
+
+    if (installPending_ && installFuture_.valid() &&
+        installFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        PluginInstallResult r = installFuture_.get();
+        installPending_ = false;
+        installBusyName_.clear();
+        if (r.ok) {
+            // The point of the rescan: the file is on disk, but it is not a
+            // PLUGIN until the host has loaded and validated it — and if it
+            // fails validation the user needs to see that here, immediately,
+            // rather than after a restart.
+            rescanPlugins();
+            installReport_ = "Installed " + r.name + " to " + r.installedPath;
+        } else {
+            installError_ = r.error;
+        }
+    }
+}
+
+void AppWindow::removeInstalledPlugin(const std::string& fileName) {
+    installError_.clear();
+    installReport_.clear();
+
+    // WINDOWS CANNOT DELETE A MAPPED IMAGE. A loaded plugin's DLL is open in
+    // this process, and fs::remove on it fails with a sharing violation. Two
+    // honest answers were available: unload first, or report the failure. We
+    // unload — a Remove button that only works after a restart is not a
+    // feature — and the cost is bounded because nothing in the product holds
+    // a decoder instance across frames yet (the host's unloadAll() contract
+    // requires exactly that; see plugin_host.hpp). The rescan below reloads
+    // every survivor in the same frame, so the visible effect is that ONE
+    // plugin disappears.
+    //
+    // If the delete still fails — the file is open in another process, or
+    // permissions changed — PluginRepo's reason is shown verbatim in red and
+    // the rescan puts everything back exactly as it was. Nothing is lost and
+    // nothing is claimed that did not happen.
+    pluginHost_.unloadAll();
+    std::string err;
+    if (pluginRepo_.remove(pluginDir_, fileName, err)) {
+        installReport_ = "Removed " + fileName;
+    } else {
+        installError_ = err;
+    }
+    rescanPlugins();
+}
+
+void AppWindow::reportPluginTestResult() {
+    // Bounded-run diagnostic only (CASCADE_PLUGIN_TEST). Machine-readable on
+    // purpose: the install gate is a UI decision, and this is the only way a
+    // headless run can prove which way it went.
+    if (!catalogError_.empty()) {
+        std::printf("plugin catalogue: FAILED frame=%d %s\n", frameCounter_,
+                    catalogError_.c_str());
+        return;
+    }
+    std::printf("plugin catalogue: frame=%d entries=%d\n", frameCounter_,
+                static_cast<int>(catalog_.size()));
+    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+        const cascade::core::PluginCatalogEntry& e =
+            catalog_[static_cast<std::size_t>(i)];
+        // Both answers: what the gate says with the acknowledgement UNTICKED
+        // (what the user first sees) and with it ticked. A gate that stopped
+        // requiring the tick would print install=ok on the first of these.
+        const std::string noAck = pluginInstallBlockedReason(i, false);
+        const std::string ack = pluginInstallBlockedReason(i, true);
+        const std::string noAckText = noAck.empty() ? "ok" : ("blocked(" + noAck + ")");
+        const std::string ackText = ack.empty() ? "ok" : ("blocked(" + ack + ")");
+        std::printf("plugin entry: id=%s abi=%u compatible=%d installed=%d legal=%d "
+                    "licence=\"%s\" install=%s installAcked=%s\n",
+                    e.id.c_str(), static_cast<unsigned>(e.abiVersion),
+                    e.compatible ? 1 : 0, catalogEntryInstalled(e) ? 1 : 0,
+                    e.legalNotice.empty() ? 0 : 1, e.licence.c_str(),
+                    noAckText.c_str(), ackText.c_str());
     }
 }
 
@@ -2050,6 +2567,13 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
 
+    // Plugin browser. Restoring the URL and the open/closed state does NOT
+    // start a fetch — see AppConfig::pluginCatalogueUrl. The user still has
+    // to press Browse, on this launch as on every other.
+    pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
+    std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
+    pluginBrowseOpen_ = cfg.pluginBrowserOpen;
+
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
             modeIndex_ = i;
@@ -2138,6 +2662,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.notchQ = static_cast<double>(notchQ_);
     cfg.autoNotch = autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
+    cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
+    cfg.pluginBrowserOpen = pluginBrowseOpen_;
     return cfg;
 }
 

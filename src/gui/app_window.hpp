@@ -13,6 +13,7 @@
 #include "core/freq_manager.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
+#include "core/plugin_repo.hpp"
 #include "core/recorder.hpp"
 #include "core/scanner.hpp"
 #include "gui/freq_scale.hpp"
@@ -101,8 +102,21 @@ private:
     // pipeline applies them (notch -> auto-notch -> NR; see Pipeline).
     void drawAudioFilterSection();
     // Loaded plugins with their LICENCE, refused candidates with their
-    // reason, and a Rescan button.
+    // reason, a Remove button per install, a Rescan button, and the "Get
+    // plugins" catalogue browser (drawPluginBrowser).
     void drawPluginsSection();
+    // The catalogue half of the Plugins section: the URL field, the Browse /
+    // Refresh button (the ONLY thing in the product that contacts the
+    // catalogue origin), the in-flight progress + Cancel, the entry list and
+    // the selected entry's detail pane with the install gate.
+    void drawPluginBrowser();
+    // The last install/remove outcome: PluginRepo's own error verbatim in
+    // red, or the success line in green. Its own method because BOTH halves
+    // of the section produce one (Install lives in the browser, Remove in the
+    // installed list) and it must be visible whichever half the user is
+    // looking at — a failed remove with the browser collapsed would otherwise
+    // report nothing at all.
+    void drawPluginResultText();
     // Translucent service-band rectangles over the spectrum panel, plus the
     // labels that fit. `pos` is the panel's screen-space top-left as recorded
     // before the spectrum was drawn.
@@ -370,6 +384,107 @@ private:
     // is declared before the pipeline-dependent members so it unloads last.
     cascade::core::PluginHost pluginHost_;
     std::string pluginDir_;
+
+    // --- Plugin browser (P9) --------------------------------------------------
+    //
+    // THE PRIVACY PROMISE. Nothing here contacts the catalogue origin until
+    // the user presses Browse. Not at startup, not when the section is
+    // expanded, not on a config restore that remembers the browser was open.
+    // The published catalogue's README makes that promise to plugin authors
+    // and users, and a paid product has to keep it, so the ONLY caller of
+    // startCatalogFetch() is a button.
+    //
+    // THREADING. Identical in shape to the Soapy scan/open pair above and for
+    // the same reason: a catalogue fetch is a TLS handshake plus an HTTP
+    // round trip, and an install is a multi-megabyte download — seconds of
+    // blocking work that would otherwise freeze the window and stall the
+    // radio. Both run on a worker via std::async; the GUI polls the future
+    // once per frame (pollPluginAsync) and applies the result on the GUI
+    // thread. The worker touches pluginRepo_ and nothing else the GUI reads,
+    // except progress()/cancel(), which are atomics for exactly this.
+    cascade::core::PluginRepo pluginRepo_;
+
+    // Result carriers. The catalogue entries are COPIED out of the repo on
+    // the worker thread so the GUI never reads pluginRepo_.entries() while a
+    // transfer could be rewriting it.
+    struct CatalogFetchResult {
+        bool ok = false;
+        std::vector<cascade::core::PluginCatalogEntry> entries;
+        std::string error;
+    };
+    struct PluginInstallResult {
+        bool ok = false;
+        std::string name;           // display name, for the report
+        std::string installedPath;  // set on success
+        std::string error;          // verbatim from PluginRepo on failure
+    };
+    std::future<CatalogFetchResult> catalogFuture_;
+    std::future<PluginInstallResult> installFuture_;
+    bool catalogPending_ = false;
+    bool installPending_ = false;
+    std::string installBusyName_;  // shown in "Downloading <name>..."
+
+    // Starts the catalogue fetch on a worker. https:// goes through
+    // PluginRepo::fetchIndex; a path with no "://" scheme is read from disk
+    // and parsed with the same parseIndex — see AppConfig::pluginCatalogueUrl
+    // for why the local form exists and why it grants nothing extra.
+    void startCatalogFetch();
+    // Starts one install on a worker. Takes the entry BY VALUE: the worker
+    // outlives the frame that spawned it, and catalog_ can be replaced by a
+    // Refresh in the meantime.
+    void startInstall(cascade::core::PluginCatalogEntry entry);
+    // Consumes finished catalogue/install futures; called once per frame from
+    // drawUi, right beside pollSoapyAsync.
+    void pollPluginAsync();
+    // True if the catalogue entry's file name already exists in the plugins
+    // directory, comparing against every record PluginHost produced — loaded
+    // AND refused. A refused DLL still occupies the name, so treating it as
+    // "not installed" would offer an install that could not replace it.
+    bool catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const;
+
+    // THE INSTALL GATE, as one named predicate so the button, the tooltip and
+    // the --frames diagnostic can never disagree about it. Returns the reason
+    // Install must stay disabled for catalog_[idx], or an EMPTY string when it
+    // may be clicked. `acknowledged` is the state of the legal-notice
+    // checkbox; it is a parameter rather than a member read so the same
+    // function answers "would this be installable if the box were ticked",
+    // which is what makes the gate observable in a headless run.
+    std::string pluginInstallBlockedReason(int idx, bool acknowledged) const;
+
+    // Deletes one installed plugin (see drawPluginsSection for the
+    // unload-first rationale) and rescans.
+    void removeInstalledPlugin(const std::string& fileName);
+
+    bool pluginBrowseOpen_ = false;  // "Get plugins" view expanded
+    char pluginUrlBuf_[512] = "";    // edit buffer for the catalogue URL
+    std::string pluginCatalogueUrl_;  // committed value (persisted)
+    std::vector<cascade::core::PluginCatalogEntry> catalog_;
+    std::string catalogError_;   // red: fetch/parse failure, verbatim
+    std::string catalogStatus_;  // neutral: "N plugins in the catalogue"
+    int catalogSel_ = -1;        // index into catalog_, -1 = nothing selected
+    bool legalAck_ = false;      // legal-notice checkbox for the SELECTED entry
+    std::string installReport_;  // green: last successful install/remove
+    std::string installError_;   // red: last failed install/remove, verbatim
+    int removeConfirmIdx_ = -1;  // installed-list row awaiting confirmation
+
+    // --- Bounded-run test hook (P9) --------------------------------------------
+    // CASCADE_PLUGIN_TEST=<url-or-path>, honored ONLY by run(frames >= 0),
+    // exactly like main()'s CASCADE_CONFIG_TEST: it points the browser at a
+    // catalogue, opens the section, starts ONE fetch on the first frame and
+    // prints a machine-readable summary of the catalogue and of every entry's
+    // install-gate decision. No interactive session can be redirected by a
+    // stray environment variable, and a normal --frames run prints nothing
+    // extra, so the byte-identical-stdout contract is untouched.
+    std::string pluginTestHook_;
+    bool pluginTestStarted_ = false;
+    // Frames rendered so far, published so the hook's diagnostic can name the
+    // frame the fetch resolved on — which is what proves the window kept
+    // rendering while the transfer was in flight.
+    int frameCounter_ = 0;
+    // Prints that summary from the LIVE member state (catalog_ /
+    // catalogError_), not from the future's payload, so what it reports is
+    // exactly what the UI is about to draw.
+    void reportPluginTestResult();
 
     cascade::core::Scanner scanner_;
     double scanStartMhz_ = cascade::core::Scanner::Params{}.startHz / 1.0e6;
