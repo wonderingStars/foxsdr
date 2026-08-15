@@ -1,6 +1,10 @@
 // Reference cascade plugin: a minimal CASCADE_CAP_DECODER that reports the
 // RMS level of the demodulated audio once per second as a line of UTF-8 text.
 //
+// This is the AUDIO example (plugin ABI 2). For the complex-baseband
+// capability added in ABI 2 - CASCADE_CAP_IQ_DECODER, the one ADS-B and DAB
+// need - see ../example_iq_plugin/example_iq_plugin.cpp.
+//
 // It is deliberately useless as a decoder and deliberately complete as an
 // example: it shows every rule of the ABI being obeyed - static descriptor,
 // single exported symbol, no exception crossing the boundary, no allocation
@@ -33,6 +37,21 @@
 //   cl /nologo /LD /O2 /EHsc /W4 /std:c++17 /DCASCADE_PLUGIN_BUILD
 //      /DCASCADE_EXAMPLE_FORCE_ABI=999 /I "..\..\src\core"
 //      example_plugin.cpp /Fe:bad_abi_decoder.dll
+//
+// The case that actually matters now that the ABI has moved is a plugin built
+// for the PREVIOUS version - use 1, which is the real retired version rather
+// than a number no plugin ever claimed:
+//
+//   cl /nologo /LD /O2 /EHsc /W4 /std:c++17 /DCASCADE_PLUGIN_BUILD
+//      /DCASCADE_EXAMPLE_FORCE_ABI=1 /I "..\..\src\core"
+//      example_plugin.cpp /Fe:v1_decoder.dll
+//
+// The host refuses it with "built against a different plugin ABI version
+// (host requires exactly 2, plugin reports 1) - rebuild the plugin against
+// this host's plugin_abi.h". Note what this build is NOT: it is a version-2
+// binary lying about its version, so its descriptor is still safely readable.
+// A genuine version-1 binary has a SHORTER descriptor, which is exactly why
+// the host refuses on abiVersion alone and never reads further.
 //
 // Linux / macOS:
 //
@@ -163,6 +182,11 @@ const CascadePluginDesc kDesc = {
     CASCADE_CAP_DECODER,
     0u,
     &kDecoder,
+    // ABI 2 added the iqDecoder member. This plugin does not declare
+    // CASCADE_CAP_IQ_DECODER, so it is NULL - written out rather than left to
+    // C++'s value-initialisation, so that the next member the ABI grows shows
+    // up as a compile-time complaint instead of silently defaulting.
+    nullptr,
 };
 
 }  // namespace

@@ -314,6 +314,66 @@ int main() {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // rule 5, the case that actually happens: the ABI moved from 1 to 2, so
+    // every catalogue entry still advertising abiVersion 1 must now be listed
+    // and marked INCOMPATIBLE, and install() must refuse it before touching
+    // the network. Written against the literal 1 rather than
+    // "CASCADE_PLUGIN_ABI_VERSION - 1" because the retired version is a fact
+    // about the published catalogue, not an expression.
+    // ---------------------------------------------------------------------
+    {
+        static_assert(CASCADE_PLUGIN_ABI_VERSION == 2,
+                      "ABI moved past 2: revisit the v1-catalogue-entry test");
+
+        std::vector<PluginCatalogEntry> v;
+        std::string err = "stale";
+        const std::string doc = std::string(R"JSON({"schemaVersion":1,"plugins":[
+            {"id":"v1plugin","name":"Built for ABI 1","version":"1.0.0","abiVersion":1,
+             "platforms":[{"os":")JSON") +
+                                PluginRepo::hostOs() + R"JSON(","arch":")JSON" +
+                                PluginRepo::hostArch() + R"JSON(","file":"v1plugin.dll",
+               "url":"https://example.invalid/v1plugin.dll","sha256":")JSON" +
+                                kHashA + R"JSON("}]},
+            {"id":"v2plugin","name":"Built for ABI 2","version":"1.0.0","abiVersion":)JSON" +
+                                abiText() + R"JSON(,
+             "platforms":[{"os":")JSON" +
+                                PluginRepo::hostOs() + R"JSON(","arch":")JSON" +
+                                PluginRepo::hostArch() + R"JSON(","file":"v2plugin.dll",
+               "url":"https://example.invalid/v2plugin.dll","sha256":")JSON" +
+                                kHashB + R"JSON("}]}]})JSON";
+
+        // A v1 entry is NOT a parse error: it must still be listed, so the UI
+        // can explain why it cannot be installed instead of the plugin simply
+        // vanishing from the catalogue after a host upgrade.
+        CHECK(PluginRepo::parseIndex(doc, v, err));
+        CHECK(err.empty());
+        CHECK(v.size() == 2u);
+        if (v.size() == 2u) {
+            CHECK(v[0].id == "v1plugin");
+            CHECK(v[0].abiVersion == 1u);
+            CHECK(!v[0].compatible);          // the whole point
+            CHECK(v[0].thisPlatform() != nullptr);  // it does have a build for us
+            CHECK(v[1].id == "v2plugin");
+            CHECK(v[1].abiVersion == 2u);
+            CHECK(v[1].compatible);
+
+            // install() re-derives the decision from abiVersion, refuses
+            // before any filesystem or network activity, and names BOTH
+            // versions in the message.
+            PluginRepo repo;
+            std::string installed = "stale";
+            std::string ierr;
+            const fs::path dir = tmpDir("v1entry");  // absent by construction
+            CHECK(!repo.install(v[0], dir.string(), installed, ierr));
+            CHECK(!ierr.empty());
+            CHECK(ierr.find("1") != std::string::npos);
+            CHECK(ierr.find("requires exactly 2") != std::string::npos);
+            CHECK(!fs::exists(dir));  // rule 7: nothing was created
+            std::printf("  v1 catalogue entry refused: %s\n", ierr.c_str());
+        }
+    }
+
     // Case-insensitive os/arch matching, and a sha256 uppercased by the
     // catalogue author, are both accepted and normalised.
     {

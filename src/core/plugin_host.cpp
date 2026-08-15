@@ -219,13 +219,35 @@ LoadedPlugin loadOne(const fs::path& p) {
     rec.author = desc->author;
     rec.licence = desc->licence;
     rec.capabilities = desc->capabilities;
-    rec.decoder = desc->decoder;
+    // Only the tables whose capability bit was DECLARED are propagated.
+    // validatePluginDesc has already proven each declared bit has a usable
+    // table; a table supplied without its bit is dropped here, so nothing
+    // downstream can call into a facility the plugin did not claim.
+    rec.decoder =
+        (desc->capabilities & CASCADE_CAP_DECODER) != 0u ? desc->decoder : nullptr;
+    rec.iqDecoder =
+        (desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u ? desc->iqDecoder : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
 }
 
 bool isNonEmpty(const char* s) { return s != nullptr && s[0] != '\0'; }
+
+// A rate an IQ decoder may legally ask for: 0 ("any rate") or inside the
+// range the host's own DSP chain can be driven at.
+//
+// Written as a positive test (>= min && <= max) rather than as a negation,
+// because the negation would ACCEPT NaN: every comparison against NaN is
+// false, so "reject if r < min || r > max" lets a NaN straight through and
+// into a divisor on the DSP thread. Infinity is excluded by the same
+// comparisons. This is the whole reason the check is a named function.
+bool iqRateOk(double r) {
+    if (r == 0.0) {
+        return true;
+    }
+    return r >= CASCADE_IQ_RATE_MIN_HZ && r <= CASCADE_IQ_RATE_MAX_HZ;
+}
 
 }  // namespace
 
@@ -267,11 +289,11 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         return PluginRejection::UnknownCapability;
     }
 
-    // With CASCADE_CAP_DECODER the only defined bit, the two checks above
-    // (non-zero, no unknown bits) already imply the decoder bit is set. The
-    // condition is written out anyway so that adding a second capability -
-    // which necessarily bumps the ABI, since it grows the descriptor - needs
-    // no rethink here.
+    // One block per capability bit, each self-contained: a plugin may declare
+    // either, or both, and a table is examined only when its bit is set. The
+    // checks inside a block run table-size FIRST for the same reason
+    // abiVersion runs first at descriptor level - until the size agrees, the
+    // remaining fields are at offsets this host has not confirmed.
     const bool claimsDecoder = (desc->capabilities & CASCADE_CAP_DECODER) != 0u;
     if (claimsDecoder && desc->decoder == nullptr) {
         return PluginRejection::MissingDecoderApi;
@@ -281,12 +303,34 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         if (d->structSize != static_cast<uint32_t>(sizeof(CascadeDecoderApi))) {
             return PluginRejection::DecoderStructSizeMismatch;
         }
-        if (d->requiredRateHz != 0u && (d->requiredRateHz < 1000u || d->requiredRateHz > 1000000u)) {
+        if (d->requiredRateHz != 0u && (d->requiredRateHz < CASCADE_AUDIO_RATE_MIN_HZ ||
+                                        d->requiredRateHz > CASCADE_AUDIO_RATE_MAX_HZ)) {
             return PluginRejection::DecoderRateOutOfRange;
         }
         if (d->create == nullptr || d->process == nullptr || d->poll_text == nullptr ||
             d->destroy == nullptr) {
             return PluginRejection::MissingDecoderFunction;
+        }
+    }
+
+    const bool claimsIq = (desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u;
+    if (claimsIq && desc->iqDecoder == nullptr) {
+        return PluginRejection::MissingIqDecoderApi;
+    }
+    if (claimsIq) {
+        const CascadeIqDecoderApi* q = desc->iqDecoder;
+        if (q->structSize != static_cast<uint32_t>(sizeof(CascadeIqDecoderApi))) {
+            return PluginRejection::IqDecoderStructSizeMismatch;
+        }
+        if (!iqRateOk(q->requiredRateHz) || !iqRateOk(q->preferredRateHz)) {
+            return PluginRejection::IqDecoderRateOutOfRange;
+        }
+        // retune is DELIBERATELY absent from this list: the ABI makes it
+        // optional and the host null-checks it at every call site. Every
+        // other pointer is mandatory.
+        if (q->create == nullptr || q->process == nullptr || q->poll_text == nullptr ||
+            q->destroy == nullptr) {
+            return PluginRejection::MissingIqDecoderFunction;
         }
     }
     return PluginRejection::None;
@@ -324,6 +368,14 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "decoder requests an implausible audio sample rate";
         case PluginRejection::MissingDecoderFunction:
             return "decoder table has a null function pointer";
+        case PluginRejection::MissingIqDecoderApi:
+            return "declares CASCADE_CAP_IQ_DECODER but supplies no IQ decoder table";
+        case PluginRejection::IqDecoderStructSizeMismatch:
+            return "IQ decoder table size does not match this host's";
+        case PluginRejection::IqDecoderRateOutOfRange:
+            return "IQ decoder requests a sample rate this host cannot deliver";
+        case PluginRejection::MissingIqDecoderFunction:
+            return "IQ decoder table has a null function pointer (only retune may be null)";
     }
     return "unknown rejection";
 }
@@ -335,8 +387,13 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
     }
     switch (r) {
         case PluginRejection::AbiVersionMismatch:
-            s += " (host " + std::to_string(CASCADE_PLUGIN_ABI_VERSION) + ", plugin " +
-                 std::to_string(desc->abiVersion) + ")";
+            // BOTH numbers, spelled out. This is the message a third-party
+            // author sees the day the host's ABI moves - "host requires
+            // exactly 2, plugin reports 1" tells them what to do, where a
+            // bare "incompatible plugin" starts a support thread.
+            s += " (host requires exactly " + std::to_string(CASCADE_PLUGIN_ABI_VERSION) +
+                 ", plugin reports " + std::to_string(desc->abiVersion) +
+                 ") - rebuild the plugin against this host's plugin_abi.h";
             break;
         case PluginRejection::DescStructSizeMismatch:
             s += " (host " + std::to_string(sizeof(CascadePluginDesc)) + " bytes, plugin " +
@@ -353,6 +410,22 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
             if (desc->decoder != nullptr) {
                 s += " (host " + std::to_string(sizeof(CascadeDecoderApi)) + " bytes, plugin " +
                      std::to_string(desc->decoder->structSize) + ")";
+            }
+            break;
+        case PluginRejection::IqDecoderStructSizeMismatch:
+            if (desc->iqDecoder != nullptr) {
+                s += " (host " + std::to_string(sizeof(CascadeIqDecoderApi)) + " bytes, plugin " +
+                     std::to_string(desc->iqDecoder->structSize) + ")";
+            }
+            break;
+        case PluginRejection::IqDecoderRateOutOfRange:
+            if (desc->iqDecoder != nullptr) {
+                char buf[128];
+                std::snprintf(buf, sizeof(buf),
+                              " (required %.6g Hz, preferred %.6g Hz; 0 or %.6g..%.6g Hz)",
+                              desc->iqDecoder->requiredRateHz, desc->iqDecoder->preferredRateHz,
+                              CASCADE_IQ_RATE_MIN_HZ, CASCADE_IQ_RATE_MAX_HZ);
+                s += buf;
             }
             break;
         default:
@@ -490,6 +563,7 @@ void PluginHost::unloadAll() {
         }
         p.nativeHandle = nullptr;
         p.decoder = nullptr;
+        p.iqDecoder = nullptr;
         p.loaded = false;
     }
     plugins_.clear();

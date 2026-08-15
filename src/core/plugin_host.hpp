@@ -15,8 +15,9 @@
 //     not loaded; it is never silently skipped, because "my plugin does not
 //     appear" with no explanation is the worst possible support ticket.
 //   - A plugin is loaded only after its descriptor passes every check in
-//     validatePluginDesc (exact ABI version, both struct sizes, all required
-//     strings, all required function pointers). A module that fails is
+//     validatePluginDesc (exact ABI version, every struct size, all required
+//     strings, a table for every declared capability, and every non-optional
+//     function pointer in each of those tables). A module that fails is
 //     unmapped again immediately - a rejected plugin never stays in the
 //     address space.
 //   - The licence string the plugin declares is copied into the record and
@@ -76,6 +77,14 @@ enum class PluginRejection {
     DecoderStructSizeMismatch,  // sizeof(CascadeDecoderApi) disagrees
     DecoderRateOutOfRange,      // requiredRateHz neither 0 nor sane audio rate
     MissingDecoderFunction,     // one of create/process/poll_text/destroy NULL
+    // --- ABI 2: the IQ decoder table, checked exactly like the audio one ---
+    MissingIqDecoderApi,          // CASCADE_CAP_IQ_DECODER set, iqDecoder NULL
+    IqDecoderStructSizeMismatch,  // sizeof(CascadeIqDecoderApi) disagrees
+    IqDecoderRateOutOfRange,      // required/preferredRateHz not 0 and not a
+                                  // rate this host could ever deliver (also
+                                  // catches NaN and infinity)
+    MissingIqDecoderFunction,     // create/process/poll_text/destroy NULL
+                                  // (retune is optional and may be NULL)
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -111,9 +120,13 @@ struct LoadedPlugin {
     std::string error;     // empty iff loaded; the reason otherwise
 
     // Valid only while `loaded` and only until unloadAll()/scan()/destruction
-    // - it points into the plugin's own image. Null unless the plugin
-    // declares CASCADE_CAP_DECODER.
-    const CascadeDecoderApi* decoder = nullptr;
+    // - they point into the plugin's own image. Each is null unless the
+    // plugin DECLARED the matching capability bit: a descriptor that supplies
+    // a table without declaring its bit gets the table ignored here rather
+    // than propagated, so no caller can end up driving a facility the plugin
+    // never claimed to provide.
+    const CascadeDecoderApi* decoder = nullptr;      // CASCADE_CAP_DECODER
+    const CascadeIqDecoderApi* iqDecoder = nullptr;  // CASCADE_CAP_IQ_DECODER
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.
@@ -169,8 +182,8 @@ public:
 
     // Unmaps every loaded module and clears the records. Idempotent: calling
     // it twice, or before any scan, is a no-op. After it returns, every
-    // `decoder` pointer previously handed out is dangling - callers must drop
-    // their decoder instances BEFORE calling this.
+    // `decoder` and `iqDecoder` pointer previously handed out is dangling -
+    // callers must drop their decoder instances BEFORE calling this.
     void unloadAll();
 
 private:
