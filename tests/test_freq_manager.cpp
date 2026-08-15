@@ -103,7 +103,7 @@ int main() {
     {
         const std::string dp = FreqManager::defaultPath();
         CHECK(!dp.empty());
-        CHECK(dp.find("sdr-minus-plus") != std::string::npos);
+        CHECK(dp.find("foxsdr") != std::string::npos);
         CHECK(dp.ends_with("bookmarks.json"));
         CHECK(!fs::exists(dp) || fs::is_regular_file(dp));  // never a dir
     }

@@ -1,9 +1,13 @@
-# SDR-+ AI Supreme Leader
+# FoxSDR
 
-A from-scratch, MIT-licensed SDR receiver for Windows and Linux: spectrum +
-waterfall, multi-mode demodulation, and hardware support through SoapySDR.
-Built clean-room — no GPL code, no GPL-linked dependencies — so the whole tree
-stays MIT.
+A from-scratch software-defined radio receiver for Windows: spectrum and
+waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
+RDS, recording, bookmarks, a scanner, band plans, and hardware support for any
+radio SoapySDR can reach.
+
+Built clean-room — no GPL code and no GPL-linked dependencies anywhere in the
+tree. That discipline is what leaves the licensing free to choose (see
+[License](#license)); it is not itself a licence claim.
 
 Internal project/binary name: `cascade`.
 
@@ -37,7 +41,7 @@ ctest --test-dir build -C Release --output-on-failure
 A Windows installer (Inno Setup 6) lives under `installer/` — it packages
 `cascade.exe`, `SoapySDR.dll`, the app-local MSVC runtime, the license, and
 post-install hardware notes into
-`installer\Output\sdr-minus-plus-setup-<version>.exe`. Build instructions:
+`installer\Output\foxsdr-setup-<version>.exe`. Build instructions:
 [installer/README-installer.md](installer/README-installer.md). Radio
 hardware support is installed separately by the user (PothosSDR or
 radioconda) — see `installer/POSTINSTALL.txt`; the app runs with no hardware
@@ -70,5 +74,5 @@ Two deliberate exceptions:
   keeping every dependency permissive is what makes this licensing choice
   possible at all.
 
-SDR-+ AI Supreme Leader is an independent project, not affiliated with or
+FoxSDR is an independent project, not affiliated with or
 endorsed by SDR++ or its authors.

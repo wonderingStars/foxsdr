@@ -1,7 +1,7 @@
 # Building the Windows installer
 
-Produces `installer\Output\sdr-minus-plus-setup-<version>.exe` — a
-self-contained Inno Setup 6 installer for SDR-+ AI Supreme Leader.
+Produces `installer\Output\foxsdr-setup-<version>.exe` — a
+self-contained Inno Setup 6 installer for FoxSDR.
 
 ## Prerequisites
 
@@ -35,7 +35,7 @@ With a different VC redist location:
 ISCC.exe /DVcCrtDir="C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC\14.44.35112\x64\Microsoft.VC143.CRT" installer\cascade.iss
 ```
 
-Output: `installer\Output\sdr-minus-plus-setup-0.8.1.exe`.
+Output: `installer\Output\foxsdr-setup-0.8.1.exe`.
 
 ## Version bumps
 
@@ -45,7 +45,7 @@ in `CMakeLists.txt`; the output filename follows automatically.
 
 ## Install behaviour
 
-* Default: machine-wide to `{autopf}\SDR-minus-plus` (elevated). The
+* Default: machine-wide to `{autopf}\FoxSDR` (elevated). The
   install-dir leaf avoids `+` on purpose; the display/app name keeps it.
 * Per-user, no elevation:
   `setup.exe /CURRENTUSER` (add `/VERYSILENT /SUPPRESSMSGBOXES /DIR="..." /NOICONS`

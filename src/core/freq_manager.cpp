@@ -53,7 +53,7 @@ std::string FreqManager::defaultPath() {
                          : (home && *home) ? fs::path(home) / ".config"
                                            : fs::path(".");
 #endif
-    return (dir / "sdr-minus-plus" / "bookmarks.json").string();
+    return (dir / "foxsdr" / "bookmarks.json").string();
 }
 
 bool FreqManager::load(const std::string& path, std::string& error) {

@@ -1,4 +1,4 @@
-; SDR-+ AI Supreme Leader (cascade) Windows installer (Inno Setup 6).
+; FoxSDR (cascade) Windows installer (Inno Setup 6).
 ;
 ; Builds a self-contained setup.exe: cascade.exe + SoapySDR.dll (the hardware
 ; ABI boundary — the ONLY runtime DLL the build produces, enforced below) plus
@@ -13,14 +13,14 @@
 ; Override the VC CRT source dir if your VS version differs:
 ;   ISCC.exe /DVcCrtDir="<...>\VC\Redist\MSVC\<ver>\x64\Microsoft.VC143.CRT" installer\cascade.iss
 ;
-; SPDX-License-Identifier: MIT
+; SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-#define AppName "SDR-+ AI Supreme Leader"
+#define AppName "FoxSDR"
 #define AppVersion "0.10.0"
 #define AppPublisher "Steven Fairclough"
 #define AppExe "cascade.exe"
 ; Install-dir leaf avoids '+' (some tools mishandle it in paths); display name keeps it.
-#define InstallLeaf "SDR-minus-plus"
+#define InstallLeaf "FoxSDR"
 #define BuildDir AddBackslash(SourcePath) + "..\build\Release"
 #ifndef VcCrtDir
   #define VcCrtDir "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC\14.44.35112\x64\Microsoft.VC143.CRT"
@@ -68,7 +68,7 @@ DisableProgramGroupPage=auto
 LicenseFile=..\LICENSE
 InfoAfterFile=POSTINSTALL.txt
 OutputDir=Output
-OutputBaseFilename=sdr-minus-plus-setup-{#AppVersion}
+OutputBaseFilename=foxsdr-setup-{#AppVersion}
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName} {#AppVersion}
 WizardStyle=modern

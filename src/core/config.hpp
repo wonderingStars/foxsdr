@@ -89,7 +89,7 @@ struct AppConfig {
 
 class ConfigStore {
 public:
-    // %APPDATA%/sdr-minus-plus/config.json on Windows (falls back to the
+    // %APPDATA%/foxsdr/config.json on Windows (falls back to the
     // current directory if APPDATA is unset — an unset APPDATA means a
     // deliberately stripped environment, and "." at least stays writable);
     // $XDG_CONFIG_HOME or ~/.config equivalent elsewhere. The directory is

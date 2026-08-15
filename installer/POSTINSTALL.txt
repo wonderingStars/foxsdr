@@ -1,4 +1,4 @@
-SDR-+ AI Supreme Leader — after-install notes
+FoxSDR — after-install notes
 ==============================================
 
 NO HARDWARE REQUIRED
@@ -44,6 +44,6 @@ RUNTIME NOTES
 
 LICENSE
 -------
-MIT — see LICENSE.txt in the install folder. SDR-+ AI Supreme Leader is an
+MIT — see LICENSE.txt in the install folder. FoxSDR is an
 independent project, not affiliated with or endorsed by SDR++ or its
 authors.

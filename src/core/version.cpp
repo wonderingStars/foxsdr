@@ -5,6 +5,6 @@ namespace cascade {
 
 const char* versionString() { return "0.10.0"; }
 
-const char* appName() { return "SDR-+ AI Supreme Leader"; }
+const char* appName() { return "FoxSDR"; }
 
 }  // namespace cascade

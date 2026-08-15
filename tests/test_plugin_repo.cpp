@@ -240,7 +240,7 @@ int main() {
     {
         const std::string u = PluginRepo::defaultIndexUrl();
         CHECK(u.rfind("https://", 0) == 0);
-        CHECK(u.find("sdr-minus-plus-plugins") != std::string::npos);
+        CHECK(u.find("foxsdr-plugins") != std::string::npos);
         CHECK(u.ends_with("index.json"));
         CHECK(PluginRepo::isHttpsUrl(u));
 

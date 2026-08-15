@@ -84,7 +84,7 @@ std::string ConfigStore::defaultPath() {
                          : (home && *home) ? fs::path(home) / ".config"
                                            : fs::path(".");
 #endif
-    return (dir / "sdr-minus-plus" / "config.json").string();
+    return (dir / "foxsdr" / "config.json").string();
 }
 
 bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& error) {

@@ -1,6 +1,6 @@
 # Commercial Licensing
 
-**SDR-+ AI Supreme Leader** is free for noncommercial use under the
+**FoxSDR** is free for noncommercial use under the
 [PolyForm Noncommercial License 1.0.0](LICENSE).
 
 **Any commercial use requires a separate paid licence.**

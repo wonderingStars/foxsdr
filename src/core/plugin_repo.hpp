@@ -149,7 +149,7 @@ public:
     static constexpr int kMaxRedirects = 4;
 
     // The published catalogue index:
-    //   https://raw.githubusercontent.com/wonderingStars/sdr-minus-plus-plugins/master/index.json
+    //   https://raw.githubusercontent.com/wonderingStars/foxsdr-plugins/master/index.json
     // raw.githubusercontent.com is used rather than a release-asset URL
     // precisely because it serves the bytes directly - see rule 3 above. The
     // repository may be private, in which case the fetch fails with an HTTP

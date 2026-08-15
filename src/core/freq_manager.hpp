@@ -65,7 +65,7 @@ struct Bookmark {
 
 class FreqManager {
 public:
-    // %APPDATA%/sdr-minus-plus/bookmarks.json on Windows (same fallback
+    // %APPDATA%/foxsdr/bookmarks.json on Windows (same fallback
     // rules as ConfigStore::defaultPath — "." when APPDATA is unset);
     // $XDG_CONFIG_HOME or ~/.config equivalent elsewhere. The directory is
     // not created here — save() creates it when there is something to write.

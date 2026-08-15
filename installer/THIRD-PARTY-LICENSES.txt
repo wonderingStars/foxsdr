@@ -1,4 +1,4 @@
-SDR-+ AI Supreme Leader - Third-Party Software Notices
+FoxSDR - Third-Party Software Notices
 ======================================================
 
 This product includes the following third-party components. Each is used

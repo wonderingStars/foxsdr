@@ -652,7 +652,7 @@ const PluginPlatform* PluginCatalogEntry::thisPlatform() const {
 // ---------------------------------------------------------------------------
 
 std::string PluginRepo::defaultIndexUrl() {
-    return "https://raw.githubusercontent.com/wonderingStars/sdr-minus-plus-plugins/master/"
+    return "https://raw.githubusercontent.com/wonderingStars/foxsdr-plugins/master/"
            "index.json";
 }
 
