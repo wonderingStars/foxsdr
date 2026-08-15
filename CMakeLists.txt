@@ -154,7 +154,18 @@ target_link_libraries(cascade_lib PUBLIC
 # Application
 # ---------------------------------------------------------------------------
 
-add_executable(cascade src/main.cpp)
+# Windows executable icon (Explorer, taskbar, Alt-Tab, Add/Remove Programs).
+# The .rc must be a SOURCE of the EXECUTABLE target - rc.exe compiles it and
+# the linker embeds the RT_GROUP_ICON - and only of the executable: cascade_lib
+# and the test binaries neither need it nor should carry it. The runtime window
+# icon is a separate mechanism set in AppWindow::run; see
+# resources/icon/README.md.
+if(WIN32)
+    enable_language(RC)
+    add_executable(cascade src/main.cpp resources/icon/foxsdr.rc)
+else()
+    add_executable(cascade src/main.cpp)
+endif()
 target_link_libraries(cascade PRIVATE cascade_lib)
 
 # Delay-load SoapySDR so a missing or broken hardware runtime cannot stop the

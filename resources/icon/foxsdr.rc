@@ -1,0 +1,15 @@
+// FoxSDR executable icon resource.
+//
+// IDI_ICON1 is deliberately numeric and deliberately 1: Windows Explorer, the
+// taskbar and Alt-Tab all show the LOWEST-numbered RT_GROUP_ICON resource in
+// the executable, so the application icon must be the first one. Keep it that
+// way if further icon resources are ever added.
+//
+// The path is relative to this .rc file's own directory, which is how both
+// rc.exe and MSVC's CMake RC rule resolve it, so no include path is needed.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+#define IDI_ICON1 1
+
+IDI_ICON1 ICON "foxsdr.ico"

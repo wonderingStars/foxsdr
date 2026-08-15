@@ -69,6 +69,13 @@ LicenseFile=..\LICENSE
 InfoAfterFile=POSTINSTALL.txt
 OutputDir=Output
 OutputBaseFilename=foxsdr-setup-{#AppVersion}
+; The setup.exe's own icon (Explorer, the download bar, the UAC prompt) and the
+; wizard's title-bar icon. Same .ico the executable embeds via
+; resources\icon\foxsdr.rc, so setup and app are visually one product.
+SetupIconFile=..\resources\icon\foxsdr.ico
+; Add/Remove Programs icon. Resolves to the installed cascade.exe, which now
+; carries the icon as its lowest-numbered RT_GROUP_ICON — no separate .ico is
+; installed, and nothing here needed to change for the icon to appear.
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName} {#AppVersion}
 WizardStyle=modern
