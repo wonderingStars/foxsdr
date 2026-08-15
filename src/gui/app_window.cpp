@@ -7,6 +7,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -187,6 +188,36 @@ int nearestIndex(const double* arr, int n, double x) {
     return best;
 }
 
+// --- Recorder / Bookmarks / Scanner constants (P6) ---------------------------
+
+// Recording destination: %USERPROFILE%/Documents/SDR-recordings per spec.
+// Computed once at construction; the directory itself is created by
+// Recorder::start on the first take, never at startup. An unset USERPROFILE
+// (deliberately stripped environment) falls back to a relative directory —
+// the same "stay writable" philosophy as ConfigStore::defaultPath's ".".
+std::string defaultRecordDir() {
+    const char* home = std::getenv("USERPROFILE");
+    if (home == nullptr || *home == '\0') { home = std::getenv("HOME"); }
+    if (home == nullptr || *home == '\0') { return "SDR-recordings"; }
+    return std::string(home) + "/Documents/SDR-recordings";
+}
+
+// Scanner user-tune detection slack, Hz. Far above double rounding through
+// (absHz - offset) + offset (nano-Hz at 9.99 GHz) and far below the smallest
+// manual tuning action (the readout's 1 Hz digit), so it can neither
+// false-trigger on arithmetic noise nor miss a real user tune.
+constexpr double kScanUserTuneEpsHz = 0.5;
+
+const char* scannerStateName(cascade::core::Scanner::State s) {
+    switch (s) {
+    case cascade::core::Scanner::State::Idle: return "Idle";
+    case cascade::core::Scanner::State::Scanning: return "Scanning";
+    case cascade::core::Scanner::State::Paused: return "Paused (signal)";
+    case cascade::core::Scanner::State::Holding: return "Holding";
+    }
+    return "?";  // unreachable; keeps /W4 return-path analysis happy
+}
+
 }  // namespace
 
 AppWindow::AppWindow(std::string configPath, bool announceConfig)
@@ -196,6 +227,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)) {
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
+    recordDir_ = defaultRecordDir();
     // Demo signal until real sources land (P4): two tones at distinct offsets
     // and levels over a noise floor, so both display axes are visibly
     // exercised — frequency (two peaks left and right of center) and
@@ -254,10 +286,28 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // Baseline for the debounce: what the file holds (or would hold).
         savedCfg_ = currentConfig();
         pendingCfg_ = savedCfg_;
+
+        // Bookmarks ride the same persistence gate as the config: hermetic
+        // runs (empty configPath_ — every --frames/--selftest CI run) never
+        // read or write the user's bookmark file. Load semantics per
+        // FreqManager: a missing file is a clean first run (true, empty
+        // list); a damaged file surfaces its reason in red in the Bookmarks
+        // section, exactly like Source errors — no stdout/stderr, so the
+        // config-test diagnostic contract stays byte-identical.
+        bookmarkPath_ = cascade::core::FreqManager::defaultPath();
+        std::string bmErr;
+        if (!freqMgr_.load(bookmarkPath_, bmErr)) { bookmarkError_ = bmErr; }
     }
 }
 
-AppWindow::~AppWindow() = default;
+AppWindow::~AppWindow() {
+    // Safety net (run()'s teardown already does this on the normal path):
+    // the recorder members are destroyed before pipeline_ (reverse
+    // declaration order), so any tap still installed must be uninstalled
+    // first — stop*Recording clears the pipeline pointer, then finalizes.
+    stopIqRecording();
+    stopAudioRecording();
+}
 
 int AppWindow::run(int frames) {
     glfwSetErrorCallback(&glfwErrorCallback);
@@ -338,6 +388,12 @@ int AppWindow::run(int frames) {
         ++rendered;
     }
 
+    // Closing the window mid-take finalizes both recordings cleanly (same
+    // contract as the toolbar Stop): taps out, then headers patched — before
+    // the pipeline teardown below ends the sample flow they were taping.
+    stopIqRecording();
+    stopAudioRecording();
+
     // Clean-exit save, unconditional: cheap, and it guarantees the on-disk
     // config matches the final session state even when the debounce never
     // fired (e.g. a change made less than 2 s before closing the window).
@@ -398,6 +454,13 @@ void AppWindow::drawUi() {
     ImGui::EndChild();
 
     ImGui::End();
+
+    // Scanner driver, AFTER all widgets: any manual tune the user made this
+    // frame (digit wheel, VFO drag, bookmark click) is already applied, so
+    // the user-wins detection inside sees this frame's state, not last
+    // frame's. Inert while the scanner is Idle — including every hermetic
+    // --frames run.
+    scannerFrame();
 }
 
 void AppWindow::drawToolbar() {
@@ -406,6 +469,12 @@ void AppWindow::drawToolbar() {
     const bool running = pipeline_.running();
     if (ImGui::Button(running ? "Stop" : "Play", ImVec2(64.0f, 0.0f))) {
         if (running) {
+            // Play-stop while recording stops the recording cleanly (spec):
+            // taps uninstalled and both WAVs finalized BEFORE the DSP
+            // threads join, so a take can never outlive the sample flow it
+            // was taping. No-ops when nothing is recording.
+            stopIqRecording();
+            stopAudioRecording();
             // Joins both pipeline threads; they exit within ~10 ms, which is
             // an acceptable one-off hitch on the GUI thread for a Stop click.
             pipeline_.stop();
@@ -577,6 +646,12 @@ void AppWindow::drawMenuColumn() {
         if (maxChanged && dbMax_ < dbMin_ + kMinDbSpan) { dbMax_ = dbMin_ + kMinDbSpan; }
         if (minChanged || maxChanged) { spectrum_->setRange(dbMin_, dbMax_); }
     }
+    // P6 sections. Closed by default (unlike the always-needed sections
+    // above): all three are occasional-use tools, and opening them by
+    // default would push the Display controls off a 720p column.
+    drawRecorderSection();
+    drawBookmarksSection();
+    drawScannerSection();
     ImGui::EndChild();
 
     // Status footer: active source identity, its sample rate (device readback
@@ -815,6 +890,14 @@ void AppWindow::followInputRate() {
                       rate, pipeline_.inputRateHz());
         sourceError_ = buf;
     }
+    // An ACCEPTED rate change finalizes an in-flight IQ take: the WAV header
+    // rate is fixed at start(), so recording on across a rate switch would
+    // produce a file that replays detuned/off-speed. (A refusal above kept
+    // the old rate, so the compare — not the call — decides.) The audio take
+    // is untouched: its 48 kHz output rate survives every rate switch.
+    if (iqRecorder_.recording() && pipeline_.inputRateHz() != iqRecordRateHz_) {
+        stopIqRecording();
+    }
 }
 
 void AppWindow::drawCenterPanels() {
@@ -1045,6 +1128,301 @@ void AppWindow::drawFreqAxis(float width, const double* tickHz,
     }
     drawList->PopClipRect();
     ImGui::Dummy(ImVec2(width, kAxisHeight));
+}
+
+// --- Recorder (P6) -------------------------------------------------------------
+
+void AppWindow::drawRecorderSection() {
+    if (!ImGui::CollapsingHeader("Recorder")) { return; }
+
+    // Destination, always visible so the user knows where takes land. The
+    // directory is created by Recorder::start on the first record.
+    ImGui::TextDisabled("%s", recordDir_.c_str());
+
+    // IQ take: baseband at the DSP input rate through the pipeline's raw
+    // tap. Toggle button: label and action swap with the recorder state.
+    if (!iqRecorder_.recording()) {
+        if (ImGui::Button("Record IQ", ImVec2(-FLT_MIN, 0.0f))) {
+            const double rate = pipeline_.inputRateHz();
+            std::string err;
+            if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
+                                  recordDir_, rate, err)) {
+                recordError_.clear();
+                iqRecordRateHz_ = rate;
+                iqRecordStartS_ = ImGui::GetTime();
+                // Install AFTER start(): the tap must never feed a recorder
+                // that is not accepting (Pipeline::setIqRecorder contract).
+                pipeline_.setIqRecorder(&iqRecorder_);
+            } else {
+                recordError_ = err;
+            }
+        }
+    } else {
+        if (ImGui::Button("Stop IQ", ImVec2(-FLT_MIN, 0.0f))) { stopIqRecording(); }
+        // Elapsed is wall time since the take started; samples/MB are the
+        // recorder's own accepted-byte counters, so they never overclaim.
+        ImGui::Text("IQ %.1f s | %llu samples | %.1f MB",
+                    ImGui::GetTime() - iqRecordStartS_,
+                    static_cast<unsigned long long>(iqRecorder_.samplesWritten()),
+                    static_cast<double>(iqRecorder_.bytesWritten()) / 1.0e6);
+    }
+
+    // Audio take: the post-chain 48 kHz output (same point audioTap uses).
+    if (!audioRecorder_.recording()) {
+        if (ImGui::Button("Record audio", ImVec2(-FLT_MIN, 0.0f))) {
+            std::string err;
+            if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
+                                     cascade::core::Pipeline::kAudioRateHz, err)) {
+                recordError_.clear();
+                audioRecordStartS_ = ImGui::GetTime();
+                pipeline_.setAudioRecorder(&audioRecorder_);
+            } else {
+                recordError_ = err;
+            }
+        }
+    } else {
+        if (ImGui::Button("Stop audio", ImVec2(-FLT_MIN, 0.0f))) {
+            stopAudioRecording();
+        }
+        ImGui::Text("Audio %.1f s | %llu samples | %.1f MB",
+                    ImGui::GetTime() - audioRecordStartS_,
+                    static_cast<unsigned long long>(audioRecorder_.samplesWritten()),
+                    static_cast<double>(audioRecorder_.bytesWritten()) / 1.0e6);
+    }
+
+    // Recording is allowed while stopped (the file just stays empty until
+    // samples flow), but say so instead of leaving frozen counters to read
+    // like a bug. Toolbar Stop DURING a take finalizes it (drawToolbar).
+    if (!pipeline_.running() &&
+        (iqRecorder_.recording() || audioRecorder_.recording())) {
+        ImGui::TextDisabled("(press Play to feed the recorders)");
+    }
+
+    if (!recordError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", recordError_.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+void AppWindow::stopIqRecording() {
+    // Order per the Pipeline::setIqRecorder contract: after the setter
+    // returns no writeIq against this recorder is in flight or can begin
+    // (the pointer swap serializes on the mutex the DSP thread holds across
+    // writes), so stop() — which patches the header and closes the file —
+    // cannot overlap a write. Both calls are no-ops when already idle.
+    pipeline_.setIqRecorder(nullptr);
+    iqRecorder_.stop();
+}
+
+void AppWindow::stopAudioRecording() {
+    pipeline_.setAudioRecorder(nullptr);
+    audioRecorder_.stop();
+}
+
+// --- Bookmarks (P6) --------------------------------------------------------------
+
+void AppWindow::drawBookmarksSection() {
+    if (!ImGui::CollapsingHeader("Bookmarks")) { return; }
+
+    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::InputTextWithHint("##bm_name", "name", bookmarkName_,
+                             sizeof(bookmarkName_));
+    ImGui::SameLine();
+    if (ImGui::Button("Add current")) {
+        cascade::core::Bookmark b;
+        b.name = bookmarkName_;
+        if (b.name.empty()) {
+            // A nameless row would render blank; default to the frequency.
+            char def[32];
+            std::snprintf(def, sizeof(def), "%.4f MHz",
+                          currentAbsoluteHz() / 1.0e6);
+            b.name = def;
+        }
+        // "Current" is the tuned station: center readback + VFO offset (the
+        // band the spectrum overlay marks), with the live mode and the
+        // REQUESTED bandwidth (the overlay's value, pre any Vfo clamp).
+        b.freqHz = currentAbsoluteHz();
+        b.mode = kModeNames[modeIndex_];
+        b.bandwidthHz = vfoBandwidthHz_;
+        freqMgr_.add(std::move(b));
+        saveBookmarks();
+    }
+
+    // Rows: click-to-tune selectable + per-row delete. The delete is
+    // deferred past the loop so removeAt can never invalidate an index the
+    // same frame still iterates.
+    int deleteIdx = -1;
+    const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
+    const float delW = ImGui::GetFrameHeight();
+    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+        const cascade::core::Bookmark& b = list[static_cast<std::size_t>(i)];
+        ImGui::PushID(i);
+        char label[192];
+        std::snprintf(label, sizeof(label), "%s  %.4f MHz", b.name.c_str(),
+                      b.freqHz / 1.0e6);
+        const float rowW = ImGui::GetContentRegionAvail().x - delW -
+                           ImGui::GetStyle().ItemSpacing.x;
+        if (ImGui::Selectable(label, false, ImGuiSelectableFlags_None,
+                              ImVec2(rowW, 0.0f))) {
+            // Click-to-tune: frequency through the shared absolute-tune
+            // path (same as scanner retunes), then mode and bandwidth. An
+            // unknown mode name — a newer build's file, kept verbatim by
+            // FreqManager on purpose — leaves the current mode untouched.
+            tuneAbsoluteHz(b.freqHz);
+            for (int m = 0; m < 8; ++m) {
+                if (b.mode == kModeNames[m]) {
+                    modeIndex_ = m;
+                    pipeline_.setDemodMode(kModeMap[m]);
+                    break;
+                }
+            }
+            // Same clamp as the config restore: [3 kHz, 90% of channel rate].
+            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
+        ImGui::PopID();
+    }
+    if (deleteIdx >= 0) {
+        freqMgr_.removeAt(static_cast<std::size_t>(deleteIdx));
+        saveBookmarks();
+    }
+
+    if (!bookmarkError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", bookmarkError_.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+void AppWindow::saveBookmarks() {
+    if (bookmarkPath_.empty()) { return; }  // hermetic run: never touch disk
+    std::string err;
+    if (freqMgr_.save(bookmarkPath_, err)) {
+        bookmarkError_.clear();  // a successful save clears a stale error
+    } else {
+        bookmarkError_ = err;
+    }
+}
+
+// --- Shared absolute tuning (P6) -----------------------------------------------
+
+void AppWindow::tuneAbsoluteHz(double absHz) {
+    // The same setter + readback path the toolbar digit wheel uses, with the
+    // VFO offset preserved: command the SOURCE center so the VFO band lands
+    // on absHz. A refusal (a tune the driver rejects) needs no handling —
+    // every display, and the scanner's user-tune baseline, follows the
+    // readback, which simply won't move.
+    pipeline_.activeSource().setCenterFrequencyHz(absHz - pipeline_.vfoOffsetHz());
+}
+
+double AppWindow::currentAbsoluteHz() {
+    return pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
+}
+
+// --- Scanner (P6) ----------------------------------------------------------------
+
+void AppWindow::drawScannerSection() {
+    if (!ImGui::CollapsingHeader("Scanner")) { return; }
+
+    // Mirrors -> Params. Scanner::configure sanitizes (swap, step floor,
+    // negative times), so the raw edit values can be handed over as-is.
+    const auto paramsFromMirrors = [this]() {
+        cascade::core::Scanner::Params p;
+        p.startHz = scanStartMhz_ * 1.0e6;
+        p.stopHz = scanStopMhz_ * 1.0e6;
+        p.stepHz = scanStepKhz_ * 1.0e3;
+        p.dwellMs = scanDwellMs_;
+        p.holdMs = scanHoldMs_;
+        p.resumeMs = scanResumeMs_;
+        return p;
+    };
+
+    // Commit on deactivate-after-edit (not per keystroke): while the scan is
+    // ACTIVE a commit reconfigures it, which per the Scanner contract resets
+    // to the new startHz — correct for new parameters, but far too jumpy to
+    // fire on every typed digit.
+    bool edited = false;
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputDouble("Start MHz", &scanStartMhz_, 0.0, 0.0, "%.4f");
+    edited |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputDouble("Stop MHz", &scanStopMhz_, 0.0, 0.0, "%.4f");
+    edited |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputDouble("Step kHz", &scanStepKhz_, 0.0, 0.0, "%.2f");
+    edited |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputDouble("Dwell ms", &scanDwellMs_, 0.0, 0.0, "%.0f");
+    edited |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputDouble("Hold ms", &scanHoldMs_, 0.0, 0.0, "%.0f");
+    edited |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputDouble("Resume ms", &scanResumeMs_, 0.0, 0.0, "%.0f");
+    edited |= ImGui::IsItemDeactivatedAfterEdit();
+
+    if (edited && scanner_.active()) {
+        scanner_.configure(paramsFromMirrors());
+        // The reconfigure re-emits a first tune on the next tick; the
+        // user-tune baseline re-arms from that retune's readback.
+        scannerHasExpected_ = false;
+    }
+
+    if (!scanner_.active()) {
+        if (ImGui::Button("Start scan", ImVec2(-FLT_MIN, 0.0f))) {
+            scanner_.configure(paramsFromMirrors());
+            scanner_.start(ImGui::GetTime() * 1000.0);
+            scannerHasExpected_ = false;
+        }
+    } else {
+        if (ImGui::Button("Stop scan", ImVec2(-FLT_MIN, 0.0f))) { scanner_.stop(); }
+    }
+
+    // State + frequency readout. currentHz() keeps reporting the last scan
+    // frequency after a stop (Scanner contract), which reads naturally here.
+    ImGui::Text("%s | %.4f MHz", scannerStateName(scanner_.state()),
+                scanner_.currentHz() / 1.0e6);
+}
+
+void AppWindow::scannerFrame() {
+    if (!scanner_.active()) { return; }
+
+    // User wins: any tune this frame that the scanner did not command —
+    // digit wheel, VFO drag/slider (the offset is part of the absolute
+    // frequency), bookmark click, source switch — leaves the readback off
+    // the last commanded value, and the scan stops rather than fight the
+    // user's hands. Checked BEFORE tick so the stale squelch state of a
+    // just-abandoned frequency can never emit one more retune.
+    if (scannerHasExpected_ &&
+        std::fabs(currentAbsoluteHz() - scannerExpectedAbsHz_) > kScanUserTuneEpsHz) {
+        scanner_.stop();
+        return;
+    }
+
+    // Squelch-open per the squelch's own OPEN comparison (Squelch::process
+    // opens at channel power > threshold; > , not >=): same power quantity,
+    // same threshold value (squelchDb_ mirrors what setSquelchDb pushed).
+    // Documented approximation: the reading comes from the pipeline's
+    // S-meter snapshot — an EMA ~100x slower than the squelch's internal
+    // meter — and the close-side hysteresis/hold are not replicated. For
+    // the scan decision only "is a signal present now" matters, and the
+    // S-meter is the one channel-power readout that is lock-free from the
+    // GUI thread.
+    const bool squelchOpen = pipeline_.signalPowerDb() > squelchDb_;
+    const std::optional<double> retune =
+        scanner_.tick(ImGui::GetTime() * 1000.0, squelchOpen);
+    if (retune.has_value()) {
+        tuneAbsoluteHz(*retune);
+        // Baseline from READBACK, not the request: a device that coerces
+        // the tune must not read as a user action next frame.
+        scannerExpectedAbsHz_ = currentAbsoluteHz();
+        scannerHasExpected_ = true;
+    }
 }
 
 // --- Config persistence (P5) -------------------------------------------------

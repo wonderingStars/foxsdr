@@ -8,7 +8,10 @@
 #include <vector>
 
 #include "core/config.hpp"
+#include "core/freq_manager.hpp"
 #include "core/pipeline.hpp"
+#include "core/recorder.hpp"
+#include "core/scanner.hpp"
 #include "gui/freq_scale.hpp"
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
@@ -40,6 +43,11 @@ public:
     explicit AppWindow(std::string configPath = {}, bool announceConfig = false);
 
     // Out-of-line: the unique_ptr members delete forward-declared types.
+    // Also finalizes any recording still in flight (uninstall the pipeline
+    // taps, then Recorder::stop) BEFORE the recorder members — which are
+    // declared after pipeline_ and therefore destroyed first — can dangle
+    // under a still-running DSP thread. run()'s teardown already does this
+    // on the normal exit path; the destructor is the safety net.
     ~AppWindow();
 
     // Runs the shell until the window is closed, or — when `frames` >= 0 —
@@ -75,6 +83,38 @@ private:
     // strip and grid can never disagree.
     void drawFreqAxis(float width, const double* tickHz, const char (*labels)[16],
                       int count);
+
+    // --- Recorder / Bookmarks / Scanner (P6) ----------------------------------
+    void drawRecorderSection();
+    void drawBookmarksSection();
+    void drawScannerSection();
+
+    // Uninstalls the matching pipeline tap, THEN stops the recorder — the
+    // order the Recorder contract requires (see Pipeline::set*Recorder).
+    // Both are harmless no-ops when nothing is recording, so the toolbar
+    // Stop path calls them unconditionally.
+    void stopIqRecording();
+    void stopAudioRecording();
+
+    // ONE absolute-tune path shared by bookmark click-to-tune and scanner
+    // retunes: commands the SOURCE center to (absHz - VFO offset) through
+    // activeSource().setCenterFrequencyHz — the same setter + readback path
+    // the toolbar digit wheel uses — so the VFO band (whose offset is
+    // preserved) lands on absHz and the display follows the readback.
+    void tuneAbsoluteHz(double absHz);
+    // The tuned station: source center readback + VFO offset (what the VFO
+    // band marks on the spectrum). This is what a bookmark captures and what
+    // the scanner's user-tune detection compares.
+    double currentAbsoluteHz();
+
+    // Once-per-GUI-frame scanner driver (called at the end of drawUi):
+    // detects manual tunes (user wins -> stop), feeds tick() with ImGui's
+    // clock and the squelch-open state, applies returned retunes.
+    void scannerFrame();
+
+    // Persists the bookmark list after every mutation; failures land in
+    // bookmarkError_ (red text). No-op in hermetic mode (empty path).
+    void saveBookmarks();
 
     // --- Config persistence (P5) ---------------------------------------------
     // Pushes every AppConfig field into the pipeline/panel mirrors; source
@@ -196,6 +236,49 @@ private:
     cascade::core::AppConfig pendingCfg_;  // debounce comparator
     double lastChangeTimeS_ = -1.0;  // glfwGetTime() of the last observed
                                      // change; < 0 = nothing pending
+
+    // --- Recorder state (P6) --------------------------------------------------
+    // Two independent Recorder instances so IQ and audio takes can run
+    // simultaneously (each records ONE kind at a time by its contract). The
+    // pipeline holds non-owning pointers to them only while a take is live;
+    // stop*Recording clears the pointer before stopping the recorder.
+    cascade::core::Recorder iqRecorder_;
+    cascade::core::Recorder audioRecorder_;
+    std::string recordDir_;    // %USERPROFILE%/Documents/SDR-recordings
+    std::string recordError_;  // red text in the Recorder section; "" = none
+    double iqRecordStartS_ = 0.0;     // ImGui::GetTime() at take start, for
+    double audioRecordStartS_ = 0.0;  // the elapsed-wall-time readout
+    // Input rate the live IQ take's WAV header was written for. A rate-follow
+    // change (source switch, Soapy rate change) finalizes the take: a WAV
+    // whose header rate disagrees with its samples would replay detuned.
+    double iqRecordRateHz_ = 0.0;
+
+    // --- Bookmarks state (P6) --------------------------------------------------
+    // Loaded at startup from FreqManager::defaultPath() and saved after every
+    // mutation — but ONLY when config persistence is enabled: hermetic runs
+    // (empty configPath_, i.e. every --frames/--selftest CI run) leave
+    // bookmarkPath_ empty and never read or write the user's bookmark file.
+    cascade::core::FreqManager freqMgr_;
+    std::string bookmarkPath_;   // empty = bookmark persistence disabled
+    std::string bookmarkError_;  // red text in the Bookmarks section
+    char bookmarkName_[128] = "";  // editable name for the next "Add current"
+
+    // --- Scanner state (P6) -----------------------------------------------------
+    // The Scanner itself is a pure state machine (core/scanner.hpp); these
+    // mirrors exist because ImGui edits by pointer. Defaults come from
+    // Scanner::Params's own member initializers so the two can never drift.
+    cascade::core::Scanner scanner_;
+    double scanStartMhz_ = cascade::core::Scanner::Params{}.startHz / 1.0e6;
+    double scanStopMhz_ = cascade::core::Scanner::Params{}.stopHz / 1.0e6;
+    double scanStepKhz_ = cascade::core::Scanner::Params{}.stepHz / 1.0e3;
+    double scanDwellMs_ = cascade::core::Scanner::Params{}.dwellMs;
+    double scanHoldMs_ = cascade::core::Scanner::Params{}.holdMs;
+    double scanResumeMs_ = cascade::core::Scanner::Params{}.resumeMs;
+    // Readback (center + offset) right after the last scanner-commanded
+    // retune. Any later frame where the live readback differs is a tune the
+    // scanner did not make — a manual tune, and the user wins (scan stops).
+    double scannerExpectedAbsHz_ = 0.0;
+    bool scannerHasExpected_ = false;  // false until the scan's first retune
 };
 
 }  // namespace cascade::gui

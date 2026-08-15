@@ -48,6 +48,10 @@
 
 namespace cascade::core {
 
+// Forward declaration (core/recorder.hpp): the pipeline stores only
+// non-owning pointers, so the full type is needed in pipeline.cpp alone.
+class Recorder;
+
 struct SpectrumFrame {
     std::vector<float> dbBins;   // fftshifted dB power spectrum, size == fftSize
     std::uint64_t seq = 0;       // strictly increasing per published frame
@@ -223,6 +227,28 @@ public:
     // the number copied: min(n, 4096, samples produced so far).
     std::size_t audioTap(float* dst, std::size_t n) const;
 
+    // --- Recorder taps (P6) ---------------------------------------------------
+    // Non-owning recorder hooks fed by the DSP thread; nullptr (the default)
+    // disconnects. The IQ recorder receives every drained block RAW — the
+    // ring's baseband samples at inputRateHz(), before the VFO touches them —
+    // via writeIq, so an IQ recording replayed through IqFileSource
+    // reproduces exactly what the spectrum displayed. The audio recorder
+    // receives the resampled 48 kHz output via writeAudio at precisely the
+    // point audioTap taps: post-squelch, pre-AudioOut, volume-independent.
+    //
+    // Both pointers live under audioMutex_ — the mutex the DSP thread holds
+    // across every write* call — which is what satisfies the Recorder
+    // threading contract ("start()/stop() must not overlap an in-flight
+    // write") without parking the DSP thread: after set*Recorder(nullptr)
+    // returns, no write against the old pointer is in flight or can begin,
+    // so the caller may immediately stop()/destroy the recorder. Install
+    // order for a new take is therefore Recorder::start() FIRST, then
+    // set*Recorder(); teardown is set*Recorder(nullptr) FIRST, then stop().
+    // writeIq/writeAudio ignore wrong-kind and stopped recorders by their
+    // own contract, so the DSP hot path needs only the null checks.
+    void setIqRecorder(Recorder* r);
+    void setAudioRecorder(Recorder* r);
+
 private:
     void sourceThreadMain();
     void dspThreadMain();
@@ -284,6 +310,10 @@ private:
     std::size_t tapFilled_ = 0;
     std::atomic<float> signalDb_{-200.0f};
     std::atomic<std::uint64_t> audioSamples_{0};
+    // Recorder taps (P6): non-owning, audioMutex_-guarded like the chain
+    // blocks above — see the set*Recorder contract in the public section.
+    Recorder* iqRecorder_ = nullptr;
+    Recorder* audioRecorder_ = nullptr;
 
     // Control operations (start/stop/setSource/setInputRateHz/dtor) serialize
     // against each other under controlMutex_; the threads themselves only

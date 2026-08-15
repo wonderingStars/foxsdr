@@ -25,6 +25,8 @@
 #include <chrono>
 #include <cmath>
 
+#include "core/recorder.hpp"
+
 namespace cascade::core {
 
 namespace {
@@ -417,6 +419,19 @@ std::uint64_t Pipeline::audioSamplesProduced() const {
     return audioSamples_.load(std::memory_order_relaxed);
 }
 
+void Pipeline::setIqRecorder(Recorder* r) {
+    // audioMutex_ (not a new lock): the DSP thread holds it across every
+    // writeIq call, so this assignment cannot interleave with a write — the
+    // serialization guarantee the header documents for record toggles.
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    iqRecorder_ = r;
+}
+
+void Pipeline::setAudioRecorder(Recorder* r) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    audioRecorder_ = r;
+}
+
 std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
     std::lock_guard<std::mutex> lk(audioMutex_);
     const std::size_t avail = std::min(n, tapFilled_);
@@ -535,6 +550,14 @@ void Pipeline::dspThreadMain() {
 void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     std::lock_guard<std::mutex> lk(audioMutex_);
 
+    // IQ recorder tap (P6): the drained block RAW, before any channel
+    // processing — "record baseband at the input rate" is exactly the ring's
+    // samples. Every sample the DSP thread consumes passes through here, so
+    // the recording has no gaps while the pipeline runs. writeIq itself
+    // ignores stopped/wrong-kind recorders (its contract), so the hot path
+    // pays only this null check when idle.
+    if (iqRecorder_ != nullptr) { iqRecorder_->writeIq(in, n); }
+
     // VFO: mix the tuned offset to DC, band-limit, decimate to channel rate.
     chanBuf_.resize(n / vfoDecim_ + 1);
     const std::size_t m = vfo_.process(in, n, chanBuf_.data(), chanBuf_.size());
@@ -577,6 +600,10 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     }
     tapFilled_ = std::min(tapBuf_.size(), tapFilled_ + k);
     audioSamples_.fetch_add(k, std::memory_order_relaxed);
+    // Audio recorder tap (P6): the same post-chain 48 kHz samples the test
+    // tap above just captured — post-squelch, pre-AudioOut, so the recording
+    // is independent of the output device and its volume.
+    if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(outBuf_.data(), k); }
     audio_.write(outBuf_.data(), k);
 }
 

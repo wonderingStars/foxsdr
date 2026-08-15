@@ -9,9 +9,13 @@
 // window is closed.
 #include <chrono>
 #include <cmath>
+#include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -20,7 +24,9 @@
 
 #include "core/config.hpp"
 #include "core/pipeline.hpp"
+#include "core/recorder.hpp"
 #include "gui/app_window.hpp"
+#include "source/iq_file_source.hpp"
 #include "source/soapy_source.hpp"
 
 // ---------------------------------------------------------------------------
@@ -316,6 +322,225 @@ int runSoapyCheck() {
     return 0;
 }
 
+// --- Recorder end-to-end check (hidden flag --record-check) -------------------
+
+// Little-endian field decodes for the WAV probe below (mirrors the recorder's
+// own explicit-byte encoder, so the probe is endian- and alignment-safe).
+std::uint32_t leU32(const unsigned char* p) {
+    return static_cast<std::uint32_t>(p[0]) |
+           (static_cast<std::uint32_t>(p[1]) << 8) |
+           (static_cast<std::uint32_t>(p[2]) << 16) |
+           (static_cast<std::uint32_t>(p[3]) << 24);
+}
+
+std::uint16_t leU16(const unsigned char* p) {
+    return static_cast<std::uint16_t>(static_cast<std::uint32_t>(p[0]) |
+                                      (static_cast<std::uint32_t>(p[1]) << 8));
+}
+
+// Minimal chunk-walking WAV probe: true iff the file is RIFF/WAVE carrying a
+// fmt chunk and a data chunk, reporting rate/channels/bits and the data byte
+// length. Deliberately independent of IqFileSource, which by design rejects
+// the AUDIO recording's mono int16 layout (it only accepts 2-channel IQ).
+bool probeWav(const std::string& path, std::uint32_t* rate,
+              std::uint16_t* channels, std::uint16_t* bits,
+              std::uint64_t* dataBytes) {
+    std::ifstream f(path, std::ios::binary);
+    unsigned char riff[12];
+    if (!f.read(reinterpret_cast<char*>(riff), 12)) { return false; }
+    if (std::memcmp(riff, "RIFF", 4) != 0 ||
+        std::memcmp(riff + 8, "WAVE", 4) != 0) {
+        return false;
+    }
+    bool haveFmt = false;
+    bool haveData = false;
+    unsigned char ch[8];
+    while (f.read(reinterpret_cast<char*>(ch), 8)) {
+        const std::uint32_t size = leU32(ch + 4);
+        std::uint32_t skip = size + (size & 1u);  // chunks are word-aligned
+        if (std::memcmp(ch, "fmt ", 4) == 0 && size >= 16) {
+            unsigned char fmt[16];
+            if (!f.read(reinterpret_cast<char*>(fmt), 16)) { return false; }
+            *channels = leU16(fmt + 2);
+            *rate = leU32(fmt + 4);
+            *bits = leU16(fmt + 14);
+            haveFmt = true;
+            skip -= 16;
+        } else if (std::memcmp(ch, "data", 4) == 0) {
+            *dataBytes = size;
+            haveData = true;
+        }
+        f.seekg(static_cast<std::streamoff>(skip), std::ios::cur);
+    }
+    return haveFmt && haveData;
+}
+
+// Bench diagnostic (hidden flag --record-check, deliberately absent from the
+// usage string like --soapy-check, and never a ctest entry — it sleeps a
+// real-time second, which is bench-check budget, not unit-test budget):
+// proves the recorder wiring end to end with ZERO GUI involvement. A
+// headless pipeline (generator source, no audio device) runs both recorder
+// taps simultaneously for ~1 s of wall time; the IQ take is then re-read
+// through IqFileSource — the actual replay path, closing the record->replay
+// loop — checking rate readback 2000000 and a sample count within 10% of
+// rate x window (2,000,000 samples for the 1 s window; the slack covers
+// source pacing plus ring/block latency at the tap edges). The audio take
+// must parse as a mono 16-bit 48000 Hz WAV. The takes land in a fresh
+// unique directory under %TEMP% and are left there for inspection.
+int runRecordCheck() {
+    namespace fs = std::filesystem;
+
+    const char* tmp = std::getenv("TEMP");
+    const fs::path base =
+        (tmp != nullptr && *tmp != '\0') ? fs::path(tmp) : fs::path(".");
+    const fs::path dir =
+        base / (std::string("cascade-record-check-") +
+                std::to_string(static_cast<unsigned long long>(
+                    std::chrono::system_clock::now().time_since_epoch().count())));
+
+    cascade::core::Pipeline::Config cfg;
+    cfg.sampleRateHz = 2'000'000.0;
+    cfg.fftSize = 1024;
+    cfg.averagingAlpha = 0.5f;
+    cfg.audioEnabled = false;  // headless: no device; the chain still runs
+    cascade::core::Pipeline pipeline(cfg);
+    // Real content (demo tone over a noise floor): the checks below assert
+    // counts and headers, but recording live nonzero floats exercises the
+    // same encode path a bench take would.
+    pipeline.sigGen().setTone(0, 300000.0, -30.0f);
+    pipeline.sigGen().setNoiseFloorDb(-90.0f);
+    pipeline.start();
+
+    cascade::core::Recorder iqRec;
+    cascade::core::Recorder audioRec;
+    std::string err;
+    if (!iqRec.start(cascade::core::RecordKind::BasebandIq, dir.string(),
+                     cfg.sampleRateHz, err)) {
+        pipeline.stop();
+        std::printf("record-check FAIL iq start: %s\n", err.c_str());
+        return 1;
+    }
+    if (!audioRec.start(cascade::core::RecordKind::Audio, dir.string(),
+                        cascade::core::Pipeline::kAudioRateHz, err)) {
+        iqRec.stop();
+        pipeline.stop();
+        std::printf("record-check FAIL audio start: %s\n", err.c_str());
+        return 1;
+    }
+
+    // Both taps at once (the spec's simultaneous-recording contract). The
+    // window is measured install -> uninstall so the pacing comparison
+    // divides by what the taps actually saw, not by the nominal sleep.
+    const auto t0 = std::chrono::steady_clock::now();
+    pipeline.setIqRecorder(&iqRec);
+    pipeline.setAudioRecorder(&audioRec);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    pipeline.setIqRecorder(nullptr);
+    pipeline.setAudioRecorder(nullptr);
+    const double windowS =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+            .count();
+    // Uninstall-then-stop: the documented Recorder toggle order.
+    iqRec.stop();
+    audioRec.stop();
+    pipeline.stop();
+
+    const std::uint64_t iqSamples = iqRec.samplesWritten();
+    const std::uint64_t audioSamples = audioRec.samplesWritten();
+
+    // Locate the two takes by prefix — the directory is fresh per run, so
+    // exactly one iq_* and one audio_* file can exist.
+    std::string iqPath;
+    std::string audioPath;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.rfind("iq_", 0) == 0) { iqPath = e.path().string(); }
+        if (name.rfind("audio_", 0) == 0) { audioPath = e.path().string(); }
+    }
+    if (ec || iqPath.empty() || audioPath.empty()) {
+        std::printf("record-check FAIL takes not found in %s\n",
+                    dir.string().c_str());
+        return 1;
+    }
+
+    // IQ readback through the REAL replay path.
+    cascade::source::IqFileSource reader;
+    if (!reader.open(iqPath)) {
+        std::printf("record-check FAIL iq reopen: %s\n", reader.lastError());
+        return 1;
+    }
+    if (reader.sampleRateHz() != 2'000'000.0) {
+        std::printf("record-check FAIL iq rate readback %.0f != 2000000\n",
+                    reader.sampleRateHz());
+        return 1;
+    }
+    // Stream a block back to prove the data chunk actually replays (read()
+    // returning short would mean a husk with a lying header).
+    std::vector<std::complex<float>> replay(4096);
+    reader.start();
+    const std::size_t got = reader.read(replay.data(), replay.size());
+    reader.stop();
+    if (got != replay.size()) {
+        std::printf("record-check FAIL iq replay read %llu of %llu\n",
+                    static_cast<unsigned long long>(got),
+                    static_cast<unsigned long long>(replay.size()));
+        return 1;
+    }
+
+    // Length: the file's own frame count (fixed 44-byte header + 8 bytes per
+    // IQ frame) must match the recorder's accepted-frame counter exactly,
+    // and land within the 10% pacing tolerance of rate x window.
+    const std::uintmax_t fileBytes = fs::file_size(iqPath, ec);
+    if (ec || fileBytes < 44u) {
+        std::printf("record-check FAIL iq file unreadable/truncated\n");
+        return 1;
+    }
+    const std::uint64_t fileFrames = (fileBytes - 44u) / 8u;
+    if (fileFrames != iqSamples) {
+        std::printf("record-check FAIL iq file frames %llu != counter %llu\n",
+                    static_cast<unsigned long long>(fileFrames),
+                    static_cast<unsigned long long>(iqSamples));
+        return 1;
+    }
+    const double expect = cfg.sampleRateHz * windowS;
+    if (std::fabs(static_cast<double>(iqSamples) - expect) > 0.10 * expect) {
+        std::printf(
+            "record-check FAIL iq_samples=%llu outside 10%% of %.0f "
+            "(window %.3f s)\n",
+            static_cast<unsigned long long>(iqSamples), expect, windowS);
+        return 1;
+    }
+
+    // Audio take: must parse as the recorder's documented layout at 48 kHz.
+    std::uint32_t aRate = 0;
+    std::uint16_t aChannels = 0;
+    std::uint16_t aBits = 0;
+    std::uint64_t aDataBytes = 0;
+    if (!probeWav(audioPath, &aRate, &aChannels, &aBits, &aDataBytes)) {
+        std::printf("record-check FAIL audio WAV does not parse\n");
+        return 1;
+    }
+    if (aRate != 48000u || aChannels != 1u || aBits != 16u) {
+        std::printf(
+            "record-check FAIL audio header rate=%lu channels=%u bits=%u "
+            "(want 48000/1/16)\n",
+            static_cast<unsigned long>(aRate), aChannels, aBits);
+        return 1;
+    }
+    if (aDataBytes != 2u * audioSamples) {
+        std::printf("record-check FAIL audio data bytes %llu != 2 x %llu\n",
+                    static_cast<unsigned long long>(aDataBytes),
+                    static_cast<unsigned long long>(audioSamples));
+        return 1;
+    }
+
+    std::printf("record-check PASS iq_samples=%llu audio_samples=%llu\n",
+                static_cast<unsigned long long>(iqSamples),
+                static_cast<unsigned long long>(audioSamples));
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -323,6 +548,7 @@ int main(int argc, char** argv) {
     int frames = -1;  // negative: run until the window is closed
     bool selftest = false;
     bool soapyCheck = false;
+    bool recordCheck = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
@@ -346,6 +572,12 @@ int main(int argc, char** argv) {
             // string on purpose — it requires attached hardware, so
             // advertising it in CI-facing help would only invite red herrings.
             soapyCheck = true;
+        } else if (std::strcmp(argv[i], "--record-check") == 0) {
+            // Hidden bench diagnostic (see runRecordCheck): same policy as
+            // --soapy-check — kept out of the usage string because its
+            // ~1 s real-time sleep and disk writes make it a bench tool,
+            // not part of the CI-facing CLI surface.
+            recordCheck = true;
         } else {
             std::fprintf(stderr,
                          "cascade: unknown argument '%s' (usage: cascade [--frames N] [--selftest])\n",
@@ -359,6 +591,7 @@ int main(int argc, char** argv) {
     // hardware bench check, which is likewise headless.
     if (selftest) { return runSelftest(); }
     if (soapyCheck) { return runSoapyCheck(); }
+    if (recordCheck) { return runRecordCheck(); }
 
     // Config persistence wiring. Normal interactive runs load/save the
     // user's config at ConfigStore::defaultPath(). Bounded --frames runs
