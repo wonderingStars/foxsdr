@@ -191,8 +191,21 @@ private:
     // strip for a text field (SDR++-style typing). Wheeling digits alone
     // cannot get you from 100 MHz to 433 MHz in any reasonable number of
     // notches, which is what made tuning feel broken.
+    // Waterfall press tracking: a press that ends without crossing the drag
+    // threshold is a CLICK (tune here); one that crosses it is a PAN. Both
+    // gestures share the left button, so they can only be told apart on
+    // release.
+    float wfPressX_ = 0.0f;
+    bool wfMoved_ = false;
+
+    // Moves the VFO so the tuned frequency lands on wantAbsHz, snapping to the
+    // mode's raster unless the caller says otherwise, and clamping the band
+    // inside the baseband span. Shared by click-to-tune and the drag path.
+    void setVfoToAbsoluteHz(double wantAbsHz, bool snap);
+
     bool freqEditing_ = false;
-    bool freqEditFocus_ = false;  // request keyboard focus on the first frame
+    bool freqEditFocus_ = false;   // request keyboard focus on the first frame
+    bool freqEditWasActive_ = false;  // field has held focus at least once
     char freqEditBuf_[32] = {0};
 
     std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;

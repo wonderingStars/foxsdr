@@ -569,16 +569,19 @@ void AppWindow::drawFrequencyReadout() {
     if (freqEditing_) {
         ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.2f);
         ImGui::SetNextItemWidth(300.0f);
-        if (freqEditFocus_) {
-            ImGui::SetKeyboardFocusHere();
-            freqEditFocus_ = false;
-        }
+        if (freqEditFocus_) { ImGui::SetKeyboardFocusHere(); }
         const bool commit = ImGui::InputText(
             "##freq_edit", freqEditBuf_, sizeof(freqEditBuf_),
             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll |
                 ImGuiInputTextFlags_CharsNoBlank);
         const bool active = ImGui::IsItemActive();
         ImGui::PopFont();
+        // SetKeyboardFocusHere only takes effect at the END of the frame, so
+        // the field is NOT active on its first frame. Cancelling on "not
+        // active" without this latch closed the editor in the same frame it
+        // opened — which is exactly what made double-click look dead.
+        if (active) { freqEditWasActive_ = true; }
+        freqEditFocus_ = false;
 
         if (commit) {
             double typed = 0.0;
@@ -589,7 +592,7 @@ void AppWindow::drawFrequencyReadout() {
                 sourceError_ = std::string("could not read frequency \"") + freqEditBuf_ + "\"";
             }
             freqEditing_ = false;
-        } else if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (!active && !freqEditFocus_)) {
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (freqEditWasActive_ && !active)) {
             freqEditing_ = false;  // cancelled: the readback never moved
         }
         return;
@@ -608,6 +611,7 @@ void AppWindow::drawFrequencyReadout() {
     // GetFontSize()) so global scale factors are not applied twice.
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.2f);
     bool significant = false;
+    bool hoveredDigit = false;
     for (int i = 0; i < 10; ++i) {
         if (digits[i] != '0') { significant = true; }
         // Separators after digits 0, 3 and 6 group the field d.ddd.ddd.ddd; a
@@ -632,19 +636,29 @@ void AppWindow::drawFrequencyReadout() {
                 // here: the display follows the readback, which won't move.
                 src.setCenterFrequencyHz(next);
             }
-            ImGui::SetTooltip("Scroll a digit to tune  |  double-click to type a frequency");
-            // Double-click (not single) opens the editor: a single click is
-            // what you do on the way to scrolling a digit, and hijacking it
-            // would make wheel tuning feel like it swallowed your click.
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            hoveredDigit = true;  // tooltip is drawn after PopFont (see below)
+            // SINGLE click opens the editor. Double-click was tried first and
+            // is a trap here: the digits are Text items, and a synthetic or
+            // fast double-click can collapse into one registered click, so it
+            // silently did nothing. Single click also matches what SDR++
+            // does, and wheel tuning is unaffected because that needs only
+            // hover, never a click.
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 std::snprintf(freqEditBuf_, sizeof(freqEditBuf_), "%.6f", hz / 1.0e6);
                 freqEditing_ = true;
                 freqEditFocus_ = true;
+                freqEditWasActive_ = false;
             }
         }
         if (i != 9) { ImGui::SameLine(0.0f, 0.0f); }
     }
     ImGui::PopFont();
+
+    // Tooltip AFTER PopFont: raised inside the 2.2x scope it inherited that
+    // scale and painted a banner across the spectrum.
+    if (hoveredDigit) {
+        ImGui::SetTooltip("Scroll a digit to tune  |  double-click to type");
+    }
 }
 
 void AppWindow::drawMenuColumn() {
@@ -1160,8 +1174,13 @@ void AppWindow::drawCenterPanels() {
                        : (hit == SpectrumView::VfoHit::EdgeLow) ? VfoDrag::EdgeLow
                                                                 : VfoDrag::EdgeHigh;
             vfoGrabDeltaHz_ = scale_.xToHz(mouseFrac) - bandCenterAbs;
-        } else if (ImGui::IsMouseDoubleClicked(0) &&
-                   hit == SpectrumView::VfoHit::None) {
+        } else if (ImGui::IsMouseClicked(0) && hit == SpectrumView::VfoHit::None) {
+            // Click anywhere off the band: jump the VFO there. Dragging the
+            // band still works (handled above); this is the "just take me to
+            // that signal" gesture, and it needs no grab-and-drop.
+            setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift);
+        }
+        if (ImGui::IsMouseDoubleClicked(0) && hit == SpectrumView::VfoHit::None) {
             scale_.resetView();  // double-click on empty spectrum: unzoom
         }
     }
@@ -1260,14 +1279,28 @@ void AppWindow::drawCenterPanels() {
     // follows the cursor, so the window shifts OPPOSITE the mouse delta.
     // Tracked manually (not via item-active state) because the waterfall's
     // layout item is a Dummy, which never becomes the active item.
+    // A press that never crosses kDragSlopPx is a CLICK: tune the VFO to the
+    // frequency under the cursor (mode raster unless Shift). Crossing the
+    // threshold turns the same press into a pan, and no tune happens on
+    // release. Both gestures live on the left button, which is why the
+    // decision can only be made when the button comes back up.
+    constexpr float kDragSlopPx = 4.0f;
     if (wfPanning_) {
         if (!ImGui::IsMouseDown(0)) {
             wfPanning_ = false;
-        } else if (io.MouseDelta.x != 0.0f) {
-            scale_.pan(-static_cast<double>(io.MouseDelta.x) / width);
+            if (!wfMoved_) { setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift); }
+        } else {
+            if (!wfMoved_ && std::fabs(io.MousePos.x - wfPressX_) > kDragSlopPx) {
+                wfMoved_ = true;
+            }
+            if (wfMoved_ && io.MouseDelta.x != 0.0f) {
+                scale_.pan(-static_cast<double>(io.MouseDelta.x) / width);
+            }
         }
     } else if (wfHovered && ImGui::IsMouseClicked(0)) {
         wfPanning_ = true;
+        wfPressX_ = io.MousePos.x;
+        wfMoved_ = false;
     }
     if (wfHovered && ImGui::IsMouseDoubleClicked(0)) { scale_.resetView(); }
 
@@ -1278,6 +1311,22 @@ void AppWindow::drawCenterPanels() {
         scale_.zoomAt(mouseFrac,
                       std::pow(kZoomPerNotch, static_cast<double>(io.MouseWheel)));
     }
+}
+
+void AppWindow::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
+    if (snap) {
+        // Same raster as the drag path (kModeSnapHz); Shift bypasses it.
+        const double s = kModeSnapHz[modeIndex_];
+        wantAbsHz = std::round(wantAbsHz / s) * s;
+    }
+    double off = wantAbsHz - pipeline_.activeSource().centerFrequencyHz();
+    // Keep the whole band inside the baseband +/- inputRate/2, exactly as the
+    // drag path does — clicking near the panel edge must not park the filter
+    // half outside the spectrum we actually receive.
+    const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+    off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
+    pipeline_.setVfoOffsetHz(off);
+    vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
 
 void AppWindow::drawFreqAxis(float width, const double* tickHz,
