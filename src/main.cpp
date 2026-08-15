@@ -24,6 +24,9 @@
 
 #include "core/config.hpp"
 #include "core/pipeline.hpp"
+#include "dsp/demod.hpp"
+#include "dsp/rds.hpp"
+#include "dsp/vfo.hpp"
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
 #include "source/iq_file_source.hpp"
@@ -380,6 +383,125 @@ int runToneCheck() {
     return 0;
 }
 
+// Bench diagnostic (hidden flag --rds-check <MHz>): the ONLY test that can
+// validate the RDS offset words and CRC polynomial. The unit tests encode with
+// the same constants they decode with, so a self-consistent error in them
+// passes every check and still fails off air. Recovering a real station's
+// name from a real broadcast is what closes that gap.
+//
+// Chain built by hand rather than reusing Pipeline's: RDS rides a 57 kHz
+// subcarrier on the FM composite, and the audio path's de-emphasis would
+// crush it (a 50 us one-pole is ~40 dB down at 57 kHz). So: Vfo -> WFM
+// discriminator with de-emphasis explicitly OFF -> RdsDecoder.
+int runRdsCheck(double centerHz) {
+    if (!cascade::source::SoapySource::runtimeAvailable()) {
+        std::printf("rds-check FAIL SoapySDR runtime not available\n");
+        return 1;
+    }
+    auto devs = cascade::source::SoapySource::enumerate();
+    std::string args;
+    for (const auto& d : devs) {
+        if (d.args.find("driver=audio") == std::string::npos) { args = d.args; break; }
+    }
+    if (args.empty()) {
+        std::printf("rds-check FAIL no SoapySDR radio devices enumerated\n");
+        return 1;
+    }
+
+    cascade::source::SoapySource src;
+    if (!src.open(args)) {
+        std::printf("rds-check FAIL open: %s\n", src.lastError());
+        return 1;
+    }
+    constexpr double kRate = 2'000'000.0;
+    src.setSampleRateHz(kRate);
+    src.setCenterFrequencyHz(centerHz);
+    // Gain matters: a B200 opens near 0 dB, and RDS at -20 dB relative to the
+    // main carrier is the first thing to vanish in the noise. The GUI pushes a
+    // default too; this path has no UI to do it.
+    src.setAutoGain(false);
+    for (const std::string& g : src.listGainNames()) { src.setGainDb(g, 50.0); }
+    if (!src.start()) {
+        std::printf("rds-check FAIL start: %s\n", src.lastError());
+        return 1;
+    }
+
+    // Decimate 2 MS/s -> 250 kHz; 200 kHz of channel comfortably passes the
+    // 53 kHz composite plus the 57 kHz RDS subcarrier.
+    constexpr unsigned kDecim = 8;
+    const double chanRate = kRate / kDecim;
+    cascade::dsp::Vfo vfo(kRate, kDecim, 200000.0);
+    vfo.setOffsetHz(0.0);
+    cascade::dsp::Demodulator demod(chanRate);
+    demod.setMode(cascade::dsp::DemodMode::WFM);
+    demod.setDeemphasisUs(0.0);  // MUST be off: see the comment above
+    cascade::dsp::RdsDecoder rds(chanRate);
+
+    std::vector<std::complex<float>> raw(65536);
+    std::vector<std::complex<float>> chan(65536);
+    std::vector<float> mpx(65536);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
+    std::uint64_t fedSamples = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const std::size_t got = src.read(raw.data(), raw.size());
+        if (got == 0) { continue; }  // self-paced timeout: retry per contract
+        const std::size_t m = vfo.process(raw.data(), got, chan.data(), chan.size());
+        if (m == 0) { continue; }
+        demod.process(chan.data(), m, mpx.data());
+        rds.process(mpx.data(), m);
+        fedSamples += m;
+        const cascade::dsp::RdsState st = rds.state();
+        if (st.piValid && st.psValid) {
+            src.stop();
+            std::printf("rds-check PASS pi=%04X ps=\"%s\" pty=%u groups=%u blockErrors=%u\n",
+                        st.pi, st.ps.c_str(), static_cast<unsigned>(st.pty),
+                        st.groupsDecoded, st.blockErrors);
+            if (!st.radioText.empty()) {
+                std::printf("rds-check radiotext=\"%s\"\n", st.radioText.c_str());
+            }
+            return 0;
+        }
+    }
+    const cascade::dsp::RdsState st = rds.state();
+
+    // Diagnose WHERE it failed rather than just reporting that it did. Measure
+    // the composite the decoder was actually fed: a healthy WFM composite has
+    // a 19 kHz pilot and, on an RDS station, energy at 57 kHz. No pilot means
+    // the failure is upstream (mistuned, too little gain, wrong demod) and the
+    // RDS decoder never had a chance; pilot but no 57 kHz means the station
+    // simply carries no RDS; both present but no sync points at the decoder.
+    const std::size_t got = src.read(raw.data(), raw.size());
+    const std::size_t m = (got > 0) ? vfo.process(raw.data(), got, chan.data(), chan.size()) : 0;
+    if (m > 0) { demod.process(chan.data(), m, mpx.data()); }
+    src.stop();
+
+    auto toneDb = [&](double hz) {
+        if (m < 4096) { return -200.0; }
+        const std::size_t n = 4096;
+        double re = 0.0, im = 0.0, tot = 0.0;
+        const double w = -2.0 * 3.14159265358979323846 * hz / chanRate;
+        for (std::size_t i = 0; i < n; ++i) {
+            const double x = static_cast<double>(mpx[i]);
+            re += x * std::cos(w * static_cast<double>(i));
+            im += x * std::sin(w * static_cast<double>(i));
+            tot += x * x;
+        }
+        const double binP = (re * re + im * im) / (static_cast<double>(n) * n);
+        const double avgP = tot / static_cast<double>(n);
+        return (avgP > 0.0) ? 10.0 * std::log10(binP / avgP + 1e-30) : -200.0;
+    };
+
+    std::printf("rds-check FAIL no PS within 45 s (synced=%d pi=%04X piValid=%d "
+                "groups=%u blockErrors=%u fed=%llu)\n",
+                rds.synced() ? 1 : 0, st.pi, st.piValid ? 1 : 0, st.groupsDecoded,
+                st.blockErrors, static_cast<unsigned long long>(fedSamples));
+    std::printf("rds-check composite: pilot19k=%.1f dBc  rds57k=%.1f dBc  "
+                "audio1k=%.1f dBc (relative to total composite power)\n",
+                toneDb(19000.0), toneDb(57000.0), toneDb(1000.0));
+    return 1;
+}
+
 // --- Recorder end-to-end check (hidden flag --record-check) -------------------
 
 // Little-endian field decodes for the WAV probe below (mirrors the recorder's
@@ -608,6 +730,7 @@ int main(int argc, char** argv) {
     bool soapyCheck = false;
     bool recordCheck = false;
     bool toneCheck = false;
+    double rdsCheckMhz = 0.0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
@@ -637,6 +760,21 @@ int main(int argc, char** argv) {
             // ~1 s real-time sleep and disk writes make it a bench tool,
             // not part of the CI-facing CLI surface.
             recordCheck = true;
+        } else if (std::strcmp(argv[i], "--rds-check") == 0) {
+            // Hidden bench diagnostic (see runRdsCheck): needs a real radio
+            // tuned to a real RDS broadcast, so never a ctest entry.
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "cascade: --rds-check requires a frequency in MHz\n");
+                return 1;
+            }
+            char* end = nullptr;
+            rdsCheckMhz = std::strtod(argv[i + 1], &end);
+            if (end == argv[i + 1] || !(rdsCheckMhz > 0.0)) {
+                std::fprintf(stderr, "cascade: invalid --rds-check frequency '%s'\n",
+                             argv[i + 1]);
+                return 1;
+            }
+            ++i;
         } else if (std::strcmp(argv[i], "--tone-check") == 0) {
             // Hidden bench diagnostic (see runToneCheck): plays audible sound,
             // so it is a human-in-the-loop tool, never a ctest entry.
@@ -656,6 +794,7 @@ int main(int argc, char** argv) {
     if (soapyCheck) { return runSoapyCheck(); }
     if (recordCheck) { return runRecordCheck(); }
     if (toneCheck) { return runToneCheck(); }
+    if (rdsCheckMhz > 0.0) { return runRdsCheck(rdsCheckMhz * 1.0e6); }
 
     // Config persistence wiring. Normal interactive runs load/save the
     // user's config at ConfigStore::defaultPath(). Bounded --frames runs
