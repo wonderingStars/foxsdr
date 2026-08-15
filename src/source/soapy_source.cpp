@@ -9,6 +9,14 @@
 
 #include <utility>
 
+#ifdef _WIN32
+// For the LoadLibrary probe in runtimeAvailable(). Included AFTER the SoapySDR
+// headers: windows.h defines macros (min/max are suppressed by NOMINMAX in the
+// build flags, but others remain) that have historically collided with library
+// headers, so it goes last where it can only affect our own code.
+#include <windows.h>
+#endif
+
 namespace cascade::source {
 
 namespace {
@@ -40,8 +48,30 @@ SoapySource::~SoapySource() {
     closeDevice();
 }
 
+bool SoapySource::runtimeAvailable() {
+#ifdef _WIN32
+    // SoapySDR.dll is DELAY-LOADED (see the root CMakeLists): the process
+    // starts even when it is absent, and the DLL is only pulled in on the
+    // first call into it. That is what lets a broken or partial install show
+    // a readable message instead of Windows' "The code execution cannot
+    // proceed because SoapySDR.dll was not found" modal at launch, which the
+    // user cannot act on and which kills the app before any of our code runs.
+    //
+    // Probing with LoadLibrary rather than calling a Soapy symbol matters: a
+    // failed delay-load raises a structured exception that a C++ catch does
+    // not handle, so we must never reach one. Every entry point below checks
+    // here first. The handle is intentionally leaked - the module stays
+    // loaded for the process lifetime anyway once anything uses it.
+    static const bool available = (::LoadLibraryA("SoapySDR.dll") != nullptr);
+    return available;
+#else
+    return true;  // POSIX builds link it normally
+#endif
+}
+
 std::vector<SoapyDeviceInfo> SoapySource::enumerate() {
     std::vector<SoapyDeviceInfo> out;
+    if (!runtimeAvailable()) { return out; }  // no runtime: no devices, no crash
     try {
         for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate()) {
             SoapyDeviceInfo info;
@@ -73,6 +103,12 @@ bool SoapySource::open(const std::string& args) {
     // Reopen semantics: whatever was open before must be fully released
     // first, or the old device handle (and its USB claim) would leak.
     closeDevice();
+    if (!runtimeAvailable()) {
+        lastError_ =
+            "SoapySDR runtime not found (SoapySDR.dll). Reinstall, or use the "
+            "signal generator / IQ file sources, which need no hardware.";
+        return false;
+    }
     try {
         dev_ = SoapySDR::Device::make(args);
         if (dev_ == nullptr) {

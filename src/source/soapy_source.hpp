@@ -60,6 +60,12 @@ public:
     // an error.
     static std::vector<SoapyDeviceInfo> enumerate();
 
+    // False when SoapySDR.dll cannot be loaded (missing or broken install).
+    // The DLL is delay-loaded, so the app runs fine without it — only
+    // hardware sources are unavailable. Every Soapy entry point checks this
+    // first so a missing runtime yields a message, never a crash.
+    static bool runtimeAvailable();
+
     // Opens the device described by a SoapySDR kwargs markup string (the
     // .args of an enumerate() entry, or hand-written like "driver=rtlsdr")
     // and sets up its RX CF32 stream on channel 0. Any previously open

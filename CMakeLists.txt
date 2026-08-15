@@ -157,6 +157,18 @@ target_link_libraries(cascade_lib PUBLIC
 add_executable(cascade src/main.cpp)
 target_link_libraries(cascade PRIVATE cascade_lib)
 
+# Delay-load SoapySDR so a missing or broken hardware runtime cannot stop the
+# app from starting. Without this the Windows loader kills the process before
+# main() with an unactionable "SoapySDR.dll was not found" modal; with it, the
+# app opens normally and SoapySource::runtimeAvailable() reports the problem
+# in the Source panel while the generator and IQ-file sources keep working.
+# Only the shipped executable needs it — the test binaries always run beside
+# a freshly deployed DLL.
+if(MSVC)
+    target_link_options(cascade PRIVATE "/DELAYLOAD:SoapySDR.dll")
+    target_link_libraries(cascade PRIVATE delayimp)
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
