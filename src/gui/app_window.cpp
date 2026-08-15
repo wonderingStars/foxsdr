@@ -157,6 +157,16 @@ constexpr double kPlaceHz[10] = {1e9, 1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e
 // (a device readback cannot exceed it in practice — 9.99 GHz).
 constexpr double kMaxDisplayHz = 9999999999.0;
 
+// SoapyAudio advertises every sound card on the machine as a SoapySDR device.
+// They are not receivers: no tuner (centerFrequencyHz reads 0), no RF, and
+// selecting one silently swaps your radio for a microphone input — which then
+// gets persisted to config and restored on the next launch, so the real SDR
+// appears to have "stopped being detected". They are filtered out of the
+// Source list entirely, matching the policy --soapy-check already applies.
+bool isAudioDriver(const std::string& args) {
+    return args.find("driver=audio") != std::string::npos;
+}
+
 // Parses a typed frequency into Hz. Accepts what someone actually types at a
 // radio: "100.3", "100.3 MHz", "433920k", "1.003e8", "100,300,000".
 // Separators (space, comma, underscore) are ignored; a k/M/G suffix wins.
@@ -936,7 +946,11 @@ void AppWindow::pollSoapyAsync() {
 
     if (soapyScanPending_ && soapyScanFuture_.valid() &&
         soapyScanFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        soapyDevices_ = soapyScanFuture_.get();
+        auto found = soapyScanFuture_.get();
+        soapyDevices_.clear();
+        for (auto& d : found) {
+            if (!isAudioDriver(d.args)) { soapyDevices_.push_back(std::move(d)); }
+        }
         soapyScanPending_ = false;
         if (sourceSel_ >= 2 || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
@@ -1041,6 +1055,12 @@ void AppWindow::selectSource(int idx) {
 
 std::unique_ptr<cascade::source::SoapySource> AppWindow::openSoapy(
     const std::string& args, double requestRateHz) {
+    // Also guards CONFIG RESTORE, not just the dropdown: a sound card saved by
+    // an older build must not come back as the radio on every launch.
+    if (isAudioDriver(args)) {
+        sourceError_ = "saved source was a sound card (driver=audio), not a radio - ignored";
+        return nullptr;
+    }
     auto dev = std::make_unique<cascade::source::SoapySource>();
     if (!dev->open(args)) {
         sourceError_ = dev->lastError();
