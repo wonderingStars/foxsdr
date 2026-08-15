@@ -468,6 +468,10 @@ void AppWindow::drawUi() {
     // frame's. Inert while the scanner is Idle — including every hermetic
     // --frames run.
     scannerFrame();
+
+    // Apply any finished SoapySDR scan/open. Last in the frame so the result
+    // lands before the next draw reads the device list.
+    pollSoapyAsync();
 }
 
 void AppWindow::drawToolbar() {
@@ -691,6 +695,17 @@ void AppWindow::drawSourceSection() {
         return pipeline_.activeSourceName();
     };
 
+    // While discovery or an open is in flight the controls are disabled and
+    // the state is spelled out: the work is on a worker thread, so the window
+    // keeps redrawing and the spectrum keeps running underneath.
+    const bool soapyBusy = soapyScanPending_ || soapyOpenPending_;
+    if (soapyBusy) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "%s",
+                           soapyOpenPending_
+                               ? ("Opening " + soapyBusyLabel_ + "...").c_str()
+                               : "Scanning for devices...");
+    }
+    ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##source_select", rowLabel(sourceSel_))) {
         // Lazy first scan: opening the dropdown IS the user asking to see
@@ -710,6 +725,7 @@ void AppWindow::drawSourceSection() {
         ImGui::EndCombo();
     }
     if (ImGui::Button("Refresh")) { scanSoapy(); }
+    ImGui::EndDisabled();
 
     // IQ file controls, shown while the combo sits on "IQ file". The pipeline
     // keeps its current source until Open succeeds: a failed open constructs
@@ -796,21 +812,73 @@ void AppWindow::drawSourceSection() {
 }
 
 void AppWindow::scanSoapy() {
+    // Kick the enumeration onto a worker and return immediately — see the
+    // header for why this may not run inline. One at a time: a second scan
+    // while one is in flight would race the result into soapyDevices_.
+    if (soapyScanPending_ || soapyOpenPending_) { return; }
+    soapyScanned_ = true;  // claimed now so the combo does not re-request
+    soapyScanPending_ = true;
     // enumerate() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path.
-    soapyDevices_ = cascade::source::SoapySource::enumerate();
-    soapyScanned_ = true;
-    if (sourceSel_ >= 2 || sourceSel_ < 0) {
-        // Re-find the open device by its args (labels can repeat); if it
-        // vanished from the scan the device stays open and selected, and
-        // the preview falls back to its live name via rowLabel(-1).
-        sourceSel_ = -1;
-        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-            if (soapy_ != nullptr && soapyDevices_[i].args == soapyArgs_) {
-                sourceSel_ = 2 + static_cast<int>(i);
+    soapyScanFuture_ =
+        std::async(std::launch::async, [] { return cascade::source::SoapySource::enumerate(); });
+}
+
+void AppWindow::pollSoapyAsync() {
+    constexpr auto kNoWait = std::chrono::seconds(0);
+
+    if (soapyScanPending_ && soapyScanFuture_.valid() &&
+        soapyScanFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        soapyDevices_ = soapyScanFuture_.get();
+        soapyScanPending_ = false;
+        if (sourceSel_ >= 2 || sourceSel_ < 0) {
+            // Re-find the open device by its args (labels can repeat); if it
+            // vanished from the scan the device stays open and selected, and
+            // the preview falls back to its live name via rowLabel(-1).
+            sourceSel_ = -1;
+            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                if (soapy_ != nullptr && soapyDevices_[i].args == soapyArgs_) {
+                    sourceSel_ = 2 + static_cast<int>(i);
+                }
             }
         }
     }
+
+    if (soapyOpenPending_ && soapyOpenFuture_.valid() &&
+        soapyOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        finishSoapyOpen(soapyOpenFuture_.get());
+        soapyOpenPending_ = false;
+        soapyBusyLabel_.clear();
+    }
+}
+
+void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
+    // Failure: the combo was never moved, so it still shows the previous
+    // source; the reason lands in red under the control.
+    if (!r.dev) {
+        sourceError_ = r.error.empty() ? "device open failed" : r.error;
+        return;
+    }
+    // A non-fatal rate refusal still carries its reason.
+    if (!r.error.empty()) { sourceError_ = r.error; }
+
+    // Panel mirrors, then gain priming — all quick register writes, unlike
+    // the make() that just finished on the worker.
+    soapyRateIndex_ = nearestIndex(kSoapyRateHz, kSoapyRateCount, r.requestRateHz);
+    soapyAgcSupported_ = r.dev->setAutoGain(false);
+    soapyAgc_ = false;
+    soapyGainNames_ = r.dev->listGainNames();
+    soapyGainsDb_.assign(soapyGainNames_.size(), kSoapyGainDefaultDb);
+    for (const std::string& g : soapyGainNames_) {
+        r.dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
+    }
+
+    soapy_ = r.dev.get();
+    soapyArgs_ = r.args;
+    pipeline_.setSource(std::move(r.dev));
+    sourceKind_ = "soapy";
+    sourceSel_ = r.row;
+    followInputRate();  // DSP chain follows the device's actual readback
 }
 
 void AppWindow::selectSource(int idx) {
@@ -836,20 +904,32 @@ void AppWindow::selectSource(int idx) {
 
     const std::size_t d = static_cast<std::size_t>(idx - 2);
     if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
+    if (soapyOpenPending_ || soapyScanPending_) { return; }  // one at a time
 
-    // Default the device to the DSP chain's design rate; openSoapy also
-    // primes gains/AGC and the panel mirrors. On failure the revert-the-
-    // combo contract holds: sourceSel_ was never changed, so the combo stays
-    // where it was and the reason lands in red below (sourceError_).
-    auto dev = openSoapy(soapyDevices_[d].args, kSoapyRateHz[kSoapyRateDefaultIndex]);
-    if (!dev) { return; }
-
-    soapy_ = dev.get();
-    soapyArgs_ = soapyDevices_[d].args;
-    pipeline_.setSource(std::move(dev));
-    sourceKind_ = "soapy";
-    sourceSel_ = idx;
-    followInputRate();  // DSP chain follows the device's actual readback
+    // The open runs on a worker: Device::make() is the multi-second, USB-bus
+    // -walking call that used to freeze the GUI here. sourceSel_ is left
+    // alone until it resolves, which preserves the revert-the-combo contract
+    // for free — a failure never moved the selection in the first place.
+    const std::string args = soapyDevices_[d].args;
+    const double rate = kSoapyRateHz[kSoapyRateDefaultIndex];
+    soapyBusyLabel_ = soapyDevices_[d].label;
+    soapyOpenPending_ = true;
+    soapyOpenFuture_ = std::async(std::launch::async, [args, rate, idx] {
+        SoapyOpenResult r;
+        r.args = args;
+        r.row = idx;
+        r.requestRateHz = rate;
+        auto dev = std::make_unique<cascade::source::SoapySource>();
+        if (!dev->open(args)) {
+            r.error = dev->lastError();
+            return r;  // r.dev stays null: the GUI thread reports the failure
+        }
+        // A rate refusal is not fatal (the panel shows the actual readback
+        // either way) but is surfaced.
+        if (!dev->setSampleRateHz(rate)) { r.error = dev->lastError(); }
+        r.dev = std::move(dev);
+        return r;
+    });
 }
 
 std::unique_ptr<cascade::source::SoapySource> AppWindow::openSoapy(

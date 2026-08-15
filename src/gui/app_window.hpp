@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -188,6 +189,32 @@ private:
     // from ever executing that code.
     std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;
     bool soapyScanned_ = false;  // one lazy scan done (scanSoapy())
+
+    // --- Off-thread SoapySDR discovery and open --------------------------
+    // SoapySDR::Device::enumerate()/make() do USB bus discovery and, for a
+    // B200, an FPGA/firmware load: seconds of blocking work. Run inline they
+    // froze the GUI for ~3 s on every source click. Both now run on a worker
+    // thread; the GUI polls each frame and applies the result. The device
+    // itself is only ever touched by the GUI thread once the future resolves,
+    // so no locking is needed beyond the future's own synchronization.
+    struct SoapyOpenResult {
+        std::unique_ptr<cascade::source::SoapySource> dev;  // null on failure
+        std::string args;
+        std::string error;
+        int row = -1;
+        double requestRateHz = 0.0;
+    };
+    std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
+    std::future<SoapyOpenResult> soapyOpenFuture_;
+    bool soapyScanPending_ = false;
+    bool soapyOpenPending_ = false;
+    std::string soapyBusyLabel_;  // device name shown while an open is in flight
+
+    // Consumes finished scan/open futures; called once per frame.
+    void pollSoapyAsync();
+    // Applies a resolved open on the GUI thread (panel mirrors, gain priming,
+    // pipeline install). Takes ownership of r.dev.
+    void finishSoapyOpen(SoapyOpenResult r);
     // Combo selection. -1 means "active device no longer in the list" (a
     // Refresh dropped it); the preview then falls back to the active source
     // name. Distinct from the ACTIVE source: selecting "IQ file" only shows
