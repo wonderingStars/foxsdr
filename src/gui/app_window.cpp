@@ -358,6 +358,13 @@ int AppWindow::run(int frames) {
                                                      kWaterfallHistory);
     }
 
+    // Interactive runs start receiving immediately. A radio that opens with
+    // dead black panels and no hint that a button must be pressed reads as
+    // broken — it was the single biggest first-run complaint. Bounded
+    // --frames runs stay stopped so CI keeps its old timing and never spawns
+    // DSP threads it does not need.
+    if (frames < 0) { pipeline_.start(); }
+
     int rendered = 0;
     while (!glfwWindowShouldClose(window)) {
         // Exact-count contract: check before rendering so --frames N produces
