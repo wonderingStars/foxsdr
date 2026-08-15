@@ -57,6 +57,13 @@ private:
     void drawFrequencyReadout();
     void drawMenuColumn();
     void drawSourceSection();
+    // Runs one SoapySDR enumeration into soapyDevices_ and re-points the
+    // combo selection at the active device by args (labels can repeat; a
+    // device that vanished from the scan leaves sourceSel_ = -1 and the
+    // preview falls back to the live source name). Called from the combo's
+    // first open and from Refresh — deliberately never from the constructor
+    // (see soapyDevices_ below for why).
+    void scanSoapy();
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
     // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
     // (opens immediately; on failure the combo selection is left unchanged).
@@ -132,8 +139,15 @@ private:
     // default preserves the parity-spec startup display.
     //
     // Enumerated SoapySDR devices behind combo rows 2..N+1 (rows 0/1 are the
-    // generator and the IQ file). Filled at construction and by Refresh.
+    // generator and the IQ file). Filled LAZILY by scanSoapy() — first
+    // dropdown open, or Refresh — never at construction: enumeration loads
+    // vendor modules (SoapyUHD -> uhd.dll -> libusb) whose USB discovery
+    // crashed in-process in ~2% of measured runs (libusb-1.0.dll AV during
+    // uhd::device::find, P6a investigation 2026-08-15). Deferring the scan
+    // keeps generator/file sessions — and every bounded --frames CI run —
+    // from ever executing that code.
     std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;
+    bool soapyScanned_ = false;  // one lazy scan done (scanSoapy())
     // Combo selection. -1 means "active device no longer in the list" (a
     // Refresh dropped it); the preview then falls back to the active source
     // name. Distinct from the ACTIVE source: selecting "IQ file" only shows

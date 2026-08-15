@@ -211,10 +211,13 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // as near-silence, and switching to CW yields the 700 Hz sidetone.
     pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
     pipeline_.audio().setVolume(volume_);
-    // One enumeration up front so the Source combo is populated from the
-    // first frame; the Refresh button re-runs it for hot-plug. enumerate()
-    // never throws and is simply empty on a machine with no vendor modules.
-    soapyDevices_ = cascade::source::SoapySource::enumerate();
+    // DELIBERATELY no SoapySDR enumeration here. Enumeration loads vendor
+    // modules (SoapyUHD -> uhd.dll -> libusb) whose USB discovery faulted
+    // in-process in ~2% of measured `--frames 1` runs (0xC0000005 inside
+    // libusb-1.0.dll during uhd::device::find — P6a, 2026-08-15). The scan
+    // now runs only on the user's explicit request (first Source-dropdown
+    // open, or Refresh — scanSoapy()), so sessions that never touch Soapy —
+    // including every bounded --frames CI run — never execute that code.
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
         if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
@@ -606,9 +609,15 @@ void AppWindow::drawSourceSection() {
         return pipeline_.activeSourceName();
     };
 
-    const int rowCount = 2 + static_cast<int>(soapyDevices_.size());
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##source_select", rowLabel(sourceSel_))) {
+        // Lazy first scan: opening the dropdown IS the user asking to see
+        // devices, and it is the earliest moment the list is needed (the
+        // closed combo's preview never reads it). The one-off enumeration
+        // hitch lands here instead of at startup — see the constructor
+        // comment for why the eager scan was removed.
+        if (!soapyScanned_) { scanSoapy(); }
+        const int rowCount = 2 + static_cast<int>(soapyDevices_.size());
         for (int i = 0; i < rowCount; ++i) {
             // PushID: two identical devices (same model, no serial in the
             // label) must still be distinct rows.
@@ -618,20 +627,7 @@ void AppWindow::drawSourceSection() {
         }
         ImGui::EndCombo();
     }
-    if (ImGui::Button("Refresh")) {
-        soapyDevices_ = cascade::source::SoapySource::enumerate();
-        if (sourceSel_ >= 2 || sourceSel_ < 0) {
-            // Re-find the open device by its args (labels can repeat); if it
-            // vanished from the scan the device stays open and selected, and
-            // the preview falls back to its live name via rowLabel(-1).
-            sourceSel_ = -1;
-            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                if (soapy_ != nullptr && soapyDevices_[i].args == soapyArgs_) {
-                    sourceSel_ = 2 + static_cast<int>(i);
-                }
-            }
-        }
-    }
+    if (ImGui::Button("Refresh")) { scanSoapy(); }
 
     // IQ file controls, shown while the combo sits on "IQ file". The pipeline
     // keeps its current source until Open succeeds: a failed open constructs
@@ -714,6 +710,24 @@ void AppWindow::drawSourceSection() {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
         ImGui::TextWrapped("%s", sourceError_.c_str());
         ImGui::PopStyleColor();
+    }
+}
+
+void AppWindow::scanSoapy() {
+    // enumerate() never throws and is simply empty on a machine with no
+    // vendor modules; this is also the hot-plug refresh path.
+    soapyDevices_ = cascade::source::SoapySource::enumerate();
+    soapyScanned_ = true;
+    if (sourceSel_ >= 2 || sourceSel_ < 0) {
+        // Re-find the open device by its args (labels can repeat); if it
+        // vanished from the scan the device stays open and selected, and
+        // the preview falls back to its live name via rowLabel(-1).
+        sourceSel_ = -1;
+        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+            if (soapy_ != nullptr && soapyDevices_[i].args == soapyArgs_) {
+                sourceSel_ = 2 + static_cast<int>(i);
+            }
+        }
     }
 }
 

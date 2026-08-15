@@ -23,6 +23,75 @@
 #include "gui/app_window.hpp"
 #include "source/soapy_source.hpp"
 
+// ---------------------------------------------------------------------------
+// Minimal fatal-crash attribution (kept from the P6a crash investigation,
+// 2026-08-15). One line to stderr naming the exception code and the faulting
+// address as module+offset — this is exactly how the intermittent 0xC0000005
+// inside libusb-1.0.dll (SoapyUHD USB discovery) was pinned, and it costs
+// nothing at runtime. Vendor SDR modules are runtime-loaded third-party code;
+// when one faults in the field, this line is the difference between a report
+// that says "crashed" and one that names the module.
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+#include <windows.h>
+
+#include <psapi.h>
+
+#include <cinttypes>
+#pragma comment(lib, "psapi.lib")
+
+namespace {
+
+// Resolve an address to "module.dll+0xOFFSET" and report on stderr. Stack
+// buffer + WriteFile (not fprintf): the filter may run on a corrupted heap,
+// so the report path must not allocate.
+LONG WINAPI crashSehFilter(EXCEPTION_POINTERS* ep) {
+    const DWORD code = ep->ExceptionRecord->ExceptionCode;
+    void* addr = ep->ExceptionRecord->ExceptionAddress;
+    char modName[MAX_PATH] = "?";
+    std::uintptr_t offset = 0;
+    HMODULE mods[1024];
+    DWORD needed = 0;
+    if (EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed)) {
+        const std::size_t n = needed / sizeof(HMODULE);
+        for (std::size_t i = 0; i < n && i < 1024; ++i) {
+            MODULEINFO mi{};
+            if (!GetModuleInformation(GetCurrentProcess(), mods[i], &mi,
+                                      sizeof(mi))) {
+                continue;
+            }
+            const auto base = reinterpret_cast<std::uintptr_t>(mi.lpBaseOfDll);
+            const auto a = reinterpret_cast<std::uintptr_t>(addr);
+            if (a >= base && a < base + mi.SizeOfImage) {
+                GetModuleFileNameA(mods[i], modName, sizeof(modName));
+                offset = a - base;
+                break;
+            }
+        }
+    }
+    char buf[MAX_PATH + 128];
+    const int len = std::snprintf(
+        buf, sizeof(buf), "cascade: fatal exception 0x%08lX at %s+0x%" PRIxPTR "\n",
+        static_cast<unsigned long>(code), modName, offset);
+    if (len > 0) {
+        DWORD written = 0;
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), buf, static_cast<DWORD>(len),
+                  &written, nullptr);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;  // die with the original exit code
+}
+
+void installCrashReporter() {
+    SetUnhandledExceptionFilter(&crashSehFilter);
+}
+
+}  // namespace
+#else
+namespace {
+void installCrashReporter() {}
+}  // namespace
+#endif
+
 namespace {
 
 // End-to-end DSP check with zero GUI involvement, so it also runs on CI
@@ -250,6 +319,7 @@ int runSoapyCheck() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    installCrashReporter();
     int frames = -1;  // negative: run until the window is closed
     bool selftest = false;
     bool soapyCheck = false;
