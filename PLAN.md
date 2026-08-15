@@ -66,18 +66,20 @@ testable without threads.
 - **P1 — DSP primitives** — ✅ DONE 2026-08-14, adversarially verified and
   mutation-hardened (82f90f9, a22b8e3): every module test proven to go red
   against a targeted behavior deletion.
-- **P2 — Render pipeline** — stage 1 ✅ DONE (79a0827): SigGen, threaded
-  Pipeline, SpectrumView, WaterfallView, all contract-built and tested.
-  Stage 2 (in progress): GUI integration — Play/Stop drives the pipeline,
-  live spectrum + waterfall replace the placeholders, headless `--selftest`
-  proves tone-in → correct-bin-out end to end.
-- **P3 — Radio chain**: VFO wiring, WFM/NFM/AM/SSB/CW demods (each with
-  synthesized-signal tests), PortAudio sink, squelch, S-meter.
-- **P4 — Hardware sources**: IQ file (WAV), SoapySDR enumeration + streaming;
-  live test on the bench B200 via SoapyUHD.
-- **P5 — UX parity + persistence**: frequency entry, zoom, band snap, JSON
-  config save/restore, themes, keybinds.
-- **P6 — Extras**: recorder, frequency manager, scanner, installer (Inno).
+- **P2 — Render pipeline** — ✅ DONE (79a0827, c43bc4d): live spectrum +
+  waterfall, `--selftest` proves tone-in → correct-bin-out headlessly.
+- **P3 — Radio chain** — ✅ DONE (622a9d0, 80fc37f): all 8 demod modes,
+  VFO, AGC, squelch, S-meter, PortAudio out; selftest hears the 700 Hz
+  CW sidetone.
+- **P4 — Hardware sources** — ✅ DONE (9e1b781…7e92951): IqSource
+  abstraction, WAV playback, SoapySDR; live B200 streaming at 2 MS/s
+  verified (`--soapy-check`).
+- **P5 — UX parity + persistence** — ✅ DONE (f1844fb…3773fe6): zoom/pan,
+  RF axis, draggable VFO with per-mode snap, rate-follow, JSON config.
+- **P6 — Extras** — ✅ DONE (4fbbfc1…d3d9580 + installer): recorder,
+  bookmarks, scanner, 2–3% startup crash root-caused and fixed (0.7.1),
+  dependencies vendored (0.8.1), Inno installer verified
+  install→selftest→uninstall.
 
 ## Testing protocol (applies to every agent)
 

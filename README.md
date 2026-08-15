@@ -32,6 +32,17 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
+## Installer
+
+A Windows installer (Inno Setup 6) lives under `installer/` — it packages
+`cascade.exe`, `SoapySDR.dll`, the app-local MSVC runtime, the license, and
+post-install hardware notes into
+`installer\Output\sdr-minus-plus-setup-<version>.exe`. Build instructions:
+[installer/README-installer.md](installer/README-installer.md). Radio
+hardware support is installed separately by the user (PothosSDR or
+radioconda) — see `installer/POSTINSTALL.txt`; the app runs with no hardware
+at all (signal generator + IQ playback).
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Dependencies are deliberately permissive

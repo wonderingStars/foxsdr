@@ -1,0 +1,49 @@
+SDR-+ AI Supreme Leader — after-install notes
+==============================================
+
+NO HARDWARE REQUIRED
+--------------------
+The app runs fully with zero radio hardware attached: use the built-in
+signal generator source or IQ file playback to explore every feature
+(spectrum, waterfall, demodulators, audio).
+
+RADIO HARDWARE SUPPORT (SoapySDR vendor modules)
+------------------------------------------------
+Hardware support arrives through SoapySDR vendor modules, which are
+separate binaries loaded at runtime — this installer deliberately does
+not bundle any. If you have a USRP (B200 etc.), RTL-SDR, HackRF, Airspy,
+LimeSDR or similar, install ONE of:
+
+  * PothosSDR   — https://downloads.myriadrf.org/builds/PothosSDR/
+  * radioconda  — https://github.com/ryanvolz/radioconda
+
+Either provides the SoapySDR module set (SoapyUHD, SoapyRTLSDR, ...) plus
+the vendor libraries (uhd.dll, librtlsdr, ...) they need.
+
+IF YOU HAVE BOTH A STANDALONE UHD INSTALL AND RADIOCONDA
+--------------------------------------------------------
+Launch the app with radioconda's bin directory FIRST on PATH, e.g. from a
+command prompt:
+
+  set PATH=C:\Users\<you>\radioconda\Library\bin;%PATH%
+  "<install dir>\cascade.exe"
+
+The ABI-mismatch symptom to watch for: device enumeration finds no USRP,
+or the app dies at startup/enumeration with an "entry point not found" /
+missing-procedure error, because the SoapyUHD module that got loaded was
+built against a different uhd.dll than the one found first on PATH.
+
+RUNTIME NOTES
+-------------
+* The Microsoft VC++ runtime DLLs (msvcp140.dll, vcruntime140.dll,
+  vcruntime140_1.dll) are installed app-locally next to cascade.exe from
+  Microsoft's redistributable folder — no system-wide runtime install is
+  needed or performed.
+* Requires 64-bit Windows 10 or later (the Universal C Runtime is an OS
+  component there).
+
+LICENSE
+-------
+MIT — see LICENSE.txt in the install folder. SDR-+ AI Supreme Leader is an
+independent project, not affiliated with or endorsed by SDR++ or its
+authors.
