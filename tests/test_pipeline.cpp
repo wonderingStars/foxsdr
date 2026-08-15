@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <thread>
@@ -90,6 +91,18 @@ int main() {
         CHECK(p.activeSource().sampleRateHz() == cfg.sampleRateHz);
         CHECK_NEAR(p.activeSource().centerFrequencyHz(), 100.0e6, 1e-3);
         CHECK(std::strcmp(p.activeSource().lastError(), "") == 0);
+
+        // Rate-follow surface (additive checks): the chain reports the
+        // construction rate, and the constructor applies the documented
+        // decimation policy decim = round(rate / 200 kHz) clamped >= 1 —
+        // computed here from the contract, not read from the implementation
+        // (1 MHz -> decim 5 -> a 200 kHz channel).
+        CHECK(p.inputRateHz() == cfg.sampleRateHz);
+        {
+            double expectDecim = std::round(cfg.sampleRateHz / 200000.0);
+            if (expectDecim < 1.0) { expectDecim = 1.0; }
+            CHECK(p.channelRateHz() == cfg.sampleRateHz / expectDecim);
+        }
 
         // No frame before start.
         SpectrumFrame frame;

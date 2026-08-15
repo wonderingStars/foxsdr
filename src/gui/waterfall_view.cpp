@@ -180,7 +180,51 @@ void WaterfallView::addLine(const float* dbBins, int n, float dbMin, float dbMax
     pendingRows_ = std::min(pendingRows_ + 1, height_);
 }
 
+int WaterfallView::uvRects(int rowCursor, int height, double u0, double u1,
+                           UvRect out[2]) {
+    if (out == nullptr || height <= 0) {
+        return 0;
+    }
+    // Clamp the window into the texture. Deliberately one-sided per bound
+    // (`<` / `>` rather than !(...)-style) so a NaN survives the clamps and
+    // is then caught by the !(b > a) degenerate exit below — a NaN window
+    // must render as "nothing", never as a silently-full window.
+    double a = u0;
+    double b = u1;
+    if (a < 0.0) { a = 0.0; }
+    if (b > 1.0) { b = 1.0; }
+    // Catches inverted, equal (zero-width), NaN, and windows entirely
+    // outside [0, 1] (both bounds clamp to the same edge).
+    if (!(b > a)) {
+        return 0;
+    }
+    // rowCursor() already stays in [0, height); wrap defensively anyway so a
+    // caller-supplied cursor can never index texels that do not exist.
+    int c = rowCursor % height;
+    if (c < 0) { c += height; }
+
+    const float fu0 = static_cast<float>(a);
+    const float fu1 = static_cast<float>(b);
+    if (c == 0) {
+        // Ring start coincides with the texture's top row: no seam inside
+        // the widget, one quad covers everything.
+        out[0] = UvRect{0.0f, 1.0f, fu0, 0.0f, fu1, 1.0f};
+        return 1;
+    }
+    // Seam split. Newest rows c..H-1 render on top, oldest rows 0..c-1
+    // below. Each quad's screen share equals its v share, so history rows
+    // keep a uniform on-screen thickness across the seam.
+    const float vSeam = static_cast<float>(c) / static_cast<float>(height);
+    out[0] = UvRect{0.0f, 1.0f - vSeam, fu0, vSeam, fu1, 1.0f};
+    out[1] = UvRect{1.0f - vSeam, 1.0f, fu0, 0.0f, fu1, vSeam};
+    return 2;
+}
+
 void WaterfallView::draw(float width, float height) {
+    draw(width, height, 0.0, 1.0);
+}
+
+void WaterfallView::draw(float width, float height, double u0, double u1) {
     if (width_ <= 0 || height_ <= 0 || width <= 0.0f || height <= 0.0f) {
         return;
     }
@@ -189,8 +233,10 @@ void WaterfallView::draw(float width, float height) {
         glGenTextures(1, &id);
         texture_ = id;
         glBindTexture(GL_TEXTURE_2D, texture_);
-        // NEAREST: see the seam rationale in the header. REPEAT on T is what
-        // makes the wrapped-v single-Image draw work; S never leaves [0,1].
+        // NEAREST: see the seam rationale in the header. Wrap modes are no
+        // longer exercised (uvRects keeps every uv inside [0, 1]); REPEAT
+        // stays as the value the original wrapped-v draw used, and GL 1.1
+        // has no CLAMP_TO_EDGE to switch to anyway.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -216,12 +262,26 @@ void WaterfallView::draw(float width, float height) {
         pendingRows_ = 0;
     }
 
-    // Wrapped v: the newest row (cursor_) lands at the widget's top edge and
-    // GL_REPEAT carries v past 1.0 across the ring seam, so one Image call
-    // always shows the full history in age order.
-    const float v0 = static_cast<float>(cursor_) / static_cast<float>(height_);
-    ImGui::Image(static_cast<ImTextureID>(texture_), ImVec2(width, height),
-                 ImVec2(0.0f, v0), ImVec2(1.0f, v0 + 1.0f));
+    // At most two quads split at the ring seam (see uvRects). Emitted as
+    // AddImage calls on the draw list rather than stacked ImGui::Image items
+    // because items would insert ItemSpacing between the two quads; a single
+    // Dummy then reserves the widget rectangle exactly once — even when a
+    // degenerate window drew nothing, so a bad zoom state cannot shift the
+    // surrounding layout.
+    UvRect rects[2];
+    const int rectCount = uvRects(cursor_, height_, u0, u1, rects);
+    if (rectCount > 0) {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        for (int i = 0; i < rectCount; ++i) {
+            const UvRect& r = rects[i];
+            drawList->AddImage(static_cast<ImTextureID>(texture_),
+                               ImVec2(p0.x, p0.y + r.y0Frac * height),
+                               ImVec2(p0.x + width, p0.y + r.y1Frac * height),
+                               ImVec2(r.u0, r.v0), ImVec2(r.u1, r.v1));
+        }
+    }
+    ImGui::Dummy(ImVec2(width, height));
 }
 
 const ImU32* WaterfallView::rowPixels(int row) const noexcept {

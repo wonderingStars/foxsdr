@@ -2,8 +2,9 @@
 //
 // The CPU ring (per-row RGBA pixels + row cursor) is deliberately separate
 // from the GL upload path so every piece of logic that can be wrong — the
-// colormap, the dB->pixel conversion, nearest resampling, ring wrap — is
-// testable headless. draw() is the only member that touches OpenGL.
+// colormap, the dB->pixel conversion, nearest resampling, ring wrap, the
+// seam/window uv math — is testable headless. The draw() overloads are the
+// only members that touch OpenGL.
 //
 // SPDX-License-Identifier: MIT
 #pragma once
@@ -68,18 +69,56 @@ public:
     // the last draw() are uploaded lazily there.
     void addLine(const float* dbBins, int n, float dbMin, float dbMax);
 
-    // ImGui::Image of the ring texture stretched to width x height. Lazily
-    // creates the GL texture on first call (needs a live GL context), then
-    // uploads only the rows addLine() wrote since the previous draw, as
-    // single-row glTexSubImage2D updates.
-    //
-    // Seam handling (deliberate choice): one Image call with wrapped v
-    // coordinates — uv spans [cursor/H, cursor/H + 1] and GL_REPEAT carries
-    // v past 1.0, so the ring seam lands exactly at the widget's top edge.
-    // Filtering is GL_NEAREST because GL_LINEAR would blend the newest and
-    // oldest rows across the seam; nearest sidesteps that without a second
-    // Image call, and spectrum bins are typically ~1:1 with panel pixels.
+    // Full-span draw: forwards to the windowed draw with the whole texture
+    // width visible ([u0, u1] = [0, 1]). Kept so existing callers and the
+    // unzoomed display need no window bookkeeping.
     void draw(float width, float height);
+
+    // Windowed draw: renders only the horizontal texture window [u0, u1]
+    // (0..1 across the bins) stretched to width x height. Lazily creates
+    // the GL texture on first call (needs a live GL context), then uploads
+    // only the rows addLine() wrote since the previous draw, as single-row
+    // glTexSubImage2D updates. The window arrives as plain texture-u
+    // numbers from the zoom controller — no frequency-scale dependency —
+    // and addLine() always stores the full span, so zooming back out never
+    // loses history.
+    //
+    // Seam handling: the ring seam (newest row at the widget's top edge,
+    // ages increasing downward) is drawn via uvRects() below — at most two
+    // quads split exactly at the seam row, each quad's screen share equal
+    // to its v share. On-screen this is identical to the previous
+    // wrapped-v single-Image approach, but it also works for any u-window
+    // and keeps every uv inside [0, 1]. Filtering is GL_NEAREST so the
+    // newest and oldest rows never blend into each other at the seam.
+    // A degenerate window (u0 >= u1 after clamping to [0, 1], or NaN)
+    // draws no texture but still occupies the widget rectangle, so a bad
+    // zoom state cannot shift the surrounding layout.
+    void draw(float width, float height, double u0, double u1);
+
+    // One screen quad of a windowed draw: the vertical slice of the widget
+    // it covers and the texture uv corners it samples. Plain floats, no GL
+    // types, so the seam math is testable headless.
+    struct UvRect {
+        float y0Frac, y1Frac;  // widget-vertical span: 0 = top edge, 1 = bottom
+        float u0, v0;          // uv of the quad's top-left corner
+        float u1, v1;          // uv of the quad's bottom-right corner
+    };
+
+    // The uv computation behind draw(w, h, u0, u1), exposed static so tests
+    // can pin seam handling without a GL context. Clamps [u0, u1] to
+    // [0, 1], then writes the quads to issue for ring cursor `rowCursor` in
+    // a texture of `height` rows:
+    //   rowCursor == 0 -> 1 quad: v spans [0, 1], no seam inside the widget;
+    //   rowCursor == c -> 2 quads: rows c..H-1 (v in [c/H, 1]) on top, then
+    //                     rows 0..c-1 (v in [0, c/H]) below — newest row at
+    //                     the top edge, seam exactly between the quads.
+    // Invariant the tests rely on: each quad's screen span equals its v
+    // span (y1Frac - y0Frac == v1 - v0), so every history row renders at
+    // the same thickness. Returns the number of quads written (0, 1 or 2);
+    // a degenerate window (u0 >= u1 after clamping, or NaN), height <= 0,
+    // or a null `out` returns 0. An out-of-range rowCursor is wrapped into
+    // [0, height) defensively.
+    static int uvRects(int rowCursor, int height, double u0, double u1, UvRect out[2]);
 
     // --- Read-only introspection (headless-safe, never touches GL) ---
 
@@ -88,8 +127,8 @@ public:
 
     // Texture row holding the newest line. Starts at 0; each addLine()
     // decrements it (wrapping), so rows cursor, cursor+1, ... cursor+H-1
-    // (mod H) read newest-to-oldest — which is what the wrapped-v draw shows
-    // top-to-bottom.
+    // (mod H) read newest-to-oldest — which is what the seam-split draw
+    // (uvRects) shows top-to-bottom.
     int rowCursor() const noexcept { return cursor_; }
 
     // Pointer to texture row `row`'s texWidth() pixels, or nullptr when the

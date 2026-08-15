@@ -1,13 +1,16 @@
 // Tests for gui/waterfall_view.hpp — everything here is headless: only the
-// colormap, the dB->pixel row conversion and the CPU ring are exercised;
-// draw() (the sole GL-touching member) is never called, so no GL context is
-// needed. Expected colors are derived in-test from the documented contract
-// (anchor RGBA constants, the normalization formula, the nearest-resampling
-// rule floor((x + 0.5) * n / texWidth)) — never read back from internals.
+// colormap, the dB->pixel row conversion, the CPU ring and the seam/window
+// uv math (uvRects) are exercised; the draw() overloads (the GL-touching
+// members) are never called, so no GL context is needed. Expected colors are
+// derived in-test from the documented contract (anchor RGBA constants, the
+// normalization formula, the nearest-resampling rule
+// floor((x + 0.5) * n / texWidth)) — never read back from internals — and
+// the uv expectations come from the documented seam-split contract.
 //
 // SPDX-License-Identifier: MIT
 #include "gui/waterfall_view.hpp"
 
+#include <cstdint>
 #include <vector>
 
 #include "test_check.hpp"
@@ -268,6 +271,136 @@ void testRingResampledAndDegenerateLines() {
     CHECK(empty.rowPixels(0) == nullptr);
 }
 
+// --- uvRects (windowed-draw seam math) --------------------------------------
+
+using UvRect = WaterfallView::UvRect;
+
+void checkRect(const UvRect& r, float y0, float y1, float u0, float v0, float u1,
+               float v1, double tol) {
+    CHECK_NEAR(r.y0Frac, y0, tol);
+    CHECK_NEAR(r.y1Frac, y1, tol);
+    CHECK_NEAR(r.u0, u0, tol);
+    CHECK_NEAR(r.v0, v0, tol);
+    CHECK_NEAR(r.u1, u1, tol);
+    CHECK_NEAR(r.v1, v1, tol);
+}
+
+void testUvNoSeam() {
+    // Cursor 0: ring start coincides with the texture top — one quad, v
+    // spans [0, 1], the u-window passes straight through. All the values
+    // here are exact binary fractions, so tolerance 0.
+    UvRect r[2];
+    CHECK(WaterfallView::uvRects(0, 64, 0.25, 0.75, r) == 1);
+    checkRect(r[0], 0.0f, 1.0f, 0.25f, 0.0f, 0.75f, 1.0f, 0.0);
+    // Full window at cursor 0 is the identity rect of the full-span draw.
+    CHECK(WaterfallView::uvRects(0, 64, 0.0, 1.0, r) == 1);
+    checkRect(r[0], 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0);
+}
+
+void testUvSeam() {
+    // Cursor 16 of 64: seam at v = 16/64 = 0.25. Per the contract, the
+    // newest rows 16..63 (v in [0.25, 1]) render on top and must cover
+    // 48/64 = 0.75 of the widget height; the oldest rows 0..15 fill the
+    // rest. Expectations derived from the contract, never read back.
+    UvRect r[2];
+    CHECK(WaterfallView::uvRects(16, 64, 0.0, 1.0, r) == 2);
+    checkRect(r[0], 0.0f, 0.75f, 0.0f, 0.25f, 1.0f, 1.0f, 0.0);
+    checkRect(r[1], 0.75f, 1.0f, 0.0f, 0.0f, 1.0f, 0.25f, 0.0);
+
+    // The u-window must pass through both quads unchanged — zooming
+    // horizontally cannot move the seam or the vertical split.
+    CHECK(WaterfallView::uvRects(16, 64, 0.25, 0.75, r) == 2);
+    checkRect(r[0], 0.0f, 0.75f, 0.25f, 0.25f, 0.75f, 1.0f, 0.0);
+    checkRect(r[1], 0.75f, 1.0f, 0.25f, 0.0f, 0.75f, 0.25f, 0.0);
+
+    // Extreme cursors: 1 and H-1 still split into two exact quads (1/64 and
+    // 63/64 are exact in float, so tolerance stays 0).
+    CHECK(WaterfallView::uvRects(1, 64, 0.0, 1.0, r) == 2);
+    checkRect(r[0], 0.0f, 63.0f / 64.0f, 0.0f, 1.0f / 64.0f, 1.0f, 1.0f, 0.0);
+    checkRect(r[1], 63.0f / 64.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f / 64.0f, 0.0);
+    CHECK(WaterfallView::uvRects(63, 64, 0.0, 1.0, r) == 2);
+    checkRect(r[0], 0.0f, 1.0f / 64.0f, 0.0f, 63.0f / 64.0f, 1.0f, 1.0f, 0.0);
+    checkRect(r[1], 1.0f / 64.0f, 1.0f, 0.0f, 0.0f, 1.0f, 63.0f / 64.0f, 0.0);
+
+    // Out-of-range cursors wrap defensively: -1 must equal 3 (mod 4).
+    UvRect a[2];
+    UvRect b[2];
+    CHECK(WaterfallView::uvRects(-1, 4, 0.0, 1.0, a) == 2);
+    CHECK(WaterfallView::uvRects(3, 4, 0.0, 1.0, b) == 2);
+    for (int i = 0; i < 2; ++i) {
+        checkRect(a[i], b[i].y0Frac, b[i].y1Frac, b[i].u0, b[i].v0, b[i].u1, b[i].v1, 0.0);
+    }
+}
+
+void testUvClampAndDegenerate() {
+    UvRect r[2];
+    // Window clamped into the texture: [-0.5, 1.5] reads as [0, 1].
+    CHECK(WaterfallView::uvRects(0, 8, -0.5, 1.5, r) == 1);
+    checkRect(r[0], 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0);
+    // Degenerate windows draw nothing (0 quads) — never UB, never a
+    // silently-full window: zero width, inverted, entirely outside on
+    // either side, degenerate-after-clamping, NaN.
+    CHECK(WaterfallView::uvRects(0, 8, 0.5, 0.5, r) == 0);
+    CHECK(WaterfallView::uvRects(3, 8, 0.7, 0.3, r) == 0);
+    CHECK(WaterfallView::uvRects(0, 8, -2.0, -1.0, r) == 0);
+    CHECK(WaterfallView::uvRects(0, 8, 1.2, 3.0, r) == 0);
+    CHECK(WaterfallView::uvRects(0, 8, -1.0, 0.0, r) == 0);  // clamps to [0, 0]
+    CHECK(WaterfallView::uvRects(0, 8, 1.0, 2.0, r) == 0);   // clamps to [1, 1]
+    const float qnan = std::nanf("");
+    CHECK(WaterfallView::uvRects(0, 8, static_cast<double>(qnan), 1.0, r) == 0);
+    CHECK(WaterfallView::uvRects(0, 8, 0.0, static_cast<double>(qnan), r) == 0);
+    // Inert inputs: non-positive height, null output.
+    CHECK(WaterfallView::uvRects(0, 0, 0.0, 1.0, r) == 0);
+    CHECK(WaterfallView::uvRects(0, -3, 0.0, 1.0, r) == 0);
+    CHECK(WaterfallView::uvRects(0, 8, 0.0, 1.0, nullptr) == 0);
+}
+
+void testUvInvariantsSweep() {
+    // Property sweep with a fixed-seed LCG: for any cursor/height/window the
+    // quads must tile the widget top-to-bottom with no gap, keep each quad's
+    // screen share equal to its v share (uniform history-row thickness —
+    // the invariant that makes the seam invisible), pass the u-window
+    // through untouched, and cover v as [seam, 1] on top then [0, seam].
+    std::uint32_t lcg = 0xBADC0DE5u;
+    auto next01 = [&lcg]() {
+        lcg = lcg * 1664525u + 1013904223u;
+        return static_cast<double>(lcg >> 8) / 16777216.0;
+    };
+    const int heights[] = {1, 2, 7, 64, 480};
+    for (int trial = 0; trial < 200; ++trial) {
+        const int h = heights[trial % 5];
+        const int cur = static_cast<int>(next01() * static_cast<double>(h));
+        // Window construction guarantees 0 <= a < b <= 1, so no trial is
+        // ever skipped (a silent skip would shrink the sweep unnoticed).
+        const double a = 0.9 * next01();
+        const double b = a + 0.05 + (1.0 - a - 0.05) * next01();
+        UvRect r[2];
+        const int rectCount = WaterfallView::uvRects(cur, h, a, b, r);
+        CHECK(rectCount == (cur == 0 ? 1 : 2));
+        if (rectCount < 1) { continue; }  // already failed above; avoid UB reads
+        CHECK_NEAR(r[0].y0Frac, 0.0f, 0.0);
+        CHECK_NEAR(r[rectCount - 1].y1Frac, 1.0f, 0.0);
+        double vCovered = 0.0;
+        for (int i = 0; i < rectCount; ++i) {
+            CHECK_NEAR(r[i].u0, a, 1e-6);
+            CHECK_NEAR(r[i].u1, b, 1e-6);
+            CHECK_NEAR(r[i].y1Frac - r[i].y0Frac, r[i].v1 - r[i].v0, 1e-6);
+            vCovered += static_cast<double>(r[i].v1) - static_cast<double>(r[i].v0);
+        }
+        CHECK_NEAR(vCovered, 1.0, 1e-6);
+        if (rectCount == 2) {
+            CHECK_NEAR(r[0].y1Frac, r[1].y0Frac, 0.0);  // contiguous, no gap
+            CHECK_NEAR(r[0].v0, static_cast<double>(cur) / static_cast<double>(h), 1e-6);
+            CHECK_NEAR(r[0].v1, 1.0, 0.0);
+            CHECK_NEAR(r[1].v0, 0.0, 0.0);
+            CHECK_NEAR(r[1].v1, static_cast<double>(cur) / static_cast<double>(h), 1e-6);
+        } else {
+            CHECK_NEAR(r[0].v0, 0.0, 0.0);
+            CHECK_NEAR(r[0].v1, 1.0, 0.0);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -282,5 +415,9 @@ int main() {
     testRingInitialState();
     testRingCursorWrap();
     testRingResampledAndDegenerateLines();
+    testUvNoSeam();
+    testUvSeam();
+    testUvClampAndDegenerate();
+    testUvInvariantsSweep();
     return testSummary("test_waterfall_view");
 }

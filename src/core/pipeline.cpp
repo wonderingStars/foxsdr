@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace cascade::core {
 
@@ -45,10 +46,40 @@ std::size_t ringCapacityFor(const Pipeline::Config& cfg) {
 
 // --- Audio chain constants ---------------------------------------------------
 
-// Decimate the input by 10: 2 MS/s -> 200 kHz channel, wide enough for WFM
-// (+/-75 kHz deviation plus guard) while cutting the demod/AGC/squelch work
-// to a tenth of the input rate.
-constexpr unsigned kVfoDecimation = 10;
+// Target channel rate: the VFO decimation is chosen as round(rate / 200 kHz)
+// (clamped >= 1) so the channel lands as close to 200 kHz as an integer
+// decimation allows — wide enough for WFM (+/-75 kHz deviation plus guard)
+// while cutting the demod/AGC/squelch work to a small fraction of the input
+// rate. For any input rate >= 300 kHz this puts the channel in
+// [150 kHz, 250 kHz]; below 300 kHz the decimation is 1 and the channel IS
+// the input.
+constexpr double kTargetChannelRateHz = 200000.0;
+
+unsigned decimationForInputRate(double rateHz) {
+    double d = std::round(rateHz / kTargetChannelRateHz);
+    if (d < 1.0) { d = 1.0; }
+    return static_cast<unsigned>(d);
+}
+
+// Input-rate acceptance for setInputRateHz (documented in the header):
+// [8 kHz, 61.44 MHz] AND an integer channel rate, because RationalResampler
+// needs an exact integer L/M ratio for channelRate -> 48 kHz — a fractional
+// channel rate could only be approximated, silently detuning all audio.
+// A NaN rate fails the range test (every comparison with NaN is false).
+constexpr double kMinInputRateHz = 8000.0;
+constexpr double kMaxInputRateHz = 61.44e6;
+
+bool acceptedInputRate(double rateHz, unsigned* decimOut, double* chanRateOut) {
+    if (!(rateHz >= kMinInputRateHz && rateHz <= kMaxInputRateHz)) {
+        return false;
+    }
+    const unsigned decim = decimationForInputRate(rateHz);
+    const double chanRate = rateHz / static_cast<double>(decim);
+    if (chanRate != std::floor(chanRate)) { return false; }
+    *decimOut = decim;
+    *chanRateOut = chanRate;
+    return true;
+}
 
 // Default channel bandwidth: 150 kHz, the standard WFM channel width (Carson
 // bandwidth of +/-75 kHz deviation with 15 kHz audio is ~180 kHz; 150 kHz is
@@ -88,21 +119,23 @@ Pipeline::Pipeline(Config cfg)
       builtin_(cfg.sampleRateHz),
       ring_(ringCapacityFor(cfg)),
       estimator_(cfg.fftSize, cascade::dsp::WindowType::BlackmanHarris),
-      vfo_(cfg.sampleRateHz, kVfoDecimation, kDefaultVfoBandwidthHz),
-      demod_(cfg.sampleRateHz / kVfoDecimation),
+      vfoDecim_(decimationForInputRate(cfg.sampleRateHz)),
+      vfoBandwidthHz_(kDefaultVfoBandwidthHz),
+      vfo_(cfg.sampleRateHz, vfoDecim_, kDefaultVfoBandwidthHz),
+      demod_(cfg.sampleRateHz / static_cast<double>(vfoDecim_)),
       agc_(kAgcTarget, kAgcAttack, kAgcDecay, kAgcMaxGain),
-      squelch_(cfg.sampleRateHz / kVfoDecimation),
+      squelch_(cfg.sampleRateHz / static_cast<double>(vfoDecim_)),
       meter_(kMeterAlpha),
       resampler_(static_cast<unsigned>(kAudioRateHz + 0.5),
                  static_cast<unsigned>(cfg.sampleRateHz /
-                                           static_cast<double>(kVfoDecimation) +
+                                           static_cast<double>(vfoDecim_) +
                                        0.5)),
       tapBuf_(kAudioTapSize, 0.0f) {
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     estimator_.setAlpha(cfg.averagingAlpha);
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
     fmScale_ = static_cast<float>(
-        0.5 * (cfg.sampleRateHz / static_cast<double>(kVfoDecimation)) /
+        0.5 * (cfg.sampleRateHz / static_cast<double>(vfoDecim_)) /
         (kTwoPi * kFmDeviationHz));
     // Open the default output device up front (not in start()) so a device
     // chosen through audio() before/between runs is never stomped by a later
@@ -201,6 +234,7 @@ void Pipeline::start() {
 
     run_.store(true, std::memory_order_relaxed);
     srcRun_.store(true, std::memory_order_relaxed);
+    dspRun_.store(true, std::memory_order_relaxed);
     srcThread_ = std::thread(&Pipeline::sourceThreadMain, this);
     dspThread_ = std::thread(&Pipeline::dspThreadMain, this);
 }
@@ -209,6 +243,7 @@ void Pipeline::stop() {
     std::lock_guard<std::mutex> lk(controlMutex_);
     run_.store(false, std::memory_order_relaxed);
     srcRun_.store(false, std::memory_order_relaxed);
+    dspRun_.store(false, std::memory_order_relaxed);
     // Abort an in-flight bounded read BEFORE joining: a self-paced source
     // may be parked inside read() waiting for samples, and its stop() is the
     // contract's abort path (IqSource requires bounded/abortable reads for
@@ -255,11 +290,16 @@ double Pipeline::vfoOffsetHz() const {
 
 void Pipeline::setVfoBandwidthHz(double bandwidthHz) {
     std::lock_guard<std::mutex> lk(audioMutex_);
+    // The raw request is remembered separately from the Vfo's clamped value
+    // so a later rate switch can re-apply the caller's intent, re-clamped for
+    // the NEW channel rate (clamping a clamp would ratchet the bandwidth).
+    vfoBandwidthHz_ = bandwidthHz;
     vfo_.setBandwidthHz(bandwidthHz);
 }
 
 void Pipeline::setSquelchDb(float thresholdDb) {
     std::lock_guard<std::mutex> lk(audioMutex_);
+    squelchDb_ = thresholdDb;  // remembered for rate-switch rebuilds
     squelch_.setThresholdDb(thresholdDb);
 }
 
@@ -269,6 +309,108 @@ float Pipeline::signalPowerDb() const {
 
 cascade::sink::AudioOut& Pipeline::audio() {
     return audio_;
+}
+
+bool Pipeline::setInputRateHz(double rateHz) {
+    // Holding controlMutex_ across the WHOLE switch is what makes a
+    // stop()-during-switch impossible by construction (documented in the
+    // header): stop/start/setSource/dtor all serialize on this mutex.
+    std::lock_guard<std::mutex> lk(controlMutex_);
+
+    // Cheap no-op: the chain already follows this exact rate. Checked before
+    // validation on purpose — "keep doing what you are doing" can never fail.
+    if (rateHz == cfg_.sampleRateHz) { return true; }
+
+    unsigned decim = 1;
+    double chanRate = 0.0;
+    if (!acceptedInputRate(rateHz, &decim, &chanRate)) { return false; }
+
+    const bool live = run_.load(std::memory_order_relaxed);
+    if (live) {
+        // Quiesce the DSP thread — the mirror image of the setSource source-
+        // thread handshake: clear its private gate, then join. run_ stays set
+        // so the source thread keeps feeding the ring throughout (a full ring
+        // drops overflow by design, never blocks the source); the DSP loop's
+        // 1 ms idle sleep bounds the join latency. After the join NO thread
+        // touches the estimator or the audio chain, so the rebuild below is
+        // race-free by construction. The partial FFT block the thread was
+        // accumulating is discarded — a rate switch is a stream discontinuity
+        // anyway, so mixing old-rate and new-rate samples in one FFT would be
+        // worse than dropping less than one frame.
+        dspRun_.store(false, std::memory_order_relaxed);
+        if (dspThread_.joinable()) { dspThread_.join(); }
+    }
+
+    {
+        // audioMutex_ is still required even with the DSP thread down:
+        // audioTap()/setDemodMode()/setVfo* may arrive concurrently from
+        // other control-plane threads. controlMutex_ -> audioMutex_ is the
+        // same acquisition order start() uses, and the DSP thread never takes
+        // controlMutex_, so the ordering cannot deadlock.
+        std::lock_guard<std::mutex> alk(audioMutex_);
+
+        // Preserve caller-visible tuning across the rebuild.
+        const double offset = vfo_.offsetHz();
+        const cascade::dsp::DemodMode mode = demod_.mode();
+
+        vfoDecim_ = decim;
+        vfo_ = cascade::dsp::Vfo(rateHz, decim, vfoBandwidthHz_);
+        vfo_.setOffsetHz(offset);
+
+        // The demodulator MUST be rebuilt at the new channel rate: every mode
+        // bakes the rate into its coefficients (CW/SSB BFO frequencies, WFM
+        // deemphasis pole, AM DC-blocker pole), so a stale demod would e.g.
+        // scale the CW sidetone by oldChannel/newChannel.
+        demod_ = cascade::dsp::Demodulator(chanRate);
+        demod_.setMode(mode);
+
+        // Squelch: reconstructed so its ~5 ms ramp and hold time stay real
+        // time at the new channel rate; the requested threshold survives.
+        // Gate state restarts closed — a rate switch is a stream restart.
+        squelch_ = cascade::dsp::Squelch(chanRate);
+        squelch_.setThresholdDb(squelchDb_);
+
+        // Resampler ratio arithmetic: chanRate is proven integral by
+        // acceptedInputRate and is < 300 kHz for every accepted rate, so the
+        // unsigned casts are exact; RationalResampler reduces L/M by gcd
+        // internally, making channelRate -> 48 kHz exact — e.g. 150000 ->
+        // 8/25, 187500 -> 32/125, 200000 -> 6/25.
+        resampler_ = cascade::dsp::RationalResampler(
+            static_cast<unsigned>(kAudioRateHz + 0.5),
+            static_cast<unsigned>(chanRate + 0.5));
+
+        // New rate regime: relearn the gain and the S-meter from neutral.
+        // (Their per-sample time constants stay tuned for ~200 kHz channels,
+        // which every accepted rate >= 300 kHz lands near; below that the
+        // ballistics merely slow proportionally — an accepted tradeoff.)
+        agc_.reset();
+        meter_.reset();
+
+        fmScale_ = static_cast<float>(0.5 * chanRate /
+                                      (kTwoPi * kFmDeviationHz));
+    }
+    signalDb_.store(-200.0f, std::memory_order_relaxed);
+
+    // Commit the new rate only after the rebuild cannot fail anymore, so a
+    // refused/aborted call really did change nothing. The spectrum estimator
+    // and the ring are deliberately untouched (rate-agnostic; see header).
+    cfg_.sampleRateHz = rateHz;
+
+    if (live) {
+        dspRun_.store(true, std::memory_order_relaxed);
+        dspThread_ = std::thread(&Pipeline::dspThreadMain, this);
+    }
+    return true;
+}
+
+double Pipeline::inputRateHz() const {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    return cfg_.sampleRateHz;
+}
+
+double Pipeline::channelRateHz() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return vfo_.channelRateHz();
 }
 
 std::uint64_t Pipeline::audioSamplesProduced() const {
@@ -298,7 +440,17 @@ void Pipeline::sourceThreadMain() {
     cascade::source::IqSource& src = *active_;
 
     constexpr double kChunkSec = 0.010;
-    std::size_t chunk = static_cast<std::size_t>(cfg_.sampleRateHz * kChunkSec + 0.5);
+    // Chunk sizing (and, below, free-running pacing) follows the SOURCE's own
+    // rate, not the DSP chain's: setInputRateHz deliberately never touches
+    // the source side, and a caller-installed source may legitimately run at
+    // a different rate than the pipeline was constructed with. Read once at
+    // thread entry — sources that can change rate are re-read on the next
+    // (re)spawn, and rate changes on a live free-running source are refused
+    // by the sources themselves (SigGenSource/file are fixed-rate). Fall back
+    // to the chain's rate if a source reports a nonsense rate.
+    double srcRate = src.sampleRateHz();
+    if (!(srcRate > 0.0)) { srcRate = cfg_.sampleRateHz; }
+    std::size_t chunk = static_cast<std::size_t>(srcRate * kChunkSec + 0.5);
     if (chunk == 0) { chunk = 1; }
     std::vector<std::complex<float>> buf(chunk);
 
@@ -352,7 +504,11 @@ void Pipeline::dspThreadMain() {
     std::vector<float> db(n);
     std::size_t filled = 0;
 
-    while (run_.load(std::memory_order_relaxed)) {
+    // dspRun_ additionally gates this loop so setInputRateHz can quiesce the
+    // DSP thread alone (the source keeps feeding the ring), mirroring how
+    // srcRun_ lets setSource quiesce the source thread alone.
+    while (run_.load(std::memory_order_relaxed) &&
+           dspRun_.load(std::memory_order_relaxed)) {
         filled += ring_.read(acc.data() + filled, n - filled);
         if (filled < n) {
             // Ring drained mid-block: yield instead of spinning. 1 ms is far
@@ -380,7 +536,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     std::lock_guard<std::mutex> lk(audioMutex_);
 
     // VFO: mix the tuned offset to DC, band-limit, decimate to channel rate.
-    chanBuf_.resize(n / kVfoDecimation + 1);
+    chanBuf_.resize(n / vfoDecim_ + 1);
     const std::size_t m = vfo_.process(in, n, chanBuf_.data(), chanBuf_.size());
     if (m == 0) { return; }
 

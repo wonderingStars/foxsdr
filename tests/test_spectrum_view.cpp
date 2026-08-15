@@ -1,6 +1,6 @@
 // Tests for gui/spectrum_view.hpp — pure display math only. draw() needs a
-// live ImGui/GL context, so the testable surface is dbToY and gridlineDbs;
-// nothing here touches ImGui.
+// live ImGui/GL context, so the testable surface is dbToY, gridlineDbs, and
+// the zoom/VFO statics binToXFrac and hitTest; nothing here touches ImGui.
 //
 // SPDX-License-Identifier: MIT
 #include "gui/spectrum_view.hpp"
@@ -130,6 +130,143 @@ int main() {
         CHECK(SpectrumView::gridlineDbs(-100.0f, 0.0f, out, -3) == 0);
         CHECK(SpectrumView::gridlineDbs(0.0f, -100.0f, out, 4) == 0);   // inverted
         CHECK(SpectrumView::gridlineDbs(qnan, 0.0f, out, 4) == 0);      // NaN bound
+    }
+
+    // ===================== zoom + VFO additions =============================
+
+    using VfoBand = SpectrumView::VfoBand;
+    using VfoHit = SpectrumView::VfoHit;
+
+    // --- hitTest full decision matrix. Every expectation is derived from
+    // the header contract, and band/tolerance values are picked binary-exact
+    // (multiples of 2^-4 and 2^-5) so "distance exactly equals tolerance"
+    // rows carry no double rounding dust.
+    {
+        struct HitCase {
+            double mouse;
+            double x0, x1;
+            double tol;
+            VfoHit want;
+            const char* why;
+        };
+        const HitCase cases[] = {
+            // Ordinary band [0.25, 0.75], tolerance 1/16.
+            {0.5, 0.25, 0.75, 0.0625, VfoHit::Center, "deep inside -> Center"},
+            {0.375, 0.25, 0.75, 0.0625, VfoHit::Center, "inside, beyond edge tol -> Center"},
+            {0.625, 0.25, 0.75, 0.0625, VfoHit::Center, "inside, beyond edge tol -> Center"},
+            {0.25, 0.25, 0.75, 0.0625, VfoHit::EdgeLow, "exactly on low edge"},
+            {0.75, 0.25, 0.75, 0.0625, VfoHit::EdgeHigh, "exactly on high edge"},
+            {0.1875, 0.25, 0.75, 0.0625, VfoHit::EdgeLow, "outside-left at exact tol (inclusive)"},
+            {0.8125, 0.25, 0.75, 0.0625, VfoHit::EdgeHigh, "outside-right at exact tol (inclusive)"},
+            {0.3125, 0.25, 0.75, 0.0625, VfoHit::EdgeLow, "inside at exact tol: edge beats center"},
+            {0.6875, 0.25, 0.75, 0.0625, VfoHit::EdgeHigh, "inside at exact tol: edge beats center"},
+            {0.28, 0.25, 0.75, 0.0625, VfoHit::EdgeLow, "inside within tol: edge beats center"},
+            {0.72, 0.25, 0.75, 0.0625, VfoHit::EdgeHigh, "inside within tol: edge beats center"},
+            {0.15, 0.25, 0.75, 0.0625, VfoHit::None, "outside-left beyond tol"},
+            {0.85, 0.25, 0.75, 0.0625, VfoHit::None, "outside-right beyond tol"},
+            {0.0, 0.25, 0.75, 0.0625, VfoHit::None, "far left of band"},
+            {1.0, 0.25, 0.75, 0.0625, VfoHit::None, "far right of band"},
+            // Inverted band behaves exactly like the ordered one.
+            {0.5, 0.75, 0.25, 0.0625, VfoHit::Center, "inverted band: Center"},
+            {0.28, 0.75, 0.25, 0.0625, VfoHit::EdgeLow, "inverted band: low edge"},
+            {0.72, 0.75, 0.25, 0.0625, VfoHit::EdgeHigh, "inverted band: high edge"},
+            {0.85, 0.75, 0.25, 0.0625, VfoHit::None, "inverted band: outside"},
+            // Narrow band [7/16, 9/16] with tolerance wider than the band:
+            // both edges are in tolerance everywhere, nearer edge must win.
+            {0.45, 0.4375, 0.5625, 0.25, VfoHit::EdgeLow, "both in tol: nearer edge is low"},
+            {0.55, 0.4375, 0.5625, 0.25, VfoHit::EdgeHigh, "both in tol: nearer edge is high"},
+            {0.5, 0.4375, 0.5625, 0.25, VfoHit::EdgeHigh, "exact tie inside: mouse > lo -> high"},
+            // Degenerate zero-width band: side of approach picks the edge.
+            {0.5, 0.5, 0.5, 0.0625, VfoHit::EdgeLow, "zero-width, on the point -> low"},
+            {0.46875, 0.5, 0.5, 0.0625, VfoHit::EdgeLow, "zero-width, from the left -> low"},
+            {0.53125, 0.5, 0.5, 0.0625, VfoHit::EdgeHigh, "zero-width, from the right -> high"},
+            {0.4, 0.5, 0.5, 0.0625, VfoHit::None, "zero-width, beyond tol left"},
+            {0.6, 0.5, 0.5, 0.0625, VfoHit::None, "zero-width, beyond tol right"},
+            // Zero tolerance: exact hits only, Center still works.
+            {0.5, 0.5, 0.5, 0.0, VfoHit::EdgeLow, "zero-width + zero tol, exact hit"},
+            {0.25, 0.25, 0.75, 0.0, VfoHit::EdgeLow, "zero tol, exact low edge"},
+            {0.75, 0.25, 0.75, 0.0, VfoHit::EdgeHigh, "zero tol, exact high edge"},
+            {0.5, 0.25, 0.75, 0.0, VfoHit::Center, "zero tol, inside -> Center"},
+            {0.2, 0.25, 0.75, 0.0, VfoHit::None, "zero tol, outside -> None"},
+            // Negative tolerance is treated as zero, not as a rejection.
+            {0.3, 0.25, 0.75, -0.5, VfoHit::Center, "negative tol == 0: inside is Center"},
+            {0.25, 0.25, 0.75, -0.5, VfoHit::EdgeLow, "negative tol == 0: exact edge hits"},
+        };
+        const int caseCount = static_cast<int>(sizeof(cases) / sizeof(cases[0]));
+        for (int i = 0; i < caseCount; ++i) {
+            const HitCase& c = cases[i];
+            const VfoBand band{c.x0, c.x1, false};
+            const VfoHit got = SpectrumView::hitTest(c.mouse, band, c.tol);
+            if (got != c.want) {
+                std::printf("  hitTest case %d: %s (mouse=%g band=[%g,%g] tol=%g)\n",
+                            i, c.why, c.mouse, c.x0, c.x1, c.tol);
+            }
+            CHECK(got == c.want);
+        }
+
+        // dragging is caller-owned display state; it must never change the
+        // classification.
+        const VfoBand dragBand{0.25, 0.75, true};
+        CHECK(SpectrumView::hitTest(0.5, dragBand, 0.0625) == VfoHit::Center);
+        CHECK(SpectrumView::hitTest(0.25, dragBand, 0.0625) == VfoHit::EdgeLow);
+
+        // NaN anywhere must classify as None (a poisoned mouse or band can
+        // never produce a phantom grab); NaN tolerance reads as 0.
+        const VfoBand okBand{0.25, 0.75, false};
+        CHECK(SpectrumView::hitTest(static_cast<double>(qnan), okBand, 0.0625) == VfoHit::None);
+        const VfoBand nanLo{static_cast<double>(qnan), 0.75, false};
+        CHECK(SpectrumView::hitTest(0.5, nanLo, 0.0625) == VfoHit::None);
+        const VfoBand nanHi{0.25, static_cast<double>(qnan), false};
+        CHECK(SpectrumView::hitTest(0.5, nanHi, 0.0625) == VfoHit::None);
+        CHECK(SpectrumView::hitTest(0.5, okBand, static_cast<double>(qnan)) == VfoHit::Center);
+        CHECK(SpectrumView::hitTest(0.25, okBand, static_cast<double>(qnan)) == VfoHit::EdgeLow);
+    }
+
+    // --- binToXFrac: identity for the full range. draw() lays bin i of n at
+    // x fraction i/(n-1); the windowed map must reproduce that exactly for
+    // the window [0, n-1] or zoomed and unzoomed traces would jump.
+    {
+        for (int i = 0; i < 16; ++i) {
+            CHECK_NEAR(SpectrumView::binToXFrac(static_cast<double>(i), 0.0, 15.0),
+                       static_cast<double>(i) / 15.0, 1e-7);
+        }
+        CHECK_NEAR(SpectrumView::binToXFrac(0.0, 0.0, 15.0), 0.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(15.0, 0.0, 15.0), 1.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(7.5, 0.0, 15.0), 0.5, 1e-7);
+    }
+
+    // --- binToXFrac: half-range window [4, 12] of a 16-bin spectrum, plus a
+    // fractional-edge window. All expectations are exact binary fractions.
+    {
+        CHECK_NEAR(SpectrumView::binToXFrac(4.0, 4.0, 12.0), 0.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(12.0, 4.0, 12.0), 1.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(8.0, 4.0, 12.0), 0.5, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(6.0, 4.0, 12.0), 0.25, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(10.0, 4.0, 12.0), 0.75, 0.0);
+        // Unclamped by contract: a result outside [0, 1] reports where an
+        // out-of-window bin went instead of silently pinning it to an edge.
+        CHECK_NEAR(SpectrumView::binToXFrac(0.0, 4.0, 12.0), -0.5, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(16.0, 4.0, 12.0), 1.5, 0.0);
+        // Fractional window cut positions (where edge interpolation lands).
+        CHECK_NEAR(SpectrumView::binToXFrac(2.5, 2.5, 5.5), 0.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(5.5, 2.5, 5.5), 1.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(4.0, 2.5, 5.5), 0.5, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(3.25, 2.5, 5.5), 0.25, 0.0);
+        // Degenerate windows: zero-width, inverted, NaN -> 0 by contract.
+        CHECK_NEAR(SpectrumView::binToXFrac(3.0, 5.0, 5.0), 0.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(3.0, 7.0, 2.0), 0.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(3.0, static_cast<double>(qnan), 12.0), 0.0, 0.0);
+        CHECK_NEAR(SpectrumView::binToXFrac(3.0, 4.0, static_cast<double>(qnan)), 0.0, 0.0);
+    }
+
+    // --- binToXFrac linearity sweep against the defining formula, random
+    // windows and bins (including out-of-window bins), fixed-seed LCG.
+    for (int i = 0; i < 200; ++i) {
+        const double first = -50.0 + 100.0 * next01();
+        const double span = 0.5 + 99.5 * next01();
+        const double bin = first - 10.0 + (span + 20.0) * next01();
+        const double want = (bin - first) / span;
+        CHECK_NEAR(SpectrumView::binToXFrac(bin, first, first + span), want, 1e-5);
     }
 
     return testSummary("test_spectrum_view");

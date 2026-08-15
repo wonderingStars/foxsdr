@@ -5,7 +5,8 @@
 // SpectrumEstimator and publishes the newest spectrum frame for the GUI to
 // poll. The same DSP thread also runs the audio chain (P3): every drained
 // block is duplicated into
-//   Vfo (decimate-by-10) -> Demodulator -> Agc -> Squelch ->
+//   Vfo (decimate to a ~200 kHz channel; see setInputRateHz for the policy)
+//   -> Demodulator -> Agc -> Squelch ->
 //   RationalResampler (channel rate -> 48 kHz) -> AudioOut::write.
 //
 // Why the audio chain shares the DSP thread instead of getting a third one:
@@ -142,6 +143,73 @@ public:
     // cfg.audioEnabled) is the system default at kAudioRateHz.
     cascade::sink::AudioOut& audio();
 
+    // --- Runtime input-rate follow (rate-follow) ------------------------------
+    // Rebuilds the rate-dependent DSP chain for a new input sample rate. The
+    // SOURCE is deliberately NOT touched: the caller owns the device side
+    // (command the hardware rate through activeSource().setSampleRateHz, or
+    // install a source built at the new rate via setSource — the built-in
+    // generator is fixed-rate by its own contract); this call only makes the
+    // DSP side follow.
+    //
+    // Accepted rates — both conditions must hold, otherwise the call returns
+    // false and changes NOTHING (the chain keeps running at the old rate):
+    //  1. rateHz in [8 kHz, 61.44 MHz] (the range SDR front ends this app
+    //     targets can actually deliver);
+    //  2. rateHz / decim is an INTEGER, where decim = round(rateHz / 200 kHz)
+    //     clamped to >= 1. The integer requirement is what keeps the audio
+    //     resampler exact: RationalResampler takes an integer L/M ratio
+    //     (channelRate -> 48 kHz, reduced by gcd internally), so a fractional
+    //     channel rate could only be approximated, silently detuning audio.
+    //     Note the bounds are necessary, not sufficient — e.g. 61.44 MHz
+    //     itself is refused (decim 307 gives a fractional channel rate).
+    // The decim policy lands the channel rate in [150 kHz, 250 kHz] for every
+    // accepted rate >= 300 kHz; below 300 kHz decim is 1 and the channel rate
+    // equals the input rate.
+    //
+    // Concurrency (mirrors the setSource quiesce handshake, but for the DSP
+    // thread — the source thread keeps running throughout): all under
+    // controlMutex_,
+    //   1. dspRun_ cleared          (the DSP loop is told to exit; run_ stays
+    //      set, so the source keeps feeding the ring — a full ring drops the
+    //      overflow by design and never blocks the source)
+    //   2. dspThread_ joined        (after this NO thread touches the
+    //      estimator or the audio chain, so rebuilding them is race-free)
+    //   3. chain rebuilt under audioMutex_ (audioTap()/setters may arrive
+    //      from other threads while the DSP thread is down)
+    //   4. dspRun_ set, DSP thread respawned
+    // Holding controlMutex_ across the whole switch is what makes a
+    // stop()-during-switch impossible by construction: stop(), start(),
+    // setSource() and this call all serialize on that mutex, so a stop can
+    // only run before the switch begins or after it completes.
+    //
+    // What changes: VFO (decim per the policy above; the last REQUESTED
+    // bandwidth is re-applied, re-clamped for the new channel rate; the
+    // tuning offset is preserved), Demodulator (reconstructed at the new
+    // channel rate, mode preserved), Squelch (reconstructed so its ramp/hold
+    // stay real-time, threshold preserved), RationalResampler (rebuilt
+    // channelRate -> 48 kHz), the FM scale, and the AGC/S-meter state (reset:
+    // new rate regime). What does not: the spectrum estimator (fftSize is
+    // unchanged and the estimator is rate-agnostic — the displayed span
+    // simply reinterprets, which is the caller's frequency-axis job), the
+    // ring (its capacity stays the construction-time sizing, so headroom in
+    // milliseconds shrinks at higher rates — still >= 8 FFT blocks for any
+    // accepted rate), seq numbering, and the audio tap/counters.
+    //
+    // Calling with the CURRENT rate is a cheap no-op returning true. Safe to
+    // call stopped (no threads to quiesce — the chain is rebuilt for the next
+    // start()) or running, from any control-plane thread.
+    bool setInputRateHz(double rateHz);
+
+    // The input rate the DSP chain is currently built for (construction rate
+    // until the first successful setInputRateHz).
+    double inputRateHz() const;
+
+    // The audio-side channel rate (the Vfo's output rate = input rate /
+    // decimation) — the rate the Demodulator runs at and the resampler
+    // converts to 48 kHz. Exposed for the GUI's bandwidth limits and for
+    // tests of the rate-follow policy.
+    double channelRateHz() const;
+
     // Rate the chain resamples to and the device is opened at.
     static constexpr double kAudioRateHz = 48000.0;
 
@@ -185,6 +253,16 @@ private:
     // setters/getters above. One mutex, never held together with frameMutex_
     // or controlMutex_ on the DSP thread, so no ordering to get wrong.
     mutable std::mutex audioMutex_;
+    // Rate-dependent chain parameters, all guarded by audioMutex_ alongside
+    // the blocks they configure. vfoDecim_ is the CURRENT decimation (the
+    // header constant it replaced assumed a fixed 2 MS/s input). The two
+    // "requested" values exist because Vfo/Squelch clamp or don't expose
+    // their setting: a rebuild re-applies the caller's request, re-clamped
+    // for the new channel rate, instead of compounding old clamps.
+    unsigned vfoDecim_ = 1;
+    double vfoBandwidthHz_ = 0.0;  // last requested (pre-clamp) VFO bandwidth
+    float squelchDb_ = -50.0f;     // last requested threshold (mirrors the
+                                   // Squelch construction default)
     cascade::dsp::Vfo vfo_;
     cascade::dsp::Demodulator demod_;
     cascade::dsp::Agc agc_;
@@ -207,14 +285,18 @@ private:
     std::atomic<float> signalDb_{-200.0f};
     std::atomic<std::uint64_t> audioSamples_{0};
 
-    // Control operations (start/stop/setSource/dtor) serialize against each
-    // other under controlMutex_; the threads themselves only ever read the
-    // two flags. run_ gates BOTH threads (a stop); srcRun_ additionally
-    // gates just the source thread so setSource can quiesce it alone while
-    // the DSP thread keeps draining the ring.
-    std::mutex controlMutex_;
+    // Control operations (start/stop/setSource/setInputRateHz/dtor) serialize
+    // against each other under controlMutex_; the threads themselves only
+    // ever read the flags. run_ gates BOTH threads (a stop); srcRun_
+    // additionally gates just the source thread so setSource can quiesce it
+    // alone while the DSP thread keeps draining the ring; dspRun_ is the
+    // symmetric per-thread gate for the DSP thread so setInputRateHz can
+    // quiesce IT alone while the source keeps feeding the ring. Mutable so
+    // const readers of cfg_ (inputRateHz) can take it.
+    mutable std::mutex controlMutex_;
     std::atomic<bool> run_{false};
     std::atomic<bool> srcRun_{false};
+    std::atomic<bool> dspRun_{false};
     std::thread srcThread_;
     std::thread dspThread_;
 };
