@@ -205,6 +205,17 @@ void Pipeline::start() {
     std::lock_guard<std::mutex> lk(controlMutex_);
     if (run_.load(std::memory_order_relaxed)) { return; }  // idempotent
 
+    // A fresh run clears any previous fault, and joins the threads a fault
+    // left behind: noteThreadFault only flips the flags, it cannot join
+    // itself, so the std::thread objects are still joinable here.
+    faulted_.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> flk(faultMutex_);
+        faultMsg_.clear();
+    }
+    if (srcThread_.joinable()) { srcThread_.join(); }
+    if (dspThread_.joinable()) { dspThread_.join(); }
+
     // A restart is a fresh acquisition: re-prime the average and discard
     // samples left in the ring from the previous run, so the first frames
     // reflect the current generator settings rather than stale history.
@@ -445,7 +456,53 @@ std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
     return avail;
 }
 
+void Pipeline::noteThreadFault(const char* where, const char* what) {
+    {
+        std::lock_guard<std::mutex> lk(faultMutex_);
+        faultMsg_ = std::string(where) + ": " + (what != nullptr ? what : "unknown");
+    }
+    faulted_.store(true, std::memory_order_relaxed);
+    // Bring the rest of the pipeline down with it. A half-running pipeline —
+    // source dead, DSP still spinning on an empty ring — presents as "running"
+    // in the UI while producing nothing, which is worse than a clean stop.
+    srcRun_.store(false, std::memory_order_relaxed);
+    dspRun_.store(false, std::memory_order_relaxed);
+    run_.store(false, std::memory_order_relaxed);
+}
+
+bool Pipeline::faulted() const { return faulted_.load(std::memory_order_relaxed); }
+
+std::string Pipeline::faultMessage() const {
+    std::lock_guard<std::mutex> lk(faultMutex_);
+    return faultMsg_;
+}
+
+// Both worker bodies run inside a catch-all. An exception that escapes a
+// std::thread is an immediate std::terminate (Windows reports it as
+// 0xC0000409 fail-fast in ucrtbase), and vendor drivers genuinely do throw
+// from deep inside a stream read when the USB device is pulled mid-capture —
+// that is precisely how unplugging the SDR used to kill the whole app.
 void Pipeline::sourceThreadMain() {
+    try {
+        sourceThreadBody();
+    } catch (const std::exception& e) {
+        noteThreadFault("source thread", e.what());
+    } catch (...) {
+        noteThreadFault("source thread", "non-standard exception");
+    }
+}
+
+void Pipeline::dspThreadMain() {
+    try {
+        dspThreadBody();
+    } catch (const std::exception& e) {
+        noteThreadFault("DSP thread", e.what());
+    } catch (...) {
+        noteThreadFault("DSP thread", "non-standard exception");
+    }
+}
+
+void Pipeline::sourceThreadBody() {
     using clock = std::chrono::steady_clock;
 
     // Stable for this thread's entire lifetime: setSource only changes
@@ -513,7 +570,7 @@ void Pipeline::sourceThreadMain() {
     }
 }
 
-void Pipeline::dspThreadMain() {
+void Pipeline::dspThreadBody() {
     const std::size_t n = cfg_.fftSize;
     std::vector<std::complex<float>> acc(n);
     std::vector<float> db(n);

@@ -797,6 +797,14 @@ void AppWindow::drawSourceSection() {
     // While discovery or an open is in flight the controls are disabled and
     // the state is spelled out: the work is on a worker thread, so the window
     // keeps redrawing and the spectrum keeps running underneath.
+    // A worker thread died on a driver exception — almost always the device
+    // being unplugged mid-stream. Say so plainly: the spectrum has frozen and
+    // without this the app just looks hung.
+    if (pipeline_.faulted()) {
+        ImGui::TextColored(kErrorRed, "Device stopped: %s", pipeline_.faultMessage().c_str());
+        ImGui::TextWrapped("Reconnect it and pick the source again, or switch to the signal generator.");
+    }
+
     const bool soapyBusy = soapyScanPending_ || soapyOpenPending_;
     if (soapyBusy) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "%s",

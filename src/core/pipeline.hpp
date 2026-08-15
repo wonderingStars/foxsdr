@@ -85,6 +85,10 @@ public:
     void start();                                 // idempotent; spawns source-pacing + DSP threads
     void stop();                                  // idempotent; joins both threads
     bool running() const;
+    // True when a worker thread aborted on an exception — a USB SDR pulled
+    // mid-stream being the case that motivated it. Latched until start().
+    bool faulted() const;
+    std::string faultMessage() const;             // empty unless faulted()
     bool getLatestFrame(SpectrumFrame& out);      // true iff a frame newer than out.seq was copied into out
 
     // --- Source selection ----------------------------------------------------
@@ -250,8 +254,15 @@ public:
     void setAudioRecorder(Recorder* r);
 
 private:
+    // *Main are catch-all wrappers; *Body holds the real loop. See the
+    // comment above sourceThreadMain in the .cpp: an exception escaping a
+    // std::thread terminates the process, and yanking a USB SDR mid-stream
+    // makes vendor drivers throw.
     void sourceThreadMain();
     void dspThreadMain();
+    void sourceThreadBody();
+    void dspThreadBody();
+    void noteThreadFault(const char* where, const char* what);
     void processAudioBlock(const std::complex<float>* in, std::size_t n);
 
     Config cfg_;
@@ -273,6 +284,13 @@ private:
     // "nothing published yet".
     std::mutex frameMutex_;
     SpectrumFrame latest_;
+
+    // Worker-thread fault state. faulted() latches until the next start(),
+    // which is what lets the GUI say "the device went away" instead of
+    // showing a frozen spectrum that looks like a hang.
+    mutable std::mutex faultMutex_;
+    std::atomic<bool> faulted_{false};
+    std::string faultMsg_;
 
     // Audio chain state. Everything below audioMutex_ (except the atomics) is
     // touched only under it: by the DSP thread once per block and by the
