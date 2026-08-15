@@ -187,6 +187,14 @@ private:
     // uhd::device::find, P6a investigation 2026-08-15). Deferring the scan
     // keeps generator/file sessions — and every bounded --frames CI run —
     // from ever executing that code.
+    // Direct frequency entry: double-clicking the readout swaps the digit
+    // strip for a text field (SDR++-style typing). Wheeling digits alone
+    // cannot get you from 100 MHz to 433 MHz in any reasonable number of
+    // notches, which is what made tuning feel broken.
+    bool freqEditing_ = false;
+    bool freqEditFocus_ = false;  // request keyboard focus on the first frame
+    char freqEditBuf_[32] = {0};
+
     std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;
     bool soapyScanned_ = false;  // one lazy scan done (scanSoapy())
 

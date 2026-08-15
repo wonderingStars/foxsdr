@@ -322,6 +322,64 @@ int runSoapyCheck() {
     return 0;
 }
 
+// Bench diagnostic (hidden flag --tone-check): drive the audio output
+// directly with an audible 1 kHz sine for two seconds. This is the bisect for
+// "no sound" — it bypasses the whole radio chain (source, VFO, demod, AGC,
+// squelch) and answers one question: does this machine's speakers path work
+// at all? Silence here means the device/volume/routing; sound here means the
+// audio stack is fine and the silence is upstream (nothing tuned, or a mode
+// that is legitimately silent on the signal being fed to it).
+int runToneCheck() {
+    cascade::sink::AudioOut audio;
+    constexpr double kRate = 48000.0;
+    if (!audio.open(-1, kRate)) {
+        std::printf("tone-check FAIL could not open the default output device\n");
+        return 1;
+    }
+    audio.setVolume(0.5f);
+
+    // 1 kHz at half scale, written slightly ahead of real time so the ring
+    // never starves; 2 s is long enough to be unmistakable.
+    constexpr int kBlock = 480;  // 10 ms
+    constexpr double kTwoPi = 6.283185307179586476925286766559;
+    std::vector<float> block(kBlock);
+    double phase = 0.0;
+    const double step = kTwoPi * 1000.0 / kRate;
+    // Keep the ring as full as it will take rather than writing in lockstep
+    // with playback: a bounded ring back-pressures naturally (write() returns
+    // what it accepted), so this both pre-fills before the stream starts
+    // pulling and never starves it afterwards. Pacing by sleep instead would
+    // sit permanently one block from empty and log underruns that say nothing
+    // about the machine's audio.
+    constexpr std::uint64_t kTotal = 96000;  // 2 s at 48 kHz
+    std::uint64_t written = 0;
+    while (written < kTotal) {
+        for (int i = 0; i < kBlock; ++i) {
+            block[static_cast<std::size_t>(i)] = 0.5f * static_cast<float>(std::sin(phase));
+            phase += step;
+            if (phase > kTwoPi) { phase -= kTwoPi; }
+        }
+        const std::size_t took = audio.write(block.data(), block.size());
+        written += took;
+        if (took < block.size()) {
+            // Ring full: rewind the phase for the samples it refused so the
+            // sine stays continuous, then wait for the callback to drain.
+            phase -= step * static_cast<double>(block.size() - took);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    // Let the ring play out: 2 s of audio has been handed over, but the
+    // callback is still consuming the tail.
+    std::this_thread::sleep_for(std::chrono::milliseconds(900));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));  // drain
+    const std::uint64_t under = audio.underruns();
+    audio.close();
+    std::printf("tone-check PASS wrote=%llu underruns=%llu (did you hear a 1 kHz tone?)\n",
+                static_cast<unsigned long long>(written),
+                static_cast<unsigned long long>(under));
+    return 0;
+}
+
 // --- Recorder end-to-end check (hidden flag --record-check) -------------------
 
 // Little-endian field decodes for the WAV probe below (mirrors the recorder's
@@ -549,6 +607,7 @@ int main(int argc, char** argv) {
     bool selftest = false;
     bool soapyCheck = false;
     bool recordCheck = false;
+    bool toneCheck = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
@@ -578,6 +637,10 @@ int main(int argc, char** argv) {
             // ~1 s real-time sleep and disk writes make it a bench tool,
             // not part of the CI-facing CLI surface.
             recordCheck = true;
+        } else if (std::strcmp(argv[i], "--tone-check") == 0) {
+            // Hidden bench diagnostic (see runToneCheck): plays audible sound,
+            // so it is a human-in-the-loop tool, never a ctest entry.
+            toneCheck = true;
         } else {
             std::fprintf(stderr,
                          "cascade: unknown argument '%s' (usage: cascade [--frames N] [--selftest])\n",
@@ -592,6 +655,7 @@ int main(int argc, char** argv) {
     if (selftest) { return runSelftest(); }
     if (soapyCheck) { return runSoapyCheck(); }
     if (recordCheck) { return runRecordCheck(); }
+    if (toneCheck) { return runToneCheck(); }
 
     // Config persistence wiring. Normal interactive runs load/save the
     // user's config at ConfigStore::defaultPath(). Bounded --frames runs

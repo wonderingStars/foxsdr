@@ -157,6 +157,49 @@ constexpr double kPlaceHz[10] = {1e9, 1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e
 // (a device readback cannot exceed it in practice — 9.99 GHz).
 constexpr double kMaxDisplayHz = 9999999999.0;
 
+// Parses a typed frequency into Hz. Accepts what someone actually types at a
+// radio: "100.3", "100.3 MHz", "433920k", "1.003e8", "100,300,000".
+// Separators (space, comma, underscore) are ignored; a k/M/G suffix wins.
+// With NO suffix the value is read as MHz when it is <= kBareMhzCutoff and as
+// Hz above it — 7500 sits above every band a consumer SDR tunes (in MHz) and
+// far below any plausible bare-Hz entry, so neither reading is ambiguous in
+// practice. Returns false on junk, leaving the caller's value untouched.
+constexpr double kBareMhzCutoff = 7500.0;
+
+bool parseFrequencyHz(const char* text, double& outHz) {
+    char clean[48];
+    std::size_t n = 0;
+    for (const char* p = text; *p != '\0' && n + 1 < sizeof(clean); ++p) {
+        if (*p == ' ' || *p == ',' || *p == '_' || *p == '\'') { continue; }
+        clean[n++] = *p;
+    }
+    clean[n] = '\0';
+    if (n == 0) { return false; }
+
+    char* end = nullptr;
+    const double value = std::strtod(clean, &end);
+    if (end == clean || !std::isfinite(value) || value < 0.0) { return false; }
+
+    // Skip a trailing "Hz"/"hz" so "100.3MHz" and "100.3M" agree.
+    while (*end == 'h' || *end == 'H' || *end == 'z' || *end == 'Z') {
+        if ((*end == 'h' || *end == 'H') && end != clean) { break; }
+        ++end;
+    }
+    double scale = 0.0;
+    switch (*end) {
+        case 'k': case 'K': scale = 1.0e3; break;
+        case 'm': case 'M': scale = 1.0e6; break;
+        case 'g': case 'G': scale = 1.0e9; break;
+        case 'h': case 'H': scale = 1.0; break;  // explicit "100300000 Hz"
+        case '\0': scale = (value <= kBareMhzCutoff) ? 1.0e6 : 1.0; break;
+        default: return false;                   // trailing junk: reject
+    }
+    const double hz = value * scale;
+    if (!std::isfinite(hz) || hz < 0.0 || hz > kMaxDisplayHz) { return false; }
+    outHz = hz;
+    return true;
+}
+
 // GLFW reports failures through this callback *before* glfwInit/CreateWindow
 // return their error codes, so printing here is what gives the user an actual
 // reason instead of a bare "init failed".
@@ -519,6 +562,39 @@ void AppWindow::drawFrequencyReadout() {
     cascade::source::IqSource& src = pipeline_.activeSource();
     const double hz = std::max(0.0, src.centerFrequencyHz());
 
+    // --- Typed entry (double-click the readout) -----------------------------
+    // Enter commits, Escape or clicking away cancels. The field is seeded in
+    // MHz because that is how frequencies are spoken; parseFrequencyHz still
+    // accepts Hz, kHz and GHz with an explicit suffix.
+    if (freqEditing_) {
+        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.2f);
+        ImGui::SetNextItemWidth(300.0f);
+        if (freqEditFocus_) {
+            ImGui::SetKeyboardFocusHere();
+            freqEditFocus_ = false;
+        }
+        const bool commit = ImGui::InputText(
+            "##freq_edit", freqEditBuf_, sizeof(freqEditBuf_),
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll |
+                ImGuiInputTextFlags_CharsNoBlank);
+        const bool active = ImGui::IsItemActive();
+        ImGui::PopFont();
+
+        if (commit) {
+            double typed = 0.0;
+            if (parseFrequencyHz(freqEditBuf_, typed)) {
+                tuneAbsoluteHz(typed);
+                sourceError_.clear();
+            } else {
+                sourceError_ = std::string("could not read frequency \"") + freqEditBuf_ + "\"";
+            }
+            freqEditing_ = false;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (!active && !freqEditFocus_)) {
+            freqEditing_ = false;  // cancelled: the readback never moved
+        }
+        return;
+    }
+
     char digits[16];
     std::snprintf(digits, sizeof(digits), "%010llu",
                   static_cast<unsigned long long>(
@@ -555,6 +631,15 @@ void AppWindow::drawFrequencyReadout() {
                 // Failure (e.g. a tune the driver refuses) needs no handling
                 // here: the display follows the readback, which won't move.
                 src.setCenterFrequencyHz(next);
+            }
+            ImGui::SetTooltip("Scroll a digit to tune  |  double-click to type a frequency");
+            // Double-click (not single) opens the editor: a single click is
+            // what you do on the way to scrolling a digit, and hijacking it
+            // would make wheel tuning feel like it swallowed your click.
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                std::snprintf(freqEditBuf_, sizeof(freqEditBuf_), "%.6f", hz / 1.0e6);
+                freqEditing_ = true;
+                freqEditFocus_ = true;
             }
         }
         if (i != 9) { ImGui::SameLine(0.0f, 0.0f); }
