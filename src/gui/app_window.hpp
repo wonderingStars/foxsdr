@@ -7,7 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "core/config.hpp"
 #include "core/pipeline.hpp"
+#include "gui/freq_scale.hpp"
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
 #include "source/soapy_source.hpp"
@@ -26,7 +28,16 @@ class AppWindow {
 public:
     // Constructs the render pipeline with the demo SigGen signal already
     // configured, so the first Play click shows spectrum content immediately.
-    AppWindow();
+    //
+    // configPath: where the persistent AppConfig is loaded from at
+    // construction and saved to (debounced during run(), and on clean exit).
+    // An EMPTY path disables persistence entirely — nothing is read or
+    // written — which is the hermetic mode the --frames/--selftest CI
+    // contract requires, and the default so a bare AppWindow can never touch
+    // the user's real config by accident. announceConfig prints the one-line
+    // "config applied: ..." diagnostic to stdout after the startup load (the
+    // CASCADE_CONFIG_TEST hook; normal runs keep stdout byte-identical).
+    explicit AppWindow(std::string configPath = {}, bool announceConfig = false);
 
     // Out-of-line: the unique_ptr members delete forward-declared types.
     ~AppWindow();
@@ -51,6 +62,33 @@ private:
     // (opens immediately; on failure the combo selection is left unchanged).
     void selectSource(int idx);
     void drawCenterPanels();
+    // The slim tick strip between the spectrum and the waterfall. tickHz /
+    // labels / count come from FreqScale::ticks, computed once per frame in
+    // drawCenterPanels and shared with the spectrum's vertical gridlines so
+    // strip and grid can never disagree.
+    void drawFreqAxis(float width, const double* tickHz, const char (*labels)[16],
+                      int count);
+
+    // --- Config persistence (P5) ---------------------------------------------
+    // Pushes every AppConfig field into the pipeline/panel mirrors; source
+    // restore failures (file gone, device unplugged) fall back to the
+    // generator silently except for lastError surfaced via sourceError_.
+    void applyConfig(const cascade::core::AppConfig& cfg);
+    cascade::core::AppConfig currentConfig();  // snapshot of the live state
+    void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
+    void saveConfigNow();               // clean-exit save (unconditional)
+
+    // Opens a Soapy device by kwargs, pushes the requested rate + default
+    // gains, and fills the Soapy panel mirrors. Null (with sourceError_ set)
+    // when the open fails. Shared by selectSource and the config restore so
+    // the two open paths cannot drift apart.
+    std::unique_ptr<cascade::source::SoapySource> openSoapy(const std::string& args,
+                                                            double requestRateHz);
+
+    // Makes the DSP chain follow activeSource().sampleRateHz() (rate-follow).
+    // A pipeline refusal — fractional channel rate — keeps the old chain and
+    // surfaces the reason in sourceError_.
+    void followInputRate();
 
     // DSP pipeline plus the two live display widgets it feeds. The views are
     // held by unique_ptr for two reasons: the forward declarations above, and
@@ -113,6 +151,37 @@ private:
     std::vector<float> soapyGainsDb_;          // slider mirrors, one per name
     bool soapyAgcSupported_ = false;
     bool soapyAgc_ = false;
+
+    // --- Frequency scale + view interaction state (P5) -----------------------
+    // ONE scale owns the x <-> Hz <-> bin mapping for both center panels, fed
+    // every frame from the active source's center readback and the pipeline's
+    // DSP input rate, so spectrum, waterfall, axis strip and VFO overlay can
+    // never disagree about what frequency a pixel column shows.
+    FreqScale scale_;
+    // Last REQUESTED VFO bandwidth (Hz): combo presets and band-edge drags
+    // both land here, and this is what the overlay and the config store use.
+    // (The combo keeps showing its last preset after an edge drag — the combo
+    // is a preset picker, not a readback; the overlay is the truth.)
+    double vfoBandwidthHz_ = 150000.0;
+    enum class VfoDrag { None, Center, EdgeLow, EdgeHigh };
+    VfoDrag vfoDrag_ = VfoDrag::None;
+    // mouseHz - band center at grab time, so a center drag never makes the
+    // band jump to put its center under the cursor.
+    double vfoGrabDeltaHz_ = 0.0;
+    bool wfPanning_ = false;  // horizontal waterfall click-drag in progress
+
+    // --- Config persistence state (P5) ----------------------------------------
+    std::string configPath_;       // empty = persistence disabled (hermetic)
+    bool configAnnounce_ = false;  // print "config applied: ..." (test hook)
+    // The ACTIVE source's kind as the config store spells it. Tracked at each
+    // successful switch because the pipeline does not expose source identity.
+    std::string sourceKind_ = "siggen";  // "siggen" | "file" | "soapy"
+    std::string iqOpenPath_;  // last successfully opened IQ file (persisted;
+                              // iqPath_ is just the edit buffer)
+    cascade::core::AppConfig savedCfg_;    // what the config file holds now
+    cascade::core::AppConfig pendingCfg_;  // debounce comparator
+    double lastChangeTimeS_ = -1.0;  // glfwGetTime() of the last observed
+                                     // change; < 0 = nothing pending
 };
 
 }  // namespace cascade::gui

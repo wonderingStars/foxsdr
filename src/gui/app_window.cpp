@@ -70,6 +70,84 @@ constexpr float kSoapyGainMinDb = 0.0f;
 constexpr float kSoapyGainMaxDb = 60.0f;
 constexpr float kSoapyGainDefaultDb = 30.0f;
 
+// Mode tables, shared by the Radio section, the band-snap logic and the
+// config store (the mode is persisted by NAME so a saved file survives any
+// future enum reorder). Button order is the SDR++ parity layout; the enum
+// order differs (LSB before CW), so the mapping is by name, never by index.
+constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
+                                       "USB", "CW",  "LSB", "RAW"};
+constexpr cascade::dsp::DemodMode kModeMap[8] = {
+    cascade::dsp::DemodMode::NFM, cascade::dsp::DemodMode::WFM,
+    cascade::dsp::DemodMode::AM,  cascade::dsp::DemodMode::DSB,
+    cascade::dsp::DemodMode::USB, cascade::dsp::DemodMode::CW,
+    cascade::dsp::DemodMode::LSB, cascade::dsp::DemodMode::RAW};
+// Bandwidth options offered in the combo, widest first.
+constexpr const char* kBwLabels[6] = {"200k", "150k", "12.5k", "10k", "6k", "3k"};
+constexpr double kBwHz[6] = {200000.0, 150000.0, 12500.0, 10000.0, 6000.0, 3000.0};
+// Per-mode default bandwidth (index into kBwHz), applied when a mode button
+// is clicked; the combo still allows any override. Rationale: WFM broadcast
+// channel 150k; NFM two-way channel 12.5k; AM/DSB broadcast channel ~10k
+// (both sidebands); SSB/CW voice/keying fits in 3k; RAW passes the full
+// 200k channel for diagnostics.
+constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
+
+// Band-snap intervals for dragging the VFO CENTER on the spectrum, indexed
+// in kModeNames order. The snap applies to the ABSOLUTE tuned frequency
+// (source center + VFO offset), not the raw offset, so snapped stations land
+// on real channel rasters; holding Shift bypasses it (free tuning).
+//
+//   mode | snap     | rationale
+//   -----+----------+------------------------------------------
+//   NFM  | 12.5 kHz | narrowband two-way channel raster
+//   WFM  | 100 kHz  | broadcast FM channel raster
+//   AM   | 9 kHz    | LW/MW broadcast raster
+//   DSB  | 1 kHz    | free-form carrier work: round numbers
+//   USB  | 1 kHz    | ham SSB convention
+//   CW   | 1 kHz    | ham CW convention
+//   LSB  | 1 kHz    | ham SSB convention
+//   RAW  | 1 kHz    | diagnostics; snap kept for predictable steps
+constexpr double kModeSnapHz[8] = {12500.0, 100000.0, 9000.0, 1000.0,
+                                   1000.0,  1000.0,   1000.0, 1000.0};
+
+// Height of the frequency tick strip. Placement decision (the spec left it
+// open): BETWEEN the spectrum and the waterfall, so one strip labels both
+// panels and stays clear of the spectrum's dB labels in the top-left corner.
+constexpr float kAxisHeight = 18.0f;
+
+// Tick capacity. FreqScale spaces ticks >= 80 px apart, so 128 slots cover a
+// panel over 10K pixels wide before the HIGH end of the axis would truncate.
+constexpr int kMaxTicks = 128;
+
+// Wheel zoom factor per notch, applied as factor^notches so fractional
+// touchpad deltas zoom proportionally. Zoom is always about the cursor.
+constexpr double kZoomPerNotch = 1.3;
+
+// VFO band-edge grab tolerance, pixels either side of the edge line.
+constexpr float kVfoEdgeTolPx = 6.0f;
+
+// VFO bandwidth clamp for edge drags and config restore:
+// [3 kHz, 90% of the channel rate]. The lower bound keeps the band visible,
+// grabbable and audible; the upper bound leaves the Vfo's decimating filter
+// a transition band instead of demanding a brick wall at Nyquist.
+constexpr double kVfoBwMinHz = 3000.0;
+constexpr double kVfoBwMaxChanFrac = 0.9;
+
+// Debounce for runtime config saves: a crash loses at most ~2 s of changes,
+// while an in-progress drag never spams the disk (the timer restarts on
+// every observed change).
+constexpr double kConfigDebounceS = 2.0;
+
+// Panel-furniture colors. kPanelBackground matches SpectrumView's background
+// so the axis strip reads as part of the same instrument face; the vertical
+// tick gridlines are fainter than the spectrum's 10 dB grid (alpha 18 vs 26)
+// so the two grids stay visually separable; the waterfall marker reuses the
+// spectrum overlay's warm center-line color.
+constexpr ImU32 kPanelBackground = IM_COL32(8, 10, 14, 255);
+constexpr ImU32 kAxisTickColor = IM_COL32(255, 255, 255, 140);
+constexpr ImU32 kAxisLabelColor = IM_COL32(255, 255, 255, 110);
+constexpr ImU32 kTickGridColor = IM_COL32(255, 255, 255, 18);
+constexpr ImU32 kWfMarkerColor = IM_COL32(255, 170, 60, 200);
+
 // The frequency readout's 10 digit places, most significant first
 // (digit i steps by kPlaceHz[i] on a wheel tick over it).
 constexpr double kPlaceHz[10] = {1e9, 1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e0};
@@ -86,13 +164,38 @@ void glfwErrorCallback(int code, const char* description) {
                  description ? description : "(no description)");
 }
 
+// Field-wise AppConfig comparison for the save debounce. Exact float
+// compares are correct here: both sides come from the same currentConfig()
+// code path, so any difference is a real user-visible change, never noise.
+bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
+    return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
+           a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
+           a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
+           a.squelchDb == b.squelchDb && a.volume == b.volume &&
+           a.dbMin == b.dbMin && a.dbMax == b.dbMax &&
+           a.splitRatio == b.splitRatio && a.vfoOffsetHz == b.vfoOffsetHz &&
+           a.sampleRateHz == b.sampleRateHz;
+}
+
+// Index of the value in arr[0..n) closest to x (ties resolve low). Used to
+// point preset combos at whatever a config file or device readback holds.
+int nearestIndex(const double* arr, int n, double x) {
+    int best = 0;
+    for (int i = 1; i < n; ++i) {
+        if (std::fabs(arr[i] - x) < std::fabs(arr[best] - x)) { best = i; }
+    }
+    return best;
+}
+
 }  // namespace
 
-AppWindow::AppWindow()
+AppWindow::AppWindow(std::string configPath, bool announceConfig)
     : pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
                                                 /*audioEnabled=*/true}),
       spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)) {
+    configPath_ = std::move(configPath);
+    configAnnounce_ = announceConfig;
     // Demo signal until real sources land (P4): two tones at distinct offsets
     // and levels over a noise floor, so both display axes are visibly
     // exercised — frequency (two peaks left and right of center) and
@@ -117,6 +220,38 @@ AppWindow::AppWindow()
         if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
     }
     if (deviceIndex_ < 0 && !devices_.empty()) { deviceIndex_ = 0; }
+
+    // --- Config restore (P5) ------------------------------------------------
+    // Load semantics per ConfigStore: missing file -> defaults + true; a
+    // corrupt/unreadable file -> defaults + false. On false the construction
+    // defaults above are KEPT (nothing applied) and the reason goes to
+    // stderr plus, under the test hook, the diagnostic line.
+    if (!configPath_.empty()) {
+        cascade::core::AppConfig cfg;
+        std::string err;
+        const bool loaded = cascade::core::ConfigStore::load(configPath_, cfg, err);
+        if (loaded) {
+            applyConfig(cfg);
+        } else {
+            std::fprintf(stderr, "cascade: %s\n", err.c_str());
+        }
+        if (configAnnounce_) {
+            // ONE diagnostic line, printed only under CASCADE_CONFIG_TEST
+            // (normal runs stay byte-identical). Values are READBACK — the
+            // demod mode the pipeline mirrors actually hold and the center
+            // the active source reports — not an echo of the file.
+            if (loaded) {
+                std::printf("config applied: mode=%s center=%.0f\n",
+                            kModeNames[modeIndex_],
+                            pipeline_.activeSource().centerFrequencyHz());
+            } else {
+                std::printf("config applied: defaults (%s)\n", err.c_str());
+            }
+        }
+        // Baseline for the debounce: what the file holds (or would hold).
+        savedCfg_ = currentConfig();
+        pendingCfg_ = savedCfg_;
+    }
 }
 
 AppWindow::~AppWindow() = default;
@@ -183,6 +318,11 @@ int AppWindow::run(int frames) {
 
         drawUi();
 
+        // Debounced runtime persistence: the config file follows the session
+        // ~2 s after the last change, so a crash loses almost nothing.
+        // Hermetic runs (empty configPath_) never touch the disk.
+        if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
+
         ImGui::Render();
         int fbWidth = 0;
         int fbHeight = 0;
@@ -194,6 +334,12 @@ int AppWindow::run(int frames) {
         glfwSwapBuffers(window);
         ++rendered;
     }
+
+    // Clean-exit save, unconditional: cheap, and it guarantees the on-disk
+    // config matches the final session state even when the debounce never
+    // fired (e.g. a change made less than 2 s before closing the window).
+    // Runs before pipeline_.stop() so the snapshot reads live state.
+    if (!configPath_.empty()) { saveConfigNow(); }
 
     // Closing the window while receiving must not leave DSP threads pacing a
     // dead display; stop before teardown so the join happens while the object
@@ -343,24 +489,8 @@ void AppWindow::drawMenuColumn() {
                       ImGuiChildFlags_None);
     drawSourceSection();
     if (ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static const char* kModes[] = {"NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"};
-        // Button order is the SDR++ parity layout; the enum order differs
-        // (LSB before CW), so the mapping is by name, never by index.
-        static constexpr cascade::dsp::DemodMode kModeMap[] = {
-            cascade::dsp::DemodMode::NFM, cascade::dsp::DemodMode::WFM,
-            cascade::dsp::DemodMode::AM,  cascade::dsp::DemodMode::DSB,
-            cascade::dsp::DemodMode::USB, cascade::dsp::DemodMode::CW,
-            cascade::dsp::DemodMode::LSB, cascade::dsp::DemodMode::RAW};
-        // Bandwidth options offered in the combo, widest first.
-        static const char* kBwLabels[] = {"200k", "150k", "12.5k", "10k", "6k", "3k"};
-        static constexpr double kBwHz[] = {200000.0, 150000.0, 12500.0,
-                                           10000.0,  6000.0,   3000.0};
-        // Per-mode default bandwidth (index into kBwHz), applied when a mode
-        // button is clicked; the combo below still allows any override.
-        // Rationale: WFM broadcast channel 150k; NFM two-way channel 12.5k;
-        // AM/DSB broadcast channel ~10k (both sidebands); SSB/CW voice/keying
-        // fits in 3k; RAW passes the full 200k channel for diagnostics.
-        static constexpr int kModeDefaultBw[] = {2, 1, 3, 3, 5, 5, 5, 0};
+        // Mode/bandwidth tables live at namespace scope (kModeNames &co):
+        // the band-snap logic and the config store share them.
         constexpr int kColumns = 4;
         const float cellWidth =
             (ImGui::GetContentRegionAvail().x -
@@ -373,11 +503,12 @@ void AppWindow::drawMenuColumn() {
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             }
-            if (ImGui::Button(kModes[i], ImVec2(cellWidth, 0.0f))) {
+            if (ImGui::Button(kModeNames[i], ImVec2(cellWidth, 0.0f))) {
                 modeIndex_ = i;
                 pipeline_.setDemodMode(kModeMap[i]);
                 bandwidthIndex_ = kModeDefaultBw[i];
-                pipeline_.setVfoBandwidthHz(kBwHz[bandwidthIndex_]);
+                vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
+                pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
             }
             if (selected) { ImGui::PopStyleColor(); }
         }
@@ -390,7 +521,8 @@ void AppWindow::drawMenuColumn() {
         }
         if (ImGui::Combo("Bandwidth", &bandwidthIndex_, kBwLabels,
                          static_cast<int>(sizeof(kBwLabels) / sizeof(kBwLabels[0])))) {
-            pipeline_.setVfoBandwidthHz(kBwHz[bandwidthIndex_]);
+            vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
+            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
         }
         if (ImGui::SliderFloat("Squelch", &squelchDb_, -120.0f, 0.0f, "%.0f dB")) {
             pipeline_.setSquelchDb(squelchDb_);
@@ -452,7 +584,10 @@ void AppWindow::drawMenuColumn() {
     ImGui::Separator();
     cascade::source::IqSource& src = pipeline_.activeSource();
     ImGui::TextUnformatted(src.name());
-    ImGui::Text("%.4g MS/s | underruns %llu", src.sampleRateHz() / 1.0e6,
+    // Source rate | DSP channel rate (the Vfo's output rate the demodulator
+    // runs at — this is what makes rate-follow visible) | buffer health.
+    ImGui::Text("%.4g MS/s | ch %.4g kHz | underruns %llu",
+                src.sampleRateHz() / 1.0e6, pipeline_.channelRateHz() / 1.0e3,
                 static_cast<unsigned long long>(pipeline_.audio().underruns()));
 }
 
@@ -520,6 +655,9 @@ void AppWindow::drawSourceSection() {
                 soapyArgs_.clear();
                 sourceError_.clear();
                 pipeline_.setSource(std::move(file));
+                sourceKind_ = "file";
+                iqOpenPath_ = iqPath_;
+                followInputRate();  // DSP chain + frequency axis track the file's rate
             }
         }
     }
@@ -532,6 +670,11 @@ void AppWindow::drawSourceSection() {
         if (ImGui::Combo("Rate", &soapyRateIndex_, kSoapyRateLabels, kSoapyRateCount)) {
             if (!soapy_->setSampleRateHz(kSoapyRateHz[soapyRateIndex_])) {
                 sourceError_ = soapy_->lastError();
+            } else {
+                // Rate-follow (P5): rebuild the DSP chain for the ACTUAL
+                // device readback so demod/audio and the frequency axis all
+                // track the hardware, not the request.
+                followInputRate();
             }
         }
         // Actual readback beside the request: drivers coerce, the DSP chain
@@ -583,7 +726,9 @@ void AppWindow::selectSource(int idx) {
         soapy_ = nullptr;  // before setSource destroys a live Soapy source
         soapyArgs_.clear();
         pipeline_.setSource(nullptr);
+        sourceKind_ = "siggen";
         sourceSel_ = 0;
+        followInputRate();  // back to the generator's fixed 2 MS/s
         return;
     }
     if (idx == 1) {
@@ -596,19 +741,36 @@ void AppWindow::selectSource(int idx) {
     const std::size_t d = static_cast<std::size_t>(idx - 2);
     if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
 
+    // Default the device to the DSP chain's design rate; openSoapy also
+    // primes gains/AGC and the panel mirrors. On failure the revert-the-
+    // combo contract holds: sourceSel_ was never changed, so the combo stays
+    // where it was and the reason lands in red below (sourceError_).
+    auto dev = openSoapy(soapyDevices_[d].args, kSoapyRateHz[kSoapyRateDefaultIndex]);
+    if (!dev) { return; }
+
+    soapy_ = dev.get();
+    soapyArgs_ = soapyDevices_[d].args;
+    pipeline_.setSource(std::move(dev));
+    sourceKind_ = "soapy";
+    sourceSel_ = idx;
+    followInputRate();  // DSP chain follows the device's actual readback
+}
+
+std::unique_ptr<cascade::source::SoapySource> AppWindow::openSoapy(
+    const std::string& args, double requestRateHz) {
     auto dev = std::make_unique<cascade::source::SoapySource>();
-    if (!dev->open(soapyDevices_[d].args)) {
-        // Revert-the-combo contract: sourceSel_ was never changed, so the
-        // combo stays where it was; the reason lands in red below.
+    if (!dev->open(args)) {
         sourceError_ = dev->lastError();
-        return;
+        return nullptr;
     }
-    // Default the device to the DSP chain's design rate. A refusal is not
-    // fatal (the panel shows the actual readback either way) but is surfaced.
-    if (!dev->setSampleRateHz(kSoapyRateHz[kSoapyRateDefaultIndex])) {
+    // A rate refusal is not fatal (the panel shows the actual readback
+    // either way) but is surfaced.
+    if (!dev->setSampleRateHz(requestRateHz)) {
         sourceError_ = dev->lastError();
     }
-    soapyRateIndex_ = kSoapyRateDefaultIndex;
+    // Point the Rate combo at the preset nearest the request (exact for the
+    // Source-menu path, best-effort for an arbitrary rate from a config).
+    soapyRateIndex_ = nearestIndex(kSoapyRateHz, kSoapyRateCount, requestRateHz);
 
     // AGC probe doubling as initialization: explicitly select manual gain
     // mode (matching the unchecked box). False means the driver has no gain
@@ -623,11 +785,22 @@ void AppWindow::selectSource(int idx) {
     for (const std::string& g : soapyGainNames_) {
         dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
     }
+    return dev;
+}
 
-    soapy_ = dev.get();
-    soapyArgs_ = soapyDevices_[d].args;
-    pipeline_.setSource(std::move(dev));
-    sourceSel_ = idx;
+void AppWindow::followInputRate() {
+    const double rate = pipeline_.activeSource().sampleRateHz();
+    if (!(rate > 0.0)) { return; }  // never-opened source; nothing to follow
+    if (!pipeline_.setInputRateHz(rate)) {
+        // The chain kept its old rate (fractional channel rate, or out of
+        // the supported range). The display span then reflects the OLD rate,
+        // which is exactly what the DSP is still doing — surface why.
+        char buf[96];
+        std::snprintf(buf, sizeof(buf),
+                      "DSP rate-follow refused %.0f S/s; chain stays at %.0f",
+                      rate, pipeline_.inputRateHz());
+        sourceError_ = buf;
+    }
 }
 
 void AppWindow::drawCenterPanels() {
@@ -642,23 +815,140 @@ void AppWindow::drawCenterPanels() {
                             static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
     }
 
+    // The frequency scale follows the tuned center (active source readback)
+    // and the DSP input rate every frame; setSpan preserves the user's zoom
+    // window whenever it still fits the new baseband, so a small retune or a
+    // rate change does not silently throw the view away.
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    scale_.setSpan(src.centerFrequencyHz(), pipeline_.inputRateHz());
+
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float splitterThickness = 6.0f;
-    const float usable = avail.y - splitterThickness;
+    const float usable = avail.y - splitterThickness - kAxisHeight;
     // A squeezed window can drive the region to zero; drawing into negative
     // sizes asserts inside ImGui, so just skip the panels that frame.
     if (usable < 40.0f || avail.x < 40.0f) { return; }
 
+    const float width = avail.x;
     const float spectrumHeight = splitRatio_ * usable;
+    const float waterfallHeight = usable - spectrumHeight;
+
+    // Visible slice of the fftshifted spectrum, shared by BOTH panels so
+    // they can never disagree about the zoom window.
+    double firstBin = 0.0;
+    double lastBin = 0.0;
+    scale_.visibleBinRange(static_cast<int>(kFftSize), firstBin, lastBin);
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    // --- Spectrum -----------------------------------------------------------
+    const ImVec2 specPos = ImGui::GetCursorScreenPos();
     // Before the first frame lastFrame_.dbBins is empty; SpectrumView renders
     // the background + grid for null bins, which is the wanted idle look.
     const float* bins = lastFrame_.dbBins.empty() ? nullptr : lastFrame_.dbBins.data();
-    spectrum_->draw(bins, static_cast<int>(lastFrame_.dbBins.size()), avail.x, spectrumHeight);
+    spectrum_->drawBinRange(bins, static_cast<int>(lastFrame_.dbBins.size()),
+                            firstBin, lastBin, width, spectrumHeight);
+    const bool specHovered = ImGui::IsItemHovered();
+
+    // Axis ticks, computed once and shared by the spectrum's vertical
+    // gridlines and the tick strip below.
+    double tickHz[kMaxTicks];
+    char tickLabels[kMaxTicks][16];
+    const int tickCount = scale_.ticks(static_cast<double>(width), tickHz,
+                                       tickLabels, kMaxTicks);
+    for (int i = 0; i < tickCount; ++i) {
+        // ticks() only returns in-view frequencies, so x stays in-panel.
+        const float x =
+            specPos.x + static_cast<float>(scale_.hzToX(tickHz[i])) * width;
+        drawList->AddLine(ImVec2(x, specPos.y), ImVec2(x, specPos.y + spectrumHeight),
+                          kTickGridColor);
+    }
+
+    // --- VFO band: interaction first, then the overlay ----------------------
+    // Band edges in absolute Hz -> panel-width fractions via the shared
+    // scale. vfoBandwidthHz_ is the REQUESTED bandwidth (the Vfo clamps its
+    // filter internally; the overlay shows what the user asked for).
+    double bandCenterAbs = src.centerFrequencyHz() + pipeline_.vfoOffsetHz();
+    SpectrumView::VfoBand band;
+    band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * vfoBandwidthHz_);
+    band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * vfoBandwidthHz_);
+    band.dragging = (vfoDrag_ != VfoDrag::None);
+
+    const double mouseFrac =
+        static_cast<double>(io.MousePos.x - specPos.x) / static_cast<double>(width);
+    if (vfoDrag_ == VfoDrag::None && specHovered) {
+        const auto hit = SpectrumView::hitTest(
+            mouseFrac, band, static_cast<double>(kVfoEdgeTolPx) / width);
+        if (hit == SpectrumView::VfoHit::EdgeLow ||
+            hit == SpectrumView::VfoHit::EdgeHigh) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        } else if (hit == SpectrumView::VfoHit::Center) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        }
+        if (ImGui::IsMouseClicked(0) && hit != SpectrumView::VfoHit::None) {
+            vfoDrag_ = (hit == SpectrumView::VfoHit::Center)  ? VfoDrag::Center
+                       : (hit == SpectrumView::VfoHit::EdgeLow) ? VfoDrag::EdgeLow
+                                                                : VfoDrag::EdgeHigh;
+            vfoGrabDeltaHz_ = scale_.xToHz(mouseFrac) - bandCenterAbs;
+        } else if (ImGui::IsMouseDoubleClicked(0) &&
+                   hit == SpectrumView::VfoHit::None) {
+            scale_.resetView();  // double-click on empty spectrum: unzoom
+        }
+    }
+    if (vfoDrag_ != VfoDrag::None) {
+        if (!ImGui::IsMouseDown(0)) {
+            vfoDrag_ = VfoDrag::None;
+        } else {
+            // xToHz is deliberately unclamped, so dragging past the panel
+            // edge keeps working; the offset/bandwidth clamps below are what
+            // bound the actual tuning.
+            const double mouseHz = scale_.xToHz(mouseFrac);
+            if (vfoDrag_ == VfoDrag::Center) {
+                double wantAbs = mouseHz - vfoGrabDeltaHz_;
+                if (!io.KeyShift) {
+                    // Snap the ABSOLUTE tuned frequency to the mode's raster
+                    // (kModeSnapHz table above); Shift = free tuning.
+                    const double snap = kModeSnapHz[modeIndex_];
+                    wantAbs = std::round(wantAbs / snap) * snap;
+                }
+                double off = wantAbs - src.centerFrequencyHz();
+                // Keep the whole band inside the baseband +/- inputRate/2.
+                // (After this clamp an extreme position may sit off-raster;
+                // the raster loses to the hard band-inside-span rule.)
+                const double lim =
+                    0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+                off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
+                pipeline_.setVfoOffsetHz(off);
+                vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            } else {
+                // Either edge adjusts the bandwidth SYMMETRICALLY about the
+                // band center (the VFO filter is symmetric by construction).
+                double bw = 2.0 * std::fabs(mouseHz - bandCenterAbs);
+                const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+                bw = std::max(kVfoBwMinHz, std::min(bw, bwHi));
+                vfoBandwidthHz_ = bw;
+                pipeline_.setVfoBandwidthHz(bw);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            }
+            // Recompute the band from post-drag state so the overlay tracks
+            // the cursor within the same frame instead of lagging one behind.
+            bandCenterAbs = src.centerFrequencyHz() + pipeline_.vfoOffsetHz();
+            band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * vfoBandwidthHz_);
+            band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * vfoBandwidthHz_);
+            band.dragging = true;
+        }
+    }
+    spectrum_->drawVfoOverlay(band, width, spectrumHeight);
+
+    // --- Frequency tick strip ------------------------------------------------
+    drawFreqAxis(width, tickHz, tickLabels, tickCount);
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
     // the user's proportions.
-    ImGui::InvisibleButton("##vsplitter", ImVec2(avail.x, splitterThickness));
+    ImGui::InvisibleButton("##vsplitter", ImVec2(width, splitterThickness));
     if (ImGui::IsItemActive()) {
         splitRatio_ = std::clamp(splitRatio_ + ImGui::GetIO().MouseDelta.y / usable,
                                  0.1f, 0.9f);
@@ -672,10 +962,207 @@ void AppWindow::drawCenterPanels() {
     } else if (ImGui::IsItemHovered()) {
         gripColor = ImGuiCol_SeparatorHovered;
     }
-    ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                              ImGui::GetColorU32(gripColor));
+    drawList->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                            ImGui::GetColorU32(gripColor));
 
-    waterfall_->draw(avail.x, usable - spectrumHeight);
+    // --- Waterfall -----------------------------------------------------------
+    // The u-window derives from the same visible bin range as the spectrum,
+    // in the waterfall's bin-center convention: texture column b covers
+    // u in [b/W, (b+1)/W] with its center at (b+0.5)/W, while the spectrum
+    // puts bin b's vertex AT the panel x for (b - first)/(last - first) —
+    // so mapping bin centers to the panel edges keeps a signal's trace peak
+    // and its waterfall stripe on the same pixel column at any zoom.
+    const ImVec2 wfPos = ImGui::GetCursorScreenPos();
+    const double u0 = (firstBin + 0.5) / static_cast<double>(kFftSize);
+    const double u1 = (lastBin + 0.5) / static_cast<double>(kFftSize);
+    waterfall_->draw(width, waterfallHeight, u0, u1);
+    const bool wfHovered = ImGui::IsItemHovered();
+
+    // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
+    // line), culled when the tuned frequency is scrolled out of view.
+    const double markFrac = scale_.hzToX(bandCenterAbs);
+    if (markFrac >= 0.0 && markFrac <= 1.0) {
+        const float x = wfPos.x + static_cast<float>(markFrac) * width;
+        drawList->AddLine(ImVec2(x, wfPos.y), ImVec2(x, wfPos.y + waterfallHeight),
+                          kWfMarkerColor);
+    }
+
+    // Horizontal click-drag on the waterfall pans the view: the content
+    // follows the cursor, so the window shifts OPPOSITE the mouse delta.
+    // Tracked manually (not via item-active state) because the waterfall's
+    // layout item is a Dummy, which never becomes the active item.
+    if (wfPanning_) {
+        if (!ImGui::IsMouseDown(0)) {
+            wfPanning_ = false;
+        } else if (io.MouseDelta.x != 0.0f) {
+            scale_.pan(-static_cast<double>(io.MouseDelta.x) / width);
+        }
+    } else if (wfHovered && ImGui::IsMouseClicked(0)) {
+        wfPanning_ = true;
+    }
+    if (wfHovered && ImGui::IsMouseDoubleClicked(0)) { scale_.resetView(); }
+
+    // Wheel over EITHER panel zooms about the cursor (1.3x per notch; the
+    // zoom floor and full-span clamp live in FreqScale). Both panels share
+    // the same x extent, so the spectrum-relative fraction serves both.
+    if ((specHovered || wfHovered) && io.MouseWheel != 0.0f) {
+        scale_.zoomAt(mouseFrac,
+                      std::pow(kZoomPerNotch, static_cast<double>(io.MouseWheel)));
+    }
+}
+
+void AppWindow::drawFreqAxis(float width, const double* tickHz,
+                             const char (*labels)[16], int count) {
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const ImVec2 p1(p0.x + width, p0.y + kAxisHeight);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(p0, p1, kPanelBackground);
+    drawList->PushClipRect(p0, p1, true);
+    for (int i = 0; i < count; ++i) {
+        const float x = p0.x + static_cast<float>(scale_.hzToX(tickHz[i])) * width;
+        drawList->AddLine(ImVec2(x, p0.y), ImVec2(x, p0.y + 4.0f), kAxisTickColor);
+        // Label centered under its tick, shifted (not clipped) at the strip
+        // ends so the first/last label stays fully readable.
+        const ImVec2 sz = ImGui::CalcTextSize(labels[i]);
+        float tx = x - 0.5f * sz.x;
+        if (tx < p0.x + 2.0f) { tx = p0.x + 2.0f; }
+        if (tx + sz.x > p1.x - 2.0f) { tx = p1.x - 2.0f - sz.x; }
+        drawList->AddText(ImVec2(tx, p0.y + 4.0f), kAxisLabelColor, labels[i]);
+    }
+    drawList->PopClipRect();
+    ImGui::Dummy(ImVec2(width, kAxisHeight));
+}
+
+// --- Config persistence (P5) -------------------------------------------------
+
+void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
+    // Panel mirrors + always-safe DSP settings first (none of these can
+    // fail; load() already range-sanitized volume/split/db*).
+    volume_ = cfg.volume;
+    pipeline_.audio().setVolume(volume_);
+    dbMin_ = cfg.dbMin;
+    dbMax_ = cfg.dbMax;
+    spectrum_->setRange(dbMin_, dbMax_);
+    splitRatio_ = cfg.splitRatio;
+    squelchDb_ = cfg.squelchDb;
+    pipeline_.setSquelchDb(squelchDb_);
+    for (int i = 0; i < 8; ++i) {
+        if (cfg.mode == kModeNames[i]) {
+            modeIndex_ = i;
+            pipeline_.setDemodMode(kModeMap[i]);
+            break;  // an unknown mode name keeps the construction default
+        }
+    }
+
+    // Source restore. The generator is always safe (it is already active);
+    // a file is restored only if the path still opens; a Soapy device only
+    // if its args re-open. Any failure falls back to the generator silently
+    // except for lastError shown once in the Source section (sourceError_).
+    if (cfg.sourceKind == "file") {
+        auto file = std::make_unique<cascade::source::IqFileSource>();
+        if (file->open(cfg.iqFilePath)) {
+            file->setCenterFrequencyHz(cfg.centerHz);
+            std::snprintf(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
+            iqOpenPath_ = cfg.iqFilePath;
+            pipeline_.setSource(std::move(file));
+            sourceKind_ = "file";
+            sourceSel_ = 1;
+            followInputRate();
+        } else {
+            sourceError_ = file->lastError();
+        }
+    } else if (cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) {
+        auto dev = openSoapy(cfg.soapyArgs, cfg.sampleRateHz);
+        if (dev) {
+            dev->setCenterFrequencyHz(cfg.centerHz);
+            soapy_ = dev.get();
+            soapyArgs_ = cfg.soapyArgs;
+            pipeline_.setSource(std::move(dev));
+            sourceKind_ = "soapy";
+            // Point the combo at the restored device if this machine still
+            // enumerates it; -1 otherwise (preview falls back to live name).
+            sourceSel_ = -1;
+            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                if (soapyDevices_[i].args == cfg.soapyArgs) {
+                    sourceSel_ = 2 + static_cast<int>(i);
+                }
+            }
+            followInputRate();
+        }
+        // openSoapy already set sourceError_ on failure.
+    }
+    if (sourceKind_ == "siggen") {
+        // Generator kept (or fallen back to): carry the saved center so the
+        // readout matches the last session. Nominal-center set cannot fail.
+        pipeline_.activeSource().setCenterFrequencyHz(cfg.centerHz);
+    }
+
+    // VFO after the source/rate restore so the clamps use the REAL rates the
+    // chain ended up with, not whatever the file claimed.
+    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(cfg.bandwidthHz, bwHi));
+    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);  // combo display
+    double off = cfg.vfoOffsetHz;
+    const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+    off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
+    pipeline_.setVfoOffsetHz(off);
+    vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+}
+
+cascade::core::AppConfig AppWindow::currentConfig() {
+    cascade::core::AppConfig cfg;
+    cfg.sourceKind = sourceKind_;
+    cfg.soapyArgs = soapyArgs_;
+    cfg.iqFilePath = iqOpenPath_;
+    cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
+    cfg.mode = kModeNames[modeIndex_];
+    cfg.bandwidthHz = vfoBandwidthHz_;
+    cfg.squelchDb = squelchDb_;
+    cfg.volume = volume_;
+    cfg.dbMin = dbMin_;
+    cfg.dbMax = dbMax_;
+    cfg.splitRatio = splitRatio_;
+    cfg.vfoOffsetHz = pipeline_.vfoOffsetHz();
+    cfg.sampleRateHz = pipeline_.activeSource().sampleRateHz();
+    return cfg;
+}
+
+void AppWindow::maybeSaveConfig(double nowS) {
+    cascade::core::AppConfig cur = currentConfig();
+    if (configsEqual(cur, savedCfg_)) {
+        lastChangeTimeS_ = -1.0;  // clean again (e.g. change was undone)
+        return;
+    }
+    if (lastChangeTimeS_ < 0.0 || !configsEqual(cur, pendingCfg_)) {
+        // First difference, or the state moved again: restart the debounce
+        // window so an in-progress drag never writes mid-gesture.
+        pendingCfg_ = cur;
+        lastChangeTimeS_ = nowS;
+        return;
+    }
+    if (nowS - lastChangeTimeS_ >= kConfigDebounceS) {
+        std::string err;
+        if (cascade::core::ConfigStore::save(configPath_, cur, err)) {
+            savedCfg_ = cur;
+            lastChangeTimeS_ = -1.0;
+        } else {
+            // Retry no sooner than the next debounce window — a locked file
+            // must not turn into one save attempt per rendered frame.
+            lastChangeTimeS_ = nowS;
+            std::fprintf(stderr, "cascade: %s\n", err.c_str());
+        }
+    }
+}
+
+void AppWindow::saveConfigNow() {
+    cascade::core::AppConfig cur = currentConfig();
+    std::string err;
+    if (cascade::core::ConfigStore::save(configPath_, cur, err)) {
+        savedCfg_ = cur;
+    } else {
+        std::fprintf(stderr, "cascade: %s\n", err.c_str());
+    }
 }
 
 }  // namespace cascade::gui

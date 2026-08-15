@@ -16,6 +16,9 @@
 #include <thread>
 #include <vector>
 
+#include <string>
+
+#include "core/config.hpp"
 #include "core/pipeline.hpp"
 #include "gui/app_window.hpp"
 #include "source/soapy_source.hpp"
@@ -287,6 +290,26 @@ int main(int argc, char** argv) {
     if (selftest) { return runSelftest(); }
     if (soapyCheck) { return runSoapyCheck(); }
 
-    cascade::gui::AppWindow app;
+    // Config persistence wiring. Normal interactive runs load/save the
+    // user's config at ConfigStore::defaultPath(). Bounded --frames runs
+    // stay hermetic (no load, no save — the CI contract) UNLESS the
+    // CASCADE_CONFIG_TEST env var supplies an explicit path: that is the
+    // documented test hook that forces a config load+save round trip against
+    // a caller-owned file and switches on AppWindow's one-line
+    // "config applied: ..." diagnostic. It is honored ONLY with --frames, so
+    // no interactive run can be silently redirected by a stray env var.
+    std::string configPath;
+    bool announceConfig = false;
+    if (frames >= 0) {
+        const char* hook = std::getenv("CASCADE_CONFIG_TEST");
+        if (hook != nullptr && *hook != '\0') {
+            configPath = hook;
+            announceConfig = true;
+        }
+    } else {
+        configPath = cascade::core::ConfigStore::defaultPath();
+    }
+
+    cascade::gui::AppWindow app(configPath, announceConfig);
     return app.run(frames);
 }
