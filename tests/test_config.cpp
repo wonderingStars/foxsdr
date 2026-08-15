@@ -77,6 +77,17 @@ AppConfig junkConfig() {
     c.splitRatio = 77.0f;
     c.vfoOffsetHz = 1e18;
     c.sampleRateHz = -3.0;
+    // P7 fields, every one set AWAY from its default (and out of range where
+    // the field has one) so a load path that forgets to assign it is caught.
+    c.stereoEnabled = false;
+    c.deemphasisIndex = 99;
+    c.nrEnabled = true;
+    c.nrStrength = -4.0f;
+    c.notchEnabled = true;
+    c.notchFreqHz = -1.0;
+    c.notchQ = 1e9;
+    c.autoNotch = true;
+    c.bandPlanOverlay = false;
     return c;
 }
 
@@ -96,6 +107,15 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.splitRatio == b.splitRatio);
     CHECK(a.vfoOffsetHz == b.vfoOffsetHz);
     CHECK(a.sampleRateHz == b.sampleRateHz);
+    CHECK(a.stereoEnabled == b.stereoEnabled);
+    CHECK(a.deemphasisIndex == b.deemphasisIndex);
+    CHECK(a.nrEnabled == b.nrEnabled);
+    CHECK(a.nrStrength == b.nrStrength);
+    CHECK(a.notchEnabled == b.notchEnabled);
+    CHECK(a.notchFreqHz == b.notchFreqHz);
+    CHECK(a.notchQ == b.notchQ);
+    CHECK(a.autoNotch == b.autoNotch);
+    CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
 }
 
 }  // namespace
@@ -140,6 +160,18 @@ int main() {
         in.splitRatio = 0.62f;
         in.vfoOffsetHz = -125000.0;
         in.sampleRateHz = 2400000.0;
+        // P7 fields, each set to something distinguishable from its default
+        // AND from junkConfig()'s value, so the roundtrip proves the file is
+        // what came back rather than either end's fallback.
+        in.stereoEnabled = false;
+        in.deemphasisIndex = 1;   // 75 us
+        in.nrEnabled = true;
+        in.nrStrength = 0.375f;   // dyadic: exact through float<->double<->text
+        in.notchEnabled = true;
+        in.notchFreqHz = 1234.5;
+        in.notchQ = 42.25;
+        in.autoNotch = true;
+        in.bandPlanOverlay = false;
 
         const std::string path = p("nested/deeper/config.json");
         std::string err = "stale";
@@ -190,13 +222,26 @@ int main() {
                         "\"splitRatio\":[0.5],"      // array for float
                         "\"vfoOffsetHz\":null,"      // null for double
                         "\"bandwidthHz\":200000.0,"  // valid, must load
-                        "\"sourceKind\":\"file\"}"   // valid, must load
+                        "\"sourceKind\":\"file\","   // valid, must load
+                        // P7: booleans are strict — 1 and "true" are wrong
+                        // types, not permissive spellings — and a real
+                        // boolean must still load.
+                        "\"stereoEnabled\":1,"
+                        "\"nrEnabled\":\"true\","
+                        "\"deemphasisIndex\":1.5,"   // non-integer number
+                        "\"notchQ\":\"high\","
+                        "\"autoNotch\":true}"        // valid, must load
                         "\n"));
         AppConfig out = junkConfig();
         std::string err;
         CHECK(ConfigStore::load(path, out, err));
         CHECK(err.empty());
         const AppConfig d;
+        CHECK(out.stereoEnabled == d.stereoEnabled);
+        CHECK(out.nrEnabled == d.nrEnabled);
+        CHECK(out.deemphasisIndex == d.deemphasisIndex);
+        CHECK(out.notchQ == d.notchQ);
+        CHECK(out.autoNotch);  // the one well-typed P7 field did load
         CHECK(out.volume == d.volume);
         CHECK(out.centerHz == d.centerHz);
         CHECK(out.mode == d.mode);
@@ -305,6 +350,61 @@ int main() {
         CHECK(writeText(path, "{\"sourceKind\":\"banana\"}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.sourceKind == "siggen");
+    }
+
+    // --- P7 clamps (documented in config.hpp) --------------------------------
+    {
+        const std::string path = p("clamps_p7.json");
+
+        // deemphasisIndex indexes a THREE-entry table; an out-of-range value
+        // would read past it, so both ends clamp rather than reset.
+        CHECK(writeText(path, "{\"deemphasisIndex\":7}\n"));
+        AppConfig out;
+        std::string err;
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.deemphasisIndex == 2);
+        CHECK(writeText(path, "{\"deemphasisIndex\":-3}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.deemphasisIndex == 0);
+        CHECK(writeText(path, "{\"deemphasisIndex\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.deemphasisIndex == 1);  // in range: untouched
+
+        // nrStrength is the module's [0, 1].
+        CHECK(writeText(path, "{\"nrStrength\":9.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nrStrength == 1.0f);
+        CHECK(writeText(path, "{\"nrStrength\":-0.5}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nrStrength == 0.0f);
+        CHECK(writeText(path, "{\"nrStrength\":0.25}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nrStrength == 0.25f);
+
+        // notch frequency stays inside the audible span of the 48 kHz sink,
+        // and Q inside the biquad's useful range.
+        CHECK(writeText(path, "{\"notchFreqHz\":0.0,\"notchQ\":0.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.notchFreqHz == 10.0);
+        CHECK(out.notchQ == 0.1);
+        CHECK(writeText(path, "{\"notchFreqHz\":1e9,\"notchQ\":1e9}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.notchFreqHz == 20000.0);
+        CHECK(out.notchQ == 1000.0);
+        CHECK(writeText(path, "{\"notchFreqHz\":700.0,\"notchQ\":25.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.notchFreqHz == 700.0);
+        CHECK(out.notchQ == 25.0);
+
+        // The audio-processing switches default OFF so an upgraded install
+        // sounds exactly as it did; the two display/decode aids default ON.
+        const AppConfig d;
+        CHECK(!d.nrEnabled);
+        CHECK(!d.notchEnabled);
+        CHECK(!d.autoNotch);
+        CHECK(d.deemphasisIndex == 0);
+        CHECK(d.stereoEnabled);
+        CHECK(d.bandPlanOverlay);
     }
 
 #ifdef _WIN32

@@ -46,8 +46,28 @@ void getFloat(const json& j, const char* key, float& dst) {
     }
 }
 
+// Booleans are strict: JSON true/false only. A number or a string that "looks
+// boolean" is a wrong-typed field, and the header's rule for those is that the
+// default survives.
+void getBool(const json& j, const char* key, bool& dst) {
+    const auto it = j.find(key);
+    if (it != j.end() && it->is_boolean()) { dst = it->get<bool>(); }
+}
+
+void getInt(const json& j, const char* key, int& dst) {
+    const auto it = j.find(key);
+    if (it != j.end() && it->is_number_integer()) { dst = it->get<int>(); }
+}
+
 float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Written as "not >= lo" so a NaN from a hand-edited file lands on the low
+// clamp instead of propagating into a filter coefficient.
+double clampd(double v, double lo, double hi) {
+    if (!(v >= lo)) { return lo; }
+    return v > hi ? hi : v;
 }
 
 }  // namespace
@@ -123,11 +143,25 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getFloat(j, "splitRatio", out.splitRatio);
     getDouble(j, "vfoOffsetHz", out.vfoOffsetHz);
     getDouble(j, "sampleRateHz", out.sampleRateHz);
+    getBool(j, "stereoEnabled", out.stereoEnabled);
+    getInt(j, "deemphasisIndex", out.deemphasisIndex);
+    getBool(j, "nrEnabled", out.nrEnabled);
+    getFloat(j, "nrStrength", out.nrStrength);
+    getBool(j, "notchEnabled", out.notchEnabled);
+    getDouble(j, "notchFreqHz", out.notchFreqHz);
+    getDouble(j, "notchQ", out.notchQ);
+    getBool(j, "autoNotch", out.autoNotch);
+    getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
 
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
     out.volume = clampf(out.volume, 0.0f, 1.0f);
     out.splitRatio = clampf(out.splitRatio, 0.1f, 0.9f);
+    if (out.deemphasisIndex < 0) { out.deemphasisIndex = 0; }
+    if (out.deemphasisIndex > 2) { out.deemphasisIndex = 2; }
+    out.nrStrength = clampf(out.nrStrength, 0.0f, 1.0f);
+    out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
+    out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
     if (!(out.dbMin < out.dbMax - 10.0f)) {
         // Reset BOTH: clamping one end would invent a range nobody chose.
         out.dbMin = defaults.dbMin;
@@ -172,6 +206,15 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["splitRatio"] = cfg.splitRatio;
     j["vfoOffsetHz"] = cfg.vfoOffsetHz;
     j["sampleRateHz"] = cfg.sampleRateHz;
+    j["stereoEnabled"] = cfg.stereoEnabled;
+    j["deemphasisIndex"] = cfg.deemphasisIndex;
+    j["nrEnabled"] = cfg.nrEnabled;
+    j["nrStrength"] = cfg.nrStrength;
+    j["notchEnabled"] = cfg.notchEnabled;
+    j["notchFreqHz"] = cfg.notchFreqHz;
+    j["notchQ"] = cfg.notchQ;
+    j["autoNotch"] = cfg.autoNotch;
+    j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the

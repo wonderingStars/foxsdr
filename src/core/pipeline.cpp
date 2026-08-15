@@ -101,10 +101,26 @@ constexpr double kFmDeviationHz = 75000.0;
 // raises a quiet signal to target over ~100-300 ms, slow enough not to pump
 // the noise floor audibly in speech pauses. Max gain 100 (40 dB) bounds the
 // wind-up on silence.
+//
+// The AGC now sees the INTERLEAVED two-channel stream (see the header), i.e.
+// two samples per channel-rate instant, so the rates are halved to keep those
+// same real-time constants. For mono content — every non-WFM mode, where the
+// two channels are identical — the halved rate applied twice per sample
+// reproduces the original single update to first order, so the audio level
+// behaviour is unchanged from the mono-only build.
 constexpr float kAgcTarget = 0.5f;
-constexpr float kAgcAttack = 0.005f;
-constexpr float kAgcDecay = 0.0005f;
+constexpr float kAgcAttack = 0.005f / 2.0f;
+constexpr float kAgcDecay = 0.0005f / 2.0f;
 constexpr float kAgcMaxGain = 100.0f;
+
+// Audio post-processing defaults (all OFF, so a fresh install and every
+// existing config sound exactly as they did before P7 added them).
+constexpr float kDefaultNrStrength = 0.5f;
+constexpr double kDefaultNotchHz = 1000.0;
+constexpr double kDefaultNotchQ = 30.0;
+// 512 bins at 48 kHz: 93.75 Hz resolution, 10.7 ms of noise-reduction
+// latency, and the frame size both modules' constants were tuned against.
+constexpr std::size_t kAudioFftSize = 512;
 
 // S-meter ballistics: EMA alpha 0.0005 is a ~10 ms time constant at 200 kHz,
 // steady under a 60 fps GUI poll without hiding real level changes.
@@ -126,25 +142,113 @@ Pipeline::Pipeline(Config cfg)
       vfo_(cfg.sampleRateHz, vfoDecim_, kDefaultVfoBandwidthHz),
       demod_(cfg.sampleRateHz / static_cast<double>(vfoDecim_)),
       agc_(kAgcTarget, kAgcAttack, kAgcDecay, kAgcMaxGain),
-      squelch_(cfg.sampleRateHz / static_cast<double>(vfoDecim_)),
+      // 2x the channel rate: the squelch gates the INTERLEAVED stream, so its
+      // 5 ms ramp and 100 ms hold are only real-time if it is told the rate
+      // it will actually be clocked at.
+      squelch_(2.0 * cfg.sampleRateHz / static_cast<double>(vfoDecim_)),
       meter_(kMeterAlpha),
       resampler_(static_cast<unsigned>(kAudioRateHz + 0.5),
                  static_cast<unsigned>(cfg.sampleRateHz /
                                            static_cast<double>(vfoDecim_) +
                                        0.5)),
-      tapBuf_(kAudioTapSize, 0.0f) {
+      resamplerR_(static_cast<unsigned>(kAudioRateHz + 0.5),
+                  static_cast<unsigned>(cfg.sampleRateHz /
+                                            static_cast<double>(vfoDecim_) +
+                                        0.5)),
+      tapBuf_(2 * kAudioTapSize, 0.0f) {
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     estimator_.setAlpha(cfg.averagingAlpha);
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
+    // WFM de-emphasis belongs to StereoFm, never to the discriminator (see
+    // the ownership note in the header): switched off here once, and kept off
+    // by every rebuild, so the composite handed to RDS and to the stereo
+    // matrix is always flat.
+    demod_.setDeemphasisUs(0.0);
     fmScale_ = static_cast<float>(
         0.5 * (cfg.sampleRateHz / static_cast<double>(vfoDecim_)) /
         (kTwoPi * kFmDeviationHz));
+    rebuildChannelBlocks(cfg.sampleRateHz / static_cast<double>(vfoDecim_));
+    // Post-resampler chain, fixed at the sink rate so no rate-follow touches
+    // it. Everything starts disabled/bypassing: NoiseReduction at strength 0
+    // is a bit-exact delay line and a disabled Notch does not even touch the
+    // samples, so an untouched install is byte-for-byte the pre-P7 audio.
+    notchL_ = std::make_unique<cascade::dsp::Notch>(kAudioRateHz, kDefaultNotchHz,
+                                                    kDefaultNotchQ);
+    notchR_ = std::make_unique<cascade::dsp::Notch>(kAudioRateHz, kDefaultNotchHz,
+                                                    kDefaultNotchQ);
+    notchL_->setEnabled(false);
+    notchR_->setEnabled(false);
+    autoNotchL_ = std::make_unique<cascade::dsp::AutoNotch>(
+        kAudioRateHz, kAudioFftSize, kDefaultNotchQ);
+    autoNotchR_ = std::make_unique<cascade::dsp::AutoNotch>(
+        kAudioRateHz, kAudioFftSize, kDefaultNotchQ);
+    autoNotchL_->setEnabled(false);
+    autoNotchR_->setEnabled(false);
+    nrL_ = std::make_unique<cascade::dsp::NoiseReduction>(kAudioRateHz, kAudioFftSize);
+    nrR_ = std::make_unique<cascade::dsp::NoiseReduction>(kAudioRateHz, kAudioFftSize);
+    nrL_->setEnabled(false);
+    nrR_->setEnabled(false);
+    nrL_->setStrength(kDefaultNrStrength);
+    nrR_->setStrength(kDefaultNrStrength);
     // Open the default output device up front (not in start()) so a device
     // chosen through audio() before/between runs is never stomped by a later
     // start(); stop() leaves the stream open, playing silence once the ring
     // drains. A failed open (headless box) degrades to a deviceless sink:
     // write() still accepts samples, nothing ever blocks.
-    if (cfg_.audioEnabled) { audio_.open(-1, kAudioRateHz); }
+    if (cfg_.audioEnabled) { openAudioDevice(-1); }
+}
+
+void Pipeline::rebuildChannelBlocks(double chanRate) {
+    // Both decoders bake the composite rate into their filter designs, so a
+    // rate change replaces them outright. Settings that are user choices
+    // (de-emphasis, force-mono) are re-applied; decoded CONTENT is not
+    // carried over — a rate change is a stream discontinuity, and a PS name
+    // that survived one would be exactly the stale readout resetRds() exists
+    // to prevent.
+    stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
+    stereo_->setDeemphasisUs(deemphasisUs_);
+    stereo_->setForceMono(!stereoEnabled_);
+    rds_ = std::make_unique<cascade::dsp::RdsDecoder>(chanRate);
+    resetDecodersLocked();
+}
+
+void Pipeline::resetDecodersLocked() {
+    rds_->reset();
+    stereo_->reset();  // stream state only; force-mono and tau are settings
+    rdsPubGroups_ = 0;
+    rdsPubErrors_ = 0;
+    {
+        std::lock_guard<std::mutex> lk(rdsMutex_);
+        rdsPublished_ = RdsSnapshot{};
+    }
+    pilotLocked_.store(false, std::memory_order_relaxed);
+    pilotLevel_.store(0.0f, std::memory_order_relaxed);
+    stereoActive_.store(false, std::memory_order_relaxed);
+}
+
+void Pipeline::publishRds() {
+    const cascade::dsp::RdsState st = rds_->state();
+    // Nothing moved: skip the copy. Two integer compares per block instead of
+    // two string assignments keeps this off the DSP thread's hot path.
+    if (st.groupsDecoded == rdsPubGroups_ && st.blockErrors == rdsPubErrors_) {
+        return;
+    }
+    rdsPubGroups_ = st.groupsDecoded;
+    rdsPubErrors_ = st.blockErrors;
+    std::lock_guard<std::mutex> lk(rdsMutex_);
+    rdsPublished_.synced = rds_->synced();
+    rdsPublished_.state = st;
+}
+
+bool Pipeline::openAudioDevice(int deviceIndex) {
+    // Stereo first, mono as the fallback: a two-channel open is what the WFM
+    // stereo path needs, but a mono-only device (or a host API that refuses
+    // the layout) must still produce sound rather than nothing.
+    bool ok = audio_.open(deviceIndex, kAudioRateHz, 2);
+    if (!ok) { ok = audio_.open(deviceIndex, kAudioRateHz, 1); }
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    audioChannels_ = ok ? audio_.channels() : 1;
+    return ok;
 }
 
 Pipeline::~Pipeline() {
@@ -181,6 +285,13 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     } else {
         external_.reset();
         active_ = &builtin_;  // null restores the built-in generator
+    }
+    {
+        // A new antenna is a new station: drop the decoded RDS content and
+        // the pilot lock with the old source. controlMutex_ -> audioMutex_ is
+        // the same order start() and setInputRateHz use.
+        std::lock_guard<std::mutex> alk(audioMutex_);
+        resetDecodersLocked();
     }
     if (live) {
         // Resume: start the incoming source BEFORE its thread exists so the
@@ -235,7 +346,19 @@ void Pipeline::start() {
         demod_.reset();
         agc_.reset();
         resampler_.reset();
+        resamplerR_.reset();
         meter_.reset();
+        // The stereo/RDS decoders and the audio post-chain are stream state
+        // too: a restart is a fresh acquisition, and a PS name recovered
+        // before the previous Stop is exactly as stale as one from another
+        // station.
+        resetDecodersLocked();
+        notchL_->reset();
+        notchR_->reset();
+        autoNotchL_->reset();
+        autoNotchR_->reset();
+        nrL_->reset();
+        nrR_->reset();
     }
     signalDb_.store(-200.0f, std::memory_order_relaxed);
 
@@ -283,7 +406,10 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
 void Pipeline::setDeemphasisUs(double us) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     deemphasisUs_ = us;
-    demod_.setDeemphasisUs(us);
+    // The STEREO decoder owns WFM de-emphasis, for both stereo and mono
+    // output (header: "WFM DE-EMPHASIS OWNERSHIP"); demod_ stays flat so the
+    // composite reaching RDS keeps its 57 kHz subcarrier.
+    stereo_->setDeemphasisUs(us);
 }
 
 double Pipeline::deemphasisUs() const {
@@ -293,8 +419,140 @@ double Pipeline::deemphasisUs() const {
 
 void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
     std::lock_guard<std::mutex> lk(audioMutex_);
+    if (demod_.mode() == m) { return; }  // idempotent: no gratuitous reset
     demod_.setMode(m);  // resets the demod's internal state (its contract)
+    // setMode restores the library default de-emphasis; WFM's belongs to
+    // StereoFm, so switch it straight back off (see the header).
+    demod_.setDeemphasisUs(0.0);
     agc_.reset();       // new level regime: relearn the gain from neutral
+    // Leaving WFM abandons the composite the decoders were tracking, and
+    // coming back to it is a fresh acquisition either way.
+    resetDecodersLocked();
+}
+
+void Pipeline::setStereoEnabled(bool on) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    stereoEnabled_ = on;
+    // Through StereoFm's own ramped gate, so the toggle fades between mono
+    // and stereo instead of stepping — a step in the difference channel is an
+    // audible click in both speakers.
+    stereo_->setForceMono(!on);
+}
+
+bool Pipeline::stereoEnabled() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return stereoEnabled_;
+}
+
+bool Pipeline::pilotLocked() const {
+    return pilotLocked_.load(std::memory_order_relaxed);
+}
+
+float Pipeline::pilotLevel() const {
+    return pilotLevel_.load(std::memory_order_relaxed);
+}
+
+bool Pipeline::stereoActive() const {
+    return stereoActive_.load(std::memory_order_relaxed);
+}
+
+RdsSnapshot Pipeline::rdsSnapshot() const {
+    std::lock_guard<std::mutex> lk(rdsMutex_);
+    return rdsPublished_;
+}
+
+void Pipeline::resetRds() {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    resetDecodersLocked();
+}
+
+void Pipeline::setNoiseReductionEnabled(bool on) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    nrL_->setEnabled(on);
+    nrR_->setEnabled(on);
+}
+
+bool Pipeline::noiseReductionEnabled() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return nrL_->isEnabled();
+}
+
+void Pipeline::setNoiseReductionStrength(float s01) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    nrL_->setStrength(s01);
+    nrR_->setStrength(s01);
+}
+
+float Pipeline::noiseReductionStrength() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return nrL_->strength();
+}
+
+void Pipeline::setNotchEnabled(bool on) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    // Clear the biquad memory on the way in: a notch re-enabled with the
+    // charge it held when it was switched off thumps.
+    if (on && !notchL_->isEnabled()) {
+        notchL_->reset();
+        notchR_->reset();
+    }
+    notchL_->setEnabled(on);
+    notchR_->setEnabled(on);
+}
+
+bool Pipeline::notchEnabled() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return notchL_->isEnabled();
+}
+
+void Pipeline::setNotchFrequencyHz(double hz) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    notchL_->setFrequencyHz(hz);
+    notchR_->setFrequencyHz(hz);
+}
+
+double Pipeline::notchFrequencyHz() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return notchL_->frequencyHz();
+}
+
+void Pipeline::setNotchQ(double q) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    notchL_->setQ(q);
+    notchR_->setQ(q);
+    autoNotchL_->setQ(q);
+    autoNotchR_->setQ(q);
+}
+
+double Pipeline::notchQ() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return notchL_->q();
+}
+
+void Pipeline::setAutoNotchEnabled(bool on) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    if (on && !autoNotchL_->isEnabled()) {
+        autoNotchL_->reset();
+        autoNotchR_->reset();
+    }
+    autoNotchL_->setEnabled(on);
+    autoNotchR_->setEnabled(on);
+    if (!on) {
+        autoNotchEngaged_.store(false, std::memory_order_relaxed);
+    }
+}
+
+bool Pipeline::autoNotchEnabled() const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return autoNotchL_->isEnabled();
+}
+
+bool Pipeline::autoNotchEngaged() const {
+    return autoNotchEngaged_.load(std::memory_order_relaxed);
+}
+
+double Pipeline::autoNotchFrequencyHz() const {
+    return autoNotchHz_.load(std::memory_order_relaxed);
 }
 
 cascade::dsp::DemodMode Pipeline::demodMode() const {
@@ -304,7 +562,12 @@ cascade::dsp::DemodMode Pipeline::demodMode() const {
 
 void Pipeline::setVfoOffsetHz(double offsetHz) {
     std::lock_guard<std::mutex> lk(audioMutex_);
+    if (vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
     vfo_.setOffsetHz(offsetHz);
+    // A retune is a different station: the RDS content and the pilot lock
+    // that belonged to the old one must not survive it. (The SOURCE centre
+    // moving is invisible from here — that caller has to call resetRds().)
+    resetDecodersLocked();
 }
 
 double Pipeline::vfoOffsetHz() const {
@@ -387,15 +650,22 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // scale the CW sidetone by oldChannel/newChannel.
         demod_ = cascade::dsp::Demodulator(chanRate);
         demod_.setMode(mode);
-        // A rebuilt demodulator starts at the library default, so the user's
-        // regional de-emphasis choice has to be re-applied or a rate change
-        // silently reverts it.
-        demod_.setDeemphasisUs(deemphasisUs_);
+        // A rebuilt demodulator starts at the library default de-emphasis;
+        // WFM's belongs to StereoFm (see the header), so switch it off again
+        // — leaving it on would put a second 50 us pole in the audio and
+        // gut the 57 kHz subcarrier RDS needs.
+        demod_.setDeemphasisUs(0.0);
+
+        // Stereo + RDS decoders, rebuilt for the new composite rate (this
+        // re-applies the user's de-emphasis and force-mono settings and
+        // clears the decoded content).
+        rebuildChannelBlocks(chanRate);
 
         // Squelch: reconstructed so its ~5 ms ramp and hold time stay real
         // time at the new channel rate; the requested threshold survives.
         // Gate state restarts closed — a rate switch is a stream restart.
-        squelch_ = cascade::dsp::Squelch(chanRate);
+        // 2x, because it gates the interleaved two-channel stream.
+        squelch_ = cascade::dsp::Squelch(2.0 * chanRate);
         squelch_.setThresholdDb(squelchDb_);
 
         // Resampler ratio arithmetic: chanRate is proven integral by
@@ -404,6 +674,12 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // internally, making channelRate -> 48 kHz exact — e.g. 150000 ->
         // 8/25, 187500 -> 32/125, 200000 -> 6/25.
         resampler_ = cascade::dsp::RationalResampler(
+            static_cast<unsigned>(kAudioRateHz + 0.5),
+            static_cast<unsigned>(chanRate + 0.5));
+        // Identical construction, identical (fresh) state: the two channels
+        // stay sample-aligned because they are the same state machine driven
+        // by the same number of inputs, never because anything syncs them.
+        resamplerR_ = cascade::dsp::RationalResampler(
             static_cast<unsigned>(kAudioRateHz + 0.5),
             static_cast<unsigned>(chanRate + 0.5));
 
@@ -460,13 +736,29 @@ void Pipeline::setAudioRecorder(Recorder* r) {
 
 std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
     std::lock_guard<std::mutex> lk(audioMutex_);
+    const std::size_t frames = tapBuf_.size() / 2;
     const std::size_t avail = std::min(n, tapFilled_);
-    // The newest sample sits at tapWrite_ - 1; walk back `avail` samples and
-    // copy forward so dst is in chronological order.
-    const std::size_t start =
-        (tapWrite_ + tapBuf_.size() - avail) % tapBuf_.size();
+    // The newest frame sits at tapWrite_ - 1; walk back `avail` frames and
+    // copy forward so dst is in chronological order. Mono downmix: exact for
+    // every mono path, where the two channels are bit-identical.
+    const std::size_t start = (tapWrite_ + frames - avail) % frames;
     for (std::size_t i = 0; i < avail; ++i) {
-        dst[i] = tapBuf_[(start + i) % tapBuf_.size()];
+        const std::size_t f = (start + i) % frames;
+        dst[i] = 0.5f * (tapBuf_[2 * f] + tapBuf_[2 * f + 1]);
+    }
+    return avail;
+}
+
+std::size_t Pipeline::audioTapStereo(float* dstLeft, float* dstRight,
+                                     std::size_t n) const {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    const std::size_t frames = tapBuf_.size() / 2;
+    const std::size_t avail = std::min(n, tapFilled_);
+    const std::size_t start = (tapWrite_ + frames - avail) % frames;
+    for (std::size_t i = 0; i < avail; ++i) {
+        const std::size_t f = (start + i) % frames;
+        if (dstLeft != nullptr) { dstLeft[i] = tapBuf_[2 * f]; }
+        if (dstRight != nullptr) { dstRight[i] = tapBuf_[2 * f + 1]; }
     }
     return avail;
 }
@@ -639,44 +931,141 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     meter_.process(chanBuf_.data(), m);
     signalDb_.store(meter_.powerDb(), std::memory_order_relaxed);
 
-    // Demodulate 1:1 at the channel rate.
+    // Demodulate 1:1 at the channel rate. In WFM this is the COMPOSITE (MPX)
+    // with no de-emphasis applied — see the ownership note in the header.
     audioBuf_.resize(m);
     demod_.process(chanBuf_.data(), m, audioBuf_.data());
+
+    const cascade::dsp::DemodMode mode = demod_.mode();
+    const bool wfm = (mode == cascade::dsp::DemodMode::WFM);
+
+    // RDS gets the RAW discriminator output: no de-emphasis, no scaling, no
+    // AGC, no squelch — bit-for-bit the signal the --rds-check bench path
+    // feeds the same decoder, which is the only configuration proven off air.
+    // (Scale is irrelevant to it anyway: both its loops normalise by the
+    // running mean power.)
+    if (wfm) {
+        rds_->process(audioBuf_.data(), m);
+        publishRds();
+    }
 
     // FM modes: rad/sample -> ~0.5 full scale at +/-75 kHz deviation (see the
     // kFmDeviationHz comment). Other modes already emit signal-amplitude
     // scale, which the AGC normalizes.
-    const cascade::dsp::DemodMode mode = demod_.mode();
-    if (mode == cascade::dsp::DemodMode::NFM ||
-        mode == cascade::dsp::DemodMode::WFM) {
+    if (mode == cascade::dsp::DemodMode::NFM || wfm) {
         for (std::size_t i = 0; i < m; ++i) { audioBuf_[i] *= fmScale_; }
     }
 
-    agc_.process(audioBuf_.data(), audioBuf_.data(), m);
+    // --- One channel or two -------------------------------------------------
+    leftBuf_.resize(m);
+    rightBuf_.resize(m);
+    if (wfm) {
+        // ALWAYS through the stereo decoder, even when the user forced mono
+        // or no pilot is present: that is what makes the transition
+        // click-free and tone-identical, because both sides of the switch
+        // carry the same 15 kHz low-pass and the same de-emphasis, and the
+        // difference channel is ramped in and out by StereoFm's own gate
+        // (with the gate shut it emits L == R bit-exactly).
+        stereo_->process(audioBuf_.data(), m, leftBuf_.data(), rightBuf_.data());
+        pilotLocked_.store(stereo_->pilotLocked(), std::memory_order_relaxed);
+        pilotLevel_.store(stereo_->pilotLevel(), std::memory_order_relaxed);
+        stereoActive_.store(stereoEnabled_ && stereo_->pilotLocked() &&
+                                stereo_->stereoCapable(),
+                            std::memory_order_relaxed);
+    } else {
+        // Every other mode is mono by nature: duplicate, so the rest of the
+        // chain has exactly one shape.
+        std::copy(audioBuf_.begin(), audioBuf_.begin() + static_cast<std::ptrdiff_t>(m),
+                  leftBuf_.begin());
+        std::copy(audioBuf_.begin(), audioBuf_.begin() + static_cast<std::ptrdiff_t>(m),
+                  rightBuf_.begin());
+        pilotLocked_.store(false, std::memory_order_relaxed);
+        pilotLevel_.store(0.0f, std::memory_order_relaxed);
+        stereoActive_.store(false, std::memory_order_relaxed);
+    }
+
+    // --- AGC + squelch on the interleaved pair ------------------------------
+    // One instance of each over L,R,L,R... so both channels get the identical
+    // gain and the identical gate envelope (header: two per-channel AGCs
+    // would each normalise their own channel and flatten the stereo image).
+    // gateBuf_ repeats every channel sample so the squelch's power source
+    // stays index-aligned with the audio it gates.
+    ilvBuf_.resize(2 * m);
+    gateBuf_.resize(2 * m);
+    for (std::size_t i = 0; i < m; ++i) {
+        ilvBuf_[2 * i] = leftBuf_[i];
+        ilvBuf_[2 * i + 1] = rightBuf_[i];
+        gateBuf_[2 * i] = chanBuf_[i];
+        gateBuf_[2 * i + 1] = chanBuf_[i];
+    }
+    agc_.process(ilvBuf_.data(), ilvBuf_.data(), 2 * m);
     // Squelch measures the pre-demod channel and gates the (AGC'd) audio, so
     // closed-squelch output is exact digital silence after the ramp.
-    squelch_.process(chanBuf_.data(), m, audioBuf_.data());
+    squelch_.process(gateBuf_.data(), 2 * m, ilvBuf_.data());
+    for (std::size_t i = 0; i < m; ++i) {
+        leftBuf_[i] = ilvBuf_[2 * i];
+        rightBuf_[i] = ilvBuf_[2 * i + 1];
+    }
 
-    // Channel rate -> 48 kHz for the device.
-    outBuf_.resize(resampler_.maxOut(m));
-    const std::size_t k =
-        resampler_.process(audioBuf_.data(), m, outBuf_.data(), outBuf_.size());
+    // --- Channel rate -> 48 kHz, one resampler per channel -------------------
+    const std::size_t cap = resampler_.maxOut(m);
+    outL_.resize(cap);
+    outR_.resize(cap);
+    const std::size_t kL =
+        resampler_.process(leftBuf_.data(), m, outL_.data(), cap);
+    const std::size_t kR =
+        resamplerR_.process(rightBuf_.data(), m, outR_.data(), cap);
+    // Identical configuration driven by identical input counts from identical
+    // initial state: the two can only ever produce the same count. The min is
+    // a belt-and-braces guard so a future divergence truncates instead of
+    // reading past an end.
+    const std::size_t k = std::min(kL, kR);
     if (k == 0) { return; }
+
+    // --- Audio post-processing: notch -> auto-notch -> noise reduction ------
+    // Order rationale in the header. All three are bypasses when disabled.
+    notchL_->process(outL_.data(), k);
+    notchR_->process(outR_.data(), k);
+    autoNotchL_->process(outL_.data(), k);
+    autoNotchR_->process(outR_.data(), k);
+    autoNotchEngaged_.store(autoNotchL_->isEngaged(), std::memory_order_relaxed);
+    autoNotchHz_.store(autoNotchL_->frequencyHz(), std::memory_order_relaxed);
+    nrL_->process(outL_.data(), k, outL_.data());
+    nrR_->process(outR_.data(), k, outR_.data());
+
+    // Mono downmix for the test tap's readers and the recorder, which stays
+    // the documented mono 16-bit WAV.
+    monoOut_.resize(k);
+    for (std::size_t i = 0; i < k; ++i) {
+        monoOut_[i] = 0.5f * (outL_[i] + outR_[i]);
+    }
 
     // Test tap + counter BEFORE the sink, so --selftest sees the chain output
     // even with no device open; then the non-blocking push to the sink (a
     // full ring drops the overflow — the device, not this thread, is behind).
+    const std::size_t tapFrames = tapBuf_.size() / 2;
     for (std::size_t i = 0; i < k; ++i) {
-        tapBuf_[tapWrite_] = outBuf_[i];
-        tapWrite_ = (tapWrite_ + 1) % tapBuf_.size();
+        tapBuf_[2 * tapWrite_] = outL_[i];
+        tapBuf_[2 * tapWrite_ + 1] = outR_[i];
+        tapWrite_ = (tapWrite_ + 1) % tapFrames;
     }
-    tapFilled_ = std::min(tapBuf_.size(), tapFilled_ + k);
+    tapFilled_ = std::min(tapFrames, tapFilled_ + k);
+    // Counted in FRAMES, unchanged in meaning: one per 48 kHz instant.
     audioSamples_.fetch_add(k, std::memory_order_relaxed);
     // Audio recorder tap (P6): the same post-chain 48 kHz samples the test
     // tap above just captured — post-squelch, pre-AudioOut, so the recording
     // is independent of the output device and its volume.
-    if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(outBuf_.data(), k); }
-    audio_.write(outBuf_.data(), k);
+    if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(monoOut_.data(), k); }
+    if (audioChannels_ == 2) {
+        outIlv_.resize(2 * k);
+        for (std::size_t i = 0; i < k; ++i) {
+            outIlv_[2 * i] = outL_[i];
+            outIlv_[2 * i + 1] = outR_[i];
+        }
+        audio_.writeStereo(outIlv_.data(), k);
+    } else {
+        audio_.write(monoOut_.data(), k);
+    }
 }
 
 }  // namespace cascade::core

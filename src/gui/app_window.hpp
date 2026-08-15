@@ -8,9 +8,11 @@
 #include <string>
 #include <vector>
 
+#include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
 #include "core/pipeline.hpp"
+#include "core/plugin_host.hpp"
 #include "core/recorder.hpp"
 #include "core/scanner.hpp"
 #include "gui/freq_scale.hpp"
@@ -89,6 +91,29 @@ private:
     void drawRecorderSection();
     void drawBookmarksSection();
     void drawScannerSection();
+
+    // --- Stereo / RDS / audio filters / band plan / plugins (P7) --------------
+    // Drawn inside the Radio section, and only while WFM is the active mode:
+    // the pilot indicator, the force-mono toggle, and the RDS readout are
+    // meaningless for every other demodulator.
+    void drawStereoRdsControls();
+    // "Audio filters": noise reduction + manual/auto notch, in the order the
+    // pipeline applies them (notch -> auto-notch -> NR; see Pipeline).
+    void drawAudioFilterSection();
+    // Loaded plugins with their LICENCE, refused candidates with their
+    // reason, and a Rescan button.
+    void drawPluginsSection();
+    // Translucent service-band rectangles over the spectrum panel, plus the
+    // labels that fit. `pos` is the panel's screen-space top-left as recorded
+    // before the spectrum was drawn.
+    void drawBandPlanOverlay(float x0, float y0, float width, float height);
+    // Band plan (optional program data) and plugins (optional user
+    // installs) — both silently absent when their directory does not exist.
+    void loadBandPlan();
+    void rescanPlugins();
+    // Every tune that moves the SOURCE centre has to tell the pipeline, which
+    // cannot see it: the RDS/stereo decoders must forget the old station.
+    void retuneSourceHz(double centerHz);
 
     // Uninstalls the matching pipeline tap, THEN stops the recorder — the
     // order the Recorder contract requires (see Pipeline::set*Recorder).
@@ -317,6 +342,35 @@ private:
     // The Scanner itself is a pure state machine (core/scanner.hpp); these
     // mirrors exist because ImGui edits by pointer. Defaults come from
     // Scanner::Params's own member initializers so the two can never drift.
+    // --- P7 feature state -----------------------------------------------------
+    // Panel mirrors for the pipeline's stereo / NR / notch settings (ImGui
+    // edits by pointer). Defaults match AppConfig's, which match the
+    // pipeline's own construction defaults, so the three can never disagree
+    // before the first user click.
+    bool stereoEnabled_ = true;
+    bool nrEnabled_ = false;
+    float nrStrength_ = 0.5f;
+    bool notchEnabled_ = false;
+    float notchFreqHz_ = 1000.0f;
+    float notchQ_ = 30.0f;
+    bool autoNotch_ = false;
+    bool bandPlanOverlay_ = true;
+
+    // Band plan: OPTIONAL display data merged from
+    // BandPlan::defaultDir() at construction. A missing directory is the
+    // normal case for a run-from-build-tree session and is silent — there is
+    // simply no overlay. A directory that EXISTS but fails to parse keeps its
+    // reason here and shows it in the Display section, because that one is a
+    // user-visible mistake worth reporting.
+    cascade::core::BandPlan bandPlan_;
+    std::string bandPlanError_;
+
+    // Plugin host: scanned once at construction and on Rescan. Owns the
+    // loaded modules, so it must outlive nothing in particular here — but it
+    // is declared before the pipeline-dependent members so it unloads last.
+    cascade::core::PluginHost pluginHost_;
+    std::string pluginDir_;
+
     cascade::core::Scanner scanner_;
     double scanStartMhz_ = cascade::core::Scanner::Params{}.startHz / 1.0e6;
     double scanStopMhz_ = cascade::core::Scanner::Params{}.stopHz / 1.0e6;

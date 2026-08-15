@@ -61,8 +61,9 @@ std::vector<AudioDevice> AudioOut::listOutputDevices() {
     return devices;
 }
 
-bool AudioOut::open(int deviceIndex, double sampleRateHz) {
+bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     if (!paOk_ || !(sampleRateHz > 0.0)) { return false; }
+    if (channels != 1 && channels != 2) { return false; }
     // Re-open semantics: switching device or rate through open() closes the
     // old stream first. close() is idempotent, so this is safe when nothing
     // is open yet.
@@ -75,7 +76,7 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz) {
         return false;
     }
     const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
-    if (info == nullptr || info->maxOutputChannels < 1) { return false; }
+    if (info == nullptr || info->maxOutputChannels < channels) { return false; }
 
     // Drain anything left from a previous session so a reopen starts silent
     // instead of replaying stale audio. Safe single-threaded consumption:
@@ -87,7 +88,8 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz) {
 
     PaStreamParameters out{};
     out.device = dev;
-    out.channelCount = 1;  // mono: the demod chain produces a single channel
+    // 1 = the mono demod chain; 2 = interleaved L,R from the stereo FM path.
+    out.channelCount = channels;
     out.sampleFormat = paFloat32;
     // Low-latency hint: an SDR should respond to tuning without an audible
     // lag. PortAudio rounds this up to whatever the host API can honor.
@@ -109,6 +111,11 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz) {
     }
     stream_ = stream;
     running_ = true;
+    // Only a SUCCESSFUL open changes the layout: a refused stereo open must
+    // leave the previous (working) layout description in place, because the
+    // caller's fallback path re-opens mono and the producer reads channels()
+    // to decide what to push.
+    channels_ = channels;
     return true;
 }
 
@@ -130,6 +137,17 @@ std::size_t AudioOut::write(const float* samples, std::size_t n) {
     return ring_.write(samples, n);
 }
 
+std::size_t AudioOut::writeStereo(const float* interleaved, std::size_t frames) {
+    // Whole frames only. freeSpace() is conservative for the producer (it can
+    // under-report while the callback is mid-read, never over-report), so
+    // capping here cannot make ring_.write split the last frame — which would
+    // swap L and R for the rest of the session.
+    const std::size_t roomFrames = ring_.freeSpace() / 2;
+    if (frames > roomFrames) { frames = roomFrames; }
+    if (frames == 0) { return 0; }
+    return ring_.write(interleaved, frames * 2) / 2;
+}
+
 void AudioOut::setVolume(float v01) {
     // Negated comparison so NaN (which fails every ordering test) lands on
     // the silent side instead of poisoning every output sample.
@@ -138,10 +156,16 @@ void AudioOut::setVolume(float v01) {
     volume_.store(v01, std::memory_order_relaxed);
 }
 
-std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t n) {
+std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
     auto* ao = static_cast<AudioOut*>(self);
+    // The device buffer holds frames * channels interleaved floats; the ring
+    // already stores them in that exact order, so this stays one flat read.
+    const std::size_t n =
+        frames * static_cast<std::size_t>(ao->channels_ == 2 ? 2 : 1);
     // Read straight into the device buffer, then scale in place — one pass,
-    // no intermediate storage, nothing the realtime thread must wait on.
+    // no intermediate storage, nothing the realtime thread must wait on. The
+    // same `vol` multiplies every sample, so both channels are scaled
+    // identically by construction.
     const std::size_t got = ao->ring_.read(dst, n);
     const float vol = ao->volume_.load(std::memory_order_relaxed);
     for (std::size_t i = 0; i < got; ++i) { dst[i] *= vol; }

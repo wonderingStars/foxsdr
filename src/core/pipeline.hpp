@@ -3,11 +3,36 @@
 // free-running (the built-in signal generator), letting the device pace when
 // it is self-paced (hardware) — a DSP thread drains it through
 // SpectrumEstimator and publishes the newest spectrum frame for the GUI to
-// poll. The same DSP thread also runs the audio chain (P3): every drained
+// poll. The same DSP thread also runs the audio chain (P3/P7): every drained
 // block is duplicated into
 //   Vfo (decimate to a ~200 kHz channel; see setInputRateHz for the policy)
-//   -> Demodulator -> Agc -> Squelch ->
-//   RationalResampler (channel rate -> 48 kHz) -> AudioOut::write.
+//   -> Demodulator -> [WFM: RdsDecoder tap, StereoFm matrix] -> Agc
+//   -> Squelch -> RationalResampler x2 (channel rate -> 48 kHz)
+//   -> Notch -> AutoNotch -> NoiseReduction -> AudioOut (mono or stereo).
+//
+// WFM DE-EMPHASIS OWNERSHIP (the one non-obvious wiring decision here).
+// Both the stereo decoder and RDS need the composite (MPX) WITHOUT
+// de-emphasis: a 50 us one-pole is ~40 dB down at 57 kHz, which would erase
+// the RDS subcarrier outright, and the broadcast standard applies de-emphasis
+// per channel AFTER the stereo matrix because the transmitter pre-emphasises
+// L and R individually before matrixing. So in WFM the Demodulator's own
+// de-emphasis is switched OFF and StereoFm owns it — including for MONO
+// output, which is simply StereoFm with its stereo gate closed (L == R
+// exactly). Routing mono through the same object is what makes toggling
+// stereo, or losing pilot lock, inaudible in tone: the de-emphasis and the
+// 15 kHz low-pass are identical on both sides of the switch, and StereoFm's
+// gate ramps the difference channel in and out instead of hard-switching.
+// The alternative (a second Demodulator instance purely for the MPX taps)
+// would leave two different de-emphasis paths for mono and stereo audio and
+// pay for a second discriminator; this way there is exactly one.
+//
+// AGC AND SQUELCH RUN ON THE INTERLEAVED STEREO STREAM, one instance each,
+// so both channels always receive the identical gain and the identical gate
+// envelope — two per-channel instances would each normalise their own channel
+// to the target level and destroy the stereo image the matrix just recovered.
+// The blocks are constructed at 2x the channel rate so their per-sample time
+// constants stay correct in real time, and a mono stream (every non-WFM mode)
+// therefore behaves exactly as it did before stereo existed.
 //
 // Why the audio chain shares the DSP thread instead of getting a third one:
 // the whole chain costs a few tens of microseconds per 1024-sample block
@@ -37,10 +62,14 @@
 
 #include "dsp/agc.hpp"
 #include "dsp/demod.hpp"
+#include "dsp/noise_reduction.hpp"
+#include "dsp/notch.hpp"
+#include "dsp/rds.hpp"
 #include "dsp/resampler.hpp"
 #include "dsp/spectrum.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
+#include "dsp/stereo_fm.hpp"
 #include "dsp/vfo.hpp"
 #include "sink/audio_out.hpp"
 #include "source/iq_source.hpp"
@@ -55,6 +84,13 @@ class Recorder;
 struct SpectrumFrame {
     std::vector<float> dbBins;   // fftshifted dB power spectrum, size == fftSize
     std::uint64_t seq = 0;       // strictly increasing per published frame
+};
+
+// What the GUI needs to render the RDS panel, as ONE value snapshot so the
+// fields it displays can never come from two different instants.
+struct RdsSnapshot {
+    bool synced = false;                // block synchronisation acquired
+    cascade::dsp::RdsState state;       // PI / PS / PTY / RadioText / counters
 };
 
 class Pipeline {
@@ -150,10 +186,79 @@ public:
     // block after start().
     float signalPowerDb() const;
 
+    // --- Broadcast-FM stereo (P7) --------------------------------------------
+    // User switch, not a capability report: false forces mono (StereoFm's own
+    // ramped force-mono gate, so the toggle is click-free). Default true —
+    // it only ever changes anything in WFM with a locked pilot, which is
+    // exactly when a broadcast receiver is expected to produce stereo.
+    void setStereoEnabled(bool on);
+    bool stereoEnabled() const;
+
+    // Lock-free snapshots for the UI indicator, published once per DSP block
+    // exactly like signalPowerDb(). pilotLocked() is the decoder's own lock
+    // flag (meaningful only while WFM is running); stereoActive() is what the
+    // "ST" indicator should light on: WFM AND enabled AND locked.
+    bool pilotLocked() const;
+    float pilotLevel() const;
+    bool stereoActive() const;
+
+    // --- RDS (P7) -------------------------------------------------------------
+    // Snapshot of the decoder fed by the WFM composite. Published by the DSP
+    // thread whenever the decoder's counters move (i.e. at most ~11 groups a
+    // second, not once per block), and copied out here under its own mutex —
+    // the GUI never contends with the audio path for audioMutex_ to read it.
+    RdsSnapshot rdsSnapshot() const;
+
+    // Discards all RDS and stereo decoder state. MUST be called on every
+    // retune: the decoder has no idea the antenna moved, and a lingering PS
+    // name from the previous station is a wrong readout, not a cosmetic one.
+    // setDemodMode / setVfoOffsetHz / setSource / setInputRateHz already call
+    // it; a caller that retunes the SOURCE (the pipeline never sees that) has
+    // to call it itself.
+    void resetRds();
+
+    // --- Audio post-processing (P7) -------------------------------------------
+    // Chain order after the resampler, per channel:
+    //     notch -> auto-notch -> noise reduction
+    // Rationale: the notches remove deterministic tones FIRST, so (a) the two
+    // never fight over the same carrier — with the manual notch already on it,
+    // the auto-notch's detector no longer sees the tone to chase — and (b) the
+    // noise-reduction floor tracker gets a spectrum with no surviving
+    // heterodyne to mistake for a noise floor. Noise reduction runs last
+    // because its output is what the listener hears; anything after it would
+    // reintroduce ripple into the floor it just smoothed.
+    void setNoiseReductionEnabled(bool on);
+    bool noiseReductionEnabled() const;
+    void setNoiseReductionStrength(float s01);
+    float noiseReductionStrength() const;
+
+    void setNotchEnabled(bool on);
+    bool notchEnabled() const;
+    void setNotchFrequencyHz(double hz);
+    double notchFrequencyHz() const;   // the CLAMPED value actually in use
+    void setNotchQ(double q);
+    double notchQ() const;
+
+    void setAutoNotchEnabled(bool on);
+    bool autoNotchEnabled() const;
+    // Readouts for the UI: is the auto-notch currently parked on a tone, and
+    // where. Both are lock-free snapshots refreshed once per DSP block.
+    bool autoNotchEngaged() const;
+    double autoNotchFrequencyHz() const;
+
     // The audio sink, exposed for GUI wiring: volume, device enumeration, and
     // re-open on device change. The device the constructor opens (when
     // cfg.audioEnabled) is the system default at kAudioRateHz.
     cascade::sink::AudioOut& audio();
+
+    // Opens an output device (-1 = system default) at kAudioRateHz, trying
+    // STEREO first and falling back to mono when the device refuses two
+    // channels. Use this rather than audio().open() from the GUI: the DSP
+    // thread reads the resulting layout under audioMutex_ to decide whether
+    // to push interleaved frames or a mono downmix, and going through the
+    // sink directly would leave that mirror stale. Returns false only when
+    // both attempts fail (the sink is then closed and write() simply drops).
+    bool openAudioDevice(int deviceIndex);
 
     // --- Runtime input-rate follow (rate-follow) ------------------------------
     // Rebuilds the rate-dependent DSP chain for a new input sample rate. The
@@ -230,10 +335,19 @@ public:
     // AudioOut::write so the count advances with or without a device.
     std::uint64_t audioSamplesProduced() const;
 
-    // Copies the most recent audio samples (a rolling 4096-sample tap taken
-    // just before AudioOut::write) into dst in chronological order. Returns
-    // the number copied: min(n, 4096, samples produced so far).
+    // Copies the most recent audio samples (a rolling 4096-FRAME tap taken
+    // just before AudioOut::write) into dst in chronological order, as the
+    // MONO downmix (L + R)/2. Returns the number copied: min(n, 4096, frames
+    // produced so far). The downmix is exact for every mono path — L and R
+    // are then bit-identical and (a + a)/2 == a in IEEE arithmetic — so the
+    // --selftest measurement this backs is unchanged by the stereo work.
     std::size_t audioTap(float* dst, std::size_t n) const;
+
+    // Both channels of the same rolling tap, for tests that need to prove the
+    // channels actually differ (stereo separation) or actually match (forced
+    // mono). Either destination may be null. Returns the frames copied.
+    std::size_t audioTapStereo(float* dstLeft, float* dstRight,
+                               std::size_t n) const;
 
     // --- Recorder taps (P6) ---------------------------------------------------
     // Non-owning recorder hooks fed by the DSP thread; nullptr (the default)
@@ -268,6 +382,15 @@ private:
     void dspThreadBody();
     void noteThreadFault(const char* where, const char* what);
     void processAudioBlock(const std::complex<float>* in, std::size_t n);
+    // Rebuilds the rate-dependent parts of the stereo/RDS/audio-post chain
+    // for a new channel rate. Caller holds audioMutex_.
+    void rebuildChannelBlocks(double chanRate);
+    // Copies the decoder's state into rdsPublished_ when something moved.
+    // Caller holds audioMutex_ (it reads rds_); takes rdsMutex_ internally.
+    void publishRds();
+    // The body of resetRds(), for callers that ALREADY hold audioMutex_ —
+    // re-locking it from inside a setter would deadlock instantly.
+    void resetDecodersLocked();
 
     Config cfg_;
     // Built-in generator source: always alive (a member, not a unique_ptr)
@@ -316,25 +439,75 @@ private:
     // Mirrors the demod's de-emphasis so it survives the rebuild that a
     // sample-rate change performs. Guarded by audioMutex_ like demod_ itself.
     double deemphasisUs_ = 50.0;
+    // Stereo decoder + RDS decoder, both fed the WFM composite. Held by
+    // unique_ptr only so a channel-rate change can replace them wholesale
+    // (neither has an assignment operator worth relying on, and both bake the
+    // rate into their filter designs).
+    std::unique_ptr<cascade::dsp::StereoFm> stereo_;
+    std::unique_ptr<cascade::dsp::RdsDecoder> rds_;
+    bool stereoEnabled_ = true;
+    // Counters of the last published snapshot: the publish is skipped unless
+    // the decoder actually advanced, which keeps the per-block cost at one
+    // pair of integer compares instead of two string copies.
+    std::uint32_t rdsPubGroups_ = 0;
+    std::uint32_t rdsPubErrors_ = 0;
+
     cascade::dsp::Agc agc_;
     cascade::dsp::Squelch squelch_;
     cascade::dsp::PowerMeter meter_;      // S-meter source (channel power)
-    cascade::dsp::RationalResampler resampler_;
+    // TWO resamplers with identical configuration, one per channel: the
+    // resampler is mono, and running the same L/M state machine twice from
+    // the same starting state keeps the channels sample-aligned forever.
+    cascade::dsp::RationalResampler resampler_;    // left / mono
+    cascade::dsp::RationalResampler resamplerR_;   // right
+    // Audio post-processing, per channel, all at kAudioRateHz (so a
+    // rate-follow never rebuilds them). Held by unique_ptr because
+    // NoiseReduction and AutoNotch own an FFT plan and are not assignable.
+    std::unique_ptr<cascade::dsp::Notch> notchL_;
+    std::unique_ptr<cascade::dsp::Notch> notchR_;
+    std::unique_ptr<cascade::dsp::AutoNotch> autoNotchL_;
+    std::unique_ptr<cascade::dsp::AutoNotch> autoNotchR_;
+    std::unique_ptr<cascade::dsp::NoiseReduction> nrL_;
+    std::unique_ptr<cascade::dsp::NoiseReduction> nrR_;
     cascade::sink::AudioOut audio_;       // constructed always; device opened
                                           // only when cfg_.audioEnabled
+    // Channel layout the sink was last opened with (1 or 2), mirrored under
+    // audioMutex_ so the DSP thread never races a GUI device switch.
+    int audioChannels_ = 1;
     // FM discriminator scale: rad/sample -> ~0.5 full scale at +/-75 kHz
     // deviation (see pipeline.cpp for the derivation).
     float fmScale_ = 1.0f;
     // Scratch buffers, members so steady-state blocks never allocate.
     std::vector<std::complex<float>> chanBuf_;   // VFO output (channel rate)
-    std::vector<float> audioBuf_;                // demod/agc/squelch (channel rate)
-    std::vector<float> outBuf_;                  // resampled 48 kHz audio
-    // Rolling pre-AudioOut tap window + producer-side counter (test support).
+    std::vector<float> audioBuf_;                // demod output / composite
+    std::vector<float> leftBuf_;                 // channel rate, per channel
+    std::vector<float> rightBuf_;
+    std::vector<float> ilvBuf_;                  // interleaved L,R (2m) for
+                                                 // the single Agc + Squelch
+    std::vector<std::complex<float>> gateBuf_;   // chanBuf_ duplicated 1->2 so
+                                                 // the squelch's power source
+                                                 // lines up with ilvBuf_
+    std::vector<float> outL_;                    // resampled 48 kHz audio
+    std::vector<float> outR_;
+    std::vector<float> outIlv_;                  // interleaved 48 kHz for the sink
+    std::vector<float> monoOut_;                 // (L+R)/2 for tap + recorder
+    // Rolling pre-AudioOut tap window (interleaved L,R; kAudioTapSize FRAMES)
+    // + producer-side counters (test support).
     std::vector<float> tapBuf_;
-    std::size_t tapWrite_ = 0;
-    std::size_t tapFilled_ = 0;
+    std::size_t tapWrite_ = 0;   // in frames
+    std::size_t tapFilled_ = 0;  // in frames
     std::atomic<float> signalDb_{-200.0f};
     std::atomic<std::uint64_t> audioSamples_{0};
+    // UI snapshots, published once per block like signalDb_.
+    std::atomic<bool> pilotLocked_{false};
+    std::atomic<float> pilotLevel_{0.0f};
+    std::atomic<bool> stereoActive_{false};
+    std::atomic<bool> autoNotchEngaged_{false};
+    std::atomic<double> autoNotchHz_{0.0};
+    // Published RDS state. Its own mutex (never held together with any other)
+    // so rdsSnapshot() from the GUI cannot stall behind an audio block.
+    mutable std::mutex rdsMutex_;
+    RdsSnapshot rdsPublished_;
     // Recorder taps (P6): non-owning, audioMutex_-guarded like the chain
     // blocks above — see the set*Recorder contract in the public section.
     Recorder* iqRecorder_ = nullptr;

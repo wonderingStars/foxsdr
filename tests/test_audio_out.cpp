@@ -300,6 +300,87 @@ int main() {
         CHECK(!ao.running());
         CHECK(!ao.open(-1, -48000.0));      // nonsense sample rate refused
         CHECK(!ao.running());
+        CHECK(ao.channels() == 1);          // default layout until an open wins
+        CHECK(!ao.open(-1, 48000.0, 3));    // only 1 and 2 are layouts
+        CHECK(!ao.open(-1, 48000.0, 0));
+        CHECK(ao.channels() == 1);          // a refused open changes nothing
+    }
+
+    // --- Stereo: real two-channel open, then the callback core headless -----
+    // The device is opened for real (this machine has audio) and CLOSED
+    // again before pullBlock is exercised: channels() survives the close by
+    // contract, so the callback path can be measured deterministically with
+    // no PortAudio thread racing the ring for samples.
+    {
+        AudioOut ao;
+        const bool ok = ao.open(-1, 48000.0, 2);
+        CHECK(ok);
+        if (!ok) {
+            printOpenFailureDiagnostics(48000.0);
+        } else {
+            CHECK(ao.running());
+            CHECK(ao.channels() == 2);
+            ao.close();
+            CHECK(!ao.running());
+            CHECK(ao.channels() == 2);  // layout of the ring, not of the stream
+
+            // writeStereo takes FRAMES and pullBlock takes FRAMES; the
+            // samples in between are interleaved L,R and must come back in
+            // exactly that order with one volume applied to both channels.
+            float frames[64];  // 32 frames
+            for (int i = 0; i < 32; ++i) {
+                frames[2 * i] = nextSample();
+                frames[2 * i + 1] = nextSample();
+            }
+            CHECK(ao.writeStereo(frames, 32) == 32u);
+
+            ao.setVolume(0.5f);
+            float dst[64];
+            for (float& d : dst) { d = 123.0f; }
+            // 16 frames requested -> 32 samples pulled.
+            CHECK(AudioOut::pullBlock(&ao, dst, 16) == 32u);
+            for (int i = 0; i < 32; ++i) { CHECK(dst[i] == frames[i] * 0.5f); }
+            CHECK(ao.underruns() == 0u);
+
+            // Starvation covers BOTH channels of every unfilled frame and
+            // still counts one event: 16 frames left in the ring, 24 asked
+            // for, so 32 samples arrive and the remaining 16 are silence.
+            for (float& d : dst) { d = 123.0f; }
+            CHECK(AudioOut::pullBlock(&ao, dst, 24) == 32u);
+            for (int i = 0; i < 32; ++i) { CHECK(dst[i] == frames[32 + i] * 0.5f); }
+            for (int i = 32; i < 48; ++i) { CHECK(dst[i] == 0.0f); }
+            CHECK(ao.underruns() == 1u);
+
+            // The channel pair is never split: with an odd number of samples
+            // of room left, writeStereo must refuse the straddling frame
+            // rather than shift every later sample by one (which would swap
+            // L and R for the rest of the session).
+            AudioOut fill;
+            CHECK(fill.open(-1, 48000.0, 2));
+            fill.close();
+            std::vector<float> block(4096, 0.25f);
+            std::size_t framesIn = 0;
+            for (int iter = 0; iter < 100000; ++iter) {
+                const std::size_t took = fill.writeStereo(block.data(), 2048);
+                framesIn += took;
+                if (took < 2048u) { break; }
+            }
+            CHECK(framesIn > 0u);
+            // Every accepted frame is whole, so the drain sees an even sample
+            // count and each frame reads back as the pair it was written as.
+            std::vector<float> out(4096, 0.0f);
+            std::size_t framesOut = 0;
+            bool pairsOk = true;
+            fill.setVolume(1.0f);
+            for (int iter = 0; iter < 100000; ++iter) {
+                const std::size_t got = AudioOut::pullBlock(&fill, out.data(), 2048);
+                if (got == 0u) { break; }
+                if (got % 2u != 0u) { pairsOk = false; }
+                framesOut += got / 2u;
+            }
+            CHECK(pairsOk);
+            CHECK(framesOut == framesIn);  // conservation, in whole frames
+        }
     }
 
     return testSummary("test_audio_out");

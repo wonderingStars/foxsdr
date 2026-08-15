@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -237,8 +238,36 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
            a.dbMin == b.dbMin && a.dbMax == b.dbMax &&
            a.splitRatio == b.splitRatio && a.vfoOffsetHz == b.vfoOffsetHz &&
-           a.sampleRateHz == b.sampleRateHz;
+           a.sampleRateHz == b.sampleRateHz &&
+           a.stereoEnabled == b.stereoEnabled &&
+           a.deemphasisIndex == b.deemphasisIndex &&
+           a.nrEnabled == b.nrEnabled && a.nrStrength == b.nrStrength &&
+           a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
+           a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
+           a.bandPlanOverlay == b.bandPlanOverlay;
 }
+
+// --- Band plan overlay constants (P7) ----------------------------------------
+//
+// The plan's own palette carries alpha 0x60 for a fill the spectrum trace has
+// to stay readable through. It is dimmed further here for one structural
+// reason: SpectrumView paints its own opaque panel background before the
+// trace, so a rectangle drawn BEFORE it would be invisible and these are
+// therefore painted after — over the trace rather than behind it. At this
+// alpha the trace still reads through cleanly, and the band edges stay
+// legible; the visual result is the intended "service bands behind the
+// spectrum" without reaching inside a module this task may not modify.
+// A full-height fill was tried first and rejected on sight: the FM broadcast
+// band alone is 20.5 MHz wide, so at any normal zoom the whole view sits
+// inside ONE band and the "overlay" became a wash tinting the entire spectrum
+// and waterfall amber. The band is now a RIBBON along the top edge at full
+// palette alpha, plus faint full-height edge lines — same information (extent,
+// boundaries, name), none of the damage to the trace underneath.
+constexpr float kBandRibbonPx = 6.0f;
+constexpr float kBandEdgeAlphaScale = 0.55f;
+// A band narrower than this many pixels gets no label — there is nowhere to
+// put one that would not spill over its neighbours.
+constexpr float kBandLabelMinPx = 46.0f;
 
 // Index of the value in arr[0..n) closest to x (ties resolve low). Used to
 // point preset combos at whatever a config file or device readback holds.
@@ -305,6 +334,21 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // as near-silence, and switching to CW yields the 700 Hz sidetone.
     pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
     pipeline_.audio().setVolume(volume_);
+    // Push every P7 mirror once so the pipeline and the panels start in
+    // agreement even when no config file exists (the pipeline's own defaults
+    // match these, so this is belt and braces rather than a fix-up).
+    pipeline_.setStereoEnabled(stereoEnabled_);
+    pipeline_.setNoiseReductionEnabled(nrEnabled_);
+    pipeline_.setNoiseReductionStrength(nrStrength_);
+    pipeline_.setNotchEnabled(notchEnabled_);
+    pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
+    pipeline_.setNotchQ(static_cast<double>(notchQ_));
+    pipeline_.setAutoNotchEnabled(autoNotch_);
+    // Optional program data / optional user code. Both are silent no-ops when
+    // their directory is absent, which is the normal case when running out of
+    // a build tree — and every bounded --frames CI run takes this path.
+    loadBandPlan();
+    rescanPlugins();
     // DELIBERATELY no SoapySDR enumeration here. Enumeration loads vendor
     // modules (SoapyUHD -> uhd.dll -> libusb) whose USB discovery faulted
     // in-process in ~2% of measured `--frames 1` runs (0xC0000005 inside
@@ -653,7 +697,7 @@ void AppWindow::drawFrequencyReadout() {
                 const double next = std::max(0.0, hz + ticks * kPlaceHz[i]);
                 // Failure (e.g. a tune the driver refuses) needs no handling
                 // here: the display follows the readback, which won't move.
-                src.setCenterFrequencyHz(next);
+                retuneSourceHz(next);
             }
             hoveredDigit = true;  // tooltip is drawn after PopFont (see below)
             // SINGLE click opens the editor. Double-click was tried first and
@@ -741,6 +785,10 @@ void AppWindow::drawMenuColumn() {
                               "50 us: Europe, Africa, Asia, Australia. 75 us: Americas, South Korea.");
         }
 
+        // Stereo indicator + force-mono toggle + the RDS readout. Only in
+        // WFM: nothing below it exists on any other demodulator.
+        if (modeIndex_ == 1) { drawStereoRdsControls(); }
+
         // S-meter: channel power mapped over the squelch slider's own
         // [-120, 0] dB span, so the bar and the threshold share a scale.
         const float sDb = pipeline_.signalPowerDb();
@@ -764,9 +812,10 @@ void AppWindow::drawMenuColumn() {
                 if (ImGui::Selectable(dev.name.c_str(), i == deviceIndex_)) {
                     deviceIndex_ = i;
                     // Re-open on change: open() closes the old stream first,
-                    // so this is the whole device-switch operation.
-                    pipeline_.audio().open(dev.index,
-                                           cascade::core::Pipeline::kAudioRateHz);
+                    // so this is the whole device-switch operation. Through
+                    // the pipeline, not the sink, so the DSP thread learns
+                    // the new channel layout (stereo first, mono fallback).
+                    pipeline_.openAudioDevice(dev.index);
                 }
                 ImGui::PopID();
             }
@@ -786,13 +835,33 @@ void AppWindow::drawMenuColumn() {
         if (minChanged && dbMin_ > dbMax_ - kMinDbSpan) { dbMin_ = dbMax_ - kMinDbSpan; }
         if (maxChanged && dbMax_ < dbMin_ + kMinDbSpan) { dbMax_ = dbMin_ + kMinDbSpan; }
         if (minChanged || maxChanged) { spectrum_->setRange(dbMin_, dbMax_); }
+
+        // Band plan overlay (P7). Always offered, even with no plan
+        // installed — the checkbox is a display preference that persists, and
+        // hiding it when resources/bandplans is missing would make the
+        // feature look broken rather than simply idle.
+        ImGui::Checkbox("Band plan", &bandPlanOverlay_);
+        if (bandPlanOverlay_) {
+            if (!bandPlanError_.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+                ImGui::TextWrapped("%s", bandPlanError_.c_str());
+                ImGui::PopStyleColor();
+            } else if (bandPlan_.entries().empty()) {
+                ImGui::TextDisabled("no band plan installed");
+            } else {
+                ImGui::TextDisabled("%s (%d bands)", bandPlan_.name().c_str(),
+                                    static_cast<int>(bandPlan_.entries().size()));
+            }
+        }
     }
-    // P6 sections. Closed by default (unlike the always-needed sections
-    // above): all three are occasional-use tools, and opening them by
+    // P6/P7 sections. Closed by default (unlike the always-needed sections
+    // above): all of them are occasional-use tools, and opening them by
     // default would push the Display controls off a 720p column.
+    drawAudioFilterSection();
     drawRecorderSection();
     drawBookmarksSection();
     drawScannerSection();
+    drawPluginsSection();
     ImGui::EndChild();
 
     // Status footer: active source identity, its sample rate (device readback
@@ -802,7 +871,17 @@ void AppWindow::drawMenuColumn() {
     // must not push the numbers out of the reserved footer space.
     ImGui::Separator();
     cascade::source::IqSource& src = pipeline_.activeSource();
-    ImGui::TextUnformatted(src.name());
+    // Line 1: the active source, and — when a band plan is loaded — the band
+    // the TUNED frequency (source centre + VFO offset, i.e. what the VFO
+    // marker sits on) falls in. BandPlan::at returns the narrowest match, so
+    // this names "ISS Downlink" rather than the 2 m band containing it.
+    const cascade::core::BandEntry* band =
+        bandPlan_.entries().empty() ? nullptr : bandPlan_.at(currentAbsoluteHz());
+    if (band != nullptr) {
+        ImGui::Text("%s | %s", src.name(), band->name.c_str());
+    } else {
+        ImGui::TextUnformatted(src.name());
+    }
     // Source rate | DSP channel rate (the Vfo's output rate the demodulator
     // runs at — this is what makes rate-follow visible) | buffer health.
     ImGui::Text("%.4g MS/s | ch %.4g kHz | underruns %llu",
@@ -1183,6 +1262,13 @@ void AppWindow::drawCenterPanels() {
                             firstBin, lastBin, width, spectrumHeight);
     const bool specHovered = ImGui::IsItemHovered();
 
+    // Band plan behind the trace (see kBandFillAlphaScale for why "behind"
+    // is achieved with a translucent fill painted after it). Before the
+    // gridlines and the VFO overlay so those stay the topmost furniture.
+    if (bandPlanOverlay_) {
+        drawBandPlanOverlay(specPos.x, specPos.y, width, spectrumHeight);
+    }
+
     // Axis ticks, computed once and shared by the spectrum's vertical
     // gridlines and the tick strip below.
     double tickHz[kMaxTicks];
@@ -1400,6 +1486,228 @@ void AppWindow::drawFreqAxis(float width, const double* tickHz,
     ImGui::Dummy(ImVec2(width, kAxisHeight));
 }
 
+// --- Stereo / RDS (P7) ---------------------------------------------------------
+
+void AppWindow::drawStereoRdsControls() {
+    // Force-mono toggle. The pipeline routes WFM through the stereo decoder
+    // either way, so this only opens or closes its difference-channel gate —
+    // which is what makes the switch click-free and tone-neutral.
+    if (ImGui::Checkbox("Stereo", &stereoEnabled_)) {
+        pipeline_.setStereoEnabled(stereoEnabled_);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Decode the 38 kHz difference channel when a 19 kHz\n"
+                          "pilot is present. Unticked forces mono.");
+    }
+    ImGui::SameLine();
+    // The indicator reports the DECODER, not the checkbox: lit only when a
+    // pilot is actually locked AND stereo is enabled, dim-but-present when a
+    // pilot is locked while the user forced mono, and greyed with no pilot.
+    const bool locked = pipeline_.pilotLocked();
+    const bool active = pipeline_.stereoActive();
+    if (active) {
+        ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.45f, 1.0f), "ST");
+    } else if (locked) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "ST (forced mono)");
+    } else {
+        ImGui::TextDisabled("MONO");
+    }
+    if (locked) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("pilot %.2f", static_cast<double>(pipeline_.pilotLevel()));
+    }
+
+    // --- RDS ------------------------------------------------------------------
+    const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
+    ImGui::SeparatorText("RDS");
+    if (!rds.state.piValid && !rds.state.psValid && rds.state.radioText.empty()) {
+        // Distinguish "listening, nothing yet" from "not receiving at all":
+        // synced means the block decoder found the 1187.5 bit/s stream and is
+        // simply waiting for the first complete field.
+        ImGui::TextDisabled(rds.synced ? "RDS: syncing..." : "RDS: no data");
+        return;
+    }
+    if (rds.state.psValid) {
+        ImGui::Text("PS  %s", rds.state.ps.c_str());
+    } else {
+        ImGui::TextDisabled("PS  --------");
+    }
+    if (rds.state.piValid) {
+        ImGui::Text("PI  %04X   PTY %u%s%s", rds.state.pi,
+                    static_cast<unsigned>(rds.state.pty),
+                    rds.state.tp ? "  TP" : "", rds.state.ta ? "  TA" : "");
+    } else {
+        ImGui::TextDisabled("PI  ----");
+    }
+    if (!rds.state.radioText.empty()) {
+        ImGui::TextWrapped("%s", rds.state.radioText.c_str());
+    }
+    ImGui::TextDisabled("groups %u | block errors %u", rds.state.groupsDecoded,
+                        rds.state.blockErrors);
+}
+
+// --- Audio filters: noise reduction + notch (P7) --------------------------------
+
+void AppWindow::drawAudioFilterSection() {
+    if (!ImGui::CollapsingHeader("Audio filters")) { return; }
+
+    // The order is the pipeline's, spelled out because it is the part a user
+    // cannot infer from the controls.
+    ImGui::TextDisabled("chain: notch -> auto-notch -> noise reduction");
+
+    if (ImGui::Checkbox("Noise reduction", &nrEnabled_)) {
+        pipeline_.setNoiseReductionEnabled(nrEnabled_);
+    }
+    ImGui::BeginDisabled(!nrEnabled_);
+    if (ImGui::SliderFloat("Strength", &nrStrength_, 0.0f, 1.0f, "%.2f")) {
+        pipeline_.setNoiseReductionStrength(nrStrength_);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::Separator();
+    if (ImGui::Checkbox("Notch", &notchEnabled_)) {
+        pipeline_.setNotchEnabled(notchEnabled_);
+    }
+    ImGui::BeginDisabled(!notchEnabled_);
+    // Logarithmic: a linear 10 Hz..20 kHz slider spends 90% of its travel
+    // above 2 kHz, where almost no heterodyne a user wants to remove lives.
+    if (ImGui::SliderFloat("Freq", &notchFreqHz_, 10.0f, 20000.0f, "%.0f Hz",
+                           ImGuiSliderFlags_Logarithmic)) {
+        pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
+    }
+    if (ImGui::SliderFloat("Q", &notchQ_, 1.0f, 200.0f, "%.0f")) {
+        pipeline_.setNotchQ(static_cast<double>(notchQ_));
+    }
+    ImGui::EndDisabled();
+
+    if (ImGui::Checkbox("Auto notch", &autoNotch_)) {
+        pipeline_.setAutoNotchEnabled(autoNotch_);
+    }
+    if (autoNotch_) {
+        ImGui::SameLine();
+        if (pipeline_.autoNotchEngaged()) {
+            ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.45f, 1.0f), "on %.0f Hz",
+                               pipeline_.autoNotchFrequencyHz());
+        } else {
+            ImGui::TextDisabled("searching");
+        }
+    }
+}
+
+// --- Plugins (P7) ---------------------------------------------------------------
+
+void AppWindow::rescanPlugins() {
+    // A missing plugins directory is the normal case and yields an empty list
+    // without an error — the host's documented behaviour, and the reason
+    // nothing here reports a failure.
+    pluginDir_ = cascade::core::PluginHost::defaultPluginDir();
+    pluginHost_.scan(pluginDir_);
+}
+
+void AppWindow::drawPluginsSection() {
+    if (!ImGui::CollapsingHeader("Plugins")) { return; }
+
+    ImGui::TextDisabled("%s", pluginDir_.c_str());
+    if (ImGui::Button("Rescan", ImVec2(-FLT_MIN, 0.0f))) { rescanPlugins(); }
+
+    const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
+    if (list.empty()) {
+        ImGui::TextDisabled("No plugins installed");
+        return;
+    }
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        const cascade::core::LoadedPlugin& p = list[i];
+        ImGui::PushID(static_cast<int>(i));
+        if (p.loaded) {
+            ImGui::Text("%s %s", p.name.c_str(), p.version.c_str());
+            if (!p.author.empty()) { ImGui::TextDisabled("by %s", p.author.c_str()); }
+            // The LICENCE is displayed, always and unconditionally. A plugin
+            // is third-party code loaded into a commercially sold binary:
+            // what terms it arrived under is the user's business and must not
+            // require digging.
+            ImGui::TextDisabled("licence: %s", p.licence.c_str());
+        } else {
+            // A refused candidate is shown WITH ITS REASON rather than
+            // omitted — "my plugin does not appear" with no explanation is
+            // the support ticket the host was designed to prevent.
+            const std::string file =
+                std::filesystem::path(p.path).filename().string();
+            ImGui::TextColored(kErrorRed, "%s", file.c_str());
+            ImGui::TextWrapped("%s", p.error.c_str());
+        }
+        ImGui::PopID();
+    }
+}
+
+// --- Band plan overlay (P7) -----------------------------------------------------
+
+void AppWindow::loadBandPlan() {
+    const std::string dir = cascade::core::BandPlan::defaultDir();
+    std::error_code ec;
+    // Existence is checked FIRST so the overwhelmingly common "no band plans
+    // installed" case stays completely silent, per the feature's contract;
+    // only a directory that is really there can produce an error worth
+    // showing.
+    if (!std::filesystem::is_directory(std::filesystem::path(dir), ec)) { return; }
+    std::string err;
+    if (!bandPlan_.loadDirectory(dir, err)) { bandPlanError_ = err; }
+}
+
+void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float height) {
+    if (bandPlan_.entries().empty()) { return; }
+    const std::vector<const cascade::core::BandEntry*> vis =
+        bandPlan_.visible(scale_.viewLowHz(), scale_.viewHighHz());
+    if (vis.empty()) { return; }
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+    for (const cascade::core::BandEntry* b : vis) {
+        // entries()/visible() are ordered widest-first on a shared start, so
+        // walking the vector paints containing bands before the narrower ones
+        // nested inside them — the draw order the model already guarantees.
+        float bx0 = x0 + static_cast<float>(scale_.hzToX(b->startHz)) * width;
+        float bx1 = x0 + static_cast<float>(scale_.hzToX(b->endHz)) * width;
+        bx0 = std::max(bx0, x0);
+        bx1 = std::min(bx1, x0 + width);
+        if (!(bx1 > bx0)) { continue; }
+
+        const std::uint32_t rgba = b->colorRgba;  // 0xRRGGBBAA
+        const int r = static_cast<int>((rgba >> 24) & 0xFFu);
+        const int g = static_cast<int>((rgba >> 16) & 0xFFu);
+        const int bl = static_cast<int>((rgba >> 8) & 0xFFu);
+        const int a = static_cast<int>(rgba & 0xFFu);
+        // A RIBBON along the top edge, not a full-height wash. Zoomed into a
+        // single band — the normal case, since FM broadcast alone spans
+        // 20 MHz — a full-panel fill tints the entire spectrum and waterfall
+        // and destroys the trace's readability. A ribbon says exactly the same
+        // thing (where the band starts, ends and what it is called) while
+        // leaving the signal untouched.
+        const float ribbonH = std::min(kBandRibbonPx, height * 0.25f);
+        drawList->AddRectFilled(ImVec2(bx0, y0), ImVec2(bx1, y0 + ribbonH),
+                                IM_COL32(r, g, bl, a));
+        // Faint full-height edges still mark the boundaries down the panel, so
+        // a band edge remains findable next to a signal without washing the
+        // area between them.
+        const int edgeA = static_cast<int>(static_cast<float>(a) * kBandEdgeAlphaScale);
+        drawList->AddLine(ImVec2(bx0, y0), ImVec2(bx0, y0 + height),
+                          IM_COL32(r, g, bl, edgeA));
+        drawList->AddLine(ImVec2(bx1, y0), ImVec2(bx1, y0 + height),
+                          IM_COL32(r, g, bl, edgeA));
+
+        if (bx1 - bx0 >= kBandLabelMinPx) {
+            const ImVec2 sz = ImGui::CalcTextSize(b->name.c_str());
+            if (sz.x <= bx1 - bx0 - 4.0f) {
+                // Label sits just under its ribbon, in near-white: coloured
+                // text on the coloured ribbon was the least legible part of
+                // the first attempt.
+                drawList->AddText(ImVec2(bx0 + 3.0f, y0 + ribbonH + 1.0f),
+                                  IM_COL32(235, 235, 235, 200), b->name.c_str());
+            }
+        }
+    }
+    drawList->PopClipRect();
+}
+
 // --- Recorder (P6) -------------------------------------------------------------
 
 void AppWindow::drawRecorderSection() {
@@ -1587,7 +1895,20 @@ void AppWindow::tuneAbsoluteHz(double absHz) {
     // on absHz. A refusal (a tune the driver rejects) needs no handling —
     // every display, and the scanner's user-tune baseline, follows the
     // readback, which simply won't move.
-    pipeline_.activeSource().setCenterFrequencyHz(absHz - pipeline_.vfoOffsetHz());
+    retuneSourceHz(absHz - pipeline_.vfoOffsetHz());
+}
+
+void AppWindow::retuneSourceHz(double centerHz) {
+    // ONE place where the source centre moves. The pipeline cannot observe a
+    // device retune (the source owns the tuner), so the RDS/stereo decoders
+    // have to be told explicitly — otherwise the previous station's PS name
+    // stays on screen over the new one, which is a wrong readout, not a
+    // cosmetic lag. No-op when the tune does not actually move anything, so
+    // a repeated command cannot keep the decoders permanently reset.
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    if (src.centerFrequencyHz() == centerHz) { return; }
+    src.setCenterFrequencyHz(centerHz);
+    pipeline_.resetRds();
 }
 
 double AppWindow::currentAbsoluteHz() {
@@ -1708,6 +2029,27 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     splitRatio_ = cfg.splitRatio;
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
+
+    // P7 settings. All are pure DSP switches with no failure mode, and the
+    // loader has already clamped every one of them into range.
+    deemphIndex_ = cfg.deemphasisIndex;
+    pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
+    stereoEnabled_ = cfg.stereoEnabled;
+    pipeline_.setStereoEnabled(stereoEnabled_);
+    nrEnabled_ = cfg.nrEnabled;
+    nrStrength_ = cfg.nrStrength;
+    pipeline_.setNoiseReductionStrength(nrStrength_);
+    pipeline_.setNoiseReductionEnabled(nrEnabled_);
+    notchFreqHz_ = static_cast<float>(cfg.notchFreqHz);
+    notchQ_ = static_cast<float>(cfg.notchQ);
+    pipeline_.setNotchFrequencyHz(cfg.notchFreqHz);
+    pipeline_.setNotchQ(cfg.notchQ);
+    notchEnabled_ = cfg.notchEnabled;
+    pipeline_.setNotchEnabled(notchEnabled_);
+    autoNotch_ = cfg.autoNotch;
+    pipeline_.setAutoNotchEnabled(autoNotch_);
+    bandPlanOverlay_ = cfg.bandPlanOverlay;
+
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
             modeIndex_ = i;
@@ -1787,6 +2129,15 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.splitRatio = splitRatio_;
     cfg.vfoOffsetHz = pipeline_.vfoOffsetHz();
     cfg.sampleRateHz = pipeline_.activeSource().sampleRateHz();
+    cfg.stereoEnabled = stereoEnabled_;
+    cfg.deemphasisIndex = deemphIndex_;
+    cfg.nrEnabled = nrEnabled_;
+    cfg.nrStrength = nrStrength_;
+    cfg.notchEnabled = notchEnabled_;
+    cfg.notchFreqHz = static_cast<double>(notchFreqHz_);
+    cfg.notchQ = static_cast<double>(notchQ_);
+    cfg.autoNotch = autoNotch_;
+    cfg.bandPlanOverlay = bandPlanOverlay_;
     return cfg;
 }
 

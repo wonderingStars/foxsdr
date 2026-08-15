@@ -16,7 +16,7 @@
 ; SPDX-License-Identifier: MIT
 
 #define AppName "SDR-+ AI Supreme Leader"
-#define AppVersion "0.8.1"
+#define AppVersion "0.10.0"
 #define AppPublisher "Steven Fairclough"
 #define AppExe "cascade.exe"
 ; Install-dir leaf avoids '+' (some tools mishandle it in paths); display name keeps it.

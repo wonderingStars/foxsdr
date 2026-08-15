@@ -29,6 +29,16 @@
 //     end would invent a range the user never chose)
 //   - sourceKind  must be "siggen" | "file" | "soapy"; anything else resets
 //     to "siggen" (the only source that can never fail to exist)
+//   - deemphasisIndex clamped to [0, 2]  (the three-entry 50 us / 75 us / off
+//                                         combo; an out-of-range index would
+//                                         read past that table)
+//   - nrStrength  clamped to [0, 1]      (module contract)
+//   - notchFreqHz clamped to [10, 20000] (audible span inside the 48 kHz
+//                                         sink's Nyquist; the Notch clamps
+//                                         again internally, but a NaN or a
+//                                         negative from a hand-edited file
+//                                         should never reach a slider)
+//   - notchQ      clamped to [0.1, 1000] (the Notch's own useful range)
 //
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
@@ -56,6 +66,25 @@ struct AppConfig {
     float splitRatio = 0.4f;
     double vfoOffsetHz = 300000.0;
     double sampleRateHz = 2000000.0;
+
+    // --- P7 feature settings --------------------------------------------------
+    // Defaults are the app's own defaults, chosen so an existing installation
+    // sounds and looks exactly as it did before these fields existed: every
+    // audio processor OFF (noise reduction, notch, auto-notch), de-emphasis
+    // on the global 50 us default. The two that default ON are the ones whose
+    // "off" state would be a missing feature rather than a preserved
+    // behaviour: broadcast stereo decoding (inert outside WFM, and inert
+    // inside it until a real 19 kHz pilot locks) and the band-plan overlay
+    // (inert unless band plan files are actually installed).
+    bool stereoEnabled = true;
+    int deemphasisIndex = 0;  // 0 = 50 us, 1 = 75 us, 2 = off (kDeemphUs order)
+    bool nrEnabled = false;
+    float nrStrength = 0.5f;
+    bool notchEnabled = false;
+    double notchFreqHz = 1000.0;
+    double notchQ = 30.0;
+    bool autoNotch = false;
+    bool bandPlanOverlay = true;
 };
 
 class ConfigStore {
