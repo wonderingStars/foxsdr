@@ -41,7 +41,7 @@
 // (build-<slug>/tests, gitignored), removed on success and left behind on
 // failure for autopsy.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_repo.hpp"
 
 #include <cstdio>

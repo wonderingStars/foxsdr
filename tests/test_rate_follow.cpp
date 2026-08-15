@@ -37,7 +37,7 @@
 // floor is disabled). Audio frequency is measured by a direct DFT scan — an
 // independent reference, the same method --selftest uses.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <chrono>
 #include <cmath>

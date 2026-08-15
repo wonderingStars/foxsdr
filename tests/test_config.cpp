@@ -18,7 +18,7 @@
 // and clobber the file, turning both assertions red. A second variant locks
 // with share mode 0 (fully exclusive) to match the contract wording.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
 #include <cstdio>

@@ -67,7 +67,7 @@
 // static and pure (or filesystem-only), so the entire security-critical
 // surface is exercised offline; only the transport itself needs a network.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>

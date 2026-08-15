@@ -7,7 +7,7 @@
 // Pipeline::sourceThreadMain/dspThreadMain, running this file aborted the
 // whole test executable rather than failing an assertion.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
 #include <chrono>
 #include <complex>

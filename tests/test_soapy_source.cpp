@@ -17,7 +17,7 @@
 // start()/read() after the failed open still behave as "no device" — a
 // mutant that swallows the failure and returns true trips all three.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/soapy_source.hpp"
 
 #include <complex>

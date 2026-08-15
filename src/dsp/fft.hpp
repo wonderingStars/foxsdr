@@ -1,7 +1,7 @@
 // RAII wrapper over pffft's single-precision complex FFT, with ORDERED output
 // (interleaved complex bins in canonical order, via pffft_transform_ordered).
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

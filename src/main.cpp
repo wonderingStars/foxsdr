@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
 // Thin entry point: parse the command line, hand off to the GUI shell.
 // `--frames N` renders exactly N frames then exits 0 — the bounded-run

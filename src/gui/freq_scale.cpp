@@ -1,6 +1,6 @@
 // Frequency-axis view transform — implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/freq_scale.hpp"
 
 #include <algorithm>

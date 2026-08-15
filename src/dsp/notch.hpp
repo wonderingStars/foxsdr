@@ -16,7 +16,7 @@
 // algorithm. See the comment above AutoNotch for the search and the
 // hysteresis rules.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <algorithm>

@@ -4,6 +4,18 @@
  *
  * SPDX-License-Identifier: MIT
  *
+ * LICENCE EXCEPTION - READ THIS IF YOU ARE WRITING A PLUGIN.
+ * The application itself is licensed under PolyForm Noncommercial 1.0.0 (see
+ * LICENSE at the repository root), which requires a paid licence for
+ * commercial use. THIS HEADER IS DELIBERATELY EXEMPT and is MIT-licensed.
+ * Every plugin must include it, so licensing it restrictively would mean no
+ * one could write a commercial plugin without our permission - which would
+ * kill the plugin ecosystem before it began. Copy this file into your project
+ * and build against it freely, for any purpose, commercial or not. Doing so
+ * grants you no rights to the rest of the application, and imposes none of
+ * its terms on your plugin: your plugin is yours, under whatever licence you
+ * choose, and that licence is displayed to users before they install it.
+ *
  * THIS FILE IS THE WHOLE CONTRACT. It is deliberately a *pure C* header with
  * no includes beyond <stddef.h>/<stdint.h>, no C++ types, no STL, no
  * templates and no inline code, so a third-party author can copy this single

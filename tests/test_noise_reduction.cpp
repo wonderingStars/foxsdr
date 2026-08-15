@@ -8,7 +8,7 @@
 // bit-exact passthrough checks cannot catch those on their own, because
 // bypass is deliberately a separate delay line (see noise_reduction.hpp).
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/noise_reduction.hpp"
 
 #include <algorithm>

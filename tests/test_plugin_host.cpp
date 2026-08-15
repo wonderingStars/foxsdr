@@ -34,7 +34,7 @@
 // Temp policy follows test_recorder.cpp: per-case directories named with the
 // process id, removed on success, left behind on failure for autopsy.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_host.hpp"
 
 #include <cstdio>

@@ -18,7 +18,7 @@
 // timed out empty) are retried immediately; the bound on read() is also what
 // lets stop()/setSource() quiesce the thread promptly (see setSource).
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/pipeline.hpp"
 
 #include <algorithm>

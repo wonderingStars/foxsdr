@@ -6,7 +6,7 @@
 // (~17 channel samples). Every spectral/equivalence check below discards a
 // generous 512 channel samples (5120 input samples) of settling first.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/vfo.hpp"
 
 #include <algorithm>

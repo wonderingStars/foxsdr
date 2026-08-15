@@ -1,6 +1,6 @@
 // Rational L/M polyphase resampler.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/resampler.hpp"
 
 #include <algorithm>

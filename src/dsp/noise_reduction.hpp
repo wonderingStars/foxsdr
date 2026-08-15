@@ -10,7 +10,7 @@
 // (psychoacoustic masking models, learned priors, vendor "AI" denoisers) is
 // used anywhere in this file.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

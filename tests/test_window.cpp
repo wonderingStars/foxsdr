@@ -1,5 +1,5 @@
 // Tests for dsp/window.hpp.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/window.hpp"
 
 #include "test_check.hpp"

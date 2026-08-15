@@ -1,6 +1,6 @@
 // PortAudio mono float32 audio output sink — implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "sink/audio_out.hpp"
 
 #include <portaudio.h>

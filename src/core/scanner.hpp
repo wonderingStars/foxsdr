@@ -82,7 +82,7 @@
 // stopped). start() always begins a fresh scan from startHz, even when
 // called while already active.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <optional>

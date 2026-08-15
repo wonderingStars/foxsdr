@@ -47,7 +47,7 @@
 // either the complete old file or the complete new one, never a hybrid.
 // Parent directories are created on demand.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <cstddef>

@@ -1,6 +1,6 @@
 // SpectrumEstimator implementation. See spectrum.hpp for the contract.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/spectrum.hpp"
 
 #include <cmath>

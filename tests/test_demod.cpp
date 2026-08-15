@@ -5,7 +5,7 @@
 // and closed-form one-pole transfer functions derived from the SPEC constants
 // (75 us deemphasis) — never against values read back from the implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/demod.hpp"
 
 #include "test_check.hpp"

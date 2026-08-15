@@ -6,7 +6,7 @@
 // commanded ms-to-samples conversion — never against constants read back
 // from the implementation. No wall clock, no randomness.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/squelch.hpp"
 
 #include "test_check.hpp"

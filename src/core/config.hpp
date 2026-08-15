@@ -45,7 +45,7 @@
 // target leaves either the complete old config or the complete new one on
 // disk — never a truncated hybrid. Parent directories are created on demand.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <string>

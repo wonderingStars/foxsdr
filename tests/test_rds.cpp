@@ -13,7 +13,7 @@
 // Clean room: the encoder was written from the published RDS/RBDS standard.
 // No third-party RDS implementation was consulted.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/rds.hpp"
 
 #include "test_check.hpp"

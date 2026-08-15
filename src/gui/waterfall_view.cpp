@@ -1,6 +1,6 @@
 // Scrolling waterfall widget — implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/waterfall_view.hpp"
 
 #include <algorithm>

@@ -1,5 +1,5 @@
 // Tests for source/siggen.hpp / siggen.cpp.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/siggen.hpp"
 
 #include <cmath>

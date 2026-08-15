@@ -14,7 +14,7 @@
 // (Pipeline already sequences it that way); members are therefore plain, not
 // atomic, on purpose.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

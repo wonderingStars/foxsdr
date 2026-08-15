@@ -2,7 +2,7 @@
 // object, composed from the existing primitives (QuadDemod, Nco, FirDecimator)
 // rather than re-deriving any of them.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

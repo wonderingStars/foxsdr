@@ -1,7 +1,7 @@
 // Rational L/M sample-rate conversion (polyphase windowed-sinc) for real
 // float streams — the post-demod audio path (e.g. 200 kHz -> 48 kHz is 6/25).
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <cstddef>

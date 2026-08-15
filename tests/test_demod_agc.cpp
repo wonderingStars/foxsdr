@@ -5,7 +5,7 @@
 // and the FM spectrum claim is checked with a direct DFT — never against
 // constants read back from the implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/agc.hpp"
 #include "dsp/quad_demod.hpp"
 

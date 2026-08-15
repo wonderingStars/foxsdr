@@ -1,7 +1,7 @@
 // Tests for dsp/spectrum.hpp — the reference spectrum is a windowed direct
 // DFT computed in-test in double precision, with the same documented scaling
 // (|X|^2 / N^2, fftshifted), never values copied from the implementation.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/spectrum.hpp"
 
 #include <cmath>

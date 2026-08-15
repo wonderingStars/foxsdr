@@ -4,7 +4,7 @@
 // carries the sequence 0,1,2,... and the consumer checks every element), not
 // against constants derived from the implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/spsc_ring.hpp"
 
 #include <atomic>

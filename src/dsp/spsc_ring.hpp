@@ -9,7 +9,7 @@
 // capacity usable — no "keep one slot empty" sentinel is needed to tell a
 // full ring from an empty one.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>

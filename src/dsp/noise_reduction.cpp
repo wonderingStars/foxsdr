@@ -2,7 +2,7 @@
 // noise_reduction.hpp. Every design decision and its reason lives in the
 // header comment; this file only says why the CODE is shaped the way it is.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/noise_reduction.hpp"
 
 #include <algorithm>

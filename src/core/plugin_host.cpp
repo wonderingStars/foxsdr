@@ -2,7 +2,7 @@
 // contract - in particular for what this code deliberately does NOT protect
 // against.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_host.hpp"
 
 #include <algorithm>

@@ -51,7 +51,7 @@
 // documents for its read()). recording(), kind() and both counters are
 // atomic and may be polled from any thread (e.g. the GUI status bar).
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>

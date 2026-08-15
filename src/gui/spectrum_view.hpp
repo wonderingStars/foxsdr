@@ -1,6 +1,6 @@
 // Spectrum line-plot widget: dB bins -> ImDrawList polyline over a dB grid.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 namespace cascade::gui {

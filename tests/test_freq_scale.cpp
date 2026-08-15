@@ -1,7 +1,7 @@
 // Tests for gui/freq_scale.hpp — the shared frequency-axis view transform.
 // Everything is pure math, so the whole contract is testable headless.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/freq_scale.hpp"
 
 #include <cmath>

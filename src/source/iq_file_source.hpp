@@ -22,7 +22,7 @@
 // fills the full request immediately; the Pipeline paces consumption with its
 // real-time clock, exactly as it already does for SigGen.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>

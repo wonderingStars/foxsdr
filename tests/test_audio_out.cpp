@@ -14,7 +14,7 @@
 // performs, so the results must be bit-identical — a tolerance would only
 // mask a wrong-operation bug.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "sink/audio_out.hpp"
 
 #include <portaudio.h>  // failure diagnostics + cross-checking isDefault

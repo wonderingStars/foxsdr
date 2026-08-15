@@ -1,6 +1,6 @@
 // Tests for dsp/fft.hpp — proven against an in-test direct O(n^2) DFT, never
 // against constants derived from the implementation.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/fft.hpp"
 
 #include <algorithm>

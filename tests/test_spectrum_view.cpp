@@ -2,7 +2,7 @@
 // live ImGui/GL context, so the testable surface is dbToY, gridlineDbs, and
 // the zoom/VFO statics binToXFrac and hitTest; nothing here touches ImGui.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/spectrum_view.hpp"
 
 #include <cmath>

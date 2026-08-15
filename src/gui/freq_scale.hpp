@@ -16,7 +16,7 @@
 // no-op, ticks() returns 0, and the transforms return defined values
 // (documented per member) instead of dividing by zero.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 namespace cascade::gui {

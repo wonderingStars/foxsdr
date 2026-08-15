@@ -17,7 +17,7 @@
 // the same clean-room way tests/test_rds.cpp builds its own. Nothing is
 // compared against a constant taken from the implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
 #include <cmath>
 #include <complex>

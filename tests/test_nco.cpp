@@ -1,5 +1,5 @@
 // Tests for dsp/nco.hpp / nco.cpp.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/nco.hpp"
 
 #include <algorithm>

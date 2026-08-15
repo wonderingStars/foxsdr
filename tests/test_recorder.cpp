@@ -11,7 +11,7 @@
 // process id (ctest runs this from build-<slug>/tests), removed on success
 // and left behind for autopsy on failure.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/recorder.hpp"
 
 #include <bit>

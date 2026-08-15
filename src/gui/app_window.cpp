@@ -1,6 +1,6 @@
 // GLFW + Dear ImGui application shell — implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 
 #include <algorithm>

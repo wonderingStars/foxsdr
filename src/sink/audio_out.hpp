@@ -29,7 +29,7 @@
 // can exercise the exact code the callback runs — starvation, partial fills,
 // volume — headless, without opening a real device.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>

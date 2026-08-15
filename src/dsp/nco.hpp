@@ -1,7 +1,7 @@
 // Numerically controlled oscillator: unit-magnitude complex exponential
 // generation and frequency translation (mixing).
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

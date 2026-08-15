@@ -45,7 +45,7 @@
 //     anything it likes there, and LoadLibrary itself is the point of no
 //     return. This is inherent to dynamic loading on every platform.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <cstddef>

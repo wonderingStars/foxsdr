@@ -5,7 +5,7 @@
 // representable in double (sums of exact doubles below 2^53), and all times
 // are integers, so == is the correct comparison. No clock, no randomness.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/scanner.hpp"
 
 #include "test_check.hpp"

@@ -5,7 +5,7 @@
 // source thread already paced SigGen before this abstraction existed, so
 // wrapping the generator changes nothing observable.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

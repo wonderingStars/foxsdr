@@ -75,7 +75,7 @@
 // so a renderer that simply walks the vector paints the wide backdrop before
 // the narrow detail on top of it.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <cstdint>

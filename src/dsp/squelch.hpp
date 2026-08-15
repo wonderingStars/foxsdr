@@ -1,6 +1,6 @@
 // Signal power meter (S-meter backend) and hysteresis squelch gate.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <cmath>

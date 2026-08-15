@@ -6,7 +6,7 @@
 // computed in-test from the configured tone frequency and the documented
 // fftshift layout (DC at fftSize/2), never from implementation output.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/pipeline.hpp"
 
 #include <algorithm>

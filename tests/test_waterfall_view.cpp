@@ -7,7 +7,7 @@
 // floor((x + 0.5) * n / texWidth)) — never read back from internals — and
 // the uv expectations come from the documented seam-split contract.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/waterfall_view.hpp"
 
 #include <cstdint>

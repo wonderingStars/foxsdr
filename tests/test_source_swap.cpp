@@ -29,7 +29,7 @@
 // bug fails the test instead of hanging it; ctest's 120 s timeout backstops
 // a hung join. No randomness is used — all fake payloads are constants.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <atomic>
 #include <chrono>

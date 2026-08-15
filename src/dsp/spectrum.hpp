@@ -1,6 +1,6 @@
 // Power-spectrum estimator: window -> FFT -> |X|^2 -> fftshift -> EMA -> dB.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

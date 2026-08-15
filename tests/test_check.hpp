@@ -6,7 +6,7 @@
 //       return testSummary("test_name");
 //   }
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <cmath>

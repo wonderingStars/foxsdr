@@ -22,7 +22,7 @@
 // and clobber the file, turning the assertions red. (Technique from
 // test_config.cpp.)
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/freq_manager.hpp"
 
 #include <algorithm>

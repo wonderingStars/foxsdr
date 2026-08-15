@@ -4,7 +4,7 @@
 // its output is fully deterministic (fixed-seed noise, closed-form tone
 // phase), so every downstream measurement is reproducible run to run.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <array>

@@ -1,6 +1,6 @@
 // Spectrum line-plot widget — implementation.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/spectrum_view.hpp"
 
 #include <algorithm>

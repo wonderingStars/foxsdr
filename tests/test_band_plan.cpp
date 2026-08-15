@@ -30,7 +30,7 @@
 // gitignored build tree), removed on success and left behind on failure for
 // autopsy — the same convention as test_config.cpp.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/band_plan.hpp"
 
 #include <cstddef>

@@ -6,7 +6,7 @@
 // seam/window uv math — is testable headless. The draw() overloads are the
 // only members that touch OpenGL.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <vector>

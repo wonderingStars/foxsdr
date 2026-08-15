@@ -5,7 +5,7 @@
 // (pilot-tone system) and ordinary PLL/DSP theory — no reference to any other
 // receiver's source was used, deliberately, because this tree ships under MIT.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

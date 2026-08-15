@@ -45,9 +45,30 @@ at all (signal generator + IQ playback).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Dependencies are deliberately permissive
-(Dear ImGui MIT, GLFW Zlib, PortAudio MIT-like, nlohmann/json MIT, pffft
-BSD-style, SoapySDR BSL-1.0); FFTW and librtlsdr are intentionally not used.
+**Free for noncommercial use. Commercial use requires a paid licence.**
+
+The application is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Hobbyists, amateur radio
+operators, students, charities, schools and public bodies may use, modify and
+share it at no cost. Using it in a business, selling it, bundling it with
+hardware, or building a product from it requires a commercial licence — see
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+
+Modification is expressly permitted under the noncommercial licence; a
+modified version simply remains noncommercial-only, and must carry the same
+terms and the `Required Notice:` line.
+
+Two deliberate exceptions:
+
+- **`src/core/plugin_abi.h` is MIT.** Every plugin must include it, so it is
+  licensed permissively on purpose — anyone, including commercial vendors, can
+  write plugins without needing a licence from us.
+- **Bundled third-party components keep their own permissive licences**
+  (Dear ImGui MIT, GLFW Zlib, PortAudio MIT-like, nlohmann/json MIT, pffft
+  BSD-style, SoapySDR BSL-1.0) and are unaffected by the terms above; see
+  `THIRD-PARTY-LICENSES.txt`. FFTW and librtlsdr are intentionally not used —
+  keeping every dependency permissive is what makes this licensing choice
+  possible at all.
 
 SDR-+ AI Supreme Leader is an independent project, not affiliated with or
 endorsed by SDR++ or its authors.

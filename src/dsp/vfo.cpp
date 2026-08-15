@@ -1,6 +1,6 @@
 // VFO channelizer: NCO mix to baseband, anti-alias low-pass, integer decimate.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/vfo.hpp"
 
 #include <algorithm>

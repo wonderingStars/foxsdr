@@ -8,7 +8,7 @@
 // with its five offset words, and the group 0/2 semantics). No third-party RDS
 // implementation of any kind was read while writing this file.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>

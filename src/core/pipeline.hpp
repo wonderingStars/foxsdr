@@ -48,7 +48,7 @@
 // Audio-chain parameter setters serialize against the DSP thread under one
 // internal mutex and take effect at the next block.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>

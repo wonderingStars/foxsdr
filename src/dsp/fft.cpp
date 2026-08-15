@@ -1,6 +1,6 @@
 // pffft-backed complex FFT. See fft.hpp for the interface contract.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/fft.hpp"
 
 #include <pffft/pffft.h>

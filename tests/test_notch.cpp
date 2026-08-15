@@ -6,7 +6,7 @@
 // cycles, so the two test tones are exactly orthogonal), and the -3 dB notch
 // width is found by bisecting the filter's own measured response.
 //
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/notch.hpp"
 
 #include <cmath>
