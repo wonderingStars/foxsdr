@@ -176,8 +176,8 @@ const CascadePluginDesc kDesc = {
     static_cast<uint32_t>(sizeof(CascadePluginDesc)),
     kClaimedAbi,
     "Example RMS Reporter",
-    "1.0.0",
-    "cascade project",
+    "2.0.0",
+    "FoxSDR project",
     "MIT",  // declared honestly; the host displays this verbatim
     CASCADE_CAP_DECODER,
     0u,
