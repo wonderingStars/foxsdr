@@ -1895,7 +1895,8 @@ void AppWindow::rescanPlugins() {
     // Instances are created only after the scan has settled, and the pipeline
     // is only pointed at the runner once they exist — so the DSP thread never
     // sees a half-built set.
-    pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz);
+    pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
+                          pipeline_.inputRateHz(), pipeline_.activeSource().centerFrequencyHz());
     pipeline_.setPluginRunner(&pluginRunner_);
 }
 
@@ -2636,9 +2637,11 @@ void AppWindow::reportPluginStatus() {
     // "being fed real audio" are different claims and the whole point of this
     // subsystem is the second one. A screenshot of a loaded plugin proves
     // nothing about whether a single sample ever reached it.
-    std::printf("plugin runner: active=%d lines=%d\n",
+    std::printf("plugin runner: active=%d lines=%d audioFed=%llu iqFed=%llu\n",
                 static_cast<int>(pluginRunner_.activeCount()),
-                static_cast<int>(decoderLog_.size()));
+                static_cast<int>(decoderLog_.size()),
+                static_cast<unsigned long long>(pluginRunner_.audioFramesFed()),
+                static_cast<unsigned long long>(pluginRunner_.iqFramesFed()));
     for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
         std::printf("plugin decode: name=%s state=%s%s\n", s.plugin.c_str(),
                     s.reason == cascade::core::DecoderIdleReason::Running ? "running"
@@ -2949,6 +2952,12 @@ void AppWindow::retuneSourceHz(double centerHz) {
     if (src.centerFrequencyHz() == centerHz) { return; }
     src.setCenterFrequencyHz(centerHz);
     pipeline_.resetRds();
+    // I/Q decoders are told for the same reason: they work on the raw band and
+    // several of them (ADS-B, AIS) report when the receiver is nowhere near
+    // the frequency they need. Reading back from the source rather than
+    // trusting the requested value, because a device may land on a nearby
+    // tuning step and the decoder should be told where it actually is.
+    pluginRunner_.retune(src.centerFrequencyHz());
 }
 
 double AppWindow::currentAbsoluteHz() {

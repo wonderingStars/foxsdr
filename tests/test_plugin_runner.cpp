@@ -83,6 +83,73 @@ LoadedPlugin makePlugin(const char* name, const CascadeDecoderApi* api) {
 
 void resetFake() { g_fake = FakeState{}; }
 
+// The raw device band the I/Q cases are fed, and where the receiver is tuned.
+// Chosen to look like a real ADS-B setup so a rate mismatch below reads as the
+// mistake it would be in the product.
+constexpr double kIqRate = 2400000.0;
+constexpr double kCentre = 1090000000.0;
+
+// --- A fake I/Q decoder, same trick as the audio one ----------------------
+
+struct FakeIq {
+    int created = 0;
+    int destroyed = 0;
+    double lastRate = 0.0;
+    double lastCentre = 0.0;
+    int retunes = 0;
+    std::size_t frames = 0;
+    std::string queued;
+    bool failCreate = false;
+};
+
+FakeIq g_iq;
+
+void* iqCreate(double rateHz, double centreHz) {
+    if (g_iq.failCreate) { return nullptr; }
+    ++g_iq.created;
+    g_iq.lastRate = rateHz;
+    g_iq.lastCentre = centreHz;
+    return &g_iq;
+}
+
+void iqProcess(void*, const float*, size_t frames) { g_iq.frames += frames; }
+void iqRetune(void*, double centreHz) { ++g_iq.retunes; g_iq.lastCentre = centreHz; }
+
+int32_t iqPoll(void*, char* buf, size_t cap) {
+    if (g_iq.queued.empty()) { return 0; }
+    std::size_t n = g_iq.queued.size();
+    if (n > cap) { n = cap; }
+    std::memcpy(buf, g_iq.queued.data(), n);
+    g_iq.queued.erase(0, n);
+    return static_cast<int32_t>(n);
+}
+
+void iqDestroy(void*) { ++g_iq.destroyed; }
+
+CascadeIqDecoderApi makeIqApi(double rateHz, bool withRetune) {
+    CascadeIqDecoderApi a{};
+    a.structSize = static_cast<uint32_t>(sizeof(CascadeIqDecoderApi));
+    a.requiredRateHz = rateHz;
+    a.preferredRateHz = 0.0;
+    a.create = &iqCreate;
+    a.process = &iqProcess;
+    a.retune = withRetune ? &iqRetune : nullptr;
+    a.poll_text = &iqPoll;
+    a.destroy = &iqDestroy;
+    return a;
+}
+
+LoadedPlugin makeIqPlugin(const char* name, const CascadeIqDecoderApi* api) {
+    LoadedPlugin p;
+    p.loaded = true;
+    p.name = name;
+    p.version = "1.0.0";
+    p.iqDecoder = api;
+    return p;
+}
+
+void resetIq() { g_iq = FakeIq{}; }
+
 }  // namespace
 
 int main() {
@@ -92,7 +159,7 @@ int main() {
         const CascadeDecoderApi any = makeApi(0u);  // "any rate"
         std::vector<LoadedPlugin> ps{makePlugin("Any", &any)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         CHECK(r.activeCount() == 1u);
         CHECK(g_fake.created == 1);
         // A rate-0 decoder is told the rate it will actually receive, not 0 -
@@ -104,7 +171,7 @@ int main() {
         const CascadeDecoderApi exact = makeApi(48000u);
         std::vector<LoadedPlugin> ps{makePlugin("Exact", &exact)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         CHECK(r.activeCount() == 1u);
         CHECK(g_fake.lastRate == 48000u);
     }
@@ -116,7 +183,7 @@ int main() {
         const CascadeDecoderApi wrong = makeApi(8000u);
         std::vector<LoadedPlugin> ps{makePlugin("Fixed8k", &wrong)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         CHECK(r.activeCount() == 0u);
         CHECK(g_fake.created == 0);
         const std::vector<DecoderStatus> st = r.status();
@@ -133,7 +200,7 @@ int main() {
         const CascadeDecoderApi any = makeApi(0u);
         std::vector<LoadedPlugin> ps{makePlugin("Any", &any)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         std::vector<float> block(512, 0.25f);
         r.processAudio(block.data(), block.size());
         r.processAudio(block.data(), block.size());
@@ -151,7 +218,7 @@ int main() {
         const CascadeDecoderApi any = makeApi(0u);
         std::vector<LoadedPlugin> ps{makePlugin("Tag", &any)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         std::vector<float> block(64, 0.0f);
         r.processAudio(block.data(), block.size());
         const std::vector<DecodedLine> out = r.drainText();
@@ -174,7 +241,7 @@ int main() {
         const CascadeDecoderApi any = makeApi(0u);
         std::vector<LoadedPlugin> ps{makePlugin("Split", &any)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         std::vector<float> block(64, 0.0f);
         r.processAudio(block.data(), block.size());
         const std::vector<DecodedLine> out = r.drainText();
@@ -189,7 +256,7 @@ int main() {
         const CascadeDecoderApi any = makeApi(0u);
         std::vector<LoadedPlugin> ps{makePlugin("Partial", &any)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         std::vector<float> block(64, 0.0f);
         r.processAudio(block.data(), block.size());
         CHECK(r.drainText().empty());
@@ -208,7 +275,7 @@ int main() {
         const CascadeDecoderApi any = makeApi(0u);
         std::vector<LoadedPlugin> ps{makePlugin("Broken", &any)};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         CHECK(r.activeCount() == 0u);
         const std::vector<DecoderStatus> st = r.status();
         CHECK(st.size() == 1u);
@@ -225,7 +292,7 @@ int main() {
         iqOnly.decoder = nullptr;
         std::vector<LoadedPlugin> ps{iqOnly};
         PluginRunner r;
-        r.rebuild(ps, 48000.0);
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
         CHECK(r.activeCount() == 0u);
         const std::vector<DecoderStatus> st = r.status();
         CHECK(st.size() == 1u);
@@ -242,10 +309,10 @@ int main() {
         std::vector<LoadedPlugin> ps{makePlugin("A", &any), makePlugin("B", &any)};
         {
             PluginRunner r;
-            r.rebuild(ps, 48000.0);
+            r.rebuild(ps, 48000.0, kIqRate, kCentre);
             CHECK(g_fake.created == 2);
             CHECK(g_fake.destroyed == 0);
-            r.rebuild(ps, 48000.0);  // a rescan
+            r.rebuild(ps, 48000.0, kIqRate, kCentre);  // a rescan
             CHECK(g_fake.destroyed == 2);
             CHECK(g_fake.created == 4);
             r.clear();
@@ -264,10 +331,136 @@ int main() {
         std::vector<LoadedPlugin> ps{makePlugin("A", &any)};
         {
             PluginRunner r;
-            r.rebuild(ps, 48000.0);
+            r.rebuild(ps, 48000.0, kIqRate, kCentre);
             CHECK(g_fake.created == 1);
         }
         CHECK(g_fake.destroyed == 1);
+    }
+
+    // --- I/Q decoders -----------------------------------------------------
+    {
+        // An "any rate" I/Q decoder is created with the RAW device rate and
+        // the receiver's centre, not the channel rate: it works on the whole
+        // band and must know where that band is.
+        resetIq();
+        const CascadeIqDecoderApi api = makeIqApi(0.0, true);
+        std::vector<LoadedPlugin> ps{makeIqPlugin("ADS-B", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 1u);
+        CHECK(g_iq.created == 1);
+        CHECK(g_iq.lastRate == kIqRate);
+        CHECK(g_iq.lastCentre == kCentre);
+    }
+    {
+        // FRAMES, not floats. The ABI passes 2*frames floats interleaved, and
+        // an off-by-two here would halve or double every decoder's idea of
+        // time - which is the kind of bug that shows up as "it decodes at
+        // 2.4 MS/s but not 1.2".
+        resetIq();
+        const CascadeIqDecoderApi api = makeIqApi(0.0, true);
+        std::vector<LoadedPlugin> ps{makeIqPlugin("ADS-B", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        std::vector<float> iq(2 * 1000, 0.0f);  // 1000 complex samples
+        r.processIq(iq.data(), 1000);
+        CHECK(g_iq.frames == 1000u);
+        r.processIq(nullptr, 10);
+        r.processIq(iq.data(), 0);
+        CHECK(g_iq.frames == 1000u);
+    }
+    {
+        // Audio must not be delivered to an I/Q decoder, nor I/Q to an audio
+        // one. They are different streams with different meanings, and
+        // crossing them would feed a decoder noise it cannot recognise while
+        // looking, from the outside, exactly like a decoder that is working.
+        resetFake();
+        resetIq();
+        const CascadeDecoderApi aApi = makeApi(0u);
+        const CascadeIqDecoderApi iApi = makeIqApi(0.0, true);
+        std::vector<LoadedPlugin> ps{makePlugin("Aud", &aApi), makeIqPlugin("Iq", &iApi)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 2u);
+        std::vector<float> buf(256, 0.0f);
+        r.processAudio(buf.data(), 128);
+        CHECK(g_fake.samples == 128u);
+        CHECK(g_iq.frames == 0u);
+        r.processIq(buf.data(), 128);
+        CHECK(g_fake.samples == 128u);
+        CHECK(g_iq.frames == 128u);
+    }
+    {
+        // A fixed-rate I/Q decoder the device cannot supply idles with a
+        // reason naming the I/Q stream, so it is not confused with the audio
+        // rate mismatch above.
+        resetIq();
+        const CascadeIqDecoderApi api = makeIqApi(192000.0, true);  // AIS-like
+        std::vector<LoadedPlugin> ps{makeIqPlugin("AIS", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 0u);
+        CHECK(g_iq.created == 0);
+        const std::vector<DecoderStatus> st = r.status();
+        CHECK(st.size() == 1u);
+        CHECK(st[0].reason == DecoderIdleReason::RateMismatch);
+        CHECK(st[0].stream == cascade::core::DecoderStream::Iq);
+        CHECK(st[0].detail.find("I/Q") != std::string::npos);
+    }
+    {
+        // retune reaches the decoder, is not sent when nothing moved, and is
+        // safe when the plugin left the optional pointer NULL.
+        resetIq();
+        const CascadeIqDecoderApi withRt = makeIqApi(0.0, true);
+        std::vector<LoadedPlugin> ps{makeIqPlugin("Rt", &withRt)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        r.retune(kCentre);  // unchanged
+        CHECK(g_iq.retunes == 0);
+        r.retune(1090500000.0);
+        CHECK(g_iq.retunes == 1);
+        CHECK(g_iq.lastCentre == 1090500000.0);
+        r.retune(1090500000.0);  // still unchanged
+        CHECK(g_iq.retunes == 1);
+    }
+    {
+        resetIq();
+        const CascadeIqDecoderApi noRt = makeIqApi(0.0, false);  // retune == NULL
+        std::vector<LoadedPlugin> ps{makeIqPlugin("NoRt", &noRt)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        r.retune(1091000000.0);  // must not dereference the null pointer
+        CHECK(g_iq.retunes == 0);
+        CHECK(r.activeCount() == 1u);
+    }
+    {
+        // I/Q text is tagged and line-split by the same path as audio.
+        resetIq();
+        g_iq.queued = "ADSB 406135 ident=EZY595R\n";
+        const CascadeIqDecoderApi api = makeIqApi(0.0, true);
+        std::vector<LoadedPlugin> ps{makeIqPlugin("ADS-B", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        std::vector<float> iq(64, 0.0f);
+        r.processIq(iq.data(), 32);
+        const std::vector<DecodedLine> out = r.drainText();
+        CHECK(out.size() == 1u);
+        CHECK(out[0].plugin == "ADS-B");
+        CHECK(out[0].text == "ADSB 406135 ident=EZY595R");
+    }
+    {
+        // I/Q instances are destroyed exactly once, like audio ones.
+        resetIq();
+        const CascadeIqDecoderApi api = makeIqApi(0.0, true);
+        std::vector<LoadedPlugin> ps{makeIqPlugin("A", &api), makeIqPlugin("B", &api)};
+        {
+            PluginRunner r;
+            r.rebuild(ps, 48000.0, kIqRate, kCentre);
+            CHECK(g_iq.created == 2);
+            r.rebuild(ps, 48000.0, kIqRate, kCentre);
+            CHECK(g_iq.destroyed == 2);
+        }
+        CHECK(g_iq.created == g_iq.destroyed);
     }
 
     // --- Feeding with nothing loaded is safe ------------------------------

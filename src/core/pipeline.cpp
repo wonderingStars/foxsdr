@@ -924,6 +924,20 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // pays only this null check when idle.
     if (iqRecorder_ != nullptr) { iqRecorder_->writeIq(in, n); }
 
+    // I/Q decoder plugins tap the RAW device band here, at the same point the
+    // I/Q recorder does and for the same reason: this is the last place the
+    // full band exists. Below this the VFO mixes, filters and decimates to one
+    // narrow channel, which is exactly what an I/Q decoder must not be given -
+    // ADS-B alone needs 2 MHz of spectrum, and AIS wants two channels 50 kHz
+    // apart. They do their own tuning; the VFO is the user's, not theirs.
+    //
+    // std::complex<float> is layout-compatible with float[2] (guaranteed by
+    // the standard), and the ABI's interleaved I,Q,I,Q rule is that same
+    // layout, so this is a reinterpretation and not a copy.
+    if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
+        runner->processIq(reinterpret_cast<const float*>(in), n);
+    }
+
     // VFO: mix the tuned offset to DC, band-limit, decimate to channel rate.
     chanBuf_.resize(n / vfoDecim_ + 1);
     const std::size_t m = vfo_.process(in, n, chanBuf_.data(), chanBuf_.size());

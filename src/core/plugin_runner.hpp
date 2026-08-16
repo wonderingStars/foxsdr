@@ -56,9 +56,19 @@ enum class DecoderIdleReason {
     NoAudioTable,   // declares no capability this runner can drive
 };
 
+// Which stream a running decoder is being fed, so the panel can say so: a
+// user who tuned the VFO and sees an I/Q decoder ignore it should be able to
+// find out that it works on the whole band instead.
+enum class DecoderStream {
+    Audio = 0,
+    Iq,
+    None,
+};
+
 struct DecoderStatus {
     std::string plugin;
     DecoderIdleReason reason = DecoderIdleReason::Running;
+    DecoderStream stream = DecoderStream::None;
     double wantRateHz = 0.0;  // meaningful for RateMismatch
     std::string detail;       // ready-to-display sentence
 };
@@ -71,10 +81,15 @@ public:
     PluginRunner(const PluginRunner&) = delete;
     PluginRunner& operator=(const PluginRunner&) = delete;
 
-    // Creates one instance per loaded plugin that declares an audio decoder
-    // this runner can feed at `audioRateHz`. Destroys whatever existed before.
-    // Safe to call while the DSP thread is running.
-    void rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz);
+    // Creates one instance per loaded plugin that declares a decoder this
+    // runner can feed. Destroys whatever existed before. Safe to call while
+    // the DSP thread is running.
+    //
+    // audioRateHz is the post-demodulation audio rate; iqRateHz is the raw
+    // device rate and centreHz the RF frequency currently at DC, both of which
+    // an I/Q decoder needs at create().
+    void rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz,
+                 double iqRateHz, double centreHz);
 
     // Destroys every instance. Must be called BEFORE the plugin host unloads
     // the modules, or the handles would outlive the code that owns them.
@@ -84,6 +99,17 @@ public:
     // rate passed to rebuild().
     void processAudio(const float* mono, std::size_t frames);
 
+    // DSP thread. `interleaved` is 2*frames floats, I,Q,I,Q..., raw device
+    // baseband at the iqRateHz passed to rebuild() - NOT the tuned, decimated
+    // channel. An I/Q decoder does its own tuning and filtering; handing it
+    // the VFO's narrow channel would throw away the band it needs (ADS-B alone
+    // wants 2 MHz of it).
+    void processIq(const float* interleaved, std::size_t frames);
+
+    // DSP or control thread. The receiver moved; effective from the next
+    // process call. Cheap and safe to call when nothing has changed.
+    void retune(double centreHz);
+
     // GUI thread. Moves out whatever has been decoded since the last call.
     std::vector<DecodedLine> drainText();
 
@@ -92,6 +118,14 @@ public:
 
     // Number of instances currently being fed.
     std::size_t activeCount() const;
+
+    // How many samples have actually been handed to decoders since the last
+    // rebuild. Diagnostic, but the important one: "the decoder produced
+    // nothing" has two completely different causes - it was never fed, or it
+    // was fed and found nothing - and without a count they are
+    // indistinguishable from the outside.
+    std::size_t audioFramesFed() const;
+    std::size_t iqFramesFed() const;
 
 private:
     struct Instance {
@@ -103,13 +137,32 @@ private:
         std::string partial;
     };
 
+    struct IqInstance {
+        const CascadeIqDecoderApi* api = nullptr;
+        void* handle = nullptr;
+        std::string name;
+        std::string partial;
+    };
+
     void destroyLocked();
     void pollLocked();
+    void pollIqLocked();
+    // Shared by both poll paths: appends `bytes` of decoder output to
+    // `partial`, emits every complete line, keeps any tail. One
+    // implementation, because two would eventually disagree about where a
+    // line ends.
+    void absorbLocked(const std::string& name, std::string& partial, const char* data,
+                      std::size_t bytes);
 
     mutable std::mutex mutex_;
     std::vector<Instance> instances_;
+    std::vector<IqInstance> iqInstances_;
     std::vector<DecoderStatus> status_;
     double audioRateHz_ = 0.0;
+    double iqRateHz_ = 0.0;
+    double centreHz_ = 0.0;
+    std::size_t audioFed_ = 0;
+    std::size_t iqFed_ = 0;
 
     // Bounded so a chatty decoder cannot grow this without limit when the GUI
     // is not draining (minimised, or a modal open). Oldest lines are dropped;
