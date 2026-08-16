@@ -235,6 +235,17 @@ const CascadeIqDecoderApi kIqDecoder = {
     &iqDestroy,
 };
 
+// ABI 3: capabilities are declared through a counted table rather than through
+// a pointer per capability in the descriptor. One entry per bit set in
+// `capabilities` below.
+//
+// The tableSize field is what lets a host that knows a DIFFERENT version of
+// this table skip just this capability instead of refusing the whole plugin,
+// so it must be sizeof the table as THIS plugin compiled it - never a literal.
+const CascadeCapabilityEntry kCapabilities[] = {
+    {CASCADE_CAP_IQ_DECODER, static_cast<uint32_t>(sizeof(CascadeIqDecoderApi)), &kIqDecoder},
+};
+
 const CascadePluginDesc kDesc = {
     static_cast<uint32_t>(sizeof(CascadePluginDesc)),
     kClaimedAbi,
@@ -243,9 +254,8 @@ const CascadePluginDesc kDesc = {
     "cascade project",
     "MIT",  // declared honestly; the host displays this verbatim
     CASCADE_CAP_IQ_DECODER,
-    0u,
-    nullptr,      // no audio decoder: CASCADE_CAP_DECODER is not declared
-    &kIqDecoder,
+    static_cast<uint32_t>(sizeof(kCapabilities) / sizeof(kCapabilities[0])),
+    kCapabilities,
 };
 
 }  // namespace
