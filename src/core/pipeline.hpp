@@ -93,6 +93,11 @@ struct RdsSnapshot {
     cascade::dsp::RdsState state;       // PI / PS / PTY / RadioText / counters
 };
 
+// Forward-declared rather than included: only a pointer is stored here, and
+// the plugin ABI header does not need to reach every translation unit that
+// includes the pipeline.
+class PluginRunner;
+
 class Pipeline {
 public:
     struct Config {
@@ -111,6 +116,17 @@ public:
     // cfg.fftSize is not a legal FFT size — failing at construction beats a
     // dead DSP thread discovered later.
     explicit Pipeline(Config cfg);
+
+    // Attaches (or detaches, with nullptr) the plugin decoder runner. The DSP
+    // thread reads this pointer every block, so it is atomic; the RUNNER's own
+    // lock is what makes the call itself safe against a concurrent rescan.
+    //
+    // The caller must detach BEFORE destroying the runner or unloading the
+    // plugin modules — the DSP thread is still running at that moment, and a
+    // pointer it dereferences must not become dangling underneath it.
+    void setPluginRunner(PluginRunner* runner) {
+        pluginRunner_.store(runner, std::memory_order_release);
+    }
     ~Pipeline();                                  // stops if running
 
     // Non-copyable: owns threads and a live ring.
@@ -480,6 +496,8 @@ private:
     // Scratch buffers, members so steady-state blocks never allocate.
     std::vector<std::complex<float>> chanBuf_;   // VFO output (channel rate)
     std::vector<float> audioBuf_;                // demod output / composite
+    std::vector<float> decoderFeed_;             // mono tap for plugins, pre-notch/NR
+    std::atomic<PluginRunner*> pluginRunner_{nullptr};
     std::vector<float> leftBuf_;                 // channel rate, per channel
     std::vector<float> rightBuf_;
     std::vector<float> ilvBuf_;                  // interleaved L,R (2m) for

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <memory>
 #include <string>
@@ -14,6 +15,7 @@
 #include "core/freq_manager.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
+#include "core/plugin_runner.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/recorder.hpp"
 #include "core/scanner.hpp"
@@ -123,6 +125,15 @@ private:
     // looking at — a failed remove with the browser collapsed would otherwise
     // report nothing at all.
     void drawPluginResultText();
+    // Decoder OUTPUT: what the loaded plugins are actually decoding, plus a
+    // line per plugin that is loaded but not being fed and why. Drained from
+    // PluginRunner every frame, because the runner's buffer is bounded and a
+    // GUI that stops reading would silently drop the newest lines.
+    void drawDecoderOutput();
+    // Moves decoded lines out of the runner into decoderLog_. Called from
+    // drawUi unconditionally, because the runner's buffer is bounded and
+    // draining only when the panel is visible would drop output silently.
+    void pumpDecoderOutput();
     // Translucent service-band rectangles over the spectrum panel, plus the
     // labels that fit. `pos` is the panel's screen-space top-left as recorded
     // before the spectrum was drawn.
@@ -389,6 +400,15 @@ private:
     // loaded modules, so it must outlive nothing in particular here — but it
     // is declared before the pipeline-dependent members so it unloads last.
     cascade::core::PluginHost pluginHost_;
+    // Drives the loaded decoders with real audio. Declared AFTER pluginHost_
+    // so it is destroyed BEFORE it: the runner's destructor calls each
+    // plugin's destroy(), which is code inside a module the host unmaps.
+    cascade::core::PluginRunner pluginRunner_;
+    // Decoded output, newest last, bounded. The panel is a tail, not an
+    // archive; the recorder is where a permanent copy belongs.
+    std::deque<cascade::core::DecodedLine> decoderLog_;
+    static constexpr std::size_t kDecoderLogMax = 500;
+    bool decoderAutoScroll_ = true;
     std::string pluginDir_;
 
     // --- Retirement enforcement (P11) -----------------------------------------

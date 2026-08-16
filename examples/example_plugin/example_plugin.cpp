@@ -82,7 +82,16 @@ const uint32_t kClaimedAbi = CASCADE_PLUGIN_ABI_VERSION;
 #endif
 
 // Audio rate this decoder wants; the host resamples to it before create().
+//
+// Overridable so a build can be made that accepts whatever rate the pipeline
+// is running at (0 = "any rate"). That variant is what proves the host's
+// decoder-runner end to end: a fixed-rate plugin can only be fed once the
+// runner resamples, and until then it would sit idle and prove nothing.
+#if defined(CASCADE_EXAMPLE_RATE_HZ)
+const uint32_t kRateHz = static_cast<uint32_t>(CASCADE_EXAMPLE_RATE_HZ);
+#else
 const uint32_t kRateHz = 8000u;
+#endif
 
 // One decoder instance. Fixed-size storage throughout: process() and
 // poll_text() run on the host's real-time thread, where an allocation is a

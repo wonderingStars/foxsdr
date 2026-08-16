@@ -21,6 +21,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/pipeline.hpp"
 
+#include "core/plugin_runner.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1021,6 +1023,29 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // reading past an end.
     const std::size_t k = std::min(kL, kR);
     if (k == 0) { return; }
+
+    // --- Decoder plugins tap in HERE, and the position is deliberate --------
+    // Post-demodulation, post-AGC, post-squelch, resampled to the fixed audio
+    // rate the decoders were created for - but BEFORE notch, auto-notch and
+    // noise reduction.
+    //
+    // Those three are perceptual processing: they exist to make a voice
+    // pleasanter to a human ear, and every one of them damages data. The
+    // auto-notch hunts continuous tones and would attack an AFSK mark tone or
+    // a POCSAG carrier as if it were interference; the noise reduction is
+    // spectral subtraction, which smears exactly the sharp transitions a
+    // slicer keys on. Feeding decoders the ear-facing audio would make the
+    // product's own audio settings silently change decode rates.
+    //
+    // Mono because that is what the audio decoder ABI carries, and the two
+    // channels are identical here in every mode except WFM stereo.
+    if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
+        decoderFeed_.resize(k);
+        for (std::size_t i = 0; i < k; ++i) {
+            decoderFeed_[i] = 0.5f * (outL_[i] + outR_[i]);
+        }
+        runner->processAudio(decoderFeed_.data(), k);
+    }
 
     // --- Audio post-processing: notch -> auto-notch -> noise reduction ------
     // Order rationale in the header. All three are bypasses when disabled.

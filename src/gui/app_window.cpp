@@ -583,7 +583,16 @@ int AppWindow::run(int frames) {
     // broken — it was the single biggest first-run complaint. Bounded
     // --frames runs stay stopped so CI keeps its old timing and never spawns
     // DSP threads it does not need.
-    if (frames < 0) { pipeline_.start(); }
+    //
+    // CASCADE_DECODE_TEST is the one exception, and it exists because the
+    // decoder runner cannot be verified any other way: a decoder that is never
+    // fed a sample looks exactly like a decoder that is fed and finds nothing.
+    // Bounded-run only, opt-in, and off by default, so the app_smoke timing
+    // contract is untouched.
+    const char* decodeHook = (frames >= 0) ? std::getenv("CASCADE_DECODE_TEST") : nullptr;
+    if (frames < 0 || (decodeHook != nullptr && *decodeHook != '\0')) {
+        pipeline_.start();
+    }
 
     // Bounded-run plugin-catalogue hook (see app_window.hpp). Read HERE, not
     // in the constructor, because only run() knows whether this is a bounded
@@ -690,6 +699,10 @@ int AppWindow::run(int frames) {
 }
 
 void AppWindow::drawUi() {
+    // Before anything is drawn: the decoders' output is bounded in the runner
+    // and must be collected whether or not the panel that shows it is open.
+    pumpDecoderOutput();
+
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1840,6 +1853,16 @@ void AppWindow::rescanPlugins() {
     // note in app_window.hpp). Nothing may hold a mapped module while files
     // are renamed, so the unload comes first — the same unload-then-touch-the
     // -file rule removeInstalledPlugin already follows.
+    //
+    // The RUNNER comes off before any of that, and in two steps. Detaching it
+    // from the pipeline stops the DSP thread reaching it; clearing it then
+    // destroys the decoder instances. Both must complete before unloadAll(),
+    // because a live handle is memory inside a module that is about to be
+    // unmapped, and destroy() is code inside that same module. Getting this
+    // order wrong is a crash in someone else's DLL with no useful stack.
+    pipeline_.setPluginRunner(nullptr);
+    pluginRunner_.clear();
+
     pluginHost_.unloadAll();
     pluginEnforceError_.clear();
 
@@ -1868,6 +1891,12 @@ void AppWindow::rescanPlugins() {
     }
 
     pluginHost_.scan(pluginDir_);
+
+    // Instances are created only after the scan has settled, and the pipeline
+    // is only pointed at the runner once they exist — so the DSP thread never
+    // sees a half-built set.
+    pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz);
+    pipeline_.setPluginRunner(&pluginRunner_);
 }
 
 std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const {
@@ -1911,6 +1940,11 @@ void AppWindow::drawPluginsSection() {
     if (pluginBrowseOpen_) { drawPluginBrowser(); }
 
     drawBlockedPluginRows();
+
+    // What the decoders are SAYING comes before the inventory of what is
+    // installed: the output is the reason the plugin exists, and the list is
+    // administration.
+    drawDecoderOutput();
 
     ImGui::SeparatorText("Installed");
     const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
@@ -2469,6 +2503,63 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     rescanPlugins();
 }
 
+void AppWindow::pumpDecoderOutput() {
+    // Called from drawUi every frame, NOT from the panel. The runner's queue
+    // is bounded and drops silently by design (the DSP thread must never
+    // block on the GUI), so draining only while the Plugins section happened
+    // to be expanded would quietly lose decodes the user never knew existed.
+    for (cascade::core::DecodedLine& l : pluginRunner_.drainText()) {
+        decoderLog_.push_back(std::move(l));
+    }
+    while (decoderLog_.size() > kDecoderLogMax) { decoderLog_.pop_front(); }
+}
+
+void AppWindow::drawDecoderOutput() {
+    const std::vector<cascade::core::DecoderStatus> st = pluginRunner_.status();
+    if (st.empty()) { return; }
+
+    ImGui::SeparatorText("Decoder output");
+
+    // Why a decoder is silent, before the output box: "it is installed and
+    // shows nothing" is otherwise indistinguishable from "there is nothing on
+    // frequency", and only one of those is worth the user changing.
+    for (const cascade::core::DecoderStatus& s : st) {
+        if (s.reason == cascade::core::DecoderIdleReason::Running) { continue; }
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+        ImGui::TextWrapped("%s", s.detail.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    if (pluginRunner_.activeCount() == 0) {
+        ImGui::TextDisabled("No decoder is running.");
+        return;
+    }
+
+    ImGui::Checkbox("Follow", &decoderAutoScroll_);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear##declog")) { decoderLog_.clear(); }
+
+    ImGui::BeginChild("##decoderlog", ImVec2(0.0f, 160.0f), true,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    if (decoderLog_.empty()) {
+        ImGui::TextDisabled("Listening...");
+    }
+    for (const cascade::core::DecodedLine& l : decoderLog_) {
+        // The plugin name is dimmed and the text is not: with two decoders
+        // running the tag is how you tell them apart, but the message is what
+        // you are reading.
+        ImGui::TextDisabled("%s", l.plugin.c_str());
+        ImGui::SameLine();
+        ImGui::TextUnformatted(l.text.c_str());
+    }
+    // Only stick to the bottom when already there, so scrolling back to read
+    // something is not yanked away by the next decode.
+    if (decoderAutoScroll_ && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f) {
+        ImGui::SetScrollHereY(1.0f);
+    }
+    ImGui::EndChild();
+}
+
 void AppWindow::removeBlockedPlugin(const std::string& fileName) {
     installError_.clear();
     installReport_.clear();
@@ -2539,6 +2630,28 @@ void AppWindow::reportPluginStatus() {
         std::printf("plugin host: file=%s loaded=%d name=%s version=%s error=%s\n",
                     file.c_str(), p.loaded ? 1 : 0, p.name.c_str(), p.version.c_str(),
                     p.error.empty() ? "-" : p.error.c_str());
+    }
+
+    // The RUNNER, reported separately from the host, because "loaded" and
+    // "being fed real audio" are different claims and the whole point of this
+    // subsystem is the second one. A screenshot of a loaded plugin proves
+    // nothing about whether a single sample ever reached it.
+    std::printf("plugin runner: active=%d lines=%d\n",
+                static_cast<int>(pluginRunner_.activeCount()),
+                static_cast<int>(decoderLog_.size()));
+    for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
+        std::printf("plugin decode: name=%s state=%s%s\n", s.plugin.c_str(),
+                    s.reason == cascade::core::DecoderIdleReason::Running ? "running"
+                                                                          : "idle",
+                    s.reason == cascade::core::DecoderIdleReason::Running
+                        ? ""
+                        : (" reason=" + s.detail).c_str());
+    }
+    // The last few decoded lines: the only evidence that the chain from
+    // antenna to plugin text actually closed.
+    std::size_t shown = 0;
+    for (auto it = decoderLog_.rbegin(); it != decoderLog_.rend() && shown < 5; ++it, ++shown) {
+        std::printf("plugin text: [%s] %s\n", it->plugin.c_str(), it->text.c_str());
     }
     for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
         // mapped=1 would mean enforcement failed: the host would have a record
