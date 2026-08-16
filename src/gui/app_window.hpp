@@ -20,6 +20,7 @@
 #include "core/plugin_repo.hpp"
 #include "core/recorder.hpp"
 #include "core/scanner.hpp"
+#include "gui/basemap_cache.hpp"
 #include "gui/freq_scale.hpp"
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
@@ -453,6 +454,11 @@ private:
     // reason as pluginRunner_.
     cascade::core::PluginUi pluginUi_;
     std::unique_ptr<MapView> map_;
+    // Map imagery from a basemap plugin, as GL textures. Inactive - and the
+    // map is the built-in coastline - unless such a plugin is installed, which
+    // is the shipped configuration. Declared after pluginHost_ so it detaches
+    // before the modules it borrows tiles from are unmapped.
+    BasemapCache basemap_;
     bool mapOpen_ = false;
     // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
     // rather than by the runner because it is written only when a decoder

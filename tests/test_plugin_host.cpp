@@ -1069,6 +1069,35 @@ int32_t presetGet(uint32_t index, CascadePreset* out) {
     return 1;
 }
 
+// A stable panel table to point a deliberately-mismatched entry at.
+const CascadePanelApi& validPanelStorage() {
+    static const CascadePanelApi p = validPanel();
+    return p;
+}
+
+void* bmCreate() { return reinterpret_cast<void*>(1); }
+int32_t bmGetTile(void*, uint32_t, uint32_t, uint32_t, CascadeTile*) {
+    return CASCADE_TILE_PENDING;
+}
+void bmRelease(void*, const CascadeTile*) {}
+int32_t bmPollText(void*, char*, size_t) { return 0; }
+void bmDestroy(void*) {}
+
+CascadeBasemapApi validBasemap() {
+    CascadeBasemapApi b{};
+    b.structSize = static_cast<uint32_t>(sizeof(CascadeBasemapApi));
+    b.attribution = "Map data (c) OpenStreetMap contributors";
+    b.minZoom = 0u;
+    b.maxZoom = 19u;
+    b.tileSize = 256u;
+    b.create = &bmCreate;
+    b.get_tile = &bmGetTile;
+    b.release_tile = &bmRelease;
+    b.poll_text = &bmPollText;
+    b.destroy = &bmDestroy;
+    return b;
+}
+
 CascadePresetApi validPreset() {
     CascadePresetApi p{};
     p.structSize = static_cast<uint32_t>(sizeof(CascadePresetApi));
@@ -1129,6 +1158,103 @@ void testUiCapabilities() {
         CascadePluginDesc p = descWith(
             CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_PANEL | CASCADE_CAP_HOST_CLIENT, all, 3);
         CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+
+    // --- CASCADE_CAP_BASEMAP ----------------------------------------------
+    {
+        using namespace uicaps;
+        const CascadeBasemapApi bm = validBasemap();
+        const CascadeCapabilityEntry bmEntry{
+            CASCADE_CAP_BASEMAP, static_cast<uint32_t>(sizeof(CascadeBasemapApi)), &bm};
+
+        // A basemap IS a usable capability on its own, unlike a preset or a
+        // host client: a plugin that supplies map imagery and nothing else has
+        // done something for the user.
+        {
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &bmEntry, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+        }
+
+        // THE ONE THAT MATTERS. Map imagery is overwhelmingly OSM-derived and
+        // therefore ODbL, which REQUIRES attribution. A basemap the host
+        // cannot credit is refused rather than drawn uncredited - the whole
+        // reason imagery lives in a plugin is to keep that obligation
+        // attached to whoever supplies the tiles, and a host that would draw
+        // it anyway makes the arrangement worthless.
+        {
+            CascadeBasemapApi bad = validBasemap();
+            bad.attribution = nullptr;
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_BASEMAP, static_cast<uint32_t>(sizeof(CascadeBasemapApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::MissingBasemapAttribution);
+        }
+        {
+            CascadeBasemapApi bad = validBasemap();
+            bad.attribution = "";  // present but empty is no credit at all
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_BASEMAP, static_cast<uint32_t>(sizeof(CascadeBasemapApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::MissingBasemapAttribution);
+        }
+
+        // Declared but not supplied, a table from another ABI build, and a
+        // null function - the same three shapes every capability is checked
+        // for.
+        {
+            const CascadeCapabilityEntry panelE{
+                CASCADE_CAP_PANEL, static_cast<uint32_t>(sizeof(CascadePanelApi)),
+                &validPanelStorage()};
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &panelE, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::MissingBasemapApi);
+        }
+        {
+            CascadeBasemapApi bad = validBasemap();
+            bad.structSize = static_cast<uint32_t>(sizeof(CascadeBasemapApi)) + 8u;
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_BASEMAP, static_cast<uint32_t>(sizeof(CascadeBasemapApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::BasemapStructSizeMismatch);
+        }
+        {
+            CascadeBasemapApi bad = validBasemap();
+            bad.get_tile = nullptr;
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_BASEMAP, static_cast<uint32_t>(sizeof(CascadeBasemapApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::MissingBasemapFunction);
+        }
+        // A tile size or zoom range the host cannot draw with.
+        {
+            CascadeBasemapApi bad = validBasemap();
+            bad.tileSize = 8u;
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_BASEMAP, static_cast<uint32_t>(sizeof(CascadeBasemapApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::BasemapBadTileSize);
+        }
+        {
+            CascadeBasemapApi bad = validBasemap();
+            bad.minZoom = 12u;
+            bad.maxZoom = 3u;  // inverted
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_BASEMAP, static_cast<uint32_t>(sizeof(CascadeBasemapApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::BasemapBadTileSize);
+        }
     }
 
     // --- CASCADE_CAP_PRESET, added without an ABI bump --------------------

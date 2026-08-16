@@ -233,7 +233,8 @@ extern "C" {
 #define CASCADE_CAP_PANEL 0x00000010u
 #define CASCADE_CAP_HOST_CLIENT 0x00000020u
 #define CASCADE_CAP_PRESET 0x00000040u
-#define CASCADE_CAP_ALL_KNOWN 0x0000007Fu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_BASEMAP 0x00000080u
+#define CASCADE_CAP_ALL_KNOWN 0x000000FFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -908,6 +909,105 @@ typedef struct CascadePresetApi {
     int32_t (*get)(uint32_t index, CascadePreset *out);
 } CascadePresetApi;
 
+/*
+ * ==========================================================================
+ * CASCADE_CAP_BASEMAP - map imagery, supplied by a plugin
+ * ==========================================================================
+ *
+ * The host ships a coastline drawn from public-domain vector data, and that is
+ * a deliberate floor rather than an ambition: it is small, offline, and free of
+ * conditions a sold product would have to answer for. Real street-level map
+ * imagery is a different matter - OpenStreetMap-derived tiles carry ODbL, and
+ * the public tile servers exclude commercial use - so it cannot ship IN the
+ * application.
+ *
+ * It can, however, arrive as a plugin the user installs and points at a tile
+ * server they run themselves. That keeps the licence question where it
+ * belongs: with the person who chose to serve the tiles. Install the plugin and
+ * the map gets imagery; remove it and the map is exactly what it was.
+ *
+ * TILE SCHEME. The standard slippy-map XYZ arrangement: Web Mercator, zoom z,
+ * with x increasing east from the antimeridian and y increasing SOUTH from the
+ * north edge, 2^z tiles each way. This is what every raster tile server speaks,
+ * so a plugin is a fetch and a decode rather than a coordinate exercise.
+ *
+ * THE HOST DRAWS IN MERCATOR WHILE A BASEMAP IS ACTIVE and reverts to
+ * equirectangular without one. Tiles are Mercator by construction and
+ * reprojecting them per frame would cost sharpness and time to preserve a
+ * projection whose advantage - not misplacing polar orbits - matters precisely
+ * when a satellite is being tracked, which is when street imagery is least
+ * useful anyway.
+ *
+ * get_tile MUST NOT BLOCK. It is called for every visible tile of every
+ * rendered frame, on the GUI thread. A plugin that fetches over a network must
+ * start the request, return CASCADE_TILE_PENDING immediately, and answer
+ * CASCADE_TILE_READY on some later call - a plugin that waits for the network
+ * here freezes the whole application, radio included.
+ */
+
+/* A tile's pixels are OWNED BY THE PLUGIN and borrowed by the host between
+ * get_tile and release_tile, exactly as an image decoder's are. */
+typedef struct CascadeTile {
+    /* sizeof(CascadeTile) as the HOST compiled it; filled before the call. */
+    uint32_t structSize;
+
+    uint32_t width;  /* normally 256; must equal the declared tileSize */
+    uint32_t height;
+    uint32_t format; /* CASCADE_IMAGE_RGB24 - the only format for now */
+    uint32_t stride; /* bytes per row; >= width * 3 */
+
+    const uint8_t *pixels; /* valid until release_tile, never NULL */
+} CascadeTile;
+
+#define CASCADE_TILE_READY 1
+#define CASCADE_TILE_PENDING 0  /* being fetched; ask again on a later frame */
+#define CASCADE_TILE_MISSING (-1) /* will never exist - do not ask again */
+
+typedef struct CascadeBasemapApi {
+    /* sizeof(CascadeBasemapApi) as the PLUGIN compiled it. Checked. */
+    uint32_t structSize;
+
+    /*
+     * Attribution the host displays whenever this basemap is on screen.
+     * Non-NULL and non-empty, and the host REFUSES the capability without it.
+     *
+     * That is not politeness. OpenStreetMap-derived data is ODbL and requires
+     * attribution; a basemap plugin that could omit it would quietly put the
+     * user in breach, and the whole reason imagery lives in a plugin is to keep
+     * that obligation visible and attached to whoever supplies the tiles.
+     */
+    const char *attribution;
+
+    uint32_t minZoom;
+    uint32_t maxZoom;
+    uint32_t tileSize; /* edge length in pixels; 64..CASCADE_TILE_SIZE_MAX */
+
+    /* One instance. NULL on failure. */
+    void *(*create)(void);
+
+    /*
+     * Offers the tile at (z, x, y). Returns CASCADE_TILE_READY with `out`
+     * filled, CASCADE_TILE_PENDING if it is not available yet, or
+     * CASCADE_TILE_MISSING if it never will be. MUST NOT BLOCK - see above.
+     *
+     * On READY the host owns a borrow of out->pixels until release_tile.
+     */
+    int32_t (*get_tile)(void *handle, uint32_t z, uint32_t x, uint32_t y,
+                        CascadeTile *out);
+
+    /* Returns a borrow taken by get_tile. Called once per READY. */
+    void (*release_tile)(void *handle, const CascadeTile *tile);
+
+    /* Status text: same contract as CascadeDecoderApi::poll_text. Where a
+     * plugin says it cannot reach its server, which is the failure a user will
+     * actually hit. */
+    int32_t (*poll_text)(void *handle, char *buf, size_t cap);
+
+    void (*destroy)(void *handle);
+} CascadeBasemapApi;
+
+#define CASCADE_TILE_SIZE_MAX 1024u
+
 typedef struct CascadeHostClientApi {
     uint32_t structSize;
 
@@ -1104,6 +1204,11 @@ static inline const CascadeTrackSourceApi *cascade_plugin_track_source(
     const CascadePluginDesc *desc) {
     return (const CascadeTrackSourceApi *)cascade_plugin_capability(desc,
                                                                     CASCADE_CAP_TRACK_SOURCE);
+}
+
+static inline const CascadeBasemapApi *cascade_plugin_basemap(
+    const CascadePluginDesc *desc) {
+    return (const CascadeBasemapApi *)cascade_plugin_capability(desc, CASCADE_CAP_BASEMAP);
 }
 
 static inline const CascadePresetApi *cascade_plugin_preset(

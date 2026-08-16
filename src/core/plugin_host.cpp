@@ -269,6 +269,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                      ? static_cast<const CascadePresetApi*>(
                            findCapabilityTable(desc, CASCADE_CAP_PRESET))
                      : nullptr;
+    rec.basemap = (desc->capabilities & CASCADE_CAP_BASEMAP) != 0u
+                      ? static_cast<const CascadeBasemapApi*>(
+                            findCapabilityTable(desc, CASCADE_CAP_BASEMAP))
+                      : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -502,6 +506,36 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         // A plugin offering only presets would load and look like a decoder.
     }
 
+    if ((desc->capabilities & CASCADE_CAP_BASEMAP) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_BASEMAP);
+        if (raw == nullptr) {
+            return PluginRejection::MissingBasemapApi;
+        }
+        const auto* b = static_cast<const CascadeBasemapApi*>(raw);
+        if (b->structSize != static_cast<uint32_t>(sizeof(CascadeBasemapApi))) {
+            return PluginRejection::BasemapStructSizeMismatch;
+        }
+        if (b->create == nullptr || b->get_tile == nullptr || b->release_tile == nullptr ||
+            b->poll_text == nullptr || b->destroy == nullptr) {
+            return PluginRejection::MissingBasemapFunction;
+        }
+        // REFUSED WITHOUT ATTRIBUTION, and this is the one string in the whole
+        // ABI whose absence is fatal rather than cosmetic. Map imagery is
+        // overwhelmingly OpenStreetMap-derived and therefore ODbL, which
+        // REQUIRES attribution; a basemap that could omit it would quietly put
+        // the user in breach. Putting imagery in a plugin is what keeps that
+        // obligation attached to whoever supplies the tiles, so the host will
+        // not draw a basemap it cannot credit.
+        if (!isNonEmpty(b->attribution)) {
+            return PluginRejection::MissingBasemapAttribution;
+        }
+        if (b->tileSize < 64u || b->tileSize > CASCADE_TILE_SIZE_MAX ||
+            b->maxZoom < b->minZoom || b->maxZoom > 24u) {
+            return PluginRejection::BasemapBadTileSize;
+        }
+        ++usable;
+    }
+
     // Every bit it declared is one this host has never heard of. Loading it
     // would put a plugin in the list that can never do anything, so say what
     // is actually wrong instead: it was built for a host newer than this one.
@@ -568,6 +602,17 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "preset table size does not match this host's";
         case PluginRejection::MissingPresetFunction:
             return "preset table has a null function pointer";
+        case PluginRejection::MissingBasemapApi:
+            return "declares CASCADE_CAP_BASEMAP but supplies no table";
+        case PluginRejection::BasemapStructSizeMismatch:
+            return "basemap table size does not match this host's";
+        case PluginRejection::MissingBasemapFunction:
+            return "basemap table has a null function pointer";
+        case PluginRejection::MissingBasemapAttribution:
+            return "basemap supplies no attribution string, which map imagery "
+                   "licences require";
+        case PluginRejection::BasemapBadTileSize:
+            return "basemap declares an unusable tile size or zoom range";
         case PluginRejection::MissingName:
             return "descriptor has no name";
         case PluginRejection::MissingVersion:

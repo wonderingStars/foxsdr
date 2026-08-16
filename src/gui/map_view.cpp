@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
 #include "imgui.h"
 
@@ -73,10 +74,30 @@ void MapView::setHome(double latDeg, double lonDeg) {
     hasHome_ = true;
 }
 
+namespace {
+
+// Web Mercator, normalised so the whole world is 0..1 in both axes - which is
+// the form the tile grid is defined in: at zoom z the world is 2^z tiles, so a
+// tile index is simply the normalised coordinate times 2^z.
+double mercY(double latDeg) {
+    const double lat = std::clamp(latDeg, -85.05112878, 85.05112878);
+    const double s = std::sin(lat * 3.14159265358979323846 / 180.0);
+    return 0.5 - std::log((1.0 + s) / (1.0 - s)) / (4.0 * 3.14159265358979323846);
+}
+
+double mercLat(double y) {
+    const double n = 3.14159265358979323846 * (1.0 - 2.0 * y);
+    return std::atan(std::sinh(n)) * 180.0 / 3.14159265358979323846;
+}
+
+}  // namespace
+
 void MapView::draw(float width, float height,
                    const std::vector<cascade::core::HostTrack>& tracks,
-                   const std::vector<cascade::core::HostPath>& paths) {
+                   const std::vector<cascade::core::HostPath>& paths,
+                   BasemapCache* tiles) {
     if (width < 32.0f || height < 32.0f) { return; }
+    const bool mercator = tiles != nullptr && tiles->active();
 
     // Fit to content the first time there is any, so the map does not open on
     // empty ocean while every target is somewhere else.
@@ -110,16 +131,34 @@ void MapView::draw(float width, float height,
     // equator; that is the projection's known and accepted distortion.)
     const double lonSpan = spanDeg_;
     const double latSpan = spanDeg_ * static_cast<double>(height) / static_cast<double>(width);
+    // In Mercator the vertical scale is derived from the SAME pixels-per-degree
+    // -of-longitude as the horizontal one, which is what keeps the projection
+    // conformal: a tile drawn square stays square. `pixPerWorld` is how many
+    // screen pixels one whole world-width spans, and everything else follows.
+    const double pixPerWorld = static_cast<double>(width) * 360.0 / lonSpan;
+    const double centreMercY = mercY(centreLat_);
+
     const auto toScreen = [&](double lat, double lon) {
-        const double x = (lon - centreLon_) / lonSpan * width + width * 0.5;
-        const double y = (centreLat_ - lat) / latSpan * height + height * 0.5;
+        double dx = lon - centreLon_;
+        // Take the short way round: a target at +179 with the view at -179 is
+        // two degrees away, not three hundred and fifty-eight.
+        if (dx > 180.0) { dx -= 360.0; }
+        if (dx < -180.0) { dx += 360.0; }
+        const double x = dx / lonSpan * width + width * 0.5;
+        const double y = mercator
+                             ? (mercY(lat) - centreMercY) * pixPerWorld + height * 0.5
+                             : (centreLat_ - lat) / latSpan * height + height * 0.5;
         return ImVec2(origin.x + static_cast<float>(x), origin.y + static_cast<float>(y));
     };
     const auto toWorld = [&](const ImVec2& p) {
         const double lon =
             (static_cast<double>(p.x - origin.x) - width * 0.5) / width * lonSpan + centreLon_;
         const double lat =
-            centreLat_ - (static_cast<double>(p.y - origin.y) - height * 0.5) / height * latSpan;
+            mercator
+                ? mercLat(centreMercY +
+                          (static_cast<double>(p.y - origin.y) - height * 0.5) / pixPerWorld)
+                : centreLat_ -
+                      (static_cast<double>(p.y - origin.y) - height * 0.5) / height * latSpan;
         return std::pair<double, double>(lat, lon);
     };
 
@@ -154,12 +193,84 @@ void MapView::draw(float width, float height,
     if (centreLon_ > 180.0) { centreLon_ -= 360.0; }
     if (centreLon_ < -180.0) { centreLon_ += 360.0; }
 
+    // --- basemap tiles, beneath everything ---------------------------------
+    //
+    // The zoom is chosen so one tile's pixels land at roughly their native
+    // size: below that the map is blurry, above it the client fetches four
+    // times the tiles for detail nobody can see. Then every visible tile at
+    // that zoom is asked for and drawn where its own edges say it goes, which
+    // is the whole of the placement logic - in Mercator the tile grid IS the
+    // projection, so there is nothing to reproject.
+    bool haveTiles = false;
+    if (mercator) {
+        const double worldPixels = pixPerWorld;  // pixels for the whole world
+        double want = std::log2(worldPixels / static_cast<double>(tiles->tileSize()));
+        int z = static_cast<int>(std::floor(want + 0.5));
+        z = std::clamp(z, static_cast<int>(tiles->minZoom()),
+                       static_cast<int>(tiles->maxZoom()));
+        const double n = std::pow(2.0, static_cast<double>(z));
+
+        // The visible world rectangle in normalised Mercator, from the corners.
+        const auto tl = toWorld(origin);
+        const auto br = toWorld(ImVec2(origin.x + width, origin.y + height));
+        const double x0 = (tl.second + 180.0) / 360.0;
+        const double x1 = (br.second + 180.0) / 360.0;
+        const double y0 = mercY(tl.first);
+        const double y1 = mercY(br.first);
+
+        long tx0 = static_cast<long>(std::floor(x0 * n));
+        long tx1 = static_cast<long>(std::floor(x1 * n));
+        long ty0 = static_cast<long>(std::floor(y0 * n));
+        long ty1 = static_cast<long>(std::floor(y1 * n));
+        if (tx1 < tx0) { std::swap(tx0, tx1); }
+        if (ty1 < ty0) { std::swap(ty0, ty1); }
+        ty0 = std::max(ty0, 0L);
+        ty1 = std::min(ty1, static_cast<long>(n) - 1);
+
+        // A hard cap on tiles per frame. The zoom choice already keeps this
+        // near the screen area divided by the tile size, but a degenerate view
+        // must not be able to ask for thousands.
+        const long maxSpan = 64;
+        if (tx1 - tx0 > maxSpan) { tx1 = tx0 + maxSpan; }
+        if (ty1 - ty0 > maxSpan) { ty1 = ty0 + maxSpan; }
+
+        for (long ty = ty0; ty <= ty1; ++ty) {
+            for (long txRaw = tx0; txRaw <= tx1; ++txRaw) {
+                // Wrap in x so panning across the antimeridian keeps working;
+                // y does not wrap, because the world ends at the poles.
+                long tx = txRaw % static_cast<long>(n);
+                if (tx < 0) { tx += static_cast<long>(n); }
+                const unsigned int tex = tiles->texture(static_cast<std::uint32_t>(z),
+                                                        static_cast<std::uint32_t>(tx),
+                                                        static_cast<std::uint32_t>(ty));
+                if (tex == 0u) { continue; }
+                // Placed from the tile's OWN edges rather than from a computed
+                // size, so rounding cannot leave hairline gaps between
+                // neighbours.
+                const double west = static_cast<double>(txRaw) / n * 360.0 - 180.0;
+                const double east = static_cast<double>(txRaw + 1) / n * 360.0 - 180.0;
+                const double north = mercLat(static_cast<double>(ty) / n);
+                const double south = mercLat(static_cast<double>(ty + 1) / n);
+                const ImVec2 a = toScreen(north, west);
+                const ImVec2 b = toScreen(south, east);
+                dl->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)), a,
+                             b);
+                haveTiles = true;
+            }
+        }
+    }
+
     // --- coastline, beneath everything else -------------------------------
     // Natural Earth 1:110m, public domain, compiled in as int16 hundredths of
     // a degree (see coastline_data.hpp). 20 KB of coordinates, so there is no
     // data file to lose, no download, and no basemap that can be missing on a
     // fresh install.
-    {
+    //
+    // SKIPPED once tiles are on screen: a rendered map already draws its own
+    // coastlines, and a 1:110m vector outline over street-level imagery is not
+    // a second opinion, it is a wrong-coloured line a few hundred metres off
+    // the real one.
+    if (!haveTiles) {
         const ImU32 landCol = IM_COL32(96, 116, 136, 255);
         const double west = centreLon_ - lonSpan * 0.5;
         const double east = centreLon_ + lonSpan * 0.5;

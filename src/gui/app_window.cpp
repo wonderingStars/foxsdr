@@ -1962,6 +1962,9 @@ void AppWindow::rescanPlugins() {
     // Same rule as the runner: a track-source or panel handle is memory inside
     // a module whose destroy() is code in that same module.
     pluginUi_.clear();
+    // And the basemap, for exactly the same reason - its handle and its tile
+    // borrows live in a module about to be unmapped.
+    basemap_.detach();
 
     pluginHost_.unloadAll();
     pluginEnforceError_.clear();
@@ -2660,6 +2663,20 @@ void AppWindow::refreshPluginRunner() {
     };
     pluginUi_.setServices(std::move(svc));
     pluginUi_.rebuild(pluginHost_.plugins());
+
+    // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring
+    // the capability wins: two basemaps cannot both be the map, and picking
+    // silently by load order is more predictable than picking by some quality
+    // the user cannot see. Detached first so a rescan that removed the plugin
+    // takes its tiles - and its textures - with it.
+    const CascadeBasemapApi* wantBasemap = nullptr;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (lp.loaded && lp.basemap != nullptr) {
+            wantBasemap = lp.basemap;
+            break;
+        }
+    }
+    basemap_.attach(wantBasemap);
     // Grants LAST, and every time. rescanPlugins() calls PluginUi::clear(),
     // which drops the permission set along with the instances, so without this
     // a rescan would silently revoke every permission the user had given — and
@@ -2729,8 +2746,22 @@ void AppWindow::drawPluginWindows() {
             ImGui::TextDisabled("%d target%s", static_cast<int>(pluginUi_.tracks().size()),
                                 pluginUi_.tracks().size() == 1 ? "" : "s");
 
-            const ImVec2 avail = ImGui::GetContentRegionAvail();
-            map_->draw(avail.x, avail.y, pluginUi_.tracks(), pluginUi_.paths());
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            // ROOM FOR THE ATTRIBUTION IS RESERVED BEFORE the map is sized, not
+            // left over after it. The map fills whatever it is given, so
+            // drawing the credit afterwards pushed it outside the window and it
+            // was never seen - which, for a host that REFUSES a basemap plugin
+            // supplying no attribution, would have been hypocrisy rather than a
+            // layout bug.
+            const bool credit = basemap_.active() && !basemap_.attribution().empty();
+            if (credit) { avail.y -= ImGui::GetTextLineHeightWithSpacing(); }
+            if (avail.y < 32.0f) { avail.y = 32.0f; }
+            map_->draw(avail.x, avail.y, pluginUi_.tracks(), pluginUi_.paths(),
+                       &basemap_);
+            if (credit) {
+                ImGui::TextDisabled("%s", basemap_.attribution().c_str());
+            }
+            basemap_.endFrame();
         }
         ImGui::End();
     }

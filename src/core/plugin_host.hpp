@@ -115,6 +115,11 @@ enum class PluginRejection {
     MissingPresetApi,
     PresetStructSizeMismatch,
     MissingPresetFunction,
+    MissingBasemapApi,
+    BasemapStructSizeMismatch,
+    MissingBasemapFunction,
+    MissingBasemapAttribution,  // ODbL-derived tiles REQUIRE it; see plugin_abi.h
+    BasemapBadTileSize,
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -162,6 +167,7 @@ struct LoadedPlugin {
     const CascadePanelApi* panel = nullptr;                // CASCADE_CAP_PANEL
     const CascadeHostClientApi* hostClient = nullptr;      // CASCADE_CAP_HOST_CLIENT
     const CascadePresetApi* preset = nullptr;              // CASCADE_CAP_PRESET
+    const CascadeBasemapApi* basemap = nullptr;            // CASCADE_CAP_BASEMAP
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.
