@@ -145,11 +145,6 @@ private:
     // into a 300 px sidebar is not a map, and a plugin's window should be
     // movable and resizable like any other.
     void drawPluginWindows();
-    // Writes a decoded image to a 24-bit BMP. BMP because it needs no encoder
-    // and no dependency, and opens on any Windows machine by double-clicking -
-    // a decoded satellite pass the user cannot open is not saved.
-    bool saveImageBmp(const cascade::core::HostImage& img, const std::string& path,
-                      std::string& error) const;
     // Translucent service-band rectangles over the spectrum panel, plus the
     // labels that fit. `pos` is the panel's screen-space top-left as recorded
     // before the spectrum was drawn.
