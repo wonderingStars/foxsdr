@@ -2621,6 +2621,100 @@ void AppWindow::refreshPluginRunner() {
     pluginUi_.rebuild(pluginHost_.plugins());
 }
 
+// GL_CLAMP_TO_EDGE is OpenGL 1.2; the headers Windows ships stop at 1.1, and
+// this build targets 1.1 deliberately. The token is defined rather than
+// falling back to GL_CLAMP because GL_CLAMP samples the border COLOUR at the
+// edges, which puts a dark fringe around every decoded image. Every driver
+// this runs on supports 1.2.
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+
+bool AppWindow::saveImageBmp(const cascade::core::HostImage& img, const std::string& path,
+                             std::string& error) const {
+    error.clear();
+    if (img.width == 0 || img.height == 0 || img.pixels.empty()) {
+        error = "there is no image to save yet";
+        return false;
+    }
+    const std::size_t srcBpp = (img.format == CASCADE_IMAGE_RGB24) ? 3u : 1u;
+    // BMP rows are padded to a multiple of four bytes. Getting this wrong
+    // produces a file that opens and looks progressively sheared, which is
+    // the classic way to write a "working" BMP that is subtly wrong.
+    const std::size_t rowBytes = static_cast<std::size_t>(img.width) * 3u;
+    const std::size_t pad = (4u - (rowBytes % 4u)) % 4u;
+    const std::size_t stride = rowBytes + pad;
+    const std::size_t pixelBytes = stride * img.height;
+    const std::uint32_t headerBytes = 14u + 40u;
+
+    std::ofstream f(path, std::ios::binary);
+    if (!f) {
+        error = "cannot open \"" + path + "\" for writing";
+        return false;
+    }
+
+    auto u16 = [&f](std::uint16_t v) {
+        const unsigned char b[2] = {static_cast<unsigned char>(v & 0xFFu),
+                                    static_cast<unsigned char>((v >> 8) & 0xFFu)};
+        f.write(reinterpret_cast<const char*>(b), 2);
+    };
+    auto u32 = [&f](std::uint32_t v) {
+        const unsigned char b[4] = {static_cast<unsigned char>(v & 0xFFu),
+                                    static_cast<unsigned char>((v >> 8) & 0xFFu),
+                                    static_cast<unsigned char>((v >> 16) & 0xFFu),
+                                    static_cast<unsigned char>((v >> 24) & 0xFFu)};
+        f.write(reinterpret_cast<const char*>(b), 4);
+    };
+
+    f.write("BM", 2);
+    u32(static_cast<std::uint32_t>(headerBytes + pixelBytes));
+    u16(0);
+    u16(0);
+    u32(headerBytes);
+    u32(40);                                        // BITMAPINFOHEADER
+    u32(img.width);
+    u32(img.height);                                // positive = bottom-up
+    u16(1);
+    u16(24);
+    u32(0);                                         // BI_RGB, uncompressed
+    u32(static_cast<std::uint32_t>(pixelBytes));
+    u32(2835);                                      // ~72 dpi
+    u32(2835);
+    u32(0);
+    u32(0);
+
+    // BMP stores rows BOTTOM-UP and pixels as B,G,R. Both are easy to forget
+    // and both produce a file that opens looking wrong rather than failing.
+    std::vector<unsigned char> row(stride, 0);
+    for (std::uint32_t yy = 0; yy < img.height; ++yy) {
+        const std::uint32_t y = img.height - 1u - yy;
+        const unsigned char* src = img.pixels.data() + static_cast<std::size_t>(y) *
+                                                           img.width * srcBpp;
+        for (std::uint32_t x = 0; x < img.width; ++x) {
+            unsigned char r, g, b;
+            if (srcBpp == 3u) {
+                r = src[x * 3 + 0];
+                g = src[x * 3 + 1];
+                b = src[x * 3 + 2];
+            } else {
+                r = g = b = src[x];
+            }
+            row[x * 3 + 0] = b;
+            row[x * 3 + 1] = g;
+            row[x * 3 + 2] = r;
+        }
+        for (std::size_t i = rowBytes; i < stride; ++i) { row[i] = 0; }
+        f.write(reinterpret_cast<const char*>(row.data()),
+                static_cast<std::streamsize>(stride));
+    }
+    f.flush();
+    if (!f) {
+        error = "writing \"" + path + "\" failed part way through";
+        return false;
+    }
+    return true;
+}
+
 void AppWindow::drawPluginWindows() {
     // One poll per frame feeds both the map and every panel: the plugins are
     // asked once and the answer is shared, so a plugin cannot be charged twice
@@ -2655,6 +2749,98 @@ void AppWindow::drawPluginWindows() {
 
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             map_->draw(avail.x, avail.y, pluginUi_.tracks(), pluginUi_.paths());
+        }
+        ImGui::End();
+    }
+
+    // --- image windows ----------------------------------------------------
+    const std::vector<cascade::core::HostImage>& imgs = pluginUi_.images();
+    if (imageTex_.size() < imgs.size()) {
+        imageTex_.resize(imgs.size(), 0u);
+        imageTexRev_.resize(imgs.size(), 0ull);
+    }
+    for (std::size_t i = 0; i < imgs.size(); ++i) {
+        const cascade::core::HostImage& im = imgs[i];
+        ImGui::SetNextWindowSize(ImVec2(660.0f, 520.0f), ImGuiCond_FirstUseEver);
+        const std::string id = im.plugin + " image###image_" + im.plugin;
+        if (ImGui::Begin(id.c_str())) {
+            if (im.width == 0 || im.height == 0) {
+                ImGui::TextDisabled("Waiting for the first image...");
+            } else {
+                // Uploaded only when the plugin says the pixels changed. A
+                // slow-scan frame updates a few times a second at most, and
+                // re-uploading a megapixel texture every frame to show the
+                // same picture would cost more than the decoding does.
+                if (imageTexRev_[i] != im.revision) {
+                    if (imageTex_[i] == 0u) { glGenTextures(1, &imageTex_[i]); }
+                    glBindTexture(GL_TEXTURE_2D, imageTex_[i]);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    // Rows are tightly packed by PluginUi, which is NOT the
+                    // 4-byte default OpenGL assumes; without this a greyscale
+                    // image whose width is not a multiple of four shears.
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                    const GLenum fmt =
+                        (im.format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
+                    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt),
+                                 static_cast<GLsizei>(im.width),
+                                 static_cast<GLsizei>(im.height), 0, fmt, GL_UNSIGNED_BYTE,
+                                 im.pixels.data());
+                    imageTexRev_[i] = im.revision;
+                }
+
+                ImGui::Text("%ux%u  %s  frame %llu", im.width, im.height,
+                            im.complete ? "complete" : "receiving...",
+                            static_cast<unsigned long long>(im.sequence));
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Save as BMP")) {
+                    // Named by plugin, sequence and wall-clock time, next to
+                    // the recordings rather than in the install directory.
+                    std::error_code ec;
+                    const std::filesystem::path dir =
+                        std::filesystem::path(recordDir_.empty() ? "." : recordDir_);
+                    std::filesystem::create_directories(dir, ec);
+                    char stamp[32];
+                    const std::time_t t = std::time(nullptr);
+                    std::tm tmv{};
+#if defined(_WIN32)
+                    localtime_s(&tmv, &t);
+#else
+                    localtime_r(&t, &tmv);
+#endif
+                    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv);
+                    std::string safe = im.plugin;
+                    for (char& c : safe) {
+                        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                                        (c >= '0' && c <= '9') || c == '-' || c == '_';
+                        if (!ok) { c = '_'; }
+                    }
+                    const std::filesystem::path out =
+                        dir / (safe + "-" + stamp + ".bmp");
+                    std::string err;
+                    if (saveImageBmp(im, out.string(), err)) {
+                        imageSaveNote_ = "Saved " + out.string();
+                    } else {
+                        imageSaveNote_ = "Save failed: " + err;
+                    }
+                }
+
+                // Fit to the window, preserving aspect: a weather image
+                // stretched to the pane is a misread image.
+                const ImVec2 avail = ImGui::GetContentRegionAvail();
+                const float sx = avail.x / static_cast<float>(im.width);
+                const float sy = avail.y / static_cast<float>(im.height);
+                const float s = (sx < sy ? sx : sy);
+                if (imageTex_[i] != 0u && s > 0.0f) {
+                    ImGui::Image(static_cast<ImTextureID>(
+                                     static_cast<std::uintptr_t>(imageTex_[i])),
+                                 ImVec2(static_cast<float>(im.width) * s,
+                                        static_cast<float>(im.height) * s));
+                }
+            }
+            if (!imageSaveNote_.empty()) { ImGui::TextDisabled("%s", imageSaveNote_.c_str()); }
         }
         ImGui::End();
     }
@@ -2879,6 +3065,11 @@ void AppWindow::reportPluginStatus() {
         std::printf("plugin panel: name=%s title=\"%s\" columns=%d rows=%d\n",
                     p.plugin.c_str(), p.title.c_str(), static_cast<int>(p.headings.size()),
                     static_cast<int>(p.rows.size()));
+    }
+    for (const cascade::core::HostImage& im : pluginUi_.images()) {
+        std::printf("plugin image: from=%s %ux%u fmt=%u complete=%d seq=%llu bytes=%zu\n",
+                    im.plugin.c_str(), im.width, im.height, im.format, im.complete ? 1 : 0,
+                    static_cast<unsigned long long>(im.sequence), im.pixels.size());
     }
     for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
         std::printf("plugin track: from=%s id=%s label=%s pos=%.4f,%.4f kind=%u\n",
