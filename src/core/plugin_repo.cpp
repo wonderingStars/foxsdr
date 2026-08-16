@@ -1892,4 +1892,52 @@ bool PluginRepo::remove(const std::string& pluginsDir, const std::string& fileNa
     return true;
 }
 
+bool PluginRepo::removeQuarantined(const std::string& pluginsDir, const std::string& fileName,
+                                   const std::string& suffix, std::string& error) {
+    error.clear();
+
+    // The REAL name goes through the unmodified sanitiser first. Everything
+    // that check refuses for an install - traversal, drive letters, device
+    // names, a non-.dll ending - is refused here for exactly the same reasons.
+    std::string safeName;
+    if (!sanitiseFileName(fileName, safeName, error)) {
+        return false;
+    }
+
+    // The suffix is appended only after that, and is constrained in its own
+    // right: a caller that could pass "/../../x" or a second path component
+    // here would have defeated the check above by the back door. It is a
+    // fixed constant in the one caller that exists; validating it anyway costs
+    // nothing and means a future caller cannot get it wrong quietly.
+    if (suffix.empty() || suffix.front() != '.' || suffix.size() > 16) {
+        error = "quarantine suffix must be a short extension beginning with '.'";
+        return false;
+    }
+    for (char c : suffix) {
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                        (c >= '0' && c <= '9') || c == '.';
+        if (!ok) {
+            error = "quarantine suffix contains a character outside [A-Za-z0-9.]";
+            return false;
+        }
+    }
+    if (suffix.find("..") != std::string::npos) {
+        error = "quarantine suffix contains \"..\"";
+        return false;
+    }
+
+    const fs::path target = fs::path(pluginsDir) / (safeName + suffix);
+    std::error_code ec;
+    if (!fs::is_regular_file(target, ec)) {
+        error = "\"" + target.string() + "\" is not a disabled plugin file";
+        return false;
+    }
+    if (!fs::remove(target, ec) || ec) {
+        error = "cannot delete \"" + target.string() + "\": " +
+                (ec ? ec.message() : std::string("the file is probably in use"));
+        return false;
+    }
+    return true;
+}
+
 }  // namespace cascade::core

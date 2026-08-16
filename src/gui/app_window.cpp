@@ -1981,6 +1981,7 @@ void AppWindow::drawBlockedPluginRows() {
     ImGui::SeparatorText("Disabled");
     const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
     const bool busy = catalogPending_ || installPending_;
+    std::string removeBlockedFile;
     for (std::size_t i = 0; i < pluginBlocked_.size(); ++i) {
         const cascade::core::BlockedPlugin& b = pluginBlocked_[i];
         ImGui::PushID(static_cast<int>(1000 + i));
@@ -2013,9 +2014,35 @@ void AppWindow::drawBlockedPluginRows() {
         // DELIBERATELY no Update button for an ABI mismatch: no catalogue
         // update can fix it (the message says so), and offering the click
         // anyway is a support ticket.
+
+        // Remove, on the other hand, must be offered on EVERY blocked row. For
+        // an ABI mismatch it is the only action that exists, and without it the
+        // user is in a dead end: the plugin cannot load, cannot be updated into
+        // loading, and cannot be got rid of without finding the plugins folder
+        // and deleting a file whose name ends in ".disabled". That dead end
+        // would arrive for every installed plugin at once on the next ABI bump.
+        //
+        // Same two-step confirmation as the installed list, and a separate
+        // index because the two lists are drawn in the same frame and one
+        // shared "which row is confirming" would arm a row in both.
+        if (blockedRemoveConfirmIdx_ == static_cast<int>(i)) {
+            ImGui::TextWrapped("Delete %s?", b.installed.file.c_str());
+            if (ImGui::Button("Confirm delete")) {
+                removeBlockedFile = b.installed.file;
+                blockedRemoveConfirmIdx_ = -1;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel##rmblocked")) { blockedRemoveConfirmIdx_ = -1; }
+        } else if (ImGui::SmallButton("Remove")) {
+            blockedRemoveConfirmIdx_ = static_cast<int>(i);
+        }
         ImGui::Separator();
         ImGui::PopID();
     }
+    // Deferred past the loop for the same reason as the installed list:
+    // removeBlockedPlugin() rescans, which rebuilds the very vector being
+    // walked here.
+    if (!removeBlockedFile.empty()) { removeBlockedPlugin(removeBlockedFile); }
 }
 
 // --- The catalogue browser (P9) --------------------------------------------
@@ -2427,6 +2454,24 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     pluginHost_.unloadAll();
     std::string err;
     if (pluginRepo_.remove(pluginDir_, fileName, err)) {
+        installReport_ = "Removed " + fileName;
+    } else {
+        installError_ = err;
+    }
+    rescanPlugins();
+}
+
+void AppWindow::removeBlockedPlugin(const std::string& fileName) {
+    installError_.clear();
+    installReport_.clear();
+
+    // No unloadAll() is needed for the delete itself — a blocked plugin was
+    // never loaded, which is the entire point of blocking it — but rescan
+    // below reloads everything anyway, and unloading first keeps this path
+    // identical in shape to removeInstalledPlugin rather than subtly different.
+    pluginHost_.unloadAll();
+    std::string err;
+    if (pluginRepo_.removeQuarantined(pluginDir_, fileName, pluginQuarantineSuffix(), err)) {
         installReport_ = "Removed " + fileName;
     } else {
         installError_ = err;

@@ -539,6 +539,12 @@ private:
     // unload-first rationale) and rescans.
     void removeInstalledPlugin(const std::string& fileName);
 
+    // Deletes one BLOCKED (retired or ABI-mismatched) plugin. Separate from
+    // removeInstalledPlugin because a blocked plugin is not on disk under its
+    // own name: it has been renamed aside with pluginQuarantineSuffix(), so it
+    // needs PluginRepo::removeQuarantined rather than remove().
+    void removeBlockedPlugin(const std::string& fileName);
+
     bool pluginBrowseOpen_ = false;  // "Get plugins" view expanded
     char pluginUrlBuf_[512] = "";    // edit buffer for the catalogue URL
     std::string pluginCatalogueUrl_;  // committed value (persisted)
@@ -550,6 +556,7 @@ private:
     std::string installReport_;  // green: last successful install/remove
     std::string installError_;   // red: last failed install/remove, verbatim
     int removeConfirmIdx_ = -1;  // installed-list row awaiting confirmation
+    int blockedRemoveConfirmIdx_ = -1;  // disabled-list row awaiting confirmation
 
     // --- Bounded-run test hook (P9) --------------------------------------------
     // CASCADE_PLUGIN_TEST=<url-or-path>, honored ONLY by run(frames >= 0),

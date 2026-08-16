@@ -613,6 +613,25 @@ public:
     // something outside pluginsDir.
     bool remove(const std::string& pluginsDir, const std::string& fileName, std::string& error);
 
+    // Deletes a plugin the HOST renamed aside rather than loaded. A retired or
+    // ABI-mismatched plugin is quarantined as "<fileName><suffix>" (see
+    // AppWindow::quarantineBlockedPlugins), and that name can never be passed
+    // to remove() above: the sanitiser requires a ".dll" ending, deliberately,
+    // because it is the same allow-list that refuses "evil.dll.exe". Loosening
+    // it to let a quarantined name through would weaken every install.
+    //
+    // So `fileName` here is the plugin's REAL name and is sanitised exactly as
+    // remove() sanitises it; `suffix` is appended only AFTER that check
+    // passes, and is itself required to be a plain extension. The caller
+    // therefore cannot reach outside pluginsDir by either argument.
+    //
+    // Exists because without it a user whose plugin is retired for an ABI
+    // change has no way to delete it from the application at all: no catalogue
+    // update can fix an ABI mismatch, so the panel offers no action, and the
+    // file stays quarantined forever.
+    bool removeQuarantined(const std::string& pluginsDir, const std::string& fileName,
+                           const std::string& suffix, std::string& error);
+
     // 0..1 for the transfer in flight. Stays at 0 when the server sends no
     // Content-Length (progress that lies is worse than progress that waits).
     float progress() const { return progress_.load(std::memory_order_relaxed); }

@@ -978,6 +978,140 @@ int main() {
         fs::remove_all(dir, ec);
     }
 
+    // ---------------------------------------------------------------------
+    // removeQuarantined(): deleting a plugin the host renamed aside
+    //
+    // A retired or ABI-mismatched plugin is not on disk under its own name -
+    // AppWindow::quarantineBlockedPlugins renames it to "<name>.dll.disabled".
+    // Without this entry point the user has no way to delete it from the
+    // application: for an ABI mismatch there is no update that can help, so
+    // the panel offers no action at all and the file stays for ever.
+    // ---------------------------------------------------------------------
+    {
+        PluginRepo repo;
+        const fs::path dir = tmpDir("remove_quarantined");
+        fs::create_directories(dir);
+        const std::string kSuffix = ".disabled";
+
+        writeText(dir / "retired.dll.disabled", "quarantined bytes");
+        writeText(dir / "live.dll", "a loaded plugin");
+        writeText(dir / "other.dll.disabled", "another quarantined plugin");
+
+        std::string err = "stale";
+
+        // THE REASON THIS FUNCTION EXISTS. remove() cannot be used here: the
+        // sanitiser requires a name ending in ".dll", so the quarantined name
+        // is refused. That refusal is correct and must stay - it is the same
+        // check that rejects "evil.dll.exe" - which is why deletion of a
+        // quarantined file needed its own entry point rather than a relaxed
+        // allow-list.
+        CHECK(!repo.remove(dir.string(), "retired.dll.disabled", err));
+        CHECK(!err.empty());
+        CHECK(fs::exists(dir / "retired.dll.disabled"));
+
+        // The real name is what the caller passes; the suffix is appended by
+        // the callee after the name has been validated.
+        err = "stale";
+        CHECK(repo.removeQuarantined(dir.string(), "retired.dll", kSuffix, err));
+        CHECK(err.empty());
+        CHECK(!fs::exists(dir / "retired.dll.disabled"));
+
+        // Nothing else was touched.
+        CHECK(fs::exists(dir / "live.dll"));
+        CHECK(fs::exists(dir / "other.dll.disabled"));
+
+        // Gone already: honest failure, no crash, no false success.
+        err.clear();
+        CHECK(!repo.removeQuarantined(dir.string(), "retired.dll", kSuffix, err));
+        CHECK(!err.empty());
+
+        // It must NOT delete a live plugin: "live.dll" has no quarantined
+        // twin, so this is a clean miss rather than a deletion of live.dll.
+        err.clear();
+        CHECK(!repo.removeQuarantined(dir.string(), "live.dll", kSuffix, err));
+        CHECK(fs::exists(dir / "live.dll"));
+
+        // The name is sanitised exactly as remove() sanitises it. A traversal
+        // must not reach a quarantined file outside the plugins directory.
+        const fs::path outsideQ = dir / ".." / ("plugin_repo_" + std::to_string(TEST_GETPID()) +
+                                                "_victim2.dll.disabled");
+        writeText(outsideQ, "must survive");
+        err.clear();
+        const std::string traversal =
+            "..\\plugin_repo_" + std::to_string(TEST_GETPID()) + "_victim2.dll";
+        CHECK(!repo.removeQuarantined(dir.string(), traversal, kSuffix, err));
+        CHECK(!err.empty());
+        CHECK(fs::exists(outsideQ));
+        CHECK(!repo.removeQuarantined(dir.string(), "sub/other.dll", kSuffix, err));
+        CHECK(!repo.removeQuarantined(dir.string(), "", kSuffix, err));
+        CHECK(!repo.removeQuarantined(dir.string(), "other", kSuffix, err));
+        CHECK(fs::exists(dir / "other.dll.disabled"));
+
+        // The SUFFIX is validated in its own right. A caller that could pass a
+        // path fragment here would have defeated the name check by the back
+        // door, so each of these must be refused rather than concatenated.
+        //
+        // These assertions are written the hard way ON PURPOSE. Asserting only
+        // that a bad suffix RETURNS FALSE proves nothing, because the
+        // concatenated name usually does not exist and the call would fail at
+        // the file-existence check whether the suffix were validated or not.
+        // A first cut of this test did exactly that and stayed green with the
+        // whole validation block deleted. So for each rejected suffix, the file
+        // that an UNVALIDATED concatenation would have named is created first,
+        // and the assertion is that it SURVIVES.
+        struct BadSuffix {
+            const char* suffix;
+            const char* wouldHit;  // file "other.dll" + suffix names
+        };
+        const BadSuffix kBad[] = {
+            {"", "other.dll"},                       // empty: would delete the live plugin
+            {"disabled", "other.dlldisabled"},       // no leading dot
+            {".dis abled", "other.dll.dis abled"},   // whitespace
+            {"..disabled", "other.dll..disabled"},   // contains ".."
+            {".dis-abled", "other.dll.dis-abled"},   // '-' is outside the suffix class
+        };
+        for (const BadSuffix& bad : kBad) {
+            const fs::path decoy = dir / bad.wouldHit;
+            writeText(decoy, "must survive a rejected suffix");
+            err.clear();
+            CHECK(!repo.removeQuarantined(dir.string(), "other.dll", bad.suffix, err));
+            CHECK(!err.empty());
+            CHECK(fs::exists(decoy));  // <- the assertion with teeth
+            fs::remove(decoy);
+        }
+
+        // A separator in the suffix must not escape the plugins directory even
+        // though the NAME was clean. Without suffix validation the target below
+        // resolves out of `dir` entirely, so the file outside must survive.
+        const fs::path escapee = dir / ".." / ("plugin_repo_" + std::to_string(TEST_GETPID()) +
+                                               "_suffix_escape.dll");
+        writeText(escapee, "must survive");
+        // TWO ".." components, deliberately. Without validation the appended
+        // string forms the component "other.dll." first, so one ".." only
+        // returns to `dir` and would name a file inside it that does not exist
+        // - passing for the wrong reason. Two reach `dir`'s parent, where the
+        // file really is, so this goes red if the validation is removed.
+        err.clear();
+        CHECK(!repo.removeQuarantined(
+            dir.string(), "other.dll",
+            ".\\..\\..\\plugin_repo_" + std::to_string(TEST_GETPID()) + "_suffix_escape.dll",
+            err));
+        CHECK(!err.empty());
+        CHECK(fs::exists(escapee));
+
+        // And the legitimate suffix still works throughout.
+        CHECK(fs::exists(dir / "other.dll.disabled"));
+        err = "stale";
+        CHECK(repo.removeQuarantined(dir.string(), "other.dll", kSuffix, err));
+        CHECK(err.empty());
+        CHECK(!fs::exists(dir / "other.dll.disabled"));
+
+        std::error_code ec;
+        fs::remove(outsideQ, ec);
+        fs::remove(escapee, ec);
+        fs::remove_all(dir, ec);
+    }
+
     // =====================================================================
     // P10: version comparison, the manifest, retirement, update planning
     // =====================================================================
