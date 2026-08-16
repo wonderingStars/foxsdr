@@ -557,7 +557,26 @@ int AppWindow::run(int frames) {
     // Layout is fully code-driven; a stray imgui.ini next to the exe would
     // silently override it and make runs non-reproducible.
     ImGui::GetIO().IniFilename = nullptr;
+    // MULTI-VIEWPORT: the map and each decoded image get a REAL operating
+    // system window rather than a panel penned inside this one. A received
+    // picture and a target map are things a user wants on a second monitor,
+    // beside the radio rather than on top of it, and an ImGui window confined
+    // to the main framebuffer can never go there.
+    //
+    // Docking rides along because the same branch provides both, and without
+    // it a window dragged out has no way home: docking is how it gets put
+    // back.
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     ImGui::StyleColorsDark();
+    // A window that has been torn off is a real window and should look like
+    // one: square corners and an opaque background, not the translucent
+    // rounded panel that reads correctly only when floating over the app.
+    {
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
         std::fprintf(stderr, "cascade: ImGui GLFW backend init failed\n");
@@ -659,6 +678,19 @@ int AppWindow::run(int frames) {
         glClearColor(0.05f, 0.05f, 0.06f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // The torn-off windows are rendered here, each into its own operating
+        // system window and GL context. The current context has to be saved
+        // and restored around it: RenderPlatformWindowsDefault leaves whichever
+        // platform window it drew last current, and the next frame's
+        // glClear/RenderDrawData above would then paint the main UI into it.
+        if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
+            GLFWwindow* const restore = glfwGetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            glfwMakeContextCurrent(restore);
+        }
+
         glfwSwapBuffers(window);
         ++rendered;
     }
@@ -2638,6 +2670,18 @@ void AppWindow::refreshPluginRunner() {
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+void AppWindow::placeAsSeparateWindow(int slot) {
+    // See the note at the Map window for why overhanging the edge is what
+    // produces a separate operating system window. FirstUseEver throughout, so
+    // this is a starting position and never fights the user afterwards.
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
+    const float stagger = 34.0f * static_cast<float>(slot);
+    ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + mv->Size.x - 140.0f + stagger,
+                                   mv->Pos.y + 60.0f + stagger),
+                            ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_FirstUseEver);
+}
+
 void AppWindow::drawPluginWindows() {
     // One poll per frame feeds both the map and every panel: the plugins are
     // asked once and the answer is shared, so a plugin cannot be charged twice
@@ -2648,7 +2692,16 @@ void AppWindow::drawPluginWindows() {
     if (haveTracks) { mapOpen_ = true; }  // opens itself the first time there is something to show
 
     if (mapOpen_) {
-        ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_FirstUseEver);
+        // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
+        // what makes ImGui give it a real operating system window rather than
+        // merging it into the main one. There is no "always be a separate
+        // window" flag; the rule is that a window which fits inside the main
+        // viewport gets merged into it, so the way to ask for a window of its
+        // own is to start it overhanging the edge. Anchored just inside the
+        // right edge rather than flung off to one side, so it appears next to
+        // the radio instead of somewhere the user has to hunt for it - and
+        // only on first use, so moving or docking it afterwards sticks.
+        placeAsSeparateWindow(0);
         if (ImGui::Begin("Map", &mapOpen_)) {
             if (ImGui::SmallButton("Fit")) { map_->requestFitToTracks(); }
             ImGui::SameLine();
@@ -2708,7 +2761,11 @@ void AppWindow::drawPluginWindows() {
     }
     for (std::size_t i = 0; i < imgs.size(); ++i) {
         const cascade::core::HostImage& im = imgs[i];
-        ImGui::SetNextWindowSize(ImVec2(660.0f, 520.0f), ImGuiCond_FirstUseEver);
+        // Its own operating system window, for the same reason as the map: a
+        // received picture is something to put beside the radio, or on another
+        // screen, not a panel inside it. Staggered per decoder so two plugins
+        // producing pictures do not land exactly on top of each other.
+        placeAsSeparateWindow(static_cast<int>(i) + 1);
         const std::string id = im.plugin + " image###image_" + im.plugin;
         if (ImGui::Begin(id.c_str())) {
             if (im.width == 0 || im.height == 0) {

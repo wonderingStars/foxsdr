@@ -18,7 +18,7 @@ support SoapySDR exists to provide. It therefore stays external by design.
 
 | Library | Upstream | Tag / commit | Archive fetched | Archive SHA256 | License | Local dir |
 |---|---|---|---|---|---|---|
-| Dear ImGui | https://github.com/ocornut/imgui | tag `v1.92.8` | `https://github.com/ocornut/imgui/archive/v1.92.8.tar.gz` | `fecb33d33930e12ff53a34064e9d3a06c8f7c3e04408f14cd36c80e3faac863b` | MIT (`imgui/LICENSE.txt`) | `third_party/imgui/` |
+| Dear ImGui | https://github.com/ocornut/imgui | tag `v1.92.8-docking` | `https://github.com/ocornut/imgui/archive/v1.92.8-docking.tar.gz` | `ca0653454ed371b7a87e9b0bc29a5d15c9be7f7c0fbe778042fc48c71df1d3d8` | MIT (`imgui/LICENSE.txt`) | `third_party/imgui/` |
 | GLFW | https://github.com/glfw/glfw | tag `3.4` | `https://github.com/glfw/glfw/archive/3.4.tar.gz` | `c038d34200234d071fae9345bc455e4a8f2f544ab60150765d7704e08f3dac01` | Zlib (`glfw/LICENSE.md`) | `third_party/glfw/` |
 | PortAudio | https://github.com/PortAudio/portaudio | commit `147dd722548358763a8b649b3e4b41dfffbcfbb6` (v19.7 line — the exact commit the vcpkg `portaudio` 19.7#9 port pins, not the older `v19.7.0` tag) | `https://github.com/PortAudio/portaudio/archive/147dd722548358763a8b649b3e4b41dfffbcfbb6.tar.gz` | `95457b809ce60d4d4790f84bb692e271f644e59d8adf96feb988c89ab52a506a` | PortAudio license (MIT-like, `portaudio/LICENSE.txt`) | `third_party/portaudio/` |
 | nlohmann/json | https://github.com/nlohmann/json | tag `v3.12.0` (release asset `json.hpp` = `single_include/nlohmann/json.hpp`) | `https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp` | `aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63` | MIT (`nlohmann_json/LICENSE.MIT`) | `third_party/nlohmann_json/` |
@@ -26,8 +26,10 @@ support SoapySDR exists to provide. It therefore stays external by design.
 
 Integrity cross-check: the SHA512 of each fetched tar.gz was compared against
 the SHA512 recorded in the corresponding vcpkg portfile
-(`C:/vcpkg/ports/<port>/portfile.cmake`) and matched byte-for-byte for imgui,
-glfw3, portaudio, and pffft — i.e. these are provably the same sources vcpkg
+(`C:/vcpkg/ports/<port>/portfile.cmake`) and matched byte-for-byte for
+glfw3, portaudio, and pffft (imgui was checked this way while it was pinned to
+the master-branch `v1.92.8`; see the note below on why the docking tag it now
+carries has no vcpkg counterpart to compare against) — i.e. these are provably the same sources vcpkg
 built the previous binaries from. (nlohmann/json was fetched as the upstream
 release asset, whose 3.12.0 version macros were verified inside the header;
 vcpkg fetches the full repo archive instead, so its hash is not comparable.)
@@ -44,6 +46,23 @@ Built as the static target `imgui` (root `CMakeLists.txt`), compiling the same
 translation units the vcpkg port compiled (core five + `imgui_stdlib.cpp` +
 the two backends). The app uses the 1.92-era API (two-argument `PushFont`),
 which pins the 1.92.8 tag.
+
+**The `-docking` tag, not plain `v1.92.8`.** The map window and each decoded
+image are real operating system windows rather than panels penned inside the
+application, and multi-viewport support is the only supported way to do that:
+it exists solely on upstream's `docking` branch. The alternative considered and
+rejected was creating extra GLFW windows by hand with one Dear ImGui context
+each — the vendored GLFW backend says in its own source that multi-context
+support "is not well tested and probably dysfunctional", so that route means
+fighting the backend for the same result.
+
+`v1.92.8-docking` is the docking-branch counterpart of the exact tag that was
+already pinned, so this changes the branch and not the version: same upstream
+repository, same MIT licence, same 1.92-era API, no change to which translation
+units are compiled or which files are vendored. The integrity cross-check
+against vcpkg's portfile no longer applies to this row — vcpkg packages the
+master branch, so there is nothing on that side to compare a docking archive
+against. The SHA256 above is of the archive actually fetched.
 
 ### GLFW (`third_party/glfw/`)
 Full pristine 3.4 tree. Built via `add_subdirectory` with

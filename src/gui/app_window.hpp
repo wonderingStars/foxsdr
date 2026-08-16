@@ -159,6 +159,11 @@ private:
     // into a 300 px sidebar is not a map, and a plugin's window should be
     // movable and resizable like any other.
     void drawPluginWindows();
+    // Starting position and size for a window that should be its OWN operating
+    // system window rather than a panel inside the main one. `slot` staggers
+    // several of them. See the definition for why the position is what decides
+    // this — ImGui has no flag for it.
+    void placeAsSeparateWindow(int slot);
     // Translucent service-band rectangles over the spectrum panel, plus the
     // labels that fit. `pos` is the panel's screen-space top-left as recorded
     // before the spectrum was drawn.
