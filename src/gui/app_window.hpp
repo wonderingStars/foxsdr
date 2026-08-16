@@ -16,6 +16,7 @@
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
+#include "core/plugin_ui.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/recorder.hpp"
 #include "core/scanner.hpp"
@@ -30,6 +31,7 @@ namespace cascade::gui {
 // includes imgui.h), preserving the rule that main() never sees GUI headers.
 class SpectrumView;
 class WaterfallView;
+class MapView;
 
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
@@ -138,6 +140,11 @@ private:
     // centre frequency. Called after any source change, because both are
     // passed to a decoder's create() and cannot be changed afterwards.
     void refreshPluginRunner();
+    // The map window and every plugin-declared panel window. Drawn as their
+    // own top-level windows rather than inside the menu column: a map squeezed
+    // into a 300 px sidebar is not a map, and a plugin's window should be
+    // movable and resizable like any other.
+    void drawPluginWindows();
     // Translucent service-band rectangles over the spectrum panel, plus the
     // labels that fit. `pos` is the panel's screen-space top-left as recorded
     // before the spectrum was drawn.
@@ -413,6 +420,12 @@ private:
     // so it is destroyed BEFORE it: the runner's destructor calls each
     // plugin's destroy(), which is code inside a module the host unmaps.
     cascade::core::PluginRunner pluginRunner_;
+    // GUI-side plugin capabilities: map targets, plugin windows, host
+    // services. Declared after pluginHost_ for the same destruction-order
+    // reason as pluginRunner_.
+    cascade::core::PluginUi pluginUi_;
+    std::unique_ptr<MapView> map_;
+    bool mapOpen_ = false;
     // Decoded output, newest last, bounded. The panel is a tail, not an
     // archive; the recorder is where a permanent copy belongs.
     std::deque<cascade::core::DecodedLine> decoderLog_;

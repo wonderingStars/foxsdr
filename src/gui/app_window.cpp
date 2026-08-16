@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,7 @@
 // icon is an asset, not a source root, and adding an include directory for one
 // generated header would be a worse trade than a two-segment relative include.
 #include "../../resources/icon/foxsdr_icon_rgba.hpp"
+#include "gui/map_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/waterfall_view.hpp"
 #include "source/iq_file_source.hpp"
@@ -578,6 +580,7 @@ int AppWindow::run(int frames) {
         waterfall_ = std::make_unique<WaterfallView>(static_cast<int>(kFftSize),
                                                      kWaterfallHistory);
     }
+    if (!map_) { map_ = std::make_unique<MapView>(); }
 
     // Interactive runs start receiving immediately. A radio that opens with
     // dead black panels and no hint that a button must be pressed reads as
@@ -703,6 +706,10 @@ void AppWindow::drawUi() {
     // Before anything is drawn: the decoders' output is bounded in the runner
     // and must be collected whether or not the panel that shows it is open.
     pumpDecoderOutput();
+    // Plugin windows are top-level and are drawn OUTSIDE the root window, so
+    // they are movable and resizable like any other window. Drawn first so the
+    // root layout below owns the remaining space.
+    drawPluginWindows();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -1918,6 +1925,9 @@ void AppWindow::rescanPlugins() {
     // order wrong is a crash in someone else's DLL with no useful stack.
     pipeline_.setPluginRunner(nullptr);
     pluginRunner_.clear();
+    // Same rule as the runner: a track-source or panel handle is memory inside
+    // a module whose destroy() is code in that same module.
+    pluginUi_.clear();
 
     pluginHost_.unloadAll();
     pluginEnforceError_.clear();
@@ -2577,6 +2587,134 @@ void AppWindow::refreshPluginRunner() {
                           pipeline_.inputRateHz(),
                           pipeline_.activeSource().centerFrequencyHz());
     pipeline_.setPluginRunner(&pluginRunner_);
+
+    // The GUI-side capabilities are rebuilt HERE too, and for the same reason:
+    // a track source created against one receiver state should not survive a
+    // source change. Doing it in this one function means the two halves of the
+    // plugin system can never disagree about which plugins are live.
+    //
+    // Services are installed BEFORE rebuild, because the ABI promises attach()
+    // runs before any capability's create() and a tracker may read the
+    // receiver while building its initial state.
+    cascade::core::HostServices svc;
+    svc.centreHz = [this] { return pipeline_.activeSource().centerFrequencyHz(); };
+    svc.sampleRateHz = [this] { return pipeline_.inputRateHz(); };
+    svc.unixTimeMs = [] {
+        return static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count());
+    };
+    svc.tune = [this](double hz) -> std::int32_t {
+        // PluginUi has already applied the per-plugin permission; this only
+        // has to tune and report what the device said. There is no isOpen() on
+        // the IqSource interface, and a source with no usable rate is one
+        // nothing has opened - a state a plugin needs told apart from "the
+        // device refused".
+        if (!(pipeline_.activeSource().sampleRateHz() > 0.0)) {
+            return CASCADE_TUNE_NO_DEVICE;
+        }
+        retuneSourceHz(hz);
+        return CASCADE_TUNE_OK;
+    };
+    pluginUi_.setServices(std::move(svc));
+    pluginUi_.rebuild(pluginHost_.plugins());
+}
+
+void AppWindow::drawPluginWindows() {
+    // One poll per frame feeds both the map and every panel: the plugins are
+    // asked once and the answer is shared, so a plugin cannot be charged twice
+    // for having two kinds of output.
+    pluginUi_.poll();
+
+    const bool haveTracks = !pluginUi_.tracks().empty() || !pluginUi_.paths().empty();
+    if (haveTracks) { mapOpen_ = true; }  // opens itself the first time there is something to show
+
+    if (mapOpen_) {
+        ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Map", &mapOpen_)) {
+            if (ImGui::SmallButton("Fit")) { map_->requestFitToTracks(); }
+            ImGui::SameLine();
+            // The receiver's own position is asked for, never guessed. It is
+            // what range and bearing are measured from, and inferring it from
+            // a decoded target would be confidently wrong.
+            static float homeLat = 0.0f;
+            static float homeLon = 0.0f;
+            ImGui::SetNextItemWidth(90.0f);
+            ImGui::InputFloat("##homelat", &homeLat, 0.0f, 0.0f, "%.4f");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90.0f);
+            ImGui::InputFloat("##homelon", &homeLon, 0.0f, 0.0f, "%.4f");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Set RX here")) {
+                map_->setHome(static_cast<double>(homeLat), static_cast<double>(homeLon));
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d target%s", static_cast<int>(pluginUi_.tracks().size()),
+                                pluginUi_.tracks().size() == 1 ? "" : "s");
+
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            map_->draw(avail.x, avail.y, pluginUi_.tracks(), pluginUi_.paths());
+        }
+        ImGui::End();
+    }
+
+    // Plugin-declared windows. Each gets its own, titled by the plugin, so two
+    // plugins cannot collide in one panel.
+    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 300.0f), ImGuiCond_FirstUseEver);
+        // The plugin NAME is part of the ImGui id, not just the title: two
+        // plugins may legitimately call their window the same thing, and
+        // colliding ids would merge them into one window.
+        const std::string id = p.title + "###panel_" + p.plugin;
+        if (ImGui::Begin(id.c_str())) {
+            const int cols = static_cast<int>(p.headings.size());
+            if (cols > 0 &&
+                ImGui::BeginTable("##rows", cols,
+                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
+                for (const std::string& h : p.headings) {
+                    ImGui::TableSetupColumn(h.c_str());
+                }
+                ImGui::TableHeadersRow();
+                for (const CascadePanelRow& r : p.rows) {
+                    if (r.kind == CASCADE_ROW_SEPARATOR) {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::Separator();
+                        continue;
+                    }
+                    ImGui::TableNextRow();
+                    if (r.kind == CASCADE_ROW_HEADING) {
+                        ImGui::TableNextColumn();
+                        ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, r.cells[0]);
+                        continue;
+                    }
+                    for (int c = 0; c < cols; ++c) {
+                        ImGui::TableNextColumn();
+                        // Bounded print: the ABI says the cells are
+                        // NUL-terminated, but a plugin that fills every byte
+                        // must not walk the host off the end of the array.
+                        const char* cell = r.cells[c];
+                        if ((r.flags & CASCADE_ROW_FLAG_WARN) != 0u) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "%.*s",
+                                               CASCADE_PANEL_CELL_CHARS, cell);
+                        } else if ((r.flags & CASCADE_ROW_FLAG_GOOD) != 0u) {
+                            ImGui::TextColored(ImVec4(0.55f, 0.9f, 0.55f, 1.0f), "%.*s",
+                                               CASCADE_PANEL_CELL_CHARS, cell);
+                        } else if ((r.flags & CASCADE_ROW_FLAG_MUTED) != 0u) {
+                            ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
+                        } else {
+                            ImGui::Text("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
+                        }
+                    }
+                }
+                ImGui::EndTable();
+            }
+            if (p.rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
+        }
+        ImGui::End();
+    }
 }
 
 void AppWindow::pumpDecoderOutput() {
@@ -2730,6 +2868,23 @@ void AppWindow::reportPluginStatus() {
     // "being fed real audio" are different claims and the whole point of this
     // subsystem is the second one. A screenshot of a loaded plugin proves
     // nothing about whether a single sample ever reached it.
+    // The UI capabilities, reported like the decoders: "the plugin is loaded"
+    // and "the plugin put something on the map" are different claims.
+    std::printf("plugin ui: tracks=%d paths=%d panels=%d tuneRequests=%d\n",
+                static_cast<int>(pluginUi_.tracks().size()),
+                static_cast<int>(pluginUi_.paths().size()),
+                static_cast<int>(pluginUi_.panels().size()),
+                static_cast<int>(pluginUi_.tuneRequesters().size()));
+    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
+        std::printf("plugin panel: name=%s title=\"%s\" columns=%d rows=%d\n",
+                    p.plugin.c_str(), p.title.c_str(), static_cast<int>(p.headings.size()),
+                    static_cast<int>(p.rows.size()));
+    }
+    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+        std::printf("plugin track: from=%s id=%s label=%s pos=%.4f,%.4f kind=%u\n",
+                    t.plugin.c_str(), t.t.id, t.t.label, t.t.latDeg, t.t.lonDeg, t.t.kind);
+    }
+
     std::printf("plugin runner: active=%d lines=%d audioFed=%llu iqFed=%llu\n",
                 static_cast<int>(pluginRunner_.activeCount()),
                 static_cast<int>(decoderLog_.size()),
