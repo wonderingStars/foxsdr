@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "gui/coastline_data.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -152,6 +153,49 @@ void MapView::draw(float width, float height,
     centreLat_ = std::clamp(centreLat_, -89.0, 89.0);
     if (centreLon_ > 180.0) { centreLon_ -= 360.0; }
     if (centreLon_ < -180.0) { centreLon_ += 360.0; }
+
+    // --- coastline, beneath everything else -------------------------------
+    // Natural Earth 1:110m, public domain, compiled in as int16 hundredths of
+    // a degree (see coastline_data.hpp). 20 KB of coordinates, so there is no
+    // data file to lose, no download, and no basemap that can be missing on a
+    // fresh install.
+    {
+        const ImU32 landCol = IM_COL32(96, 116, 136, 255);
+        const double west = centreLon_ - lonSpan * 0.5;
+        const double east = centreLon_ + lonSpan * 0.5;
+        const double south = centreLat_ - latSpan * 0.5;
+        const double north = centreLat_ + latSpan * 0.5;
+
+        for (std::uint32_t r = 0; r < coastline::kRunCount; ++r) {
+            const coastline::Run& run = coastline::kRuns[r];
+            ImVec2 prev(0.0f, 0.0f);
+            bool havePrev = false;
+            double prevLon = 0.0;
+            for (std::uint32_t i = 0; i < run.count; ++i) {
+                const std::size_t k = (static_cast<std::size_t>(run.first) + i) * 2u;
+                const double lon = static_cast<double>(coastline::kCoords[k]) / 100.0;
+                const double lat = static_cast<double>(coastline::kCoords[k + 1]) / 100.0;
+                const ImVec2 s = toScreen(lat, lon);
+                if (havePrev) {
+                    // Same antimeridian rule as the ground tracks: a segment
+                    // that jumps more than half the world is a wrap, not a
+                    // coast, and drawing it streaks a line across the map.
+                    const bool wrap = std::fabs(lon - prevLon) > 180.0;
+                    // Cheap reject of segments entirely outside the view. With
+                    // 5127 points this is not about frame rate so much as
+                    // about not asking ImGui to clip thousands of lines that
+                    // cannot be seen.
+                    const bool visible =
+                        !(std::max(lon, prevLon) < west || std::min(lon, prevLon) > east ||
+                          lat < south - latSpan || lat > north + latSpan);
+                    if (!wrap && visible) { dl->AddLine(prev, s, landCol, 1.0f); }
+                }
+                prev = s;
+                prevLon = lon;
+                havePrev = true;
+            }
+        }
+    }
 
     // --- graticule --------------------------------------------------------
     const double step = graticuleStep(spanDeg_);
