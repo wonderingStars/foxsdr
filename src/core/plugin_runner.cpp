@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 namespace cascade::core {
 namespace {
@@ -125,16 +126,61 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
             }
         }
 
-        // Neither table, or nothing this runner drives: say so rather than
-        // leaving the plugin looking loaded-and-working.
-        if (!started && lp.decoder == nullptr && lp.iqDecoder == nullptr) {
+        if (lp.imageDecoder != nullptr) {
+            // WHICH STREAM is the plugin's own declaration, and it decides
+            // everything else here: an SSTV decoder asks for demodulated audio
+            // and an LRPT decoder for complex baseband, and the rate it is
+            // matched against has to be the rate of the stream it asked for.
+            const bool isIq = lp.imageDecoder->inputKind == CASCADE_INPUT_IQ;
+            const double have = isIq ? iqRateHz : audioRateHz;
+            const double want = lp.imageDecoder->requiredRateHz;
+            DecoderStatus st;
+            st.plugin = lp.name;
+            st.output = DecoderOutput::Image;
+            st.stream = isIq ? DecoderStream::Iq : DecoderStream::Audio;
+            if (want != 0.0 && want != have) {
+                st.reason = DecoderIdleReason::RateMismatch;
+                st.wantRateHz = want;
+                st.detail = rateSentence(lp.name, want, have, isIq ? "raw I/Q" : "audio");
+                status_.push_back(std::move(st));
+            } else {
+                // centerHz is 0 for an audio-input decoder, per the ABI: the
+                // audio it receives has already been tuned and demodulated, so
+                // an RF frequency would be a number it could only misuse.
+                void* h = lp.imageDecoder->create(want != 0.0 ? want : have,
+                                                  isIq ? centreHz : 0.0);
+                if (h == nullptr) {
+                    st.reason = DecoderIdleReason::CreateFailed;
+                    st.detail =
+                        "\"" + lp.name + "\" failed to start (its create() returned nothing).";
+                    status_.push_back(std::move(st));
+                } else {
+                    ImageInstance inst;
+                    inst.api = lp.imageDecoder;
+                    inst.handle = h;
+                    inst.name = lp.name;
+                    inst.inputKind = isIq ? CASCADE_INPUT_IQ : CASCADE_INPUT_AUDIO;
+                    imageInstances_.push_back(std::move(inst));
+                    if (isIq) { ++iqImageCount_; } else { ++audioImageCount_; }
+                    st.reason = DecoderIdleReason::Running;
+                    st.detail = "\"" + lp.name + "\" is building an image from the " +
+                                (isIq ? "raw receiver band (it ignores the VFO)."
+                                      : "tuned audio.");
+                    status_.push_back(std::move(st));
+                    started = true;
+                }
+            }
+        }
+
+        // No table this runner drives: say so rather than leaving the plugin
+        // looking loaded-and-working.
+        if (!started && lp.decoder == nullptr && lp.iqDecoder == nullptr &&
+            lp.imageDecoder == nullptr) {
             DecoderStatus st;
             st.plugin = lp.name;
             st.reason = DecoderIdleReason::NoAudioTable;
             st.stream = DecoderStream::None;
-            st.detail = "\"" + lp.name +
-                        "\" provides no decoder this build can drive (image decoders are "
-                        "not routed yet).";
+            st.detail = "\"" + lp.name + "\" provides no decoder this build can drive.";
             status_.push_back(std::move(st));
         }
     }
@@ -143,12 +189,16 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
 void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
     if (interleaved == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (iqInstances_.empty()) { return; }
+    if (iqInstances_.empty() && iqImageCount_ == 0) { return; }
     iqFed_ += frames;
     for (IqInstance& i : iqInstances_) {
         i.api->process(i.handle, interleaved, frames);
     }
+    for (ImageInstance& i : imageInstances_) {
+        if (i.inputKind == CASCADE_INPUT_IQ) { i.api->process(i.handle, interleaved, frames); }
+    }
     pollIqLocked();
+    pollImageTextLocked(CASCADE_INPUT_IQ);
 }
 
 void PluginRunner::retune(double centreHz) {
@@ -160,6 +210,14 @@ void PluginRunner::retune(double centreHz) {
         // usually does not care - so it is null-checked at the call site,
         // which is the contract the header states.
         if (i.api->retune != nullptr) { i.api->retune(i.handle, centreHz); }
+    }
+    for (ImageInstance& i : imageInstances_) {
+        // Only the I/Q ones. An audio-input image decoder was created with
+        // centerHz 0 by the ABI's own rule, so handing it a real RF frequency
+        // now would contradict what it was told at create().
+        if (i.inputKind == CASCADE_INPUT_IQ && i.api->retune != nullptr) {
+            i.api->retune(i.handle, centreHz);
+        }
     }
 }
 
@@ -177,6 +235,12 @@ void PluginRunner::destroyLocked() {
         if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
     }
     iqInstances_.clear();
+    for (ImageInstance& i : imageInstances_) {
+        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
+    }
+    imageInstances_.clear();
+    audioImageCount_ = 0;
+    iqImageCount_ = 0;
     status_.clear();
     audioFed_ = 0;
     iqFed_ = 0;
@@ -185,12 +249,16 @@ void PluginRunner::destroyLocked() {
 void PluginRunner::processAudio(const float* mono, std::size_t frames) {
     if (mono == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (instances_.empty()) { return; }
+    if (instances_.empty() && audioImageCount_ == 0) { return; }
     audioFed_ += frames;
     for (Instance& i : instances_) {
         i.api->process(i.handle, mono, frames);
     }
+    for (ImageInstance& i : imageInstances_) {
+        if (i.inputKind == CASCADE_INPUT_AUDIO) { i.api->process(i.handle, mono, frames); }
+    }
     pollLocked();
+    pollImageTextLocked(CASCADE_INPUT_AUDIO);
 }
 
 void PluginRunner::absorbLocked(const std::string& name, std::string& partial,
@@ -244,6 +312,85 @@ void PluginRunner::pollIqLocked() {
     }
 }
 
+void PluginRunner::pollImageTextLocked(std::uint32_t inputKind) {
+    for (ImageInstance& i : imageInstances_) {
+        if (i.inputKind != inputKind) { continue; }
+        for (;;) {
+            const int32_t n =
+                i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
+            if (n <= 0) { break; }
+            const std::size_t got =
+                std::min(static_cast<std::size_t>(n), pollBuf_.size());
+            absorbLocked(i.name, i.partial, pollBuf_.data(), got);
+        }
+    }
+}
+
+void PluginRunner::pollImages(std::vector<HostImage>& out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Re-seed `out` whenever the instance set changed under it - a rescan, a
+    // source switch. Comparing the NAMES rather than just the count is what
+    // makes a swap of one plugin for another impossible to miss: the count
+    // alone would leave the new decoder's picture labelled with the old
+    // plugin's name.
+    bool shapeChanged = out.size() != imageInstances_.size();
+    for (std::size_t i = 0; !shapeChanged && i < imageInstances_.size(); ++i) {
+        if (out[i].plugin != imageInstances_[i].name) { shapeChanged = true; }
+    }
+    if (shapeChanged) {
+        out.assign(imageInstances_.size(), HostImage{});
+        for (std::size_t i = 0; i < imageInstances_.size(); ++i) {
+            out[i].plugin = imageInstances_[i].name;
+        }
+    }
+
+    for (std::size_t i = 0; i < imageInstances_.size(); ++i) {
+        ImageInstance& ii = imageInstances_[i];
+        CascadeImage img{};
+        img.structSize = static_cast<std::uint32_t>(sizeof(CascadeImage));
+        const std::int32_t got = ii.api->poll_image(ii.handle, &img);
+        if (got <= 0) { continue; }
+
+        // Validate before believing any of it. These are third-party numbers
+        // and they are about to size an allocation and bound a read.
+        const bool sane =
+            img.pixels != nullptr && img.width > 0 && img.height > 0 &&
+            img.width <= CASCADE_IMAGE_MAX_DIM && img.height <= CASCADE_IMAGE_MAX_DIM &&
+            (img.format == CASCADE_IMAGE_GRAY8 || img.format == CASCADE_IMAGE_RGB24);
+        const std::size_t bpp = img.format == CASCADE_IMAGE_RGB24 ? 3u : 1u;
+        const std::size_t rowBytes = static_cast<std::size_t>(img.width) * bpp;
+        // A stride SHORTER than a row would make the host read rows that
+        // overlap and, at the last row, past the end of the plugin buffer.
+        const bool strideOk = sane && img.stride >= rowBytes;
+        const bool sizeOk =
+            strideOk && static_cast<std::size_t>(img.width) * img.height <= kMaxImagePixels;
+
+        if (sizeOk) {
+            HostImage& hi = out[i];
+            hi.width = img.width;
+            hi.height = img.height;
+            hi.format = img.format;
+            hi.complete = img.complete != 0;
+            hi.sequence = img.sequence;
+            // Copied ROW BY ROW into a tightly packed buffer: the plugin may
+            // pad its rows for alignment, and everything downstream (the
+            // texture upload, the file writer) is simpler if the host copy
+            // never does.
+            hi.pixels.resize(rowBytes * img.height);
+            for (std::uint32_t y = 0; y < img.height; ++y) {
+                std::memcpy(hi.pixels.data() + static_cast<std::size_t>(y) * rowBytes,
+                            img.pixels + static_cast<std::size_t>(y) * img.stride, rowBytes);
+            }
+            ++hi.revision;
+        }
+        // Released either way, and immediately: the borrow is over the moment
+        // the copy is taken, so a plugin is never waiting on the GUI to finish
+        // looking at a picture.
+        ii.api->release_image(ii.handle, &img);
+    }
+}
+
 std::vector<DecodedLine> PluginRunner::drainText() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<DecodedLine> out(pending_.begin(), pending_.end());
@@ -268,7 +415,7 @@ std::size_t PluginRunner::iqFramesFed() const {
 
 std::size_t PluginRunner::activeCount() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return instances_.size() + iqInstances_.size();
+    return instances_.size() + iqInstances_.size() + imageInstances_.size();
 }
 
 }  // namespace cascade::core

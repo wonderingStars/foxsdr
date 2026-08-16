@@ -43,6 +43,20 @@ catalogue ("Plugins" -> "Get plugins"). The catalogue is contacted only when
 you press Browse: nothing is fetched at startup, and no plugin ever updates
 itself.
 
+A plugin may declare several capabilities. Decoders are fed real samples —
+either the tuned, demodulated audio or the raw receiver band — and produce
+either text lines or **images** (slow-scan and weather-satellite pictures,
+shown in their own window and saveable as BMP). A plugin may also put targets
+and tracks on the map, and declare a window of its own.
+
+**Tune permission.** A plugin that can move the receiver can also take it away
+from you, so a plugin may only retune the radio if you tick it under
+"Plugins" -> "Receiver control". It is off by default and off for every newly
+installed plugin; a plugin that asks and is refused says so on that panel, so a
+satellite tracker that needs Doppler correction is one visible click away
+rather than mysteriously idle. The grant is per plugin and is remembered
+between sessions.
+
 Security model, in one line: every download is https, sha256-verified against
 the catalogue before it is allowed to become a file, size-capped, refused on a
 cross-host redirect, and written under a sanitised bare filename inside the

@@ -127,6 +127,20 @@ private:
     // looking at — a failed remove with the browser collapsed would otherwise
     // report nothing at all.
     void drawPluginResultText();
+    // "Receiver control": the checkbox that grants one plugin permission to
+    // tune the radio. Without it the permission PluginUi enforces could never
+    // be given — every request_tune was refused and the user had no way to say
+    // yes — which made a satellite tracker's Doppler correction unreachable.
+    void drawPluginTuneControls();
+    // Grants or revokes one plugin, updating both the live PluginUi and the
+    // persisted list. One function so the two can never disagree: a grant that
+    // took effect but was not saved would come back revoked next launch.
+    void setPluginTuneAllowed(const std::string& plugin, bool allowed);
+    // Pushes pluginTuneAllowed_ into pluginUi_. Called after every
+    // PluginUi::rebuild, because rebuild follows a clear() that drops the
+    // grants along with the instances — without this a rescan silently revoked
+    // every permission the user had given.
+    void applyPluginTuneGrants();
     // Decoder OUTPUT: what the loaded plugins are actually decoding, plus a
     // line per plugin that is loaded but not being fed and why. Drained from
     // PluginRunner every frame, because the runner's buffer is bounded and a
@@ -426,10 +440,19 @@ private:
     cascade::core::PluginUi pluginUi_;
     std::unique_ptr<MapView> map_;
     bool mapOpen_ = false;
+    // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
+    // rather than by the runner because it is written only when a decoder
+    // produces a new picture: keeping the GUI's copy out of the runner is what
+    // lets a megapixel frame be copied once per change instead of once per
+    // rendered frame.
+    std::vector<cascade::core::HostImage> pluginImages_;
     // GL textures for plugin images, one per image, keyed by index. Uploaded
-    // only when the plugin says the pixels changed.
+    // only when the plugin says the pixels changed. imageTexPlugin_ records
+    // whose picture each slot currently holds, so a rescan that puts a
+    // different plugin in a slot cannot leave the old texture on screen.
     std::vector<unsigned int> imageTex_;
     std::vector<std::uint64_t> imageTexRev_;
+    std::vector<std::string> imageTexPlugin_;
     std::string imageSaveNote_;
     // Decoded output, newest last, bounded. The panel is a tail, not an
     // archive; the recorder is where a permanent copy belongs.
@@ -490,6 +513,11 @@ private:
     // AppConfig::pluginLastUpdateCheck, stamped when a catalogue fetch
     // succeeds and persisted with the rest of the config.
     std::int64_t pluginLastUpdateCheck_ = 0;
+    // AppConfig::pluginTuneAllowed. THIS is the durable copy of the grant, and
+    // PluginUi holds the live one: PluginUi::clear() drops its set with the
+    // instances on every rescan, so the permission has to survive somewhere
+    // that a rescan does not touch.
+    std::vector<std::string> pluginTuneAllowed_;
 
     // --- Plugin browser (P9) --------------------------------------------------
     //

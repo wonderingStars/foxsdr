@@ -288,7 +288,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
-           a.pluginLastUpdateCheck == b.pluginLastUpdateCheck;
+           a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
+           a.pluginTuneAllowed == b.pluginTuneAllowed;
 }
 
 // --- Plugin browser helpers (P9) ---------------------------------------------
@@ -2011,6 +2012,7 @@ void AppWindow::drawPluginsSection() {
     // installed: the output is the reason the plugin exists, and the list is
     // administration.
     drawDecoderOutput();
+    drawPluginTuneControls();
 
     ImGui::SeparatorText("Installed");
     const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
@@ -2620,6 +2622,11 @@ void AppWindow::refreshPluginRunner() {
     };
     pluginUi_.setServices(std::move(svc));
     pluginUi_.rebuild(pluginHost_.plugins());
+    // Grants LAST, and every time. rescanPlugins() calls PluginUi::clear(),
+    // which drops the permission set along with the instances, so without this
+    // a rescan would silently revoke every permission the user had given — and
+    // the tracker that worked a moment ago would go quiet with no explanation.
+    applyPluginTuneGrants();
 }
 
 // GL_CLAMP_TO_EDGE is OpenGL 1.2; the headers Windows ships stop at 1.1, and
@@ -2670,10 +2677,34 @@ void AppWindow::drawPluginWindows() {
     }
 
     // --- image windows ----------------------------------------------------
-    const std::vector<cascade::core::HostImage>& imgs = pluginUi_.images();
+    // The pictures come from the RUNNER, because that is what feeds the image
+    // decoders samples. pluginImages_ is this window's own buffer and is
+    // rewritten only when a decoder produces something new, so redrawing an
+    // image the user is looking at costs nothing.
+    pluginRunner_.pollImages(pluginImages_);
+    const std::vector<cascade::core::HostImage>& imgs = pluginImages_;
+    // Textures are keyed by SLOT, and a rescan can put a different plugin in a
+    // slot - or drop one entirely. A slot whose plugin changed keeps its GL
+    // texture (allocating a new one per rescan would leak them) but has its
+    // cached revision invalidated, because the new decoder's revision counter
+    // starts at 0 again and a stale cache would leave the previous plugin's
+    // picture on screen under the new plugin's name.
+    while (imageTex_.size() > imgs.size()) {
+        if (imageTex_.back() != 0u) { glDeleteTextures(1, &imageTex_.back()); }
+        imageTex_.pop_back();
+        imageTexRev_.pop_back();
+        imageTexPlugin_.pop_back();
+    }
     if (imageTex_.size() < imgs.size()) {
         imageTex_.resize(imgs.size(), 0u);
         imageTexRev_.resize(imgs.size(), 0ull);
+        imageTexPlugin_.resize(imgs.size());
+    }
+    for (std::size_t i = 0; i < imgs.size(); ++i) {
+        if (imageTexPlugin_[i] != imgs[i].plugin) {
+            imageTexPlugin_[i] = imgs[i].plugin;
+            imageTexRev_[i] = 0ull;
+        }
     }
     for (std::size_t i = 0; i < imgs.size(); ++i) {
         const cascade::core::HostImage& im = imgs[i];
@@ -2816,6 +2847,77 @@ void AppWindow::drawPluginWindows() {
             if (p.rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
         }
         ImGui::End();
+    }
+}
+
+void AppWindow::applyPluginTuneGrants() {
+    for (const std::string& p : pluginTuneAllowed_) { pluginUi_.setTuneAllowed(p, true); }
+}
+
+void AppWindow::setPluginTuneAllowed(const std::string& plugin, bool allowed) {
+    pluginUi_.setTuneAllowed(plugin, allowed);
+    const auto it =
+        std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(), plugin);
+    if (allowed && it == pluginTuneAllowed_.end()) {
+        pluginTuneAllowed_.push_back(plugin);
+    } else if (!allowed && it != pluginTuneAllowed_.end()) {
+        pluginTuneAllowed_.erase(it);
+    }
+}
+
+void AppWindow::drawPluginTuneControls() {
+    // WHO GETS A ROW. Only a plugin that declares the host-client capability
+    // can ever call request_tune, so only those are offerable — listing the
+    // rest would suggest the receiver is at risk from decoders that cannot
+    // touch it. A plugin that is NOT currently loaded but still holds a grant
+    // gets a row too: it is the only way to revoke a permission given to
+    // something since removed or quarantined, and a grant the user cannot see
+    // is exactly the kind that should not exist.
+    std::vector<std::string> rows;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (p.loaded && p.hostClient != nullptr) { rows.push_back(p.name); }
+    }
+    const std::size_t loadedRows = rows.size();
+    for (const std::string& g : pluginTuneAllowed_) {
+        if (std::find(rows.begin(), rows.end(), g) == rows.end()) { rows.push_back(g); }
+    }
+    if (rows.empty()) { return; }
+
+    ImGui::SeparatorText("Receiver control");
+
+    // THE DENIAL NOTICE. A tracker that is refused just sits there looking
+    // broken; this is the line that turns "why is my plugin doing nothing" into
+    // a visible one-click decision, which is why PluginUi records refusals even
+    // though it rejects them.
+    const std::string& denied = pluginUi_.lastDeniedPlugin();
+    if (!denied.empty() && !pluginUi_.tuneAllowed(denied)) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+        ImGui::TextWrapped("\"%s\" asked to tune the receiver and was refused.",
+                           denied.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::TextWrapped(
+        "A ticked plugin may move the receiver's centre frequency — that is how a "
+        "satellite tracker follows Doppler. Off by default.");
+
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const std::string& name = rows[i];
+        ImGui::PushID(static_cast<int>(i));
+        bool allowed = pluginUi_.tuneAllowed(name);
+        if (ImGui::Checkbox(name.c_str(), &allowed)) {
+            setPluginTuneAllowed(name, allowed);
+        }
+        // What the plugin has actually DONE with the permission, which is the
+        // part that tells the user whether the row matters.
+        const std::vector<std::string>& asked = pluginUi_.tuneRequesters();
+        if (i >= loadedRows) {
+            ImGui::TextDisabled("not currently installed — grant remembered");
+        } else if (std::find(asked.begin(), asked.end(), name) != asked.end()) {
+            ImGui::TextDisabled("has asked to tune this session");
+        } else {
+            ImGui::TextDisabled("has not asked to tune");
+        }
+        ImGui::PopID();
     }
 }
 
@@ -2972,17 +3074,21 @@ void AppWindow::reportPluginStatus() {
     // nothing about whether a single sample ever reached it.
     // The UI capabilities, reported like the decoders: "the plugin is loaded"
     // and "the plugin put something on the map" are different claims.
-    std::printf("plugin ui: tracks=%d paths=%d panels=%d tuneRequests=%d\n",
+    // tuneGranted is printed beside tuneRequests because the pair is the whole
+    // permission story: a request with no grant is a refusal the user can undo,
+    // and a grant with no request is a permission nothing is using.
+    std::printf("plugin ui: tracks=%d paths=%d panels=%d tuneRequests=%d tuneGranted=%d\n",
                 static_cast<int>(pluginUi_.tracks().size()),
                 static_cast<int>(pluginUi_.paths().size()),
                 static_cast<int>(pluginUi_.panels().size()),
-                static_cast<int>(pluginUi_.tuneRequesters().size()));
+                static_cast<int>(pluginUi_.tuneRequesters().size()),
+                static_cast<int>(pluginTuneAllowed_.size()));
     for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
         std::printf("plugin panel: name=%s title=\"%s\" columns=%d rows=%d\n",
                     p.plugin.c_str(), p.title.c_str(), static_cast<int>(p.headings.size()),
                     static_cast<int>(p.rows.size()));
     }
-    for (const cascade::core::HostImage& im : pluginUi_.images()) {
+    for (const cascade::core::HostImage& im : pluginImages_) {
         std::printf("plugin image: from=%s %ux%u fmt=%u complete=%d seq=%llu bytes=%zu\n",
                     im.plugin.c_str(), im.width, im.height, im.format, im.complete ? 1 : 0,
                     static_cast<unsigned long long>(im.sequence), im.pixels.size());
@@ -3463,6 +3569,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // Restored purely so it can be saved back unchanged when the user never
     // browses this session. Nothing reads it to decide whether to fetch.
     pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
+    // Tune grants are pushed into PluginUi immediately, not just stored: the
+    // plugin scan already ran in the constructor, so a tracker created during
+    // it may call request_tune on its very first poll — before any rebuild
+    // would have re-applied them.
+    pluginTuneAllowed_ = cfg.pluginTuneAllowed;
+    applyPluginTuneGrants();
 
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
@@ -3560,6 +3672,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
+    cfg.pluginTuneAllowed = pluginTuneAllowed_;
     return cfg;
 }
 

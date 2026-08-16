@@ -9,6 +9,12 @@
 //   rebuild()/clear()   control thread. Creates and destroys instances.
 //   processAudio()      DSP thread, real-time. Must not block or allocate.
 //   drainText()         GUI thread, once per frame.
+//   pollImages()        GUI thread, once per frame.
+//
+// IMAGE DECODERS LIVE HERE, not in PluginUi where they were first created.
+// They consume samples like every other decoder - the only difference is that
+// what comes back is a picture instead of a line of text - and a decoder that
+// is never handed a sample cannot produce anything at all.
 //
 // A decoder instance is owned by exactly one thread at a time, as the ABI
 // requires. That is enforced by never touching instances_ from the GUI thread
@@ -33,6 +39,7 @@
 #include <string>
 #include <vector>
 
+#include "core/host_image.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
 
@@ -56,6 +63,15 @@ enum class DecoderIdleReason {
     NoAudioTable,   // declares no capability this runner can drive
 };
 
+// What a running instance produces. Text and image decoders are fed
+// identically and differ only in what comes back out, so the status panel says
+// which - "installed and silent" reads very differently once you know the
+// plugin's output is a picture that takes a minute to build.
+enum class DecoderOutput {
+    Text = 0,
+    Image,
+};
+
 // Which stream a running decoder is being fed, so the panel can say so: a
 // user who tuned the VFO and sees an I/Q decoder ignore it should be able to
 // find out that it works on the whole band instead.
@@ -69,6 +85,7 @@ struct DecoderStatus {
     std::string plugin;
     DecoderIdleReason reason = DecoderIdleReason::Running;
     DecoderStream stream = DecoderStream::None;
+    DecoderOutput output = DecoderOutput::Text;
     double wantRateHz = 0.0;  // meaningful for RateMismatch
     std::string detail;       // ready-to-display sentence
 };
@@ -113,6 +130,22 @@ public:
     // GUI thread. Moves out whatever has been decoded since the last call.
     std::vector<DecodedLine> drainText();
 
+    // GUI thread. Refreshes `out` from the image decoders: one entry per image
+    // decoder instance, in rebuild order, each carrying the newest picture that
+    // decoder has produced.
+    //
+    // `out` BELONGS TO THE CALLER and persists across calls, which is the whole
+    // design. An entry is rewritten only when its decoder offers a new image,
+    // so a megapixel weather frame is copied once per change rather than once
+    // per rendered frame, and the GUI keeps drawing the last picture in between
+    // without asking the plugin for it again.
+    //
+    // The plugin's poll_image/release_image pair runs under the same lock the
+    // DSP thread takes, because the borrow must not overlap a process() call on
+    // that instance. The copy therefore happens with the lock held; it is only
+    // paid when an image actually changed.
+    void pollImages(std::vector<HostImage>& out);
+
     // GUI thread. What each loaded decoder is doing, or why it is not.
     std::vector<DecoderStatus> status() const;
 
@@ -144,9 +177,29 @@ private:
         std::string partial;
     };
 
+    // An image decoder takes EITHER stream (SSTV wants demodulated audio, LRPT
+    // wants complex baseband), so unlike the two above, the instance has to
+    // carry which one it asked for.
+    struct ImageInstance {
+        const CascadeImageDecoderApi* api = nullptr;
+        void* handle = nullptr;
+        std::string name;
+        std::string partial;
+        std::uint32_t inputKind = CASCADE_INPUT_AUDIO;
+    };
+
+    // A plugin is third-party code: an absurd width/height must not make the
+    // host try to allocate it. CASCADE_IMAGE_MAX_DIM bounds each side; this
+    // bounds the product, which is what actually gets allocated.
+    static constexpr std::size_t kMaxImagePixels = 64u * 1024u * 1024u;
+
     void destroyLocked();
     void pollLocked();
     void pollIqLocked();
+    // Status text from the image decoders fed by `inputKind`, into the same
+    // line queue as everything else: an image decoder reports its progress and
+    // its failures as text, and a second log for it would only hide them.
+    void pollImageTextLocked(std::uint32_t inputKind);
     // Shared by both poll paths: appends `bytes` of decoder output to
     // `partial`, emits every complete line, keeps any tail. One
     // implementation, because two would eventually disagree about where a
@@ -157,6 +210,11 @@ private:
     mutable std::mutex mutex_;
     std::vector<Instance> instances_;
     std::vector<IqInstance> iqInstances_;
+    std::vector<ImageInstance> imageInstances_;
+    // How many image instances take each stream. Kept so the real-time path can
+    // decide whether it has anything to feed without walking the vector.
+    std::size_t audioImageCount_ = 0;
+    std::size_t iqImageCount_ = 0;
     std::vector<DecoderStatus> status_;
     double audioRateHz_ = 0.0;
     double iqRateHz_ = 0.0;

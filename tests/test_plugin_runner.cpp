@@ -150,6 +150,128 @@ LoadedPlugin makeIqPlugin(const char* name, const CascadeIqDecoderApi* api) {
 
 void resetIq() { g_iq = FakeIq{}; }
 
+// --- A fake IMAGE decoder -------------------------------------------------
+//
+// The one that matters most here: until this was wired, an image decoder was
+// created and polled but never handed a sample, so `frames` below could only
+// ever be 0 in the product.
+
+struct FakeImg {
+    int created = 0;
+    int destroyed = 0;
+    double lastRate = 0.0;
+    double lastCentre = -1.0;   // -1 = never called, to tell it from a real 0
+    int retunes = 0;
+    std::size_t frames = 0;
+    int polls = 0;
+    int releases = 0;
+    bool failCreate = false;
+    // What poll_image hands out. offer = 0 -> "nothing pending".
+    int offer = 0;
+    uint32_t w = 0, h = 0, fmt = CASCADE_IMAGE_GRAY8, stride = 0;
+    uint64_t seq = 0;
+    std::vector<uint8_t> pixels;
+    std::string queued;  // status text
+};
+
+FakeImg g_img;
+
+void* imgCreate(double rateHz, double centreHz) {
+    if (g_img.failCreate) { return nullptr; }
+    ++g_img.created;
+    g_img.lastRate = rateHz;
+    g_img.lastCentre = centreHz;
+    return &g_img;
+}
+
+void imgProcess(void*, const float*, size_t frames) { g_img.frames += frames; }
+void imgRetune(void*, double centreHz) { ++g_img.retunes; g_img.lastCentre = centreHz; }
+
+int32_t imgPollImage(void*, CascadeImage* out) {
+    ++g_img.polls;
+    if (g_img.offer == 0) { return 0; }
+    // The host is required to fill structSize before the call; a plugin that
+    // could not see it would have no way to tell what it is filling.
+    if (out->structSize != static_cast<uint32_t>(sizeof(CascadeImage))) { return -1; }
+    out->width = g_img.w;
+    out->height = g_img.h;
+    out->format = g_img.fmt;
+    out->stride = g_img.stride;
+    out->complete = 1;
+    out->sequence = g_img.seq;
+    out->pixels = g_img.pixels.data();
+    return 1;
+}
+
+void imgRelease(void*, const CascadeImage*) { ++g_img.releases; }
+
+int32_t imgPollText(void*, char* buf, size_t cap) {
+    if (g_img.queued.empty()) { return 0; }
+    std::size_t n = g_img.queued.size();
+    if (n > cap) { n = cap; }
+    std::memcpy(buf, g_img.queued.data(), n);
+    g_img.queued.erase(0, n);
+    return static_cast<int32_t>(n);
+}
+
+void imgDestroy(void*) { ++g_img.destroyed; }
+
+CascadeImageDecoderApi makeImgApi(uint32_t inputKind, double rateHz, bool withRetune) {
+    CascadeImageDecoderApi a{};
+    a.structSize = static_cast<uint32_t>(sizeof(CascadeImageDecoderApi));
+    a.inputKind = inputKind;
+    a.requiredRateHz = rateHz;
+    a.preferredRateHz = 0.0;
+    a.create = &imgCreate;
+    a.process = &imgProcess;
+    a.retune = withRetune ? &imgRetune : nullptr;
+    a.poll_image = &imgPollImage;
+    a.release_image = &imgRelease;
+    a.poll_text = &imgPollText;
+    a.destroy = &imgDestroy;
+    return a;
+}
+
+LoadedPlugin makeImgPlugin(const char* name, const CascadeImageDecoderApi* api) {
+    LoadedPlugin p;
+    p.loaded = true;
+    p.name = name;
+    p.version = "1.0.0";
+    p.imageDecoder = api;
+    return p;
+}
+
+void resetImg() { g_img = FakeImg{}; }
+
+// Bounds-safe element access for the assertions below. CHECK records a failure
+// and CARRIES ON, so a plain v[0] guarded only by a preceding size CHECK is an
+// out-of-bounds read in exactly the run that has something to report - the test
+// would crash instead of naming the broken expectation. Returning a
+// default-constructed element instead makes the follow-up checks fail honestly
+// rather than being skipped.
+template <typename T>
+const T& at(const std::vector<T>& v, std::size_t i) {
+    static const T kNone{};
+    return i < v.size() ? v[i] : kNone;
+}
+
+// Offers a 2x2 GRAY8 image whose rows are PADDED to `stride` bytes, so the
+// host's row-by-row copy is exercised rather than a flat memcpy that would
+// happen to work when stride == width.
+void offerGray2x2(uint32_t stride, uint64_t seq) {
+    g_img.offer = 1;
+    g_img.w = 2;
+    g_img.h = 2;
+    g_img.fmt = CASCADE_IMAGE_GRAY8;
+    g_img.stride = stride;
+    g_img.seq = seq;
+    g_img.pixels.assign(static_cast<std::size_t>(stride) * 2u, 0xEE);  // padding filler
+    g_img.pixels[0] = 1;
+    g_img.pixels[1] = 2;
+    g_img.pixels[stride + 0] = 3;
+    g_img.pixels[stride + 1] = 4;
+}
+
 }  // namespace
 
 int main() {
@@ -461,6 +583,265 @@ int main() {
             CHECK(g_iq.destroyed == 2);
         }
         CHECK(g_iq.created == g_iq.destroyed);
+    }
+
+    // --- IMAGE decoders: the wire that did not exist ----------------------
+    {
+        // THE BUG THIS FILE EXISTS TO CATCH. An image decoder was created and
+        // polled for pictures but never handed a single sample, so it could not
+        // produce anything at all. An audio-input one must receive the audio
+        // stream, and be told the rate it will get.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("SSTV", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(g_img.created == 1);
+        CHECK(g_img.lastRate == 48000.0);
+        // The ABI says centerHz is 0 for an audio-input decoder: the audio has
+        // already been tuned and demodulated, so an RF frequency would be a
+        // number it could only misuse.
+        CHECK(g_img.lastCentre == 0.0);
+        CHECK(r.activeCount() == 1u);
+        std::vector<float> block(512, 0.25f);
+        r.processAudio(block.data(), block.size());
+        CHECK(g_img.frames == 512u);
+        // ...and it is NOT fed the raw I/Q as well.
+        r.processIq(block.data(), 128);
+        CHECK(g_img.frames == 512u);
+    }
+    {
+        // An I/Q-input image decoder (LRPT) gets the raw device band and the
+        // receiver's centre, exactly like an I/Q text decoder - and none of the
+        // audio.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_IQ, 0.0, true);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("LRPT", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(g_img.created == 1);
+        CHECK(g_img.lastRate == kIqRate);
+        CHECK(g_img.lastCentre == kCentre);
+        std::vector<float> iq(2 * 300, 0.0f);
+        r.processIq(iq.data(), 300);
+        CHECK(g_img.frames == 300u);
+        r.processAudio(iq.data(), 64);
+        CHECK(g_img.frames == 300u);
+        // The receiver moving reaches it, because where the band sits is what
+        // an I/Q decoder tunes within.
+        r.retune(137100000.0);
+        CHECK(g_img.retunes == 1);
+        CHECK(g_img.lastCentre == 137100000.0);
+    }
+    {
+        // An AUDIO-input image decoder must NOT be retuned: it was created with
+        // centerHz 0 by the ABI's own rule, so handing it a real RF frequency
+        // later would contradict what it was told.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, true);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("SSTV", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        r.retune(137100000.0);
+        CHECK(g_img.retunes == 0);
+        CHECK(g_img.lastCentre == 0.0);
+    }
+    {
+        // A fixed-rate image decoder the stream cannot supply idles with a
+        // reason, and is matched against the rate of the stream IT asked for -
+        // checking an I/Q decoder against the audio rate would refuse every
+        // correct plugin.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_IQ, 140000.0, false);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("LRPT", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(g_img.created == 0);
+        CHECK(r.activeCount() == 0u);
+        const std::vector<DecoderStatus> st = r.status();
+        CHECK(st.size() == 1u);
+        CHECK(at(st, 0).reason == DecoderIdleReason::RateMismatch);
+        CHECK(at(st, 0).output == cascade::core::DecoderOutput::Image);
+        CHECK(at(st, 0).stream == cascade::core::DecoderStream::Iq);
+        CHECK(at(st, 0).wantRateHz == 140000.0);
+    }
+    {
+        // A rate an image decoder CAN have: 48 kHz audio, which is what the
+        // pipeline delivers. Running, and reported as an image producer so the
+        // panel does not describe a picture as silent text.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 48000.0, false);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("SSTV", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 1u);
+        const std::vector<DecoderStatus> st = r.status();
+        CHECK(st.size() == 1u);
+        CHECK(at(st, 0).reason == DecoderIdleReason::Running);
+        CHECK(at(st, 0).output == cascade::core::DecoderOutput::Image);
+    }
+
+    // --- Images come back out, copied and released ------------------------
+    {
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("SSTV", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+
+        std::vector<cascade::core::HostImage> imgs;
+        // Nothing offered yet: one entry, empty, tagged with the plugin.
+        r.pollImages(imgs);
+        CHECK(imgs.size() == 1u);
+        CHECK(at(imgs, 0).plugin == "SSTV");
+        CHECK(at(imgs, 0).width == 0u);
+        CHECK(at(imgs, 0).revision == 0u);
+        CHECK(g_img.releases == 0);  // nothing borrowed, nothing to release
+
+        // A picture with PADDED rows (stride 5 for a 2-pixel row): the host
+        // copy must be tightly packed, or every consumer downstream - the
+        // texture upload, the BMP writer - sees a sheared image.
+        offerGray2x2(/*stride=*/5, /*seq=*/7);
+        r.pollImages(imgs);
+        CHECK(at(imgs, 0).width == 2u && at(imgs, 0).height == 2u);
+        CHECK(at(imgs, 0).format == CASCADE_IMAGE_GRAY8);
+        CHECK(at(imgs, 0).complete);
+        CHECK(at(imgs, 0).sequence == 7u);
+        // The packed pixels are compared as a WHOLE VECTOR: indexing them
+        // element by element after a size check has the same out-of-bounds
+        // hazard as indexing the image list itself.
+        CHECK(at(imgs, 0).pixels == std::vector<std::uint8_t>({1, 2, 3, 4}));
+        CHECK(at(imgs, 0).revision == 1u);
+        // The borrow is returned immediately, once per successful poll.
+        CHECK(g_img.releases == 1);
+
+        // Nothing new offered: the picture STAYS, and is not re-copied. A GUI
+        // that had to be handed the pixels again every frame would re-upload a
+        // megapixel texture 60 times a second to show the same image.
+        g_img.offer = 0;
+        const int pollsBefore = g_img.polls;
+        r.pollImages(imgs);
+        CHECK(at(imgs, 0).width == 2u);
+        CHECK(at(imgs, 0).revision == 1u);
+        CHECK(g_img.releases == 1);
+        CHECK(g_img.polls == pollsBefore + 1);  // asked, told nothing pending
+    }
+    {
+        // Nonsense geometry is refused, not allocated. The width is a
+        // third-party number about to size a buffer and bound a read; a stride
+        // shorter than a row would walk the host off the end of the plugin's
+        // buffer on the last line.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("Bad", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        std::vector<cascade::core::HostImage> imgs;
+
+        offerGray2x2(2, 1);
+        g_img.stride = 1;  // shorter than the 2-byte row
+        r.pollImages(imgs);
+        CHECK(at(imgs, 0).width == 0u);
+        CHECK(at(imgs, 0).revision == 0u);
+        CHECK(g_img.releases == 1);  // refused, but still released
+
+        offerGray2x2(2, 2);
+        g_img.w = CASCADE_IMAGE_MAX_DIM + 1u;
+        r.pollImages(imgs);
+        CHECK(at(imgs, 0).width == 0u);
+
+        offerGray2x2(2, 3);
+        g_img.fmt = 99u;  // not GRAY8 or RGB24
+        r.pollImages(imgs);
+        CHECK(at(imgs, 0).width == 0u);
+        CHECK(at(imgs, 0).revision == 0u);
+        CHECK(g_img.releases == 3);
+    }
+    {
+        // A rebuild that puts a DIFFERENT plugin in the same slot must re-seed
+        // the caller's buffer. Keeping the old entry would label the new
+        // decoder's picture with the previous plugin's name - and the count
+        // alone cannot detect the swap.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        PluginRunner r;
+        std::vector<cascade::core::HostImage> imgs;
+        r.rebuild({makeImgPlugin("First", &api)}, 48000.0, kIqRate, kCentre);
+        offerGray2x2(2, 1);
+        r.pollImages(imgs);
+        CHECK(imgs.size() == 1u);
+        CHECK(at(imgs, 0).plugin == "First");
+        CHECK(at(imgs, 0).width == 2u);
+
+        g_img.offer = 0;
+        r.rebuild({makeImgPlugin("Second", &api)}, 48000.0, kIqRate, kCentre);
+        r.pollImages(imgs);
+        CHECK(imgs.size() == 1u);
+        CHECK(at(imgs, 0).plugin == "Second");
+        CHECK(at(imgs, 0).width == 0u);      // the old plugin's picture is gone
+        CHECK(at(imgs, 0).revision == 0u);
+    }
+    {
+        // Status text from an image decoder joins the same log as everything
+        // else: it is where a slow-scan decoder says what it is receiving, and
+        // a second log for it would only hide it.
+        resetImg();
+        g_img.queued = "SSTV Martin M1 sync at 1200 Hz\n";
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("SSTV", &api)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        std::vector<float> block(64, 0.0f);
+        r.processAudio(block.data(), block.size());
+        const std::vector<DecodedLine> out = r.drainText();
+        CHECK(out.size() == 1u);
+        CHECK(at(out, 0).plugin == "SSTV");
+        CHECK(at(out, 0).text == "SSTV Martin M1 sync at 1200 Hz");
+    }
+    {
+        // Lifetime, the rule that matters most: a handle outliving its module
+        // is a crash inside someone else's DLL.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        std::vector<LoadedPlugin> ps{makeImgPlugin("A", &api), makeImgPlugin("B", &api)};
+        {
+            PluginRunner r;
+            r.rebuild(ps, 48000.0, kIqRate, kCentre);
+            CHECK(g_img.created == 2);
+            r.rebuild(ps, 48000.0, kIqRate, kCentre);  // a rescan
+            CHECK(g_img.destroyed == 2);
+            r.clear();
+            CHECK(g_img.destroyed == 4);
+            r.clear();  // idempotent
+            CHECK(g_img.destroyed == 4);
+        }
+        CHECK(g_img.created == g_img.destroyed);
+    }
+    {
+        // A plugin declaring BOTH a text decoder and an image decoder gets one
+        // instance of each, and both are fed.
+        resetFake();
+        resetImg();
+        const CascadeDecoderApi tApi = makeApi(0u);
+        const CascadeImageDecoderApi iApi = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        LoadedPlugin p = makePlugin("Both", &tApi);
+        p.imageDecoder = &iApi;
+        PluginRunner r;
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 2u);
+        std::vector<float> block(128, 0.0f);
+        r.processAudio(block.data(), block.size());
+        CHECK(g_fake.samples == 128u);
+        CHECK(g_img.frames == 128u);
+    }
+    {
+        // Polling images with nothing loaded is safe, and empties the caller's
+        // buffer rather than leaving a picture from a plugin that is gone.
+        resetImg();
+        PluginRunner r;
+        std::vector<cascade::core::HostImage> imgs;
+        r.pollImages(imgs);
+        CHECK(imgs.empty());
     }
 
     // --- Feeding with nothing loaded is safe ------------------------------

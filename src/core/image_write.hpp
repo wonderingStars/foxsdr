@@ -14,7 +14,7 @@
 
 #include <string>
 
-#include "core/plugin_ui.hpp"
+#include "core/host_image.hpp"
 
 namespace cascade::core {
 

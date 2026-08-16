@@ -116,27 +116,8 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
             }
         }
 
-        if (lp.imageDecoder != nullptr) {
-            // create() takes the rate and centre the stream will arrive at.
-            // Nothing routes samples to image decoders yet, so it is told what
-            // the receiver is doing and will simply produce nothing until the
-            // host feeds it - which is honest, and better than refusing to
-            // create it and hiding the capability entirely.
-            void* h = lp.imageDecoder->create(
-                lp.imageDecoder->requiredRateHz != 0.0 ? lp.imageDecoder->requiredRateHz : 0.0,
-                0.0);
-            if (h != nullptr) {
-                HostImage hi;
-                hi.plugin = lp.name;
-                ImageInstance ii;
-                ii.api = lp.imageDecoder;
-                ii.handle = h;
-                ii.name = lp.name;
-                ii.imageIndex = images_.size();
-                images_.push_back(std::move(hi));
-                imageInstances_.push_back(std::move(ii));
-            }
-        }
+        // NOTE: no image-decoder instance is created here. An image decoder
+        // consumes samples, so PluginRunner owns it - see the header.
 
         if (lp.panel != nullptr) {
             void* h = lp.panel->create();
@@ -188,11 +169,6 @@ void PluginUi::destroyInstances() {
         if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
     }
     panelInstances_.clear();
-    for (ImageInstance& i : imageInstances_) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    imageInstances_.clear();
-    images_.clear();
     tracks_.clear();
     paths_.clear();
     panels_.clear();
@@ -246,50 +222,6 @@ void PluginUi::poll() {
             hp.points.assign(p.points, p.points + n2);
             paths_.push_back(std::move(hp));
         }
-    }
-
-    for (ImageInstance& ii : imageInstances_) {
-        CascadeImage img{};
-        img.structSize = static_cast<std::uint32_t>(sizeof(CascadeImage));
-        const std::int32_t got = ii.api->poll_image(ii.handle, &img);
-        if (got <= 0) { continue; }
-
-        // Validate before believing any of it. These are third-party numbers
-        // and they are about to size an allocation and bound a read.
-        const bool sane =
-            img.pixels != nullptr && img.width > 0 && img.height > 0 &&
-            img.width <= CASCADE_IMAGE_MAX_DIM && img.height <= CASCADE_IMAGE_MAX_DIM &&
-            (img.format == CASCADE_IMAGE_GRAY8 || img.format == CASCADE_IMAGE_RGB24);
-        const std::size_t bpp = img.format == CASCADE_IMAGE_RGB24 ? 3u : 1u;
-        const std::size_t rowBytes = static_cast<std::size_t>(img.width) * bpp;
-        // A stride SHORTER than a row would make the host read rows that
-        // overlap and, at the last row, past the end of the plugin buffer.
-        const bool strideOk = sane && img.stride >= rowBytes;
-        const bool sizeOk =
-            strideOk && static_cast<std::size_t>(img.width) * img.height <= kMaxImagePixels;
-
-        if (sizeOk) {
-            HostImage& hi = images_[ii.imageIndex];
-            hi.width = img.width;
-            hi.height = img.height;
-            hi.format = img.format;
-            hi.complete = img.complete != 0;
-            hi.sequence = img.sequence;
-            // Copied ROW BY ROW into a tightly packed buffer: the plugin may
-            // pad its rows for alignment, and everything downstream (the
-            // texture upload, the file writer) is simpler if the host copy
-            // never does.
-            hi.pixels.resize(rowBytes * img.height);
-            for (std::uint32_t y = 0; y < img.height; ++y) {
-                std::memcpy(hi.pixels.data() + static_cast<std::size_t>(y) * rowBytes,
-                            img.pixels + static_cast<std::size_t>(y) * img.stride, rowBytes);
-            }
-            ++hi.revision;
-        }
-        // Released either way, and immediately: the borrow is over the moment
-        // the copy is taken, so a plugin is never waiting on the GUI to finish
-        // looking at a picture.
-        ii.api->release_image(ii.handle, &img);
     }
 
     for (PanelInstance& pi : panelInstances_) {

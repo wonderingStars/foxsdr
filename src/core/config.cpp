@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -64,6 +65,20 @@ void getInt(const json& j, const char* key, int& dst) {
 void getInt64(const json& j, const char* key, std::int64_t& dst) {
     const auto it = j.find(key);
     if (it != j.end() && it->is_number_integer()) { dst = it->get<std::int64_t>(); }
+}
+
+// An array of strings, filtered to the entries that ARE strings. A mixed array
+// is a hand-edit; keeping the usable entries loses less than discarding the
+// whole list would, and the alternative - refusing the file - would wipe every
+// other setting over one bad element.
+void getStringArray(const json& j, const char* key, std::vector<std::string>& dst) {
+    const auto it = j.find(key);
+    if (it == j.end() || !it->is_array()) { return; }
+    std::vector<std::string> v;
+    for (const auto& e : *it) {
+        if (e.is_string()) { v.push_back(e.get<std::string>()); }
+    }
+    dst = std::move(v);
 }
 
 float clampf(float v, float lo, float hi) {
@@ -163,6 +178,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
+    getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
 
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
@@ -194,6 +210,20 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // way "never checked" is the only reading that cannot mislead the UI.
     if (out.pluginLastUpdateCheck < 0) {
         out.pluginLastUpdateCheck = 0;
+    }
+    // Tune grants: drop empties and duplicates, then cap. A duplicate would
+    // make revoking the permission look like it did not work — the second copy
+    // would still be there — and an empty name could never match a plugin, so
+    // both are noise a hand-edit or an older build could leave behind.
+    {
+        std::vector<std::string> grants;
+        for (const std::string& g : out.pluginTuneAllowed) {
+            if (g.empty()) { continue; }
+            if (std::find(grants.begin(), grants.end(), g) != grants.end()) { continue; }
+            grants.push_back(g);
+            if (grants.size() >= AppConfig::kMaxTuneGrants) { break; }
+        }
+        out.pluginTuneAllowed = std::move(grants);
     }
     return true;
 }
@@ -243,6 +273,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
+    j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the

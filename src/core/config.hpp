@@ -50,6 +50,14 @@
 //   - pluginLastUpdateCheck: a negative value resets to 0 ("never"). A time
 //     before the epoch is either a hand-edit or a clock that went backwards,
 //     and "never checked" is the only honest reading of either.
+//   - pluginTuneAllowed: a non-array resets to empty (no grants), which is the
+//     same state a fresh install has. Empty and duplicate entries are dropped,
+//     and the list is capped at kMaxTuneGrants — it is a list of plugin names
+//     the user ticked, so a file claiming thousands is a hand-edit and the cap
+//     stops it becoming a per-tune-request linear scan of arbitrary length.
+//     A name that matches no installed plugin is KEPT: a grant must survive a
+//     plugin being temporarily removed or renamed aside by the retirement
+//     quarantine, or reinstalling would silently re-grant it.
 //
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
@@ -59,8 +67,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // For PluginRepo::defaultIndexUrl(), which IS the default value of
 // pluginCatalogueUrl below. Spelling the default as a call rather than as a
@@ -161,6 +171,29 @@ struct AppConfig {
     // Sanitized on load: a negative value (hand-edit, or a clock that went
     // backwards) resets to 0, i.e. "never", which is the honest reading.
     std::int64_t pluginLastUpdateCheck = 0;
+
+    // --- Plugin tune permission -----------------------------------------------
+    // Names of the plugins the user has allowed to move the receiver. Empty by
+    // default, and empty is the secure state: PluginUi answers every
+    // request_tune with CASCADE_TUNE_DENIED unless the plugin's name is in this
+    // list.
+    //
+    // WHY IT IS PERSISTED AT ALL. A satellite tracker that corrects for Doppler
+    // is useless without it, and the grant is a decision about a piece of
+    // software the user installed, not about this session — asking again every
+    // launch would train them to tick it without reading it, which is the
+    // failure mode consent dialogs are famous for. It is stored by NAME rather
+    // than by file hash deliberately: a grant that evaporated on every plugin
+    // update would be the same nag by another route.
+    //
+    // Nothing here can grant anything on its own. A name in this list only
+    // matters if a plugin by that name is installed AND declares the host-
+    // client capability AND actually calls request_tune; the tune itself still
+    // goes through PluginUi's range checks and the receiver's own refusal.
+    std::vector<std::string> pluginTuneAllowed;
+
+    // Cap for the list above; see the load-semantics note in the header comment.
+    static constexpr std::size_t kMaxTuneGrants = 256;
 };
 
 class ConfigStore {

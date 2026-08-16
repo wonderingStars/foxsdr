@@ -97,6 +97,10 @@ AppConfig junkConfig() {
     // P10: away from its default AND out of range, so a load path that forgets
     // to assign it is caught by the same rule as every other field.
     c.pluginLastUpdateCheck = -999;
+    // A grant that must never survive a load: a config that does not mention
+    // tune permission has granted none, and a leftover here would mean a
+    // plugin could move the receiver on the strength of stale memory.
+    c.pluginTuneAllowed = {"junk-grant"};
     return c;
 }
 
@@ -128,6 +132,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
+    CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
 }
 
 }  // namespace
@@ -191,6 +196,10 @@ int main() {
         in.pluginBrowserOpen = true;
         // P10: a timestamp past 2038, which is why the field is 64-bit.
         in.pluginLastUpdateCheck = 4102444800;  // 2100-01-01T00:00:00Z
+        // Tune grants, in an order the roundtrip must preserve: the list is
+        // what the permission check reads, and a name silently dropped by the
+        // save is a permission the user gave and did not get back.
+        in.pluginTuneAllowed = {"Satellite Tracker", "ADS-B"};
 
         const std::string path = p("nested/deeper/config.json");
         std::string err = "stale";
@@ -525,6 +534,77 @@ int main() {
         out = junkConfig();
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.pluginLastUpdateCheck == d.pluginLastUpdateCheck);
+    }
+
+    // --- Plugin tune permission ----------------------------------------------
+    {
+        const std::string path = p("plugin_tune.json");
+        const AppConfig d;
+
+        // NO GRANTS BY DEFAULT. This is the security-relevant one: a fresh
+        // install, a missing field and a wrong-typed field must all mean "no
+        // plugin may move the receiver", because the check that enforces it
+        // reads exactly this list.
+        CHECK(d.pluginTuneAllowed.empty());
+
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginTuneAllowed.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"pluginTuneAllowed\":\"Tracker\"}\n"));  // not an array
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginTuneAllowed.empty());
+
+        // Compared as WHOLE VECTORS, never element by element after a size
+        // check: CHECK records a failure and carries on, so an indexed read
+        // guarded only by a preceding size CHECK is an out-of-bounds read the
+        // moment the size is wrong - which is exactly the run where the test
+        // needs to report rather than crash.
+        using Names = std::vector<std::string>;
+
+        // An ordinary list loads verbatim and in order.
+        CHECK(writeText(path, "{\"pluginTuneAllowed\":[\"Tracker\",\"ADS-B\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginTuneAllowed == Names({"Tracker", "ADS-B"}));
+
+        // Non-string elements are dropped and the usable ones kept: refusing
+        // the whole file over one bad element would wipe every other setting.
+        CHECK(writeText(path, "{\"pluginTuneAllowed\":[\"Tracker\",7,null,\"AIS\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginTuneAllowed == Names({"Tracker", "AIS"}));
+
+        // Empty names can match no plugin, and a DUPLICATE would make revoking
+        // look like it failed - the second copy would still be there.
+        CHECK(writeText(path,
+                        "{\"pluginTuneAllowed\":[\"Tracker\",\"\",\"Tracker\",\"AIS\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginTuneAllowed == Names({"Tracker", "AIS"}));
+
+        // The cap: a file claiming thousands of grants is a hand-edit, and the
+        // list is scanned on every request_tune.
+        {
+            std::string big = "{\"pluginTuneAllowed\":[";
+            for (std::size_t i = 0; i < AppConfig::kMaxTuneGrants + 50u; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"p" + std::to_string(i) + "\"";
+            }
+            big += "]}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginTuneAllowed.size() == AppConfig::kMaxTuneGrants);
+        }
+
+        // And a roundtrip through a file the store wrote itself.
+        AppConfig in;
+        in.pluginTuneAllowed = {"Satellite Tracker"};
+        const std::string rt = p("plugin_tune_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginTuneAllowed == Names({"Satellite Tracker"}));
     }
 
 #ifdef _WIN32

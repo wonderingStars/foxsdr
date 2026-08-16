@@ -8,6 +8,11 @@
 // would have tied the lifetime of a satellite tracker - which consumes no
 // signal - to the audio chain.
 //
+// IMAGE DECODERS ARE NOT HERE, and that is the same rule applied honestly:
+// they consume samples, so they belong to PluginRunner with the other
+// decoders. They were created here while nothing routed samples to them, which
+// made a capability that could never produce anything look implemented.
+//
 // THE TUNE PERMISSION, which is the one security-shaped decision here:
 // a plugin that can move the VFO can also fight the user for it, or sit on a
 // frequency they did not choose. So the host answers request_tune with
@@ -47,24 +52,6 @@ struct HostPath {
     std::uint32_t kind = 0;
     std::uint32_t flags = 0;
     std::vector<CascadePathPoint> points;
-};
-
-// The newest image a plugin has produced, COPIED out of it.
-//
-// The ABI lends the pixels only until release_image, and the host wants to
-// keep showing the picture across frames, upload it to a texture on its own
-// schedule and let the user save it minutes later. So it is copied once on
-// arrival and released immediately - the borrow is held for microseconds
-// rather than for as long as the window is open.
-struct HostImage {
-    std::string plugin;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    std::uint32_t format = 0;   // CASCADE_IMAGE_GRAY8 / RGB24
-    bool complete = false;      // false while still being received
-    std::uint64_t sequence = 0;
-    std::vector<std::uint8_t> pixels;  // tightly packed, no row padding
-    std::uint64_t revision = 0;        // bumped whenever pixels change
 };
 
 // One plugin-declared window, resolved once at create time.
@@ -114,7 +101,6 @@ public:
     const std::vector<HostTrack>& tracks() const { return tracks_; }
     const std::vector<HostPath>& paths() const { return paths_; }
     const std::vector<HostPanel>& panels() const { return panels_; }
-    const std::vector<HostImage>& images() const { return images_; }
 
     // --- Tune permission -------------------------------------------------
     // Which plugins have asked to control the receiver at least once, so the
@@ -149,12 +135,6 @@ private:
         void* handle = nullptr;
         std::string name;
     };
-    struct ImageInstance {
-        const CascadeImageDecoderApi* api = nullptr;
-        void* handle = nullptr;
-        std::string name;
-        std::size_t imageIndex = 0;  // into images_
-    };
     struct PanelInstance {
         const CascadePanelApi* api = nullptr;
         void* handle = nullptr;
@@ -169,20 +149,14 @@ private:
     static constexpr std::uint32_t kMaxPathsPerPlugin = 64;
     static constexpr std::uint32_t kMaxRowsPerPanel = 2000;
     static constexpr std::uint32_t kMaxPathPoints = 20000;
-    // A plugin is third-party code: an absurd width/height must not make the
-    // host try to allocate it. CASCADE_IMAGE_MAX_DIM bounds each side; this
-    // bounds the product, which is what actually gets allocated.
-    static constexpr std::size_t kMaxImagePixels = 64u * 1024u * 1024u;
 
     void destroyInstances();
 
     std::vector<TrackInstance> trackInstances_;
     std::vector<PanelInstance> panelInstances_;
-    std::vector<ImageInstance> imageInstances_;
     std::vector<HostTrack> tracks_;
     std::vector<HostPath> paths_;
     std::vector<HostPanel> panels_;
-    std::vector<HostImage> images_;
 
     HostServices services_;
     std::vector<std::string> tuneRequesters_;
