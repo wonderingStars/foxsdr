@@ -21,7 +21,13 @@ constexpr double kEarthRadiusKm = 6371.0;
 ImU32 colourFor(std::uint32_t kind, bool stale) {
     ImU32 c;
     switch (kind) {
-        case CASCADE_TRACK_AIRCRAFT: c = IM_COL32(120, 200, 255, 255); break;
+        // Red for aircraft. The pale blue this used to be is legible over a
+        // dark empty map and nearly invisible over street tiles, which are
+        // pale and busy - and street tiles are now the normal case whenever a
+        // basemap plugin is installed. Red is the one hue an OSM raster style
+        // does not use for large areas (its reds are thin motorway lines), so
+        // an aircraft stays findable against it.
+        case CASCADE_TRACK_AIRCRAFT: c = IM_COL32(235, 40, 40, 255); break;
         case CASCADE_TRACK_VESSEL:   c = IM_COL32(120, 255, 170, 255); break;
         case CASCADE_TRACK_STATION:  c = IM_COL32(255, 210, 120, 255); break;
         case CASCADE_TRACK_SATELLITE:c = IM_COL32(230, 150, 255, 255); break;
@@ -92,6 +98,18 @@ double mercLat(double y) {
 
 }  // namespace
 
+void MapView::goTo(double latDeg, double lonDeg, double spanDeg) {
+    centreLat_ = latDeg;
+    centreLon_ = lonDeg;
+    // Tightened only, never loosened - see the header for why.
+    if (spanDeg_ > spanDeg) { spanDeg_ = spanDeg; }
+    // A go-to is an explicit instruction about where to look, so it also
+    // cancels the pending initial fit; otherwise the first target to arrive
+    // would immediately drag the view somewhere else.
+    fitRequested_ = false;
+    fittedOnce_ = true;
+}
+
 void MapView::draw(float width, float height,
                    const std::vector<cascade::core::HostTrack>& tracks,
                    const std::vector<cascade::core::HostPath>& paths,
@@ -115,6 +133,19 @@ void MapView::draw(float width, float height,
         spanDeg_ = std::clamp(need * 1.6, 0.5, 360.0);
         fitRequested_ = false;
         fittedOnce_ = true;
+    }
+
+    // FOLLOW, before the projection is set up so the whole frame uses the new
+    // centre. A followed target that only re-centred on the NEXT frame would
+    // visibly lag its own marker.
+    if (!followId_.empty()) {
+        for (const auto& ht : tracks) {
+            if (followId_ == ht.t.id) {
+                centreLat_ = ht.t.latDeg;
+                centreLon_ = ht.t.lonDeg;
+                break;
+            }
+        }
     }
 
     const ImVec2 origin = ImGui::GetCursorScreenPos();

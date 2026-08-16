@@ -268,6 +268,20 @@ void applyWindowIcon(GLFWwindow* window) {
                       images);
 }
 
+// Great-circle distance in km, for the range column in the track list. The map
+// has its own copy for its range rings; duplicating six lines of trigonometry
+// is better than exposing one view's internals to the window that owns it.
+double greatCircleKmForList(double lat1, double lon1, double lat2, double lon2) {
+    const double kR = 6371.0;
+    const double p1 = lat1 * 3.14159265358979323846 / 180.0;
+    const double p2 = lat2 * 3.14159265358979323846 / 180.0;
+    const double dp = (lat2 - lat1) * 3.14159265358979323846 / 180.0;
+    const double dl = (lon2 - lon1) * 3.14159265358979323846 / 180.0;
+    const double a = std::sin(dp * 0.5) * std::sin(dp * 0.5) +
+                     std::cos(p1) * std::cos(p2) * std::sin(dl * 0.5) * std::sin(dl * 0.5);
+    return 2.0 * kR * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+}
+
 // Field-wise AppConfig comparison for the save debounce. Exact float
 // compares are correct here: both sides come from the same currentConfig()
 // code path, so any difference is a real user-visible change, never noise.
@@ -2746,6 +2760,16 @@ void AppWindow::drawPluginWindows() {
             ImGui::TextDisabled("%d target%s", static_cast<int>(pluginUi_.tracks().size()),
                                 pluginUi_.tracks().size() == 1 ? "" : "s");
 
+            // THE FLIGHT LIST, down the left of the map. A map alone answers
+            // "where is everything"; the list answers "what am I hearing" and,
+            // clicked, "take me to that one" - which is the question a
+            // callsign actually prompts.
+            const float listWidth = 190.0f;
+            ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
+            drawTrackList();
+            ImGui::EndChild();
+            ImGui::SameLine();
+
             ImVec2 avail = ImGui::GetContentRegionAvail();
             // ROOM FOR THE ATTRIBUTION IS RESERVED BEFORE the map is sized, not
             // left over after it. The map fills whatever it is given, so
@@ -2798,6 +2822,13 @@ void AppWindow::drawPluginWindows() {
     }
     for (std::size_t i = 0; i < imgs.size(); ++i) {
         const cascade::core::HostImage& im = imgs[i];
+        // NOTHING RECEIVED YET, NO WINDOW. An image decoder is created the
+        // moment its plugin loads, so every launch used to open a window
+        // saying "waiting for the first image..." - for SSTV, which may not
+        // hear a transmission all day. A window that appears when a picture
+        // starts arriving, and not before, is the same rule the map already
+        // follows: it opens itself the first time there is something to show.
+        if (im.width == 0u || im.height == 0u) { continue; }
         // Its own operating system window, for the same reason as the map: a
         // received picture is something to put beside the radio, or on another
         // screen, not a panel inside it. Staggered per decoder so two plugins
@@ -2941,6 +2972,75 @@ void AppWindow::drawPluginWindows() {
             if (p.rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
         }
         ImGui::End();
+    }
+}
+
+void AppWindow::drawTrackList() {
+    const std::vector<cascade::core::HostTrack>& tracks = pluginUi_.tracks();
+    if (tracks.empty()) {
+        ImGui::TextDisabled("No targets.");
+        ImGui::TextDisabled("Decoded aircraft, ships and stations appear here.");
+        return;
+    }
+
+    ImGui::Text("%d target%s", static_cast<int>(tracks.size()),
+                tracks.size() == 1 ? "" : "s");
+    // FOLLOW is a toggle rather than a mode buried in a menu, because its
+    // effect - the map moving on its own - is confusing if you cannot see at a
+    // glance that you asked for it.
+    const bool following = !map_->followedId().empty();
+    if (following) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+        ImGui::TextWrapped("following %s", map_->followedId().c_str());
+        ImGui::PopStyleColor();
+        if (ImGui::SmallButton("Stop following")) { map_->clearFollow(); }
+    }
+    ImGui::Separator();
+
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        const cascade::core::HostTrack& ht = tracks[i];
+        ImGui::PushID(static_cast<int>(i));
+
+        // The LABEL is the callsign where one has been decoded and the id
+        // otherwise. An aircraft's ICAO address is known from its first frame
+        // but its callsign only arrives in a separate message type, so a list
+        // that showed callsigns alone would leave rows blank for aircraft it
+        // is tracking perfectly well.
+        const char* label = (ht.t.label[0] != '\0') ? ht.t.label : ht.t.id;
+        const bool selected = (map_->selectedId() == std::string(ht.t.id));
+        if (ImGui::Selectable(label, selected)) {
+            // CLICK = GO TO. One click centres the map on it; the map only
+            // ever tightens the zoom, so clicking a flight while already
+            // zoomed in does not throw the view back out.
+            map_->setSelected(ht.t.id);
+            map_->goTo(ht.t.latDeg, ht.t.lonDeg);
+            mapOpen_ = true;
+        }
+        // Double click starts following, which is the natural escalation of
+        // "take me there" and needs no extra control.
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            map_->setFollowed(ht.t.id);
+        }
+
+        // One line of detail under each: altitude where it is known, and range
+        // from the receiver where a position has been set. NaN means the
+        // decoder honestly does not know, and is shown as nothing rather than
+        // as a confident zero.
+        char detail[96];
+        detail[0] = '\0';
+        if (!std::isnan(ht.t.altM)) {
+            std::snprintf(detail, sizeof(detail), "%.0f ft",
+                          ht.t.altM * 3.28084);
+        }
+        if (map_->hasHome()) {
+            const double km = greatCircleKmForList(map_->homeLatDeg(), map_->homeLonDeg(),
+                                                   ht.t.latDeg, ht.t.lonDeg);
+            char rng[32];
+            std::snprintf(rng, sizeof(rng), "%s%.0f km", detail[0] != '\0' ? "  " : "", km);
+            std::strncat(detail, rng, sizeof(detail) - std::strlen(detail) - 1);
+        }
+        if (detail[0] != '\0') { ImGui::TextDisabled("  %s", detail); }
+        ImGui::PopID();
     }
 }
 

@@ -70,6 +70,29 @@ public:
     // fight before it is useful.
     void requestFitToTracks() { fitRequested_ = true; }
 
+    // GO TO ONE TARGET: centre on it and, if the view is wider than `spanDeg`,
+    // zoom in to that. Used by the flight list beside the map - clicking a
+    // callsign should take you to the aircraft, which is the one thing a list
+    // of callsigns is for.
+    //
+    // The zoom is only ever TIGHTENED, never loosened: someone who has zoomed
+    // right into an approach path and then clicks a flight in that same area
+    // wants to go to it, not to be yanked back out to a county view.
+    void goTo(double latDeg, double lonDeg, double spanDeg = 2.0);
+
+    // The track the list has asked to follow, empty when none. While set, the
+    // view re-centres on that target every frame, so an aircraft being watched
+    // stays put instead of flying off the edge.
+    void setFollowed(const std::string& id) { followId_ = id; }
+    const std::string& followedId() const { return followId_; }
+    void clearFollow() { followId_.clear(); }
+
+    // The track the user last clicked in the list, so the caller can show it
+    // as selected. Distinct from following: selecting is a highlight, and
+    // following moves the map.
+    void setSelected(const std::string& id) { selectedId_ = id; }
+    const std::string& selectedId() const { return selectedId_; }
+
     // Degrees of longitude across the viewport; smaller is more zoomed in.
     double spanDeg() const { return spanDeg_; }
 
@@ -91,6 +114,8 @@ private:
     bool fittedOnce_ = false;
 
     std::string hoveredId_;
+    std::string followId_;
+    std::string selectedId_;
 };
 
 }  // namespace cascade::gui

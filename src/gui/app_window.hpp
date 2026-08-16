@@ -134,6 +134,11 @@ private:
     // yes — which made a satellite tracker's Doppler correction unreachable.
     // The one-click rows under an installed plugin: "ADS-B 1090 MHz" and the
     // like, declared by the plugin itself through CASCADE_CAP_PRESET.
+    // The list of decoded targets down the side of the Map window: callsign
+    // or id, altitude and range, with click-to-go-to and double-click to
+    // follow. A map answers "where is everything"; this answers "what am I
+    // hearing", and clicking answers "take me to that one".
+    void drawTrackList();
     void drawPluginPresets(const cascade::core::LoadedPlugin& p);
     // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
     // rebuilds the decoders against the new receiver state, and opens what
