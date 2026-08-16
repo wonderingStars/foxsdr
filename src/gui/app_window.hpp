@@ -131,6 +131,15 @@ private:
     // tune the radio. Without it the permission PluginUi enforces could never
     // be given — every request_tune was refused and the user had no way to say
     // yes — which made a satellite tracker's Doppler correction unreachable.
+    // The one-click rows under an installed plugin: "ADS-B 1090 MHz" and the
+    // like, declared by the plugin itself through CASCADE_CAP_PRESET.
+    void drawPluginPresets(const cascade::core::LoadedPlugin& p);
+    // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
+    // rebuilds the decoders against the new receiver state, and opens what
+    // that plugin contributes. The ONLY caller is a button: a preset is a
+    // plugin publishing where it listens, never a plugin retuning the radio —
+    // that still needs the separate per-plugin permission.
+    void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps);
     void drawPluginTuneControls();
     // Grants or revokes one plugin, updating both the live PluginUi and the
     // persisted list. One function so the two can never disagree: a grant that
@@ -523,6 +532,12 @@ private:
     // instances on every rescan, so the permission has to survive somewhere
     // that a rescan does not touch.
     std::vector<std::string> pluginTuneAllowed_;
+    // Bound on how many one-click presets a single plugin may put on the
+    // panel. A plugin is third-party code and a list this long is not a menu.
+    static constexpr std::uint32_t kMaxPresetsPerPlugin = 16u;
+    // What the last preset click did, shown under the list — a receiver that
+    // moved with no acknowledgement reads as a button that did nothing.
+    std::string presetNote_;
 
     // --- Plugin browser (P9) --------------------------------------------------
     //

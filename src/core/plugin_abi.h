@@ -232,7 +232,8 @@ extern "C" {
 #define CASCADE_CAP_TRACK_SOURCE 0x00000008u
 #define CASCADE_CAP_PANEL 0x00000010u
 #define CASCADE_CAP_HOST_CLIENT 0x00000020u
-#define CASCADE_CAP_ALL_KNOWN 0x0000003Fu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_PRESET 0x00000040u
+#define CASCADE_CAP_ALL_KNOWN 0x0000007Fu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -801,6 +802,112 @@ typedef struct CascadeHostApi {
     int64_t (*unix_time_ms)(void *ctx);
 } CascadeHostApi;
 
+/*
+ * ==========================================================================
+ * CASCADE_CAP_PRESET - "where do I listen for this?"
+ * ==========================================================================
+ *
+ * A decoder knows the frequency it is for and the user usually does not.
+ * Installing an ADS-B decoder and then having to find out for yourself that
+ * ADS-B lives at 1090 MHz, and that it wants 2 MS/s of raw bandwidth rather
+ * than a narrow channel, is the difference between a plugin that works when
+ * you click it and one that appears to do nothing.
+ *
+ * So a plugin may declare the places it expects to be used. The host offers
+ * them as one click each: tune there, put the receiver into the right mode,
+ * and open whatever windows that plugin contributes.
+ *
+ * THIS IS A SUGGESTION, NOT A TUNE. Nothing here lets a plugin move the
+ * receiver - only the USER clicking one of these does, and CASCADE_CAP_
+ * HOST_CLIENT with its separate per-plugin permission remains the only way a
+ * plugin can retune anything on its own. A plugin declaring a preset is
+ * publishing a fact about the mode it decodes, in the same spirit as its name
+ * and its licence.
+ *
+ * WHY A NEW CAPABILITY BIT AND NOT AN ABI BUMP. This is exactly the case
+ * version 3 restructured the descriptor for: a new bit plus a new table type,
+ * costing nothing to plugins that do not declare it and refusing nothing on a
+ * host that does not know it. Plugins built before this bit existed keep
+ * loading unchanged.
+ */
+
+#define CASCADE_PRESET_LABEL_CHARS 48
+
+/* Demodulator, matching what the host offers. A preset naming a mode the host
+ * does not implement is ignored rather than refused - the tune still
+ * happens, which is the part that matters. */
+#define CASCADE_DEMOD_UNCHANGED 0u /* leave the receiver's mode alone */
+#define CASCADE_DEMOD_NFM 1u
+#define CASCADE_DEMOD_WFM 2u
+#define CASCADE_DEMOD_AM 3u
+#define CASCADE_DEMOD_DSB 4u
+#define CASCADE_DEMOD_USB 5u
+#define CASCADE_DEMOD_CW 6u
+#define CASCADE_DEMOD_LSB 7u
+#define CASCADE_DEMOD_RAW 8u
+
+/*
+ * Tune the DEVICE's centre frequency to `frequencyHz` rather than putting the
+ * VFO there.
+ *
+ * The distinction is not cosmetic and gets one of the two kinds of decoder
+ * wrong if ignored. An audio decoder wants its signal in the tuned channel, so
+ * the VFO goes to the frequency. An I/Q decoder is handed the whole raw device
+ * band and does its own tuning inside it, so what it needs is the BAND to
+ * contain its signal - and ADS-B at 1090 MHz with a VFO offset of a few
+ * hundred kHz would otherwise sit the device slightly off, which is legal but
+ * pointless.
+ */
+#define CASCADE_PRESET_DEVICE_CENTRE 0x00000001u
+
+typedef struct CascadePreset {
+    /* sizeof(CascadePreset) as the HOST compiled it; the host fills this in
+     * before the call so the plugin can tell what it is filling. */
+    uint32_t structSize;
+
+    /* Shown on the button, e.g. "ADS-B 1090 MHz" or "APRS (Europe)". A plugin
+     * with one preset may repeat its own name; a plugin with several must
+     * distinguish them, because the label is all the user sees. NUL-terminated
+     * UTF-8, no newlines. */
+    char label[CASCADE_PRESET_LABEL_CHARS];
+
+    /* Where to listen, in Hz. Must be > 0. */
+    double frequencyHz;
+
+    /* CASCADE_DEMOD_*. */
+    uint32_t demodMode;
+
+    /* Channel bandwidth in Hz, or 0 to leave the receiver's alone. */
+    double bandwidthHz;
+
+    /* Device sample rate the decoder needs, in Hz, or 0 for "no preference".
+     * ADS-B needs at least 2 MS/s and simply cannot work below it, which is
+     * the sort of thing a user should not have to discover from a decoder that
+     * silently produces nothing. Advisory: the host applies it only if the
+     * open device supports it. */
+    double sampleRateHz;
+
+    /* OR of CASCADE_PRESET_* flags. */
+    uint32_t flags;
+} CascadePreset;
+
+typedef struct CascadePresetApi {
+    /* sizeof(CascadePresetApi) as the PLUGIN compiled it. Checked. */
+    uint32_t structSize;
+
+    /* How many presets this plugin offers. Bounded by the host at a small
+     * number; a plugin claiming hundreds is not one whose list belongs in a
+     * menu. Must not throw. */
+    uint32_t (*count)(void);
+
+    /* Fills `out` for 0 <= index < count(). Returns 1 on success and 0 if the
+     * index is out of range or the plugin declines to describe it. Called on
+     * the GUI thread, never in real time, and not tied to any instance - a
+     * preset is a property of the PLUGIN, not of a running decoder, so this
+     * takes no handle and may be called before anything is created. */
+    int32_t (*get)(uint32_t index, CascadePreset *out);
+} CascadePresetApi;
+
 typedef struct CascadeHostClientApi {
     uint32_t structSize;
 
@@ -997,6 +1104,11 @@ static inline const CascadeTrackSourceApi *cascade_plugin_track_source(
     const CascadePluginDesc *desc) {
     return (const CascadeTrackSourceApi *)cascade_plugin_capability(desc,
                                                                     CASCADE_CAP_TRACK_SOURCE);
+}
+
+static inline const CascadePresetApi *cascade_plugin_preset(
+    const CascadePluginDesc *desc) {
+    return (const CascadePresetApi *)cascade_plugin_capability(desc, CASCADE_CAP_PRESET);
 }
 
 static inline const CascadePanelApi *cascade_plugin_panel(const CascadePluginDesc *desc) {

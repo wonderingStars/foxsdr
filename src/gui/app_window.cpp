@@ -2070,6 +2070,7 @@ void AppWindow::drawPluginsSection() {
             // what terms it arrived under is the user's business and must not
             // require digging.
             ImGui::TextDisabled("licence: %s", p.licence.c_str());
+            drawPluginPresets(p);
         } else {
             // A refused candidate is shown WITH ITS REASON rather than
             // omitted — "my plugin does not appear" with no explanation is
@@ -2093,6 +2094,11 @@ void AppWindow::drawPluginsSection() {
         }
         ImGui::Separator();
         ImGui::PopID();
+    }
+    if (!presetNote_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.9f, 0.55f, 1.0f));
+        ImGui::TextWrapped("%s", presetNote_.c_str());
+        ImGui::PopStyleColor();
     }
     if (!removeFile.empty()) { removeInstalledPlugin(removeFile); }
     // Only when the browser is collapsed: with it open the same text has
@@ -2905,6 +2911,121 @@ void AppWindow::drawPluginWindows() {
         }
         ImGui::End();
     }
+}
+
+void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
+    // ONE CLICK: go where this decoder listens, in the mode it needs, and show
+    // its windows. A decoder knows its own frequency and the user usually does
+    // not; making them find out that ADS-B is at 1090 MHz and wants 2 MS/s of
+    // raw band is the difference between a plugin that works when you click it
+    // and one that appears to do nothing.
+    if (p.preset == nullptr) { return; }
+    uint32_t n = p.preset->count();
+    if (n == 0u) { return; }
+    // A plugin is third-party code. A list this long is not a menu, and
+    // without a cap a buggy plugin could put thousands of buttons on the
+    // panel.
+    if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
+
+    for (uint32_t i = 0; i < n; ++i) {
+        CascadePreset ps{};
+        ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+        if (p.preset->get(i, &ps) != 1) { continue; }
+        // Third-party numbers about to command a radio. A frequency that is
+        // not a frequency is refused here rather than handed to a driver;
+        // written as a positive test because the negation would accept NaN.
+        if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
+
+        // Bounded print: the ABI says the label is NUL-terminated, but a
+        // plugin that fills every byte must not walk the host off the end.
+        char label[CASCADE_PRESET_LABEL_CHARS + 32];
+        std::snprintf(label, sizeof(label), "%.*s##preset%u", CASCADE_PRESET_LABEL_CHARS,
+                      ps.label[0] != '\0' ? ps.label : p.name.c_str(), i);
+        if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) { applyPluginPreset(p, ps); }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Tune to %.4f MHz and open this plugin's windows",
+                              ps.frequencyHz / 1.0e6);
+        }
+    }
+}
+
+void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
+                                  const CascadePreset& ps) {
+    // MODE FIRST, because the mode's default bandwidth would otherwise
+    // overwrite the one the preset asked for.
+    if (ps.demodMode != CASCADE_DEMOD_UNCHANGED && ps.demodMode <= CASCADE_DEMOD_RAW) {
+        // The ABI's numbering is deliberately its own rather than an alias of
+        // this table's order: a plugin compiled today must not change meaning
+        // because the host reordered its buttons.
+        static const int kAbiToIndex[9] = {
+            -1,  // UNCHANGED, handled above
+            0,   // NFM
+            1,   // WFM
+            2,   // AM
+            3,   // DSB
+            4,   // USB
+            5,   // CW
+            6,   // LSB
+            7    // RAW
+        };
+        const int idx = kAbiToIndex[ps.demodMode];
+        if (idx >= 0) {
+            modeIndex_ = idx;
+            pipeline_.setDemodMode(kModeMap[idx]);
+            bandwidthIndex_ = kModeDefaultBw[idx];
+            vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
+            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+        }
+    }
+
+    // The device rate, before the tune, because changing it re-plans the whole
+    // chain. Advisory: a source that refuses simply keeps the rate it had, and
+    // the decoder will say so itself rather than the host guessing.
+    if (ps.sampleRateHz > 0.0 && soapy_ != nullptr &&
+        pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
+        if (soapy_->setSampleRateHz(ps.sampleRateHz)) {
+            // The combo follows, or it would keep showing the rate the user
+            // last picked while the radio ran at another.
+            soapyRateIndex_ = nearestIndex(kSoapyRateHz, kSoapyRateCount,
+                                           pipeline_.activeSource().sampleRateHz());
+            followInputRate();
+        }
+    }
+
+    if (ps.bandwidthHz > 0.0) {
+        const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+        vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(ps.bandwidthHz, bwHi));
+        pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+        bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+    }
+
+    // WHERE the frequency goes differs by decoder kind, and getting it wrong
+    // half-works in a way that is hard to diagnose. An I/Q decoder is handed
+    // the whole raw device band and tunes inside it, so the BAND must contain
+    // its signal - hence the device centre. An audio decoder wants its signal
+    // in the tuned channel, so the VFO goes there and the offset is preserved.
+    if ((ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u) {
+        retuneSourceHz(ps.frequencyHz);
+    } else {
+        tuneAbsoluteHz(ps.frequencyHz);
+    }
+
+    // Rebuild the decoders against the receiver they are now pointed at: the
+    // rate and centre are passed to create() and cannot be changed on a live
+    // instance, so without this the plugin the user just clicked would still
+    // be configured for wherever the radio used to be.
+    refreshPluginRunner();
+
+    // ...and show what it produces. A tune with nothing on screen is the same
+    // "did that work?" the button exists to answer. The map opens only for a
+    // plugin that actually puts things on it; panels and image windows are
+    // opened by their own capabilities being present.
+    if (p.trackSource != nullptr) { mapOpen_ = true; }
+
+    char note[192];
+    std::snprintf(note, sizeof(note), "Tuned to %.4f MHz for %s", ps.frequencyHz / 1.0e6,
+                  p.name.c_str());
+    presetNote_ = note;
 }
 
 void AppWindow::applyPluginTuneGrants() {

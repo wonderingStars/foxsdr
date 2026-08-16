@@ -265,6 +265,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                          ? static_cast<const CascadeHostClientApi*>(
                                findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT))
                          : nullptr;
+    rec.preset = (desc->capabilities & CASCADE_CAP_PRESET) != 0u
+                     ? static_cast<const CascadePresetApi*>(
+                           findCapabilityTable(desc, CASCADE_CAP_PRESET))
+                     : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -481,6 +485,23 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         // Counting it would let an empty plugin load and look functional.
     }
 
+    if ((desc->capabilities & CASCADE_CAP_PRESET) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_PRESET);
+        if (raw == nullptr) {
+            return PluginRejection::MissingPresetApi;
+        }
+        const auto* p = static_cast<const CascadePresetApi*>(raw);
+        if (p->structSize != static_cast<uint32_t>(sizeof(CascadePresetApi))) {
+            return PluginRejection::PresetStructSizeMismatch;
+        }
+        if (p->count == nullptr || p->get == nullptr) {
+            return PluginRejection::MissingPresetFunction;
+        }
+        // NOT counted toward `usable`, for the same reason as the host client:
+        // telling the user where to tune is not, by itself, decoding anything.
+        // A plugin offering only presets would load and look like a decoder.
+    }
+
     // Every bit it declared is one this host has never heard of. Loading it
     // would put a plugin in the list that can never do anything, so say what
     // is actually wrong instead: it was built for a host newer than this one.
@@ -541,6 +562,12 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "host-client table size does not match this host's";
         case PluginRejection::MissingHostClientFunction:
             return "host-client table has a null attach pointer";
+        case PluginRejection::MissingPresetApi:
+            return "declares CASCADE_CAP_PRESET but supplies no table";
+        case PluginRejection::PresetStructSizeMismatch:
+            return "preset table size does not match this host's";
+        case PluginRejection::MissingPresetFunction:
+            return "preset table has a null function pointer";
         case PluginRejection::MissingName:
             return "descriptor has no name";
         case PluginRejection::MissingVersion:

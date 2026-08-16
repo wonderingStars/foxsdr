@@ -112,6 +112,9 @@ enum class PluginRejection {
     MissingHostClientApi,
     HostClientStructSizeMismatch,
     MissingHostClientFunction,
+    MissingPresetApi,
+    PresetStructSizeMismatch,
+    MissingPresetFunction,
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -158,6 +161,7 @@ struct LoadedPlugin {
     const CascadeTrackSourceApi* trackSource = nullptr;    // CASCADE_CAP_TRACK_SOURCE
     const CascadePanelApi* panel = nullptr;                // CASCADE_CAP_PANEL
     const CascadeHostClientApi* hostClient = nullptr;      // CASCADE_CAP_HOST_CLIENT
+    const CascadePresetApi* preset = nullptr;              // CASCADE_CAP_PRESET
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.

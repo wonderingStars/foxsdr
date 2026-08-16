@@ -1057,6 +1057,26 @@ CascadeHostClientApi validHostClient() {
     return h;
 }
 
+uint32_t presetCount() { return 1u; }
+int32_t presetGet(uint32_t index, CascadePreset* out) {
+    if (index != 0u || out == nullptr) { return 0; }
+    std::snprintf(out->label, CASCADE_PRESET_LABEL_CHARS, "ADS-B 1090 MHz");
+    out->frequencyHz = 1090000000.0;
+    out->demodMode = CASCADE_DEMOD_RAW;
+    out->bandwidthHz = 0.0;
+    out->sampleRateHz = 2400000.0;
+    out->flags = CASCADE_PRESET_DEVICE_CENTRE;
+    return 1;
+}
+
+CascadePresetApi validPreset() {
+    CascadePresetApi p{};
+    p.structSize = static_cast<uint32_t>(sizeof(CascadePresetApi));
+    p.count = &presetCount;
+    p.get = &presetGet;
+    return p;
+}
+
 // Builds a descriptor from an arbitrary set of capability entries. The array
 // is leaked deliberately, for the reason descFor documents.
 CascadePluginDesc descWith(uint32_t caps, const CascadeCapabilityEntry* entries,
@@ -1109,6 +1129,74 @@ void testUiCapabilities() {
         CascadePluginDesc p = descWith(
             CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_PANEL | CASCADE_CAP_HOST_CLIENT, all, 3);
         CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+
+    // --- CASCADE_CAP_PRESET, added without an ABI bump --------------------
+    {
+        using namespace uicaps;
+        const CascadeIqDecoderApi iq = validIqDecoder();
+        const CascadePresetApi preset = validPreset();
+        const CascadeCapabilityEntry iqEntry{
+            CASCADE_CAP_IQ_DECODER, static_cast<uint32_t>(sizeof(CascadeIqDecoderApi)), &iq};
+        const CascadeCapabilityEntry presetEntry{
+            CASCADE_CAP_PRESET, static_cast<uint32_t>(sizeof(CascadePresetApi)), &preset};
+
+        // The shape this exists for: a decoder that also says where to find
+        // its signal.
+        {
+            const CascadeCapabilityEntry all[2] = {iqEntry, presetEntry};
+            CascadePluginDesc p =
+                descWith(CASCADE_CAP_IQ_DECODER | CASCADE_CAP_PRESET, all, 2);
+            CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+        }
+
+        // A PRESET ALONE IS NOT ENOUGH, for the same reason a host client
+        // alone is not: telling the user where to tune decodes nothing, plots
+        // nothing and shows nothing. Loading it would put a row in the list
+        // that looks like a decoder and is not.
+        {
+            CascadePluginDesc p = descWith(CASCADE_CAP_PRESET, &presetEntry, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::NoUsableCapability);
+        }
+
+        // Declared but not supplied.
+        {
+            CascadePluginDesc p = descWith(CASCADE_CAP_IQ_DECODER | CASCADE_CAP_PRESET,
+                                           &iqEntry, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::MissingPresetApi);
+        }
+        // A table from a different build of the ABI.
+        {
+            CascadePresetApi bad = validPreset();
+            bad.structSize = static_cast<uint32_t>(sizeof(CascadePresetApi)) + 8u;
+            const CascadeCapabilityEntry badEntry{
+                CASCADE_CAP_PRESET, static_cast<uint32_t>(sizeof(CascadePresetApi)), &bad};
+            const CascadeCapabilityEntry all[2] = {iqEntry, badEntry};
+            CascadePluginDesc p =
+                descWith(CASCADE_CAP_IQ_DECODER | CASCADE_CAP_PRESET, all, 2);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::PresetStructSizeMismatch);
+        }
+        // Both functions are mandatory: there is no useful half of this table.
+        {
+            CascadePresetApi bad = validPreset();
+            bad.get = nullptr;
+            const CascadeCapabilityEntry badEntry{
+                CASCADE_CAP_PRESET, static_cast<uint32_t>(sizeof(CascadePresetApi)), &bad};
+            const CascadeCapabilityEntry all[2] = {iqEntry, badEntry};
+            CascadePluginDesc p =
+                descWith(CASCADE_CAP_IQ_DECODER | CASCADE_CAP_PRESET, all, 2);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::MissingPresetFunction);
+        }
+
+        // THE COMPATIBILITY PROMISE: a plugin built before this bit existed
+        // declares none of it and must be entirely unaffected.
+        {
+            CascadePluginDesc p = descWith(CASCADE_CAP_IQ_DECODER, &iqEntry, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+        }
     }
 
     // HOST_CLIENT ALONE IS NOT ENOUGH. Being able to ask the host for things
