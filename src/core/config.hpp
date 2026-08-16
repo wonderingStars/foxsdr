@@ -74,6 +74,14 @@ namespace cascade::core {
 struct AppConfig {
     int schemaVersion = 1;
     std::string sourceKind = "siggen";      // "siggen" | "file" | "soapy"
+    // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
+    // Empty means "whatever the driver defaults to", which is what every
+    // pre-existing config will say. It is persisted because the port is a
+    // property of how the radio is CABLED, not of a session: a user who has
+    // an antenna on TX/RX must not have to reselect it every launch, and
+    // picking the wrong one produces a working-looking receiver that hears
+    // essentially nothing.
+    std::string soapyAntenna;
     std::string soapyArgs;                  // kwargs of the last soapy device
     std::string iqFilePath;
     double centerHz = 100000000.0;

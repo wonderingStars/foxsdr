@@ -95,6 +95,25 @@ public:
     // no gain mode (hasGainMode() false) — the GUI greys the checkbox then.
     bool setAutoGain(bool on);
 
+    // The device's RX antenna ports, e.g. {"TX/RX", "RX2"} on a B200.
+    //
+    // This exists because its absence was a silent, complete failure. With no
+    // way to choose a port the driver's default is used, which on a USRP B200
+    // is RX2 — and an antenna connected to TX/RX then delivers nothing but
+    // noise. Measured on this hardware at 1090 MHz: TX/RX gave 37 dB
+    // peak-to-noise and decoded aircraft, RX2 gave 21 dB and decoded almost
+    // nothing. Samples flow either way, the spectrum looks alive either way,
+    // and there was no control and no readout to reveal which port was in use.
+    std::vector<std::string> listAntennas();
+
+    // Selects an RX antenna by name. False if there is no device, the name is
+    // not one the driver lists, or it refused.
+    bool setAntenna(const std::string& name);
+
+    // The port currently selected, as the DRIVER reports it (not a cached copy
+    // of what was requested) — an empty string when nothing is open.
+    std::string antenna();
+
     // --- IqSource --------------------------------------------------------
 
     // Activates the RX stream. False without an open device (that is the

@@ -134,6 +134,10 @@ private:
     // drawUi unconditionally, because the runner's buffer is bounded and
     // draining only when the panel is visible would drop output silently.
     void pumpDecoderOutput();
+    // Rebuilds every decoder instance against the CURRENT source rate and
+    // centre frequency. Called after any source change, because both are
+    // passed to a decoder's create() and cannot be changed afterwards.
+    void refreshPluginRunner();
     // Translucent service-band rectangles over the spectrum panel, plus the
     // labels that fit. `pos` is the panel's screen-space top-left as recorded
     // before the spectrum was drawn.
@@ -336,6 +340,11 @@ private:
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
     std::string sourceKind_ = "siggen";  // "siggen" | "file" | "soapy"
+    // RX antenna ports the open device offers, and the one selected. Empty
+    // until a Soapy device is opened. Persisted, because which port carries
+    // the antenna is a property of the user's cabling, not of a session.
+    std::vector<std::string> soapyAntennas_;
+    std::string soapyAntenna_;
     std::string iqOpenPath_;  // last successfully opened IQ file (persisted;
                               // iqPath_ is just the edit buffer)
     cascade::core::AppConfig savedCfg_;    // what the config file holds now

@@ -270,6 +270,7 @@ void applyWindowIcon(GLFWwindow* window) {
 // code path, so any difference is a real user-visible change, never noise.
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
+           a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
@@ -1160,6 +1161,40 @@ void AppWindow::drawSourceSection() {
         ImGui::SameLine();
         ImGui::Text("actual %.4g MS/s", soapy_->sampleRateHz() / 1.0e6);
 
+        // ANTENNA. Above the gain controls on purpose: no amount of gain
+        // rescues the wrong port, and picking the wrong one gives a receiver
+        // that looks entirely healthy - spectrum moving, samples flowing -
+        // while hearing essentially nothing. Measured on a B200 at 1090 MHz,
+        // the difference between the two ports was 16 dB of signal-to-noise
+        // and the difference between decoding aircraft and decoding none.
+        if (soapyAntennas_.size() > 1) {
+            if (ImGui::BeginCombo("Antenna", soapyAntenna_.c_str())) {
+                for (const std::string& a : soapyAntennas_) {
+                    const bool sel = (a == soapyAntenna_);
+                    if (ImGui::Selectable(a.c_str(), sel) && !sel) {
+                        if (soapy_->setAntenna(a)) {
+                            // Read BACK rather than assuming the request took:
+                            // a driver may coerce, and the panel must show the
+                            // port actually in use.
+                            // The debounced save notices via configsEqual,
+                            // which now compares soapyAntenna - no explicit
+                            // dirty flag exists, and adding one here would be
+                            // a second mechanism doing the same job.
+                            soapyAntenna_ = soapy_->antenna();
+                        } else {
+                            sourceError_ = soapy_->lastError();
+                        }
+                    }
+                    if (sel) { ImGui::SetItemDefaultFocus(); }
+                }
+                ImGui::EndCombo();
+            }
+        } else if (!soapyAntenna_.empty()) {
+            // One port, nothing to choose - but still shown, because "which
+            // antenna am I on" should never be a question the UI cannot answer.
+            ImGui::Text("Antenna: %s", soapyAntenna_.c_str());
+        }
+
         if (soapyAgcSupported_) {
             if (ImGui::Checkbox("Auto gain", &soapyAgc_)) {
                 if (!soapy_->setAutoGain(soapyAgc_)) {
@@ -1260,6 +1295,13 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     for (const std::string& g : soapyGainNames_) {
         r.dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
     }
+    // Antenna: restore the saved port if this device still has one by that
+    // name, otherwise leave the driver's default alone and just report what
+    // it chose. Never guessed at - which port carries an antenna is a fact
+    // about the user's cabling that no default can know.
+    soapyAntennas_ = r.dev->listAntennas();
+    if (!soapyAntenna_.empty()) { r.dev->setAntenna(soapyAntenna_); }
+    soapyAntenna_ = r.dev->antenna();
 
     soapy_ = r.dev.get();
     soapyArgs_ = r.args;
@@ -1355,6 +1397,12 @@ std::unique_ptr<cascade::source::SoapySource> AppWindow::openSoapy(
     for (const std::string& g : soapyGainNames_) {
         dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
     }
+    // Same antenna handling as the Source-menu path: apply a saved port if the
+    // device has it, then read back whatever is actually selected so the panel
+    // never claims a port the driver did not accept.
+    soapyAntennas_ = dev->listAntennas();
+    if (!soapyAntenna_.empty()) { dev->setAntenna(soapyAntenna_); }
+    soapyAntenna_ = dev->antenna();
     return dev;
 }
 
@@ -1379,6 +1427,14 @@ void AppWindow::followInputRate() {
     if (iqRecorder_.recording() && pipeline_.inputRateHz() != iqRecordRateHz_) {
         stopIqRecording();
     }
+
+    // Every source change funnels through here, which makes it the one place
+    // that can keep the decoder instances honest about the rate and centre
+    // they were built for. Cheap when no plugins are loaded, and it must run
+    // even when the rate was REFUSED above: the centre frequency has usually
+    // moved regardless, and a decoder told the wrong one reports confidently
+    // wrong things.
+    refreshPluginRunner();
 }
 
 void AppWindow::drawCenterPanels() {
@@ -1895,9 +1951,7 @@ void AppWindow::rescanPlugins() {
     // Instances are created only after the scan has settled, and the pipeline
     // is only pointed at the runner once they exist — so the DSP thread never
     // sees a half-built set.
-    pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
-                          pipeline_.inputRateHz(), pipeline_.activeSource().centerFrequencyHz());
-    pipeline_.setPluginRunner(&pluginRunner_);
+    refreshPluginRunner();
 }
 
 std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const {
@@ -2504,6 +2558,27 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     rescanPlugins();
 }
 
+void AppWindow::refreshPluginRunner() {
+    // Decoder instances are created FOR a sample rate and a centre frequency,
+    // so they are only valid for the source that was active when they were
+    // built. Both change when the user switches source, opens a file, or when
+    // a saved configuration restores a device at startup.
+    //
+    // That last case is what made this necessary. rescanPlugins() runs during
+    // construction, BEFORE the config restores the source, so the first build
+    // saw the generator's defaults - and an ADS-B plugin created against a
+    // 100 MHz centre correctly reported "receiver is at 100.000 MHz" while the
+    // radio sat on 1090 MHz. The decoder was right and the host had lied to it.
+    //
+    // Rebuilding rather than retuning, because the RATE cannot be changed on a
+    // live instance: the ABI passes it to create() and nothing else.
+    pipeline_.setPluginRunner(nullptr);
+    pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
+                          pipeline_.inputRateHz(),
+                          pipeline_.activeSource().centerFrequencyHz());
+    pipeline_.setPluginRunner(&pluginRunner_);
+}
+
 void AppWindow::pumpDecoderOutput() {
     // Called from drawUi every frame, NOT from the panel. The runner's queue
     // is bounded and drops silently by design (the DSP thread must never
@@ -2632,6 +2707,24 @@ void AppWindow::reportPluginStatus() {
                     file.c_str(), p.loaded ? 1 : 0, p.name.c_str(), p.version.c_str(),
                     p.error.empty() ? "-" : p.error.c_str());
     }
+
+    // The SOURCE, because a decoder starved of samples is indistinguishable
+    // from a decoder that decoded nothing, and sourceError_ is otherwise only
+    // ever shown in the GUI - invisible to exactly the headless runs used to
+    // verify decoding.
+    // The device rate is printed to six decimals ON PURPOSE. A hardware rate
+    // readback is a double the tuner computed from a master clock divider, and
+    // it is very often NOT the round number that was asked for. The chain
+    // requires an integer channel rate, so 2400000.000001 is refused while
+    // "2400000" appears in every log - which reads as a nonsensical refusal of
+    // a rate that is obviously fine.
+    std::printf("source status: kind=%s name=%s deviceRate=%.6f chainRate=%.6f "
+                "centre=%.0f running=%d error=%s\n",
+                sourceKind_.c_str(), pipeline_.activeSourceName(),
+                pipeline_.activeSource().sampleRateHz(), pipeline_.inputRateHz(),
+                pipeline_.activeSource().centerFrequencyHz(),
+                pipeline_.running() ? 1 : 0,
+                sourceError_.empty() ? "-" : sourceError_.c_str());
 
     // The RUNNER, reported separately from the host, because "loaded" and
     // "being fed real audio" are different claims and the whole point of this
@@ -3135,6 +3228,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
             sourceError_ = file->lastError();
         }
     } else if (cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) {
+        // Seeded BEFORE the open, because openSoapy applies it as part of
+        // bringing the device up - the port has to be right from the first
+        // sample, not corrected afterwards.
+        soapyAntenna_ = cfg.soapyAntenna;
         auto dev = openSoapy(cfg.soapyArgs, cfg.sampleRateHz);
         if (dev) {
             dev->setCenterFrequencyHz(cfg.centerHz);
@@ -3176,6 +3273,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
 cascade::core::AppConfig AppWindow::currentConfig() {
     cascade::core::AppConfig cfg;
     cfg.sourceKind = sourceKind_;
+    cfg.soapyAntenna = soapyAntenna_;
     cfg.soapyArgs = soapyArgs_;
     cfg.iqFilePath = iqOpenPath_;
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();

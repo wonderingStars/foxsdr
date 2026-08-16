@@ -7,6 +7,7 @@
 #include <SoapySDR/Formats.h>
 #include <SoapySDR/Types.hpp>
 
+#include <algorithm>
 #include <utility>
 
 #ifdef _WIN32
@@ -359,6 +360,62 @@ bool SoapySource::setAutoGain(bool on) {
     } catch (...) {
         lastError_ = "setGainMode failed: non-standard exception";
         return false;
+    }
+}
+
+std::vector<std::string> SoapySource::listAntennas() {
+    if (dev_ == nullptr) {
+        return {};  // no device, no ports — not an error
+    }
+    try {
+        return dev_->listAntennas(SOAPY_SDR_RX, kChannel);
+    } catch (const std::exception& e) {
+        lastError_ = describe(e, "listAntennas failed");
+        return {};
+    } catch (...) {
+        lastError_ = "listAntennas failed: non-standard exception";
+        return {};
+    }
+}
+
+bool SoapySource::setAntenna(const std::string& name) {
+    if (dev_ == nullptr) {
+        lastError_ = "setAntenna() called with no device open";
+        return false;
+    }
+    try {
+        // Checked against the driver's own list first. Soapy drivers vary in
+        // what they do with an unknown antenna name - some throw, some ignore
+        // it silently - and a silently ignored port change is precisely the
+        // failure this whole method exists to end.
+        const std::vector<std::string> avail = dev_->listAntennas(SOAPY_SDR_RX, kChannel);
+        if (std::find(avail.begin(), avail.end(), name) == avail.end()) {
+            lastError_ = "device has no RX antenna called \"" + name + "\"";
+            return false;
+        }
+        dev_->setAntenna(SOAPY_SDR_RX, kChannel, name);
+        return true;
+    } catch (const std::exception& e) {
+        lastError_ = describe(e, "setAntenna failed");
+        return false;
+    } catch (...) {
+        lastError_ = "setAntenna failed: non-standard exception";
+        return false;
+    }
+}
+
+std::string SoapySource::antenna() {
+    if (dev_ == nullptr) {
+        return {};
+    }
+    try {
+        return dev_->getAntenna(SOAPY_SDR_RX, kChannel);
+    } catch (const std::exception& e) {
+        lastError_ = describe(e, "getAntenna failed");
+        return {};
+    } catch (...) {
+        lastError_ = "getAntenna failed: non-standard exception";
+        return {};
     }
 }
 

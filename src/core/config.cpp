@@ -139,6 +139,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
 
     getString(j, "sourceKind", out.sourceKind);
     getString(j, "soapyArgs", out.soapyArgs);
+    getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
     getDouble(j, "centerHz", out.centerHz);
     getString(j, "mode", out.mode);
@@ -218,6 +219,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["schemaVersion"] = cfg.schemaVersion;
     j["sourceKind"] = cfg.sourceKind;
     j["soapyArgs"] = cfg.soapyArgs;
+    j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
     j["centerHz"] = cfg.centerHz;
     j["mode"] = cfg.mode;

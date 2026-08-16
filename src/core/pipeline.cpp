@@ -73,15 +73,45 @@ unsigned decimationForInputRate(double rateHz) {
 constexpr double kMinInputRateHz = 8000.0;
 constexpr double kMaxInputRateHz = 61.44e6;
 
-bool acceptedInputRate(double rateHz, unsigned* decimOut, double* chanRateOut) {
+// A hardware rate readback is a double the device COMPUTED from a master
+// clock and an integer divider, so it is very often not the round number that
+// was requested: a B200 asked for 2.4 MS/s reports 2399999.992520 Hz.
+//
+// The exact-integer channel-rate test below then refuses it, because
+// 2399999.99252 / 12 is 199999.99937... - and the refusal message, printed to
+// zero decimals, reads "refused 2400000 S/s", which looks like nonsense. The
+// real consequence is worse than cosmetic: the chain keeps its previous rate
+// while the device streams at the new one, so every decoder is handed samples
+// on a time base that is wrong by whatever the two rates differ by.
+//
+// So a readback within a hair of an integer is treated as that integer. The
+// tolerance is relative, and deliberately tiny - 0.24 Hz at 2.4 MS/s, a tenth
+// of a part per million, orders of magnitude below any crystal's own error and
+// below what any decoder in this project can notice. A device genuinely
+// running at a non-integer rate is still refused, because that is a rate the
+// resampler truly cannot handle exactly.
+double snapToIntegerRate(double rateHz) {
+    const double nearest = std::round(rateHz);
+    const double tolerance = std::max(1e-3, rateHz * 1e-7);
+    return std::fabs(rateHz - nearest) <= tolerance ? nearest : rateHz;
+}
+
+// `snappedOut` is the rate the CHAIN should actually run at, and the caller
+// must use it in place of the requested one: storing the raw readback while
+// building the resampler from the snapped value would leave the pipeline
+// reporting a rate it is not running.
+bool acceptedInputRate(double rateHz, unsigned* decimOut, double* chanRateOut,
+                       double* snappedOut) {
     if (!(rateHz >= kMinInputRateHz && rateHz <= kMaxInputRateHz)) {
         return false;
     }
-    const unsigned decim = decimationForInputRate(rateHz);
-    const double chanRate = rateHz / static_cast<double>(decim);
+    const double snapped = snapToIntegerRate(rateHz);
+    const unsigned decim = decimationForInputRate(snapped);
+    const double chanRate = snapped / static_cast<double>(decim);
     if (chanRate != std::floor(chanRate)) { return false; }
     *decimOut = decim;
     *chanRateOut = chanRate;
+    *snappedOut = snapped;
     return true;
 }
 
@@ -612,7 +642,17 @@ bool Pipeline::setInputRateHz(double rateHz) {
 
     unsigned decim = 1;
     double chanRate = 0.0;
-    if (!acceptedInputRate(rateHz, &decim, &chanRate)) { return false; }
+    double snapped = 0.0;
+    if (!acceptedInputRate(rateHz, &decim, &chanRate, &snapped)) { return false; }
+    // From here on the SNAPPED rate is the rate: a device readback that was a
+    // hair off an integer is treated as the integer it was aiming at, and
+    // everything the chain builds - and everything it later reports - must
+    // agree on that one value.
+    rateHz = snapped;
+    // Re-check the cheap no-op against the snapped value too, or a device
+    // whose readback jitters in the last decimal place would tear the whole
+    // DSP chain down and rebuild it on every source refresh.
+    if (rateHz == cfg_.sampleRateHz) { return true; }
 
     const bool live = run_.load(std::memory_order_relaxed);
     if (live) {
