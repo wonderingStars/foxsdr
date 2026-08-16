@@ -101,6 +101,17 @@ enum class PluginRejection {
     ImageDecoderRateOutOfRange,      // rate not 0 and not sane for inputKind
     MissingImageDecoderFunction,     // a mandatory pointer is NULL
                                      // (retune is optional and may be NULL)
+    // --- UI and host-services capabilities, added without an ABI bump ------
+    MissingTrackSourceApi,
+    TrackSourceStructSizeMismatch,
+    MissingTrackSourceFunction,   // poll_paths is optional and may be NULL
+    MissingPanelApi,
+    PanelStructSizeMismatch,
+    PanelBadColumnCount,          // columns() is mandatory; 1..MAX enforced later
+    MissingPanelFunction,
+    MissingHostClientApi,
+    HostClientStructSizeMismatch,
+    MissingHostClientFunction,
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -144,6 +155,9 @@ struct LoadedPlugin {
     const CascadeDecoderApi* decoder = nullptr;      // CASCADE_CAP_DECODER
     const CascadeIqDecoderApi* iqDecoder = nullptr;  // CASCADE_CAP_IQ_DECODER
     const CascadeImageDecoderApi* imageDecoder = nullptr;  // CASCADE_CAP_IMAGE_DECODER
+    const CascadeTrackSourceApi* trackSource = nullptr;    // CASCADE_CAP_TRACK_SOURCE
+    const CascadePanelApi* panel = nullptr;                // CASCADE_CAP_PANEL
+    const CascadeHostClientApi* hostClient = nullptr;      // CASCADE_CAP_HOST_CLIENT
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.

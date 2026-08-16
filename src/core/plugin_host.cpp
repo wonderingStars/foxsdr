@@ -253,6 +253,18 @@ LoadedPlugin loadOne(const fs::path& p) {
                            ? static_cast<const CascadeImageDecoderApi*>(
                                  findCapabilityTable(desc, CASCADE_CAP_IMAGE_DECODER))
                            : nullptr;
+    rec.trackSource = (desc->capabilities & CASCADE_CAP_TRACK_SOURCE) != 0u
+                          ? static_cast<const CascadeTrackSourceApi*>(
+                                findCapabilityTable(desc, CASCADE_CAP_TRACK_SOURCE))
+                          : nullptr;
+    rec.panel = (desc->capabilities & CASCADE_CAP_PANEL) != 0u
+                    ? static_cast<const CascadePanelApi*>(
+                          findCapabilityTable(desc, CASCADE_CAP_PANEL))
+                    : nullptr;
+    rec.hostClient = (desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u
+                         ? static_cast<const CascadeHostClientApi*>(
+                               findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT))
+                         : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -410,6 +422,65 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         ++usable;
     }
 
+    // A source of things to draw on the map. No rate to check: it is not fed
+    // a signal, which is exactly why a satellite tracker can be a plugin.
+    if ((desc->capabilities & CASCADE_CAP_TRACK_SOURCE) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_TRACK_SOURCE);
+        if (raw == nullptr) {
+            return PluginRejection::MissingTrackSourceApi;
+        }
+        const auto* t = static_cast<const CascadeTrackSourceApi*>(raw);
+        if (t->structSize != static_cast<uint32_t>(sizeof(CascadeTrackSourceApi))) {
+            return PluginRejection::TrackSourceStructSizeMismatch;
+        }
+        // poll_paths is DELIBERATELY absent from this list: most sources have
+        // no polylines, the ABI makes it optional, and the host null-checks it
+        // at the call site.
+        if (t->create == nullptr || t->poll_tracks == nullptr || t->destroy == nullptr) {
+            return PluginRejection::MissingTrackSourceFunction;
+        }
+        ++usable;
+    }
+
+    if ((desc->capabilities & CASCADE_CAP_PANEL) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_PANEL);
+        if (raw == nullptr) {
+            return PluginRejection::MissingPanelApi;
+        }
+        const auto* p = static_cast<const CascadePanelApi*>(raw);
+        if (p->structSize != static_cast<uint32_t>(sizeof(CascadePanelApi))) {
+            return PluginRejection::PanelStructSizeMismatch;
+        }
+        if (p->create == nullptr || p->columns == nullptr || p->poll_rows == nullptr ||
+            p->destroy == nullptr) {
+            return PluginRejection::MissingPanelFunction;
+        }
+        // The title is what the window is CALLED. An empty one would give the
+        // user an anonymous window they cannot identify among several.
+        if (!isNonEmpty(p->title)) {
+            return PluginRejection::MissingPanelFunction;
+        }
+        ++usable;
+    }
+
+    if ((desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT);
+        if (raw == nullptr) {
+            return PluginRejection::MissingHostClientApi;
+        }
+        const auto* h = static_cast<const CascadeHostClientApi*>(raw);
+        if (h->structSize != static_cast<uint32_t>(sizeof(CascadeHostClientApi))) {
+            return PluginRejection::HostClientStructSizeMismatch;
+        }
+        if (h->attach == nullptr) {
+            return PluginRejection::MissingHostClientFunction;
+        }
+        // NOT counted toward `usable`. Being able to ask the host for things
+        // is not, on its own, doing anything for the user: a plugin that only
+        // declares this contributes no decode, no map target and no window.
+        // Counting it would let an empty plugin load and look functional.
+    }
+
     // Every bit it declared is one this host has never heard of. Loading it
     // would put a plugin in the list that can never do anything, so say what
     // is actually wrong instead: it was built for a host newer than this one.
@@ -450,6 +521,26 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "image decoder asks for a sample rate this host cannot deliver";
         case PluginRejection::MissingImageDecoderFunction:
             return "image decoder table has a null function pointer";
+        case PluginRejection::MissingTrackSourceApi:
+            return "declares CASCADE_CAP_TRACK_SOURCE but supplies no track table";
+        case PluginRejection::TrackSourceStructSizeMismatch:
+            return "track source table size does not match this host's";
+        case PluginRejection::MissingTrackSourceFunction:
+            return "track source table has a null function pointer";
+        case PluginRejection::MissingPanelApi:
+            return "declares CASCADE_CAP_PANEL but supplies no panel table";
+        case PluginRejection::PanelStructSizeMismatch:
+            return "panel table size does not match this host's";
+        case PluginRejection::PanelBadColumnCount:
+            return "panel declares an impossible number of columns";
+        case PluginRejection::MissingPanelFunction:
+            return "panel table has a null function pointer or no window title";
+        case PluginRejection::MissingHostClientApi:
+            return "declares CASCADE_CAP_HOST_CLIENT but supplies no table";
+        case PluginRejection::HostClientStructSizeMismatch:
+            return "host-client table size does not match this host's";
+        case PluginRejection::MissingHostClientFunction:
+            return "host-client table has a null attach pointer";
         case PluginRejection::MissingName:
             return "descriptor has no name";
         case PluginRejection::MissingVersion:

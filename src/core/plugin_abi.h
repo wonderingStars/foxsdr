@@ -229,7 +229,26 @@ extern "C" {
 #define CASCADE_CAP_DECODER 0x00000001u
 #define CASCADE_CAP_IQ_DECODER 0x00000002u
 #define CASCADE_CAP_IMAGE_DECODER 0x00000004u
-#define CASCADE_CAP_ALL_KNOWN 0x00000007u /* OR of every bit THIS host knows */
+#define CASCADE_CAP_TRACK_SOURCE 0x00000008u
+#define CASCADE_CAP_PANEL 0x00000010u
+#define CASCADE_CAP_HOST_CLIENT 0x00000020u
+#define CASCADE_CAP_ALL_KNOWN 0x0000003Fu /* OR of every bit THIS host knows */
+
+/*
+ * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
+ * claim ABI 3 made and this is the proof of it: they are new entries in the
+ * capability table, the descriptor did not change size, and every plugin built
+ * before they existed still loads and runs untouched.
+ *
+ * They also change what a plugin IS. Up to here a plugin was a decoder - bytes
+ * in, text or pictures out. TRACK_SOURCE and PANEL let a plugin contribute to
+ * the user interface, and HOST_CLIENT lets it act on the receiver. A satellite
+ * tracker is the case that forced all three: it consumes no signal at all, it
+ * needs a map and a table of passes, and it has to Doppler-correct the VFO.
+ *
+ * A plugin declaring ONLY these and no decoder is therefore legitimate and
+ * must load.
+ */
 
 /*
  * Rate bounds the host range-checks the tables against. A plugin that asks
@@ -558,6 +577,240 @@ typedef struct CascadeIqDecoderApi {
 #define CASCADE_INPUT_AUDIO 1u
 #define CASCADE_INPUT_IQ 2u
 
+/* ==========================================================================
+ * CASCADE_CAP_TRACK_SOURCE - things at a place, drawn on the host's map.
+ *
+ * Deliberately ONE type for aircraft, ships, stations and satellites. They
+ * differ in almost nothing that a map cares about: an identifier, a position,
+ * how fast it is going and which way, and how long ago it was heard. Giving
+ * each its own capability would have meant four near-identical tables and four
+ * renderers, and a user who wants aircraft and ships on one map would have got
+ * two maps.
+ *
+ * Fixed-size character arrays rather than pointers, and the host COPIES what
+ * it is given. Tracks are small, there are hundreds at most, and the
+ * alternative - a borrow with a release call, as the image API needs - would
+ * put a lifetime contract around data that is cheaper to copy than to reason
+ * about. The image API borrows because a frame is megabytes; a track is bytes.
+ * ==========================================================================
+ */
+
+#define CASCADE_TRACK_ID_CHARS 24
+#define CASCADE_TRACK_LABEL_CHARS 40
+
+/* What the thing is. The host uses it to pick a symbol and a colour, and
+ * nothing else - an unknown kind draws as a plain dot rather than being
+ * rejected, so a future kind needs no ABI change here either. */
+#define CASCADE_TRACK_UNKNOWN 0u
+#define CASCADE_TRACK_AIRCRAFT 1u
+#define CASCADE_TRACK_VESSEL 2u
+#define CASCADE_TRACK_STATION 3u   /* fixed: an APRS digipeater, a base */
+#define CASCADE_TRACK_SATELLITE 4u
+
+/* Optional per-track hints. */
+#define CASCADE_TRACK_FLAG_EMERGENCY 0x00000001u
+#define CASCADE_TRACK_FLAG_SELECTED 0x00000002u
+
+typedef struct CascadeTrack {
+    /* Stable across updates - it is how the host knows this is the same thing
+     * moving rather than a new thing appearing. An ICAO address, an MMSI, a
+     * callsign, a NORAD number. Non-empty, NUL-terminated. */
+    char id[CASCADE_TRACK_ID_CHARS];
+
+    /* What to draw beside it. May be empty, in which case the host shows the
+     * id - a target with no label must never render as an unlabelled dot the
+     * user cannot identify. NUL-terminated. */
+    char label[CASCADE_TRACK_LABEL_CHARS];
+
+    double latDeg;  /* -90..90   */
+    double lonDeg;  /* -180..180 */
+
+    /* Metres above mean sea level. NaN when the source does not report it -
+     * NOT 0, which is a real altitude and would put every ship at sea level
+     * by accident and every aircraft with unknown altitude on the ground. */
+    double altM;
+
+    /* Degrees true, 0..360, and metres per second. NaN when unknown, for the
+     * same reason: 0 is a real course and a real speed. */
+    double courseDeg;
+    double speedMps;
+
+    /* Milliseconds since this track was last UPDATED by the plugin. The host
+     * fades and eventually drops stale targets, and it cannot compute this
+     * itself - only the plugin knows when it last actually heard from the
+     * thing, as opposed to when it last happened to be polled. */
+    uint64_t ageMs;
+
+    uint32_t kind;   /* CASCADE_TRACK_* */
+    uint32_t flags;  /* CASCADE_TRACK_FLAG_* */
+} CascadeTrack;
+
+/*
+ * A polyline: a satellite's ground track, an aircraft's trail, a footprint
+ * circle. Separate from CascadeTrack because a path is a shape rather than a
+ * position, and squeezing one into the other would have meant either a
+ * pointer inside CascadeTrack (a lifetime contract) or one track per vertex
+ * (hundreds of phantom targets on the map).
+ */
+#define CASCADE_PATH_FLAG_CLOSED 0x00000001u /* join last vertex to first */
+#define CASCADE_PATH_FLAG_DASHED 0x00000002u
+
+typedef struct CascadePathPoint {
+    double latDeg;
+    double lonDeg;
+} CascadePathPoint;
+
+typedef struct CascadePath {
+    char id[CASCADE_TRACK_ID_CHARS];
+    uint32_t kind;   /* CASCADE_TRACK_*, so a path can be coloured like its owner */
+    uint32_t flags;  /* CASCADE_PATH_FLAG_* */
+    /* Vertices, owned by the PLUGIN and valid until the next poll_paths call
+     * or destroy - whichever comes first. A path can be hundreds of points
+     * (a full orbit), which is the one place in this API where copying every
+     * poll would be wasteful enough to matter. */
+    const CascadePathPoint *points;
+    uint32_t count;
+} CascadePath;
+
+typedef struct CascadeTrackSourceApi {
+    uint32_t structSize;
+
+    /* Creates the source. Takes no rate: a track source is not fed a signal.
+     * Something that decodes AND plots declares both capabilities and gets two
+     * instances, which is deliberate - the decoder half is real-time and the
+     * plotting half is not, and they should not share a lifetime. */
+    void *(*create)(void);
+
+    /* Fills up to `cap` tracks and returns how many were written, or negative
+     * on permanent failure. Called from the GUI thread at frame rate, so it
+     * must be cheap and must not block - it is a read of state the plugin has
+     * already computed, never the place to compute it. */
+    int32_t (*poll_tracks)(void *handle, CascadeTrack *out, uint32_t cap);
+
+    /* Same contract for polylines. MAY BE NULL - most sources have no paths -
+     * and the host checks before calling. */
+    int32_t (*poll_paths)(void *handle, CascadePath *out, uint32_t cap);
+
+    void (*destroy)(void *handle);
+} CascadeTrackSourceApi;
+
+/* ==========================================================================
+ * CASCADE_CAP_PANEL - a window of the plugin's own, drawn by the host.
+ *
+ * The plugin describes WHAT to show; the host decides how. That boundary is
+ * the point. The alternatives were to hand plugins the host's ImGui context -
+ * which welds every plugin to one exact ImGui build, the precise class of
+ * coupling ABI 3 exists to end - or to let plugins open real OS windows, which
+ * means every plugin ships a GUI stack, runs its own event loop, and can take
+ * the display down with it.
+ *
+ * The cost is that a plugin cannot draw anything the host has no widget for.
+ * That is accepted: a pass table, a status readout and a progress bar covers
+ * what these plugins actually need, and a genuinely novel visual can come
+ * later as another capability without disturbing this one.
+ * ==========================================================================
+ */
+
+#define CASCADE_PANEL_TITLE_CHARS 40
+#define CASCADE_PANEL_MAX_COLUMNS 8
+#define CASCADE_PANEL_CELL_CHARS 32
+
+/* Row kinds. An unknown kind is skipped, not refused. */
+#define CASCADE_ROW_CELLS 0u      /* a table row: cells[0..columns-1] */
+#define CASCADE_ROW_HEADING 1u    /* cells[0] as a section heading */
+#define CASCADE_ROW_SEPARATOR 2u  /* a rule; cells ignored */
+
+/* Per-row emphasis. Advisory - the host may render these however it likes. */
+#define CASCADE_ROW_FLAG_GOOD 0x00000001u
+#define CASCADE_ROW_FLAG_WARN 0x00000002u
+#define CASCADE_ROW_FLAG_MUTED 0x00000004u
+
+typedef struct CascadePanelRow {
+    uint32_t kind;
+    uint32_t flags;
+    char cells[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS];
+} CascadePanelRow;
+
+typedef struct CascadePanelApi {
+    uint32_t structSize;
+
+    /* Window title, e.g. "Satellite passes". Static storage, non-NULL. */
+    const char *title;
+
+    void *(*create)(void);
+
+    /* Number of columns, 1..CASCADE_PANEL_MAX_COLUMNS, and their headings.
+     * Called once after create() - the shape of a panel is fixed for its
+     * lifetime, so the host can build the table once instead of rediscovering
+     * it every frame. `headings` is filled by the plugin. */
+    uint32_t (*columns)(void *handle,
+                        char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS]);
+
+    /* Fills up to `cap` rows, returns how many, negative on permanent
+     * failure. GUI thread, at frame rate: cheap, non-blocking, no I/O. */
+    int32_t (*poll_rows)(void *handle, CascadePanelRow *out, uint32_t cap);
+
+    void (*destroy)(void *handle);
+} CascadePanelApi;
+
+/* ==========================================================================
+ * CASCADE_CAP_HOST_CLIENT - the only capability that points the other way.
+ *
+ * Everything else is the plugin producing something. This one lets a plugin
+ * ASK THE HOST for things: what the receiver is doing, what the time is, and -
+ * the reason it exists - to please retune. A satellite tracker that cannot
+ * Doppler-correct is not a satellite tracker.
+ *
+ * THE SAFETY RULE, because a plugin that can move the VFO can also fight the
+ * user for it: a tune request is a REQUEST. The host refuses unless the user
+ * has explicitly given that plugin control, and may refuse at any time for any
+ * reason. request_tune returns 0 when it was honoured and a negative
+ * CASCADE_TUNE_* code when it was not, so a plugin can tell "you are not
+ * allowed" from "that frequency is out of range" and say something useful
+ * instead of silently failing to track.
+ * ==========================================================================
+ */
+
+#define CASCADE_TUNE_OK 0
+#define CASCADE_TUNE_DENIED (-1)     /* the user has not granted control */
+#define CASCADE_TUNE_OUT_OF_RANGE (-2)
+#define CASCADE_TUNE_NO_DEVICE (-3)
+#define CASCADE_TUNE_FAILED (-4)     /* the device refused or errored */
+
+typedef struct CascadeHostApi {
+    uint32_t structSize;
+
+    /* Opaque host context. Pass it back unchanged as the first argument of
+     * every call below; it is not a pointer the plugin may inspect. */
+    void *ctx;
+
+    /* Where the receiver is tuned, in Hz, and what it is sampling at. 0 when
+     * no device is open. */
+    double (*centre_hz)(void *ctx);
+    double (*sample_rate_hz)(void *ctx);
+
+    /* Asks the receiver to tune. See the safety rule above. */
+    int32_t (*request_tune)(void *ctx, double centreHz);
+
+    /* Milliseconds since the Unix epoch, UTC. Supplied by the host rather
+     * than taken from the plugin's own clock so that everything in the
+     * application agrees on the time - and so a future recorded-playback mode
+     * can hand a plugin the timestamp of the SAMPLES rather than the wall
+     * clock, which is exactly what a pass predictor replaying a capture
+     * needs. */
+    int64_t (*unix_time_ms)(void *ctx);
+} CascadeHostApi;
+
+typedef struct CascadeHostClientApi {
+    uint32_t structSize;
+
+    /* Called ONCE, before any other capability's create(), with a table that
+     * remains valid for as long as the plugin is loaded. The plugin should
+     * store the pointer. A plugin that declares this capability but does not
+     * need the table may ignore it; the host still calls. */
+    void (*attach)(const CascadeHostApi *host);
+} CascadeHostClientApi;
+
 typedef struct CascadeImageDecoderApi {
     /* sizeof(CascadeImageDecoderApi) as the PLUGIN compiled it. Checked
      * against the host's own sizeof; a mismatch disables THIS capability
@@ -738,6 +991,22 @@ static inline const CascadeImageDecoderApi *cascade_plugin_image_decoder(
     const CascadePluginDesc *desc) {
     return (const CascadeImageDecoderApi *)cascade_plugin_capability(desc,
                                                                      CASCADE_CAP_IMAGE_DECODER);
+}
+
+static inline const CascadeTrackSourceApi *cascade_plugin_track_source(
+    const CascadePluginDesc *desc) {
+    return (const CascadeTrackSourceApi *)cascade_plugin_capability(desc,
+                                                                    CASCADE_CAP_TRACK_SOURCE);
+}
+
+static inline const CascadePanelApi *cascade_plugin_panel(const CascadePluginDesc *desc) {
+    return (const CascadePanelApi *)cascade_plugin_capability(desc, CASCADE_CAP_PANEL);
+}
+
+static inline const CascadeHostClientApi *cascade_plugin_host_client(
+    const CascadePluginDesc *desc) {
+    return (const CascadeHostClientApi *)cascade_plugin_capability(desc,
+                                                                   CASCADE_CAP_HOST_CLIENT);
 }
 
 /*

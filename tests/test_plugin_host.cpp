@@ -1004,8 +1004,197 @@ void testRealPluginDirs() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// The UI and host-services capabilities, added to ABI 3 WITHOUT bumping it.
+//
+// The point of these is not only that they work: it is that they exist at all
+// without a version change. Every assertion here runs against the same
+// CASCADE_PLUGIN_ABI_VERSION that the already-published plugins were built
+// against.
+// ---------------------------------------------------------------------------
+
+namespace uicaps {
+
+void* trackCreate() { return reinterpret_cast<void*>(1); }
+int32_t trackPoll(void*, CascadeTrack*, uint32_t) { return 0; }
+void trackDestroy(void*) {}
+
+void* panelCreate() { return reinterpret_cast<void*>(1); }
+uint32_t panelColumns(void*, char h[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS]) {
+    std::snprintf(h[0], CASCADE_PANEL_CELL_CHARS, "Satellite");
+    return 1u;
+}
+int32_t panelPoll(void*, CascadePanelRow*, uint32_t) { return 0; }
+void panelDestroy(void*) {}
+
+void hostAttach(const CascadeHostApi*) {}
+
+CascadeTrackSourceApi validTrack() {
+    CascadeTrackSourceApi t{};
+    t.structSize = static_cast<uint32_t>(sizeof(CascadeTrackSourceApi));
+    t.create = &trackCreate;
+    t.poll_tracks = &trackPoll;
+    t.poll_paths = nullptr;  // optional by contract
+    t.destroy = &trackDestroy;
+    return t;
+}
+
+CascadePanelApi validPanel() {
+    CascadePanelApi p{};
+    p.structSize = static_cast<uint32_t>(sizeof(CascadePanelApi));
+    p.title = "Satellite passes";
+    p.create = &panelCreate;
+    p.columns = &panelColumns;
+    p.poll_rows = &panelPoll;
+    p.destroy = &panelDestroy;
+    return p;
+}
+
+CascadeHostClientApi validHostClient() {
+    CascadeHostClientApi h{};
+    h.structSize = static_cast<uint32_t>(sizeof(CascadeHostClientApi));
+    h.attach = &hostAttach;
+    return h;
+}
+
+// Builds a descriptor from an arbitrary set of capability entries. The array
+// is leaked deliberately, for the reason descFor documents.
+CascadePluginDesc descWith(uint32_t caps, const CascadeCapabilityEntry* entries,
+                           uint32_t count) {
+    auto* owned = new CascadeCapabilityEntry[count > 0 ? count : 1]{};
+    for (uint32_t i = 0; i < count; ++i) { owned[i] = entries[i]; }
+    CascadePluginDesc p{};
+    p.structSize = static_cast<uint32_t>(sizeof(CascadePluginDesc));
+    p.abiVersion = static_cast<uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+    p.name = "UiFixture";
+    p.version = "1.0.0";
+    p.author = "tests";
+    p.licence = "MIT";
+    p.capabilities = caps;
+    p.capabilityCount = count > 0 ? count : 1u;
+    p.capabilityTables = owned;
+    return p;
+}
+
+}  // namespace uicaps
+
+void testUiCapabilities() {
+    using namespace uicaps;
+    const CascadeTrackSourceApi track = validTrack();
+    const CascadePanelApi panel = validPanel();
+    const CascadeHostClientApi hostc = validHostClient();
+
+    const CascadeCapabilityEntry trackEntry{
+        CASCADE_CAP_TRACK_SOURCE, static_cast<uint32_t>(sizeof(CascadeTrackSourceApi)), &track};
+    const CascadeCapabilityEntry panelEntry{
+        CASCADE_CAP_PANEL, static_cast<uint32_t>(sizeof(CascadePanelApi)), &panel};
+    const CascadeCapabilityEntry hostEntry{
+        CASCADE_CAP_HOST_CLIENT, static_cast<uint32_t>(sizeof(CascadeHostClientApi)), &hostc};
+
+    // THE CASE THAT MOTIVATED ALL OF THIS: a plugin that decodes NOTHING.
+    // A satellite tracker consumes no signal - it needs TLEs and a clock - so
+    // if a decoder-less plugin cannot load, a tracker cannot be a plugin.
+    {
+        CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_SOURCE, &trackEntry, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+    {
+        CascadePluginDesc p = descWith(CASCADE_CAP_PANEL, &panelEntry, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+    // The full satellite-tracker shape: map targets, a window, and the right
+    // to ask the host to retune.
+    {
+        const CascadeCapabilityEntry all[3] = {trackEntry, panelEntry, hostEntry};
+        CascadePluginDesc p = descWith(
+            CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_PANEL | CASCADE_CAP_HOST_CLIENT, all, 3);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+
+    // HOST_CLIENT ALONE IS NOT ENOUGH. Being able to ask the host for things
+    // is not doing anything for the user: such a plugin decodes nothing, plots
+    // nothing and shows nothing, and loading it would put a row in the list
+    // that looks functional and is not.
+    {
+        CascadePluginDesc p = descWith(CASCADE_CAP_HOST_CLIENT, &hostEntry, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::NoUsableCapability);
+    }
+
+    // Declared but not supplied.
+    {
+        CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_SOURCE, &panelEntry, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::MissingTrackSourceApi);
+    }
+    {
+        CascadePluginDesc p = descWith(CASCADE_CAP_PANEL, &trackEntry, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::MissingPanelApi);
+    }
+
+    // Size disagreement disables THAT capability's plugin rather than being
+    // read at the wrong offsets.
+    {
+        CascadeTrackSourceApi bad = validTrack();
+        bad.structSize = 8u;
+        const CascadeCapabilityEntry e{CASCADE_CAP_TRACK_SOURCE,
+                                       static_cast<uint32_t>(sizeof(CascadeTrackSourceApi)),
+                                       &bad};
+        CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_SOURCE, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::TrackSourceStructSizeMismatch);
+    }
+
+    // Mandatory pointers. poll_paths stays NULL throughout and must remain
+    // acceptable - it is optional by contract, and a source with no polylines
+    // is the common case.
+    {
+        CascadeTrackSourceApi bad = validTrack();
+        bad.poll_tracks = nullptr;
+        const CascadeCapabilityEntry e{CASCADE_CAP_TRACK_SOURCE,
+                                       static_cast<uint32_t>(sizeof(CascadeTrackSourceApi)),
+                                       &bad};
+        CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_SOURCE, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::MissingTrackSourceFunction);
+    }
+    {
+        // A window with no name is a window the user cannot identify among
+        // several, so an empty title is refused like a null pointer.
+        CascadePanelApi bad = validPanel();
+        bad.title = "";
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_PANEL, static_cast<uint32_t>(sizeof(CascadePanelApi)), &bad};
+        CascadePluginDesc p = descWith(CASCADE_CAP_PANEL, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::MissingPanelFunction);
+    }
+    {
+        CascadeHostClientApi bad = validHostClient();
+        bad.attach = nullptr;
+        const CascadeCapabilityEntry all[2] = {
+            trackEntry,
+            {CASCADE_CAP_HOST_CLIENT, static_cast<uint32_t>(sizeof(CascadeHostClientApi)),
+             &bad}};
+        CascadePluginDesc p =
+            descWith(CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_HOST_CLIENT, all, 2);
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::MissingHostClientFunction);
+    }
+
+    // The typed accessors resolve to the right tables, and to null for a
+    // capability the plugin does not have.
+    {
+        const CascadeCapabilityEntry all[2] = {trackEntry, panelEntry};
+        CascadePluginDesc p =
+            descWith(CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_PANEL, all, 2);
+        CHECK(cascade_plugin_track_source(&p) == &track);
+        CHECK(cascade_plugin_panel(&p) == &panel);
+        CHECK(cascade_plugin_host_client(&p) == nullptr);
+        CHECK(cascade_plugin_audio_decoder(&p) == nullptr);
+    }
+}
+
 int main() {
     testValidation();
+    testUiCapabilities();
     testVersionOnePluginIsRefused();
     testRejectionMessages();
     testExtensionFilter();
