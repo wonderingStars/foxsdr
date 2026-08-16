@@ -136,8 +136,36 @@ CascadeIqDecoderApi validIqDecoder() {
 
 // Every case below starts from one of these and breaks exactly one thing, so
 // a failure names the field that matters instead of a whole struct.
+// ABI 3: the descriptor BORROWS a capability array rather than carrying a
+// pointer per capability, so that array has to outlive the descriptor this
+// returns. The tests keep descriptors alive across statements and in places
+// hold two at once, which rules out a local array (dangles the moment we
+// return) and a shared static one (the two would alias). A small deliberate
+// leak is the honest answer in a test binary: a few dozen 16-byte allocations
+// that are never freed, and no lifetime question to get wrong.
+//
+// An entry is emitted only for a NON-NULL table, while `caps` is set
+// independently. That preserves what the old fixture expressed by nulling a
+// member: pass the bit with a null table to get "declares it, supplies no
+// table", which is still MissingDecoderApi and friends.
 CascadePluginDesc descFor(uint32_t caps, const CascadeDecoderApi* dec,
-                          const CascadeIqDecoderApi* iq) {
+                          const CascadeIqDecoderApi* iq,
+                          const CascadeImageDecoderApi* img = nullptr) {
+    auto* entries = new CascadeCapabilityEntry[3]{};
+    uint32_t n = 0;
+    if (dec != nullptr) {
+        entries[n++] = {CASCADE_CAP_DECODER, static_cast<uint32_t>(sizeof(CascadeDecoderApi)),
+                        dec};
+    }
+    if (iq != nullptr) {
+        entries[n++] = {CASCADE_CAP_IQ_DECODER,
+                        static_cast<uint32_t>(sizeof(CascadeIqDecoderApi)), iq};
+    }
+    if (img != nullptr) {
+        entries[n++] = {CASCADE_CAP_IMAGE_DECODER,
+                        static_cast<uint32_t>(sizeof(CascadeImageDecoderApi)), img};
+    }
+
     CascadePluginDesc p{};
     p.structSize = static_cast<uint32_t>(sizeof(CascadePluginDesc));
     p.abiVersion = static_cast<uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
@@ -146,9 +174,13 @@ CascadePluginDesc descFor(uint32_t caps, const CascadeDecoderApi* dec,
     p.author = "tests";
     p.licence = "MIT";
     p.capabilities = caps;
-    p.reserved = 0u;
-    p.decoder = dec;
-    p.iqDecoder = iq;
+    // A descriptor with no tables at all still needs a non-zero count and a
+    // non-null array to get past the structural checks and reach the
+    // per-capability ones, which is what the "declares it, supplies nothing"
+    // cases are testing. n==0 leaves one zeroed entry, which findCapability
+    // Table skips because its capability field names no bit.
+    p.capabilityCount = n > 0 ? n : 1u;
+    p.capabilityTables = entries;
     return p;
 }
 
@@ -219,11 +251,47 @@ void testValidation() {
         CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::AbiVersionMismatch);
     }
 
-    // --- Reserved padding must be zero.
+    // --- The capability table itself (ABI 3). These replace the old
+    // "reserved must be zero" case: reserved is gone, and the array that took
+    // its place has its own structural rules.
     {
         CascadePluginDesc p = validDesc(&dec);
-        p.reserved = 1u;
-        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::ReservedNotZero);
+        p.capabilityCount = 0u;
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::CapabilityCountOutOfRange);
+    }
+    {
+        // A count large enough to walk arbitrary memory is refused rather
+        // than trusted and iterated.
+        CascadePluginDesc p = validDesc(&dec);
+        p.capabilityCount = 1000000u;
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::CapabilityCountOutOfRange);
+    }
+    {
+        CascadePluginDesc p = validDesc(&dec);
+        p.capabilityTables = nullptr;
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::MissingCapabilityTables);
+    }
+
+    // --- Unknown capability bits are IGNORED when something usable remains,
+    // which is the whole point of ABI 3 and the thing that makes future
+    // capabilities additive. A plugin built for a later host still loads here
+    // and provides whatever this host understands.
+    {
+        CascadePluginDesc p = validDesc(&dec);
+        p.capabilities = CASCADE_CAP_DECODER | 0x40000000u;
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+    {
+        // ...but a plugin whose capabilities are ALL unknown provides this
+        // host nothing, and saying so beats loading a decoration.
+        CascadePluginDesc p = validDesc(&dec);
+        p.capabilities = 0x40000000u;
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::NoUsableCapability);
+        const std::string msg = cascade::core::describePluginRejection(
+            PluginRejection::NoUsableCapability, &p);
+        CHECK(contains(msg.c_str(), "newer version"));
     }
 
     // --- Required strings. Null and empty are both refused for name,
@@ -267,15 +335,30 @@ void testValidation() {
         p.capabilities = 0u;
         CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::NoCapabilities);
     }
-    // Unknown bits are refused even when a known bit is present. 0x2 used to
-    // be an unknown bit and is CASCADE_CAP_IQ_DECODER as of ABI 2, so the
-    // cases start above it - which is itself the ABI-bump rule working: the
-    // legal set is frozen per version, and it grew.
-    for (uint32_t caps : {0x4u, 0x80000000u, CASCADE_CAP_DECODER | 0x4u,
-                          CASCADE_CAP_IQ_DECODER | 0x8u,
-                          CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | 0x10u}) {
+    // ABI 3 REVERSED the rule these cases used to assert. Up to ABI 2 an
+    // unknown bit meant the descriptor could not be what it claimed, so the
+    // plugin was refused outright; that was the only safe reading while
+    // capabilities were trailing struct members, because an unknown bit
+    // implied a layout this host could not know the size of.
+    //
+    // Now the tables are out of line and each carries its own size, so an
+    // unknown bit costs nothing: the host reads the tables it recognises and
+    // never dereferences one it does not. Refusing would mean a plugin built
+    // against a later host is useless here even for the parts both understand,
+    // which is exactly the flag-day problem ABI 3 exists to end.
+    //
+    // Note 0x4 has since become CASCADE_CAP_IMAGE_DECODER, so the unknown
+    // cases start above it.
+    for (uint32_t caps : {CASCADE_CAP_DECODER | 0x80000000u,
+                          CASCADE_CAP_IQ_DECODER | 0x08000000u,
+                          CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | 0x10000000u}) {
         CascadePluginDesc p = descFor(caps, &dec, &iq);
-        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::UnknownCapability);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+    // Only-unknown is still refused, because then there is nothing to run.
+    for (uint32_t caps : {0x80000000u, 0x08000000u, 0x10000000u | 0x20000000u}) {
+        CascadePluginDesc p = descFor(caps, &dec, &iq);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::NoUsableCapability);
     }
     // All three legal combinations of the two known bits are acceptable when
     // the matching tables are present.
@@ -450,11 +533,11 @@ void testValidation() {
 // ---------------------------------------------------------------------------
 
 void testVersionOnePluginIsRefused() {
-    // This test encodes the v1 -> v2 retirement literally (the strings it
-    // asserts on contain "2"), so it must be revisited on the next bump
-    // rather than quietly passing against a different pair of numbers.
-    static_assert(CASCADE_PLUGIN_ABI_VERSION == 2,
-                  "ABI moved past 2: update testVersionOnePluginIsRefused");
+    // This test encodes the retirement rule literally (the strings it asserts
+    // on contain the host's version number), so it must be revisited on each
+    // bump rather than quietly passing against a different pair of numbers.
+    static_assert(CASCADE_PLUGIN_ABI_VERSION == 3,
+                  "ABI moved past 3: update testVersionOnePluginIsRefused");
 
     const CascadeDecoderApi dec = validDecoder();
 
@@ -470,16 +553,29 @@ void testVersionOnePluginIsRefused() {
 
     const std::string msg =
         cascade::core::describePluginRejection(PluginRejection::AbiVersionMismatch, &v1);
-    CHECK(contains(msg, "2"));  // the host's version
+    CHECK(contains(msg, "3"));  // the host's version
     CHECK(contains(msg, "1"));  // the plugin's
-    CHECK(contains(msg, "host requires exactly 2"));
+    CHECK(contains(msg, "host requires exactly 3"));
     CHECK(contains(msg, "plugin reports 1"));
     std::printf("  v1 plugin refusal: %s\n", msg.c_str());
 
-    // A v1 descriptor that ALSO has the old struct size (which is what a real
-    // v1 binary looks like: no iqDecoder member) is still reported as the
-    // version mismatch - version is decided before size, because size can
-    // only be interpreted once the layout is known.
+    // Version 2 is refused on exactly the same terms. Worth asserting
+    // separately from version 1: v2 is the version every plugin in the
+    // catalogue was built against before this bump, so it is the one users
+    // will actually hit, and "one behind" must not be treated as good enough.
+    CascadePluginDesc v2 = validDesc(&dec);
+    v2.abiVersion = 2u;
+    CHECK(cascade::core::validatePluginDesc(&v2) == PluginRejection::AbiVersionMismatch);
+    const std::string msg2 =
+        cascade::core::describePluginRejection(PluginRejection::AbiVersionMismatch, &v2);
+    CHECK(contains(msg2, "host requires exactly 3"));
+    CHECK(contains(msg2, "plugin reports 2"));
+
+    // An older descriptor ALSO has a different struct size (a v2 descriptor
+    // carried two trailing table pointers where this one carries a count and
+    // an array) and is still reported as the version mismatch - version is
+    // decided before size, because size can only be interpreted once the
+    // layout is known.
     CascadePluginDesc v1Short = validDesc(&dec);
     v1Short.abiVersion = 1u;
     v1Short.structSize =

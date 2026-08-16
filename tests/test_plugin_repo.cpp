@@ -389,8 +389,8 @@ int main() {
     // about the published catalogue, not an expression.
     // ---------------------------------------------------------------------
     {
-        static_assert(CASCADE_PLUGIN_ABI_VERSION == 2,
-                      "ABI moved past 2: revisit the v1-catalogue-entry test");
+        static_assert(CASCADE_PLUGIN_ABI_VERSION == 3,
+                      "ABI moved past 3: revisit the v1-catalogue-entry test");
 
         std::vector<PluginCatalogEntry> v;
         std::string err = "stale";
@@ -421,7 +421,10 @@ int main() {
             CHECK(!v[0].compatible);                // the whole point
             CHECK(v[0].thisPlatform() != nullptr);  // it does have a build for us
             CHECK(v[1].id == "v2plugin");
-            CHECK(v[1].abiVersion == 2u);
+            // Derived, not literal: this entry is built with abiText(), so it
+            // tracks the host by construction. The literal 1 above is
+            // different in kind - that IS a fact about a retired version.
+            CHECK(v[1].abiVersion == static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION));
             CHECK(v[1].compatible);
 
             // install() re-derives the decision from abiVersion, refuses
@@ -434,7 +437,7 @@ int main() {
             CHECK(!repo.install(v[0], dir.string(), installed, ierr));
             CHECK(!ierr.empty());
             CHECK(ierr.find("1") != std::string::npos);
-            CHECK(ierr.find("requires exactly 2") != std::string::npos);
+            CHECK(ierr.find("requires exactly " + abiText()) != std::string::npos);
             CHECK(!fs::exists(dir));  // nothing was created
             std::printf("  v1 catalogue entry refused: %s\n", ierr.c_str());
         }

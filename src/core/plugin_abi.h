@@ -72,32 +72,57 @@
  * block, allocate unboundedly, or perform I/O. destroy happens-after the last
  * process/retune/poll_text for that instance.
  *
- * ============================ ABI 2 - WHAT CHANGED =========================
+ * ====================== ABI 3 - WHAT CHANGED, AND WHY ======================
  *
- * Version 2 adds a SECOND capability, CASCADE_CAP_IQ_DECODER, for decoders
- * that need complex baseband rather than demodulated audio. ADS-B is the
- * driver: 1090 MHz, 2 MS/s minimum, pulse-position modulation on the raw
- * envelope. There is no audio stream in that problem at all, so the version-1
- * "float audio in, text out" shape could not express it, and neither could
- * DAB, digital-voice framing, or anything else that lives below the
- * demodulator.
+ * Version 3 exists to be THE LAST BREAKING VERSION. Versions 1 and 2 each
+ * added a capability as a trailing pointer in CascadePluginDesc, which grew
+ * the struct, which meant an older host reading a newer descriptor would read
+ * past the end of it - so the only safe rule was to refuse any version that
+ * was not an exact match, and every new capability became a flag day for every
+ * plugin ever built.
  *
- * A version-2 plugin may declare CASCADE_CAP_DECODER, CASCADE_CAP_IQ_DECODER,
- * or both; each declared bit requires its own function-pointer table.
+ * That does not scale, and the third capability is what forced the issue.
+ * Version 3 therefore moves the tables OUT of the descriptor:
  *
- * MOVING A VERSION-1 PLUGIN TO VERSION 2 - the complete list:
- *   1. Recompile against this header (the version constant changed, so a
- *      plugin that hard-codes 1 is refused; use CASCADE_PLUGIN_ABI_VERSION).
- *   2. CascadePluginDesc gained ONE trailing member, `iqDecoder`. A
- *      brace-initialised static descriptor that lists every member by
- *      position must add a trailing NULL (C++ value-initialises the missing
- *      member, but relying on that makes the next addition silent).
- *      structSize is sizeof(CascadePluginDesc), so it changes on its own.
- *   3. Nothing else. CascadeDecoderApi - the audio table - is byte-for-byte
- *      unchanged in layout and semantics, so an audio decoder needs no code
- *      changes beyond the recompile and the trailing NULL.
- * There is deliberately no compatibility shim: see the versioning policy at
- * CASCADE_PLUGIN_ABI_VERSION below.
+ *   - CascadePluginDesc no longer has `decoder` and `iqDecoder` members. It
+ *     carries `capabilityCount` and `capabilityTables`, a counted array of
+ *     CascadeCapabilityEntry - each one a {capability bit, table size, table
+ *     pointer}. The struct is now a fixed 56 bytes on 64-bit and stays that
+ *     size however many capabilities are added later.
+ *   - Unknown capability bits are IGNORED rather than refused. The host uses
+ *     what it recognises and never dereferences a table it does not
+ *     understand, so a plugin built for a later host still works here for
+ *     whatever it has in common.
+ *   - Each entry carries its own tableSize. If one table ever has to grow,
+ *     only plugins using THAT table lose THAT capability; everything else
+ *     keeps working.
+ *
+ * The consequence worth stating plainly: after this, adding a capability needs
+ * a new bit and a new table type, and needs NO new ABI version. Nobody's
+ * plugin stops loading. If a table's shape turns out to be wrong, it gets a
+ * new bit rather than a bigger struct, and old and new can be declared side by
+ * side by the same plugin.
+ *
+ * Version 3 also adds CASCADE_CAP_IMAGE_DECODER, for decoders whose output is
+ * a picture rather than text - SSTV, Meteor-M LRPT, HRPT, the GOES products.
+ *
+ * MOVING A VERSION-2 PLUGIN TO VERSION 3 - the complete list:
+ *   1. Recompile against this header.
+ *   2. Replace the trailing `&decoderApi` / `&iqApi` members of the static
+ *      descriptor with a capability table:
+ *
+ *        static const CascadeCapabilityEntry kCaps[] = {
+ *            {CASCADE_CAP_DECODER, (uint32_t)sizeof(CascadeDecoderApi), &kAudioApi},
+ *        };
+ *        ... , CASCADE_CAP_DECODER, 1u, kCaps };
+ *
+ *      structSize is sizeof(CascadePluginDesc) and changes on its own.
+ *   3. Nothing else. CascadeDecoderApi and CascadeIqDecoderApi are
+ *      byte-for-byte unchanged in layout and semantics, so the decoder code
+ *      itself needs no changes at all.
+ *
+ * There is deliberately no compatibility shim for versions 1 and 2: see the
+ * versioning policy at CASCADE_PLUGIN_ABI_VERSION below.
  */
 
 #ifndef CASCADE_PLUGIN_ABI_H
@@ -120,32 +145,54 @@ extern "C" {
  * Bump this for ANY change to the structs, the callback signatures, or the
  * documented semantics of either.
  *
- * VERSIONING POLICY, stated once so nobody has to infer it. Every plugin
- * built against version 1 is refused by a version-2 host, including one that
- * only ever used facilities version 2 still has. That is deliberate, not an
- * oversight and not a temporary state:
+ * VERSIONING POLICY, stated once so nobody has to infer it. Every plugin built
+ * against version 1 or 2 is refused by a version-3 host, including one that
+ * only ever used facilities version 3 still has. That is deliberate:
  *
- *   - The descriptor GREW in version 2. A version-1 plugin's descriptor is
- *     shorter than this header describes, so reading the new trailing member
- *     out of it is an out-of-bounds read of the plugin's image. The host
- *     cannot know from the bytes alone which layout it is holding; it knows
- *     only what abiVersion claims, which is precisely why abiVersion is
- *     checked first and why the check is exact.
+ *   - The descriptor CHANGED SHAPE in each of those versions - it grew in 2,
+ *     and in 3 the trailing table pointers were replaced by a counted array.
+ *     An older plugin's descriptor is therefore not the layout this header
+ *     describes, and reading it as if it were is an out-of-bounds read of the
+ *     plugin's image. The host cannot know from the bytes alone which layout
+ *     it is holding; it knows only what abiVersion claims, which is precisely
+ *     why abiVersion is checked FIRST and why the check is exact.
  *   - "Load it anyway if it only uses the old fields" means every future
  *     change has to be audited against every past layout, forever. Refusing
  *     is one rule with no matrix.
- *   - The cost is a recompile of the plugin against this header, which is a
- *     few seconds and which the author has to do anyway to build against a
- *     new host. The cost of the alternative is a memory-corruption bug in a
- *     paying customer's receiver.
+ *   - The cost is a recompile against this header - seconds of work, and the
+ *     catalogue's plugins are all maintained in-tree precisely so that cost
+ *     falls on the maintainers rather than on users. The cost of the
+ *     alternative is a memory-corruption bug in a paying customer's receiver.
  *
- * The refusal is reported with BOTH numbers ("host requires exactly 2, plugin
- * reports 1"), so an author never has to guess what happened.
+ * WHY THIS SHOULD BE THE LAST TIME. The rule above is safe but expensive, and
+ * version 3 removes the thing that kept triggering it. The descriptor is now
+ * fixed-size, capabilities live behind a counted array, unknown bits are
+ * ignored, and each table carries its own size. A future capability is
+ * additive: new bit, new table type, NO version bump, nothing stops loading.
+ * If you find yourself about to increment this constant, check first whether
+ * a new capability bit would do the job instead - it almost certainly will.
+ *
+ * The refusal is reported with BOTH numbers ("host requires exactly 3, plugin
+ * reports 2"), so an author never has to guess what happened.
  */
-#define CASCADE_PLUGIN_ABI_VERSION 2
+#define CASCADE_PLUGIN_ABI_VERSION 3
 
 /* The one exported symbol's name, as the host looks it up. */
 #define CASCADE_PLUGIN_ENTRY_NAME "cascade_plugin_query"
+
+/*
+ * Canonical way to get one capability's table out of a descriptor, defined
+ * here so the host, the plugins and their tests all read the array the same
+ * way instead of each hand-rolling the loop and each getting the malformed
+ * cases subtly differently.
+ *
+ * Returns NULL unless the entry names EXACTLY this one capability and carries
+ * a non-NULL table. The caller must still check the table's own structSize
+ * before casting - that is per-capability and cannot be done here.
+ *
+ * Declared below CascadePluginDesc; see the definition after the struct.
+ */
+#define CASCADE_HAVE_CAPABILITY_LOOKUP 1
 
 /* Export decoration for the plugin's definition of the entry point. */
 #if defined(_WIN32)
@@ -157,17 +204,32 @@ extern "C" {
 #endif
 
 /*
- * Capability bits. A plugin sets one bit per facility it provides and must
- * populate the matching pointer in CascadePluginDesc.
+ * Capability bits. A plugin sets one bit per facility it provides and supplies
+ * a matching entry in the descriptor's capability table.
  *
- * The host REFUSES a plugin that sets a bit it does not know, even alongside
- * known bits. That is consistent with the exact-version rule above: the set
- * of legal bits is frozen by CASCADE_PLUGIN_ABI_VERSION, so an unknown bit at
- * a matching ABI version means the descriptor is not what it claims to be.
+ * UNKNOWN BITS ARE IGNORED, NOT REFUSED - changed in version 3, and the reason
+ * version 3 exists. In versions 1 and 2 each capability was a trailing pointer
+ * in the descriptor, so adding one GREW the struct, so an older host reading a
+ * newer descriptor would read off the end of it. Refusing outright was then the
+ * only safe answer, and every new capability meant a new ABI version and a
+ * flag day for every plugin in existence.
+ *
+ * Version 3 moves the tables out of the struct and behind a counted array (see
+ * CascadeCapabilityEntry). The descriptor is now a FIXED size for ever, so a
+ * plugin declaring a capability this host has never heard of is no longer a
+ * malformed descriptor - it is simply a plugin that does more than this host
+ * can use. The host uses the bits it knows, ignores the rest, and never
+ * dereferences a table it does not understand.
+ *
+ * The practical consequence: adding a capability after this is ADDITIVE. It
+ * needs a new bit and a new table type, and it does NOT need a new ABI version
+ * and does NOT stop any existing plugin from loading. This should be the last
+ * breaking change to this header.
  */
 #define CASCADE_CAP_DECODER 0x00000001u
 #define CASCADE_CAP_IQ_DECODER 0x00000002u
-#define CASCADE_CAP_ALL_KNOWN 0x00000003u /* OR of every bit above */
+#define CASCADE_CAP_IMAGE_DECODER 0x00000004u
+#define CASCADE_CAP_ALL_KNOWN 0x00000007u /* OR of every bit THIS host knows */
 
 /*
  * Rate bounds the host range-checks the tables against. A plugin that asks
@@ -187,6 +249,84 @@ extern "C" {
 #define CASCADE_AUDIO_RATE_MAX_HZ 1000000u
 #define CASCADE_IQ_RATE_MIN_HZ 8000.0
 #define CASCADE_IQ_RATE_MAX_HZ 61440000.0
+
+/*
+ * ONE CAPABILITY, ONE ENTRY. The descriptor carries a counted array of these
+ * instead of a pointer per capability, which is what makes the descriptor a
+ * fixed size and every future capability additive.
+ *
+ * `tableSize` is sizeof the pointed-to table AS THE PLUGIN COMPILED IT. The
+ * host compares it against its own sizeof for that capability and, on a
+ * mismatch, SKIPS THAT ONE CAPABILITY while still using the others. That is
+ * the second half of the forward-compatibility story: if a table ever has to
+ * grow, only the plugins using that table lose that facility, instead of every
+ * plugin in the catalogue failing to load.
+ *
+ * A table that needs to change incompatibly should get a NEW capability bit
+ * rather than a bigger struct, and then old and new can be declared side by
+ * side by the same plugin.
+ */
+typedef struct CascadeCapabilityEntry {
+    /* Exactly ONE CASCADE_CAP_* bit. An entry naming two capabilities, or
+     * none, is malformed and the host skips it. */
+    uint32_t capability;
+
+    /* sizeof(the table `table` points at), as the plugin compiled it. */
+    uint32_t tableSize;
+
+    /* The capability's API table: CascadeDecoderApi for CASCADE_CAP_DECODER,
+     * CascadeIqDecoderApi for CASCADE_CAP_IQ_DECODER, and so on. Static
+     * storage, non-NULL. Typed as void* because the array is heterogeneous;
+     * the host casts only after matching BOTH the bit and tableSize. */
+    const void *table;
+} CascadeCapabilityEntry;
+
+/*
+ * Pixel formats an image decoder may produce. Deliberately only two, both
+ * trivially uploadable as a texture with no conversion table and no palette:
+ * a weather-satellite or SSTV frame is either luminance or RGB.
+ */
+#define CASCADE_IMAGE_GRAY8 1u  /* 1 byte per pixel */
+#define CASCADE_IMAGE_RGB24 2u  /* 3 bytes per pixel, R,G,B */
+
+/* Sanity bounds the host range-checks a produced image against, so a corrupt
+ * width/height cannot make the host allocate or read absurd amounts. An LRPT
+ * frame is ~1568 px wide and an HRPT line ~2048; 16384 leaves generous room. */
+#define CASCADE_IMAGE_MAX_DIM 16384u
+
+/*
+ * An image handed from plugin to host. The PIXELS ARE OWNED BY THE PLUGIN and
+ * borrowed by the host only until release_image() is called for that image, so
+ * nothing is copied on the boundary and neither side frees the other's memory.
+ */
+typedef struct CascadeImage {
+    /* sizeof(CascadeImage) as the HOST compiled it; the host fills this in
+     * before calling poll_image so the plugin can tell what it is filling. */
+    uint32_t structSize;
+
+    uint32_t width;   /* 1..CASCADE_IMAGE_MAX_DIM */
+    uint32_t height;  /* 1..CASCADE_IMAGE_MAX_DIM */
+    uint32_t format;  /* CASCADE_IMAGE_GRAY8 or CASCADE_IMAGE_RGB24 */
+
+    /* Bytes per row. May exceed width * bytesPerPixel for alignment; must not
+     * be less. The host reads `height` rows of width*bpp bytes at `stride`
+     * intervals from `pixels`. */
+    uint32_t stride;
+
+    /* 0 while the image is still being received, 1 when finished. A slow-scan
+     * mode takes tens of seconds per frame, and showing it building is the
+     * difference between "working" and "frozen", so partial frames are
+     * expected and are not an error. */
+    int32_t complete;
+
+    /* Increments per image. Lets the host tell a new frame from an update to
+     * the one it is already displaying. */
+    uint64_t sequence;
+
+    /* width*height*bpp bytes readable at `stride` per row. Valid until
+     * release_image() for this image, or until destroy(). Never NULL. */
+    const uint8_t *pixels;
+} CascadeImage;
 
 /*
  * CASCADE_CAP_DECODER - a text decoder.
@@ -397,6 +537,82 @@ typedef struct CascadeIqDecoderApi {
  * version-1 descriptor safely, without reading a single byte whose meaning
  * depends on the layout it has not yet confirmed.
  */
+/*
+ * CASCADE_CAP_IMAGE_DECODER - a decoder whose output is a picture.
+ *
+ * Added in version 3, and the reason the image types above exist. SSTV,
+ * Meteor-M LRPT, HRPT and the GOES products all end in a bitmap, and the
+ * text-out shape could not express that at all.
+ *
+ * `inputKind` says what stream this wants: CASCADE_INPUT_AUDIO for
+ * demodulated audio (SSTV) or CASCADE_INPUT_IQ for complex baseband (LRPT).
+ * One table serves both because everything after the input differs not at all
+ * - the host feeds one buffer and polls for pictures either way.
+ *
+ * poll_text is still here, and is not optional: a decoder that is receiving
+ * but has produced no picture yet must be able to say so ("VIS 60, 320x256,
+ * 34% received"), or a slow mode is indistinguishable from a broken one.
+ *
+ * EVERY function pointer here must be non-NULL, and none of them may throw.
+ */
+#define CASCADE_INPUT_AUDIO 1u
+#define CASCADE_INPUT_IQ 2u
+
+typedef struct CascadeImageDecoderApi {
+    /* sizeof(CascadeImageDecoderApi) as the PLUGIN compiled it. Checked
+     * against the host's own sizeof; a mismatch disables THIS capability
+     * only, not the whole plugin. */
+    uint32_t structSize;
+
+    /* CASCADE_INPUT_AUDIO or CASCADE_INPUT_IQ. */
+    uint32_t inputKind;
+
+    /* As the other tables: 0 means "any rate". Range-checked against the
+     * AUDIO bounds when inputKind is CASCADE_INPUT_AUDIO and the IQ bounds
+     * when it is CASCADE_INPUT_IQ. */
+    double requiredRateHz;
+    double preferredRateHz;
+
+    /* Creates one instance. centerHz is the RF frequency at DC, and is 0 for
+     * an audio-input decoder. NULL on failure. */
+    void *(*create)(double rateHz, double centerHz);
+
+    /* Consumes `frames` samples. For CASCADE_INPUT_AUDIO that is `frames`
+     * real floats; for CASCADE_INPUT_IQ it is 2*frames floats interleaved
+     * I,Q,I,Q,... - the same rule as CascadeIqDecoderApi. Borrowed pointer,
+     * valid only for the call. Real-time thread: no blocking, no I/O, no
+     * unbounded allocation. */
+    void (*process)(void *handle, const float *samples, size_t frames);
+
+    /* The receiver moved. MAY BE NULL if the decoder does not care; the host
+     * checks before calling. */
+    void (*retune)(void *handle, double centerHz);
+
+    /*
+     * Offers the newest image, if any. The host fills out->structSize before
+     * the call and the plugin fills the rest. Returns 1 if an image was
+     * written, 0 if none is pending (must be cheap - it is polled per frame),
+     * negative if the decoder has failed permanently.
+     *
+     * On 1, the host owns a BORROW of out->pixels until it calls
+     * release_image with the same image. The plugin must not free or rewrite
+     * those bytes in the meantime; a decoder building the next frame into the
+     * same buffer needs two buffers.
+     */
+    int32_t (*poll_image)(void *handle, CascadeImage *out);
+
+    /* Returns a borrow taken by poll_image. Called exactly once per successful
+     * poll_image, before destroy(). */
+    void (*release_image)(void *handle, const CascadeImage *img);
+
+    /* Status text: same contract as CascadeDecoderApi::poll_text. */
+    int32_t (*poll_text)(void *handle, char *buf, size_t cap);
+
+    /* Destroys an instance. Called once, after the last call of any other
+     * function on that handle and after every image has been released. */
+    void (*destroy)(void *handle);
+} CascadeImageDecoderApi;
+
 typedef struct CascadePluginDesc {
     /* sizeof(CascadePluginDesc) as the PLUGIN compiled it. Second guard,
      * after abiVersion: it catches a plugin built against an edited or
@@ -421,29 +637,108 @@ typedef struct CascadePluginDesc {
      * Non-NULL, non-empty; displayed verbatim by the host. */
     const char *licence;
 
-    /* OR of CASCADE_CAP_* bits. Must be non-zero and contain no unknown
-     * bits. Declaring BOTH decoder bits is legal and expected of a plugin
-     * that ships, say, an audio POCSAG decoder and an IQ ADS-B decoder in one
-     * module: each declared bit simply needs its table. */
+    /* OR of CASCADE_CAP_* bits. Must be non-zero. Declaring several is legal
+     * and expected of a plugin that ships, say, an audio POCSAG decoder and
+     * an IQ ADS-B decoder in one module: each declared bit simply needs its
+     * entry in the table below.
+     *
+     * Bits the host does not know are IGNORED rather than refused - see the
+     * capability-bit comment above. This field is a fast filter; the table is
+     * the authority, and a bit with no matching entry provides nothing. */
     uint32_t capabilities;
 
-    /* Must be 0. Reserved so a future ABI can add a small scalar without
-     * changing the struct's size on 64-bit (it currently occupies the
-     * padding that would otherwise sit before `decoder`). */
-    uint32_t reserved;
+    /* Number of entries in `capabilityTables`. Must be non-zero, and is
+     * bounded by the host at a small number - a descriptor claiming thousands
+     * of tables is not a plugin this host should be walking. */
+    uint32_t capabilityCount;
 
-    /* Non-NULL if and only if CASCADE_CAP_DECODER is set. Static storage.
-     * The host refuses the plugin if the bit is set and this is NULL; if the
-     * bit is NOT set it ignores this pointer entirely and never calls
-     * through it, so leave it NULL. */
-    const CascadeDecoderApi *decoder;
-
-    /* Added in ABI 2, and the reason ABI 2 exists. Non-NULL if and only if
-     * CASCADE_CAP_IQ_DECODER is set; same host treatment as `decoder` above.
-     * A version-1 plugin has no such member, which is exactly why a version-1
-     * descriptor cannot be read with this layout and is refused outright. */
-    const CascadeIqDecoderApi *iqDecoder;
+    /*
+     * `capabilityCount` entries, static storage, non-NULL.
+     *
+     * REPLACES the per-capability pointers that versions 1 and 2 carried as
+     * trailing struct members. Because the array is out of line, this struct
+     * is now a fixed 56 bytes on every 64-bit target and stays that size no
+     * matter how many capabilities are added later. That is the entire reason
+     * version 3 is a breaking change: it is the change that makes further
+     * breaking changes unnecessary.
+     *
+     * Duplicate entries for one capability are malformed; the host uses the
+     * first and ignores the rest.
+     */
+    const CascadeCapabilityEntry *capabilityTables;
 } CascadePluginDesc;
+
+/*
+ * Look up one capability's table. See CASCADE_HAVE_CAPABILITY_LOOKUP above.
+ *
+ * Header-only and static so it costs nothing and adds no link dependency
+ * between a plugin and the host. Both sides use this, so "what counts as a
+ * malformed entry" has exactly one definition:
+ *
+ *   - an entry whose capability field is not EXACTLY the requested bit is
+ *     skipped (including an entry with several bits set, which would leave
+ *     the reader unable to know which table type it holds);
+ *   - a NULL table is skipped;
+ *   - the first match wins, so a duplicate is ignored rather than being an
+ *     error - listing a capability twice is odd, but refusing to load over it
+ *     would help nobody.
+ *
+ * The count is clamped so a corrupt capabilityCount cannot walk off the array.
+ */
+#define CASCADE_MAX_CAPABILITY_ENTRIES 32u
+
+static inline const void *cascade_plugin_capability(const CascadePluginDesc *desc,
+                                                    uint32_t capability) {
+    uint32_t n;
+    uint32_t i;
+    if (desc == NULL || desc->capabilityTables == NULL || capability == 0u) {
+        return NULL;
+    }
+    /* Exactly one bit, or the request itself is meaningless. */
+    if ((capability & (capability - 1u)) != 0u) {
+        return NULL;
+    }
+    n = desc->capabilityCount;
+    if (n > CASCADE_MAX_CAPABILITY_ENTRIES) {
+        n = CASCADE_MAX_CAPABILITY_ENTRIES;
+    }
+    for (i = 0; i < n; ++i) {
+        if (desc->capabilityTables[i].capability == capability &&
+            desc->capabilityTables[i].table != NULL) {
+            return desc->capabilityTables[i].table;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Typed conveniences over the lookup above - one per capability this header
+ * defines. These are what calling code should use: they read as well as the
+ * old `desc->iqDecoder` did, and they put the cast in exactly one place
+ * instead of at every call site, where a wrong one would compile silently and
+ * reinterpret an unrelated table.
+ *
+ * Each returns NULL when the plugin does not provide that capability, so the
+ * null check callers already had around the old member still works unchanged.
+ * NOTE they do NOT check the table's structSize; the host does that during
+ * validation, and a plugin's own test should do it explicitly so a mismatch is
+ * reported as itself rather than as a missing table.
+ */
+static inline const CascadeDecoderApi *cascade_plugin_audio_decoder(
+    const CascadePluginDesc *desc) {
+    return (const CascadeDecoderApi *)cascade_plugin_capability(desc, CASCADE_CAP_DECODER);
+}
+
+static inline const CascadeIqDecoderApi *cascade_plugin_iq_decoder(
+    const CascadePluginDesc *desc) {
+    return (const CascadeIqDecoderApi *)cascade_plugin_capability(desc, CASCADE_CAP_IQ_DECODER);
+}
+
+static inline const CascadeImageDecoderApi *cascade_plugin_image_decoder(
+    const CascadePluginDesc *desc) {
+    return (const CascadeImageDecoderApi *)cascade_plugin_capability(desc,
+                                                                     CASCADE_CAP_IMAGE_DECODER);
+}
 
 /*
  * The entry point. The host calls:

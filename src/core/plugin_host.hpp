@@ -85,6 +85,22 @@ enum class PluginRejection {
                                   // catches NaN and infinity)
     MissingIqDecoderFunction,     // create/process/poll_text/destroy NULL
                                   // (retune is optional and may be NULL)
+    // --- ABI 3: the capability table replaced the per-capability pointers ---
+    CapabilityCountOutOfRange,  // capabilityCount is 0, or absurdly large
+    MissingCapabilityTables,    // capabilityCount > 0 but the array is NULL
+    NoUsableCapability,         // every capability declared is one this host
+                                // does not know, or has an unusable table, so
+                                // the plugin provides this host with nothing.
+                                // NOT the same as UnknownCapability: an
+                                // unknown bit ALONGSIDE a usable one is fine
+                                // and is ignored (see plugin_abi.h).
+    // --- ABI 3: the image decoder table, checked like the other two ---
+    MissingImageDecoderApi,          // bit set, table entry absent or NULL
+    ImageDecoderStructSizeMismatch,  // sizeof(CascadeImageDecoderApi) disagrees
+    ImageDecoderBadInputKind,        // inputKind not AUDIO or IQ
+    ImageDecoderRateOutOfRange,      // rate not 0 and not sane for inputKind
+    MissingImageDecoderFunction,     // a mandatory pointer is NULL
+                                     // (retune is optional and may be NULL)
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -127,6 +143,7 @@ struct LoadedPlugin {
     // never claimed to provide.
     const CascadeDecoderApi* decoder = nullptr;      // CASCADE_CAP_DECODER
     const CascadeIqDecoderApi* iqDecoder = nullptr;  // CASCADE_CAP_IQ_DECODER
+    const CascadeImageDecoderApi* imageDecoder = nullptr;  // CASCADE_CAP_IMAGE_DECODER
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.

@@ -1994,7 +1994,18 @@ void AppWindow::drawBlockedPluginRows() {
         ImGui::TextWrapped("%s", b.message.c_str());
         ImGui::PopStyleColor();
 
-        if (b.reason == cascade::core::PluginBlockReason::BelowMinimumVersion) {
+        // Update is offered for EVERY blocked reason for which a plan exists,
+        // including an ABI mismatch.
+        //
+        // That is a change of policy, and worth stating. It used to be that an
+        // ABI mismatch got no Update button on the grounds that no catalogue
+        // update could fix one - true while the catalogue held a single ABI,
+        // because the only build on offer was the one already installed. Now
+        // that a rebuilt plugin is published for the new ABI, the catalogue is
+        // exactly what fixes it: planUpdates has always treated "same version,
+        // wrong ABI" as update-worthy (see its `have->abiVersion` branch), and
+        // suppressing the button here was hiding the remedy that existed.
+        {
             const cascade::core::PluginUpdate* plan = nullptr;
             for (const cascade::core::PluginUpdate& u : updates) {
                 if (u.id == b.installed.id) { plan = &u; break; }
@@ -2011,9 +2022,6 @@ void AppWindow::drawBlockedPluginRows() {
                 ImGui::TextDisabled("Press \"Get plugins\", then Browse, to fetch the update.");
             }
         }
-        // DELIBERATELY no Update button for an ABI mismatch: no catalogue
-        // update can fix it (the message says so), and offering the click
-        // anyway is a support ticket.
 
         // Remove, on the other hand, must be offered on EVERY blocked row. For
         // an ABI mismatch it is the only action that exists, and without it the

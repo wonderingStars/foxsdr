@@ -25,6 +25,24 @@ namespace cascade::core {
 
 namespace {
 
+// A descriptor may declare a handful of capabilities; it may not declare
+// thousands. The bound exists so a corrupt or hostile capabilityCount cannot
+// make the host walk arbitrary memory looking for a table.
+constexpr uint32_t kMaxCapabilityEntries = 32u;
+
+// Finds the table a plugin supplied for one capability bit, or nullptr.
+//
+// Delegates to the accessor defined in plugin_abi.h rather than repeating the
+// walk. That matters more than it looks: the plugins and their tests read the
+// same array, and two implementations of "what counts as a malformed entry"
+// would eventually disagree about some edge - a duplicate, a multi-bit entry,
+// a null table - and the disagreement would show up as a plugin the tests
+// accept and the host silently ignores. One definition, in the header both
+// sides already include.
+const void* findCapabilityTable(const CascadePluginDesc* desc, uint32_t bit) {
+    return cascade_plugin_capability(desc, bit);
+}
+
 // ---------------------------------------------------------------------------
 // Platform shim. Everything OS-specific is confined to these four functions
 // so the loading logic below reads the same on both platforms.
@@ -223,10 +241,18 @@ LoadedPlugin loadOne(const fs::path& p) {
     // validatePluginDesc has already proven each declared bit has a usable
     // table; a table supplied without its bit is dropped here, so nothing
     // downstream can call into a facility the plugin did not claim.
-    rec.decoder =
-        (desc->capabilities & CASCADE_CAP_DECODER) != 0u ? desc->decoder : nullptr;
-    rec.iqDecoder =
-        (desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u ? desc->iqDecoder : nullptr;
+    rec.decoder = (desc->capabilities & CASCADE_CAP_DECODER) != 0u
+                      ? static_cast<const CascadeDecoderApi*>(
+                            findCapabilityTable(desc, CASCADE_CAP_DECODER))
+                      : nullptr;
+    rec.iqDecoder = (desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u
+                        ? static_cast<const CascadeIqDecoderApi*>(
+                              findCapabilityTable(desc, CASCADE_CAP_IQ_DECODER))
+                        : nullptr;
+    rec.imageDecoder = (desc->capabilities & CASCADE_CAP_IMAGE_DECODER) != 0u
+                           ? static_cast<const CascadeImageDecoderApi*>(
+                                 findCapabilityTable(desc, CASCADE_CAP_IMAGE_DECODER))
+                           : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -249,6 +275,17 @@ bool iqRateOk(double r) {
     return r >= CASCADE_IQ_RATE_MIN_HZ && r <= CASCADE_IQ_RATE_MAX_HZ;
 }
 
+// The audio equivalent, for the ABI 3 image decoder, whose rates are doubles
+// even when it asks for an audio stream. Positive test for the NaN reason
+// documented on iqRateOk - the negation would accept NaN.
+bool audioRateOk(double r) {
+    if (r == 0.0) {
+        return true;
+    }
+    return r >= static_cast<double>(CASCADE_AUDIO_RATE_MIN_HZ) &&
+           r <= static_cast<double>(CASCADE_AUDIO_RATE_MAX_HZ);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -267,9 +304,6 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         return PluginRejection::DescStructSizeMismatch;
     }
     // Only now is the rest of the struct known to be laid out as we expect.
-    if (desc->reserved != 0u) {
-        return PluginRejection::ReservedNotZero;
-    }
     if (!isNonEmpty(desc->name)) {
         return PluginRejection::MissingName;
     }
@@ -285,21 +319,31 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
     if (desc->capabilities == 0u) {
         return PluginRejection::NoCapabilities;
     }
-    if ((desc->capabilities & ~static_cast<uint32_t>(CASCADE_CAP_ALL_KNOWN)) != 0u) {
-        return PluginRejection::UnknownCapability;
+    if (desc->capabilityCount == 0u || desc->capabilityCount > kMaxCapabilityEntries) {
+        return PluginRejection::CapabilityCountOutOfRange;
+    }
+    if (desc->capabilityTables == nullptr) {
+        return PluginRejection::MissingCapabilityTables;
     }
 
+    // ABI 3: unknown capability bits are IGNORED, not refused. The host reads
+    // only tables it recognises and never dereferences one it does not, so a
+    // plugin built for a later host is usable here for whatever it has in
+    // common. What is NOT acceptable is a plugin that provides this host
+    // nothing at all, which is caught by `usable` at the end.
+    unsigned usable = 0;
+
     // One block per capability bit, each self-contained: a plugin may declare
-    // either, or both, and a table is examined only when its bit is set. The
+    // any combination, and a table is examined only when its bit is set. The
     // checks inside a block run table-size FIRST for the same reason
     // abiVersion runs first at descriptor level - until the size agrees, the
     // remaining fields are at offsets this host has not confirmed.
-    const bool claimsDecoder = (desc->capabilities & CASCADE_CAP_DECODER) != 0u;
-    if (claimsDecoder && desc->decoder == nullptr) {
-        return PluginRejection::MissingDecoderApi;
-    }
-    if (claimsDecoder) {
-        const CascadeDecoderApi* d = desc->decoder;
+    if ((desc->capabilities & CASCADE_CAP_DECODER) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_DECODER);
+        if (raw == nullptr) {
+            return PluginRejection::MissingDecoderApi;
+        }
+        const auto* d = static_cast<const CascadeDecoderApi*>(raw);
         if (d->structSize != static_cast<uint32_t>(sizeof(CascadeDecoderApi))) {
             return PluginRejection::DecoderStructSizeMismatch;
         }
@@ -311,14 +355,15 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
             d->destroy == nullptr) {
             return PluginRejection::MissingDecoderFunction;
         }
+        ++usable;
     }
 
-    const bool claimsIq = (desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u;
-    if (claimsIq && desc->iqDecoder == nullptr) {
-        return PluginRejection::MissingIqDecoderApi;
-    }
-    if (claimsIq) {
-        const CascadeIqDecoderApi* q = desc->iqDecoder;
+    if ((desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_IQ_DECODER);
+        if (raw == nullptr) {
+            return PluginRejection::MissingIqDecoderApi;
+        }
+        const auto* q = static_cast<const CascadeIqDecoderApi*>(raw);
         if (q->structSize != static_cast<uint32_t>(sizeof(CascadeIqDecoderApi))) {
             return PluginRejection::IqDecoderStructSizeMismatch;
         }
@@ -332,6 +377,44 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
             q->destroy == nullptr) {
             return PluginRejection::MissingIqDecoderFunction;
         }
+        ++usable;
+    }
+
+    if ((desc->capabilities & CASCADE_CAP_IMAGE_DECODER) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_IMAGE_DECODER);
+        if (raw == nullptr) {
+            return PluginRejection::MissingImageDecoderApi;
+        }
+        const auto* im = static_cast<const CascadeImageDecoderApi*>(raw);
+        if (im->structSize != static_cast<uint32_t>(sizeof(CascadeImageDecoderApi))) {
+            return PluginRejection::ImageDecoderStructSizeMismatch;
+        }
+        if (im->inputKind != CASCADE_INPUT_AUDIO && im->inputKind != CASCADE_INPUT_IQ) {
+            return PluginRejection::ImageDecoderBadInputKind;
+        }
+        // The rate bounds depend on which stream it asked for: an SSTV decoder
+        // wanting 44.1 kHz of audio and an LRPT decoder wanting 140 kS/s of
+        // I/Q are both legitimate, and checking one against the other's range
+        // would reject a correct plugin.
+        const bool rateOk = (im->inputKind == CASCADE_INPUT_IQ)
+                                ? (iqRateOk(im->requiredRateHz) && iqRateOk(im->preferredRateHz))
+                                : (audioRateOk(im->requiredRateHz) &&
+                                   audioRateOk(im->preferredRateHz));
+        if (!rateOk) {
+            return PluginRejection::ImageDecoderRateOutOfRange;
+        }
+        if (im->create == nullptr || im->process == nullptr || im->poll_image == nullptr ||
+            im->release_image == nullptr || im->poll_text == nullptr || im->destroy == nullptr) {
+            return PluginRejection::MissingImageDecoderFunction;
+        }
+        ++usable;
+    }
+
+    // Every bit it declared is one this host has never heard of. Loading it
+    // would put a plugin in the list that can never do anything, so say what
+    // is actually wrong instead: it was built for a host newer than this one.
+    if (usable == 0) {
+        return PluginRejection::NoUsableCapability;
     }
     return PluginRejection::None;
 }
@@ -347,7 +430,26 @@ const char* pluginRejectionMessage(PluginRejection r) {
         case PluginRejection::DescStructSizeMismatch:
             return "plugin descriptor size does not match this host's";
         case PluginRejection::ReservedNotZero:
+            // Retained so the enum stays stable for callers; ABI 3 removed the
+            // reserved field, so nothing produces this any more.
             return "reserved descriptor field is not zero";
+        case PluginRejection::CapabilityCountOutOfRange:
+            return "descriptor declares an implausible number of capability tables";
+        case PluginRejection::MissingCapabilityTables:
+            return "descriptor declares capabilities but supplies no capability table";
+        case PluginRejection::NoUsableCapability:
+            return "every capability it declares is one this host does not know - it was "
+                   "built for a newer version of FoxSDR";
+        case PluginRejection::MissingImageDecoderApi:
+            return "declares CASCADE_CAP_IMAGE_DECODER but supplies no image decoder table";
+        case PluginRejection::ImageDecoderStructSizeMismatch:
+            return "image decoder table size does not match this host's";
+        case PluginRejection::ImageDecoderBadInputKind:
+            return "image decoder declares neither audio nor IQ input";
+        case PluginRejection::ImageDecoderRateOutOfRange:
+            return "image decoder asks for a sample rate this host cannot deliver";
+        case PluginRejection::MissingImageDecoderFunction:
+            return "image decoder table has a null function pointer";
         case PluginRejection::MissingName:
             return "descriptor has no name";
         case PluginRejection::MissingVersion:
@@ -399,34 +501,57 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
             s += " (host " + std::to_string(sizeof(CascadePluginDesc)) + " bytes, plugin " +
                  std::to_string(desc->structSize) + ")";
             break;
-        case PluginRejection::UnknownCapability: {
+        case PluginRejection::NoUsableCapability: {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "0x%08X",
                           desc->capabilities & ~static_cast<unsigned>(CASCADE_CAP_ALL_KNOWN));
-            s += std::string(" (unknown bits ") + buf + ")";
+            s += std::string(" (it declares only ") + buf +
+                 ", and this host knows none of those)";
             break;
         }
-        case PluginRejection::DecoderStructSizeMismatch:
-            if (desc->decoder != nullptr) {
+        case PluginRejection::DecoderStructSizeMismatch: {
+            const auto* d = static_cast<const CascadeDecoderApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_DECODER));
+            if (d != nullptr) {
                 s += " (host " + std::to_string(sizeof(CascadeDecoderApi)) + " bytes, plugin " +
-                     std::to_string(desc->decoder->structSize) + ")";
+                     std::to_string(d->structSize) + ")";
             }
             break;
-        case PluginRejection::IqDecoderStructSizeMismatch:
-            if (desc->iqDecoder != nullptr) {
+        }
+        case PluginRejection::IqDecoderStructSizeMismatch: {
+            const auto* q = static_cast<const CascadeIqDecoderApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_IQ_DECODER));
+            if (q != nullptr) {
                 s += " (host " + std::to_string(sizeof(CascadeIqDecoderApi)) + " bytes, plugin " +
-                     std::to_string(desc->iqDecoder->structSize) + ")";
+                     std::to_string(q->structSize) + ")";
             }
             break;
-        case PluginRejection::IqDecoderRateOutOfRange:
-            if (desc->iqDecoder != nullptr) {
+        }
+        case PluginRejection::IqDecoderRateOutOfRange: {
+            const auto* q = static_cast<const CascadeIqDecoderApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_IQ_DECODER));
+            if (q != nullptr) {
                 char buf[128];
                 std::snprintf(buf, sizeof(buf),
                               " (required %.6g Hz, preferred %.6g Hz; 0 or %.6g..%.6g Hz)",
-                              desc->iqDecoder->requiredRateHz, desc->iqDecoder->preferredRateHz,
-                              CASCADE_IQ_RATE_MIN_HZ, CASCADE_IQ_RATE_MAX_HZ);
+                              q->requiredRateHz, q->preferredRateHz, CASCADE_IQ_RATE_MIN_HZ,
+                              CASCADE_IQ_RATE_MAX_HZ);
                 s += buf;
             }
+            break;
+        }
+        case PluginRejection::ImageDecoderStructSizeMismatch: {
+            const auto* im = static_cast<const CascadeImageDecoderApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_IMAGE_DECODER));
+            if (im != nullptr) {
+                s += " (host " + std::to_string(sizeof(CascadeImageDecoderApi)) +
+                     " bytes, plugin " + std::to_string(im->structSize) + ")";
+            }
+            break;
+        }
+        case PluginRejection::CapabilityCountOutOfRange:
+            s += " (" + std::to_string(desc->capabilityCount) + " declared, limit " +
+                 std::to_string(kMaxCapabilityEntries) + ")";
             break;
         default:
             break;
