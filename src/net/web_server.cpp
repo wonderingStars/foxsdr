@@ -104,6 +104,23 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
 <section id="app" class="hidden">
   <div id="status"></div>
   <canvas id="spectrum" width="1024" height="256"></canvas>
+  <div id="controls">
+    <div class="row">
+      <button id="playstop">Start</button>
+      <label>Centre (MHz)<input id="centre" type="number" step="0.000001"></label>
+      <button id="tune">Tune</button>
+    </div>
+    <div id="modes" class="row"></div>
+    <div class="row">
+      <label>VFO offset <span id="vfoVal"></span><input id="vfo" type="range" min="-500" max="500" step="1"></label>
+      <label>Bandwidth <span id="bwVal"></span><input id="bw" type="range" min="0" max="5" step="1"></label>
+    </div>
+    <div class="row">
+      <label>Squelch <span id="sqVal"></span><input id="sq" type="range" min="-120" max="0" step="1"></label>
+      <label>Volume <span id="volVal"></span><input id="vol" type="range" min="0" max="1" step="0.01"></label>
+    </div>
+    <p id="ctlError" class="error"></p>
+  </div>
   <button id="logout" class="hidden">Sign out</button>
 </section>
 <script src="/app.js"></script>
@@ -137,6 +154,13 @@ canvas { width:100%; height:auto; background:#080a0d; border:1px solid #232833;
 .cell .k { color:var(--dim); font-size:.7rem; text-transform:uppercase;
            letter-spacing:.05em; display:block; }
 .cell .v { font-variant-numeric:tabular-nums; }
+#controls { margin-top:.75rem; display:flex; flex-direction:column; gap:.6rem; }
+.row { display:flex; flex-wrap:wrap; gap:.75rem; align-items:flex-end; }
+.row label { flex:1 1 10rem; }
+.row input[type=range] { width:100%; }
+#modes button { flex:0 0 auto; background:#1c2029; color:var(--fg); font-weight:400; }
+#modes button.on { background:var(--accent); color:#04121f; font-weight:600; }
+#centre { width:11rem; font-variant-numeric:tabular-nums; }
 )CSS";
 
 constexpr char kAppJs[] = R"JS(
@@ -166,9 +190,118 @@ function cell(k, v) {
     .replace('<span class="v"></span>', '<span class="v">' + v + '</span>');
 }
 
+// --- Controls ---------------------------------------------------------------
+// The wire vocabulary, which the server validates against dsp::modeFromName —
+// so a name that drifts out of step here comes back as an explicit 400 rather
+// than a button that quietly does nothing.
+const MODES = ['NFM', 'WFM', 'AM', 'DSB', 'USB', 'LSB', 'CW', 'RAW'];
+// The bandwidth slider steps through the same presets the desktop panel offers,
+// widest first, so the two surfaces expose the same choices.
+const BWS = [200000, 150000, 12500, 10000, 6000, 3000];
+let currentMode = '';
+
+async function control(patch) {
+  $('ctlError').textContent = '';
+  const r = await fetch('/api/control', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (r.status === 401) { stopPolling(); await refreshSession(); return false; }
+  if (!r.ok) {
+    let msg = 'Rejected.';
+    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+    $('ctlError').textContent = msg;
+    return false;
+  }
+  // Accepted, not applied: the radio moves on the application's next frame and
+  // the change shows up through the ordinary status poll. Nudging it here keeps
+  // the page feeling immediate without pretending we know the outcome.
+  setTimeout(pollStatus, 120);
+  return true;
+}
+
+function buildModes() {
+  const box = $('modes');
+  if (box.childElementCount) return;
+  MODES.forEach((m) => {
+    const b = document.createElement('button');
+    b.textContent = m;
+    b.dataset.mode = m;
+    b.addEventListener('click', () => control({ mode: m }));
+    box.appendChild(b);
+  });
+}
+
+// Only write a control the user is not currently holding: pushing a slider back
+// under the thumb mid-drag is the classic remote-UI bug.
+function syncControl(el, value) {
+  if (document.activeElement === el) return;
+  el.value = value;
+}
+
+function reflect(s) {
+  $('playstop').textContent = s.running ? 'Stop' : 'Start';
+  syncControl($('centre'), (s.centerHz / 1e6).toFixed(6));
+  syncControl($('vfo'), Math.round(s.vfoOffsetHz / 1000));
+  $('vfoVal').textContent = (s.vfoOffsetHz / 1000).toFixed(0) + ' kHz';
+  let bwIdx = 0, best = Infinity;
+  BWS.forEach((b, i) => {
+    const d = Math.abs(b - s.bandwidthHz);
+    if (d < best) { best = d; bwIdx = i; }
+  });
+  syncControl($('bw'), bwIdx);
+  $('bwVal').textContent = (s.bandwidthHz / 1000).toFixed(1) + ' kHz';
+  syncControl($('sq'), Math.round(s.squelchDb));
+  $('sqVal').textContent = s.squelchDb.toFixed(0) + ' dB';
+  syncControl($('vol'), s.volume);
+  $('volVal').textContent = Math.round(s.volume * 100) + '%';
+  if (s.mode !== currentMode) {
+    currentMode = s.mode;
+    Array.from($('modes').children).forEach((b) => {
+      b.classList.toggle('on', b.dataset.mode === s.mode);
+    });
+  }
+}
+
+$('playstop').addEventListener('click', () => {
+  control({ running: $('playstop').textContent === 'Start' });
+});
+$('tune').addEventListener('click', () => {
+  const mhz = parseFloat($('centre').value);
+  if (isFinite(mhz)) control({ centerHz: Math.round(mhz * 1e6) });
+});
+$('centre').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('tune').click(); }
+});
+$('vfo').addEventListener('change', () => {
+  control({ vfoOffsetHz: parseFloat($('vfo').value) * 1000 });
+});
+$('vfo').addEventListener('input', () => {
+  $('vfoVal').textContent = $('vfo').value + ' kHz';
+});
+$('bw').addEventListener('change', () => {
+  control({ bandwidthHz: BWS[parseInt($('bw').value, 10)] });
+});
+$('sq').addEventListener('change', () => {
+  control({ squelchDb: parseFloat($('sq').value) });
+});
+$('sq').addEventListener('input', () => {
+  $('sqVal').textContent = $('sq').value + ' dB';
+});
+$('vol').addEventListener('change', () => {
+  control({ volume: parseFloat($('vol').value) });
+});
+$('vol').addEventListener('input', () => {
+  $('volVal').textContent = Math.round($('vol').value * 100) + '%';
+});
+
 async function pollStatus() {
   const s = await getJson('/api/status');
   if (!s) return;
+  buildModes();
+  reflect(s);
   $('status').innerHTML = [
     cell('Centre', fmtHz(s.centerHz)),
     cell('VFO offset', fmtHz(s.vfoOffsetHz)),
@@ -336,6 +469,13 @@ public:
     std::size_t sessionCount() const { return sessions_.size(); }
     void revokeAllSessions() { sessions_.revokeAll(); }
 
+    std::vector<ControlRequest> takePendingControls() {
+        std::lock_guard<std::mutex> lock(controlMutex_);
+        std::vector<ControlRequest> out(pending_.begin(), pending_.end());
+        pending_.clear();
+        return out;
+    }
+
 private:
     void installRoutes(httplib::Server& svr);
 
@@ -363,6 +503,10 @@ private:
 
     mutable SessionStore sessions_;
     mutable LoginThrottle throttle_;
+
+    // Accepted control requests awaiting the application's next frame.
+    mutable std::mutex controlMutex_;
+    std::deque<ControlRequest> pending_;
 
     std::unique_ptr<httplib::Server> svr_;
     std::thread thread_;
@@ -536,6 +680,42 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["sourceName"] = s.sourceName;
         j["signalDb"] = s.signalDb;
         j["stereoActive"] = s.stereoActive;
+        j["squelchDb"] = s.squelchDb;
+        j["volume"] = s.volume;
+        res.set_content(j.dump(), "application/json");
+    });
+
+    svr.Post("/api/control", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorised(req)) {
+            deny(res, "sign in first");
+            return;
+        }
+        // Same CSRF reasoning as /api/login, and it matters more here: this is
+        // the endpoint that moves the radio.
+        if (req.get_header_value("Content-Type").rfind("application/json", 0) != 0) {
+            deny(res, "expected a JSON body", 415);
+            return;
+        }
+        ControlRequest cr;
+        std::string error;
+        if (!parseControlRequest(req.body, cr, error)) {
+            deny(res, error, 400);
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(controlMutex_);
+            while (pending_.size() >= WebServer::kMaxQueuedControls) {
+                pending_.pop_front();
+            }
+            pending_.push_back(cr);
+        }
+        // 202, not 200: this has been accepted, not carried out. The radio is
+        // moved by the application on its next frame, and the browser sees the
+        // result through /api/status like every other observer — which is also
+        // what keeps the page honest if a clamp changes the value it asked for.
+        res.status = 202;
+        nlohmann::json j;
+        j["accepted"] = true;
         res.set_content(j.dump(), "application/json");
     });
 
@@ -663,5 +843,8 @@ int WebServer::boundPort() const { return impl_->boundPort(); }
 BindDecision WebServer::decision() const { return impl_->decision(); }
 std::size_t WebServer::sessionCount() const { return impl_->sessionCount(); }
 void WebServer::revokeAllSessions() { impl_->revokeAllSessions(); }
+std::vector<ControlRequest> WebServer::takePendingControls() {
+    return impl_->takePendingControls();
+}
 
 }  // namespace cascade::net

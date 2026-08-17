@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "net/web_auth.hpp"
+#include "net/web_control.hpp"
 #include "net/web_policy.hpp"
 
 // Forward-declared rather than included: httplib.h is 747 KB and belongs in
@@ -68,6 +69,11 @@ struct RadioStatus {
     std::string sourceName;
     float signalDb = -200.0f;
     bool stereoActive = false;
+    // Included so the browser's own controls can show where they currently
+    // sit. Without them the page would have to remember what it last sent,
+    // which goes wrong the moment the desktop window changes something.
+    float squelchDb = 0.0f;
+    float volume = 0.0f;
 };
 
 struct SpectrumSnapshot {
@@ -141,6 +147,23 @@ public:
     // Ends every session without stopping the server. The settings UI calls
     // this on a password change.
     void revokeAllSessions();
+
+    // --- Control -------------------------------------------------------------
+    // POST /api/control validates a request (net/web_control.hpp) and queues
+    // it HERE; it never touches the radio, because several of the things a
+    // browser can ask for are GUI-thread-only. The application drains this
+    // once per frame and applies what it finds.
+    //
+    // Returns everything accepted since the last call, oldest first, and
+    // empties the queue. Safe to call from the application's own thread while
+    // requests keep arriving.
+    std::vector<ControlRequest> takePendingControls();
+
+    // Bound on the queue. An application that stops draining (a stalled GUI
+    // thread) must not let a client grow this without limit; past the cap the
+    // OLDEST request is dropped, because for a control surface the most recent
+    // instruction is the one that matters.
+    static constexpr std::size_t kMaxQueuedControls = 64;
 
 private:
     class Impl;  // holds the httplib::Server and the route handlers

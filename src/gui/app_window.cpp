@@ -794,6 +794,10 @@ void AppWindow::drawUi() {
     // Same contract for the web server's view of the radio: a browser must be
     // served whether or not the settings panel is expanded, and this is the
     // only thread allowed to read the source identity (see app_window.hpp).
+    // Anything a browser asked for since the last frame, applied before the
+    // panels are drawn so the window shows the new state this frame rather
+    // than one frame late.
+    applyWebControls();
     publishWebSnapshot();
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
@@ -3936,6 +3940,8 @@ void AppWindow::publishWebSnapshot() {
     s.mode = kModeNames[modeIndex_];
     s.signalDb = pipeline_.signalPowerDb();
     s.stereoActive = pipeline_.stereoActive();
+    s.squelchDb = squelchDb_;
+    s.volume = volume_;
 
     const double centerHz = s.centerHz;
     const double spanHz = pipeline_.inputRateHz();
@@ -3950,6 +3956,69 @@ void AppWindow::publishWebSnapshot() {
         webBins_ = lastFrame_.dbBins;
         webSnapCenterHz_ = centerHz;
         webSnapSpanHz_ = spanHz;
+    }
+}
+
+void AppWindow::applyWebControls() {
+    const std::vector<cascade::net::ControlRequest> requests =
+        webServer_.takePendingControls();
+    for (const cascade::net::ControlRequest& r : requests) {
+        if (r.running.has_value()) {
+            if (*r.running) {
+                pipeline_.start();
+            } else {
+                pipeline_.stop();
+            }
+        }
+        if (r.centerHz.has_value()) {
+            // The GUI's own absolute-tune path, so the RDS/stereo decoders are
+            // told to forget the old station exactly as they are for a tune
+            // made from this window.
+            retuneSourceHz(*r.centerHz);
+        }
+        if (r.mode.has_value()) {
+            // Mapped by NAME, never by index: the button table's order and the
+            // DemodMode enum's order deliberately differ.
+            const std::string want = cascade::dsp::modeName(*r.mode);
+            for (int i = 0; i < 8; ++i) {
+                if (want == kModeNames[i]) {
+                    modeIndex_ = i;
+                    pipeline_.setDemodMode(kModeMap[i]);
+                    // A mode button here also moves the bandwidth to that
+                    // mode's default, so a browser mode change behaves the
+                    // same way. An explicit bandwidthHz in the SAME request
+                    // still wins, because it is applied below.
+                    bandwidthIndex_ = kModeDefaultBw[i];
+                    vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
+                    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+                    break;
+                }
+            }
+        }
+        // Bandwidth before offset: the offset's limit depends on it.
+        if (r.bandwidthHz.has_value()) {
+            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(*r.bandwidthHz, bwHi));
+            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+        }
+        if (r.vfoOffsetHz.has_value()) {
+            // Clamped against the LIVE rate, the same rule the config restore
+            // uses — web_control's range check is a sanity bound, not this.
+            const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
+            const double off =
+                (lim > 0.0) ? std::clamp(*r.vfoOffsetHz, -lim, lim) : 0.0;
+            pipeline_.setVfoOffsetHz(off);
+            vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+        }
+        if (r.squelchDb.has_value()) {
+            squelchDb_ = static_cast<float>(*r.squelchDb);
+            pipeline_.setSquelchDb(squelchDb_);
+        }
+        if (r.volume.has_value()) {
+            volume_ = static_cast<float>(*r.volume);
+            pipeline_.audio().setVolume(volume_);
+        }
     }
 }
 

@@ -16,6 +16,7 @@
 
 #include <httplib.h>
 
+#include "dsp/demod.hpp"
 #include "net/web_auth.hpp"
 #include "net/web_server.hpp"
 #include "test_check.hpp"
@@ -451,6 +452,133 @@ void testRestartRevokesSessions() {
     server.stop();
 }
 
+void testControlQueue() {
+    WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    // A valid request is ACCEPTED (202, not 200 — it has not been carried out
+    // yet) and lands in the queue for the application to drain.
+    auto ok = cli.Post("/api/control", "{\"centerHz\":144800000,\"mode\":\"NFM\"}",
+                       "application/json");
+    CHECK(static_cast<bool>(ok));
+    if (ok) {
+        CHECK(ok->status == 202);
+    }
+    std::vector<ControlRequest> drained = server.takePendingControls();
+    CHECK(drained.size() == 1);
+    if (drained.size() == 1) {
+        CHECK(drained[0].centerHz.value_or(0.0) == 144800000.0);
+        CHECK(drained[0].mode.value_or(cascade::dsp::DemodMode::RAW) ==
+              cascade::dsp::DemodMode::NFM);
+    }
+    // Draining empties it: a request must not be applied twice.
+    CHECK(server.takePendingControls().empty());
+
+    // A rejected request reaches the queue at all.
+    auto bad = cli.Post("/api/control", "{\"gaain\":30}", "application/json");
+    CHECK(static_cast<bool>(bad));
+    if (bad) {
+        CHECK(bad->status == 400);
+    }
+    CHECK(server.takePendingControls().empty());
+
+    // Form-encoded is refused before anything is parsed (CSRF), and this is
+    // the endpoint that moves the radio, so it matters more here than at login.
+    auto wrongType = cli.Post("/api/control", "centerHz=144800000",
+                              "application/x-www-form-urlencoded");
+    CHECK(static_cast<bool>(wrongType));
+    if (wrongType) {
+        CHECK(wrongType->status == 415);
+    }
+    CHECK(server.takePendingControls().empty());
+
+    server.stop();
+}
+
+void testControlRequiresAuth() {
+    WebServerConfig cfg = loopbackConfig();
+    cfg.passwordRecord = realRecord();
+
+    WebServer server;
+    std::string error;
+    const int port = startOnFreePort(server, cfg, error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    // THE ONE THAT MATTERS: an unauthenticated caller must not be able to move
+    // the receiver, and must not get a request into the queue by trying.
+    auto denied = cli.Post("/api/control", "{\"centerHz\":144800000}",
+                           "application/json");
+    CHECK(static_cast<bool>(denied));
+    if (denied) {
+        CHECK(denied->status == 401);
+    }
+    CHECK(server.takePendingControls().empty());
+
+    auto login = cli.Post("/api/login", loginBody("admin", kPassword),
+                          "application/json");
+    CHECK(static_cast<bool>(login));
+    std::string token;
+    if (login) {
+        token = tokenFromSetCookie(login->get_header_value("Set-Cookie"));
+    }
+    const httplib::Headers authed = {{"Cookie", "foxsdr_session=" + token}};
+
+    auto allowed = cli.Post("/api/control", authed, "{\"centerHz\":144800000}",
+                            "application/json");
+    CHECK(static_cast<bool>(allowed));
+    if (allowed) {
+        CHECK(allowed->status == 202);
+    }
+    CHECK(server.takePendingControls().size() == 1);
+
+    server.stop();
+}
+
+void testControlQueueIsBounded() {
+    WebServer server;
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    // An application that stopped draining must not let a client grow this
+    // without limit.
+    const std::size_t sent = WebServer::kMaxQueuedControls + 10;
+    for (std::size_t i = 0; i < sent; ++i) {
+        const std::string body =
+            "{\"centerHz\":" + std::to_string(100000000 + i) + "}";
+        auto r = cli.Post("/api/control", body, "application/json");
+        CHECK(static_cast<bool>(r));
+    }
+    const std::vector<ControlRequest> drained = server.takePendingControls();
+    CHECK(drained.size() == WebServer::kMaxQueuedControls);
+    // The OLDEST were dropped: for a control surface the most recent
+    // instruction is the one that matters, so the newest must survive.
+    if (!drained.empty()) {
+        CHECK(drained.back().centerHz.value_or(0.0) ==
+              static_cast<double>(100000000 + sent - 1));
+    }
+
+    server.stop();
+}
+
 }  // namespace
 
 int main() {
@@ -461,5 +589,8 @@ int main() {
     testOffMachineBindWithoutPasswordNeverListens();
     testSpectrumEndpoint();
     testRestartRevokesSessions();
+    testControlQueue();
+    testControlRequiresAuth();
+    testControlQueueIsBounded();
     return testSummary("test_web_server");
 }

@@ -7,6 +7,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "dsp/fir.hpp"
@@ -16,6 +17,28 @@
 namespace cascade::dsp {
 
 enum class DemodMode { NFM, WFM, AM, DSB, USB, LSB, CW, RAW };
+
+// Number of entries in DemodMode. Kept beside the enum so a new mode makes
+// every table that claims to cover all of them fail its own test rather than
+// silently ending one short.
+inline constexpr std::size_t kDemodModeCount = 8;
+
+// THE canonical spelling of each mode, and the only place mode NAMES are
+// defined.
+//
+// Three separate things need to turn a mode into text or back: the config
+// store persists the mode by name (so a saved file survives any future enum
+// reorder), the GUI's mode buttons carry their own ORDER — which deliberately
+// differs from the enum's — and the web API accepts a mode from a browser.
+// Three consumers each keeping a private list is how one of them ends up
+// accepting a spelling the others reject; the GUI keeps its ordering table,
+// but the vocabulary itself lives here.
+//
+// modeName returns a stable, never-null string. modeFromName is exact and
+// case-sensitive: a browser sending "wfm" is a client bug worth reporting, not
+// something to guess at.
+const char* modeName(DemodMode m);
+bool modeFromName(const std::string& name, DemodMode& out);
 
 // One demodulator per VFO. The channel arrives as complex baseband at
 // channelRateHz with the wanted signal already centered at DC (the VFO's

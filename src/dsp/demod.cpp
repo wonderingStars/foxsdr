@@ -6,6 +6,30 @@
 
 namespace cascade::dsp {
 
+// Mode names, in ENUM order. The one table; see demod.hpp for why it lives
+// here rather than in each of the three places that need it.
+namespace {
+constexpr const char* kModeText[kDemodModeCount] = {"NFM", "WFM", "AM",  "DSB",
+                                                    "USB", "LSB", "CW", "RAW"};
+}  // namespace
+
+const char* modeName(DemodMode m) {
+    const auto i = static_cast<std::size_t>(m);
+    // Never returns null, even for a value cast in from outside the enum:
+    // callers put this straight into printf and JSON.
+    return (i < kDemodModeCount) ? kModeText[i] : "NFM";
+}
+
+bool modeFromName(const std::string& name, DemodMode& out) {
+    for (std::size_t i = 0; i < kDemodModeCount; ++i) {
+        if (name == kModeText[i]) {
+            out = static_cast<DemodMode>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
 namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;

@@ -722,6 +722,16 @@ private:
     // members below. Called once per frame from drawUi, unconditionally: the
     // panel being collapsed must not stop the browser being served.
     void publishWebSnapshot();
+    // Drains the server's control queue and applies each request to the radio.
+    // Called once per frame from drawUi, on the GUI thread, because that is
+    // the only thread allowed to move the SOURCE — the HTTP handler validated
+    // the request and queued it precisely so it would not have to.
+    //
+    // Applying here rather than in the handler also keeps the panel mirrors
+    // (modeIndex_, vfoOffsetKhz_, squelchDb_ ...) in step, so a change made
+    // from a browser shows up on the desktop window and in the debounced
+    // config save exactly as though it had been clicked.
+    void applyWebControls();
     // Applies webCfg_ to the server: starts, restarts or stops it, and puts
     // the outcome in webError_ / webNote_. The ONE place that calls
     // WebServer::start, so the panel, the config restore and the password

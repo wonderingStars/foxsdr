@@ -25,6 +25,9 @@ constexpr std::size_t kN = 4800;  // analysis window: 10 Hz bins, so 1 kHz,
 
 using cascade::dsp::Demodulator;
 using cascade::dsp::DemodMode;
+using cascade::dsp::kDemodModeCount;
+using cascade::dsp::modeFromName;
+using cascade::dsp::modeName;
 
 // Fixed-seed LCG (Numerical Recipes constants) for the passthrough tests.
 float lcgUnit(std::uint32_t& s) {
@@ -123,6 +126,43 @@ std::vector<std::complex<float>> makeMixedBlock(std::size_t n) {
 }  // namespace
 
 int main() {
+    // --- Mode names: the single vocabulary three consumers share ------------
+    // The config store persists a mode by NAME, the GUI's button table orders
+    // the modes differently from the enum, and the web API accepts a mode from
+    // a browser. All three resolve through modeName/modeFromName, so this is
+    // what stops one of them accepting a spelling the others reject.
+    {
+        for (std::size_t i = 0; i < kDemodModeCount; ++i) {
+            const auto m = static_cast<DemodMode>(i);
+            const char* name = modeName(m);
+            CHECK(name != nullptr);
+            CHECK(name[0] != '\0');
+            DemodMode back{};
+            const bool ok = modeFromName(name, back);
+            CHECK(ok);
+            if (ok) {
+                CHECK(back == m);  // round trip, for every mode
+            }
+        }
+        // Names are distinct: two modes sharing a spelling would make the
+        // round trip above pass while making one of them unreachable.
+        for (std::size_t i = 0; i < kDemodModeCount; ++i) {
+            for (std::size_t k = i + 1; k < kDemodModeCount; ++k) {
+                CHECK(std::string(modeName(static_cast<DemodMode>(i))) !=
+                      std::string(modeName(static_cast<DemodMode>(k))));
+            }
+        }
+        // Exact and case-sensitive; nothing else is accepted.
+        DemodMode ignored{};
+        CHECK(!modeFromName("", ignored));
+        CHECK(!modeFromName("wfm", ignored));
+        CHECK(!modeFromName("FM", ignored));
+        CHECK(!modeFromName(" WFM", ignored));
+        // A value cast in from outside the enum must still yield a printable
+        // string rather than reading past the table.
+        CHECK(modeName(static_cast<DemodMode>(99)) != nullptr);
+    }
+
     // --- NFM: 1 kHz modulator / 2.5 kHz deviation round trip ----------------
     {
         Demodulator d(kFs);
