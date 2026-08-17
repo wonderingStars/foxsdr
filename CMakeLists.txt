@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.26.0 LANGUAGES C CXX)
+project(cascade VERSION 0.27.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -132,9 +132,11 @@ file(GLOB CASCADE_DSP    CONFIGURE_DEPENDS src/dsp/*.cpp)
 file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
+file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
 
 add_library(cascade_lib STATIC
-    ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK})
+    ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK}
+    ${CASCADE_NET})
 
 target_include_directories(cascade_lib PUBLIC src)
 # Vendored targets are listed BEFORE SoapySDR so third_party/ include dirs
