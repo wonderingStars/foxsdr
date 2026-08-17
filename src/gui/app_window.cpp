@@ -2057,10 +2057,11 @@ void AppWindow::drawPluginsSection() {
 
     drawBlockedPluginRows();
 
-    // What the decoders are SAYING comes before the inventory of what is
-    // installed: the output is the reason the plugin exists, and the list is
-    // administration.
-    drawDecoderOutput();
+    // The decoder output has its OWN WINDOW (see drawDecoderWindow); what is
+    // left here is the button that opens it and the idle reasons, which
+    // belong next to the plugin list because they are about installation
+    // rather than about traffic.
+    drawDecoderStatusRows();
     drawPluginTuneControls();
 
     ImGui::SeparatorText("Installed");
@@ -2917,6 +2918,8 @@ void AppWindow::drawPluginWindows() {
         ImGui::End();
     }
 
+    drawDecoderWindow();
+
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
     for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
@@ -3241,15 +3244,16 @@ void AppWindow::pumpDecoderOutput() {
     while (decoderLog_.size() > kDecoderLogMax) { decoderLog_.pop_front(); }
 }
 
-void AppWindow::drawDecoderOutput() {
+void AppWindow::drawDecoderStatusRows() {
     const std::vector<cascade::core::DecoderStatus> st = pluginRunner_.status();
     if (st.empty()) { return; }
 
-    ImGui::SeparatorText("Decoder output");
+    ImGui::SeparatorText("Decoders");
 
-    // Why a decoder is silent, before the output box: "it is installed and
-    // shows nothing" is otherwise indistinguishable from "there is nothing on
-    // frequency", and only one of those is worth the user changing.
+    // Why a decoder is silent stays HERE rather than moving to the output
+    // window, because it is a fact about the installation: "it is installed
+    // and shows nothing" is otherwise indistinguishable from "there is
+    // nothing on frequency", and only one of those is worth acting on.
     for (const cascade::core::DecoderStatus& s : st) {
         if (s.reason == cascade::core::DecoderIdleReason::Running) { continue; }
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
@@ -3262,12 +3266,44 @@ void AppWindow::drawDecoderOutput() {
         return;
     }
 
-    ImGui::Checkbox("Follow", &decoderAutoScroll_);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Clear##declog")) { decoderLog_.clear(); }
+    if (ImGui::Button(decoderWindowOpen_ ? "Hide decoder output"
+                                         : "Show decoder output",
+                      ImVec2(-1.0f, 0.0f))) {
+        decoderWindowOpen_ = !decoderWindowOpen_;
+    }
+    if (!decoderLog_.empty()) {
+        ImGui::TextDisabled("%d line%s decoded", static_cast<int>(decoderLog_.size()),
+                            decoderLog_.size() == 1 ? "" : "s");
+    }
+}
 
-    ImGui::BeginChild("##decoderlog", ImVec2(0.0f, 160.0f), true,
-                      ImGuiWindowFlags_HorizontalScrollbar);
+void AppWindow::drawDecoderWindow() {
+    // ITS OWN OPERATING SYSTEM WINDOW, for the same reason the map and the
+    // decoded images have one: a decoder's output is the reason the plugin
+    // exists, and continuous text - CW, RTTY, APRS - is something to put
+    // beside the radio or on a second screen, not to read through a slot in a
+    // side panel.
+    //
+    // Opens itself the first time a decoder actually says something, which is
+    // the rule the map already follows. A window that appears before there is
+    // anything in it is just another empty box to close.
+    if (!decoderLog_.empty() && !decoderWindowEverOpened_) {
+        decoderWindowOpen_ = true;
+        decoderWindowEverOpened_ = true;
+    }
+    if (!decoderWindowOpen_) { return; }
+
+    placeAsSeparateWindow(9);
+    if (ImGui::Begin("Decoder output###decoderout", &decoderWindowOpen_)) {
+        ImGui::Checkbox("Follow", &decoderAutoScroll_);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear##declog")) { decoderLog_.clear(); }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%d line%s", static_cast<int>(decoderLog_.size()),
+                            decoderLog_.size() == 1 ? "" : "s");
+
+        ImGui::BeginChild("##decoderlog", ImVec2(0.0f, 0.0f), true,
+                          ImGuiWindowFlags_HorizontalScrollbar);
     if (decoderLog_.empty()) {
         ImGui::TextDisabled("Listening...");
     }
@@ -3284,7 +3320,9 @@ void AppWindow::drawDecoderOutput() {
     if (decoderAutoScroll_ && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f) {
         ImGui::SetScrollHereY(1.0f);
     }
-    ImGui::EndChild();
+        ImGui::EndChild();
+    }
+    ImGui::End();
 }
 
 void AppWindow::removeBlockedPlugin(const std::string& fileName) {

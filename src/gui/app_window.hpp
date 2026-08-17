@@ -160,7 +160,11 @@ private:
     // line per plugin that is loaded but not being fed and why. Drained from
     // PluginRunner every frame, because the runner's buffer is bounded and a
     // GUI that stops reading would silently drop the newest lines.
-    void drawDecoderOutput();
+    // Idle reasons and the button that opens the output window; stays in the
+    // Plugins section because it is about installation, not traffic.
+    void drawDecoderStatusRows();
+    // The decoded text, in its own operating system window.
+    void drawDecoderWindow();
     // Moves decoded lines out of the runner into decoderLog_. Called from
     // drawUi unconditionally, because the runner's buffer is bounded and
     // draining only when the panel is visible would drop output silently.
@@ -484,6 +488,11 @@ private:
     std::deque<cascade::core::DecodedLine> decoderLog_;
     static constexpr std::size_t kDecoderLogMax = 500;
     bool decoderAutoScroll_ = true;
+    // The output window opens itself the first time a decoder says something,
+    // and not before — the same rule the map follows. Once the user closes it
+    // that stays closed, which is why the "ever opened" latch exists.
+    bool decoderWindowOpen_ = false;
+    bool decoderWindowEverOpened_ = false;
     std::string pluginDir_;
 
     // --- Retirement enforcement (P11) -----------------------------------------

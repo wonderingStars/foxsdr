@@ -476,6 +476,11 @@ private:
     // the same starting state keeps the channels sample-aligned forever.
     cascade::dsp::RationalResampler resampler_;    // left / mono
     cascade::dsp::RationalResampler resamplerR_;   // right
+    // The decoder feed's own resampler. Separate because it is driven from a
+    // different point in the chain (before the AGC), and a resampler is a
+    // state machine — interleaving two signals through one corrupts both.
+    cascade::dsp::RationalResampler resamplerD_;
+    std::vector<float> preAgcBuf_;
     // Audio post-processing, per channel, all at kAudioRateHz (so a
     // rate-follow never rebuilds them). Held by unique_ptr because
     // NoiseReduction and AutoNotch own an FFT plan and are not assignable.

@@ -187,6 +187,10 @@ Pipeline::Pipeline(Config cfg)
                   static_cast<unsigned>(cfg.sampleRateHz /
                                             static_cast<double>(vfoDecim_) +
                                         0.5)),
+      resamplerD_(static_cast<unsigned>(kAudioRateHz + 0.5),
+                  static_cast<unsigned>(cfg.sampleRateHz /
+                                            static_cast<double>(vfoDecim_) +
+                                        0.5)),
       tapBuf_(2 * kAudioTapSize, 0.0f) {
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     estimator_.setAlpha(cfg.averagingAlpha);
@@ -379,6 +383,7 @@ void Pipeline::start() {
         agc_.reset();
         resampler_.reset();
         resamplerR_.reset();
+        resamplerD_.reset();
         meter_.reset();
         // The stereo/RDS decoders and the audio post-chain are stream state
         // too: a restart is a fresh acquisition, and a PS name recovered
@@ -724,6 +729,14 @@ bool Pipeline::setInputRateHz(double rateHz) {
         resamplerR_ = cascade::dsp::RationalResampler(
             static_cast<unsigned>(kAudioRateHz + 0.5),
             static_cast<unsigned>(chanRate + 0.5));
+        // A THIRD one, for the decoder feed. It has to be its own instance
+        // rather than a shared one because it is driven from a different tap
+        // point in the chain - before the AGC - and a resampler is a state
+        // machine: interleaving two different signals through one would
+        // corrupt both.
+        resamplerD_ = cascade::dsp::RationalResampler(
+            static_cast<unsigned>(kAudioRateHz + 0.5),
+            static_cast<unsigned>(chanRate + 0.5));
 
         // New rate regime: relearn the gain and the S-meter from neutral.
         // (Their per-sample time constants stay tuned for ~200 kHz channels,
@@ -1046,6 +1059,43 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // would each normalise their own channel and flatten the stereo image).
     // gateBuf_ repeats every channel sample so the squelch's power source
     // stays index-aligned with the audio it gates.
+    // --- DECODER TAP, BEFORE the AGC and the squelch ------------------------
+    //
+    // Both of those exist to make audio comfortable to LISTEN to, and a
+    // decoder does not listen - it measures. They are two consumers of the
+    // same signal with opposite requirements, so each gets what it needs
+    // rather than the user being made to mediate.
+    //
+    // The AGC is not a theoretical objection. Morse is on-off keyed, so during
+    // the gaps between elements the AGC ramps its gain up and amplifies the
+    // channel filter's ringing at the tone frequency, keeping the tone bin
+    // energised through what should be silence. Measured through this path,
+    // the CW decoder saw an audio peak of 1.10 - above full scale, the AGC's
+    // fingerprint - and read "CQ DE G0ABC" as "TT", every element merged into
+    // one long mark. The same mechanism damages any decoder that keys on
+    // amplitude.
+    //
+    // The squelch goes with it for the same reason and one of its own: a weak
+    // signal is exactly the one worth decoding, and gating it to digital
+    // silence to spare the user a hiss they are not listening to serves
+    // nobody. A user who sets a squelch threshold is asking for quiet
+    // speakers, not for the decoders to stop.
+    //
+    // Still AFTER demodulation and BEFORE notch, auto-notch and noise
+    // reduction - see the note further down, which is unchanged: those three
+    // are perceptual processing and every one of them damages data.
+    if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
+        preAgcBuf_.resize(m);
+        for (std::size_t i = 0; i < m; ++i) {
+            preAgcBuf_[i] = 0.5f * (leftBuf_[i] + rightBuf_[i]);
+        }
+        const std::size_t dcap = resamplerD_.maxOut(m);
+        decoderFeed_.resize(dcap);
+        const std::size_t dk =
+            resamplerD_.process(preAgcBuf_.data(), m, decoderFeed_.data(), dcap);
+        if (dk > 0) { runner->processAudio(decoderFeed_.data(), dk); }
+    }
+
     ilvBuf_.resize(2 * m);
     gateBuf_.resize(2 * m);
     for (std::size_t i = 0; i < m; ++i) {
@@ -1078,28 +1128,15 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     const std::size_t k = std::min(kL, kR);
     if (k == 0) { return; }
 
-    // --- Decoder plugins tap in HERE, and the position is deliberate --------
-    // Post-demodulation, post-AGC, post-squelch, resampled to the fixed audio
-    // rate the decoders were created for - but BEFORE notch, auto-notch and
-    // noise reduction.
-    //
-    // Those three are perceptual processing: they exist to make a voice
-    // pleasanter to a human ear, and every one of them damages data. The
-    // auto-notch hunts continuous tones and would attack an AFSK mark tone or
-    // a POCSAG carrier as if it were interference; the noise reduction is
-    // spectral subtraction, which smears exactly the sharp transitions a
-    // slicer keys on. Feeding decoders the ear-facing audio would make the
-    // product's own audio settings silently change decode rates.
-    //
-    // Mono because that is what the audio decoder ABI carries, and the two
-    // channels are identical here in every mode except WFM stereo.
-    if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
-        decoderFeed_.resize(k);
-        for (std::size_t i = 0; i < k; ++i) {
-            decoderFeed_[i] = 0.5f * (outL_[i] + outR_[i]);
-        }
-        runner->processAudio(decoderFeed_.data(), k);
-    }
+    // The decoders were fed further up, before the AGC and the squelch - see
+    // the note there. They are deliberately fed before notch, auto-notch and
+    // noise reduction too: those three are perceptual processing, and every
+    // one of them damages data. The auto-notch hunts continuous tones and
+    // would attack an AFSK mark tone or a POCSAG carrier as if it were
+    // interference; the noise reduction is spectral subtraction, which smears
+    // exactly the sharp transitions a slicer keys on. Feeding decoders the
+    // ear-facing audio would make the product's own audio settings silently
+    // change decode rates.
 
     // --- Audio post-processing: notch -> auto-notch -> noise reduction ------
     // Order rationale in the header. All three are bypasses when disabled.
