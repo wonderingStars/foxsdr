@@ -183,6 +183,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <canvas id="map" width="1024" height="420"></canvas>
     <div id="trackList"></div>
   </div>
+  <div id="imagesWrap" class="hidden"><h2>Pictures</h2><div id="images"></div></div>
   <h2 id="decodedHead" class="hidden">Decoded</h2>
   <pre id="decoded" class="hidden"></pre>
   <h2>Plugins</h2>
@@ -263,6 +264,11 @@ button.on { background:#7a2020; color:#ffd7d7; }
       padding:.3rem .5rem; font-size:.85rem; }
 .pl.bad { border-color:#7a2020; }
 .pl .meta { color:var(--dim); font-size:.75rem; }
+#images { display:flex; flex-wrap:wrap; gap:.75rem; }
+.img { background:#171b22; border:1px solid #232833; border-radius:3px; padding:.4rem; }
+.img img { display:block; max-width:100%; image-rendering:pixelated;
+           background:#080a0d; border-radius:2px; }
+.img .cap { color:var(--dim); font-size:.75rem; margin-top:.25rem; }
 )CSS";
 
 // THE CLIENT SCRIPT IS SPLIT ACROSS SEVERAL LITERALS because MSVC caps a single
@@ -539,6 +545,35 @@ function reflectTracks(s) {
   });
 }
 
+// Decoded pictures. The <img> src carries the REVISION, so the browser's own
+// cache does the work: it refetches once per change and not once per poll,
+// which is what keeps a megapixel SSTV frame off the 4 Hz status path.
+let lastImageKey = '';
+function reflectImages(s) {
+  const key = s.images.map(i => i.plugin + i.width + 'x' + i.height + '@' + i.revision).join('|');
+  if (key === lastImageKey) return;
+  lastImageKey = key;
+  const has = s.images.length > 0;
+  $('imagesWrap').classList.toggle('hidden', !has);
+  if (!has) return;
+  const box = $('images');
+  box.innerHTML = '';
+  s.images.forEach((im, i) => {
+    const d = document.createElement('div');
+    d.className = 'img';
+    const el = document.createElement('img');
+    el.src = '/api/image/' + i + '?rev=' + im.revision;
+    el.alt = im.plugin + ' picture';
+    el.width = Math.min(im.width || 320, 480);
+    const cap = document.createElement('div');
+    cap.className = 'cap';
+    cap.textContent = im.plugin + '  ' + im.width + 'x' + im.height +
+                      (im.complete ? '' : '  (receiving)');
+    d.appendChild(el); d.appendChild(cap);
+    box.appendChild(d);
+  });
+}
+
 let lastPluginKey = '';
 function reflectPlugins(s) {
   const key = s.plugins.map(p => p.name + p.version + p.loaded + p.error).join('|');
@@ -694,6 +729,7 @@ function reflect(s) {
   reflectExtras(s);
   reflectTracks(s);
   reflectPlugins(s);
+  reflectImages(s);
 
   // RDS, shown only when there is something to show.
   const showRds = s.mode === 'WFM' && (s.rdsSynced || s.pilotLocked);
@@ -1149,6 +1185,19 @@ public:
     std::size_t sessionCount() const { return sessions_.size(); }
     void revokeAllSessions() { sessions_.revokeAll(); }
 
+    void setImages(std::vector<WebImage> imgs) {
+        std::lock_guard<std::mutex> lock(imageMutex_);
+        images_ = std::move(imgs);
+    }
+    bool imageAt(std::size_t i, std::vector<std::uint8_t>& out) const {
+        std::lock_guard<std::mutex> lock(imageMutex_);
+        if (i >= images_.size() || images_[i].bmp.empty()) {
+            return false;
+        }
+        out = images_[i].bmp;
+        return true;
+    }
+
     void pushAudio(const float* samples, std::size_t n) { audio_.write(samples, n); }
     std::size_t audioListeners() const {
         return static_cast<std::size_t>(listeners_.load(std::memory_order_relaxed));
@@ -1192,6 +1241,10 @@ private:
     // Accepted control requests awaiting the application's next frame.
     mutable std::mutex controlMutex_;
     std::deque<ControlRequest> pending_;
+
+    // Decoded pictures, already BMP-encoded by the application.
+    mutable std::mutex imageMutex_;
+    std::vector<WebImage> images_;
 
     // Live audio for listening browsers, and how many are currently streaming.
     mutable AudioRing audio_;
@@ -1464,6 +1517,16 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                                    {"idleReason", p.idleReason}});
             }
             j["plugins"] = std::move(plugins);
+
+            nlohmann::json images = nlohmann::json::array();
+            for (const RadioStatus::Image& im : s.images) {
+                images.push_back({{"plugin", im.plugin},
+                                  {"width", im.width},
+                                  {"height", im.height},
+                                  {"complete", im.complete},
+                                  {"revision", im.revision}});
+            }
+            j["images"] = std::move(images);
         }
         j["iqRecording"] = s.iqRecording;
         j["audioRecording"] = s.audioRecording;
@@ -1531,6 +1594,31 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 return sink.write(reinterpret_cast<const char*>(pcm.data()), pcm.size());
             },
             [this](bool) { listeners_.fetch_sub(1, std::memory_order_acq_rel); });
+    });
+
+    // One decoded picture as a 24-bit BMP. Separate from the status poll
+    // because a picture is hundreds of kilobytes; the browser refetches only
+    // when the revision in the status changes.
+    svr.Get(R"(/api/image/(\d+))", [this](const httplib::Request& req,
+                                          httplib::Response& res) {
+        if (!authorised(req)) {
+            deny(res, "sign in first");
+            return;
+        }
+        std::size_t index = 0;
+        try {
+            index = static_cast<std::size_t>(std::stoul(req.matches[1].str()));
+        } catch (const std::exception&) {
+            deny(res, "bad image index", 400);
+            return;
+        }
+        std::vector<std::uint8_t> bmp;
+        if (!imageAt(index, bmp)) {
+            deny(res, "no such image", 404);
+            return;
+        }
+        res.set_content(reinterpret_cast<const char*>(bmp.data()), bmp.size(),
+                        "image/bmp");
     });
 
     svr.Post("/api/control", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1702,5 +1790,8 @@ void WebServer::pushAudio(const float* samples, std::size_t n) {
     impl_->pushAudio(samples, n);
 }
 std::size_t WebServer::audioListeners() const { return impl_->audioListeners(); }
+void WebServer::setImages(std::vector<WebImage> images) {
+    impl_->setImages(std::move(images));
+}
 
 }  // namespace cascade::net

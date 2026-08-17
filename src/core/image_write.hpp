@@ -32,6 +32,16 @@ namespace cascade::core {
 // Returns false with `error` set on any failure; never throws.
 bool writeBmp24(const HostImage& img, const std::string& path, std::string& error);
 
+// The same 24-bit BMP, encoded into memory instead of onto disk. Exists so the
+// web server can hand a decoded picture to a browser without staging it through
+// a temp file — a BMP is what this codebase already knows how to produce
+// correctly, and every browser renders one, so it needs no new encoder and no
+// new dependency. Shares the format code with writeBmp24 rather than repeating
+// it: the bottom-up row order and the B,G,R channel order are exactly the
+// details that would drift between two copies.
+bool encodeBmp24(const HostImage& img, std::vector<std::uint8_t>& out,
+                 std::string& error);
+
 }  // namespace cascade::core
 
 #endif  // CASCADE_CORE_IMAGE_WRITE_HPP

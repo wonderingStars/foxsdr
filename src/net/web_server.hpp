@@ -213,6 +213,31 @@ struct RadioStatus {
         std::string idleReason; // why it is loaded but not being fed, if so
     };
     std::vector<Plugin> plugins;
+
+    // --- Decoded images ----------------------------------------------------
+    // METADATA only. The pixels are fetched separately from /api/image/<n>,
+    // because a decoded picture is hundreds of kilobytes and the status poll
+    // runs four times a second — inlining one would make the whole readout
+    // stall behind it. `revision` is what tells a browser the picture changed,
+    // so it refetches once per CHANGE rather than once per poll.
+    struct Image {
+        std::string plugin;
+        unsigned width = 0;
+        unsigned height = 0;
+        bool complete = false;
+        std::uint64_t revision = 0;
+    };
+    std::vector<Image> images;
+};
+
+// One decoded picture, already encoded as a 24-bit BMP, ready to serve.
+struct WebImage {
+    std::string plugin;
+    unsigned width = 0;
+    unsigned height = 0;
+    bool complete = false;
+    std::uint64_t revision = 0;
+    std::vector<std::uint8_t> bmp;
 };
 
 struct SpectrumSnapshot {
@@ -316,6 +341,11 @@ public:
 
     // Browsers currently streaming audio, for the settings panel.
     std::size_t audioListeners() const;
+
+    // Replaces the served set of decoded pictures. The application calls this
+    // only when a decoder's revision actually moves — re-encoding a megapixel
+    // BMP every frame would cost more than the whole rest of the server.
+    void setImages(std::vector<WebImage> images);
 
     // Each listener holds one HTTP worker thread for as long as it listens, so
     // this is capped well below the library's pool. Past the cap the request is

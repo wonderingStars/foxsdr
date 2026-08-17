@@ -7,6 +7,82 @@
 
 namespace cascade::core {
 
+bool encodeBmp24(const HostImage& img, std::vector<std::uint8_t>& out,
+                 std::string& error) {
+    error.clear();
+    out.clear();
+    if (img.width == 0 || img.height == 0 || img.pixels.empty()) {
+        error = "there is no image yet";
+        return false;
+    }
+    const std::size_t srcBpp = (img.format == CASCADE_IMAGE_RGB24) ? 3u : 1u;
+    const std::size_t needed =
+        static_cast<std::size_t>(img.width) * img.height * srcBpp;
+    if (img.pixels.size() < needed) {
+        error = "image buffer is smaller than its declared size";
+        return false;
+    }
+
+    const std::size_t rowBytes = static_cast<std::size_t>(img.width) * 3u;
+    const std::size_t pad = (4u - (rowBytes % 4u)) % 4u;
+    const std::size_t stride = rowBytes + pad;
+    const std::size_t pixelBytes = stride * img.height;
+    const std::uint32_t headerBytes = 14u + 40u;
+
+    out.reserve(headerBytes + pixelBytes);
+    const auto u16 = [&out](std::uint16_t v) {
+        out.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+    };
+    const auto u32 = [&out](std::uint32_t v) {
+        out.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFu));
+    };
+
+    out.push_back('B');
+    out.push_back('M');
+    u32(static_cast<std::uint32_t>(headerBytes + pixelBytes));
+    u16(0);
+    u16(0);
+    u32(headerBytes);
+    u32(40);
+    u32(img.width);
+    u32(img.height);
+    u16(1);
+    u16(24);
+    u32(0);
+    u32(static_cast<std::uint32_t>(pixelBytes));
+    u32(2835);
+    u32(2835);
+    u32(0);
+    u32(0);
+
+    // Rows BOTTOM-UP and channels B,G,R — both easy to forget, and both give a
+    // file that opens looking wrong rather than one that fails.
+    for (std::uint32_t yy = 0; yy < img.height; ++yy) {
+        const std::uint32_t y = img.height - 1u - yy;
+        const std::uint8_t* src =
+            img.pixels.data() + static_cast<std::size_t>(y) * img.width * srcBpp;
+        for (std::uint32_t x = 0; x < img.width; ++x) {
+            std::uint8_t r, g, b;
+            if (srcBpp == 3u) {
+                r = src[x * 3 + 0];
+                g = src[x * 3 + 1];
+                b = src[x * 3 + 2];
+            } else {
+                r = g = b = src[x];
+            }
+            out.push_back(b);
+            out.push_back(g);
+            out.push_back(r);
+        }
+        for (std::size_t i = 0; i < pad; ++i) { out.push_back(0); }
+    }
+    return true;
+}
+
 bool writeBmp24(const HostImage& img, const std::string& path, std::string& error) {
     error.clear();
     if (img.width == 0 || img.height == 0 || img.pixels.empty()) {

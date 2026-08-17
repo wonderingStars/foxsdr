@@ -102,6 +102,36 @@ int main() {
         CHECK(!err.empty());
     }
 
+    // --- encodeBmp24 must produce EXACTLY what writeBmp24 writes ----------
+    // The web server serves the in-memory form. The two share the format code
+    // precisely so the bottom-up row order and the B,G,R channel order cannot
+    // drift apart; this is what proves they have not.
+    {
+        const cascade::core::HostImage fixture = rgbFixture();
+        const fs::path ref = dir / "ref.bmp";
+        std::string err;
+        CHECK(cascade::core::writeBmp24(fixture, ref.string(), err));
+        std::ifstream f(ref, std::ios::binary);
+        const std::vector<std::uint8_t> onDisk(
+            (std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::vector<std::uint8_t> inMemory;
+        CHECK(cascade::core::encodeBmp24(fixture, inMemory, err));
+        CHECK(err.empty());
+        CHECK(!inMemory.empty());
+        CHECK(inMemory == onDisk);
+
+        // The same refusals, so a caller cannot get bytes out of an image the
+        // writer would have rejected.
+        cascade::core::HostImage empty;
+        std::vector<std::uint8_t> nothing;
+        CHECK(!cascade::core::encodeBmp24(empty, nothing, err));
+        CHECK(nothing.empty());
+        cascade::core::HostImage bad = rgbFixture();
+        bad.pixels.resize(4);
+        CHECK(!cascade::core::encodeBmp24(bad, nothing, err));
+        CHECK(nothing.empty());
+    }
+
     // --- a real write, read back byte by byte ----------------------------
     const cascade::core::HostImage im = rgbFixture();
     std::string err = "stale";

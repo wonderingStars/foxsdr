@@ -800,6 +800,7 @@ void AppWindow::drawUi() {
     applyWebControls();
     publishWebSnapshot();
     publishWebAudio();
+    publishWebImages();
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -3952,6 +3953,44 @@ void AppWindow::publishWebAudio() {
     webAudioLastProduced_ = produced;
 }
 
+void AppWindow::publishWebImages() {
+    if (!webServer_.running()) {
+        return;
+    }
+    // Nothing to do unless a picture changed OR the set itself did (a rescan
+    // can add or drop a decoder).
+    bool dirty = (webImageRevs_.size() != pluginImages_.size());
+    for (std::size_t i = 0; !dirty && i < pluginImages_.size(); ++i) {
+        dirty = (webImageRevs_[i] != pluginImages_[i].revision);
+    }
+    if (!dirty) {
+        return;
+    }
+
+    std::vector<cascade::net::WebImage> out;
+    out.reserve(pluginImages_.size());
+    webImageRevs_.assign(pluginImages_.size(), 0);
+    for (std::size_t i = 0; i < pluginImages_.size(); ++i) {
+        const cascade::core::HostImage& src = pluginImages_[i];
+        webImageRevs_[i] = src.revision;
+        cascade::net::WebImage w;
+        w.plugin = src.plugin;
+        w.width = src.width;
+        w.height = src.height;
+        w.complete = src.complete;
+        w.revision = src.revision;
+        std::string err;
+        // A decoder that has produced no pixels yet encodes to nothing; the
+        // slot is still published so the browser can show that it exists and
+        // is waiting, rather than the picture appearing from nowhere later.
+        if (!cascade::core::encodeBmp24(src, w.bmp, err)) {
+            w.bmp.clear();
+        }
+        out.push_back(std::move(w));
+    }
+    webServer_.setImages(std::move(out));
+}
+
 void AppWindow::publishWebSnapshot() {
     // Everything read here is read on the GUI thread, which is the contract
     // activeSource() and its readbacks require. The server's providers only
@@ -4038,6 +4077,10 @@ void AppWindow::publishWebSnapshot() {
         w.kind = t.t.kind;
         w.flags = t.t.flags;
         s.tracks.push_back(std::move(w));
+    }
+
+    for (const cascade::core::HostImage& im : pluginImages_) {
+        s.images.push_back({im.plugin, im.width, im.height, im.complete, im.revision});
     }
 
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {

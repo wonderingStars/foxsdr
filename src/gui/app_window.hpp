@@ -729,6 +729,12 @@ private:
     // (85 ms at 48 kHz) the excess is unrecoverable and is dropped; the
     // listener hears a glitch, which beats hearing stale audio for ever after.
     void publishWebAudio();
+    // Re-encodes decoded pictures for the browser, but ONLY when a decoder's
+    // revision has actually moved: encoding a megapixel BMP every frame would
+    // cost more than everything else the server does put together.
+    void publishWebImages();
+    // Revisions the last publish encoded, one per image slot.
+    std::vector<std::uint64_t> webImageRevs_;
     // Copies the current radio state and newest spectrum frame into the
     // members below. Called once per frame from drawUi, unconditionally: the
     // panel being collapsed must not stop the browser being served.
