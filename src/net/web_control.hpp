@@ -58,6 +58,17 @@ inline constexpr double kMinBandwidthHz = 100.0;
 inline constexpr double kMaxBandwidthHz = 1.0e7;
 inline constexpr double kMinSquelchDb = -200.0;
 inline constexpr double kMaxSquelchDb = 20.0;
+// Display range. The ends are the desktop sliders' own limits; the rule that
+// dbMin must stay below dbMax is enforced by the application, which owns the
+// same minimum-span rule the window uses.
+inline constexpr double kMinDisplayDb = -200.0;
+inline constexpr double kMaxDisplayDb = 40.0;
+// The notch's audible span inside the 48 kHz sink's Nyquist, and the biquad's
+// useful Q range — the same bounds the config store sanitizes to.
+inline constexpr double kMinNotchHz = 10.0;
+inline constexpr double kMaxNotchHz = 20000.0;
+inline constexpr double kMinNotchQ = 0.1;
+inline constexpr double kMaxNotchQ = 1000.0;
 
 struct ControlRequest {
     std::optional<bool> running;                    // start / stop the receiver
@@ -68,9 +79,25 @@ struct ControlRequest {
     std::optional<double> squelchDb;
     std::optional<double> volume;                   // 0..1
 
+    // Display range shared by the spectrum axis and the waterfall colormap.
+    std::optional<double> dbMin;
+    std::optional<double> dbMax;
+
+    // Audio processing, matching the desktop's "Radio" and "Audio filters".
+    std::optional<int> deemphasisIndex;             // 0 = 50 us, 1 = 75 us, 2 = off
+    std::optional<bool> nrEnabled;
+    std::optional<double> nrStrength;               // 0..1
+    std::optional<bool> notchEnabled;
+    std::optional<double> notchFreqHz;
+    std::optional<double> notchQ;
+    std::optional<bool> autoNotch;
+    std::optional<bool> stereoEnabled;
+
     bool empty() const {
         return !running && !centerHz && !vfoOffsetHz && !mode && !bandwidthHz &&
-               !squelchDb && !volume;
+               !squelchDb && !volume && !dbMin && !dbMax && !deemphasisIndex &&
+               !nrEnabled && !nrStrength && !notchEnabled && !notchFreqHz &&
+               !notchQ && !autoNotch && !stereoEnabled;
     }
 };
 

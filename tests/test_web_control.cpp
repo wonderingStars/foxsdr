@@ -172,6 +172,65 @@ void testRejectsNonFinite() {
     CHECK(accepts("{\"centerHz\":1.0e8}"));
 }
 
+void testDisplayAndAudioFields() {
+    ControlRequest r;
+    std::string error;
+
+    CHECK(parseControlRequest("{\"dbMin\":-95,\"dbMax\":-10}", r, error));
+    CHECK(r.dbMin.value_or(0.0) == -95.0);
+    CHECK(r.dbMax.value_or(0.0) == -10.0);
+
+    // A display range is only meaningful as a pair: inverted or degenerate
+    // divides by zero where dB is mapped to pixels.
+    CHECK(!accepts("{\"dbMin\":0,\"dbMax\":-50}"));      // inverted
+    CHECK(!accepts("{\"dbMin\":-20,\"dbMax\":-15}"));    // 5 dB span
+    CHECK(!accepts("{\"dbMin\":-80,\"dbMax\":-70}"));    // exactly 10, strict
+    CHECK(accepts("{\"dbMin\":-80,\"dbMax\":-69}"));
+    // One end alone is fine — the application applies the span rule against
+    // the end it already holds.
+    CHECK(accepts("{\"dbMin\":-120}"));
+    CHECK(accepts("{\"dbMax\":10}"));
+
+    CHECK(parseControlRequest("{\"deemphasisIndex\":1}", r, error));
+    CHECK(r.deemphasisIndex.value_or(-1) == 1);
+    // Indexes a THREE-entry table; out of range would read past it.
+    CHECK(!accepts("{\"deemphasisIndex\":3}"));
+    CHECK(!accepts("{\"deemphasisIndex\":-1}"));
+    CHECK(!accepts("{\"deemphasisIndex\":1.5}"));
+    CHECK(accepts("{\"deemphasisIndex\":0}"));
+    CHECK(accepts("{\"deemphasisIndex\":2}"));
+
+    CHECK(parseControlRequest(
+        "{\"nrEnabled\":true,\"nrStrength\":0.75,\"notchEnabled\":true,"
+        "\"notchFreqHz\":700,\"notchQ\":25,\"autoNotch\":true,\"stereoEnabled\":false}",
+        r, error));
+    CHECK(r.nrEnabled.value_or(false));
+    CHECK(r.nrStrength.value_or(0.0) == 0.75);
+    CHECK(r.notchEnabled.value_or(false));
+    CHECK(r.notchFreqHz.value_or(0.0) == 700.0);
+    CHECK(r.notchQ.value_or(0.0) == 25.0);
+    CHECK(r.autoNotch.value_or(false));
+    CHECK(!r.stereoEnabled.value_or(true));
+
+    // Every new boolean is strict, like running.
+    CHECK(!accepts("{\"nrEnabled\":1}"));
+    CHECK(!accepts("{\"notchEnabled\":\"yes\"}"));
+    CHECK(!accepts("{\"autoNotch\":null}"));
+    CHECK(!accepts("{\"stereoEnabled\":\"true\"}"));
+
+    // Ranges, matching what the config store sanitizes to.
+    CHECK(!accepts("{\"nrStrength\":1.5}"));
+    CHECK(!accepts("{\"nrStrength\":-0.1}"));
+    CHECK(!accepts("{\"notchFreqHz\":5}"));
+    CHECK(!accepts("{\"notchFreqHz\":30000}"));
+    CHECK(!accepts("{\"notchQ\":0}"));
+    CHECK(!accepts("{\"notchQ\":2000}"));
+    CHECK(accepts("{\"notchFreqHz\":10}"));
+    CHECK(accepts("{\"notchFreqHz\":20000}"));
+    CHECK(accepts("{\"notchQ\":0.1}"));
+    CHECK(accepts("{\"notchQ\":1000}"));
+}
+
 void testFailureLeavesNothingBehind() {
     // A caller that ignores the return value must not find a usable request
     // sitting in `out` from a body that was refused.
@@ -197,6 +256,7 @@ int main() {
     testRejectsWrongTypes();
     testRejectsOutOfRange();
     testRejectsNonFinite();
+    testDisplayAndAudioFields();
     testFailureLeavesNothingBehind();
     return testSummary("test_web_control");
 }

@@ -75,6 +75,49 @@ struct RadioStatus {
     // which goes wrong the moment the desktop window changes something.
     float squelchDb = 0.0f;
     float volume = 0.0f;
+
+    // --- Display ---------------------------------------------------------
+    // The dB range the desktop's spectrum axis and waterfall colormap share.
+    // The browser needs it for the same reason: a waterfall drawn against a
+    // different range from the one the window uses is a different picture of
+    // the same signal.
+    float dbMin = -110.0f;
+    float dbMax = 0.0f;
+
+    // --- Audio processing ------------------------------------------------
+    int deemphasisIndex = 0;   // 0 = 50 us, 1 = 75 us, 2 = off
+    bool nrEnabled = false;
+    float nrStrength = 0.5f;
+    bool notchEnabled = false;
+    double notchFreqHz = 1000.0;
+    double notchQ = 30.0;
+    bool autoNotch = false;
+    bool autoNotchEngaged = false;
+    double autoNotchFreqHz = 0.0;
+
+    // --- Broadcast FM ------------------------------------------------------
+    bool stereoEnabled = true;
+    bool pilotLocked = false;
+
+    // --- RDS ---------------------------------------------------------------
+    // Empty/zero when nothing is decoded, which is every mode but WFM and the
+    // first seconds of most WFM stations.
+    //
+    // rdsPty is the RAW 5-bit programme-type CODE, not a name, because the
+    // code-to-name table differs between RDS (Europe) and RBDS (North
+    // America) — dsp/rds.hpp exposes the code for exactly that reason and the
+    // browser must not invent one of the two tables.
+    bool rdsSynced = false;
+    bool rdsPiValid = false;
+    unsigned rdsPi = 0;
+    bool rdsPsValid = false;
+    std::string rdsPs;           // the 8-character Programme Service name
+    std::string rdsRadioText;
+    unsigned rdsPty = 0;
+    bool rdsTp = false;
+    bool rdsTa = false;
+    unsigned rdsGroups = 0;
+    unsigned rdsErrors = 0;
 };
 
 struct SpectrumSnapshot {

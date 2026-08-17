@@ -3971,6 +3971,33 @@ void AppWindow::publishWebSnapshot() {
     s.stereoActive = pipeline_.stereoActive();
     s.squelchDb = squelchDb_;
     s.volume = volume_;
+    s.dbMin = dbMin_;
+    s.dbMax = dbMax_;
+    s.deemphasisIndex = deemphIndex_;
+    s.nrEnabled = nrEnabled_;
+    s.nrStrength = nrStrength_;
+    s.notchEnabled = notchEnabled_;
+    s.notchFreqHz = static_cast<double>(notchFreqHz_);
+    s.notchQ = static_cast<double>(notchQ_);
+    s.autoNotch = autoNotch_;
+    s.autoNotchEngaged = pipeline_.autoNotchEngaged();
+    s.autoNotchFreqHz = pipeline_.autoNotchFrequencyHz();
+    s.stereoEnabled = stereoEnabled_;
+    s.pilotLocked = pipeline_.pilotLocked();
+    {
+        const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
+        s.rdsSynced = rds.synced;
+        s.rdsPiValid = rds.state.piValid;
+        s.rdsPi = rds.state.pi;
+        s.rdsPsValid = rds.state.psValid;
+        s.rdsPs = rds.state.ps;
+        s.rdsRadioText = rds.state.radioText;
+        s.rdsPty = rds.state.pty;
+        s.rdsTp = rds.state.tp;
+        s.rdsTa = rds.state.ta;
+        s.rdsGroups = rds.state.groupsDecoded;
+        s.rdsErrors = rds.state.blockErrors;
+    }
 
     const double centerHz = s.centerHz;
     const double spanHz = pipeline_.inputRateHz();
@@ -4047,6 +4074,58 @@ void AppWindow::applyWebControls() {
         if (r.volume.has_value()) {
             volume_ = static_cast<float>(*r.volume);
             pipeline_.audio().setVolume(volume_);
+        }
+        // Display range. The same minimum-span rule the desktop sliders
+        // enforce, applied against whichever end the request did not supply —
+        // a degenerate or inverted span is a divide-by-zero where dB is mapped
+        // to pixels.
+        if (r.dbMin.has_value() || r.dbMax.has_value()) {
+            float lo = r.dbMin.has_value() ? static_cast<float>(*r.dbMin) : dbMin_;
+            float hi = r.dbMax.has_value() ? static_cast<float>(*r.dbMax) : dbMax_;
+            if (lo > hi - kMinDbSpan) {
+                // Push back the end the caller actually moved, so the other
+                // does not shift under them.
+                if (r.dbMin.has_value()) {
+                    lo = hi - kMinDbSpan;
+                } else {
+                    hi = lo + kMinDbSpan;
+                }
+            }
+            dbMin_ = lo;
+            dbMax_ = hi;
+            spectrum_->setRange(dbMin_, dbMax_);
+        }
+        if (r.deemphasisIndex.has_value()) {
+            deemphIndex_ = *r.deemphasisIndex;
+            pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
+        }
+        if (r.stereoEnabled.has_value()) {
+            stereoEnabled_ = *r.stereoEnabled;
+            pipeline_.setStereoEnabled(stereoEnabled_);
+        }
+        if (r.nrEnabled.has_value()) {
+            nrEnabled_ = *r.nrEnabled;
+            pipeline_.setNoiseReductionEnabled(nrEnabled_);
+        }
+        if (r.nrStrength.has_value()) {
+            nrStrength_ = static_cast<float>(*r.nrStrength);
+            pipeline_.setNoiseReductionStrength(nrStrength_);
+        }
+        if (r.notchEnabled.has_value()) {
+            notchEnabled_ = *r.notchEnabled;
+            pipeline_.setNotchEnabled(notchEnabled_);
+        }
+        if (r.notchFreqHz.has_value()) {
+            notchFreqHz_ = static_cast<float>(*r.notchFreqHz);
+            pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
+        }
+        if (r.notchQ.has_value()) {
+            notchQ_ = static_cast<float>(*r.notchQ);
+            pipeline_.setNotchQ(static_cast<double>(notchQ_));
+        }
+        if (r.autoNotch.has_value()) {
+            autoNotch_ = *r.autoNotch;
+            pipeline_.setAutoNotchEnabled(autoNotch_);
         }
     }
 }

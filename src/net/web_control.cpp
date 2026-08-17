@@ -15,9 +15,12 @@ namespace {
 
 // Every key this version understands. Rule 1 rejects anything else, so this
 // list is the API surface rather than a convenience.
-const char* const kKnownKeys[] = {"running",     "centerHz",  "vfoOffsetHz",
-                                  "mode",        "bandwidthHz", "squelchDb",
-                                  "volume"};
+const char* const kKnownKeys[] = {
+    "running",     "centerHz",    "vfoOffsetHz",     "mode",
+    "bandwidthHz", "squelchDb",   "volume",          "dbMin",
+    "dbMax",       "deemphasisIndex", "nrEnabled",   "nrStrength",
+    "notchEnabled", "notchFreqHz", "notchQ",         "autoNotch",
+    "stereoEnabled"};
 
 bool isKnownKey(const std::string& key) {
     for (const char* k : kKnownKeys) {
@@ -81,12 +84,43 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
 
     ControlRequest req;
 
-    if (const auto it = j.find("running"); it != j.end()) {
+    // Booleans, all read the same strict way: JSON true/false only, since a
+    // number or a "looks boolean" string is a client bug.
+    struct BoolField {
+        const char* key;
+        std::optional<bool>* dst;
+    };
+    const BoolField boolFields[] = {
+        {"running", &req.running},
+        {"nrEnabled", &req.nrEnabled},
+        {"notchEnabled", &req.notchEnabled},
+        {"autoNotch", &req.autoNotch},
+        {"stereoEnabled", &req.stereoEnabled},
+    };
+    for (const BoolField& f : boolFields) {
+        const auto it = j.find(f.key);
+        if (it == j.end()) {
+            continue;
+        }
         if (!it->is_boolean()) {
-            error = "running must be true or false";
+            error = std::string(f.key) + " must be true or false";
             return false;
         }
-        req.running = it->get<bool>();
+        *f.dst = it->get<bool>();
+    }
+
+    if (const auto it = j.find("deemphasisIndex"); it != j.end()) {
+        // An index into a THREE-entry table; out of range would read past it.
+        if (!it->is_number_integer()) {
+            error = "deemphasisIndex must be an integer";
+            return false;
+        }
+        const int v = it->get<int>();
+        if (v < 0 || v > 2) {
+            error = "deemphasisIndex must be 0 (50 us), 1 (75 us) or 2 (off)";
+            return false;
+        }
+        req.deemphasisIndex = v;
     }
 
     if (const auto it = j.find("mode"); it != j.end()) {
@@ -109,7 +143,22 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
                     req.bandwidthHz, error) ||
         !readNumber(j, "squelchDb", kMinSquelchDb, kMaxSquelchDb, req.squelchDb,
                     error) ||
-        !readNumber(j, "volume", 0.0, 1.0, req.volume, error)) {
+        !readNumber(j, "volume", 0.0, 1.0, req.volume, error) ||
+        !readNumber(j, "dbMin", kMinDisplayDb, kMaxDisplayDb, req.dbMin, error) ||
+        !readNumber(j, "dbMax", kMinDisplayDb, kMaxDisplayDb, req.dbMax, error) ||
+        !readNumber(j, "nrStrength", 0.0, 1.0, req.nrStrength, error) ||
+        !readNumber(j, "notchFreqHz", kMinNotchHz, kMaxNotchHz, req.notchFreqHz, error) ||
+        !readNumber(j, "notchQ", kMinNotchQ, kMaxNotchQ, req.notchQ, error)) {
+        return false;
+    }
+
+    // A display range is only meaningful as a pair, and an inverted or
+    // degenerate one divides by zero where dB is mapped to pixels. Checked
+    // here when BOTH ends are supplied; when only one is, the application
+    // applies the same minimum-span rule the desktop sliders use, against the
+    // end it already holds.
+    if (req.dbMin && req.dbMax && !(*req.dbMin < *req.dbMax - 10.0)) {
+        error = "dbMin must be at least 10 dB below dbMax";
         return false;
     }
 

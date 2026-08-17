@@ -93,7 +93,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header><h1>FoxSDR</h1><span id="remote" class="badge hidden">remote access</span></header>
+<header><h1>FoxSDR</h1><span id="remote" class="badge hidden">remote access</span><span id="link" class="badge warn hidden">disconnected</span></header>
 <section id="login" class="hidden">
   <h2>Sign in</h2>
   <form id="loginForm">
@@ -105,7 +105,9 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
 </section>
 <section id="app" class="hidden">
   <div id="status"></div>
-  <canvas id="spectrum" width="1024" height="256"></canvas>
+  <canvas id="spectrum" width="1024" height="256" title="click to tune the VFO here"></canvas>
+  <canvas id="waterfall" width="1024" height="220"></canvas>
+  <div id="rds" class="hidden"></div>
   <div id="controls">
     <div class="row">
       <button id="playstop">Start</button>
@@ -121,6 +123,25 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <div class="row">
       <label>Squelch <span id="sqVal"></span><input id="sq" type="range" min="-120" max="0" step="1"></label>
       <label>Volume <span id="volVal"></span><input id="vol" type="range" min="0" max="1" step="0.01"></label>
+    </div>
+    <div class="row">
+      <label>Min dB <span id="dbMinVal"></span><input id="dbMin" type="range" min="-160" max="-20" step="1"></label>
+      <label>Max dB <span id="dbMaxVal"></span><input id="dbMax" type="range" min="-100" max="20" step="1"></label>
+    </div>
+    <div class="row" id="fmRow">
+      <label>De-emphasis<select id="deemph">
+        <option value="0">50 us</option><option value="1">75 us</option><option value="2">off</option>
+      </select></label>
+      <label class="check"><input id="stereo" type="checkbox"> Stereo</label>
+    </div>
+    <div class="row">
+      <label class="check"><input id="nr" type="checkbox"> Noise reduction</label>
+      <label>Strength <span id="nrVal"></span><input id="nrStrength" type="range" min="0" max="1" step="0.01"></label>
+    </div>
+    <div class="row">
+      <label class="check"><input id="notch" type="checkbox"> Notch</label>
+      <label>Notch Hz <span id="notchVal"></span><input id="notchFreq" type="range" min="10" max="8000" step="10"></label>
+      <label class="check"><input id="autoNotch" type="checkbox"> Auto-notch <span id="anState" class="dim"></span></label>
     </div>
     <p id="ctlError" class="error"></p>
   </div>
@@ -142,6 +163,7 @@ h2 { font-size:1rem; margin:0 0 .75rem; }
 .hidden { display:none; }
 .badge { background:#7a2020; color:#ffd7d7; padding:.15rem .5rem; border-radius:3px;
          font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; }
+.badge.warn { background:#5a4a10; color:#ffe9a8; }
 .error { color:#ff9b9b; min-height:1.5em; }
 form { display:flex; flex-direction:column; gap:.5rem; max-width:20rem; }
 label { display:flex; flex-direction:column; gap:.2rem; color:var(--dim); font-size:.8rem; }
@@ -164,20 +186,56 @@ canvas { width:100%; height:auto; background:#080a0d; border:1px solid #232833;
 #modes button { flex:0 0 auto; background:#1c2029; color:var(--fg); font-weight:400; }
 #modes button.on { background:var(--accent); color:#04121f; font-weight:600; }
 #centre { width:11rem; font-variant-numeric:tabular-nums; }
+#spectrum { border-bottom:0; border-radius:3px 3px 0 0; cursor:crosshair; }
+#waterfall { border-top:0; border-radius:0 0 3px 3px; }
+.row label.check { flex:0 0 auto; flex-direction:row; align-items:center; gap:.35rem;
+                   color:var(--fg); font-size:.85rem; }
+.row label.check input { width:auto; }
+select { background:#1c2029; border:1px solid #2c3240; color:var(--fg);
+         padding:.35rem; border-radius:3px; font:inherit; }
+.dim { color:var(--dim); font-size:.75rem; }
+#rds { background:#171b22; border:1px solid #232833; border-radius:3px;
+       padding:.5rem .6rem; margin-top:.5rem; display:grid; gap:.25rem;
+       grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); }
+#rds .rt { grid-column:1/-1; font-variant-numeric:tabular-nums; }
 )CSS";
 
-constexpr char kAppJs[] = R"JS(
+// THE CLIENT SCRIPT IS SPLIT ACROSS SEVERAL LITERALS because MSVC caps a single
+// string literal at 16380 bytes and this one outgrew it. The split points are
+// arbitrary — chosen at section boundaries for readability — and the pieces are
+// joined once, at first request, by appJs() below. Nothing may rely on a piece
+// being independently valid JavaScript.
+constexpr char kAppJs1[] = R"JS(
 'use strict';
 const $ = (id) => document.getElementById(id);
 let seq = 0, timer = null;
 
 function showError(msg) { $('loginError').textContent = msg || ''; }
 
+// EVERY network call goes through here or through control()/startListening(),
+// and every one of them catches. The receiver is an application the user can
+// close, so "the server went away" is an ORDINARY state of this page, not an
+// exceptional one: without the catch, fetch rejects and — because the pollers
+// run from setInterval, which does not await anything — each failure became an
+// unhandled promise rejection, four a second, for as long as the tab stayed
+// open. The page now simply shows "disconnected" and keeps trying, so it
+// recovers by itself when the application comes back.
+function setLinkUp(up) {
+  const el = $('link');
+  if (el) el.classList.toggle('hidden', up);
+}
+
 async function getJson(url) {
-  const r = await fetch(url, { credentials: 'same-origin' });
-  if (r.status === 401) { stopPolling(); await refreshSession(); return null; }
-  if (!r.ok) return null;
-  return r.json();
+  try {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (r.status === 401) { stopPolling(); await refreshSession(); return null; }
+    setLinkUp(true);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) {
+    setLinkUp(false);
+    return null;
+  }
 }
 
 function fmtHz(hz) {
@@ -193,6 +251,9 @@ function cell(k, v) {
     .replace('<span class="v"></span>', '<span class="v">' + v + '</span>');
 }
 
+)JS";
+
+constexpr char kAppJs2[] = R"JS(
 // --- Controls ---------------------------------------------------------------
 // The wire vocabulary, which the server validates against dsp::modeFromName —
 // so a name that drifts out of step here comes back as an explicit 400 rather
@@ -205,12 +266,20 @@ let currentMode = '';
 
 async function control(patch) {
   $('ctlError').textContent = '';
-  const r = await fetch('/api/control', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
+  let r;
+  try {
+    r = await fetch('/api/control', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  } catch (e) {
+    setLinkUp(false);
+    $('ctlError').textContent = 'Not connected to the receiver.';
+    return false;
+  }
+  setLinkUp(true);
   if (r.status === 401) { stopPolling(); await refreshSession(); return false; }
   if (!r.ok) {
     let msg = 'Rejected.';
@@ -260,6 +329,54 @@ function reflect(s) {
   $('sqVal').textContent = s.squelchDb.toFixed(0) + ' dB';
   syncControl($('vol'), s.volume);
   $('volVal').textContent = Math.round(s.volume * 100) + '%';
+
+  // Display range drives the client-side colour mapping directly.
+  viewDbMin = s.dbMin; viewDbMax = s.dbMax;
+  syncControl($('dbMin'), Math.round(s.dbMin));
+  syncControl($('dbMax'), Math.round(s.dbMax));
+  $('dbMinVal').textContent = s.dbMin.toFixed(0);
+  $('dbMaxVal').textContent = s.dbMax.toFixed(0);
+  lastVfoHz = s.vfoOffsetHz;
+
+  // De-emphasis and stereo are only meaningful in the FM modes; shown greyed
+  // elsewhere so the setting stays discoverable without implying it does
+  // anything to SSB — the same choice the desktop panel makes.
+  const fm = (s.mode === 'NFM' || s.mode === 'WFM');
+  $('deemph').disabled = !fm;
+  $('stereo').disabled = !fm;
+  syncControl($('deemph'), String(s.deemphasisIndex));
+  if (document.activeElement !== $('stereo')) $('stereo').checked = s.stereoEnabled;
+
+  if (document.activeElement !== $('nr')) $('nr').checked = s.nrEnabled;
+  syncControl($('nrStrength'), s.nrStrength);
+  $('nrVal').textContent = Math.round(s.nrStrength * 100) + '%';
+  if (document.activeElement !== $('notch')) $('notch').checked = s.notchEnabled;
+  syncControl($('notchFreq'), Math.round(s.notchFreqHz));
+  $('notchVal').textContent = s.notchFreqHz.toFixed(0) + ' Hz';
+  if (document.activeElement !== $('autoNotch')) $('autoNotch').checked = s.autoNotch;
+  $('anState').textContent =
+    s.autoNotch && s.autoNotchEngaged ? '(on ' + s.autoNotchFreqHz.toFixed(0) + ' Hz)' : '';
+
+  // RDS, shown only when there is something to show.
+  const showRds = s.mode === 'WFM' && (s.rdsSynced || s.pilotLocked);
+  $('rds').classList.toggle('hidden', !showRds);
+  if (showRds) {
+    const bits = [];
+    bits.push('<div><span class="dim">Pilot</span> ' + (s.pilotLocked ? 'locked' : '-') + '</div>');
+    bits.push('<div><span class="dim">Stereo</span> ' + (s.stereoActive ? 'yes' : 'no') + '</div>');
+    bits.push('<div><span class="dim">PS</span> ' + (s.rdsPsValid ? s.rdsPs : '-') + '</div>');
+    bits.push('<div><span class="dim">PI</span> ' +
+      (s.rdsPiValid ? '0x' + s.rdsPi.toString(16).toUpperCase() : '-') + '</div>');
+    // The raw programme-type CODE, not a name: the code-to-name table differs
+    // between RDS and RBDS and the receiver deliberately does not pick one.
+    bits.push('<div><span class="dim">PTY</span> ' + s.rdsPty + '</div>');
+    bits.push('<div><span class="dim">Groups</span> ' + s.rdsGroups +
+      ' <span class="dim">err</span> ' + s.rdsErrors + '</div>');
+    if (s.rdsRadioText) {
+      bits.push('<div class="rt"><span class="dim">RT</span> ' + s.rdsRadioText + '</div>');
+    }
+    $('rds').innerHTML = bits.join('');
+  }
   if (s.mode !== currentMode) {
     currentMode = s.mode;
     Array.from($('modes').children).forEach((b) => {
@@ -268,6 +385,9 @@ function reflect(s) {
   }
 }
 
+)JS";
+
+constexpr char kAppJs3[] = R"JS(
 // --- Audio ------------------------------------------------------------------
 // Raw 16-bit PCM arrives as an endless chunked response; Web Audio plays it.
 // Scheduling is explicit rather than handing the stream to an <audio> element,
@@ -383,6 +503,33 @@ $('vol').addEventListener('change', () => {
 $('vol').addEventListener('input', () => {
   $('volVal').textContent = Math.round($('vol').value * 100) + '%';
 });
+$('dbMin').addEventListener('change', () => {
+  control({ dbMin: parseFloat($('dbMin').value) });
+});
+$('dbMin').addEventListener('input', () => { $('dbMinVal').textContent = $('dbMin').value; });
+$('dbMax').addEventListener('change', () => {
+  control({ dbMax: parseFloat($('dbMax').value) });
+});
+$('dbMax').addEventListener('input', () => { $('dbMaxVal').textContent = $('dbMax').value; });
+$('deemph').addEventListener('change', () => {
+  control({ deemphasisIndex: parseInt($('deemph').value, 10) });
+});
+$('stereo').addEventListener('change', () => control({ stereoEnabled: $('stereo').checked }));
+$('nr').addEventListener('change', () => control({ nrEnabled: $('nr').checked }));
+$('nrStrength').addEventListener('change', () => {
+  control({ nrStrength: parseFloat($('nrStrength').value) });
+});
+$('nrStrength').addEventListener('input', () => {
+  $('nrVal').textContent = Math.round($('nrStrength').value * 100) + '%';
+});
+$('notch').addEventListener('change', () => control({ notchEnabled: $('notch').checked }));
+$('notchFreq').addEventListener('change', () => {
+  control({ notchFreqHz: parseFloat($('notchFreq').value) });
+});
+$('notchFreq').addEventListener('input', () => {
+  $('notchVal').textContent = $('notchFreq').value + ' Hz';
+});
+$('autoNotch').addEventListener('change', () => control({ autoNotch: $('autoNotch').checked }));
 
 async function pollStatus() {
   const s = await getJson('/api/status');
@@ -401,30 +548,92 @@ async function pollStatus() {
   ].join('');
 }
 
-function drawSpectrum(bins, dbMin, dbMax) {
+// The wire quantises dB over a FIXED range so the encoding never has to change;
+// the user's dbMin/dbMax is a DISPLAY preference. Mapping wire -> dB -> the
+// user's range happens here, on the client, so moving the sliders re-colours
+// what is already on screen instead of waiting for the server to re-encode.
+let viewDbMin = -110, viewDbMax = 0;
+let lastSpanHz = 0, lastVfoHz = 0;
+
+function binToUnit(q, wireMin, wireMax) {
+  const db = wireMin + (q / 255) * (wireMax - wireMin);
+  const span = (viewDbMax - viewDbMin) || 1;
+  const t = (db - viewDbMin) / span;
+  return t < 0 ? 0 : (t > 1 ? 1 : t);
+}
+
+// Black -> blue -> cyan -> yellow -> red, the conventional waterfall ramp.
+const WF_STOPS = [[0,0,0],[0,0,140],[0,180,200],[255,230,80],[255,60,40]];
+function colormap(t) {
+  const s = t * (WF_STOPS.length - 1);
+  const i = Math.min(WF_STOPS.length - 2, Math.floor(s));
+  const f = s - i, a = WF_STOPS[i], b = WF_STOPS[i + 1];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+
+function drawSpectrum(bins, wireMin, wireMax) {
   const c = $('spectrum'), ctx = c.getContext('2d');
   const w = c.width, h = c.height, n = bins.length;
   ctx.clearRect(0, 0, w, h);
+
+  // The VFO band, drawn first so the trace sits on top of it — the same
+  // reading the desktop window gives: this is the slice being demodulated.
+  if (lastSpanHz > 0) {
+    const x = ((lastVfoHz / lastSpanHz) + 0.5) * w;
+    ctx.fillStyle = 'rgba(79,176,255,0.16)';
+    ctx.fillRect(x - 1, 0, 3, h);
+    ctx.strokeStyle = 'rgba(79,176,255,0.55)';
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+
   ctx.strokeStyle = '#4fb0ff';
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * w;
-    const y = h - (bins[i] / 255) * h;
+    const y = h - binToUnit(bins[i], wireMin, wireMax) * h;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.stroke();
+}
+
+function drawWaterfall(bins, wireMin, wireMax) {
+  const c = $('waterfall'), ctx = c.getContext('2d');
+  const w = c.width;
+  ctx.drawImage(c, 0, 1);            // scroll everything down one row
+  const row = ctx.createImageData(w, 1);
+  for (let x = 0; x < w; x++) {
+    const t = binToUnit(bins[Math.floor((x * bins.length) / w)], wireMin, wireMax);
+    const rgb = colormap(t);
+    row.data[x * 4] = rgb[0];
+    row.data[x * 4 + 1] = rgb[1];
+    row.data[x * 4 + 2] = rgb[2];
+    row.data[x * 4 + 3] = 255;
+  }
+  ctx.putImageData(row, 0, 0);
 }
 
 async function pollSpectrum() {
   const s = await getJson('/api/spectrum?since=' + seq);
   if (!s || !s.bins) return;
   seq = s.seq;
+  if (s.spanHz) lastSpanHz = s.spanHz;
   const raw = atob(s.bins);
   const bins = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bins[i] = raw.charCodeAt(i);
   drawSpectrum(bins, s.dbMin, s.dbMax);
+  drawWaterfall(bins, s.dbMin, s.dbMax);
 }
+
+// Click the spectrum to move the VFO there — the desktop's click-to-tune. The
+// x position maps to an offset from the CENTRE, which is exactly what
+// vfoOffsetHz means, so no absolute-frequency arithmetic is needed.
+$('spectrum').addEventListener('click', (e) => {
+  if (!lastSpanHz) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  const f = (e.clientX - r.left) / r.width;
+  control({ vfoOffsetHz: Math.round((f - 0.5) * lastSpanHz) });
+});
 
 function startPolling() {
   if (timer) return;
@@ -467,6 +676,14 @@ $('logout').addEventListener('click', async () => {
 
 refreshSession();
 )JS";
+
+// The joined client script. Built once on first use — the pieces are compile
+// -time constants, so there is nothing to invalidate.
+const std::string& appJs() {
+    static const std::string joined =
+        std::string(kAppJs1) + kAppJs2 + kAppJs3;
+    return joined;
+}
 
 }  // namespace
 
@@ -657,7 +874,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     });
 
     svr.Get("/app.js", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(kAppJs, "text/javascript; charset=utf-8");
+        res.set_content(appJs(), "text/javascript; charset=utf-8");
     });
 
     // What the client needs before it can decide whether to show a login form.
@@ -778,6 +995,30 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["stereoActive"] = s.stereoActive;
         j["squelchDb"] = s.squelchDb;
         j["volume"] = s.volume;
+        j["dbMin"] = s.dbMin;
+        j["dbMax"] = s.dbMax;
+        j["deemphasisIndex"] = s.deemphasisIndex;
+        j["nrEnabled"] = s.nrEnabled;
+        j["nrStrength"] = s.nrStrength;
+        j["notchEnabled"] = s.notchEnabled;
+        j["notchFreqHz"] = s.notchFreqHz;
+        j["notchQ"] = s.notchQ;
+        j["autoNotch"] = s.autoNotch;
+        j["autoNotchEngaged"] = s.autoNotchEngaged;
+        j["autoNotchFreqHz"] = s.autoNotchFreqHz;
+        j["stereoEnabled"] = s.stereoEnabled;
+        j["pilotLocked"] = s.pilotLocked;
+        j["rdsSynced"] = s.rdsSynced;
+        j["rdsPiValid"] = s.rdsPiValid;
+        j["rdsPi"] = s.rdsPi;
+        j["rdsPsValid"] = s.rdsPsValid;
+        j["rdsPs"] = s.rdsPs;
+        j["rdsRadioText"] = s.rdsRadioText;
+        j["rdsPty"] = s.rdsPty;
+        j["rdsTp"] = s.rdsTp;
+        j["rdsTa"] = s.rdsTa;
+        j["rdsGroups"] = s.rdsGroups;
+        j["rdsErrors"] = s.rdsErrors;
         res.set_content(j.dump(), "application/json");
     });
 
