@@ -30,6 +30,7 @@ support SoapySDR exists to provide. It therefore stays external by design.
 | PortAudio | https://github.com/PortAudio/portaudio | commit `147dd722548358763a8b649b3e4b41dfffbcfbb6` (v19.7 line — the exact commit the vcpkg `portaudio` 19.7#9 port pins, not the older `v19.7.0` tag) | `https://github.com/PortAudio/portaudio/archive/147dd722548358763a8b649b3e4b41dfffbcfbb6.tar.gz` | `95457b809ce60d4d4790f84bb692e271f644e59d8adf96feb988c89ab52a506a` | PortAudio license (MIT-like, `portaudio/LICENSE.txt`) | `third_party/portaudio/` |
 | nlohmann/json | https://github.com/nlohmann/json | tag `v3.12.0` (release asset `json.hpp` = `single_include/nlohmann/json.hpp`) | `https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp` | `aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63` | MIT (`nlohmann_json/LICENSE.MIT`) | `third_party/nlohmann_json/` |
 | pffft | https://bitbucket.org/jpommier/pffft | tag `v1.0.0` (bitbucket changeset `02fe7715a5bf`) — the exact revision the vcpkg `pffft` 1.0.0 port pins | `https://bitbucket.org/jpommier/pffft/get/v1.0.0.tar.gz` | `9adeb18ac7bb52e9fb921c31c0c6a4e9ae150cc6fcb20a899d4b3a2275176ded` | FFTPACK/BSD-style (`pffft/LICENSE.txt`) | `third_party/pffft/` |
+| cpp-httplib | https://github.com/yhirose/cpp-httplib | tag `v0.53.1` (single header `httplib.h`) | `https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.53.1/httplib.h` | `bc69d53636a8757cb24a1deb9880bf7e2fdae3a80bbc759e145b8c80913cbfa3` | MIT (`cpp_httplib/LICENSE`) | `third_party/cpp_httplib/` |
 
 Integrity cross-check: the SHA512 of each fetched tar.gz was compared against
 the SHA512 recorded in the corresponding vcpkg portfile
@@ -111,3 +112,34 @@ the scalar-fallback preprocessor branch, which is a skipped group on x64
 MSVC — the unpatched source compiles to identical code. The app includes
 `<pffft/pffft.h>`, which resolves because the target exports `third_party/`
 itself as the include root.
+
+### cpp-httplib (`third_party/cpp_httplib/`)
+Single header only, at `include/httplib.h`, exposed through the
+`cascade_httplib` INTERFACE target (which also carries `ws2_32` on Windows,
+since the header's socket layer needs it). It provides the HTTP/1.1 server
+behind web server mode. The `0.53.1` version was confirmed from the
+`CPPHTTPLIB_VERSION` macro inside the fetched header, not from the URL alone.
+
+Fetched as the raw header at the tag rather than as a release archive, so — as
+with nlohmann/json — there is no vcpkg portfile hash to cross-check it against;
+the SHA256 in the table above is of the header actually vendored.
+
+**TLS is deliberately not enabled.** `CPPHTTPLIB_OPENSSL_SUPPORT` is never
+defined, so no OpenSSL is required, linked, or shipped. Two consequences that
+belong with the pin rather than buried in the server code:
+
+- the server speaks plain HTTP, so a password crossing a network it serves is
+  in clear — which is why the bind policy distinguishes loopback from anything
+  else, and why remote access is documented as terminating TLS in front of the
+  application (a reverse proxy or a tunnel) rather than as opening its port;
+- the application already reaches the network as a *client* through WinHTTP,
+  which uses the operating system's trust store. Enabling OpenSSL here would
+  put a second TLS stack, with its own certificate store and its own patch
+  cadence, into a product that needs neither.
+
+Verified by `tests/test_httplib_vendor.cpp`, which binds a server to loopback
+on an OS-chosen port and makes real requests through it (11 checks). That test
+exists because a vendored header can be present and correctly hashed while
+still failing to compile under `/W4 /permissive-`, missing an import library,
+or having no working socket layer on this platform — none of which is visible
+from the file on disk.

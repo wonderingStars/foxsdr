@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.27.0 LANGUAGES C CXX)
+project(cascade VERSION 0.28.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -107,6 +107,23 @@ add_library(cascade_json INTERFACE)
 target_include_directories(cascade_json SYSTEM INTERFACE
     "${CASCADE_TP}/nlohmann_json/include")
 
+# cpp-httplib — the HTTP/1.1 server behind web server mode. Header-only, so an
+# INTERFACE target carrying the include root plus the Winsock import library the
+# header's socket code needs. SYSTEM so /W4 does not police 747 KB of upstream.
+#
+# TLS IS DELIBERATELY NOT ENABLED. CPPHTTPLIB_OPENSSL_SUPPORT would pull in
+# OpenSSL, which is neither vendored here nor small, and would put a second TLS
+# stack in a product that already reaches the network through WinHTTP (which
+# uses the OS trust store). The server therefore speaks plain HTTP, which is
+# why the bind policy treats loopback and LAN differently and why remote access
+# is documented as "terminate TLS in front of it" rather than "open the port".
+add_library(cascade_httplib INTERFACE)
+target_include_directories(cascade_httplib SYSTEM INTERFACE
+    "${CASCADE_TP}/cpp_httplib/include")
+if(WIN32)
+    target_link_libraries(cascade_httplib INTERFACE ws2_32)
+endif()
+
 # ---------------------------------------------------------------------------
 # Warnings — /W4 applies to OUR code only (cascade_flags is linked by
 # cascade_lib, never by the vendored targets, which build at their defaults;
@@ -150,6 +167,7 @@ target_link_libraries(cascade_lib PUBLIC
     portaudio_static
     cascade_json
     cascade_pffft
+    cascade_httplib
     SoapySDR)
 
 # ---------------------------------------------------------------------------
