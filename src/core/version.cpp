@@ -3,7 +3,7 @@
 
 namespace cascade {
 
-const char* versionString() { return "0.28.0"; }
+const char* versionString() { return "0.29.0"; }
 
 const char* appName() { return "FoxSDR"; }
 
