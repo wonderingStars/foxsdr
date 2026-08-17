@@ -178,8 +178,15 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <span id="scanState" class="dim"></span>
     </div>
   </div>
+  <div id="mapWrap" class="hidden">
+    <h2>Map</h2>
+    <canvas id="map" width="1024" height="420"></canvas>
+    <div id="trackList"></div>
+  </div>
   <h2 id="decodedHead" class="hidden">Decoded</h2>
   <pre id="decoded" class="hidden"></pre>
+  <h2>Plugins</h2>
+  <div id="plugins"></div>
   <button id="logout" class="hidden">Sign out</button>
 </section>
 <script src="/app.js"></script>
@@ -244,6 +251,18 @@ select { background:#1c2029; border:1px solid #2c3240; color:var(--fg);
            padding:.5rem; max-height:16rem; overflow:auto; font-size:.8rem;
            white-space:pre-wrap; word-break:break-word; margin:.25rem 0 0; }
 button.on { background:#7a2020; color:#ffd7d7; }
+#map { background:#080a0d; border:1px solid #232833; border-radius:3px; }
+#trackList { display:flex; flex-direction:column; gap:.2rem; margin-top:.4rem;
+             max-height:12rem; overflow:auto; }
+.tr { display:flex; gap:.6rem; background:#171b22; border:1px solid #232833;
+      border-radius:3px; padding:.25rem .5rem; font-size:.8rem; }
+.tr .id { font-variant-numeric:tabular-nums; color:var(--dim); min-width:6rem; }
+.tr .pos { font-variant-numeric:tabular-nums; margin-left:auto; color:var(--dim); }
+#plugins { display:flex; flex-direction:column; gap:.25rem; }
+.pl { background:#171b22; border:1px solid #232833; border-radius:3px;
+      padding:.3rem .5rem; font-size:.85rem; }
+.pl.bad { border-color:#7a2020; }
+.pl .meta { color:var(--dim); font-size:.75rem; }
 )CSS";
 
 // THE CLIENT SCRIPT IS SPLIT ACROSS SEVERAL LITERALS because MSVC caps a single
@@ -448,6 +467,103 @@ function reflectSource(s) {
   });
 }
 
+// EQUIRECTANGULAR, matching the desktop's default projection. Mercator would
+// misplace polar orbits, and this one inverts cheaply — which is what a
+// click-to-centre would need later.
+const TRACK_COLOURS = { 1: '#ff5a4a', 2: '#4fd08a', 3: '#4fb0ff', 4: '#ffd24f' };
+
+function reflectTracks(s) {
+  const has = s.tracks.length > 0;
+  $('mapWrap').classList.toggle('hidden', !has);
+  if (!has) return;
+
+  const c = $('map'), ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // Fit the view to what is actually being heard, with a margin, so a single
+  // aircraft is not a dot in the middle of an empty world map.
+  let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+  s.tracks.forEach((t) => {
+    minLat = Math.min(minLat, t.latDeg); maxLat = Math.max(maxLat, t.latDeg);
+    minLon = Math.min(minLon, t.lonDeg); maxLon = Math.max(maxLon, t.lonDeg);
+  });
+  const padLat = Math.max(0.5, (maxLat - minLat) * 0.25);
+  const padLon = Math.max(0.5, (maxLon - minLon) * 0.25);
+  minLat -= padLat; maxLat += padLat; minLon -= padLon; maxLon += padLon;
+  const xOf = (lon) => ((lon - minLon) / (maxLon - minLon)) * w;
+  const yOf = (lat) => h - ((lat - minLat) / (maxLat - minLat)) * h;
+
+  // A graticule, so the picture has a scale rather than being floating dots.
+  ctx.strokeStyle = '#1b212b'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = (i / 4) * h, x = (i / 4) * w;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+  ctx.fillStyle = '#4a5464'; ctx.font = '11px system-ui, sans-serif';
+  ctx.fillText(maxLat.toFixed(2) + 'N', 4, 12);
+  ctx.fillText(minLat.toFixed(2) + 'N', 4, h - 4);
+  ctx.fillText(minLon.toFixed(2) + 'E', 4, h - 18);
+  ctx.fillText(maxLon.toFixed(2) + 'E', w - 60, h - 18);
+
+  s.tracks.forEach((t) => {
+    const x = xOf(t.lonDeg), y = yOf(t.latDeg);
+    ctx.fillStyle = (t.flags & 1) ? '#ff2020' : (TRACK_COLOURS[t.kind] || '#c8d0dc');
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+    // Course, when the source reported one — null means not reported, and a
+    // heading line drawn for an unknown course would be an invention.
+    if (t.courseDeg !== null && isFinite(t.courseDeg)) {
+      const a = (t.courseDeg - 90) * Math.PI / 180;
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.beginPath(); ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(a) * 14, y + Math.sin(a) * 14); ctx.stroke();
+    }
+    ctx.fillStyle = '#e6e9ee';
+    ctx.fillText(t.label || t.id, x + 7, y - 6);
+  });
+
+  const box = $('trackList');
+  box.innerHTML = '';
+  s.tracks.slice(0, 60).forEach((t) => {
+    const row = document.createElement('div');
+    row.className = 'tr';
+    const alt = (t.altM === null || !isFinite(t.altM)) ? '-' : Math.round(t.altM) + ' m';
+    const spd = (t.speedMps === null || !isFinite(t.speedMps)) ? '-'
+                                                              : Math.round(t.speedMps) + ' m/s';
+    row.innerHTML = '<span class="id">' + t.id + '</span>' +
+                    '<span>' + (t.label || '') + '</span>' +
+                    '<span class="pos">' + t.latDeg.toFixed(4) + ', ' +
+                    t.lonDeg.toFixed(4) + '  ' + alt + '  ' + spd + '</span>';
+    box.appendChild(row);
+  });
+}
+
+let lastPluginKey = '';
+function reflectPlugins(s) {
+  const key = s.plugins.map(p => p.name + p.version + p.loaded + p.error).join('|');
+  if (key === lastPluginKey) return;
+  lastPluginKey = key;
+  const box = $('plugins');
+  box.innerHTML = '';
+  if (!s.plugins.length) {
+    box.innerHTML = '<div class="pl"><span class="meta">no plugins installed</span></div>';
+    return;
+  }
+  s.plugins.forEach((p) => {
+    const d = document.createElement('div');
+    d.className = 'pl' + (p.loaded ? '' : ' bad');
+    const head = (p.name || '(unnamed)') + (p.version ? ' ' + p.version : '');
+    const meta = p.loaded ? (p.licence || 'licence not stated')
+                          : ('refused: ' + (p.error || 'reason not reported'));
+    d.innerHTML = '<div>' + head + '</div><div class="meta">' + meta + '</div>';
+    box.appendChild(d);
+  });
+}
+
+)JS";
+
+constexpr char kAppJs2b[] = R"JS(
 function fmtBytes(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + ' MB';
@@ -576,6 +692,8 @@ function reflect(s) {
 
   reflectSource(s);
   reflectExtras(s);
+  reflectTracks(s);
+  reflectPlugins(s);
 
   // RDS, shown only when there is something to show.
   const showRds = s.mode === 'WFM' && (s.rdsSynced || s.pilotLocked);
@@ -939,7 +1057,7 @@ refreshSession();
 // -time constants, so there is nothing to invalidate.
 const std::string& appJs() {
     static const std::string joined =
-        std::string(kAppJs1) + kAppJs2 + kAppJs3;
+        std::string(kAppJs1) + kAppJs2 + kAppJs2b + kAppJs3;
     return joined;
 }
 
@@ -1311,6 +1429,41 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 lines.push_back({{"plugin", d.plugin}, {"text", d.text}});
             }
             j["decoded"] = std::move(lines);
+
+            // NaN is not representable in JSON, and nlohmann writes it as
+            // null. That is exactly the wanted meaning here — "not reported" —
+            // but it must be DELIBERATE rather than incidental, so it is done
+            // explicitly: a number would claim an altitude, course or speed the
+            // decoder never heard.
+            const auto orNull = [](double v) {
+                return std::isfinite(v) ? nlohmann::json(v) : nlohmann::json(nullptr);
+            };
+            nlohmann::json tracks = nlohmann::json::array();
+            for (const RadioStatus::Track& t : s.tracks) {
+                tracks.push_back({{"id", t.id},
+                                  {"label", t.label},
+                                  {"plugin", t.plugin},
+                                  {"latDeg", t.latDeg},
+                                  {"lonDeg", t.lonDeg},
+                                  {"altM", orNull(t.altM)},
+                                  {"courseDeg", orNull(t.courseDeg)},
+                                  {"speedMps", orNull(t.speedMps)},
+                                  {"ageMs", t.ageMs},
+                                  {"kind", t.kind},
+                                  {"flags", t.flags}});
+            }
+            j["tracks"] = std::move(tracks);
+
+            nlohmann::json plugins = nlohmann::json::array();
+            for (const RadioStatus::Plugin& p : s.plugins) {
+                plugins.push_back({{"name", p.name},
+                                   {"version", p.version},
+                                   {"licence", p.licence},
+                                   {"loaded", p.loaded},
+                                   {"error", p.error},
+                                   {"idleReason", p.idleReason}});
+            }
+            j["plugins"] = std::move(plugins);
         }
         j["iqRecording"] = s.iqRecording;
         j["audioRecording"] = s.audioRecording;

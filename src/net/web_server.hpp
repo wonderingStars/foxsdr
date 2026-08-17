@@ -177,6 +177,42 @@ struct RadioStatus {
         std::string text;
     };
     std::vector<DecodedLine> decoded;
+
+    // --- Tracks ------------------------------------------------------------
+    // Decoded targets — aircraft, vessels, stations, satellites — as the map
+    // and the track list show them. altM/courseDeg/speedMps are NaN when the
+    // source does not report them (0 is a real altitude and a real course), and
+    // the JSON carries null for those rather than a number that would put every
+    // unknown-altitude aircraft on the ground.
+    struct Track {
+        std::string id;
+        std::string label;
+        std::string plugin;
+        double latDeg = 0.0;
+        double lonDeg = 0.0;
+        double altM = 0.0;
+        double courseDeg = 0.0;
+        double speedMps = 0.0;
+        std::uint64_t ageMs = 0;
+        unsigned kind = 0;
+        unsigned flags = 0;
+    };
+    std::vector<Track> tracks;
+
+    // --- Plugins -----------------------------------------------------------
+    // What is installed, and for anything refused, why. Read-only: this page
+    // deliberately cannot install or remove a plugin — that moves NATIVE CODE
+    // onto the machine, which is a different question from tuning a radio and
+    // one the owner should answer at the application, not over HTTP.
+    struct Plugin {
+        std::string name;
+        std::string version;
+        std::string licence;
+        bool loaded = false;
+        std::string error;      // empty iff loaded
+        std::string idleReason; // why it is loaded but not being fed, if so
+    };
+    std::vector<Plugin> plugins;
 };
 
 struct SpectrumSnapshot {

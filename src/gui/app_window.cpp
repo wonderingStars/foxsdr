@@ -4024,6 +4024,32 @@ void AppWindow::publishWebSnapshot() {
     s.scanStopHz = scanStopMhz_ * 1.0e6;
     s.scanStepHz = scanStepKhz_ * 1.0e3;
 
+    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+        cascade::net::RadioStatus::Track w;
+        w.id = t.t.id;
+        w.label = t.t.label;
+        w.plugin = t.plugin;
+        w.latDeg = t.t.latDeg;
+        w.lonDeg = t.t.lonDeg;
+        w.altM = t.t.altM;
+        w.courseDeg = t.t.courseDeg;
+        w.speedMps = t.t.speedMps;
+        w.ageMs = t.t.ageMs;
+        w.kind = t.t.kind;
+        w.flags = t.t.flags;
+        s.tracks.push_back(std::move(w));
+    }
+
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        cascade::net::RadioStatus::Plugin w;
+        w.name = p.name;
+        w.version = p.version;
+        w.licence = p.licence;
+        w.loaded = p.loaded;
+        w.error = p.error;
+        s.plugins.push_back(std::move(w));
+    }
+
     // The tail of the decoder log. Bounded here rather than sending the whole
     // deque: this is a live readout, and the panel the desktop shows is a tail
     // too.
