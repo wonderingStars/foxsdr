@@ -96,7 +96,14 @@ The application is licensed under the
 operators, students, charities, schools and public bodies may use, modify and
 share it at no cost. Using it in a business, selling it, bundling it with
 hardware, or building a product from it requires a commercial licence — see
-[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) for the tiers and
+[COMMERCIAL-AGREEMENT.md](COMMERCIAL-AGREEMENT.md) for the actual terms.
+
+If you are a hobbyist, that free licence is permanent and unconditional. There
+is no trial period, no registration, no licence key, no activation, no
+telemetry, and no feature withheld to sell you later. It will not be withdrawn
+from under you: this project is funded by companies paying for commercial
+licences, which is precisely what keeps it free for everybody else.
 
 Modification is expressly permitted under the noncommercial licence; a
 modified version simply remains noncommercial-only, and must carry the same

@@ -5,6 +5,13 @@ revision the app was built and tested against, so an upstream change can never
 break or alter this build. Sources are verbatim upstream copies — **no vendored
 file has been modified**. Each subdirectory keeps its upstream license file.
 
+Those license files, plus SoapySDR's, are reproduced verbatim in
+`installer/THIRD-PARTY-LICENSES.txt`, the aggregate notice shipped with the
+installer and referenced by `COMMERCIAL-LICENSE.md` and
+`COMMERCIAL-AGREEMENT.md`. **Update it whenever a pinned revision changes** — a
+commercial licence defines the third-party carve-out by reference to it, so it
+must list what the build actually contains.
+
 The one deliberate exception is **SoapySDR**, which is *not* vendored and is
 still consumed via `find_package(SoapySDR CONFIG REQUIRED)` from vcpkg:
 SoapySDR is the hardware ABI boundary. Vendor device modules (SoapyUHD for the
