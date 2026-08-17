@@ -224,4 +224,65 @@ private:
 bool sha256(const std::uint8_t* data, std::size_t n, std::vector<std::uint8_t>& out,
             std::string& error);
 
+// --- Login throttling --------------------------------------------------------
+
+inline constexpr std::size_t kMaxLoginAttempts = 5;
+inline constexpr std::int64_t kLoginWindowSeconds = 300;  // 5 minutes
+inline constexpr std::size_t kMaxThrottleClients = 1024;
+
+// Per-client failed-login counter.
+//
+// WHY THIS IS NEEDED AT ALL, given the password is already expensive to test:
+// rule 3 in this header measures one PBKDF2 derivation at about 86 ms on this
+// hardware, so an unthrottled login endpoint hands an attacker roughly twelve
+// guesses a second per core — days, not centuries, against a weak password.
+// The hash cost raises the price of an offline attack on a stolen config file;
+// only a throttle raises the price of an ONLINE one.
+//
+// It counts FAILURES, not attempts: a working client logging in repeatedly is
+// never locked out, and a successful login clears the client's counter, so the
+// only way to reach the limit is to keep getting it wrong.
+//
+// Keyed by whatever the caller considers a client identity (an IP string, in
+// practice). The map is capped at kMaxThrottleClients because an
+// unauthenticated caller can cause entries to be created — see the same
+// reasoning behind SessionStore's cap. When full, the oldest entry is evicted;
+// that is a deliberate trade, since the alternative (refusing new entries)
+// would let an attacker fill the table and then attack unthrottled.
+//
+// Time is injected, for the same reason SessionStore injects it: a throttle
+// whose window cannot be driven deterministically cannot be tested.
+class LoginThrottle {
+public:
+    // True if this client may attempt a login now.
+    bool allow(const std::string& client, std::int64_t nowSeconds) const;
+
+    // Records a failed attempt. Returns the number of failures now held for
+    // this client within the window.
+    std::size_t recordFailure(const std::string& client, std::int64_t nowSeconds);
+
+    // Clears a client's failures after a successful login.
+    void recordSuccess(const std::string& client);
+
+    // Seconds until this client may try again; 0 when it may try now.
+    std::int64_t retryAfterSeconds(const std::string& client,
+                                   std::int64_t nowSeconds) const;
+
+    void clear();
+    std::size_t size() const;
+
+private:
+    struct Entry {
+        std::string client;
+        std::size_t failures = 0;
+        std::int64_t windowStart = 0;  // first failure of the current window
+    };
+
+    // Returns nullptr when absent. Caller holds mutex_.
+    const Entry* find(const std::string& client) const;
+
+    mutable std::mutex mutex_;
+    std::deque<Entry> entries_;  // oldest first, so eviction is pop_front
+};
+
 }  // namespace cascade::net

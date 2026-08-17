@@ -508,4 +508,89 @@ std::size_t SessionStore::size() const {
     return entries_.size();
 }
 
+// --- Login throttling --------------------------------------------------------
+
+const LoginThrottle::Entry* LoginThrottle::find(const std::string& client) const {
+    for (const Entry& e : entries_) {
+        if (e.client == client) {
+            return &e;
+        }
+    }
+    return nullptr;
+}
+
+bool LoginThrottle::allow(const std::string& client, std::int64_t nowSeconds) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Entry* e = find(client);
+    if (e == nullptr) {
+        return true;
+    }
+    // A window that has run out is as good as no failures at all.
+    if (nowSeconds - e->windowStart >= kLoginWindowSeconds) {
+        return true;
+    }
+    return e->failures < kMaxLoginAttempts;
+}
+
+std::size_t LoginThrottle::recordFailure(const std::string& client,
+                                         std::int64_t nowSeconds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (Entry& e : entries_) {
+        if (e.client == client) {
+            if (nowSeconds - e.windowStart >= kLoginWindowSeconds) {
+                // The previous window expired; this failure starts a new one
+                // rather than inheriting stale count.
+                e.failures = 1;
+                e.windowStart = nowSeconds;
+            } else {
+                ++e.failures;
+            }
+            return e.failures;
+        }
+    }
+    while (entries_.size() >= kMaxThrottleClients) {
+        entries_.pop_front();
+    }
+    Entry e;
+    e.client = client;
+    e.failures = 1;
+    e.windowStart = nowSeconds;
+    entries_.push_back(std::move(e));
+    return 1;
+}
+
+void LoginThrottle::recordSuccess(const std::string& client) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+        if (it->client == client) {
+            entries_.erase(it);
+            return;
+        }
+    }
+}
+
+std::int64_t LoginThrottle::retryAfterSeconds(const std::string& client,
+                                              std::int64_t nowSeconds) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Entry* e = find(client);
+    if (e == nullptr || e->failures < kMaxLoginAttempts) {
+        return 0;
+    }
+    const std::int64_t elapsed = nowSeconds - e->windowStart;
+    if (elapsed >= kLoginWindowSeconds) {
+        return 0;
+    }
+    return kLoginWindowSeconds - elapsed;
+}
+
+void LoginThrottle::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    entries_.clear();
+}
+
+std::size_t LoginThrottle::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return entries_.size();
+}
+
 }  // namespace cascade::net
