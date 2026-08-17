@@ -799,6 +799,7 @@ void AppWindow::drawUi() {
     // than one frame late.
     applyWebControls();
     publishWebSnapshot();
+    publishWebAudio();
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -3923,6 +3924,34 @@ void AppWindow::scannerFrame() {
 
 // --- Web server mode (P11) ---------------------------------------------------
 
+void AppWindow::publishWebAudio() {
+    const std::uint64_t produced = pipeline_.audioSamplesProduced();
+    if (!webServer_.running()) {
+        // Keep the mark current so switching the server on later starts from
+        // live rather than trying to publish everything since launch.
+        webAudioLastProduced_ = produced;
+        return;
+    }
+    if (produced <= webAudioLastProduced_) {
+        // Equal is the ordinary "no new audio" case; less can only mean the
+        // counter restarted, and the honest response to both is to re-mark.
+        webAudioLastProduced_ = produced;
+        return;
+    }
+
+    std::uint64_t fresh = produced - webAudioLastProduced_;
+    // Pipeline::audioTap holds 4096 frames; anything older than that is gone
+    // whatever we do here.
+    constexpr std::uint64_t kTapFrames = 4096;
+    if (fresh > kTapFrames) {
+        fresh = kTapFrames;
+    }
+    webAudioBuf_.resize(static_cast<std::size_t>(fresh));
+    const std::size_t got = pipeline_.audioTap(webAudioBuf_.data(), webAudioBuf_.size());
+    webServer_.pushAudio(webAudioBuf_.data(), got);
+    webAudioLastProduced_ = produced;
+}
+
 void AppWindow::publishWebSnapshot() {
     // Everything read here is read on the GUI thread, which is the contract
     // activeSource() and its readbacks require. The server's providers only
@@ -4180,6 +4209,10 @@ void AppWindow::drawWebSection() {
         if (d.authRequired) {
             ImGui::TextDisabled("%d browser session(s)",
                                 static_cast<int>(webServer_.sessionCount()));
+        }
+        if (webServer_.audioListeners() > 0) {
+            ImGui::TextDisabled("%d listening to audio",
+                                static_cast<int>(webServer_.audioListeners()));
         }
     } else if (webCfg_.enabled) {
         ImGui::TextDisabled("not serving");

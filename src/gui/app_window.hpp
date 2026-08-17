@@ -718,6 +718,17 @@ private:
     // thread assembles one consistent snapshot per frame under webMutex_, and
     // the providers do nothing but copy it out.
     void drawWebSection();
+    // Copies audio produced since the last frame into the server's ring.
+    //
+    // The pipeline's tap is a rolling 4096-frame window with no per-reader
+    // position, so "what is new" comes from audioSamplesProduced(), which is
+    // monotonic and counts FRAMES in the same unit the tap returns. The
+    // difference between two readings is exactly what to copy — that is what
+    // makes the stream gap-free and repeat-free rather than "whatever the
+    // window happened to hold". If the GUI ever stalls longer than the window
+    // (85 ms at 48 kHz) the excess is unrecoverable and is dropped; the
+    // listener hears a glitch, which beats hearing stale audio for ever after.
+    void publishWebAudio();
     // Copies the current radio state and newest spectrum frame into the
     // members below. Called once per frame from drawUi, unconditionally: the
     // panel being collapsed must not stop the browser being served.
@@ -766,6 +777,11 @@ private:
     // enumerating adapters is a syscall nobody needs on a headless run.
     std::vector<std::string> webLocalAddresses_;
     bool webAddressesScanned_ = false;
+
+    // audioSamplesProduced() at the last publish, and the scratch buffer the
+    // tap is read into (a member so a steady stream never allocates).
+    std::uint64_t webAudioLastProduced_ = 0;
+    std::vector<float> webAudioBuf_;
 
     mutable std::mutex webMutex_;
     cascade::net::RadioStatus webStatus_;

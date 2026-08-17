@@ -5,8 +5,10 @@
 #include "net/web_server.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <ctime>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 
@@ -107,6 +109,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
   <div id="controls">
     <div class="row">
       <button id="playstop">Start</button>
+      <button id="listen">Listen</button>
       <label>Centre (MHz)<input id="centre" type="number" step="0.000001"></label>
       <button id="tune">Tune</button>
     </div>
@@ -264,6 +267,90 @@ function reflect(s) {
     });
   }
 }
+
+// --- Audio ------------------------------------------------------------------
+// Raw 16-bit PCM arrives as an endless chunked response; Web Audio plays it.
+// Scheduling is explicit rather than handing the stream to an <audio> element,
+// because an <audio> element buffers for smoothness and would put the sound
+// seconds behind the spectrum next to it.
+let audioCtx = null, audioAbort = null, nextPlayTime = 0, pcmTail = null;
+
+// How far ahead of the clock to keep the queue. Under this and any jitter
+// becomes a dropout; much over it and the audio lags the waterfall visibly.
+const AUDIO_LEAD = 0.25;
+
+function stopListening() {
+  if (audioAbort) { audioAbort.abort(); audioAbort = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  pcmTail = null;
+  $('listen').textContent = 'Listen';
+}
+
+function playChunk(bytes) {
+  // A chunk can split a sample across two reads; carry the odd byte over.
+  let data = bytes;
+  if (pcmTail && pcmTail.length) {
+    data = new Uint8Array(pcmTail.length + bytes.length);
+    data.set(pcmTail, 0);
+    data.set(bytes, pcmTail.length);
+  }
+  const usable = data.length - (data.length % 2);
+  pcmTail = usable < data.length ? data.slice(usable) : null;
+  if (!usable) return;
+
+  const view = new DataView(data.buffer, data.byteOffset, usable);
+  const frames = usable / 2;
+  const buf = audioCtx.createBuffer(1, frames, 48000);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < frames; i++) ch[i] = view.getInt16(i * 2, true) / 32767;
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  // If we have fallen behind (a stall, a backgrounded tab), restart the
+  // schedule at now + lead rather than piling up buffers that are already late.
+  if (nextPlayTime < now + 0.02) nextPlayTime = now + AUDIO_LEAD;
+  src.start(nextPlayTime);
+  nextPlayTime += buf.duration;
+}
+
+async function startListening() {
+  // An AudioContext may only be created from a user gesture, which is why
+  // this is a button and not something the page does on load.
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  await audioCtx.resume();
+  nextPlayTime = 0;
+  pcmTail = null;
+  audioAbort = new AbortController();
+  $('listen').textContent = 'Stop audio';
+  try {
+    const r = await fetch('/api/audio', {
+      credentials: 'same-origin',
+      signal: audioAbort.signal,
+    });
+    if (!r.ok) {
+      let msg = 'Audio unavailable.';
+      try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+      $('ctlError').textContent = msg;
+      stopListening();
+      return;
+    }
+    const reader = r.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (audioCtx) playChunk(value);
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') $('ctlError').textContent = 'Audio stream ended.';
+  }
+  stopListening();
+}
+
+$('listen').addEventListener('click', () => {
+  if (audioCtx) stopListening(); else startListening();
+});
 
 $('playstop').addEventListener('click', () => {
   control({ running: $('playstop').textContent === 'Start' });
@@ -469,6 +556,11 @@ public:
     std::size_t sessionCount() const { return sessions_.size(); }
     void revokeAllSessions() { sessions_.revokeAll(); }
 
+    void pushAudio(const float* samples, std::size_t n) { audio_.write(samples, n); }
+    std::size_t audioListeners() const {
+        return static_cast<std::size_t>(listeners_.load(std::memory_order_relaxed));
+    }
+
     std::vector<ControlRequest> takePendingControls() {
         std::lock_guard<std::mutex> lock(controlMutex_);
         std::vector<ControlRequest> out(pending_.begin(), pending_.end());
@@ -507,6 +599,10 @@ private:
     // Accepted control requests awaiting the application's next frame.
     mutable std::mutex controlMutex_;
     std::deque<ControlRequest> pending_;
+
+    // Live audio for listening browsers, and how many are currently streaming.
+    mutable AudioRing audio_;
+    std::atomic<int> listeners_{0};
 
     std::unique_ptr<httplib::Server> svr_;
     std::thread thread_;
@@ -685,6 +781,60 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         res.set_content(j.dump(), "application/json");
     });
 
+    // Live audio as an endless chunked response of 16-bit little-endian PCM.
+    //
+    // WHY RAW PCM AND NOT A CODEC. Every codec worth streaming is either
+    // patent-encumbered (AAC) or a new vendored dependency with its own
+    // licence to clear, and the standing posture on this project is to stay
+    // well clear of that line. Raw 48 kHz mono at 16 bits is 96 kB/s, which is
+    // nothing on a LAN — the case this feature is actually for — and the
+    // browser needs no decoder at all, only Web Audio.
+    svr.Get("/api/audio", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorised(req)) {
+            deny(res, "sign in first");
+            return;
+        }
+        // Claim a slot BEFORE committing to the stream; each listener parks an
+        // HTTP worker thread for as long as it listens.
+        const int before = listeners_.fetch_add(1, std::memory_order_acq_rel);
+        if (before >= static_cast<int>(WebServer::kMaxAudioListeners)) {
+            listeners_.fetch_sub(1, std::memory_order_acq_rel);
+            deny(res, "too many listeners", 503);
+            return;
+        }
+
+        // Start at LIVE, not at the oldest buffered sample: a listener joining
+        // a radio wants what is being received now, not two seconds of history
+        // it then stays behind by for ever.
+        auto cursor = std::make_shared<std::uint64_t>(audio_.written());
+
+        res.set_chunked_content_provider(
+            "audio/L16;rate=48000;channels=1",
+            [this, cursor](std::size_t /*offset*/, httplib::DataSink& sink) {
+                if (!running_.load(std::memory_order_acquire)) {
+                    return false;  // server stopping: end the stream cleanly
+                }
+                // 100 ms per read. Small enough to keep latency low, large
+                // enough that the per-chunk overhead is irrelevant.
+                constexpr std::size_t kChunkSamples = 4800;
+                float samples[kChunkSamples];
+                std::uint64_t dropped = 0;
+                const std::size_t got =
+                    audio_.read(*cursor, samples, kChunkSamples, dropped);
+                if (got == 0) {
+                    // Nothing new yet. Sleeping here is correct rather than
+                    // lazy: this is the listener's OWN worker thread, and
+                    // spinning would burn a core per listener to no purpose.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    return true;
+                }
+                std::vector<std::uint8_t> pcm(2 * got);
+                floatToPcm16le(samples, got, pcm.data());
+                return sink.write(reinterpret_cast<const char*>(pcm.data()), pcm.size());
+            },
+            [this](bool) { listeners_.fetch_sub(1, std::memory_order_acq_rel); });
+    });
+
     svr.Post("/api/control", [this](const httplib::Request& req, httplib::Response& res) {
         if (!authorised(req)) {
             deny(res, "sign in first");
@@ -775,6 +925,10 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
     // to prove themselves against the new configuration.
     sessions_.revokeAll();
     throttle_.clear();
+    // Nothing buffered from a previous run: its samples are stale by however
+    // long the server was down, and a cursor from then must not find them
+    // readable.
+    audio_.reset();
 
     svr_ = std::make_unique<httplib::Server>();
     svr_->set_payload_max_length(kMaxPayloadBytes);
@@ -846,5 +1000,9 @@ void WebServer::revokeAllSessions() { impl_->revokeAllSessions(); }
 std::vector<ControlRequest> WebServer::takePendingControls() {
     return impl_->takePendingControls();
 }
+void WebServer::pushAudio(const float* samples, std::size_t n) {
+    impl_->pushAudio(samples, n);
+}
+std::size_t WebServer::audioListeners() const { return impl_->audioListeners(); }
 
 }  // namespace cascade::net

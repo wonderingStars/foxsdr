@@ -36,6 +36,7 @@
 #include <thread>
 #include <vector>
 
+#include "net/web_audio.hpp"
 #include "net/web_auth.hpp"
 #include "net/web_control.hpp"
 #include "net/web_policy.hpp"
@@ -164,6 +165,26 @@ public:
     // OLDEST request is dropped, because for a control surface the most recent
     // instruction is the one that matters.
     static constexpr std::size_t kMaxQueuedControls = 64;
+
+    // --- Audio ---------------------------------------------------------------
+    // Publishes newly produced receiver audio (mono, kWebAudioRateHz) for any
+    // browser currently listening. The application calls this once per frame
+    // with exactly the samples produced since the previous call; the ring
+    // (net/web_audio.hpp) gives each listener its own cursor.
+    //
+    // Safe to call whether or not anyone is listening, and whether or not the
+    // server is running — it is a buffer write, not a send.
+    void pushAudio(const float* samples, std::size_t n);
+
+    // Browsers currently streaming audio, for the settings panel.
+    std::size_t audioListeners() const;
+
+    // Each listener holds one HTTP worker thread for as long as it listens, so
+    // this is capped well below the library's pool. Past the cap the request is
+    // refused with 503 rather than being accepted and starving the rest of the
+    // API — a page that cannot fetch its own status is a worse failure than one
+    // that cannot play audio.
+    static constexpr std::size_t kMaxAudioListeners = 4;
 
 private:
     class Impl;  // holds the httplib::Server and the route handlers

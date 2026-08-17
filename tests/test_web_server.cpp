@@ -11,6 +11,8 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -579,6 +581,158 @@ void testControlQueueIsBounded() {
     server.stop();
 }
 
+void testAudioStreamsRealSamples() {
+    WebServer server;
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+
+    // A constant 0.5 means every sample on the wire must be 16384 — a
+    // deterministic check on the whole path (ring, cursor, float->PCM,
+    // chunked transfer) rather than just "some bytes arrived".
+    std::atomic<bool> producing{true};
+    std::thread producer([&server, &producing]() {
+        std::vector<float> block(480, 0.5f);   // 10 ms at 48 kHz
+        while (producing.load()) {
+            server.pushAudio(block.data(), block.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    });
+
+    std::string received;
+    {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(5, 0);
+        cli.set_read_timeout(10, 0);
+        auto res = cli.Get("/api/audio", [&received](const char* data, std::size_t len) {
+            received.append(data, len);
+            return received.size() < 2000;  // enough to prove it streams
+        });
+        // Returning false from a content receiver CANCELS the request, so the
+        // result is Error::Canceled rather than a success — this stream has no
+        // end of its own to reach. The proof that it worked is the bytes, which
+        // are checked below.
+        CHECK(!res);
+        CHECK(res.error() == httplib::Error::Canceled);
+    }
+    producing.store(false);
+    producer.join();
+
+    CHECK(received.size() >= 2000);
+    CHECK(received.size() % 2 == 0);
+    std::size_t wrong = 0;
+    for (std::size_t i = 0; i + 1 < received.size(); i += 2) {
+        const auto lo = static_cast<std::uint8_t>(received[i]);
+        const auto hi = static_cast<std::uint8_t>(received[i + 1]);
+        const auto s = static_cast<std::int16_t>(
+            static_cast<std::uint16_t>(lo) | (static_cast<std::uint16_t>(hi) << 8));
+        if (s != 16384) {
+            ++wrong;
+        }
+    }
+    CHECK(wrong == 0);
+
+    server.stop();
+}
+
+void testAudioRequiresAuth() {
+    WebServerConfig cfg = loopbackConfig();
+    cfg.passwordRecord = realRecord();
+
+    WebServer server;
+    std::string error;
+    const int port = startOnFreePort(server, cfg, error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+
+    // Audio is receiver output — what the set is actually hearing — so it is
+    // gated exactly like everything else.
+    auto denied = cli.Get("/api/audio");
+    CHECK(static_cast<bool>(denied));
+    if (denied) {
+        CHECK(denied->status == 401);
+    }
+    CHECK(server.audioListeners() == 0);
+
+    server.stop();
+}
+
+void testAudioListenerCap() {
+    WebServer server;
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+
+    std::atomic<bool> producing{true};
+    std::thread producer([&server, &producing]() {
+        std::vector<float> block(480, 0.25f);
+        while (producing.load()) {
+            server.pushAudio(block.data(), block.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    });
+
+    // Occupy every slot.
+    std::atomic<bool> holdOpen{true};
+    std::atomic<int> streaming{0};
+    std::vector<std::thread> listeners;
+    for (std::size_t i = 0; i < WebServer::kMaxAudioListeners; ++i) {
+        listeners.emplace_back([port, &holdOpen, &streaming]() {
+            httplib::Client cli("127.0.0.1", port);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(30, 0);
+            bool counted = false;
+            cli.Get("/api/audio", [&](const char*, std::size_t) {
+                if (!counted) {
+                    counted = true;
+                    streaming.fetch_add(1);
+                }
+                return holdOpen.load();
+            });
+        });
+    }
+    // Wait until every slot is genuinely in use, bounded so a failure reports
+    // rather than hanging the suite.
+    for (int i = 0; i < 200 && streaming.load() < static_cast<int>(WebServer::kMaxAudioListeners);
+         ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    CHECK(streaming.load() == static_cast<int>(WebServer::kMaxAudioListeners));
+
+    // One more must be refused rather than accepted and left to starve the
+    // rest of the API of worker threads.
+    {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(5, 0);
+        cli.set_read_timeout(5, 0);
+        auto extra = cli.Get("/api/audio");
+        CHECK(static_cast<bool>(extra));
+        if (extra) {
+            CHECK(extra->status == 503);
+        }
+    }
+
+    holdOpen.store(false);
+    for (std::thread& t : listeners) {
+        t.join();
+    }
+    producing.store(false);
+    producer.join();
+
+    server.stop();
+}
+
 }  // namespace
 
 int main() {
@@ -592,5 +746,8 @@ int main() {
     testControlQueue();
     testControlRequiresAuth();
     testControlQueueIsBounded();
+    testAudioStreamsRealSamples();
+    testAudioRequiresAuth();
+    testAudioListenerCap();
     return testSummary("test_web_server");
 }
