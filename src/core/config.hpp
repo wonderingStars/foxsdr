@@ -192,6 +192,45 @@ struct AppConfig {
     // goes through PluginUi's range checks and the receiver's own refusal.
     std::vector<std::string> pluginTuneAllowed;
 
+    // --- Web server mode (P11) ------------------------------------------------
+    // Browser access to the receiver. OFF by default, and the default binding
+    // is this machine only, so enabling the feature cannot by itself expose
+    // anything to a network.
+    bool webEnabled = false;
+
+    // The address the server binds. "127.0.0.1" (this machine only) and
+    // "0.0.0.0" (every interface) are the two the UI offers; a specific
+    // interface address is accepted for anyone who wants one.
+    //
+    // KEPT VERBATIM apart from the empty-string rule below, deliberately, for
+    // the same reason pluginCatalogueUrl is: the value has exactly one
+    // enforcement point — net/web_policy.hpp's evaluateBind — which refuses a
+    // hostname, a malformed quad, an octet with a leading zero, and any
+    // off-machine binding with no usable password. A second, weaker copy of
+    // those rules here is how the two end up disagreeing.
+    //
+    // An EMPTY value resets to the default. This one exception matters: the
+    // policy reads "" as "every interface", so an emptied field would silently
+    // mean the OPPOSITE of the safe default, and a config file must not be
+    // able to widen the binding by losing a value.
+    std::string webBindAddress = "127.0.0.1";
+
+    // Listening port. Sanitized on load (unlike the address) because it feeds a
+    // numeric UI control, the same treatment volume and notchQ get.
+    int webPort = 8073;
+
+    // Account name for the browser login. An empty value resets to the default.
+    std::string webUsername = "admin";
+
+    // Serialized PBKDF2 password record — see net/web_auth.hpp. Empty means no
+    // password is set, which the policy allows only for a this-machine-only
+    // binding. THE PLAINTEXT PASSWORD IS NEVER STORED, here or anywhere else;
+    // there is deliberately no field it could live in. Kept verbatim, because
+    // PasswordRecord::parse is its one enforcement point and an unreadable
+    // record must refuse the bind rather than be quietly treated as "no
+    // password".
+    std::string webPasswordRecord;
+
     // Cap for the list above; see the load-semantics note in the header comment.
     static constexpr std::size_t kMaxTuneGrants = 256;
 };

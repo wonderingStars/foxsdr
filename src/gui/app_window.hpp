@@ -7,6 +7,7 @@
 #include <deque>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
 #include "gui/freq_scale.hpp"
+// Pulls in the bind policy and the credential types too, but NOT httplib —
+// web_server.hpp forward-declares it.
+#include "net/web_server.hpp"
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
 #include "source/soapy_source.hpp"
@@ -700,6 +704,65 @@ private:
     // end of the run so it reflects any catalogue fetch the run performed.
     bool pluginStatusHook_ = false;
     void reportPluginStatus();
+
+    // --- Web server mode (P11) ------------------------------------------------
+    //
+    // WHY THE SERVER IS FED FROM A PUBLISHED SNAPSHOT rather than reading the
+    // pipeline directly. Its provider callbacks run on HTTP worker threads, and
+    // two of the things a browser wants are documented GUI-THREAD-ONLY:
+    // Pipeline::activeSourceName() returns a const char* valid only until the
+    // next setSource, and the source's own centre-frequency readback has the
+    // same contract. Calling either from a request handler would be a race that
+    // shows up as a torn string or a dangling pointer under exactly the
+    // conditions — a source swap — that are hardest to reproduce. So the GUI
+    // thread assembles one consistent snapshot per frame under webMutex_, and
+    // the providers do nothing but copy it out.
+    void drawWebSection();
+    // Copies the current radio state and newest spectrum frame into the
+    // members below. Called once per frame from drawUi, unconditionally: the
+    // panel being collapsed must not stop the browser being served.
+    void publishWebSnapshot();
+    // Applies webCfg_ to the server: starts, restarts or stops it, and puts
+    // the outcome in webError_ / webNote_. The ONE place that calls
+    // WebServer::start, so the panel, the config restore and the password
+    // dialog cannot drift apart.
+    void applyWebSettings();
+    // Hashes `password` and stores the record, then re-applies. An empty
+    // string CLEARS the password, which the policy will refuse if the binding
+    // is not loopback — deliberately, since that is the user removing the only
+    // thing protecting an exposed receiver.
+    void setWebPassword(const std::string& password);
+
+    cascade::net::WebServer webServer_;
+    cascade::net::WebServerConfig webCfg_;
+    // Panel mirrors (ImGui edits by pointer). webBindChoice_: 0 = this machine
+    // only, 1 = every network interface. A specific interface address loaded
+    // from the config that matches neither shows as choice 2 and is left alone.
+    int webBindChoice_ = 0;
+    int webPortMirror_ = cascade::net::kDefaultWebPort;
+    char webUserBuf_[64] = "admin";
+    char webPassBuf_[128] = "";
+    char webPassConfirmBuf_[128] = "";
+    std::string webError_;   // red: the policy's refusal, or a bind failure
+    std::string webNote_;    // neutral/green: "serving at http://..."
+    // Edits are staged and applied on a button rather than taking effect as
+    // they are typed. Two reasons: restarting the listener on every keystroke
+    // of the port field is nonsense, and — the real one — a setting that
+    // decides who can reach the receiver should be reviewed before it takes
+    // effect, not applied halfway through being typed.
+    bool webDirty_ = false;
+    // Addresses of this machine's own interfaces, for the "open this on your
+    // phone" hint. Filled lazily the first time the section is drawn, because
+    // enumerating adapters is a syscall nobody needs on a headless run.
+    std::vector<std::string> webLocalAddresses_;
+    bool webAddressesScanned_ = false;
+
+    mutable std::mutex webMutex_;
+    cascade::net::RadioStatus webStatus_;
+    std::vector<float> webBins_;
+    std::uint64_t webSeq_ = 0;
+    double webSnapCenterHz_ = 0.0;
+    double webSnapSpanHz_ = 0.0;
 
     cascade::core::Scanner scanner_;
     double scanStartMhz_ = cascade::core::Scanner::Params{}.startHz / 1.0e6;

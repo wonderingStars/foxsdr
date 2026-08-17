@@ -179,6 +179,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
     getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
+    getBool(j, "webEnabled", out.webEnabled);
+    getString(j, "webBindAddress", out.webBindAddress);
+    getInt(j, "webPort", out.webPort);
+    getString(j, "webUsername", out.webUsername);
+    getString(j, "webPasswordRecord", out.webPasswordRecord);
 
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
@@ -211,6 +216,24 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.pluginLastUpdateCheck < 0) {
         out.pluginLastUpdateCheck = 0;
     }
+    // Web server: the port is sanitized because it drives a numeric control;
+    // the ADDRESS and the password record are not, because each has exactly one
+    // enforcement point (evaluateBind and PasswordRecord::parse) and a second
+    // copy here could only disagree with it. See the header.
+    //
+    // The empty-address rule is the one exception and it is a safety rule, not
+    // a validation one: net/web_policy reads "" as "every interface", so a
+    // field emptied by a hand-edit would mean the opposite of the safe default.
+    if (out.webPort < 1024 || out.webPort > 65535) {
+        out.webPort = defaults.webPort;
+    }
+    if (out.webBindAddress.empty()) {
+        out.webBindAddress = defaults.webBindAddress;
+    }
+    if (out.webUsername.empty()) {
+        out.webUsername = defaults.webUsername;
+    }
+
     // Tune grants: drop empties and duplicates, then cap. A duplicate would
     // make revoking the permission look like it did not work — the second copy
     // would still be there — and an empty name could never match a plugin, so
@@ -274,6 +297,11 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
     j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
+    j["webEnabled"] = cfg.webEnabled;
+    j["webBindAddress"] = cfg.webBindAddress;
+    j["webPort"] = cfg.webPort;
+    j["webUsername"] = cfg.webUsername;
+    j["webPasswordRecord"] = cfg.webPasswordRecord;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the

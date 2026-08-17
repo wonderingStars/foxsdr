@@ -250,6 +250,40 @@ refreshSession();
 
 }  // namespace
 
+std::vector<std::string> localInterfaceAddresses() {
+    std::vector<std::string> out;
+    char host[256] = {0};
+    if (::gethostname(host, sizeof(host) - 1) != 0) {
+        return out;
+    }
+    ::addrinfo hints{};
+    hints.ai_family = AF_INET;  // IPv4 only: this is a hint for a phone browser
+    hints.ai_socktype = SOCK_STREAM;
+    ::addrinfo* result = nullptr;
+    if (::getaddrinfo(host, nullptr, &hints, &result) != 0 || result == nullptr) {
+        return out;
+    }
+    for (const ::addrinfo* a = result; a != nullptr; a = a->ai_next) {
+        if (a->ai_family != AF_INET || a->ai_addr == nullptr) {
+            continue;
+        }
+        char text[INET_ADDRSTRLEN] = {0};
+        const auto* sin = reinterpret_cast<const ::sockaddr_in*>(a->ai_addr);
+        if (::inet_ntop(AF_INET, &sin->sin_addr, text, sizeof(text)) == nullptr) {
+            continue;
+        }
+        const std::string addr(text);
+        if (addr.rfind("127.", 0) == 0) {
+            continue;  // loopback is never the answer to "reach me from my phone"
+        }
+        if (std::find(out.begin(), out.end(), addr) == out.end()) {
+            out.push_back(addr);
+        }
+    }
+    ::freeaddrinfo(result);
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Impl
 // ---------------------------------------------------------------------------

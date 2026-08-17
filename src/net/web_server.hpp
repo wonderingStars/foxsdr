@@ -77,6 +77,16 @@ struct SpectrumSnapshot {
     double spanHz = 0.0;
 };
 
+// This machine's own IPv4 addresses, so the settings panel can say "open
+// http://192.168.1.20:8073 on your phone" instead of leaving the user to find
+// it. Loopback is excluded; an empty result means enumeration failed and the
+// caller should simply omit the hint.
+//
+// It lives here rather than in the GUI because every line of socket code in
+// this product belongs in the one translation unit that already owns the
+// socket headers and their initialisation.
+std::vector<std::string> localInterfaceAddresses();
+
 class WebServer {
 public:
     using StatusProvider = std::function<RadioStatus()>;

@@ -101,6 +101,15 @@ AppConfig junkConfig() {
     // tune permission has granted none, and a leftover here would mean a
     // plugin could move the receiver on the strength of stale memory.
     c.pluginTuneAllowed = {"junk-grant"};
+    // P11 web server: every field away from its default, and the two that
+    // matter set to the DANGEROUS value — web access on, bound to every
+    // interface — so any load path that forgets to assign them is caught by a
+    // test rather than by a receiver that quietly answered the network.
+    c.webEnabled = true;
+    c.webBindAddress = "0.0.0.0";
+    c.webPort = 1;
+    c.webUsername = "garbage";
+    c.webPasswordRecord = "garbage";
     return c;
 }
 
@@ -133,6 +142,11 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
+    CHECK(a.webEnabled == b.webEnabled);
+    CHECK(a.webBindAddress == b.webBindAddress);
+    CHECK(a.webPort == b.webPort);
+    CHECK(a.webUsername == b.webUsername);
+    CHECK(a.webPasswordRecord == b.webPasswordRecord);
 }
 
 }  // namespace
@@ -200,6 +214,13 @@ int main() {
         // what the permission check reads, and a name silently dropped by the
         // save is a permission the user gave and did not get back.
         in.pluginTuneAllowed = {"Satellite Tracker", "ADS-B"};
+        // P11: values distinguishable from both the defaults and junkConfig().
+        in.webEnabled = true;
+        in.webBindAddress = "192.168.1.20";
+        in.webPort = 9090;
+        in.webUsername = "steve";
+        in.webPasswordRecord = "pbkdf2-sha256$10000$AAECAwQFBgcICQoLDA0ODw==$"
+                               "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
 
         const std::string path = p("nested/deeper/config.json");
         std::string err = "stale";
@@ -605,6 +626,91 @@ int main() {
         AppConfig back = junkConfig();
         CHECK(ConfigStore::load(rt, back, err));
         CHECK(back.pluginTuneAllowed == Names({"Satellite Tracker"}));
+    }
+
+    // --- P11 web server settings ---------------------------------------------
+    {
+        const std::string path = p("web.json");
+        const AppConfig d;
+
+        // THE DEFAULTS ARE THE SAFE ONES, and this is the security-relevant
+        // assertion in this file: a fresh install, a missing field and a
+        // corrupt file must all mean "web access off, and if it is ever turned
+        // on it listens only to this machine". Every other web assertion below
+        // is about a hand-edit failing safe.
+        CHECK(!d.webEnabled);
+        CHECK(d.webBindAddress == "127.0.0.1");
+        CHECK(d.webPort == 8073);
+        CHECK(d.webPasswordRecord.empty());
+
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // web fields absent
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.webEnabled);
+        CHECK(out.webBindAddress == "127.0.0.1");
+        CHECK(out.webPasswordRecord.empty());
+
+        // AN EMPTIED ADDRESS MUST NOT WIDEN THE BINDING. web_policy reads ""
+        // as "every interface", so a field a hand-edit blanked would mean the
+        // opposite of the safe default. It comes back as loopback.
+        CHECK(writeText(path, "{\"webEnabled\":true,\"webBindAddress\":\"\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webEnabled);
+        CHECK(out.webBindAddress == "127.0.0.1");
+
+        // The port is sanitized, because it drives a numeric control.
+        CHECK(writeText(path, "{\"webPort\":80}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webPort == 8073);
+        CHECK(writeText(path, "{\"webPort\":0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webPort == 8073);
+        CHECK(writeText(path, "{\"webPort\":70000}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webPort == 8073);
+        CHECK(writeText(path, "{\"webPort\":9000}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webPort == 9000);  // in range: untouched
+
+        // The ADDRESS is NOT validated here — evaluateBind is its one
+        // enforcement point, and a second weaker copy in the loader is how the
+        // two come to disagree. A nonsense value is kept verbatim and refused
+        // later, where the refusal can explain itself.
+        CHECK(writeText(path, "{\"webBindAddress\":\"nas.local\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webBindAddress == "nas.local");
+
+        // Likewise the password record: a corrupt one is kept so the policy can
+        // refuse the bind and say so, rather than being blanked here — which
+        // would silently downgrade it to "no password set".
+        CHECK(writeText(path, "{\"webPasswordRecord\":\"not-a-record\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webPasswordRecord == "not-a-record");
+
+        // An emptied user name resets, like the catalogue URL.
+        CHECK(writeText(path, "{\"webUsername\":\"\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webUsername == "admin");
+
+        // Wrong types keep the defaults, like every other field. The one that
+        // matters is webEnabled: a string "true" must NOT switch the server on.
+        out = junkConfig();
+        CHECK(writeText(path,
+                        "{\"webEnabled\":\"true\",\"webPort\":\"8073\","
+                        "\"webBindAddress\":42}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.webEnabled == d.webEnabled);
+        CHECK(out.webPort == d.webPort);
+        CHECK(out.webBindAddress == d.webBindAddress);
+
+        // A corrupt file leaves the safe defaults, not junkConfig()'s
+        // enabled-and-wide-open prefill.
+        out = junkConfig();
+        CHECK(writeText(path, "{ not json"));
+        CHECK(!ConfigStore::load(path, out, err));
+        CHECK(!out.webEnabled);
+        CHECK(out.webBindAddress == "127.0.0.1");
     }
 
 #ifdef _WIN32

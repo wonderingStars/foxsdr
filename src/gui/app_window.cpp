@@ -303,7 +303,11 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
-           a.pluginTuneAllowed == b.pluginTuneAllowed;
+           a.pluginTuneAllowed == b.pluginTuneAllowed &&
+           a.webEnabled == b.webEnabled &&
+           a.webBindAddress == b.webBindAddress && a.webPort == b.webPort &&
+           a.webUsername == b.webUsername &&
+           a.webPasswordRecord == b.webPasswordRecord;
 }
 
 // --- Plugin browser helpers (P9) ---------------------------------------------
@@ -476,6 +480,29 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // now runs only on the user's explicit request (first Source-dropdown
     // open, or Refresh — scanSoapy()), so sessions that never touch Soapy —
     // including every bounded --frames CI run — never execute that code.
+    // Web server providers. Installed once, before any start(), because the
+    // server refuses to change them while running. Both do nothing but copy
+    // the snapshot the GUI thread publishes each frame — see the note in
+    // app_window.hpp for why they must not touch the pipeline directly.
+    webServer_.setStatusProvider([this]() {
+        std::lock_guard<std::mutex> lock(webMutex_);
+        return webStatus_;
+    });
+    webServer_.setSpectrumProvider([this](cascade::net::SpectrumSnapshot& inOut) {
+        std::lock_guard<std::mutex> lock(webMutex_);
+        // Same contract as Pipeline::getLatestFrame: nothing newer than the
+        // caller's cursor means "no frame", so a polling browser never
+        // re-fetches a picture it already drew.
+        if (webSeq_ == 0 || inOut.seq >= webSeq_) {
+            return false;
+        }
+        inOut.seq = webSeq_;
+        inOut.centerHz = webSnapCenterHz_;
+        inOut.spanHz = webSnapSpanHz_;
+        inOut.dbBins = webBins_;
+        return true;
+    });
+
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
         if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
@@ -527,6 +554,16 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
 }
 
 AppWindow::~AppWindow() {
+    // FIRST, before anything else is torn down: stop serving.
+    //
+    // The server's provider callbacks capture `this` and read webMutex_,
+    // webStatus_ and webBins_, all of which are declared AFTER webServer_ and
+    // are therefore destroyed BEFORE it. Relying on ~WebServer to stop the
+    // listener would mean a request in flight could touch a destroyed mutex
+    // during teardown. stop() joins the listener thread, so once it returns no
+    // handler is running or can start.
+    webServer_.stop();
+
     // A catalogue fetch or a plugin download may still be in flight. The
     // std::async futures below block in their own destructors until the
     // worker returns, so without this an app closed mid-download would sit
@@ -754,6 +791,10 @@ void AppWindow::drawUi() {
     // Before anything is drawn: the decoders' output is bounded in the runner
     // and must be collected whether or not the panel that shows it is open.
     pumpDecoderOutput();
+    // Same contract for the web server's view of the radio: a browser must be
+    // served whether or not the settings panel is expanded, and this is the
+    // only thread allowed to read the source identity (see app_window.hpp).
+    publishWebSnapshot();
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -1085,6 +1126,7 @@ void AppWindow::drawMenuColumn() {
     drawBookmarksSection();
     drawScannerSection();
     drawPluginsSection();
+    drawWebSection();
     ImGui::EndChild();
 
     // Status footer: active source identity, its sample rate (device readback
@@ -3875,6 +3917,206 @@ void AppWindow::scannerFrame() {
 
 // --- Config persistence (P5) -------------------------------------------------
 
+// --- Web server mode (P11) ---------------------------------------------------
+
+void AppWindow::publishWebSnapshot() {
+    // Everything read here is read on the GUI thread, which is the contract
+    // activeSource() and its readbacks require. The server's providers only
+    // ever copy what this leaves behind.
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    cascade::net::RadioStatus s;
+    s.running = pipeline_.running();
+    s.faulted = pipeline_.faulted();
+    s.faultMessage = pipeline_.faultMessage();
+    s.centerHz = src.centerFrequencyHz();
+    s.sampleRateHz = src.sampleRateHz();
+    s.sourceName = src.name();  // copied into a std::string here, deliberately
+    s.vfoOffsetHz = pipeline_.vfoOffsetHz();
+    s.bandwidthHz = vfoBandwidthHz_;
+    s.mode = kModeNames[modeIndex_];
+    s.signalDb = pipeline_.signalPowerDb();
+    s.stereoActive = pipeline_.stereoActive();
+
+    const double centerHz = s.centerHz;
+    const double spanHz = pipeline_.inputRateHz();
+
+    std::lock_guard<std::mutex> lock(webMutex_);
+    webStatus_ = std::move(s);
+    // Copy the bins only when the frame actually advanced. lastFrame_ is what
+    // the spectrum panel just drew, so the browser and the window are showing
+    // the same data by construction.
+    if (lastFrame_.seq != webSeq_) {
+        webSeq_ = lastFrame_.seq;
+        webBins_ = lastFrame_.dbBins;
+        webSnapCenterHz_ = centerHz;
+        webSnapSpanHz_ = spanHz;
+    }
+}
+
+void AppWindow::applyWebSettings() {
+    webError_.clear();
+    webNote_.clear();
+    webDirty_ = false;
+
+    if (!webCfg_.enabled) {
+        webServer_.stop();
+        return;
+    }
+
+    std::string error;
+    if (!webServer_.start(webCfg_, error)) {
+        // The policy's refusal text is written to be shown verbatim; a bind
+        // failure's is too. Which of the two it was is available from
+        // decision(), but the user only needs the sentence.
+        webError_ = error;
+        return;
+    }
+
+    const cascade::net::BindDecision d = webServer_.decision();
+    const int port = webServer_.boundPort();
+    if (d.reachableOffMachine) {
+        webNote_ = "serving on port " + std::to_string(port) +
+                   " to every machine on your network";
+    } else {
+        webNote_ = "serving at http://127.0.0.1:" + std::to_string(port);
+    }
+}
+
+void AppWindow::setWebPassword(const std::string& password) {
+    webError_.clear();
+    if (password.empty()) {
+        // Clearing is allowed here; the POLICY decides whether the resulting
+        // configuration may still listen, and it refuses an off-machine
+        // binding with no password. That refusal is the right place for it —
+        // this dialog should not be a second copy of the rule.
+        webCfg_.passwordRecord.clear();
+        webServer_.revokeAllSessions();
+        applyWebSettings();
+        return;
+    }
+    cascade::net::PasswordRecord rec;
+    std::string error;
+    if (!cascade::net::hashPassword(password, rec, error)) {
+        webError_ = error;  // "at least 8 characters", or a CNG failure
+        return;
+    }
+    webCfg_.passwordRecord = rec.serialize();
+    // Anyone signed in under the old password should have to prove themselves
+    // against the new one.
+    webServer_.revokeAllSessions();
+    applyWebSettings();
+}
+
+void AppWindow::drawWebSection() {
+    if (!ImGui::CollapsingHeader("Web access")) { return; }
+
+    if (!webAddressesScanned_) {
+        webLocalAddresses_ = cascade::net::localInterfaceAddresses();
+        webAddressesScanned_ = true;
+    }
+
+    bool enabled = webCfg_.enabled;
+    if (ImGui::Checkbox("Serve a browser page", &enabled)) {
+        webCfg_.enabled = enabled;
+        webDirty_ = true;
+    }
+
+    // "A specific address" is offered only when the config already holds one,
+    // so the common case is a two-way choice rather than a text field the user
+    // has to get right.
+    const char* kWhere[] = {"This machine only", "Every network interface",
+                            "A specific address"};
+    const int whereCount = (webBindChoice_ == 2) ? 3 : 2;
+    if (ImGui::Combo("Reachable from", &webBindChoice_, kWhere, whereCount)) {
+        if (webBindChoice_ == 0) {
+            webCfg_.bindAddress = "127.0.0.1";
+        } else if (webBindChoice_ == 1) {
+            webCfg_.bindAddress = "0.0.0.0";
+        }
+        webDirty_ = true;
+    }
+    if (webBindChoice_ == 2) {
+        ImGui::TextDisabled("address: %s", webCfg_.bindAddress.c_str());
+    }
+
+    if (ImGui::InputInt("Port", &webPortMirror_)) {
+        webPortMirror_ = std::clamp(webPortMirror_, cascade::net::kMinPort,
+                                    cascade::net::kMaxPort);
+        webCfg_.port = webPortMirror_;
+        webDirty_ = true;
+    }
+
+    if (ImGui::InputText("User name", webUserBuf_, sizeof(webUserBuf_))) {
+        webCfg_.username = webUserBuf_;
+        webDirty_ = true;
+    }
+
+    // --- Password ------------------------------------------------------------
+    const bool hasPassword = !webCfg_.passwordRecord.empty();
+    ImGui::TextDisabled(hasPassword ? "a password is set" : "no password set");
+
+    ImGui::InputText("Password", webPassBuf_, sizeof(webPassBuf_),
+                     ImGuiInputTextFlags_Password);
+    ImGui::InputText("Confirm", webPassConfirmBuf_, sizeof(webPassConfirmBuf_),
+                     ImGuiInputTextFlags_Password);
+    if (ImGui::Button("Set password")) {
+        const std::string a(webPassBuf_);
+        const std::string b(webPassConfirmBuf_);
+        if (a != b) {
+            webError_ = "the two passwords do not match";
+        } else {
+            setWebPassword(a);
+        }
+        // Do not leave the plaintext sitting in a buffer once it has been
+        // hashed (or rejected).
+        std::memset(webPassBuf_, 0, sizeof(webPassBuf_));
+        std::memset(webPassConfirmBuf_, 0, sizeof(webPassConfirmBuf_));
+    }
+    if (hasPassword) {
+        ImGui::SameLine();
+        if (ImGui::Button("Clear password")) {
+            setWebPassword(std::string());
+        }
+    }
+
+    // --- Apply ---------------------------------------------------------------
+    ImGui::Separator();
+    ImGui::BeginDisabled(!webDirty_);
+    if (ImGui::Button(webDirty_ ? "Apply" : "Applied")) {
+        applyWebSettings();
+    }
+    ImGui::EndDisabled();
+
+    // --- Outcome -------------------------------------------------------------
+    if (!webError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", webError_.c_str());
+        ImGui::PopStyleColor();
+    } else if (webServer_.running()) {
+        ImGui::TextWrapped("%s", webNote_.c_str());
+        const cascade::net::BindDecision d = webServer_.decision();
+        if (d.reachableOffMachine) {
+            // The one thing worth shouting about on this panel.
+            ImGui::TextColored(kErrorRed, "reachable from your network");
+            for (const std::string& addr : webLocalAddresses_) {
+                ImGui::TextDisabled("http://%s:%d", addr.c_str(),
+                                    webServer_.boundPort());
+            }
+            ImGui::TextWrapped(
+                "This link is plain HTTP: the password is sent unencrypted, so "
+                "use it on a network you trust. To reach it from the internet, "
+                "put it behind something that terminates TLS rather than "
+                "forwarding this port.");
+        }
+        if (d.authRequired) {
+            ImGui::TextDisabled("%d browser session(s)",
+                                static_cast<int>(webServer_.sessionCount()));
+        }
+    } else if (webCfg_.enabled) {
+        ImGui::TextDisabled("not serving");
+    }
+}
+
 void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // Panel mirrors + always-safe DSP settings first (none of these can
     // fail; load() already range-sanitized volume/split/db*).
@@ -3978,6 +4220,22 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
         pipeline_.activeSource().setCenterFrequencyHz(cfg.centerHz);
     }
 
+    // Web server. Applied LAST in the restore so the snapshot the providers
+    // publish is assembled from a fully restored radio; applyWebSettings is
+    // what decides whether anything actually listens, and it refuses on its
+    // own terms (an off-machine binding with no password never starts).
+    webCfg_.enabled = cfg.webEnabled;
+    webCfg_.bindAddress = cfg.webBindAddress;
+    webCfg_.port = cfg.webPort;
+    webCfg_.username = cfg.webUsername;
+    webCfg_.passwordRecord = cfg.webPasswordRecord;
+    webPortMirror_ = webCfg_.port;
+    webBindChoice_ = cascade::net::isLoopbackAddress(webCfg_.bindAddress) ? 0
+                     : cascade::net::isWildcardAddress(webCfg_.bindAddress) ? 1
+                                                                            : 2;
+    std::snprintf(webUserBuf_, sizeof(webUserBuf_), "%s", webCfg_.username.c_str());
+    applyWebSettings();
+
     // VFO after the source/rate restore so the clamps use the REAL rates the
     // chain ended up with, not whatever the file claimed.
     const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
@@ -4020,6 +4278,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
+    cfg.webEnabled = webCfg_.enabled;
+    cfg.webBindAddress = webCfg_.bindAddress;
+    cfg.webPort = webCfg_.port;
+    cfg.webUsername = webCfg_.username;
+    cfg.webPasswordRecord = webCfg_.passwordRecord;
     return cfg;
 }
 
