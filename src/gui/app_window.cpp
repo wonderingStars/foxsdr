@@ -4001,6 +4001,40 @@ void AppWindow::publishWebSnapshot() {
                               : 0.0;
         s.gains.push_back({soapyGainNames_[i], db});
     }
+
+    s.iqRecording = iqRecorder_.recording();
+    s.audioRecording = audioRecorder_.recording();
+    s.iqBytes = iqRecorder_.bytesWritten();
+    s.audioBytes = audioRecorder_.bytesWritten();
+    s.recordDir = recordDir_;
+    s.recordError = recordError_;
+
+    for (const cascade::core::Bookmark& b : freqMgr_.list()) {
+        s.bookmarks.push_back({b.name, b.freqHz, b.mode, b.bandwidthHz});
+    }
+
+    s.scannerActive = scanner_.active();
+    switch (scanner_.state()) {
+        case cascade::core::Scanner::State::Idle: s.scannerState = "idle"; break;
+        case cascade::core::Scanner::State::Scanning: s.scannerState = "scanning"; break;
+        case cascade::core::Scanner::State::Paused: s.scannerState = "paused"; break;
+        case cascade::core::Scanner::State::Holding: s.scannerState = "holding"; break;
+    }
+    s.scanStartHz = scanStartMhz_ * 1.0e6;
+    s.scanStopHz = scanStopMhz_ * 1.0e6;
+    s.scanStepHz = scanStepKhz_ * 1.0e3;
+
+    // The tail of the decoder log. Bounded here rather than sending the whole
+    // deque: this is a live readout, and the panel the desktop shows is a tail
+    // too.
+    {
+        constexpr std::size_t kMaxWebDecoded = 60;
+        const std::size_t total = decoderLog_.size();
+        const std::size_t from = (total > kMaxWebDecoded) ? total - kMaxWebDecoded : 0;
+        for (std::size_t i = from; i < total; ++i) {
+            s.decoded.push_back({decoderLog_[i].plugin, decoderLog_[i].text});
+        }
+    }
     {
         const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
         s.rdsSynced = rds.synced;
@@ -4208,6 +4242,104 @@ void AppWindow::applyWebControls() {
                 } else {
                     sourceError_ = soapy_->lastError();
                 }
+            }
+        }
+
+        // --- Recorder --------------------------------------------------------
+        // The install/teardown ORDER is the Recorder contract's, not a choice:
+        // start() then set*Recorder for a new take, set*Recorder(nullptr) then
+        // stop() to end one. The stop* helpers already do the second.
+        if (r.recordIq.has_value()) {
+            if (*r.recordIq && !iqRecorder_.recording()) {
+                const double rate = pipeline_.inputRateHz();
+                std::string err;
+                if (iqRecorder_.start(cascade::core::RecordKind::BasebandIq,
+                                      recordDir_, rate, err)) {
+                    iqRecordRateHz_ = rate;
+                    iqRecordStartS_ = ImGui::GetTime();
+                    pipeline_.setIqRecorder(&iqRecorder_);
+                    recordError_.clear();
+                } else {
+                    recordError_ = err;
+                }
+            } else if (!*r.recordIq) {
+                stopIqRecording();
+            }
+        }
+        if (r.recordAudio.has_value()) {
+            if (*r.recordAudio && !audioRecorder_.recording()) {
+                std::string err;
+                if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
+                                         cascade::core::Pipeline::kAudioRateHz, err)) {
+                    audioRecordStartS_ = ImGui::GetTime();
+                    pipeline_.setAudioRecorder(&audioRecorder_);
+                    recordError_.clear();
+                } else {
+                    recordError_ = err;
+                }
+            } else if (!*r.recordAudio) {
+                stopAudioRecording();
+            }
+        }
+
+        // --- Bookmarks -------------------------------------------------------
+        // Indexes are re-checked against the LIVE list: the browser's copy can
+        // be a poll out of date, and acting on a stale index would tune to, or
+        // delete, the wrong entry.
+        if (r.bookmarkAdd.has_value()) {
+            cascade::core::Bookmark b;
+            b.name = *r.bookmarkAdd;
+            b.freqHz = currentAbsoluteHz();
+            b.mode = kModeNames[modeIndex_];
+            b.bandwidthHz = vfoBandwidthHz_;
+            freqMgr_.add(b);
+            saveBookmarks();
+        }
+        if (r.bookmarkTune.has_value()) {
+            const std::size_t i = static_cast<std::size_t>(*r.bookmarkTune);
+            if (i < freqMgr_.list().size()) {
+                const cascade::core::Bookmark b = freqMgr_.list()[i];
+                for (int m = 0; m < 8; ++m) {
+                    if (b.mode == kModeNames[m]) {
+                        modeIndex_ = m;
+                        pipeline_.setDemodMode(kModeMap[m]);
+                        break;
+                    }
+                }
+                const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+                vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+                pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+                bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+                tuneAbsoluteHz(b.freqHz);
+            }
+        }
+        if (r.bookmarkRemove.has_value()) {
+            if (freqMgr_.removeAt(static_cast<std::size_t>(*r.bookmarkRemove))) {
+                saveBookmarks();
+            }
+        }
+
+        // --- Scanner ---------------------------------------------------------
+        if (r.scanStartHz.has_value()) { scanStartMhz_ = *r.scanStartHz / 1.0e6; }
+        if (r.scanStopHz.has_value()) { scanStopMhz_ = *r.scanStopHz / 1.0e6; }
+        if (r.scanStepHz.has_value()) { scanStepKhz_ = *r.scanStepHz / 1.0e3; }
+        if (r.scannerActive.has_value()) {
+            if (*r.scannerActive) {
+                cascade::core::Scanner::Params p;
+                p.startHz = scanStartMhz_ * 1.0e6;
+                p.stopHz = scanStopMhz_ * 1.0e6;
+                p.stepHz = scanStepKhz_ * 1.0e3;
+                p.dwellMs = scanDwellMs_;
+                p.holdMs = scanHoldMs_;
+                p.resumeMs = scanResumeMs_;
+                // configure() sanitizes (swaps a reversed range, floors the
+                // step), so the browser's values get the same treatment the
+                // panel's do.
+                scanner_.configure(p);
+                scanner_.start(ImGui::GetTime() * 1000.0);
+                scannerHasExpected_ = false;
+            } else {
+                scanner_.stop();
             }
         }
     }

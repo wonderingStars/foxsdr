@@ -143,6 +143,40 @@ struct RadioStatus {
     bool sourceBusy = false;
     // The application's own last source error, verbatim. Empty when fine.
     std::string sourceError;
+
+    // --- Recorder ----------------------------------------------------------
+    bool iqRecording = false;
+    bool audioRecording = false;
+    std::uint64_t iqBytes = 0;
+    std::uint64_t audioBytes = 0;
+    std::string recordDir;
+    std::string recordError;
+
+    // --- Bookmarks ---------------------------------------------------------
+    struct Bookmark {
+        std::string name;
+        double freqHz = 0.0;
+        std::string mode;
+        double bandwidthHz = 0.0;
+    };
+    std::vector<Bookmark> bookmarks;
+
+    // --- Scanner -----------------------------------------------------------
+    bool scannerActive = false;
+    std::string scannerState;   // "idle" | "scanning" | "paused" | "holding"
+    double scanStartHz = 0.0;
+    double scanStopHz = 0.0;
+    double scanStepHz = 0.0;
+
+    // --- Decoder output ----------------------------------------------------
+    // The tail of what the loaded plugins have decoded. A TAIL, not an
+    // archive: the recorder is where a permanent copy belongs, and shipping
+    // the whole log on every status poll would grow without bound.
+    struct DecodedLine {
+        std::string plugin;
+        std::string text;
+    };
+    std::vector<DecodedLine> decoded;
 };
 
 struct SpectrumSnapshot {

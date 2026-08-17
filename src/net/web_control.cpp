@@ -22,7 +22,9 @@ const char* const kKnownKeys[] = {
     "notchEnabled", "notchFreqHz", "notchQ",         "autoNotch",
     "stereoEnabled", "sourceKind",  "soapyArgs",     "antenna",
     "sampleRateHz", "gainName",    "gainDb",         "agc",
-    "scanDevices"};
+    "scanDevices",  "recordIq",    "recordAudio",    "bookmarkAdd",
+    "bookmarkTune", "bookmarkRemove", "scannerActive", "scanStartHz",
+    "scanStopHz",   "scanStepHz"};
 
 // Longest string a control field will accept. Device kwargs and antenna names
 // are short by nature; a cap keeps a hostile client from making the
@@ -105,6 +107,9 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"stereoEnabled", &req.stereoEnabled},
         {"agc", &req.agc},
         {"scanDevices", &req.scanDevices},
+        {"recordIq", &req.recordIq},
+        {"recordAudio", &req.recordAudio},
+        {"scannerActive", &req.scannerActive},
     };
     for (const BoolField& f : boolFields) {
         const auto it = j.find(f.key);
@@ -181,6 +186,7 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"soapyArgs", &req.soapyArgs},
         {"antenna", &req.antenna},
         {"gainName", &req.gainName},
+        {"bookmarkAdd", &req.bookmarkAdd},
     };
     for (const StringField& f : stringFields) {
         const auto it = j.find(f.key);
@@ -208,7 +214,46 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
     }
 
     if (!readNumber(j, "sampleRateHz", 8000.0, 61.44e6, req.sampleRateHz, error) ||
-        !readNumber(j, "gainDb", -30.0, 100.0, req.gainDb, error)) {
+        !readNumber(j, "gainDb", -30.0, 100.0, req.gainDb, error) ||
+        !readNumber(j, "scanStartHz", kMinCenterHz, kMaxCenterHz, req.scanStartHz, error) ||
+        !readNumber(j, "scanStopHz", kMinCenterHz, kMaxCenterHz, req.scanStopHz, error) ||
+        !readNumber(j, "scanStepHz", 100.0, 10.0e6, req.scanStepHz, error)) {
+        return false;
+    }
+
+    // Bookmark indexes. Non-negative integers; the application re-checks them
+    // against the live list, since the browser's copy can be one poll stale.
+    struct IndexField {
+        const char* key;
+        std::optional<int>* dst;
+    };
+    const IndexField indexFields[] = {
+        {"bookmarkTune", &req.bookmarkTune},
+        {"bookmarkRemove", &req.bookmarkRemove},
+    };
+    for (const IndexField& f : indexFields) {
+        const auto it = j.find(f.key);
+        if (it == j.end()) {
+            continue;
+        }
+        if (!it->is_number_integer()) {
+            error = std::string(f.key) + " must be an integer";
+            return false;
+        }
+        const int v = it->get<int>();
+        if (v < 0) {
+            error = std::string(f.key) + " must not be negative";
+            return false;
+        }
+        *f.dst = v;
+    }
+
+    if (req.bookmarkAdd && req.bookmarkAdd->empty()) {
+        error = "bookmarkAdd must not be empty";
+        return false;
+    }
+    if (req.scanStartHz && req.scanStopHz && !(*req.scanStartHz < *req.scanStopHz)) {
+        error = "scanStartHz must be below scanStopHz";
         return false;
     }
 

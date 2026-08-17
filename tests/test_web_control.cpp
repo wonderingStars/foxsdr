@@ -281,6 +281,49 @@ void testSourceFields() {
     CHECK(accepts("{\"antenna\":\"" + std::string(256, 'x') + "\"}"));
 }
 
+void testRecorderBookmarkScannerFields() {
+    ControlRequest r;
+    std::string error;
+
+    CHECK(parseControlRequest("{\"recordIq\":true,\"recordAudio\":false}", r, error));
+    CHECK(r.recordIq.value_or(false));
+    CHECK(r.recordAudio.has_value());
+    CHECK(!r.recordAudio.value_or(true));
+    CHECK(!accepts("{\"recordIq\":1}"));
+    // The recording DIRECTORY is not a field: it would let a network client
+    // choose where the application writes on the host.
+    CHECK(!accepts("{\"recordDir\":\"C:/anywhere\"}"));
+
+    CHECK(parseControlRequest("{\"bookmarkAdd\":\"BBC Lancashire\"}", r, error));
+    CHECK(r.bookmarkAdd.value_or("") == "BBC Lancashire");
+    CHECK(!accepts("{\"bookmarkAdd\":\"\"}"));
+    CHECK(!accepts("{\"bookmarkAdd\":42}"));
+
+    CHECK(parseControlRequest("{\"bookmarkTune\":3}", r, error));
+    CHECK(r.bookmarkTune.value_or(-1) == 3);
+    CHECK(parseControlRequest("{\"bookmarkRemove\":0}", r, error));
+    CHECK(r.bookmarkRemove.value_or(-1) == 0);
+    CHECK(!accepts("{\"bookmarkTune\":-1}"));
+    CHECK(!accepts("{\"bookmarkRemove\":-5}"));
+    CHECK(!accepts("{\"bookmarkTune\":1.5}"));
+    CHECK(!accepts("{\"bookmarkTune\":\"0\"}"));
+
+    CHECK(parseControlRequest(
+        "{\"scannerActive\":true,\"scanStartHz\":88000000,\"scanStopHz\":108000000,"
+        "\"scanStepHz\":100000}", r, error));
+    CHECK(r.scannerActive.value_or(false));
+    CHECK(r.scanStartHz.value_or(0.0) == 88000000.0);
+    CHECK(r.scanStopHz.value_or(0.0) == 108000000.0);
+    CHECK(r.scanStepHz.value_or(0.0) == 100000.0);
+    // A range that runs backwards, or has no width, cannot be scanned.
+    CHECK(!accepts("{\"scanStartHz\":108000000,\"scanStopHz\":88000000}"));
+    CHECK(!accepts("{\"scanStartHz\":90000000,\"scanStopHz\":90000000}"));
+    CHECK(!accepts("{\"scanStepHz\":0}"));
+    CHECK(!accepts("{\"scannerActive\":\"yes\"}"));
+    // One end alone is fine — the application holds the other.
+    CHECK(accepts("{\"scanStartHz\":88000000}"));
+}
+
 void testFailureLeavesNothingBehind() {
     // A caller that ignores the return value must not find a usable request
     // sitting in `out` from a body that was refused.
@@ -308,6 +351,7 @@ int main() {
     testRejectsNonFinite();
     testDisplayAndAudioFields();
     testSourceFields();
+    testRecorderBookmarkScannerFields();
     testFailureLeavesNothingBehind();
     return testSummary("test_web_control");
 }

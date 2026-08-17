@@ -159,7 +159,27 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <label class="check"><input id="autoNotch" type="checkbox"> Auto-notch <span id="anState" class="dim"></span></label>
     </div>
     <p id="ctlError" class="error"></p>
+    <div class="row">
+      <button id="recIq">Record IQ</button>
+      <button id="recAudio">Record audio</button>
+      <span id="recInfo" class="dim"></span>
+    </div>
+    <p id="recError" class="error"></p>
+    <div class="row">
+      <label>Bookmark name<input id="bmName" placeholder="name this frequency"></label>
+      <button id="bmAdd">Add current</button>
+    </div>
+    <div id="bookmarks"></div>
+    <div class="row">
+      <label>Scan from (MHz)<input id="scanFrom" type="number" step="0.001"></label>
+      <label>to (MHz)<input id="scanTo" type="number" step="0.001"></label>
+      <label>step (kHz)<input id="scanStep" type="number" step="1"></label>
+      <button id="scanToggle">Start scan</button>
+      <span id="scanState" class="dim"></span>
+    </div>
   </div>
+  <h2 id="decodedHead" class="hidden">Decoded</h2>
+  <pre id="decoded" class="hidden"></pre>
   <button id="logout" class="hidden">Sign out</button>
 </section>
 <script src="/app.js"></script>
@@ -213,6 +233,17 @@ select { background:#1c2029; border:1px solid #2c3240; color:var(--fg);
        padding:.5rem .6rem; margin-top:.5rem; display:grid; gap:.25rem;
        grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); }
 #rds .rt { grid-column:1/-1; font-variant-numeric:tabular-nums; }
+#bookmarks { display:flex; flex-direction:column; gap:.25rem; }
+.bm { display:flex; align-items:center; gap:.5rem; background:#171b22;
+      border:1px solid #232833; border-radius:3px; padding:.3rem .5rem; }
+.bm .f { font-variant-numeric:tabular-nums; color:var(--dim); }
+.bm .n { flex:1 1 auto; }
+.bm button { padding:.2rem .5rem; font-size:.8rem; }
+.bm button.del { background:#7a2020; color:#ffd7d7; }
+#decoded { background:#080a0d; border:1px solid #232833; border-radius:3px;
+           padding:.5rem; max-height:16rem; overflow:auto; font-size:.8rem;
+           white-space:pre-wrap; word-break:break-word; margin:.25rem 0 0; }
+button.on { background:#7a2020; color:#ffd7d7; }
 )CSS";
 
 // THE CLIENT SCRIPT IS SPLIT ACROSS SEVERAL LITERALS because MSVC caps a single
@@ -417,6 +448,88 @@ function reflectSource(s) {
   });
 }
 
+function fmtBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + ' MB';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + ' kB';
+  return n + ' B';
+}
+
+let lastBmKey = '', lastDecodedKey = '';
+
+function reflectExtras(s) {
+  // Recorder. The buttons carry their own state, so one control both starts
+  // and stops — the same shape the desktop's Record/Stop pair has.
+  $('recIq').textContent = s.iqRecording ? 'Stop IQ' : 'Record IQ';
+  $('recIq').classList.toggle('on', s.iqRecording);
+  $('recAudio').textContent = s.audioRecording ? 'Stop audio' : 'Record audio';
+  $('recAudio').classList.toggle('on', s.audioRecording);
+  const parts = [];
+  if (s.iqRecording) parts.push('IQ ' + fmtBytes(s.iqBytes));
+  if (s.audioRecording) parts.push('audio ' + fmtBytes(s.audioBytes));
+  if (!parts.length && s.recordDir) parts.push('into ' + s.recordDir);
+  $('recInfo').textContent = parts.join('  |  ');
+  $('recError').textContent = s.recordError || '';
+
+  // Bookmarks, rebuilt only when the list changes so a click is never
+  // intercepted by a row being replaced underneath it.
+  // The COUNT is part of the key on purpose. Without it, an empty list keys to
+  // the empty string — which is exactly what the delete handler resets the
+  // cached key to, so the rebuild was skipped and the deleted row stayed on
+  // screen even though the server had removed it.
+  const bmKey = s.bookmarks.length + '#' +
+                s.bookmarks.map(b => b.name + '@' + b.freqHz).join('|');
+  if (bmKey !== lastBmKey) {
+    lastBmKey = bmKey;
+    const box = $('bookmarks');
+    box.innerHTML = '';
+    s.bookmarks.forEach((b, i) => {
+      const row = document.createElement('div');
+      row.className = 'bm';
+      const f = document.createElement('span');
+      f.className = 'f';
+      f.textContent = (b.freqHz / 1e6).toFixed(4) + ' MHz ' + b.mode;
+      const n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = b.name;
+      const go = document.createElement('button');
+      go.textContent = 'Tune';
+      go.addEventListener('click', () => control({ bookmarkTune: i }));
+      const del = document.createElement('button');
+      del.className = 'del';
+      del.textContent = 'Delete';
+      del.addEventListener('click', () => { lastBmKey = ''; control({ bookmarkRemove: i }); });
+      row.appendChild(f); row.appendChild(n); row.appendChild(go); row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+
+  // Scanner.
+  syncControl($('scanFrom'), (s.scanStartHz / 1e6).toFixed(3));
+  syncControl($('scanTo'), (s.scanStopHz / 1e6).toFixed(3));
+  syncControl($('scanStep'), (s.scanStepHz / 1e3).toFixed(0));
+  $('scanToggle').textContent = s.scannerActive ? 'Stop scan' : 'Start scan';
+  $('scanToggle').classList.toggle('on', s.scannerActive);
+  $('scanState').textContent = s.scannerActive ? s.scannerState : '';
+
+  // Decoder output.
+  const decKey = s.decoded.length + '#' + (s.decoded.length ? s.decoded[s.decoded.length-1].text : '');
+  if (decKey !== lastDecodedKey) {
+    lastDecodedKey = decKey;
+    const has = s.decoded.length > 0;
+    $('decoded').classList.toggle('hidden', !has);
+    $('decodedHead').classList.toggle('hidden', !has);
+    if (has) {
+      const el = $('decoded');
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      el.textContent = s.decoded.map(d => '[' + d.plugin + '] ' + d.text).join('\n');
+      // Follow the tail only if the reader was already at it — yanking the
+      // view while someone is reading back is the classic log-panel bug.
+      if (atBottom) el.scrollTop = el.scrollHeight;
+    }
+  }
+}
+
 function reflect(s) {
   $('playstop').textContent = s.running ? 'Stop' : 'Start';
   syncControl($('centre'), (s.centerHz / 1e6).toFixed(6));
@@ -462,6 +575,7 @@ function reflect(s) {
     s.autoNotch && s.autoNotchEngaged ? '(on ' + s.autoNotchFreqHz.toFixed(0) + ' Hz)' : '';
 
   reflectSource(s);
+  reflectExtras(s);
 
   // RDS, shown only when there is something to show.
   const showRds = s.mode === 'WFM' && (s.rdsSynced || s.pilotLocked);
@@ -647,6 +761,33 @@ $('srate').addEventListener('change', () => {
   control({ sampleRateHz: parseFloat($('srate').value) });
 });
 $('agc').addEventListener('change', () => control({ agc: $('agc').checked }));
+$('recIq').addEventListener('click', () => {
+  control({ recordIq: $('recIq').textContent === 'Record IQ' });
+});
+$('recAudio').addEventListener('click', () => {
+  control({ recordAudio: $('recAudio').textContent === 'Record audio' });
+});
+$('bmAdd').addEventListener('click', () => {
+  const name = $('bmName').value.trim();
+  if (!name) { $('ctlError').textContent = 'Give the bookmark a name first.'; return; }
+  lastBmKey = '';
+  control({ bookmarkAdd: name }).then(() => { $('bmName').value = ''; });
+});
+$('bmName').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('bmAdd').click(); }
+});
+$('scanToggle').addEventListener('click', () => {
+  const on = $('scanToggle').textContent === 'Start scan';
+  const patch = { scannerActive: on };
+  if (on) {
+    const a = parseFloat($('scanFrom').value), b = parseFloat($('scanTo').value);
+    const st = parseFloat($('scanStep').value);
+    if (isFinite(a)) patch.scanStartHz = Math.round(a * 1e6);
+    if (isFinite(b)) patch.scanStopHz = Math.round(b * 1e6);
+    if (isFinite(st)) patch.scanStepHz = Math.round(st * 1e3);
+  }
+  control(patch);
+});
 
 async function pollStatus() {
   const s = await getJson('/api/status');
@@ -1155,7 +1296,33 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 gains.push_back({{"name", g.name}, {"db", g.db}});
             }
             j["gains"] = std::move(gains);
+
+            nlohmann::json marks = nlohmann::json::array();
+            for (const RadioStatus::Bookmark& b : s.bookmarks) {
+                marks.push_back({{"name", b.name},
+                                 {"freqHz", b.freqHz},
+                                 {"mode", b.mode},
+                                 {"bandwidthHz", b.bandwidthHz}});
+            }
+            j["bookmarks"] = std::move(marks);
+
+            nlohmann::json lines = nlohmann::json::array();
+            for (const RadioStatus::DecodedLine& d : s.decoded) {
+                lines.push_back({{"plugin", d.plugin}, {"text", d.text}});
+            }
+            j["decoded"] = std::move(lines);
         }
+        j["iqRecording"] = s.iqRecording;
+        j["audioRecording"] = s.audioRecording;
+        j["iqBytes"] = s.iqBytes;
+        j["audioBytes"] = s.audioBytes;
+        j["recordDir"] = s.recordDir;
+        j["recordError"] = s.recordError;
+        j["scannerActive"] = s.scannerActive;
+        j["scannerState"] = s.scannerState;
+        j["scanStartHz"] = s.scanStartHz;
+        j["scanStopHz"] = s.scanStopHz;
+        j["scanStepHz"] = s.scanStepHz;
         res.set_content(j.dump(), "application/json");
     });
 

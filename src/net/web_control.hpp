@@ -117,13 +117,35 @@ struct ControlRequest {
     // next status poll.
     std::optional<bool> scanDevices;
 
+    // --- Recorder -------------------------------------------------------
+    // The recording DIRECTORY is not settable from here, for the same reason
+    // an IQ file is not selectable: it would let a network client choose
+    // where the application writes on the host. Takes land in the directory
+    // the application already uses.
+    std::optional<bool> recordIq;
+    std::optional<bool> recordAudio;
+
+    // --- Bookmarks ------------------------------------------------------
+    // Add the CURRENT frequency under this name.
+    std::optional<std::string> bookmarkAdd;
+    std::optional<int> bookmarkTune;     // index into the published list
+    std::optional<int> bookmarkRemove;   // index into the published list
+
+    // --- Scanner --------------------------------------------------------
+    std::optional<bool> scannerActive;
+    std::optional<double> scanStartHz;
+    std::optional<double> scanStopHz;
+    std::optional<double> scanStepHz;
+
     bool empty() const {
         return !running && !centerHz && !vfoOffsetHz && !mode && !bandwidthHz &&
                !squelchDb && !volume && !dbMin && !dbMax && !deemphasisIndex &&
                !nrEnabled && !nrStrength && !notchEnabled && !notchFreqHz &&
                !notchQ && !autoNotch && !stereoEnabled && !sourceKind &&
                !soapyArgs && !antenna && !sampleRateHz && !gainName && !gainDb &&
-               !agc && !scanDevices;
+               !agc && !scanDevices && !recordIq && !recordAudio &&
+               !bookmarkAdd && !bookmarkTune && !bookmarkRemove &&
+               !scannerActive && !scanStartHz && !scanStopHz && !scanStepHz;
     }
 };
 
