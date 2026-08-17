@@ -110,6 +110,21 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
   <div id="rds" class="hidden"></div>
   <div id="controls">
     <div class="row">
+      <label>Source<select id="srcSel"></select></label>
+      <button id="scan">Scan for devices</button>
+      <span id="srcBusy" class="dim"></span>
+    </div>
+    <div class="row" id="devRow">
+      <label>Antenna<select id="antenna"></select></label>
+      <label>Sample rate<select id="srate">
+        <option value="1000000">1 MS/s</option><option value="2000000">2 MS/s</option>
+        <option value="4000000">4 MS/s</option><option value="8000000">8 MS/s</option>
+      </select></label>
+      <label class="check"><input id="agc" type="checkbox"> Hardware AGC</label>
+    </div>
+    <div class="row" id="gainRow"></div>
+    <p id="srcError" class="error"></p>
+    <div class="row">
       <button id="playstop">Start</button>
       <button id="listen">Listen</button>
       <label>Centre (MHz)<input id="centre" type="number" step="0.000001"></label>
@@ -313,6 +328,95 @@ function syncControl(el, value) {
   el.value = value;
 }
 
+// The device list, the open device's ports and gains, and whichever of them
+// the receiver currently holds. Rebuilt only when the underlying list CHANGES,
+// so a dropdown the user has open is not torn down under them four times a
+// second.
+let lastDevKey = '', lastAntKey = '', lastGainKey = '';
+
+function reflectSource(s) {
+  $('srcBusy').textContent = s.sourceBusy ? 'working...' : '';
+  $('scan').disabled = s.sourceBusy;
+  $('srcError').textContent = s.sourceError || '';
+
+  const devKey = s.devices.map(d => d.args).join('|') + '#' + s.sourceKind + '#' + s.soapyArgs;
+  if (devKey !== lastDevKey) {
+    lastDevKey = devKey;
+    const sel = $('srcSel');
+    sel.innerHTML = '';
+    const gen = document.createElement('option');
+    gen.value = ''; gen.textContent = 'Signal generator';
+    sel.appendChild(gen);
+    s.devices.forEach((d) => {
+      const o = document.createElement('option');
+      o.value = d.args; o.textContent = d.label;
+      sel.appendChild(o);
+    });
+    // An IQ file may be OPEN (restored from the config, or chosen in the
+    // desktop window); it simply cannot be chosen from here. Showing it keeps
+    // the readout honest rather than implying the generator is running.
+    if (s.sourceKind === 'file') {
+      const o = document.createElement('option');
+      o.value = '__file__'; o.textContent = 'IQ file (choose in the app)';
+      o.disabled = true;
+      sel.appendChild(o);
+      sel.value = '__file__';
+    } else {
+      sel.value = s.sourceKind === 'soapy' ? s.soapyArgs : '';
+    }
+  }
+
+  const isDevice = s.sourceKind === 'soapy';
+  $('devRow').classList.toggle('hidden', !isDevice);
+  $('gainRow').classList.toggle('hidden', !isDevice);
+  if (!isDevice) return;
+
+  const antKey = s.antennas.join('|') + '#' + s.antenna;
+  if (antKey !== lastAntKey) {
+    lastAntKey = antKey;
+    const a = $('antenna');
+    a.innerHTML = '';
+    s.antennas.forEach((n) => {
+      const o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      a.appendChild(o);
+    });
+    a.value = s.antenna;
+  }
+  syncControl($('srate'), String(Math.round(s.sampleRateHz)));
+  $('agc').disabled = !s.agcSupported;
+  if (document.activeElement !== $('agc')) $('agc').checked = s.agc;
+
+  const gainKey = s.gains.map(g => g.name).join('|');
+  if (gainKey !== lastGainKey) {
+    lastGainKey = gainKey;
+    const row = $('gainRow');
+    row.innerHTML = '';
+    s.gains.forEach((g) => {
+      const label = document.createElement('label');
+      label.innerHTML = g.name + ' <span class="gv"></span>';
+      const inp = document.createElement('input');
+      inp.type = 'range'; inp.min = '0'; inp.max = '76'; inp.step = '1';
+      inp.dataset.gain = g.name;
+      inp.addEventListener('input', () => {
+        label.querySelector('.gv').textContent = inp.value + ' dB';
+      });
+      inp.addEventListener('change', () => {
+        control({ gainName: g.name, gainDb: parseFloat(inp.value) });
+      });
+      label.appendChild(inp);
+      row.appendChild(label);
+    });
+  }
+  s.gains.forEach((g) => {
+    const inp = document.querySelector('#gainRow input[data-gain="' + g.name + '"]');
+    if (!inp) return;
+    syncControl(inp, Math.round(g.db));
+    const gv = inp.parentElement.querySelector('.gv');
+    if (gv) gv.textContent = g.db.toFixed(0) + ' dB';
+  });
+}
+
 function reflect(s) {
   $('playstop').textContent = s.running ? 'Stop' : 'Start';
   syncControl($('centre'), (s.centerHz / 1e6).toFixed(6));
@@ -356,6 +460,8 @@ function reflect(s) {
   if (document.activeElement !== $('autoNotch')) $('autoNotch').checked = s.autoNotch;
   $('anState').textContent =
     s.autoNotch && s.autoNotchEngaged ? '(on ' + s.autoNotchFreqHz.toFixed(0) + ' Hz)' : '';
+
+  reflectSource(s);
 
   // RDS, shown only when there is something to show.
   const showRds = s.mode === 'WFM' && (s.rdsSynced || s.pilotLocked);
@@ -530,6 +636,17 @@ $('notchFreq').addEventListener('input', () => {
   $('notchVal').textContent = $('notchFreq').value + ' Hz';
 });
 $('autoNotch').addEventListener('change', () => control({ autoNotch: $('autoNotch').checked }));
+$('scan').addEventListener('click', () => control({ scanDevices: true }));
+$('srcSel').addEventListener('change', () => {
+  const v = $('srcSel').value;
+  if (v === '' ) control({ sourceKind: 'siggen' });
+  else if (v !== '__file__') control({ sourceKind: 'soapy', soapyArgs: v });
+});
+$('antenna').addEventListener('change', () => control({ antenna: $('antenna').value }));
+$('srate').addEventListener('change', () => {
+  control({ sampleRateHz: parseFloat($('srate').value) });
+});
+$('agc').addEventListener('change', () => control({ agc: $('agc').checked }));
 
 async function pollStatus() {
   const s = await getJson('/api/status');
@@ -1019,6 +1136,26 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["rdsTa"] = s.rdsTa;
         j["rdsGroups"] = s.rdsGroups;
         j["rdsErrors"] = s.rdsErrors;
+        j["sourceKind"] = s.sourceKind;
+        j["soapyArgs"] = s.soapyArgs;
+        j["antenna"] = s.antenna;
+        j["antennas"] = s.antennas;
+        j["agcSupported"] = s.agcSupported;
+        j["agc"] = s.agc;
+        j["sourceBusy"] = s.sourceBusy;
+        j["sourceError"] = s.sourceError;
+        {
+            nlohmann::json devices = nlohmann::json::array();
+            for (const RadioStatus::SoapyDevice& d : s.devices) {
+                devices.push_back({{"label", d.label}, {"args", d.args}});
+            }
+            j["devices"] = std::move(devices);
+            nlohmann::json gains = nlohmann::json::array();
+            for (const RadioStatus::GainStage& g : s.gains) {
+                gains.push_back({{"name", g.name}, {"db", g.db}});
+            }
+            j["gains"] = std::move(gains);
+        }
         res.set_content(j.dump(), "application/json");
     });
 

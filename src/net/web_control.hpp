@@ -93,11 +93,37 @@ struct ControlRequest {
     std::optional<bool> autoNotch;
     std::optional<bool> stereoEnabled;
 
+    // --- Source ---------------------------------------------------------
+    // "siggen" or "soapy". NOTE what is deliberately absent: there is no way
+    // for a browser to name an IQ FILE. Letting a network client open an
+    // arbitrary path on the machine running the receiver is a real capability
+    // — a file-read primitive dressed as a source selector — and it is not
+    // one to add without the owner deciding they want it. The desktop window
+    // keeps its file picker.
+    std::optional<std::string> sourceKind;
+    // Which SoapySDR device to open, as the kwargs string the scan reported.
+    // Matched against the scanned list rather than passed to the driver
+    // verbatim, so a browser cannot hand arbitrary kwargs to a vendor module.
+    std::optional<std::string> soapyArgs;
+    std::optional<std::string> antenna;
+    std::optional<double> sampleRateHz;
+    // One named gain stage, set as a pair — both or neither.
+    std::optional<std::string> gainName;
+    std::optional<double> gainDb;
+    std::optional<bool> agc;
+    // Ask the application to enumerate SoapySDR devices. A REQUEST, not a
+    // result: enumeration loads vendor modules and walks the USB bus, so it
+    // happens on the application's own thread and the outcome appears in the
+    // next status poll.
+    std::optional<bool> scanDevices;
+
     bool empty() const {
         return !running && !centerHz && !vfoOffsetHz && !mode && !bandwidthHz &&
                !squelchDb && !volume && !dbMin && !dbMax && !deemphasisIndex &&
                !nrEnabled && !nrStrength && !notchEnabled && !notchFreqHz &&
-               !notchQ && !autoNotch && !stereoEnabled;
+               !notchQ && !autoNotch && !stereoEnabled && !sourceKind &&
+               !soapyArgs && !antenna && !sampleRateHz && !gainName && !gainDb &&
+               !agc && !scanDevices;
     }
 };
 

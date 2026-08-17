@@ -20,7 +20,14 @@ const char* const kKnownKeys[] = {
     "bandwidthHz", "squelchDb",   "volume",          "dbMin",
     "dbMax",       "deemphasisIndex", "nrEnabled",   "nrStrength",
     "notchEnabled", "notchFreqHz", "notchQ",         "autoNotch",
-    "stereoEnabled"};
+    "stereoEnabled", "sourceKind",  "soapyArgs",     "antenna",
+    "sampleRateHz", "gainName",    "gainDb",         "agc",
+    "scanDevices"};
+
+// Longest string a control field will accept. Device kwargs and antenna names
+// are short by nature; a cap keeps a hostile client from making the
+// application hold megabytes of nonsense while it is matched against a list.
+constexpr std::size_t kMaxFieldChars = 256;
 
 bool isKnownKey(const std::string& key) {
     for (const char* k : kKnownKeys) {
@@ -96,6 +103,8 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"notchEnabled", &req.notchEnabled},
         {"autoNotch", &req.autoNotch},
         {"stereoEnabled", &req.stereoEnabled},
+        {"agc", &req.agc},
+        {"scanDevices", &req.scanDevices},
     };
     for (const BoolField& f : boolFields) {
         const auto it = j.find(f.key);
@@ -159,6 +168,55 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
     // end it already holds.
     if (req.dbMin && req.dbMax && !(*req.dbMin < *req.dbMax - 10.0)) {
         error = "dbMin must be at least 10 dB below dbMax";
+        return false;
+    }
+
+    // Bounded strings.
+    struct StringField {
+        const char* key;
+        std::optional<std::string>* dst;
+    };
+    const StringField stringFields[] = {
+        {"sourceKind", &req.sourceKind},
+        {"soapyArgs", &req.soapyArgs},
+        {"antenna", &req.antenna},
+        {"gainName", &req.gainName},
+    };
+    for (const StringField& f : stringFields) {
+        const auto it = j.find(f.key);
+        if (it == j.end()) {
+            continue;
+        }
+        if (!it->is_string()) {
+            error = std::string(f.key) + " must be a string";
+            return false;
+        }
+        const std::string v = it->get<std::string>();
+        if (v.size() > kMaxFieldChars) {
+            error = std::string(f.key) + " is too long";
+            return false;
+        }
+        *f.dst = v;
+    }
+
+    if (req.sourceKind && *req.sourceKind != "siggen" && *req.sourceKind != "soapy") {
+        // "file" is refused ON PURPOSE — see the note in web_control.hpp. A
+        // browser naming a path on the host is a file-read primitive, not a
+        // source selector.
+        error = "sourceKind must be \"siggen\" or \"soapy\"";
+        return false;
+    }
+
+    if (!readNumber(j, "sampleRateHz", 8000.0, 61.44e6, req.sampleRateHz, error) ||
+        !readNumber(j, "gainDb", -30.0, 100.0, req.gainDb, error)) {
+        return false;
+    }
+
+    // A gain is a NAME and a VALUE; either alone cannot be acted on, and
+    // silently ignoring the half that arrived would be a control that
+    // reported success and did nothing.
+    if (req.gainName.has_value() != req.gainDb.has_value()) {
+        error = "gainName and gainDb must be given together";
         return false;
     }
 

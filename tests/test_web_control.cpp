@@ -231,6 +231,56 @@ void testDisplayAndAudioFields() {
     CHECK(accepts("{\"notchQ\":1000}"));
 }
 
+void testSourceFields() {
+    ControlRequest r;
+    std::string error;
+
+    CHECK(parseControlRequest("{\"sourceKind\":\"siggen\"}", r, error));
+    CHECK(r.sourceKind.value_or("") == "siggen");
+    CHECK(parseControlRequest(
+        "{\"sourceKind\":\"soapy\",\"soapyArgs\":\"driver=uhd,serial=ABC\"}", r, error));
+    CHECK(r.soapyArgs.value_or("") == "driver=uhd,serial=ABC");
+
+    // "file" IS REFUSED ON PURPOSE. Letting a network client name a path on
+    // the host is a file-read primitive dressed as a source selector, and that
+    // is a capability the owner should choose to add, not one that arrives
+    // with a feature.
+    CHECK(!accepts("{\"sourceKind\":\"file\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"file\",\"iqFilePath\":\"C:/secrets.wav\"}"));
+    // ...and iqFilePath is not even a field this version knows.
+    CHECK(!accepts("{\"iqFilePath\":\"C:/secrets.wav\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"rtlsdr\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"\"}"));
+    CHECK(!accepts("{\"sourceKind\":7}"));
+
+    CHECK(parseControlRequest("{\"antenna\":\"TX/RX\"}", r, error));
+    CHECK(r.antenna.value_or("") == "TX/RX");
+    CHECK(parseControlRequest("{\"scanDevices\":true}", r, error));
+    CHECK(r.scanDevices.value_or(false));
+    CHECK(!accepts("{\"scanDevices\":1}"));
+
+    CHECK(parseControlRequest("{\"sampleRateHz\":2000000}", r, error));
+    CHECK(r.sampleRateHz.value_or(0.0) == 2000000.0);
+    CHECK(!accepts("{\"sampleRateHz\":100}"));      // below any SDR's range
+    CHECK(!accepts("{\"sampleRateHz\":1e9}"));
+
+    // A gain is a NAME and a VALUE; either alone cannot be acted on, and
+    // accepting half would be a control that reported success and did nothing.
+    CHECK(parseControlRequest("{\"gainName\":\"PGA\",\"gainDb\":42}", r, error));
+    CHECK(r.gainName.value_or("") == "PGA");
+    CHECK(r.gainDb.value_or(0.0) == 42.0);
+    CHECK(!accepts("{\"gainName\":\"PGA\"}"));
+    CHECK(!accepts("{\"gainDb\":42}"));
+    CHECK(!accepts("{\"gainName\":\"PGA\",\"gainDb\":500}"));
+
+    // Strings are bounded, so a hostile client cannot make the application
+    // hold megabytes of nonsense while it is matched against a list.
+    const std::string huge(300, 'x');
+    CHECK(!accepts("{\"antenna\":\"" + huge + "\"}"));
+    CHECK(!accepts("{\"soapyArgs\":\"" + huge + "\"}"));
+    CHECK(accepts("{\"antenna\":\"" + std::string(256, 'x') + "\"}"));
+}
+
 void testFailureLeavesNothingBehind() {
     // A caller that ignores the return value must not find a usable request
     // sitting in `out` from a body that was refused.
@@ -257,6 +307,7 @@ int main() {
     testRejectsOutOfRange();
     testRejectsNonFinite();
     testDisplayAndAudioFields();
+    testSourceFields();
     testFailureLeavesNothingBehind();
     return testSummary("test_web_control");
 }

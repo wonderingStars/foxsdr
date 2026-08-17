@@ -118,6 +118,31 @@ struct RadioStatus {
     bool rdsTa = false;
     unsigned rdsGroups = 0;
     unsigned rdsErrors = 0;
+
+    // --- Source ------------------------------------------------------------
+    struct SoapyDevice {
+        std::string label;
+        std::string args;
+    };
+    struct GainStage {
+        std::string name;
+        double db = 0.0;
+    };
+
+    std::string sourceKind = "siggen";   // "siggen" | "file" | "soapy"
+    std::string soapyArgs;               // kwargs of the open device, if any
+    std::string antenna;                 // RX port the DRIVER reports
+    std::vector<std::string> antennas;   // ports it offers
+    std::vector<SoapyDevice> devices;    // last enumeration, empty until asked
+    std::vector<GainStage> gains;
+    bool agcSupported = false;
+    bool agc = false;
+    // True while a device scan or open is in flight, so the page can say so
+    // rather than looking as though the button did nothing — both take
+    // seconds (a scan walks the USB bus; an open loads FPGA firmware).
+    bool sourceBusy = false;
+    // The application's own last source error, verbatim. Empty when fine.
+    std::string sourceError;
 };
 
 struct SpectrumSnapshot {

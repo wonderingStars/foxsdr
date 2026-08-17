@@ -3984,6 +3984,23 @@ void AppWindow::publishWebSnapshot() {
     s.autoNotchFreqHz = pipeline_.autoNotchFrequencyHz();
     s.stereoEnabled = stereoEnabled_;
     s.pilotLocked = pipeline_.pilotLocked();
+    s.sourceKind = sourceKind_;
+    s.soapyArgs = soapyArgs_;
+    s.antenna = soapyAntenna_;
+    s.antennas = soapyAntennas_;
+    s.agcSupported = soapyAgcSupported_;
+    s.agc = soapyAgc_;
+    s.sourceBusy = soapyScanPending_ || soapyOpenPending_;
+    s.sourceError = sourceError_;
+    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+        s.devices.push_back({d.label, d.args});
+    }
+    for (std::size_t i = 0; i < soapyGainNames_.size(); ++i) {
+        const double db = (i < soapyGainsDb_.size())
+                              ? static_cast<double>(soapyGainsDb_[i])
+                              : 0.0;
+        s.gains.push_back({soapyGainNames_[i], db});
+    }
     {
         const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
         s.rdsSynced = rds.synced;
@@ -4126,6 +4143,72 @@ void AppWindow::applyWebControls() {
         if (r.autoNotch.has_value()) {
             autoNotch_ = *r.autoNotch;
             pipeline_.setAutoNotchEnabled(autoNotch_);
+        }
+
+        // --- Source ---------------------------------------------------------
+        // All of this runs on the GUI thread by construction (applyWebControls
+        // is called from drawUi), which is what makes it safe to touch the
+        // source at all.
+        if (r.scanDevices.value_or(false)) {
+            scanSoapy();
+        }
+        if (r.sourceKind.has_value()) {
+            if (*r.sourceKind == "siggen") {
+                selectSource(0);
+            } else if (*r.sourceKind == "soapy" && r.soapyArgs.has_value()) {
+                // Matched against the SCANNED list rather than passed to the
+                // driver verbatim: a browser must not be able to hand
+                // arbitrary kwargs to a vendor module, and an unknown string
+                // is simply not a device this receiver has seen.
+                bool found = false;
+                for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                    if (soapyDevices_[i].args == *r.soapyArgs) {
+                        selectSource(static_cast<int>(i) + 2);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    sourceError_ = "no scanned device matches those arguments; "
+                                   "rescan and try again";
+                }
+            }
+        }
+        // The remaining source settings only mean anything with a device open.
+        if (soapy_ != nullptr) {
+            if (r.antenna.has_value()) {
+                if (soapy_->setAntenna(*r.antenna)) {
+                    soapyAntenna_ = soapy_->antenna();  // readback, not the request
+                } else {
+                    sourceError_ = soapy_->lastError();
+                }
+            }
+            if (r.sampleRateHz.has_value()) {
+                if (soapy_->setSampleRateHz(*r.sampleRateHz)) {
+                    followInputRate();
+                } else {
+                    sourceError_ = soapy_->lastError();
+                }
+            }
+            if (r.gainName.has_value() && r.gainDb.has_value()) {
+                if (soapy_->setGainDb(*r.gainName, *r.gainDb)) {
+                    for (std::size_t i = 0; i < soapyGainNames_.size(); ++i) {
+                        if (soapyGainNames_[i] == *r.gainName &&
+                            i < soapyGainsDb_.size()) {
+                            soapyGainsDb_[i] = static_cast<float>(*r.gainDb);
+                        }
+                    }
+                } else {
+                    sourceError_ = soapy_->lastError();
+                }
+            }
+            if (r.agc.has_value() && soapyAgcSupported_) {
+                if (soapy_->setAutoGain(*r.agc)) {
+                    soapyAgc_ = *r.agc;
+                } else {
+                    sourceError_ = soapy_->lastError();
+                }
+            }
         }
     }
 }
