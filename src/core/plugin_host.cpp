@@ -273,6 +273,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                       ? static_cast<const CascadeBasemapApi*>(
                             findCapabilityTable(desc, CASCADE_CAP_BASEMAP))
                       : nullptr;
+    rec.trackInfo = (desc->capabilities & CASCADE_CAP_TRACK_INFO) != 0u
+                        ? static_cast<const CascadeTrackInfoApi*>(
+                              findCapabilityTable(desc, CASCADE_CAP_TRACK_INFO))
+                        : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -536,6 +540,25 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         ++usable;
     }
 
+    if ((desc->capabilities & CASCADE_CAP_TRACK_INFO) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_TRACK_INFO);
+        if (raw == nullptr) {
+            return PluginRejection::MissingTrackInfoApi;
+        }
+        const auto* t = static_cast<const CascadeTrackInfoApi*>(raw);
+        if (t->structSize != static_cast<uint32_t>(sizeof(CascadeTrackInfoApi))) {
+            return PluginRejection::TrackInfoStructSizeMismatch;
+        }
+        if (t->create == nullptr || t->get_info == nullptr || t->release_info == nullptr ||
+            t->poll_text == nullptr || t->destroy == nullptr) {
+            return PluginRejection::MissingTrackInfoFunction;
+        }
+        // Counted toward `usable`: enriching the targets on the map is a real
+        // job on its own, unlike a preset (which only points at one) or the
+        // host-client table (which is a permission, not a function).
+        ++usable;
+    }
+
     // Every bit it declared is one this host has never heard of. Loading it
     // would put a plugin in the list that can never do anything, so say what
     // is actually wrong instead: it was built for a host newer than this one.
@@ -613,6 +636,12 @@ const char* pluginRejectionMessage(PluginRejection r) {
                    "licences require";
         case PluginRejection::BasemapBadTileSize:
             return "basemap declares an unusable tile size or zoom range";
+        case PluginRejection::MissingTrackInfoApi:
+            return "declares CASCADE_CAP_TRACK_INFO but supplies no table";
+        case PluginRejection::TrackInfoStructSizeMismatch:
+            return "track-info table size does not match this host's";
+        case PluginRejection::MissingTrackInfoFunction:
+            return "track-info table has a null function pointer";
         case PluginRejection::MissingName:
             return "descriptor has no name";
         case PluginRejection::MissingVersion:

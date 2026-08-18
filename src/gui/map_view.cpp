@@ -8,6 +8,7 @@
 
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
+#include "gui/track_info_cache.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -155,7 +156,7 @@ void MapView::goTo(double latDeg, double lonDeg, double spanDeg) {
 void MapView::draw(float width, float height,
                    const std::vector<cascade::core::HostTrack>& tracks,
                    const std::vector<cascade::core::HostPath>& paths,
-                   BasemapCache* tiles) {
+                   BasemapCache* tiles, TrackInfoCache* info) {
     if (width < 32.0f || height < 32.0f) { return; }
     const bool mercator = tiles != nullptr && tiles->active();
 
@@ -522,6 +523,30 @@ void MapView::draw(float width, float height,
         ImGui::BeginTooltip();
         ImGui::Text("%s", best->t.label[0] != '\0' ? best->t.label : best->t.id);
         ImGui::Separator();
+        // Who this actually is, when a track-info plugin knows. Asking is
+        // non-blocking and cached, so hovering is also what starts the lookup
+        // for a target the per-frame sweep has not reached yet.
+        if (info != nullptr && info->active()) {
+            const TrackInfoCache::Info* d = info->get(best->t.id, best->t.kind);
+            if (d != nullptr && d->known) {
+                if (!d->registration.empty()) {
+                    ImGui::Text("reg     %s", d->registration.c_str());
+                }
+                const std::string& type =
+                    !d->typeName.empty() ? d->typeName : d->typeCode;
+                if (!type.empty()) { ImGui::Text("type    %s", type.c_str()); }
+                if (!d->operatorName.empty()) {
+                    ImGui::Text("oper    %s", d->operatorName.c_str());
+                }
+                if (!d->country.empty()) {
+                    ImGui::Text("reg'd   %s", d->country.c_str());
+                }
+                ImGui::Separator();
+            } else if (d == nullptr) {
+                ImGui::TextDisabled("looking up...");
+                ImGui::Separator();
+            }
+        }
         ImGui::Text("id      %s", best->t.id);
         ImGui::Text("from    %s", best->plugin.c_str());
         ImGui::Text("pos     %.5f, %.5f", best->t.latDeg, best->t.lonDeg);

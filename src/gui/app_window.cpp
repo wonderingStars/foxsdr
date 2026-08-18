@@ -2028,6 +2028,7 @@ void AppWindow::rescanPlugins() {
     // And the basemap, for exactly the same reason - its handle and its tile
     // borrows live in a module about to be unmapped.
     basemap_.detach();
+    trackInfo_.detach();
 
     pluginHost_.unloadAll();
     pluginEnforceError_.clear();
@@ -2741,6 +2742,15 @@ void AppWindow::refreshPluginRunner() {
         }
     }
     basemap_.attach(wantBasemap);
+    // Track enrichment, by the same first-wins rule and for the same reason.
+    const CascadeTrackInfoApi* wantTrackInfo = nullptr;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (lp.loaded && lp.trackInfo != nullptr) {
+            wantTrackInfo = lp.trackInfo;
+            break;
+        }
+    }
+    trackInfo_.attach(wantTrackInfo);
     // Grants LAST, and every time. rescanPlugins() calls PluginUi::clear(),
     // which drops the permission set along with the instances, so without this
     // a rescan would silently revoke every permission the user had given — and
@@ -2831,7 +2841,7 @@ void AppWindow::drawPluginWindows() {
             if (credit) { avail.y -= ImGui::GetTextLineHeightWithSpacing(); }
             if (avail.y < 32.0f) { avail.y = 32.0f; }
             map_->draw(avail.x, avail.y, pluginUi_.tracks(), pluginUi_.paths(),
-                       &basemap_);
+                       &basemap_, &trackInfo_);
             if (credit) {
                 ImGui::TextDisabled("%s", basemap_.attribution().c_str());
             }
@@ -3078,11 +3088,27 @@ void AppWindow::drawTrackList() {
         // from the receiver where a position has been set. NaN means the
         // decoder honestly does not know, and is shown as nothing rather than
         // as a confident zero.
-        char detail[96];
+        char detail[128];
         detail[0] = '\0';
+        // Registration and type first, when a track-info plugin knows them -
+        // "G-EZBX A319" says more about what is overhead than any number does.
+        // Asking here is also what queues the lookup for every listed target.
+        if (trackInfo_.active()) {
+            const cascade::gui::TrackInfoCache::Info* d =
+                trackInfo_.get(ht.t.id, ht.t.kind);
+            if (d != nullptr && d->known &&
+                (!d->registration.empty() || !d->typeCode.empty())) {
+                std::snprintf(detail, sizeof(detail), "%s%s%s",
+                              d->registration.c_str(),
+                              (!d->registration.empty() && !d->typeCode.empty()) ? " " : "",
+                              d->typeCode.c_str());
+            }
+        }
         if (!std::isnan(ht.t.altM)) {
-            std::snprintf(detail, sizeof(detail), "%.0f ft",
+            char alt[32];
+            std::snprintf(alt, sizeof(alt), "%s%.0f ft", detail[0] != '\0' ? "  " : "",
                           ht.t.altM * 3.28084);
+            std::strncat(detail, alt, sizeof(detail) - std::strlen(detail) - 1);
         }
         if (map_->hasHome()) {
             const double km = greatCircleKmForList(map_->homeLatDeg(), map_->homeLonDeg(),
@@ -3288,6 +3314,14 @@ void AppWindow::pumpDecoderOutput() {
     // block on the GUI), so draining only while the Plugins section happened
     // to be expanded would quietly lose decodes the user never knew existed.
     for (cascade::core::DecodedLine& l : pluginRunner_.drainText()) {
+        decoderLog_.push_back(std::move(l));
+    }
+    // The track-info plugin's status ("cannot reach the registry") lands in
+    // the same log: it is the only place a user looks when a plugin is quiet.
+    for (std::string& s : trackInfo_.drainText()) {
+        cascade::core::DecodedLine l;
+        l.plugin = "Aircraft info";
+        l.text = std::move(s);
         decoderLog_.push_back(std::move(l));
     }
     while (decoderLog_.size() > kDecoderLogMax) { decoderLog_.pop_front(); }
@@ -4142,6 +4176,21 @@ void AppWindow::publishWebSnapshot() {
         w.ageMs = t.t.ageMs;
         w.kind = t.t.kind;
         w.flags = t.t.flags;
+        // Enrichment from the track-info plugin. Running every frame for
+        // every live target, this loop is ALSO what drives the lookups: the
+        // ask is non-blocking, PENDING costs nothing, and answers are cached.
+        if (trackInfo_.active()) {
+            const cascade::gui::TrackInfoCache::Info* d = trackInfo_.get(w.id, w.kind);
+            if (d != nullptr) {
+                w.infoState = d->known ? 1u : 2u;
+                if (d->known) {
+                    w.registration = d->registration;
+                    w.acType = !d->typeName.empty() ? d->typeName : d->typeCode;
+                    w.acOperator = d->operatorName;
+                    w.acCountry = d->country;
+                }
+            }
+        }
         s.tracks.push_back(std::move(w));
     }
 

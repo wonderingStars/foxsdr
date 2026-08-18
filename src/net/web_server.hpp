@@ -196,6 +196,15 @@ struct RadioStatus {
         std::uint64_t ageMs = 0;
         unsigned kind = 0;
         unsigned flags = 0;
+        // Who this is, when a track-info plugin has answered: 0 = no answer
+        // yet (or no plugin), 1 = known, 2 = the source does not have it.
+        // Separate states because "still looking" and "will never know" read
+        // differently to a person.
+        unsigned infoState = 0;
+        std::string registration;
+        std::string acType;      // "Airbus A319-111", or the type code
+        std::string acOperator;
+        std::string acCountry;
     };
     std::vector<Track> tracks;
 

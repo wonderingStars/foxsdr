@@ -41,6 +41,7 @@
 namespace cascade::gui {
 
 class BasemapCache;
+class TrackInfoCache;
 
 class MapView {
 public:
@@ -52,9 +53,12 @@ public:
     // view switches to Web Mercator and draws its tiles beneath everything
     // else; the coastline then stays out of the way, because drawing vector
     // land over a rendered map is just a wrong-coloured outline.
+    //
+    // `info` may be null too; when a track-info plugin is active it feeds the
+    // hover tooltip's registration/type/operator lines.
     void draw(float width, float height, const std::vector<cascade::core::HostTrack>& tracks,
               const std::vector<cascade::core::HostPath>& paths,
-              BasemapCache* tiles = nullptr);
+              BasemapCache* tiles = nullptr, TrackInfoCache* info = nullptr);
 
     // The receiver's own position, used for range rings and for the range and
     // bearing readout. Unset until the user provides one - guessing it from a

@@ -1106,6 +1106,25 @@ CascadePresetApi validPreset() {
     return p;
 }
 
+void* tiCreate() { return reinterpret_cast<void*>(1); }
+int32_t tiGetInfo(void*, const char*, uint32_t, CascadeTrackInfo*) {
+    return CASCADE_INFO_MISSING;
+}
+void tiRelease(void*, const CascadeTrackInfo*) {}
+int32_t tiPollText(void*, char*, size_t) { return 0; }
+void tiDestroy(void*) {}
+
+CascadeTrackInfoApi validTrackInfo() {
+    CascadeTrackInfoApi t{};
+    t.structSize = static_cast<uint32_t>(sizeof(CascadeTrackInfoApi));
+    t.create = &tiCreate;
+    t.get_info = &tiGetInfo;
+    t.release_info = &tiRelease;
+    t.poll_text = &tiPollText;
+    t.destroy = &tiDestroy;
+    return t;
+}
+
 // Builds a descriptor from an arbitrary set of capability entries. The array
 // is leaked deliberately, for the reason descFor documents.
 CascadePluginDesc descWith(uint32_t caps, const CascadeCapabilityEntry* entries,
@@ -1254,6 +1273,54 @@ void testUiCapabilities() {
             CascadePluginDesc p = descWith(CASCADE_CAP_BASEMAP, &e, 1);
             CHECK(cascade::core::validatePluginDesc(&p) ==
                   PluginRejection::BasemapBadTileSize);
+        }
+    }
+
+    // --- CASCADE_CAP_TRACK_INFO, added without an ABI bump ----------------
+    {
+        using namespace uicaps;
+        const CascadeTrackInfoApi ti = validTrackInfo();
+        const CascadeCapabilityEntry tiEntry{
+            CASCADE_CAP_TRACK_INFO, static_cast<uint32_t>(sizeof(CascadeTrackInfoApi)),
+            &ti};
+
+        // Enrichment alone is a usable capability: a plugin that can say WHO
+        // every aircraft on the map is has done something for the user, even
+        // though it decodes nothing itself.
+        {
+            CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_INFO, &tiEntry, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+        }
+        // Declared but not supplied, a table from another ABI build, and a
+        // null function - the same three shapes every capability is checked
+        // for.
+        {
+            const CascadeCapabilityEntry panelE{
+                CASCADE_CAP_PANEL, static_cast<uint32_t>(sizeof(CascadePanelApi)),
+                &validPanelStorage()};
+            CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_INFO, &panelE, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::MissingTrackInfoApi);
+        }
+        {
+            CascadeTrackInfoApi bad = validTrackInfo();
+            bad.structSize = static_cast<uint32_t>(sizeof(CascadeTrackInfoApi)) + 8u;
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_TRACK_INFO, static_cast<uint32_t>(sizeof(CascadeTrackInfoApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_INFO, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::TrackInfoStructSizeMismatch);
+        }
+        {
+            CascadeTrackInfoApi bad = validTrackInfo();
+            bad.release_info = nullptr;
+            const CascadeCapabilityEntry e{
+                CASCADE_CAP_TRACK_INFO, static_cast<uint32_t>(sizeof(CascadeTrackInfoApi)),
+                &bad};
+            CascadePluginDesc p = descWith(CASCADE_CAP_TRACK_INFO, &e, 1);
+            CHECK(cascade::core::validatePluginDesc(&p) ==
+                  PluginRejection::MissingTrackInfoFunction);
         }
     }
 

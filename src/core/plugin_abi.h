@@ -234,7 +234,8 @@ extern "C" {
 #define CASCADE_CAP_HOST_CLIENT 0x00000020u
 #define CASCADE_CAP_PRESET 0x00000040u
 #define CASCADE_CAP_BASEMAP 0x00000080u
-#define CASCADE_CAP_ALL_KNOWN 0x000000FFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_TRACK_INFO 0x00000100u
+#define CASCADE_CAP_ALL_KNOWN 0x000001FFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -1008,6 +1009,78 @@ typedef struct CascadeBasemapApi {
 
 #define CASCADE_TILE_SIZE_MAX 1024u
 
+/* ---------------------------------------------------------------------------
+ * CASCADE_CAP_TRACK_INFO - who a track actually is, looked up by a plugin.
+ *
+ * A track source gives the host an id (for aircraft, the 24-bit ICAO address
+ * as six hex digits) and sometimes a label. Everything else about the target -
+ * registration, airframe type, operator, country of registry - exists only in
+ * registry databases. This capability lets a plugin supply that enrichment,
+ * from whatever source IT chose: a web API, a local database file, anything.
+ *
+ * WHY A PLUGIN AND NOT THE APPLICATION. The lookup source determines both the
+ * data licence and the privacy cost (an online lookup tells a third party
+ * which aircraft this receiver hears, which is a coarse statement of where its
+ * user lives). Keeping it in a plugin keeps those decisions with the person
+ * who chose to install it - the same reasoning as CASCADE_CAP_BASEMAP, and the
+ * catalogue's legalNotice mechanism is how the choice is made informed.
+ *
+ * get_info MUST NOT BLOCK. It is called on the GUI thread, per frame, for
+ * targets on screen. A plugin that consults anything slow must queue the id,
+ * return CASCADE_INFO_PENDING, and answer READY on a later call. The host
+ * caches every READY and MISSING answer, so each id is asked about until it is
+ * answered ONCE, not for ever.
+ *
+ * Strings in CascadeTrackInfo are OWNED BY THE PLUGIN and borrowed by the
+ * host between get_info and release_info, exactly as tile pixels are. A field
+ * with nothing to say is NULL or empty; the host shows what it gets.
+ */
+
+typedef struct CascadeTrackInfo {
+    /* sizeof(CascadeTrackInfo) as the HOST compiled it; filled before the
+     * call. */
+    uint32_t structSize;
+
+    const char *registration; /* "G-EZBX" */
+    const char *typeCode;     /* "A319" - the ICAO type designator */
+    const char *typeName;     /* "Airbus A319-111" */
+    const char *manufacturer; /* "Airbus" */
+    const char *operatorName; /* "easyJet UK" */
+    const char *country;      /* "United Kingdom" - country of registry */
+} CascadeTrackInfo;
+
+#define CASCADE_INFO_READY 1
+#define CASCADE_INFO_PENDING 0  /* being looked up; ask again on a later frame */
+#define CASCADE_INFO_MISSING (-1) /* not in this source - do not ask again */
+
+typedef struct CascadeTrackInfoApi {
+    /* sizeof(CascadeTrackInfoApi) as the PLUGIN compiled it. Checked. */
+    uint32_t structSize;
+
+    /* One instance. NULL on failure. */
+    void *(*create)(void);
+
+    /*
+     * Offers what this source knows about track `id` of kind `kind`
+     * (CASCADE_TRACK_*). Returns CASCADE_INFO_READY with `out` filled,
+     * CASCADE_INFO_PENDING while a lookup is in flight, or
+     * CASCADE_INFO_MISSING when this source has nothing and never will.
+     * MUST NOT BLOCK - see above. On READY the host owns a borrow of the
+     * strings until release_info.
+     */
+    int32_t (*get_info)(void *handle, const char *id, uint32_t kind,
+                        CascadeTrackInfo *out);
+
+    /* Returns a borrow taken by get_info. Called once per READY. */
+    void (*release_info)(void *handle, const CascadeTrackInfo *info);
+
+    /* Status text: same contract as CascadeDecoderApi::poll_text. Where a
+     * plugin says it cannot reach its source. */
+    int32_t (*poll_text)(void *handle, char *buf, size_t cap);
+
+    void (*destroy)(void *handle);
+} CascadeTrackInfoApi;
+
 typedef struct CascadeHostClientApi {
     uint32_t structSize;
 
@@ -1209,6 +1282,12 @@ static inline const CascadeTrackSourceApi *cascade_plugin_track_source(
 static inline const CascadeBasemapApi *cascade_plugin_basemap(
     const CascadePluginDesc *desc) {
     return (const CascadeBasemapApi *)cascade_plugin_capability(desc, CASCADE_CAP_BASEMAP);
+}
+
+static inline const CascadeTrackInfoApi *cascade_plugin_track_info(
+    const CascadePluginDesc *desc) {
+    return (const CascadeTrackInfoApi *)cascade_plugin_capability(desc,
+                                                                  CASCADE_CAP_TRACK_INFO);
 }
 
 static inline const CascadePresetApi *cascade_plugin_preset(

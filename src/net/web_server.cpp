@@ -382,9 +382,11 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
        border:1px solid var(--edge); border-radius:3px; }
 #trackList { display:flex; flex-direction:column; gap:.15rem; margin-top:.35rem;
              max-height:11rem; overflow:auto; }
-.tr { display:flex; gap:.5rem; background:#1b202a; border:1px solid var(--edge);
-      border-radius:3px; padding:.2rem .45rem; font-size:.75rem; cursor:pointer; }
+.tr { display:flex; flex-wrap:wrap; gap:.15rem .5rem; background:#1b202a;
+      border:1px solid var(--edge); border-radius:3px; padding:.2rem .45rem;
+      font-size:.75rem; cursor:pointer; }
 .tr.sel { border-color:#4fb0ff; background:#22303e; }
+.tr .ac { flex:1 1 100%; color:#9fb4c8; font-size:.72rem; }
 .tr .id { font-variant-numeric:tabular-nums; color:var(--dim); min-width:5.5rem; }
 .tr .pos { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums; }
 
@@ -801,6 +803,15 @@ function reflectTracks(s) {
                     '<span>' + (t.label || '') + '</span>' +
                     '<span class="pos">' + t.latDeg.toFixed(4) + ', ' +
                     t.lonDeg.toFixed(4) + '  ' + alt + '  ' + spd + '</span>';
+    // Who it is, when the track-info plugin has answered. textContent, never
+    // innerHTML: these strings come from a third-party registry.
+    if (t.infoState === 1) {
+      const ac = document.createElement('span');
+      ac.className = 'ac';
+      ac.textContent = [t.reg, t.acType, t.acOperator, t.acCountry]
+          .filter((x) => x).join('  ·  ');
+      if (ac.textContent) row.appendChild(ac);
+    }
     row.addEventListener('click', () => {
       selectedTrackId = (t.id === selectedTrackId) ? '' : t.id;
       redrawMap();
@@ -2342,7 +2353,12 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                                   {"speedMps", orNull(t.speedMps)},
                                   {"ageMs", t.ageMs},
                                   {"kind", t.kind},
-                                  {"flags", t.flags}});
+                                  {"flags", t.flags},
+                                  {"infoState", t.infoState},
+                                  {"reg", t.registration},
+                                  {"acType", t.acType},
+                                  {"acOperator", t.acOperator},
+                                  {"acCountry", t.acCountry}});
             }
             j["tracks"] = std::move(tracks);
 

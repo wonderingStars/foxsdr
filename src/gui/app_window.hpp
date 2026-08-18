@@ -22,6 +22,7 @@
 #include "core/recorder.hpp"
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
+#include "gui/track_info_cache.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
 // web_server.hpp forward-declares it.
@@ -467,6 +468,9 @@ private:
     // reason as pluginRunner_.
     cascade::core::PluginUi pluginUi_;
     std::unique_ptr<MapView> map_;
+    // Who each map target actually is, answered by a track-info plugin
+    // (registration, type, operator). Inactive when none is installed.
+    TrackInfoCache trackInfo_;
     // Map imagery from a basemap plugin, as GL textures. Inactive - and the
     // map is the built-in coastline - unless such a plugin is installed, which
     // is the shipped configuration. Declared after pluginHost_ so it detaches
