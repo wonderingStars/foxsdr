@@ -12,3 +12,11 @@ dataset = "foxsdr_usage"
 
 # Deliberately NOT set: no KV, no D1, no R2, no logpush. There is nowhere
 # for this Worker to persist a request even if a future edit tried to.
+
+# The endpoint lives on the project's own domain, NOT the workers.dev name.
+# This URL is compiled into every shipped binary, so it has to be one we can
+# repoint later without orphaning copies already installed — exactly the
+# reason the plugin catalogue URL is worth moving off a raw GitHub path too.
+[[routes]]
+pattern = "telemetry.foxsdr.com"
+custom_domain = true

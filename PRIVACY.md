@@ -5,8 +5,9 @@ lists exactly what it sends when you do.
 
 ## The short version
 
-- **Usage reporting is off by default.** Nothing is transmitted until you turn
-  it on, and turning it off again deletes the identifier described below.
+- **Usage reporting is ON by default, and you can turn it off.** It sends the
+  anonymous counts listed below and nothing else. Switching it off stops all
+  reporting and deletes the identifier described below.
 - **No personal data is collected**, and no IP address or location is recorded.
 - **Nothing about what you listen to is ever collected** — no frequencies, no
   positions, no decoded messages. Not when reporting is on, not ever.
@@ -53,11 +54,15 @@ These are design constraints, not current policy:
   your individual radio, and is removed.
 - Your name, your machine's name, your user account, or any file path.
 
-## Turning it on or off
+## Turning it off
 
-Settings → Usage reporting. Off by default. Turning it off deletes the install
-identifier, so a later opt-in produces a new one that cannot be linked to the
-old one.
+**Settings → Usage reporting**, and untick it. Reporting is on by default, so
+this is the switch that stops it. Turning it off deletes the install
+identifier, so if you ever turn it back on you get a new one that cannot be
+linked to the old one.
+
+Nothing else in the application is affected: no feature depends on reporting
+being on, and nothing nags you about having turned it off.
 
 ## Where the data goes
 

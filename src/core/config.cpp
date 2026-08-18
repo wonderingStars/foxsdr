@@ -214,11 +214,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.telemetryEnabled = false;
         out.telemetryPending.clear();
     }
-    // Reporting cannot be on without an id to report under, however the file
-    // came to say so.
-    if (out.telemetryEnabled && out.telemetryInstallId.empty()) {
-        out.telemetryEnabled = false;
-    }
+    // An id is MINTED on first run rather than disabling reporting: with
+    // reporting on by default, a fresh install legitimately has no id yet,
+    // and treating that as "switch it off" would mean it never reported at
+    // all. A HAND-EDITED bad id still disables it (above) - that path is a
+    // user trying to intervene, and is respected.
     if (out.telemetryPending.size() > AppConfig::kMaxPendingReportBytes) {
         out.telemetryPending.clear();
     }

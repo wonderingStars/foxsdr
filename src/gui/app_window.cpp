@@ -5048,6 +5048,13 @@ void AppWindow::telemetryNotePanel(const char* name) {
 void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     telemetryEnabled_ = cfg.telemetryEnabled;
     telemetryInstallId_ = cfg.telemetryInstallId;
+    // Reporting is on by default, so a first run arrives here enabled with no
+    // identifier. Mint one now. If the CSPRNG fails there is no id, and
+    // reporting stays off rather than falling back to anything guessable.
+    if (telemetryEnabled_ && telemetryInstallId_.empty()) {
+        telemetryInstallId_ = cascade::core::newInstallId();
+        telemetryEnabled_ = !telemetryInstallId_.empty();
+    }
     telemetryLaunches_ = cfg.telemetryLaunches + 1;
     telemetryCrashes_ = cfg.telemetryCrashes;
     // The previous run never wrote its clean-exit marker, so it did not end

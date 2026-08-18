@@ -136,11 +136,11 @@ are host filesystem paths rather than settings.
 
 ## Privacy
 
-FoxSDR collects nothing about you unless you switch it on. Optional anonymous
-usage reporting (Settings → Usage reporting, **off by default**) sends counts
-only: version, operating system, session length, which modes and plugins get
-used, and which radio model — against a random identifier created on your
-machine when you opt in and deleted when you opt out.
+FoxSDR reports anonymous usage counts. **Settings → Usage reporting** is
+**on by default** — untick it and reporting stops. It sends counts only:
+version, operating system, session length, which modes and plugins get used,
+and which radio model, against a random identifier created on your machine.
+Switching it off deletes that identifier.
 
 **It never sends frequencies, anything decoded, your location, or your IP
 address**, and hardware serial numbers are stripped before the radio model is

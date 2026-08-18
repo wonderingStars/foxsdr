@@ -233,11 +233,15 @@ struct AppConfig {
 
     // --- Anonymous usage reporting (see PRIVACY.md) -------------------------
     //
-    // OFF unless the user turns it on. Storing the identifier below on
-    // someone's machine for analytics needs their consent under PECR
-    // regulation 6, and a default of true would not be consent — so this
-    // field defaults false and nothing but an explicit action changes it.
-    bool telemetryEnabled = false;
+    // ON by default; the user turns it off (product decision, 2026-08-18).
+    //
+    // NOTE FOR ANYONE CHANGING THIS BACK: PECR regulation 6 requires consent
+    // before storing an identifier on someone's device for analytics, and a
+    // default of true is not consent. The owner has accepted that risk
+    // knowingly. If that position ever changes, this is the single line to
+    // flip, and PRIVACY.md, README.md and the website all describe the
+    // default in words that would need to change with it.
+    bool telemetryEnabled = true;
 
     // Random 32-hex-character install id, created when reporting is switched
     // ON and DELETED when it is switched off, so a later opt-in cannot be

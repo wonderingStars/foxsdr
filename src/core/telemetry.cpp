@@ -172,10 +172,13 @@ std::string TelemetryReport::toJson() const {
 
 namespace {
 
-// Deliberately empty. A build that has not had an endpoint set collects
-// nothing and offers no setting, which is the right default for a source tree
-// anyone can compile: a fork should not start reporting to us.
-constexpr char kDefaultEndpoint[] = "";
+// The project's own domain rather than the workers.dev name behind it: this
+// string is compiled into every shipped binary, so it has to be one that can
+// be repointed later without orphaning copies already installed.
+//
+// Reporting is still OFF until the user turns it on - this only decides where
+// a report would go, not whether one is sent.
+constexpr char kDefaultEndpoint[] = "https://telemetry.foxsdr.com";
 
 }  // namespace
 
