@@ -239,8 +239,10 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <div id="mapWrap" class="panel hidden">
         <h3>Map <button class="pop" data-view="map"
                         title="open the map in its own window">&#x29c9;</button></h3>
-        <canvas id="map"></canvas>
-        <div id="trackList"></div>
+        <div id="mapRow">
+          <canvas id="map"></canvas>
+          <div id="trackList" title="drag the left edge to resize"></div>
+        </div>
       </div>
       <div id="imagesWrap" class="panel hidden">
         <h3>Pictures <button class="pop" data-view="images"
@@ -433,20 +435,41 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 .bm button { padding:.15rem .4rem; font-size:.72rem; }
 .bm button.del, button.del { background:#5a1c1c; border-color:#7a2020; color:#ffd7d7; }
 
+/* THE TRACK LIST SITS BESIDE THE MAP, not under it — the desktop's layout,
+   and the one that makes a wide window useful instead of leaving the list
+   pushed off the bottom of a short panel. */
+#mapRow { display:flex; gap:.5rem; flex:1 1 auto; min-height:0; min-width:0; }
+
 /* A FIXED flex-basis, never content-derived: the canvas's intrinsic size is
    its pixel buffer, which fitCanvas() sets from the rendered box, and letting
-   the two feed each other is the runaway documented at #scope. Grow soaks up
-   whatever the splitter grants the panel area. */
-#map { width:100%; flex:1 1 340px; min-height:180px; background:#080a0d;
+   the two feed each other is the runaway documented at #scope. min-width:0 is
+   the same guard on the OTHER axis, and it is load-bearing now the canvas
+   flexes horizontally: without it the canvas's own buffer width becomes its
+   min-content width, so it can grow and never shrink. Grow soaks up whatever
+   the splitter grants the panel area. */
+#map { flex:1 1 auto; min-width:0; min-height:180px; background:#080a0d;
        border:1px solid var(--edge); border-radius:3px; }
-/* resize:vertical puts the browser's own grab handle on the scrollable
-   innards, so every panel body can be sized without inventing more splitters. */
-#trackList { display:flex; flex-direction:column; gap:.15rem; margin-top:.35rem;
-             height:11rem; max-height:none; overflow:auto; resize:vertical; }
+/* Beside the map, scrolling on its own, and resizable by its edge —
+   resize:horizontal puts the browser's own grab handle on it, so the split
+   between map and list needs no splitter of its own. width (not flex-basis)
+   because that is what the resize handle writes. */
+#trackList { display:flex; flex-direction:column; gap:.15rem;
+             flex:0 0 auto; width:23rem; min-width:12rem; max-width:60%;
+             overflow:auto; resize:horizontal; }
+/* Narrow windows (a phone held upright) have no room for two columns, so the
+   list goes back under the map and the map keeps a usable height. */
+@media (max-width: 900px) {
+  #mapRow { flex-direction:column; }
+  #trackList { width:auto; max-width:none; height:11rem; resize:vertical; }
+}
 .tr { display:flex; flex-wrap:wrap; gap:.15rem .5rem; background:#1b202a;
       border:1px solid var(--edge); border-radius:3px; padding:.2rem .45rem;
       font-size:.75rem; cursor:pointer; }
 .tr.sel { border-color:#4fb0ff; background:#22303e; }
+/* Followed: the map re-centres on this one every poll, so it gets a stronger
+   mark than a selection — a persistent state deserves to look persistent. */
+.tr.fol { border-color:#ffd24f; }
+.tr.fol .id::before { content:'\25c9\00a0'; color:#ffd24f; }
 .tr .ac { flex:1 1 100%; color:#9fb4c8; font-size:.72rem; }
 .tr .id { font-variant-numeric:tabular-nums; color:var(--dim); min-width:5.5rem; }
 .tr .pos { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums; }
@@ -764,6 +787,20 @@ function reflectTracks(s) {
                                : (maxLat - minLat) * (w / h);
     mapView.lonSpan = Math.min(360, Math.max(0.2, maxLon - minLon, needVert));
   }
+  // FOLLOW, before the projection is set up so the whole frame uses the new
+  // centre — a followed target that only re-centred on the next poll would
+  // visibly lag its own marker. A followed track that stops being reported
+  // releases the follow rather than pinning the map to a ghost.
+  if (followTrackId) {
+    const f = s.tracks.find((t) => t.id === followTrackId);
+    if (f) {
+      mapView.user = true;
+      mapView.centreLat = f.latDeg;
+      mapView.centreLon = f.lonDeg;
+    } else {
+      followTrackId = '';
+    }
+  }
   const centreLat = mapView.centreLat, centreLon = mapView.centreLon;
   const lonSpan = mapView.lonSpan;
   const wrapLon = (lon) => {
@@ -871,7 +908,9 @@ function reflectTracks(s) {
   box.innerHTML = '';
   s.tracks.slice(0, 60).forEach((t) => {
     const row = document.createElement('div');
-    row.className = (t.id === selectedTrackId) ? 'tr sel' : 'tr';
+    row.className = 'tr' + (t.id === selectedTrackId ? ' sel' : '') +
+                    (t.id === followTrackId ? ' fol' : '');
+    row.title = 'click to go to it on the map, double-click to follow it';
     const alt = (t.altM === null || !isFinite(t.altM)) ? '-' : Math.round(t.altM) + ' m';
     const spd = (t.speedMps === null || !isFinite(t.speedMps)) ? '-'
                                                               : Math.round(t.speedMps) + ' m/s';
@@ -888,8 +927,16 @@ function reflectTracks(s) {
           .filter((x) => x).join('  ·  ');
       if (ac.textContent) row.appendChild(ac);
     }
+    // Click SELECTS and goes to it — deliberately not a toggle, because a
+    // double-click fires two clicks first and a toggle would leave the
+    // followed aircraft deselected. Clear a selection by clicking the map
+    // background instead.
     row.addEventListener('click', () => {
-      selectedTrackId = (t.id === selectedTrackId) ? '' : t.id;
+      selectedTrackId = t.id;
+      goToTrack(t);
+    });
+    row.addEventListener('dblclick', () => {
+      followTrackId = (t.id === followTrackId) ? '' : t.id;
       redrawMap();
     });
     box.appendChild(row);
@@ -1263,6 +1310,24 @@ const mapView = { user: false, centreLat: 54, centreLon: -2, lonSpan: 20 };
 let mapProj = null;
 let mapStatus = null;
 let mapRedraw = 0;
+// The track the map is following, empty when none. While set, every status
+// poll re-centres on it, so a target being watched stays put instead of
+// flying off the edge — the desktop's double-click behaviour.
+let followTrackId = '';
+
+// GO TO ONE TARGET: centre on it, and tighten the zoom if the view is wider
+// than `spanDeg`. TIGHTENED ONLY, never loosened — someone zoomed right into
+// an approach path who then clicks a flight in that same area wants to go to
+// it, not to be yanked back out to a county view.
+function goToTrack(t, spanDeg) {
+  if (!t) return;
+  mapView.user = true;          // this is an explicit instruction about where
+  mapView.centreLat = t.latDeg; // to look, so it overrides the auto-fit
+  mapView.centreLon = t.lonDeg;
+  const want = spanDeg || 2;
+  if (mapView.lonSpan > want) mapView.lonSpan = want;
+  redrawMap();
+}
 function redrawMap() {
   if (mapRedraw) return;
   mapRedraw = requestAnimationFrame(() => {
