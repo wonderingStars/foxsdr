@@ -8,7 +8,10 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <deque>
+#include <set>
 #include <thread>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 
@@ -363,7 +366,8 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 #trackList { display:flex; flex-direction:column; gap:.15rem; margin-top:.35rem;
              max-height:11rem; overflow:auto; }
 .tr { display:flex; gap:.5rem; background:#1b202a; border:1px solid var(--edge);
-      border-radius:3px; padding:.2rem .45rem; font-size:.75rem; }
+      border-radius:3px; padding:.2rem .45rem; font-size:.75rem; cursor:pointer; }
+.tr.sel { border-color:#4fb0ff; background:#22303e; }
 .tr .id { font-variant-numeric:tabular-nums; color:var(--dim); min-width:5.5rem; }
 .tr .pos { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums; }
 
@@ -617,15 +621,26 @@ function reflectSource(s) {
   });
 }
 
+)JS";
+
+// The map itself. Split from kAppJs2: MSVC caps a string literal at 16380
+// bytes and the tile + icon work pushed the section over it.
+constexpr char kAppJs2t[] = R"JS(
 // EQUIRECTANGULAR, matching the desktop's default projection. Mercator would
 // misplace polar orbits, and this one inverts cheaply — which is what a
 // click-to-centre would need later.
 const TRACK_COLOURS = { 1: '#ff5a4a', 2: '#4fd08a', 3: '#4fb0ff', 4: '#ffd24f' };
 
 function reflectTracks(s) {
+  mapStatus = s;   // so a drag can redraw between polls
+  const bm = s.basemap || { active: false };
   const has = s.tracks.length > 0;
   $('mapWrap').classList.toggle('hidden', !has);
-  if (!has) return;
+  if (!has) { mapHits = []; mapProj = null; return; }
+  // A selection whose track has gone is over, not remembered.
+  if (selectedTrackId && !s.tracks.some((t) => t.id === selectedTrackId)) {
+    selectedTrackId = '';
+  }
 
   const c = $('map');
   fitCanvas(c);
@@ -634,52 +649,134 @@ function reflectTracks(s) {
   ctx.clearRect(0, 0, w, h);
 
   // Fit the view to what is actually being heard, with a margin, so a single
-  // aircraft is not a dot in the middle of an empty world map.
-  let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
-  s.tracks.forEach((t) => {
-    minLat = Math.min(minLat, t.latDeg); maxLat = Math.max(maxLat, t.latDeg);
-    minLon = Math.min(minLon, t.lonDeg); maxLon = Math.max(maxLon, t.lonDeg);
-  });
-  const padLat = Math.max(0.5, (maxLat - minLat) * 0.25);
-  const padLon = Math.max(0.5, (maxLon - minLon) * 0.25);
-  minLat -= padLat; maxLat += padLat; minLon -= padLon; maxLon += padLon;
-  const xOf = (lon) => ((lon - minLon) / (maxLon - minLon)) * w;
-  const yOf = (lat) => h - ((lat - minLat) / (maxLat - minLat)) * h;
-
-  // A graticule, so the picture has a scale rather than being floating dots.
-  ctx.strokeStyle = '#1b212b'; ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = (i / 4) * h, x = (i / 4) * w;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  // aircraft is not a dot in the middle of an empty world map — UNLESS the
+  // user has taken the view with a drag or the wheel, in which case it is
+  // theirs until a double-click hands it back.
+  if (!mapView.user) {
+    let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    s.tracks.forEach((t) => {
+      minLat = Math.min(minLat, t.latDeg); maxLat = Math.max(maxLat, t.latDeg);
+      minLon = Math.min(minLon, t.lonDeg); maxLon = Math.max(maxLon, t.lonDeg);
+    });
+    const padLat = Math.max(0.5, (maxLat - minLat) * 0.25);
+    const padLon = Math.max(0.5, (maxLon - minLon) * 0.25);
+    minLat -= padLat; maxLat += padLat; minLon -= padLon; maxLon += padLon;
+    mapView.centreLat = (minLat + maxLat) / 2;
+    mapView.centreLon = (minLon + maxLon) / 2;
+    // The span that shows both extents, in whichever vertical scale is about
+    // to draw the frame.
+    const needVert = bm.active ? (mercYn(minLat) - mercYn(maxLat)) * 360 * (w / h)
+                               : (maxLat - minLat) * (w / h);
+    mapView.lonSpan = Math.min(360, Math.max(0.2, maxLon - minLon, needVert));
   }
-  ctx.fillStyle = '#4a5464'; ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText(maxLat.toFixed(2) + 'N', 4, 12);
-  ctx.fillText(minLat.toFixed(2) + 'N', 4, h - 4);
-  ctx.fillText(minLon.toFixed(2) + 'E', 4, h - 18);
-  ctx.fillText(maxLon.toFixed(2) + 'E', w - 60, h - 18);
+  const centreLat = mapView.centreLat, centreLon = mapView.centreLon;
+  const lonSpan = mapView.lonSpan;
+  const wrapLon = (lon) => {
+    let dx = lon - centreLon;
+    if (dx > 180) dx -= 360;
+    if (dx < -180) dx += 360;
+    return dx;
+  };
 
+  // WEB MERCATOR while the application has a basemap plugin supplying tiles —
+  // tiles are Mercator by construction, exactly as on the desktop map — and
+  // centre-plus-span equirectangular otherwise.
+  let xOf, yOf, haveTiles = false;
+  if (bm.active) {
+    const pixPerWorld = w * 360 / lonSpan;
+    const cy = mercYn(centreLat);
+    xOf = (lon) => wrapLon(lon) / lonSpan * w + w / 2;
+    yOf = (lat) => (mercYn(lat) - cy) * pixPerWorld + h / 2;
+    mapProj = { merc: true, w: w, h: h, lonSpan: lonSpan, pixPerWorld: pixPerWorld };
+    haveTiles = drawMapTiles(ctx, w, h, { lonSpan, centreLon, cy, xOf }, bm);
+    pruneTiles();
+  } else {
+    const latSpan = lonSpan * h / w;
+    xOf = (lon) => wrapLon(lon) / lonSpan * w + w / 2;
+    yOf = (lat) => (centreLat - lat) / latSpan * h + h / 2;
+    mapProj = { merc: false, w: w, h: h, lonSpan: lonSpan, latSpan: latSpan };
+  }
+
+  ctx.font = '11px system-ui, sans-serif';
+  if (!bm.active) {
+    // A graticule, so the picture has a scale rather than being floating
+    // dots. Not drawn over tiles: the imagery is its own reference.
+    const latSpan = lonSpan * h / w;
+    ctx.strokeStyle = '#1b212b'; ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = (i / 4) * h, x = (i / 4) * w;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+    ctx.fillStyle = '#4a5464';
+    ctx.fillText((centreLat + latSpan / 2).toFixed(2) + 'N', 4, 12);
+    ctx.fillText((centreLat - latSpan / 2).toFixed(2) + 'N', 4, h - 4);
+    ctx.fillText((centreLon - lonSpan / 2).toFixed(2) + 'E', 4, h - 18);
+    ctx.fillText((centreLon + lonSpan / 2).toFixed(2) + 'E', w - 60, h - 18);
+  }
+
+  const hits = [];
   s.tracks.forEach((t) => {
     const x = xOf(t.lonDeg), y = yOf(t.latDeg);
-    ctx.fillStyle = (t.flags & 1) ? '#ff2020' : (TRACK_COLOURS[t.kind] || '#c8d0dc');
-    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
-    // Course, when the source reported one — null means not reported, and a
-    // heading line drawn for an unknown course would be an invention.
-    if (t.courseDeg !== null && isFinite(t.courseDeg)) {
-      const a = (t.courseDeg - 90) * Math.PI / 180;
-      ctx.strokeStyle = ctx.fillStyle;
-      ctx.beginPath(); ctx.moveTo(x, y);
-      ctx.lineTo(x + Math.cos(a) * 14, y + Math.sin(a) * 14); ctx.stroke();
+    hits.push({ id: t.id, x: x, y: y });
+    const col = (t.flags & 1) ? '#ff2020' : (TRACK_COLOURS[t.kind] || '#c8d0dc');
+    const sel = t.id === selectedTrackId;
+    if (t.kind === 1) {
+      // Aircraft are a plane silhouette rotated to the course; the selected
+      // one is the silhouette knocked out of a filled disc.
+      if (sel) {
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.fill();
+        tracePlane(ctx, x, y, t.courseDeg, 8);
+        ctx.fillStyle = '#10141a'; ctx.fill();
+      } else {
+        tracePlane(ctx, x, y, t.courseDeg, 9);
+        ctx.fillStyle = col; ctx.fill();
+        // A dark edge so the pale icon stays an icon over pale street tiles.
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 1; ctx.stroke();
+      }
+    } else {
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+      // Course, when the source reported one — null means not reported, and a
+      // heading line drawn for an unknown course would be an invention.
+      if (t.courseDeg !== null && isFinite(t.courseDeg)) {
+        const a = (t.courseDeg - 90) * Math.PI / 180;
+        ctx.strokeStyle = col;
+        ctx.beginPath(); ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * 14, y + Math.sin(a) * 14); ctx.stroke();
+      }
+      if (sel) {
+        ctx.strokeStyle = col; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.stroke();
+      }
     }
+    // Labels are outlined so they read over pale tiles as well as dark ocean.
+    const lbl = t.label || t.id, lx = x + (sel ? 16 : 8);
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.strokeText(lbl, lx, y - 6);
     ctx.fillStyle = '#e6e9ee';
-    ctx.fillText(t.label || t.id, x + 7, y - 6);
+    ctx.fillText(lbl, lx, y - 6);
   });
+  mapHits = hits;
+
+  // The attribution travels with the tiles or the tiles do not travel: shown
+  // whenever imagery is actually on screen (ODbL requires it, and the desktop
+  // refuses a basemap without one for exactly this reason).
+  if (haveTiles && bm.attribution) {
+    ctx.font = '10px system-ui, sans-serif';
+    const tw = ctx.measureText(bm.attribution).width;
+    ctx.fillStyle = 'rgba(8,10,13,0.72)';
+    ctx.fillRect(w - tw - 10, h - 16, tw + 10, 16);
+    ctx.fillStyle = '#c8d0dc';
+    ctx.fillText(bm.attribution, w - tw - 5, h - 5);
+  }
 
   const box = $('trackList');
   box.innerHTML = '';
   s.tracks.slice(0, 60).forEach((t) => {
     const row = document.createElement('div');
-    row.className = 'tr';
+    row.className = (t.id === selectedTrackId) ? 'tr sel' : 'tr';
     const alt = (t.altM === null || !isFinite(t.altM)) ? '-' : Math.round(t.altM) + ' m';
     const spd = (t.speedMps === null || !isFinite(t.speedMps)) ? '-'
                                                               : Math.round(t.speedMps) + ' m/s';
@@ -687,6 +784,10 @@ function reflectTracks(s) {
                     '<span>' + (t.label || '') + '</span>' +
                     '<span class="pos">' + t.latDeg.toFixed(4) + ', ' +
                     t.lonDeg.toFixed(4) + '  ' + alt + '  ' + spd + '</span>';
+    row.addEventListener('click', () => {
+      selectedTrackId = (t.id === selectedTrackId) ? '' : t.id;
+      redrawMap();
+    });
     box.appendChild(row);
   });
 }
@@ -913,6 +1014,229 @@ function reflectPlugins(s) {
   });
 }
 
+)JS";
+
+// The browser map's basemap tiles and aircraft icons. Its own literal: MSVC
+// caps a string literal at 16380 bytes and the neighbours are close to it.
+constexpr char kAppJs2d[] = R"JS(
+// --- basemap tiles ----------------------------------------------------------
+// Normalised Web Mercator: the whole world is 0..1 in both axes, so a tile
+// index is the coordinate times 2^z — the same form the desktop uses.
+function mercYn(lat) {
+  const l = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const s = Math.sin(l * Math.PI / 180);
+  return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+}
+
+// Tiles the page holds, keyed 'z/x/y'. A 202 from the server means "asked the
+// radio, ask me again" — the entry is deleted so the next status poll refetches,
+// which IS the retry loop (4 Hz, and the server records the want on every ask).
+// 404 means the tile will never exist and is remembered so nobody asks again.
+const tileCache = new Map();
+let tileFrame = 0;
+function tileFor(z, x, y) {
+  const key = z + '/' + x + '/' + y;
+  let e = tileCache.get(key);
+  if (e) { e.used = tileFrame; return e.state === 'ready' ? e.bmp : null; }
+  e = { state: 'loading', bmp: null, used: tileFrame };
+  tileCache.set(key, e);
+  fetch('/api/tile/' + z + '/' + x + '/' + y, { credentials: 'same-origin' })
+    .then(async (r) => {
+      if (r.status === 200) {
+        const blob = await r.blob();
+        e.bmp = await createImageBitmap(blob);
+        e.state = 'ready';
+      } else if (r.status === 404) {
+        e.state = 'missing';
+      } else {
+        tileCache.delete(key);
+      }
+    })
+    .catch(() => { tileCache.delete(key); });
+  return null;
+}
+function pruneTiles() {
+  tileFrame++;
+  if (tileCache.size <= 384) return;
+  const dead = [];
+  tileCache.forEach((e, k) => { if (e.used < tileFrame - 4) dead.push(k); });
+  dead.forEach((k) => {
+    const e = tileCache.get(k);
+    if (e && e.bmp && e.bmp.close) e.bmp.close();
+    tileCache.delete(k);
+  });
+}
+
+// Draws every visible tile at the zoom whose pixels land nearest native size.
+// Returns whether anything was actually drawn, because the attribution must be
+// shown exactly when imagery is on screen.
+function drawMapTiles(ctx, w, h, view, bm) {
+  const pixPerWorld = w * 360 / view.lonSpan;
+  let z = Math.round(Math.log2(pixPerWorld / (bm.tileSize || 256)));
+  z = Math.max(bm.minZoom, Math.min(bm.maxZoom, z));
+  const n = Math.pow(2, z);
+  const y0 = view.cy - (h / 2) / pixPerWorld, y1 = view.cy + (h / 2) / pixPerWorld;
+  const lonL = view.centreLon - view.lonSpan / 2;
+  const lonR = view.centreLon + view.lonSpan / 2;
+  let tx0 = Math.floor((lonL + 180) / 360 * n), tx1 = Math.floor((lonR + 180) / 360 * n);
+  let ty0 = Math.max(0, Math.floor(y0 * n)), ty1 = Math.min(n - 1, Math.floor(y1 * n));
+  if (tx1 - tx0 > 32) tx1 = tx0 + 32;   // a degenerate view must not ask for thousands
+  if (ty1 - ty0 > 32) ty1 = ty0 + 32;
+  let drew = false;
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tr = tx0; tr <= tx1; tr++) {
+      const tx = ((tr % n) + n) % n;   // wrap x across the antimeridian; y ends at the poles
+      const bmp = tileFor(z, tx, ty);
+      if (!bmp) continue;
+      // Placed from the tile's own edges, rounded, so neighbours share pixels
+      // instead of leaving hairline gaps.
+      const ax = Math.round(view.xOf(tr / n * 360 - 180));
+      const bx = Math.round(view.xOf((tr + 1) / n * 360 - 180));
+      const ay = Math.round((ty / n - view.cy) * pixPerWorld + h / 2);
+      const by = Math.round(((ty + 1) / n - view.cy) * pixPerWorld + h / 2);
+      ctx.drawImage(bmp, ax, ay, bx - ax, by - ay);
+      drew = true;
+    }
+  }
+  return drew;
+}
+
+// --- aircraft icon ----------------------------------------------------------
+// Right half of a plane silhouette, nose up, unit box; the left half is the
+// mirror walked backwards. Same table as the desktop's, so the two maps agree.
+const PLANE_HALF = [
+  [0.00, -1.00], [0.13, -0.70], [0.13, -0.26], [0.98, 0.16], [0.98, 0.38],
+  [0.13, 0.20], [0.13, 0.62], [0.48, 0.88], [0.48, 1.02], [0.08, 0.94],
+  [0.00, 0.96]];
+function tracePlane(ctx, x, y, courseDeg, scale) {
+  const a = (courseDeg === null || !isFinite(courseDeg)) ? 0 : courseDeg * Math.PI / 180;
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(a); ctx.scale(scale, scale);
+  ctx.beginPath();
+  PLANE_HALF.forEach((p, i) => { if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); });
+  for (let i = PLANE_HALF.length - 2; i >= 1; i--) ctx.lineTo(-PLANE_HALF[i][0], PLANE_HALF[i][1]);
+  ctx.closePath();
+  // Restored BEFORE fill/stroke so the path is in device pixels and a stroke
+  // is one pixel wide, not one times the icon scale.
+  ctx.restore();
+}
+
+function mercLatN(y) {
+  return Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI;
+}
+
+// --- view state and navigation ----------------------------------------------
+// The view auto-fits to the targets until the user takes it with a drag or
+// the wheel; from then on it is theirs. Double-click hands it back to the
+// auto-fit. mapProj is the projection of the LAST DRAWN frame, which is what
+// the handlers must convert pixels through — using anything newer would move
+// the map against a picture the user is not looking at yet.
+const mapView = { user: false, centreLat: 54, centreLon: -2, lonSpan: 20 };
+let mapProj = null;
+let mapStatus = null;
+let mapRedraw = 0;
+function redrawMap() {
+  if (mapRedraw) return;
+  mapRedraw = requestAnimationFrame(() => {
+    mapRedraw = 0;
+    if (mapStatus) reflectTracks(mapStatus);
+  });
+}
+
+// Selecting is a highlight: the circled icon on the map and the lit row in the
+// list. Click either to select; click again to clear. A drag is not a click —
+// the moved flag is what keeps letting go of a pan from toggling a selection.
+let selectedTrackId = '';
+let mapHits = [];   // [{id,x,y}] in canvas pixels, from the last draw
+let mapDrag = null;
+let mapDragMoved = false;
+
+$('map').addEventListener('mousedown', (ev) => {
+  if (ev.button !== 0) return;
+  mapDrag = { x: ev.clientX, y: ev.clientY, moved: false };
+});
+window.addEventListener('mousemove', (ev) => {
+  if (!mapDrag || !mapProj) return;
+  const dx = ev.clientX - mapDrag.x, dy = ev.clientY - mapDrag.y;
+  // A few pixels of slop, so an ordinary click on a target does not count as
+  // a pan and lose itself.
+  if (!mapDrag.moved && Math.hypot(dx, dy) < 4) return;
+  mapDrag.moved = true;
+  const c = $('map');
+  const r = c.getBoundingClientRect();
+  const px = dx * c.width / r.width, py = dy * c.height / r.height;
+  mapView.user = true;
+  mapView.centreLon -= px / mapProj.w * mapProj.lonSpan;
+  if (mapView.centreLon > 180) mapView.centreLon -= 360;
+  if (mapView.centreLon < -180) mapView.centreLon += 360;
+  // Vertical pixels convert through the projection that drew the frame: under
+  // tiles a degree of latitude is not a constant number of pixels.
+  if (mapProj.merc) {
+    mapView.centreLat = mercLatN(mercYn(mapView.centreLat) - py / mapProj.pixPerWorld);
+  } else {
+    mapView.centreLat += py / mapProj.h * mapProj.latSpan;
+  }
+  mapView.centreLat = Math.max(-85, Math.min(85, mapView.centreLat));
+  mapDrag.x = ev.clientX; mapDrag.y = ev.clientY;
+  redrawMap();
+});
+window.addEventListener('mouseup', () => {
+  mapDragMoved = !!(mapDrag && mapDrag.moved);
+  mapDrag = null;
+});
+
+$('map').addEventListener('wheel', (ev) => {
+  if (!mapProj) return;
+  ev.preventDefault();
+  const c = $('map');
+  const r = c.getBoundingClientRect();
+  const mx = (ev.clientX - r.left) * c.width / r.width;
+  const my = (ev.clientY - r.top) * c.height / r.height;
+  const p = mapProj;
+  // Zoom about the CURSOR, exactly as the desktop does: the world point under
+  // it before the zoom must still be under it after.
+  const lonB = mapView.centreLon + (mx - p.w / 2) / p.w * p.lonSpan;
+  const latB = p.merc
+      ? mercLatN(mercYn(mapView.centreLat) + (my - p.h / 2) / p.pixPerWorld)
+      : mapView.centreLat - (my - p.h / 2) / p.h * p.latSpan;
+  mapView.user = true;
+  mapView.lonSpan = Math.max(0.02, Math.min(360,
+      mapView.lonSpan * Math.pow(0.85, ev.deltaY < 0 ? 1 : -1)));
+  const lonSpan2 = mapView.lonSpan;
+  const lonA = mapView.centreLon + (mx - p.w / 2) / p.w * lonSpan2;
+  mapView.centreLon += lonB - lonA;
+  if (p.merc) {
+    const ppw2 = p.w * 360 / lonSpan2;
+    const atY = mercYn(mapView.centreLat) + (my - p.h / 2) / ppw2;
+    mapView.centreLat = mercLatN(mercYn(mapView.centreLat) + (mercYn(latB) - atY));
+  } else {
+    const latSpan2 = lonSpan2 * p.h / p.w;
+    const latA = mapView.centreLat - (my - p.h / 2) / p.h * latSpan2;
+    mapView.centreLat += latB - latA;
+  }
+  mapView.centreLat = Math.max(-85, Math.min(85, mapView.centreLat));
+  redrawMap();
+}, { passive: false });
+
+$('map').addEventListener('dblclick', () => {
+  mapView.user = false;   // back to following the targets
+  redrawMap();
+});
+
+$('map').addEventListener('click', (ev) => {
+  if (mapDragMoved) { mapDragMoved = false; return; }
+  const c = $('map');
+  const r = c.getBoundingClientRect();
+  const mx = (ev.clientX - r.left) * c.width / r.width;
+  const my = (ev.clientY - r.top) * c.height / r.height;
+  let best = null, bestD = 18 * (c.width / r.width);
+  mapHits.forEach((p) => {
+    const d = Math.hypot(p.x - mx, p.y - my);
+    if (d < bestD) { bestD = d; best = p; }
+  });
+  selectedTrackId = (best && best.id !== selectedTrackId) ? best.id : '';
+  redrawMap();
+});
 )JS";
 
 constexpr char kAppJs2b[] = R"JS(
@@ -1439,7 +1763,7 @@ refreshSession();
 // -time constants, so there is nothing to invalidate.
 const std::string& appJs() {
     static const std::string joined =
-        std::string(kAppJs1) + kAppJs2 + kAppJs2b + kAppJs2c + kAppJs3;
+        std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d + kAppJs3;
     return joined;
 }
 
@@ -1544,6 +1868,43 @@ public:
         return true;
     }
 
+    // --- Basemap tiles (see web_server.hpp for the shape of the whole thing) --
+
+    std::vector<WebServer::TileRequest> takePendingTileRequests() {
+        std::lock_guard<std::mutex> lock(tileMutex_);
+        std::vector<WebServer::TileRequest> out(pendingTiles_.begin(), pendingTiles_.end());
+        pendingTiles_.clear();
+        pendingTileKeys_.clear();
+        return out;
+    }
+
+    void setTile(std::uint32_t z, std::uint32_t x, std::uint32_t y,
+                 std::vector<std::uint8_t> bmp) {
+        std::lock_guard<std::mutex> lock(tileMutex_);
+        TileEntry& e = tiles_[tileKey(z, x, y)];
+        e.bmp = std::move(bmp);
+        e.lastUsed = ++tileTick_;
+        if (tiles_.size() <= WebServer::kMaxStoredTiles) {
+            return;
+        }
+        // Evict the least recently served. One over the cap means one out, so
+        // this is a min-scan, not a sort.
+        auto oldest = tiles_.begin();
+        for (auto it = tiles_.begin(); it != tiles_.end(); ++it) {
+            if (it->second.lastUsed < oldest->second.lastUsed) {
+                oldest = it;
+            }
+        }
+        tiles_.erase(oldest);
+    }
+
+    void clearTiles() {
+        std::lock_guard<std::mutex> lock(tileMutex_);
+        tiles_.clear();
+        pendingTiles_.clear();
+        pendingTileKeys_.clear();
+    }
+
     void pushAudio(const float* samples, std::size_t n) { audio_.write(samples, n); }
     std::size_t audioListeners() const {
         return static_cast<std::size_t>(listeners_.load(std::memory_order_relaxed));
@@ -1591,6 +1952,50 @@ private:
     // Decoded pictures, already BMP-encoded by the application.
     mutable std::mutex imageMutex_;
     std::vector<WebImage> images_;
+
+    // Basemap tiles published by the application, and the requests waiting for
+    // it. An entry with an empty bmp means the plugin said MISSING — a real
+    // answer, kept so the browser can be told to stop asking.
+    struct TileEntry {
+        std::vector<std::uint8_t> bmp;
+        std::uint64_t lastUsed = 0;
+    };
+    static std::uint64_t tileKey(std::uint32_t z, std::uint32_t x, std::uint32_t y) {
+        return (static_cast<std::uint64_t>(z) << 58) |
+               (static_cast<std::uint64_t>(y) << 29) | static_cast<std::uint64_t>(x);
+    }
+    // What the tile route found, mapped onto what HTTP can say.
+    enum class TileLookup { Served, Missing, Pending };
+    TileLookup lookupTile(std::uint32_t z, std::uint32_t x, std::uint32_t y,
+                          std::vector<std::uint8_t>& out) {
+        std::lock_guard<std::mutex> lock(tileMutex_);
+        auto it = tiles_.find(tileKey(z, x, y));
+        if (it != tiles_.end()) {
+            it->second.lastUsed = ++tileTick_;
+            if (it->second.bmp.empty()) {
+                return TileLookup::Missing;
+            }
+            out = it->second.bmp;
+            return TileLookup::Served;
+        }
+        // Not held: record the want, deduplicated, bounded. A full queue drops
+        // the recording, not the response — the browser retries anyway.
+        const std::uint64_t k = tileKey(z, x, y);
+        if (pendingTileKeys_.insert(k).second) {
+            if (pendingTiles_.size() < WebServer::kMaxQueuedTileRequests) {
+                pendingTiles_.push_back({z, x, y});
+            } else {
+                pendingTileKeys_.erase(k);
+            }
+        }
+        return TileLookup::Pending;
+    }
+
+    mutable std::mutex tileMutex_;
+    std::unordered_map<std::uint64_t, TileEntry> tiles_;
+    std::uint64_t tileTick_ = 0;
+    std::deque<WebServer::TileRequest> pendingTiles_;
+    std::set<std::uint64_t> pendingTileKeys_;
 
     // Live audio for listening browsers, and how many are currently streaming.
     mutable AudioRing audio_;
@@ -1853,6 +2258,15 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             }
             j["tracks"] = std::move(tracks);
 
+            // What the browser's map needs to fetch and CREDIT the imagery —
+            // the attribution requirement travels with the tiles or the tiles
+            // do not travel.
+            j["basemap"] = {{"active", s.basemap.active},
+                            {"attribution", s.basemap.attribution},
+                            {"minZoom", s.basemap.minZoom},
+                            {"maxZoom", s.basemap.maxZoom},
+                            {"tileSize", s.basemap.tileSize}};
+
             nlohmann::json plugins = nlohmann::json::array();
             for (const RadioStatus::Plugin& p : s.plugins) {
                 plugins.push_back({{"name", p.name},
@@ -1998,6 +2412,51 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         }
         res.set_content(reinterpret_cast<const char*>(bmp.data()), bmp.size(),
                         "image/bmp");
+    });
+
+    // One basemap tile as a 24-bit BMP. Three honest answers: 200 with the
+    // tile, 202 "not here yet — ask again" (which is also what RECORDS the
+    // want; see the header), and 404 for a tile the plugin said will never
+    // exist, so the browser can stop asking.
+    svr.Get(R"(/api/tile/(\d+)/(\d+)/(\d+))",
+            [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorised(req)) {
+            deny(res, "sign in first");
+            return;
+        }
+        std::uint32_t z = 0, x = 0, y = 0;
+        try {
+            z = static_cast<std::uint32_t>(std::stoul(req.matches[1].str()));
+            x = static_cast<std::uint32_t>(std::stoul(req.matches[2].str()));
+            y = static_cast<std::uint32_t>(std::stoul(req.matches[3].str()));
+        } catch (const std::exception&) {
+            deny(res, "bad tile address", 400);
+            return;
+        }
+        // The XYZ grid is 2^z tiles each way, and the key packs z into 6 bits
+        // with x and y into 29 each — z above 22 is beyond every real tile
+        // server anyway and would not fit either constraint.
+        if (z > 22u || x >= (1u << z) || y >= (1u << z)) {
+            deny(res, "bad tile address", 400);
+            return;
+        }
+        std::vector<std::uint8_t> bmp;
+        switch (lookupTile(z, x, y, bmp)) {
+            case TileLookup::Served:
+                res.set_content(reinterpret_cast<const char*>(bmp.data()), bmp.size(),
+                                "image/bmp");
+                return;
+            case TileLookup::Missing:
+                deny(res, "no such tile", 404);
+                return;
+            case TileLookup::Pending: {
+                nlohmann::json j;
+                j["pending"] = true;
+                res.status = 202;
+                res.set_content(j.dump(), "application/json");
+                return;
+            }
+        }
     });
 
     svr.Post("/api/control", [this](const httplib::Request& req, httplib::Response& res) {
@@ -2172,5 +2631,13 @@ std::size_t WebServer::audioListeners() const { return impl_->audioListeners(); 
 void WebServer::setImages(std::vector<WebImage> images) {
     impl_->setImages(std::move(images));
 }
+std::vector<WebServer::TileRequest> WebServer::takePendingTileRequests() {
+    return impl_->takePendingTileRequests();
+}
+void WebServer::setTile(std::uint32_t z, std::uint32_t x, std::uint32_t y,
+                        std::vector<std::uint8_t> bmp) {
+    impl_->setTile(z, x, y, std::move(bmp));
+}
+void WebServer::clearTiles() { impl_->clearTiles(); }
 
 }  // namespace cascade::net

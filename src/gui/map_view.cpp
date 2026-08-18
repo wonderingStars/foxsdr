@@ -42,6 +42,48 @@ ImU32 colourFor(std::uint32_t kind, bool stale) {
     return c;
 }
 
+// Aircraft draw as a plane silhouette rather than a dot, rotated to the
+// reported course; the SELECTED aircraft is the same silhouette knocked out
+// of a filled disc, so the one being watched reads at a glance. The table is
+// the RIGHT half of the outline, nose up, in a unit box (y negative toward
+// the nose); the left half is the mirror walked backwards, which keeps the
+// two sides identical by construction. The shape is concave, hence
+// AddConcavePolyFilled.
+constexpr float kPlaneHalf[][2] = {
+    {0.00f, -1.00f},  // nose
+    {0.13f, -0.70f},  // cockpit taper
+    {0.13f, -0.26f},  // wing root, leading edge
+    {0.98f, 0.16f},   // wing tip, leading edge
+    {0.98f, 0.38f},   // wing tip, trailing edge
+    {0.13f, 0.20f},   // wing root, trailing edge
+    {0.13f, 0.62f},   // fuselage ahead of the tail
+    {0.48f, 0.88f},   // tailplane tip, leading edge
+    {0.48f, 1.02f},   // tailplane tip, trailing edge
+    {0.08f, 0.94f},   // tail root
+    {0.00f, 0.96f},   // tail, on the centreline
+};
+constexpr int kPlaneHalfCount = static_cast<int>(sizeof(kPlaneHalf) / sizeof(kPlaneHalf[0]));
+
+void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, ImU32 col) {
+    // Course 0 is north, which on screen is straight up; an unknown course
+    // (NaN by ABI contract) draws the plane pointing north rather than
+    // inventing a heading line the way the tick for other kinds would.
+    const double a = (std::isnan(courseDeg) ? 0.0 : courseDeg) * kPi / 180.0;
+    const float ca = static_cast<float>(std::cos(a));
+    const float sa = static_cast<float>(std::sin(a));
+    ImVec2 pts[2 * kPlaneHalfCount - 2];
+    int n = 0;
+    const auto put = [&](float x, float y) {
+        pts[n++] = ImVec2(c.x + (x * ca - y * sa) * scale, c.y + (x * sa + y * ca) * scale);
+    };
+    for (int i = 0; i < kPlaneHalfCount; ++i) { put(kPlaneHalf[i][0], kPlaneHalf[i][1]); }
+    // Mirror, skipping both centreline points so no vertex repeats.
+    for (int i = kPlaneHalfCount - 2; i >= 1; --i) {
+        put(-kPlaneHalf[i][0], kPlaneHalf[i][1]);
+    }
+    dl->AddConcavePolyFilled(pts, n, col);
+}
+
 double greatCircleKm(double lat1, double lon1, double lat2, double lon2) {
     const double p1 = lat1 * kPi / 180.0;
     const double p2 = lat2 * kPi / 180.0;
@@ -208,17 +250,36 @@ void MapView::draw(float width, float height,
             const double lonAfter =
                 (static_cast<double>(m.x - origin.x) - width * 0.5) / width * lonSpan2 +
                 centreLon_;
-            const double latAfter =
-                centreLat_ -
-                (static_cast<double>(m.y - origin.y) - height * 0.5) / height * latSpan2;
             centreLon_ += before.second - lonAfter;
-            centreLat_ += before.first - latAfter;
+            // The vertical correction must use the projection actually drawing
+            // the frame: with tiles up the y axis is Mercator, and the linear
+            // formula made the point under the cursor jump on every notch —
+            // by ~1.7x at this latitude.
+            if (mercator) {
+                const double pixPerWorld2 = static_cast<double>(width) * 360.0 / lonSpan2;
+                const double atY =
+                    centreMercY +
+                    (static_cast<double>(m.y - origin.y) - height * 0.5) / pixPerWorld2;
+                centreLat_ = mercLat(mercY(centreLat_) + (mercY(before.first) - atY));
+            } else {
+                const double latAfter =
+                    centreLat_ -
+                    (static_cast<double>(m.y - origin.y) - height * 0.5) / height * latSpan2;
+                centreLat_ += before.first - latAfter;
+            }
         }
     }
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const ImVec2 d = ImGui::GetIO().MouseDelta;
         centreLon_ -= static_cast<double>(d.x) / width * lonSpan;
-        centreLat_ += static_cast<double>(d.y) / height * latSpan;
+        // Same projection rule as the zoom: under tiles a degree of latitude
+        // is not a constant number of pixels, and the linear version left the
+        // map sliding slower than the cursor vertically.
+        if (mercator) {
+            centreLat_ = mercLat(mercY(centreLat_) - static_cast<double>(d.y) / pixPerWorld);
+        } else {
+            centreLat_ += static_cast<double>(d.y) / height * latSpan;
+        }
     }
     centreLat_ = std::clamp(centreLat_, -89.0, 89.0);
     if (centreLon_ > 180.0) { centreLon_ -= 360.0; }
@@ -414,20 +475,36 @@ void MapView::draw(float width, float height,
         }
         const bool stale = ht.t.ageMs > 60000ull;
         const ImU32 col = colourFor(ht.t.kind, stale);
+        // Selected or followed: either way this is the one the user singled
+        // out, and it gets the ringed marker.
+        const bool picked = (!selectedId_.empty() && selectedId_ == ht.t.id) ||
+                            (!followId_.empty() && followId_ == ht.t.id);
 
-        // A course, where known, is drawn as a heading tick. It is the
-        // difference between a field of dots and a picture of where things
-        // are going.
-        if (!std::isnan(ht.t.courseDeg)) {
-            const double a = ht.t.courseDeg * kPi / 180.0;
-            const ImVec2 tip(s.x + static_cast<float>(std::sin(a) * 12.0),
-                             s.y - static_cast<float>(std::cos(a) * 12.0));
-            dl->AddLine(s, tip, col, 1.5f);
+        if (ht.t.kind == CASCADE_TRACK_AIRCRAFT) {
+            // The silhouette IS the heading indicator, so no tick.
+            if (picked) {
+                dl->AddCircleFilled(s, 13.0f, col);
+                addPlane(dl, s, ht.t.courseDeg, 8.0f, IM_COL32(16, 20, 26, 255));
+            } else {
+                addPlane(dl, s, ht.t.courseDeg, 9.0f, col);
+            }
+        } else {
+            // A course, where known, is drawn as a heading tick. It is the
+            // difference between a field of dots and a picture of where things
+            // are going.
+            if (!std::isnan(ht.t.courseDeg)) {
+                const double a = ht.t.courseDeg * kPi / 180.0;
+                const ImVec2 tip(s.x + static_cast<float>(std::sin(a) * 12.0),
+                                 s.y - static_cast<float>(std::cos(a) * 12.0));
+                dl->AddLine(s, tip, col, 1.5f);
+            }
+            dl->AddCircleFilled(s, 3.5f, col);
+            if (picked) { dl->AddCircle(s, 9.0f, col, 0, 2.0f); }
         }
-        dl->AddCircleFilled(s, 3.5f, col);
 
         const char* lbl = ht.t.label[0] != '\0' ? ht.t.label : ht.t.id;
-        dl->AddText(ImVec2(s.x + 6.0f, s.y - 6.0f), col, lbl);
+        const float lblX = s.x + (picked ? 15.0f : 8.0f);
+        dl->AddText(ImVec2(lblX, s.y - 6.0f), col, lbl);
 
         if (hovered) {
             const float dx = mouse.x - s.x;

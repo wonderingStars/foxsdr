@@ -121,6 +121,34 @@ unsigned int BasemapCache::texture(std::uint32_t z, std::uint32_t x, std::uint32
     return tex;
 }
 
+std::int32_t BasemapCache::rawTile(std::uint32_t z, std::uint32_t x, std::uint32_t y,
+                                   std::vector<std::uint8_t>& rgb) {
+    rgb.clear();
+    if (!active()) { return CASCADE_TILE_MISSING; }
+
+    CascadeTile t{};
+    t.structSize = static_cast<std::uint32_t>(sizeof(CascadeTile));
+    const std::int32_t got = api_->get_tile(handle_, z, x, y, &t);
+    if (got == CASCADE_TILE_PENDING) { return CASCADE_TILE_PENDING; }
+    if (got != CASCADE_TILE_READY) { return CASCADE_TILE_MISSING; }
+
+    // The same third-party-numbers check texture() applies, for the same
+    // reason: the stride is about to bound a read of the plugin's buffer.
+    const std::size_t rowBytes = static_cast<std::size_t>(t.width) * 3u;
+    const bool sane = t.pixels != nullptr && t.width == tileSize_ &&
+                      t.height == tileSize_ && t.format == CASCADE_IMAGE_RGB24 &&
+                      t.stride >= rowBytes && t.width <= CASCADE_TILE_SIZE_MAX;
+    if (sane) {
+        rgb.resize(rowBytes * t.height);
+        for (std::uint32_t row = 0; row < t.height; ++row) {
+            std::memcpy(rgb.data() + static_cast<std::size_t>(row) * rowBytes,
+                        t.pixels + static_cast<std::size_t>(row) * t.stride, rowBytes);
+        }
+    }
+    api_->release_tile(handle_, &t);
+    return sane ? CASCADE_TILE_READY : CASCADE_TILE_MISSING;
+}
+
 void BasemapCache::endFrame() {
     ++frame_;
     if (tiles_.size() <= kMaxTiles) { return; }

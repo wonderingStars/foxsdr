@@ -59,6 +59,22 @@ public:
     // cannot grow the texture set without limit.
     void endFrame();
 
+    // The same tile as packed 24-bit RGB rows instead of a texture, for a
+    // consumer with no GL context — the web server, whose browser does its own
+    // drawing. Same thread contract as texture() (the plugin is only ever
+    // called from the GUI thread), and the same start-the-fetch semantics:
+    // asking is what makes the plugin go and get it.
+    //
+    // Returns CASCADE_TILE_READY with `rgb` filled (width*height*3 bytes,
+    // stride removed), CASCADE_TILE_PENDING while the plugin is still
+    // fetching, or CASCADE_TILE_MISSING when the tile will never exist —
+    // which includes a tile the plugin delivered with dimensions that do not
+    // match its own declaration, for the same reason texture() refuses one.
+    // Deliberately does not touch the texture set: the caller caches results
+    // on its own side, so nothing here needs remembering.
+    std::int32_t rawTile(std::uint32_t z, std::uint32_t x, std::uint32_t y,
+                         std::vector<std::uint8_t>& rgb);
+
     // Status lines the plugin produced ("cannot reach the tile server"), moved
     // out for display. The failure a user will actually hit is a wrong URL,
     // and a map that just stays blank explains nothing.

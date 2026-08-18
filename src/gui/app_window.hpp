@@ -735,6 +735,16 @@ private:
     void publishWebImages();
     // Revisions the last publish encoded, one per image slot.
     std::vector<std::uint64_t> webImageRevs_;
+    // Serves the browser map's tile wants from the basemap plugin. The
+    // browser's viewport drives WHICH tiles; this frame-time pump is what
+    // keeps the plugin on the GUI thread, the only thread the ABI lets call
+    // it: the server records requests it cannot answer, this drains a bounded
+    // number per frame, fetches, encodes, publishes, and the browser retries.
+    void pumpWebTiles();
+    // What the last pump saw, so a plugin change or removal clears the
+    // server's store instead of serving the old source's imagery as the new's.
+    bool webTilesActive_ = false;
+    std::string webTileAttribution_;
     // Copies the current radio state and newest spectrum frame into the
     // members below. Called once per frame from drawUi, unconditionally: the
     // panel being collapsed must not stop the browser being served.

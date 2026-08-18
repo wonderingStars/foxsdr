@@ -256,6 +256,21 @@ struct RadioStatus {
     std::string installReport;     // last success, verbatim
     std::string installError;      // last failure, verbatim
 
+    // --- Basemap -----------------------------------------------------------
+    // Whether a basemap plugin is supplying map imagery, and what the browser
+    // needs to draw it: the zoom range and tile size to plan fetches, and the
+    // attribution it is REQUIRED to show while any tile is on screen — the
+    // same ODbL obligation the desktop enforces at plugin load, which must not
+    // be lost in transit to a different renderer.
+    struct Basemap {
+        bool active = false;
+        std::string attribution;
+        unsigned minZoom = 0;
+        unsigned maxZoom = 19;
+        unsigned tileSize = 256;
+    };
+    Basemap basemap;
+
     // --- Decoded images ----------------------------------------------------
     // METADATA only. The pixels are fetched separately from /api/image/<n>,
     // because a decoded picture is hundreds of kilobytes and the status poll
@@ -388,6 +403,45 @@ public:
     // only when a decoder's revision actually moves — re-encoding a megapixel
     // BMP every frame would cost more than the whole rest of the server.
     void setImages(std::vector<WebImage> images);
+
+    // --- Basemap tiles -------------------------------------------------------
+    // GET /api/tile/{z}/{x}/{y} is demand-driven by the BROWSER's viewport,
+    // which this process cannot predict — but the plugin that has the tiles
+    // may only be called on the GUI thread (the ABI promises nothing about any
+    // other). So the route never calls the plugin: a request for a tile the
+    // server does not hold is RECORDED and answered 202, the application
+    // drains the recordings once per frame, fetches from the plugin on the
+    // thread the ABI requires, and publishes the result here; the browser
+    // simply asks again. A tile that is held is served as image/bmp; one
+    // published as missing answers 404 and the browser stops asking.
+
+    struct TileRequest {
+        std::uint32_t z = 0;
+        std::uint32_t x = 0;
+        std::uint32_t y = 0;
+    };
+
+    // Tiles browsers asked for that the server could not serve, deduplicated,
+    // oldest first; empties the queue. GUI thread, once per frame.
+    std::vector<TileRequest> takePendingTileRequests();
+
+    // Publishes one tile. An EMPTY body records "missing", which is a real
+    // answer (the plugin said the tile will never exist) and not an absence —
+    // it is what stops the browser retrying a tile nobody can produce.
+    void setTile(std::uint32_t z, std::uint32_t x, std::uint32_t y,
+                 std::vector<std::uint8_t> bmp);
+
+    // Drops every stored tile AND every pending request. The application calls
+    // this when the basemap plugin changes or goes away: tiles from the old
+    // source must not be served as if the new one produced them.
+    void clearTiles();
+
+    // Bounds. Requests beyond the queue cap are dropped rather than queued —
+    // the browser retries, so a lost recording costs a round trip, not a tile.
+    // The store cap evicts the least recently SERVED tile; at 256 tiles of
+    // 192 KB the store tops out near 50 MB.
+    static constexpr std::size_t kMaxQueuedTileRequests = 64;
+    static constexpr std::size_t kMaxStoredTiles = 256;
 
     // Each listener holds one HTTP worker thread for as long as it listens, so
     // this is capped well below the library's pool. Past the cap the request is

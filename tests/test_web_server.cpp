@@ -581,6 +581,157 @@ void testControlQueueIsBounded() {
     server.stop();
 }
 
+void testTileEndpoint() {
+    WebServer server;
+    RadioStatus withBasemap = sampleStatus();
+    withBasemap.basemap.active = true;
+    withBasemap.basemap.attribution = "(c) OpenStreetMap contributors";
+    withBasemap.basemap.minZoom = 0;
+    withBasemap.basemap.maxZoom = 19;
+    withBasemap.basemap.tileSize = 256;
+    server.setStatusProvider([withBasemap]() { return withBasemap; });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    // The status carries what the browser needs to plan fetches and to credit
+    // the imagery — the attribution requirement must survive the transport.
+    auto status = cli.Get("/api/status");
+    CHECK(static_cast<bool>(status));
+    if (status) {
+        CHECK(status->body.find("\"basemap\"") != std::string::npos);
+        CHECK(status->body.find("(c) OpenStreetMap contributors") != std::string::npos);
+        CHECK(status->body.find("\"tileSize\":256") != std::string::npos);
+    }
+
+    // A tile the server does not hold answers 202 AND records the want.
+    auto first = cli.Get("/api/tile/3/1/2");
+    CHECK(static_cast<bool>(first));
+    if (first) {
+        CHECK(first->status == 202);
+        CHECK(first->body.find("\"pending\":true") != std::string::npos);
+    }
+    // Asking twice records once: the pump must not fetch the same tile twice
+    // because two polls raced.
+    CHECK(static_cast<bool>(cli.Get("/api/tile/3/1/2")));
+    std::vector<WebServer::TileRequest> wants = server.takePendingTileRequests();
+    CHECK(wants.size() == 1);
+    if (wants.size() == 1) {
+        CHECK(wants[0].z == 3 && wants[0].x == 1 && wants[0].y == 2);
+    }
+    // Taking drains: the same want must not be served twice.
+    CHECK(server.takePendingTileRequests().empty());
+
+    // A published tile is served byte-for-byte as image/bmp.
+    const std::vector<std::uint8_t> fakeBmp = {'B', 'M', 1, 2, 3, 4, 5};
+    server.setTile(3, 1, 2, fakeBmp);
+    auto served = cli.Get("/api/tile/3/1/2");
+    CHECK(static_cast<bool>(served));
+    if (served) {
+        CHECK(served->status == 200);
+        CHECK(served->get_header_value("Content-Type") == "image/bmp");
+        CHECK(served->body.size() == fakeBmp.size());
+        CHECK(std::equal(fakeBmp.begin(), fakeBmp.end(), served->body.begin(),
+                         [](std::uint8_t a, char b) {
+                             return a == static_cast<std::uint8_t>(b);
+                         }));
+    }
+
+    // An EMPTY publish means the plugin said the tile will never exist: 404,
+    // which is what stops the browser retrying it, and nothing re-recorded.
+    server.setTile(3, 4, 5, {});
+    auto missing = cli.Get("/api/tile/3/4/5");
+    CHECK(static_cast<bool>(missing));
+    if (missing) {
+        CHECK(missing->status == 404);
+    }
+    CHECK(server.takePendingTileRequests().empty());
+
+    // Addresses outside the XYZ grid are refused, not recorded: x and y are
+    // bounded by 2^z, and z by any real tile server's range.
+    auto badZ = cli.Get("/api/tile/23/0/0");
+    CHECK(static_cast<bool>(badZ) && badZ->status == 400);
+    auto badX = cli.Get("/api/tile/3/8/0");   // 2^3 tiles means x <= 7
+    CHECK(static_cast<bool>(badX) && badX->status == 400);
+    auto junk = cli.Get("/api/tile/3/nope/0");
+    CHECK(static_cast<bool>(junk));
+    if (junk) {
+        CHECK(junk->status == 404);   // does not match the route's digit pattern
+    }
+    CHECK(server.takePendingTileRequests().empty());
+
+    // clearTiles drops the stored tile AND the queue: after a plugin change
+    // the old source's imagery must not be served as the new one's.
+    server.clearTiles();
+    auto afterClear = cli.Get("/api/tile/3/1/2");
+    CHECK(static_cast<bool>(afterClear));
+    if (afterClear) {
+        CHECK(afterClear->status == 202);
+    }
+    CHECK(server.takePendingTileRequests().size() == 1);
+
+    // The request queue is bounded; whatever is dropped costs the browser a
+    // retry, not a tile.
+    for (std::uint32_t i = 0; i < WebServer::kMaxQueuedTileRequests + 10; ++i) {
+        auto r = cli.Get("/api/tile/10/" + std::to_string(i) + "/0");
+        CHECK(static_cast<bool>(r) && r->status == 202);
+    }
+    CHECK(server.takePendingTileRequests().size() == WebServer::kMaxQueuedTileRequests);
+
+    // The store is bounded too, evicting the least recently served: after
+    // publishing one over the cap, the untouched oldest tile is gone (202
+    // again) while a freshly served one survives.
+    for (std::uint32_t i = 0; i < WebServer::kMaxStoredTiles; ++i) {
+        server.setTile(15, i, 1, fakeBmp);
+    }
+    // Serve tile 0 so it is recently used; tile 1 becomes the oldest.
+    CHECK(static_cast<bool>(cli.Get("/api/tile/15/0/1")));
+    server.setTile(15, 30000, 2, fakeBmp);   // one over the cap
+    auto evicted = cli.Get("/api/tile/15/1/1");
+    CHECK(static_cast<bool>(evicted));
+    if (evicted) {
+        CHECK(evicted->status == 202);
+    }
+    auto kept = cli.Get("/api/tile/15/0/1");
+    CHECK(static_cast<bool>(kept));
+    if (kept) {
+        CHECK(kept->status == 200);
+    }
+
+    server.stop();
+}
+
+void testTileRequiresAuth() {
+    WebServerConfig cfg = loopbackConfig();
+    cfg.passwordRecord = realRecord();
+
+    WebServer server;
+    std::string error;
+    const int port = startOnFreePort(server, cfg, error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    // Tiles reveal where the user is looking; and an unauthenticated caller
+    // must not be able to fill the request queue either.
+    auto denied = cli.Get("/api/tile/3/1/2");
+    CHECK(static_cast<bool>(denied));
+    if (denied) {
+        CHECK(denied->status == 401);
+    }
+    CHECK(server.takePendingTileRequests().empty());
+
+    server.stop();
+}
+
 void testAudioStreamsRealSamples() {
     WebServer server;
     std::string error;
@@ -746,6 +897,8 @@ int main() {
     testControlQueue();
     testControlRequiresAuth();
     testControlQueueIsBounded();
+    testTileEndpoint();
+    testTileRequiresAuth();
     testAudioStreamsRealSamples();
     testAudioRequiresAuth();
     testAudioListenerCap();

@@ -801,6 +801,7 @@ void AppWindow::drawUi() {
     publishWebSnapshot();
     publishWebAudio();
     publishWebImages();
+    pumpWebTiles();
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -3991,6 +3992,55 @@ void AppWindow::publishWebImages() {
     webServer_.setImages(std::move(out));
 }
 
+void AppWindow::pumpWebTiles() {
+    const bool active = basemap_.active();
+    // A plugin change mid-session must not leave the old source's tiles being
+    // served under the new one's attribution — or at all.
+    if (active != webTilesActive_ ||
+        (active && basemap_.attribution() != webTileAttribution_)) {
+        webServer_.clearTiles();
+        webTilesActive_ = active;
+        webTileAttribution_ = active ? basemap_.attribution() : std::string();
+    }
+    if (!active || !webServer_.running()) {
+        return;
+    }
+    const std::vector<cascade::net::WebServer::TileRequest> wants =
+        webServer_.takePendingTileRequests();
+    // Bounded per frame: each READY tile is a 192 KB copy plus a BMP encode,
+    // and this runs on the frame path. Whatever is not served here the browser
+    // simply asks for again.
+    constexpr std::size_t kMaxTilesPerFrame = 16;
+    std::size_t served = 0;
+    for (const cascade::net::WebServer::TileRequest& r : wants) {
+        if (served >= kMaxTilesPerFrame) {
+            break;
+        }
+        std::vector<std::uint8_t> rgb;
+        const std::int32_t got = basemap_.rawTile(r.z, r.x, r.y, rgb);
+        if (got == CASCADE_TILE_PENDING) {
+            // Asking is what started the plugin fetching; the browser's retry
+            // will land after it has had time to finish.
+            continue;
+        }
+        std::vector<std::uint8_t> bmp;
+        if (got == CASCADE_TILE_READY) {
+            cascade::core::HostImage img;
+            img.width = basemap_.tileSize();
+            img.height = basemap_.tileSize();
+            img.format = CASCADE_IMAGE_RGB24;
+            img.pixels = std::move(rgb);
+            std::string err;
+            if (!cascade::core::encodeBmp24(img, bmp, err)) {
+                bmp.clear();  // published as missing: an unencodable tile has no
+                              // better answer than "stop asking"
+            }
+        }
+        webServer_.setTile(r.z, r.x, r.y, std::move(bmp));
+        ++served;
+    }
+}
+
 void AppWindow::publishWebSnapshot() {
     // Everything read here is read on the GUI thread, which is the contract
     // activeSource() and its readbacks require. The server's providers only
@@ -4098,6 +4148,12 @@ void AppWindow::publishWebSnapshot() {
     for (const cascade::core::HostImage& im : pluginImages_) {
         s.images.push_back({im.plugin, im.width, im.height, im.complete, im.revision});
     }
+
+    s.basemap.active = basemap_.active();
+    s.basemap.attribution = basemap_.attribution();
+    s.basemap.minZoom = basemap_.minZoom();
+    s.basemap.maxZoom = basemap_.maxZoom();
+    s.basemap.tileSize = basemap_.tileSize();
 
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         cascade::net::RadioStatus::Plugin w;
