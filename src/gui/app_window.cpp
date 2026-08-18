@@ -4034,6 +4034,22 @@ void AppWindow::publishWebSnapshot() {
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
         s.devices.push_back({d.label, d.args});
     }
+    // THE DEVICE THAT IS ALREADY OPEN MUST APPEAR IN THE LIST even when no
+    // scan has run this session. soapyDevices_ is filled only by an explicit
+    // scan (enumeration walks the USB bus, so it is never done automatically),
+    // but a device restored from the config is open and receiving — and a
+    // source list that omitted it showed only "Signal generator" while the
+    // radio was plainly working, with no way to select it back after switching
+    // away.
+    if (sourceKind_ == "soapy" && !soapyArgs_.empty()) {
+        bool listed = false;
+        for (const cascade::net::RadioStatus::SoapyDevice& d : s.devices) {
+            if (d.args == soapyArgs_) { listed = true; break; }
+        }
+        if (!listed) {
+            s.devices.insert(s.devices.begin(), {s.sourceName, soapyArgs_});
+        }
+    }
     for (std::size_t i = 0; i < soapyGainNames_.size(); ++i) {
         const double db = (i < soapyGainsDb_.size())
                               ? static_cast<double>(soapyGainsDb_[i])
