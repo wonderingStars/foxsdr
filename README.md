@@ -134,6 +134,23 @@ The browser client does everything the desktop does, with two deliberate
 exceptions: it cannot name an I/Q file or a recording directory, because those
 are host filesystem paths rather than settings.
 
+## Privacy
+
+FoxSDR collects nothing about you unless you switch it on. Optional anonymous
+usage reporting (Settings → Usage reporting, **off by default**) sends counts
+only: version, operating system, session length, which modes and plugins get
+used, and which radio model — against a random identifier created on your
+machine when you opt in and deleted when you opt out.
+
+**It never sends frequencies, anything decoded, your location, or your IP
+address**, and hardware serial numbers are stripped before the radio model is
+sent. The complete list of what is and is not transmitted is in
+[PRIVACY.md](PRIVACY.md), the payload is held to it by an automated test, and
+the receiving endpoint's source is in [telemetry-worker/](telemetry-worker/).
+
+Apart from that, the application makes exactly one network request: fetching
+the plugin catalogue, and only when you press **Browse**.
+
 ## Installing
 
 Download `foxsdr-setup-<version>.exe` from the releases page and run it. It
@@ -174,8 +191,8 @@ hardware, or building a product from it requires a commercial licence — see
 [COMMERCIAL-AGREEMENT.md](COMMERCIAL-AGREEMENT.md) for the actual terms.
 
 If you are a hobbyist, that free licence is permanent and unconditional. There
-is no trial period, no registration, no licence key, no activation, no
-telemetry, and no feature withheld to sell you later. It will not be withdrawn
+is no trial period, no registration, no licence key, no activation, and no
+feature withheld to sell you later. It will not be withdrawn
 from under you: this project is funded by companies paying for commercial
 licences, which is precisely what keeps it free for everybody else.
 

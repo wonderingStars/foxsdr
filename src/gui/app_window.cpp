@@ -307,7 +307,24 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.webEnabled == b.webEnabled &&
            a.webBindAddress == b.webBindAddress && a.webPort == b.webPort &&
            a.webUsername == b.webUsername &&
-           a.webPasswordRecord == b.webPasswordRecord;
+           a.webPasswordRecord == b.webPasswordRecord &&
+           // Telemetry: only the DURABLE fields take part. telemetryPending
+           // grows a second every second and telemetryCleanExit is pure
+           // bookkeeping, so comparing either would make the config
+           // permanently "changed" and write the file every two seconds for
+           // as long as the application is open. They ride along on whatever
+           // save the fields below trigger, and on the unconditional save at
+           // exit — which is the one that matters, because it is where the
+           // finished report and the clean-exit marker are written.
+           //
+           // telemetryLaunches changing at start-up is load-bearing: it is
+           // what makes the first debounced save happen, and that save is
+           // what puts telemetryCleanExit=false on disk. Without it a crash
+           // in the first seconds would look like a clean exit.
+           a.telemetryEnabled == b.telemetryEnabled &&
+           a.telemetryInstallId == b.telemetryInstallId &&
+           a.telemetryLaunches == b.telemetryLaunches &&
+           a.telemetryCrashes == b.telemetryCrashes;
 }
 
 // --- Plugin browser helpers (P9) ---------------------------------------------
@@ -520,6 +537,10 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         const bool loaded = cascade::core::ConfigStore::load(configPath_, cfg, err);
         if (loaded) {
             applyConfig(cfg);
+            // AFTER applyConfig, so the crash count and the pending report are
+            // read from the file rather than from freshly defaulted members.
+            // Sends nothing unless the user previously opted in.
+            telemetryStartup(cfg);
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
         }
@@ -761,6 +782,7 @@ int AppWindow::run(int frames) {
     // config matches the final session state even when the debounce never
     // fired (e.g. a change made less than 2 s before closing the window).
     // Runs before pipeline_.stop() so the snapshot reads live state.
+    telemetryCleanExit_ = true;  // reached only on the normal shutdown path
     if (!configPath_.empty()) { saveConfigNow(); }
 
     // Closing the window while receiving must not leave DSP threads pacing a
@@ -1134,6 +1156,7 @@ void AppWindow::drawMenuColumn() {
     drawScannerSection();
     drawPluginsSection();
     drawWebSection();
+    drawUsageReportingSection();
     ImGui::EndChild();
 
     // Status footer: active source identity, its sample rate (device readback
@@ -4811,6 +4834,63 @@ void AppWindow::drawWebSection() {
     }
 }
 
+void AppWindow::drawUsageReportingSection() {
+    if (!ImGui::CollapsingHeader("Usage reporting")) { return; }
+
+    // No endpoint compiled in means the feature cannot work, so it is shown as
+    // unavailable rather than offering a switch that would collect into
+    // nowhere. A source build gets this by default: a fork must not start
+    // reporting to us because somebody rebuilt it.
+    const std::string endpoint = cascade::core::telemetryEndpoint();
+    if (endpoint.empty()) {
+        ImGui::TextDisabled("Not available in this build.");
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "Anonymous counts only: version, operating system, how long sessions "
+        "run, which modes and plugins get used, and which radio model. Never "
+        "frequencies, never anything decoded, never your location, and no IP "
+        "address is recorded.");
+    ImGui::Spacing();
+
+    bool on = telemetryEnabled_;
+    if (ImGui::Checkbox("Send anonymous usage reports", &on)) {
+        if (on && !telemetryEnabled_) {
+            // The id is created at the moment of consent, never before - so a
+            // machine that never opts in has no identifier at all, not even an
+            // unused one sitting in its config.
+            telemetryInstallId_ = cascade::core::newInstallId();
+            telemetryEnabled_ = !telemetryInstallId_.empty();
+        } else if (!on) {
+            // Off DELETES the identifier, so a later opt-in gets a new one
+            // that cannot be tied to the old. Any report still waiting to be
+            // sent goes with it.
+            telemetryEnabled_ = false;
+            telemetryInstallId_.clear();
+        }
+
+    }
+
+    if (telemetryEnabled_) {
+        ImGui::TextDisabled("Install id: %s", telemetryInstallId_.c_str());
+        ImGui::TextDisabled("Sent once at start-up, describing the previous session.");
+    } else {
+        ImGui::TextDisabled("Off. Nothing is transmitted.");
+    }
+    if (ImGui::SmallButton("What exactly is sent?")) {
+        privacyNoticeOpen_ = !privacyNoticeOpen_;
+    }
+    if (privacyNoticeOpen_) {
+        ImGui::Indent();
+        ImGui::TextDisabled(
+            "id (random)  version  os  arch  launches  crashes\n"
+            "session seconds  sdr model  modes used  panels  plugins\n"
+            "See PRIVACY.md for the complete list and what is excluded.");
+        ImGui::Unindent();
+    }
+}
+
 void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // Panel mirrors + always-safe DSP settings first (none of these can
     // fail; load() already range-sanitized volume/split/db*).
@@ -4943,6 +5023,82 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
 
+void AppWindow::telemetryAccrueMode() {
+    // Seconds are banked against the mode that was ACTUALLY running, at every
+    // mode change and at exit. Accumulating against the mode selected at
+    // shutdown would credit the whole session to whatever happened to be last.
+    const double now = glfwGetTime();
+    if (telemetryModeSince_ > 0.0 && now > telemetryModeSince_) {
+        const auto secs = static_cast<std::uint64_t>(now - telemetryModeSince_);
+        if (secs > 0) { telemetryModeSeconds_[kModeNames[modeIndex_]] += secs; }
+    }
+    telemetryModeSince_ = now;
+}
+
+void AppWindow::telemetryNotePanel(const char* name) {
+    if (name == nullptr || name[0] == '\0') { return; }
+    const std::string n(name);
+    if (telemetryPanels_.size() >= 16) { return; }
+    if (std::find(telemetryPanels_.begin(), telemetryPanels_.end(), n) ==
+        telemetryPanels_.end()) {
+        telemetryPanels_.push_back(n);
+    }
+}
+
+void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
+    telemetryEnabled_ = cfg.telemetryEnabled;
+    telemetryInstallId_ = cfg.telemetryInstallId;
+    telemetryLaunches_ = cfg.telemetryLaunches + 1;
+    telemetryCrashes_ = cfg.telemetryCrashes;
+    // The previous run never wrote its clean-exit marker, so it did not end
+    // normally. This is the whole crash-counting mechanism: no crash handler,
+    // no minidump, nothing uploaded from the failure itself - just the
+    // observation that last time the marker was never set.
+    if (!cfg.telemetryCleanExit) { ++telemetryCrashes_; }
+    telemetrySessionStart_ = glfwGetTime();
+    telemetryModeSince_ = telemetrySessionStart_;
+    // Last session's report goes now, on a thread, while the window is coming
+    // up. Nothing waits for it and nothing reports if it fails.
+    if (telemetryEnabled_ && !telemetryInstallId_.empty() &&
+        !cfg.telemetryPending.empty()) {
+        telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
+    }
+}
+
+void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
+    cfg.telemetryEnabled = telemetryEnabled_;
+    cfg.telemetryInstallId = telemetryInstallId_;
+    cfg.telemetryLaunches = telemetryLaunches_;
+    cfg.telemetryCrashes = telemetryCrashes_;
+    cfg.telemetryPending.clear();
+    if (!telemetryEnabled_ || telemetryInstallId_.empty()) {
+        return;  // opted out: nothing is written, so nothing can later be sent
+    }
+    telemetryAccrueMode();
+
+    cascade::core::TelemetryReport r;
+    r.installId = telemetryInstallId_;
+    r.appVersion = cascade::versionString();
+    r.os = cascade::core::osDescription();
+    r.arch = cascade::core::archDescription();
+    r.launches = telemetryLaunches_;
+    r.crashes = telemetryCrashes_;
+    const double now = glfwGetTime();
+    r.session.seconds = static_cast<std::uint64_t>(
+        now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);
+    r.session.modeSeconds = telemetryModeSeconds_;
+    r.session.panels = telemetryPanels_;
+    // MODEL ONLY - sanitiseDevice strips the serial, which the raw args carry
+    // twice (once alone, once inside the label).
+    r.session.sdrModel = cascade::core::sanitiseDevice(soapyArgs_);
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (p.loaded && r.session.plugins.size() < 20) {
+            r.session.plugins.push_back(p.name + " " + p.version);
+        }
+    }
+    cfg.telemetryPending = r.toJson();
+}
+
 cascade::core::AppConfig AppWindow::currentConfig() {
     cascade::core::AppConfig cfg;
     cfg.sourceKind = sourceKind_;
@@ -4977,6 +5133,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.webPort = webCfg_.port;
     cfg.webUsername = webCfg_.username;
     cfg.webPasswordRecord = webCfg_.passwordRecord;
+    telemetryJournal(cfg);
+    // FALSE while running, so a start-up that reads it back knows the previous
+    // session never got as far as writing true. Set only on the clean exit
+    // path, which is what makes an absent marker mean "crashed".
+    cfg.telemetryCleanExit = telemetryCleanExit_;
     return cfg;
 }
 

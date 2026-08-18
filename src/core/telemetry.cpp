@@ -10,7 +10,9 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <bcrypt.h>
+#include <winhttp.h>
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "winhttp.lib")
 #endif
 
 namespace cascade::core {
@@ -162,6 +164,101 @@ std::string TelemetryReport::toJson() const {
     // able to make the report unserialisable (see web_server.cpp for the same
     // hazard taking down the whole browser UI).
     return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+// ---------------------------------------------------------------------------
+// Transport
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Deliberately empty. A build that has not had an endpoint set collects
+// nothing and offers no setting, which is the right default for a source tree
+// anyone can compile: a fork should not start reporting to us.
+constexpr char kDefaultEndpoint[] = "";
+
+}  // namespace
+
+std::string telemetryEndpoint() {
+#if defined(_WIN32)
+    char buf[512] = {0};
+    const DWORD n = ::GetEnvironmentVariableA("FOXSDR_TELEMETRY_URL", buf, sizeof(buf));
+    if (n > 0 && n < sizeof(buf)) {
+        return std::string(buf, n);
+    }
+#endif
+    return std::string(kDefaultEndpoint);
+}
+
+#if defined(_WIN32)
+namespace {
+
+// One HTTPS POST of a small JSON body. Certificate validation is left at
+// WinHTTP's defaults - no security flags are ever relaxed here - and the
+// timeouts are short because this runs on a thread the destructor joins.
+void postJson(const std::string& url, const std::string& json) {
+    URL_COMPONENTSW uc{};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {0}, path[1024] = {0};
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 255;
+    uc.lpszUrlPath = path;
+    uc.dwUrlPathLength = 1023;
+    const std::wstring wurl(url.begin(), url.end());
+    if (!::WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) { return; }
+    // https only: a usage report is not secret, but sending it in clear would
+    // put an install id on the wire for any network in between to collect.
+    if (uc.nScheme != INTERNET_SCHEME_HTTPS) { return; }
+
+    HINTERNET ses = ::WinHttpOpen(L"FoxSDR-usage/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (ses == nullptr) { return; }
+    ::WinHttpSetTimeouts(ses, 4000, 4000, 6000, 6000);
+    HINTERNET con = ::WinHttpConnect(ses, host, uc.nPort, 0);
+    if (con != nullptr) {
+        HINTERNET req = ::WinHttpOpenRequest(con, L"POST", path, nullptr, WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        if (req != nullptr) {
+            const wchar_t* kType = L"Content-Type: application/json\r\n";
+            ::WinHttpSendRequest(req, kType, static_cast<DWORD>(-1),
+                                 const_cast<char*>(json.data()),
+                                 static_cast<DWORD>(json.size()),
+                                 static_cast<DWORD>(json.size()), 0);
+            // The response is not read and not acted on. There is nothing the
+            // server could say that this client should obey - no config, no
+            // commands, no identifiers - and not reading it is the simplest
+            // way to guarantee that stays true.
+            ::WinHttpReceiveResponse(req, nullptr);
+            ::WinHttpCloseHandle(req);
+        }
+        ::WinHttpCloseHandle(con);
+    }
+    ::WinHttpCloseHandle(ses);
+}
+
+}  // namespace
+#endif
+
+TelemetryReporter::~TelemetryReporter() {
+    if (thread_.joinable()) { thread_.join(); }
+}
+
+bool TelemetryReporter::busy() const { return thread_.joinable(); }
+
+void TelemetryReporter::send(const std::string& url, const std::string& json) {
+    if (url.empty() || json.empty() || thread_.joinable()) { return; }
+#if defined(_WIN32)
+    thread_ = std::thread([url, json]() {
+        try {
+            postJson(url, json);
+        } catch (...) {
+            // Silent by design: see the header.
+        }
+    });
+#else
+    (void)url;
+    (void)json;
+#endif
 }
 
 }  // namespace cascade::core

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -23,6 +24,7 @@
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
 #include "gui/track_info_cache.hpp"
+#include "core/telemetry.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
 // web_server.hpp forward-declares it.
@@ -468,6 +470,33 @@ private:
     // reason as pluginRunner_.
     cascade::core::PluginUi pluginUi_;
     std::unique_ptr<MapView> map_;
+    // --- Anonymous usage reporting (opt-in; see PRIVACY.md) ----------------
+    // Counters for the session in progress, journalled to the config at exit
+    // and sent at the NEXT start-up. Nothing here is transmitted unless the
+    // user has turned reporting on.
+    cascade::core::TelemetryReporter telemetryReporter_;
+    bool telemetryEnabled_ = false;
+    std::string telemetryInstallId_;
+    std::uint64_t telemetryLaunches_ = 0;
+    std::uint64_t telemetryCrashes_ = 0;
+    bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
+    double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
+    double telemetryModeSince_ = 0.0;                     // when the current mode began
+    std::map<std::string, std::uint64_t> telemetryModeSeconds_;
+    std::vector<std::string> telemetryPanels_;
+    // Called on every mode change and at exit, so the seconds land against
+    // the mode that was actually running rather than the last one selected.
+    void telemetryAccrueMode();
+    void telemetryNotePanel(const char* name);
+    // Reads the previous session out of the config, counts a crash if it
+    // never finished, and sends its report. Start-up only.
+    void telemetryStartup(const cascade::core::AppConfig& cfg);
+    // Builds this session's report into `cfg` for the next start-up to send.
+    void telemetryJournal(cascade::core::AppConfig& cfg);
+    // "Usage reporting" settings section: the opt-in switch and what it sends.
+    void drawUsageReportingSection();
+    bool privacyNoticeOpen_ = false;
+
     // Who each map target actually is, answered by a track-info plugin
     // (registration, type, operator). Inactive when none is installed.
     TrackInfoCache trackInfo_;

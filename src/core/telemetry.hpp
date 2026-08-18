@@ -40,6 +40,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace cascade::core {
@@ -95,6 +96,44 @@ bool validInstallId(const std::string& id);
 // "Windows 10.0.22631" - the OS and its build, no machine or user name.
 std::string osDescription();
 std::string archDescription();
+
+// WHERE REPORTS GO. Empty in this build, which DISABLES reporting entirely:
+// with nowhere to send, the setting is unavailable rather than silently
+// collecting. Set it to the deployed Cloudflare Worker (a route on the
+// project's own domain rather than a workers.dev address, so the endpoint can
+// move without orphaning binaries already installed).
+//
+// FOXSDR_TELEMETRY_URL overrides it, which is how the tests point at a local
+// stub without a network.
+std::string telemetryEndpoint();
+
+// Posts one report, on a thread of its own, and forgets about it.
+//
+// Fire-and-forget, but NOT detached: the destructor joins, because a detached
+// thread writing into a WinHTTP handle while the process tears down is how a
+// clean exit turns into a crash on exit - and a crash on exit would be
+// counted, by this very feature, as a crash. Transfers are bounded by short
+// timeouts so the join cannot hold shutdown open.
+//
+// Every failure is silent. A usage counter that interrupted somebody's
+// listening to complain it could not reach a server would be worse than
+// having no usage counter.
+class TelemetryReporter {
+public:
+    TelemetryReporter() = default;
+    ~TelemetryReporter();
+
+    TelemetryReporter(const TelemetryReporter&) = delete;
+    TelemetryReporter& operator=(const TelemetryReporter&) = delete;
+
+    // No-op when `url` or `json` is empty, or when a send is already running.
+    void send(const std::string& url, const std::string& json);
+
+    bool busy() const;
+
+private:
+    std::thread thread_;
+};
 
 }  // namespace cascade::core
 

@@ -231,8 +231,44 @@ struct AppConfig {
     // password".
     std::string webPasswordRecord;
 
+    // --- Anonymous usage reporting (see PRIVACY.md) -------------------------
+    //
+    // OFF unless the user turns it on. Storing the identifier below on
+    // someone's machine for analytics needs their consent under PECR
+    // regulation 6, and a default of true would not be consent — so this
+    // field defaults false and nothing but an explicit action changes it.
+    bool telemetryEnabled = false;
+
+    // Random 32-hex-character install id, created when reporting is switched
+    // ON and DELETED when it is switched off, so a later opt-in cannot be
+    // linked to an earlier one. Validated on load by
+    // core::validInstallId — a hand-edited config that put something
+    // meaningful here (a name, an email) is discarded rather than
+    // transmitted.
+    std::string telemetryInstallId;
+
+    // Launches and unclean exits since installation. Counters only.
+    std::uint64_t telemetryLaunches = 0;
+    std::uint64_t telemetryCrashes = 0;
+
+    // False while the application is running, true once it has shut down
+    // cleanly. A start-up that finds this ALREADY false knows the previous
+    // session ended in a crash — which is the only way to count crashes
+    // without shipping a crash handler that uploads memory.
+    bool telemetryCleanExit = true;
+
+    // The finished session's report, JSON, waiting to be sent at the next
+    // start-up. Held here rather than transmitted at exit because a network
+    // call on the shutdown path can hang the application while the user is
+    // trying to close it. Cleared once sent.
+    std::string telemetryPending;
+
     // Cap for the list above; see the load-semantics note in the header comment.
     static constexpr std::size_t kMaxTuneGrants = 256;
+
+    // A pending report is a few hundred bytes; anything beyond this is a
+    // corrupt or tampered config and is dropped rather than posted.
+    static constexpr std::size_t kMaxPendingReportBytes = 8192;
 };
 
 class ConfigStore {

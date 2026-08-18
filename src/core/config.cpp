@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
+#include "core/telemetry.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -65,6 +67,15 @@ void getInt(const json& j, const char* key, int& dst) {
 void getInt64(const json& j, const char* key, std::int64_t& dst) {
     const auto it = j.find(key);
     if (it != j.end() && it->is_number_integer()) { dst = it->get<std::int64_t>(); }
+}
+
+// Unsigned counters (launches, crashes). is_number_unsigned rejects a negative
+// literal outright, so a hand-edited "-1" cannot wrap to a colossal count and
+// then be reported as though the software had been launched 18 quintillion
+// times.
+void getUint64(const json& j, const char* key, std::uint64_t& dst) {
+    const auto it = j.find(key);
+    if (it != j.end() && it->is_number_unsigned()) { dst = it->get<std::uint64_t>(); }
 }
 
 // An array of strings, filtered to the entries that ARE strings. A mixed array
@@ -184,6 +195,33 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getInt(j, "webPort", out.webPort);
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
+    getBool(j, "telemetryEnabled", out.telemetryEnabled);
+    getString(j, "telemetryInstallId", out.telemetryInstallId);
+    getUint64(j, "telemetryLaunches", out.telemetryLaunches);
+    getUint64(j, "telemetryCrashes", out.telemetryCrashes);
+    getBool(j, "telemetryCleanExit", out.telemetryCleanExit);
+    getString(j, "telemetryPending", out.telemetryPending);
+
+    // THE INSTALL ID IS VALIDATED, NOT TRUSTED. It is the one telemetry field
+    // that leaves the machine as free text, so a config that put something
+    // meaningful there — a name, an email, a hostname — must not be able to
+    // turn an anonymous counter into an identifying one. Anything that is not
+    // exactly 32 lowercase hex characters is discarded, and reporting is
+    // switched off with it: continuing with a fresh id would silently re-opt
+    // the user in to something they may have been trying to disable by hand.
+    if (!out.telemetryInstallId.empty() && !validInstallId(out.telemetryInstallId)) {
+        out.telemetryInstallId.clear();
+        out.telemetryEnabled = false;
+        out.telemetryPending.clear();
+    }
+    // Reporting cannot be on without an id to report under, however the file
+    // came to say so.
+    if (out.telemetryEnabled && out.telemetryInstallId.empty()) {
+        out.telemetryEnabled = false;
+    }
+    if (out.telemetryPending.size() > AppConfig::kMaxPendingReportBytes) {
+        out.telemetryPending.clear();
+    }
 
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
@@ -302,6 +340,12 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["webPort"] = cfg.webPort;
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
+    j["telemetryEnabled"] = cfg.telemetryEnabled;
+    j["telemetryInstallId"] = cfg.telemetryInstallId;
+    j["telemetryLaunches"] = cfg.telemetryLaunches;
+    j["telemetryCrashes"] = cfg.telemetryCrashes;
+    j["telemetryCleanExit"] = cfg.telemetryCleanExit;
+    j["telemetryPending"] = cfg.telemetryPending;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the
