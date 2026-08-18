@@ -382,6 +382,9 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 .pl.bad { border-color:#7a2020; }
 .pl .meta, .cat .meta { color:var(--dim); font-size:.72rem; }
 .pl button { margin-top:.25rem; padding:.15rem .45rem; font-size:.72rem; }
+.pl button.preset { display:block; width:100%; text-align:left;
+                    background:#1f3243; border-color:#2e4a63; color:#cfe6ff; }
+.pl button.preset:hover { background:#274056; }
 #catalogue { display:flex; flex-direction:column; gap:.3rem; }
 .cat { background:#1b202a; border:1px solid var(--edge); border-radius:3px; padding:.4rem .5rem; }
 .cat .hd { display:flex; gap:.4rem; align-items:baseline; flex-wrap:wrap; }
@@ -829,10 +832,13 @@ function reflectCatalogue(s) {
   });
 }
 
+)JS";
+
+constexpr char kAppJs2c[] = R"JS(
 let lastPluginKey = '';
 function reflectPlugins(s) {
   const key = s.plugins.map(p => p.name + p.version + p.loaded + p.error +
-                                 p.tuneAllowed).join('|');
+                                 p.tuneAllowed + (p.presets || []).length).join('|');
   if (key === lastPluginKey) return;
   lastPluginKey = key;
   const box = $('plugins');
@@ -871,6 +877,20 @@ function reflectPlugins(s) {
       lab.appendChild(document.createTextNode(' may tune the receiver'));
       d.appendChild(lab);
     }
+
+    // One button per declared preset — the browser's copy of the desktop's
+    // one-click rows.
+    (p.presets || []).forEach((ps, i) => {
+      const b = document.createElement('button');
+      b.className = 'preset';
+      b.textContent = ps.label || ((ps.frequencyHz / 1e6).toFixed(4) + ' MHz');
+      b.title = 'Tune to ' + (ps.frequencyHz / 1e6).toFixed(4) +
+                ' MHz and set up this plugin';
+      b.addEventListener('click', () => {
+        control({ pluginPresetName: p.name, pluginPresetIndex: i });
+      });
+      d.appendChild(b);
+    });
 
     if (p.fileName) {
       const rm = document.createElement('button');
@@ -1419,7 +1439,7 @@ refreshSession();
 // -time constants, so there is nothing to invalidate.
 const std::string& appJs() {
     static const std::string joined =
-        std::string(kAppJs1) + kAppJs2 + kAppJs2b + kAppJs3;
+        std::string(kAppJs1) + kAppJs2 + kAppJs2b + kAppJs2c + kAppJs3;
     return joined;
 }
 
@@ -1843,7 +1863,17 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                                    {"error", p.error},
                                    {"idleReason", p.idleReason},
                                    {"canRequestTune", p.canRequestTune},
-                                   {"tuneAllowed", p.tuneAllowed}});
+                                   {"tuneAllowed", p.tuneAllowed},
+                                   {"presets", [&p]() {
+                                        nlohmann::json a = nlohmann::json::array();
+                                        for (const auto& ps : p.presets) {
+                                            a.push_back({{"label", ps.label},
+                                                         {"frequencyHz", ps.frequencyHz},
+                                                         {"bandwidthHz", ps.bandwidthHz},
+                                                         {"sampleRateHz", ps.sampleRateHz}});
+                                        }
+                                        return a;
+                                    }()}});
             }
             j["plugins"] = std::move(plugins);
 

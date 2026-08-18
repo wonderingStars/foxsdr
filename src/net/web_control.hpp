@@ -155,6 +155,11 @@ struct ControlRequest {
     // fields or neither.
     std::optional<std::string> pluginTuneName;
     std::optional<bool> pluginTuneAllowed;
+    // Apply one of a plugin's declared presets: tune there, set the mode,
+    // bandwidth and device rate it asks for, and open what it contributes.
+    // Both fields or neither — an index with no plugin names nothing.
+    std::optional<std::string> pluginPresetName;
+    std::optional<int> pluginPresetIndex;
 
     bool empty() const {
         return !running && !centerHz && !vfoOffsetHz && !mode && !bandwidthHz &&
@@ -166,7 +171,8 @@ struct ControlRequest {
                !bookmarkAdd && !bookmarkTune && !bookmarkRemove &&
                !scannerActive && !scanStartHz && !scanStopHz && !scanStepHz &&
                !pluginFetch && !pluginInstall && !pluginRemove &&
-               !pluginTuneName && !pluginTuneAllowed;
+               !pluginTuneName && !pluginTuneAllowed && !pluginPresetName &&
+               !pluginPresetIndex;
     }
 };
 

@@ -25,7 +25,8 @@ const char* const kKnownKeys[] = {
     "scanDevices",  "recordIq",    "recordAudio",    "bookmarkAdd",
     "bookmarkTune", "bookmarkRemove", "scannerActive", "scanStartHz",
     "scanStopHz",   "scanStepHz",  "pluginFetch",    "pluginInstall",
-    "acknowledgeNotice", "pluginRemove", "pluginTuneName", "pluginTuneAllowed"};
+    "acknowledgeNotice", "pluginRemove", "pluginTuneName", "pluginTuneAllowed",
+    "pluginPresetName", "pluginPresetIndex"};
 
 // Longest string a control field will accept. Device kwargs and antenna names
 // are short by nature; a cap keeps a hostile client from making the
@@ -194,6 +195,7 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"pluginInstall", &req.pluginInstall},
         {"pluginRemove", &req.pluginRemove},
         {"pluginTuneName", &req.pluginTuneName},
+        {"pluginPresetName", &req.pluginPresetName},
     };
     for (const StringField& f : stringFields) {
         const auto it = j.find(f.key);
@@ -237,6 +239,7 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
     const IndexField indexFields[] = {
         {"bookmarkTune", &req.bookmarkTune},
         {"bookmarkRemove", &req.bookmarkRemove},
+        {"pluginPresetIndex", &req.pluginPresetIndex},
     };
     for (const IndexField& f : indexFields) {
         const auto it = j.find(f.key);
@@ -260,6 +263,14 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
     // lets a plugin move the receiver.
     if (req.pluginTuneName.has_value() != req.pluginTuneAllowed.has_value()) {
         error = "pluginTuneName and pluginTuneAllowed must be given together";
+        return false;
+    }
+    if (req.pluginPresetName.has_value() != req.pluginPresetIndex.has_value()) {
+        error = "pluginPresetName and pluginPresetIndex must be given together";
+        return false;
+    }
+    if (req.pluginPresetName && req.pluginPresetName->empty()) {
+        error = "pluginPresetName must not be empty";
         return false;
     }
     if (req.pluginInstall && req.pluginInstall->empty()) {

@@ -216,6 +216,19 @@ struct RadioStatus {
         // receiver — and whether the user has said yes.
         bool canRequestTune = false;
         bool tuneAllowed = false;
+        // Where this decoder listens, as it declares through
+        // CASCADE_CAP_PRESET. One click each: a decoder knows its own
+        // frequency and the user usually does not, and making somebody find
+        // out that ADS-B is at 1090 MHz wanting 2 MS/s of raw band is the
+        // difference between a plugin that works when you click it and one
+        // that appears to do nothing.
+        struct Preset {
+            std::string label;
+            double frequencyHz = 0.0;
+            double bandwidthHz = 0.0;
+            double sampleRateHz = 0.0;
+        };
+        std::vector<Preset> presets;
     };
     std::vector<Plugin> plugins;
 

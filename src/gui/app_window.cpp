@@ -4094,6 +4094,32 @@ void AppWindow::publishWebSnapshot() {
         w.canRequestTune = (p.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u;
         w.tuneAllowed = std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(),
                                   p.name) != pluginTuneAllowed_.end();
+        // Declared presets, filtered by the SAME rules drawPluginPresets uses:
+        // capped, because a plugin is third-party code and a list this long is
+        // not a menu, and each frequency positively tested so a value that is
+        // not a frequency (NaN included — which is why this is written as a
+        // positive test rather than a negation) never reaches the browser or,
+        // through it, a driver.
+        if (p.preset != nullptr) {
+            std::uint32_t n = p.preset->count();
+            if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
+            for (std::uint32_t i = 0; i < n; ++i) {
+                CascadePreset ps{};
+                ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+                if (p.preset->get(i, &ps) != 1) { continue; }
+                if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
+                cascade::net::RadioStatus::Plugin::Preset wp;
+                // The ABI says the label is NUL-terminated, but a plugin that
+                // fills every byte must not walk us off the end.
+                wp.label.assign(ps.label,
+                                strnlen(ps.label, CASCADE_PRESET_LABEL_CHARS));
+                if (wp.label.empty()) { wp.label = p.name; }
+                wp.frequencyHz = ps.frequencyHz;
+                wp.bandwidthHz = ps.bandwidthHz;
+                wp.sampleRateHz = ps.sampleRateHz;
+                w.presets.push_back(std::move(wp));
+            }
+        }
         s.plugins.push_back(std::move(w));
     }
 
@@ -4453,6 +4479,25 @@ void AppWindow::applyWebControls() {
         }
         if (r.pluginTuneName.has_value() && r.pluginTuneAllowed.has_value()) {
             setPluginTuneAllowed(*r.pluginTuneName, *r.pluginTuneAllowed);
+        }
+        if (r.pluginPresetName.has_value() && r.pluginPresetIndex.has_value()) {
+            // Re-read the preset from the PLUGIN rather than trusting anything
+            // the browser echoed back, and re-apply the same validity test, so
+            // the only numbers that reach the receiver are ones the plugin
+            // itself just produced. Then applyPluginPreset — the identical
+            // path the desktop button takes, which also sets the mode,
+            // bandwidth and device rate and opens the plugin's windows.
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                if (lp.name != *r.pluginPresetName || lp.preset == nullptr) { continue; }
+                const auto idx = static_cast<std::uint32_t>(*r.pluginPresetIndex);
+                if (idx >= lp.preset->count() || idx >= kMaxPresetsPerPlugin) { break; }
+                CascadePreset ps{};
+                ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+                if (lp.preset->get(idx, &ps) != 1) { break; }
+                if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { break; }
+                applyPluginPreset(lp, ps);
+                break;
+            }
         }
 
         if (r.scannerActive.has_value()) {
