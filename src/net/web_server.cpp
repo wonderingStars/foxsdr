@@ -126,6 +126,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
   </header>
 
   <aside id="side">
+    <div id="sideGrip" title="drag to resize the control column"></div>
 
     <details open><summary>Source</summary><div class="sec">
       <label>Device<select id="srcSel"></select></label>
@@ -212,6 +213,8 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
 
   <main id="main">
     <div id="scope">
+      <button class="pop" id="popScope" data-view="scope"
+              title="open the spectrum in its own window">&#x29c9;</button>
       <canvas id="spectrum" title="click to tune the VFO here"></canvas>
       <div id="splitScope" class="hsplit" title="drag to resize"></div>
       <canvas id="waterfall"></canvas>
@@ -220,13 +223,19 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <div id="splitPanels" class="hsplit hidden" title="drag to resize"></div>
     <div id="panels">
       <div id="mapWrap" class="panel hidden">
-        <h3>Map</h3>
+        <h3>Map <button class="pop" data-view="map"
+                        title="open the map in its own window">&#x29c9;</button></h3>
         <canvas id="map"></canvas>
         <div id="trackList"></div>
       </div>
-      <div id="imagesWrap" class="panel hidden"><h3>Pictures</h3><div id="images"></div></div>
+      <div id="imagesWrap" class="panel hidden">
+        <h3>Pictures <button class="pop" data-view="images"
+                             title="open the pictures in their own window">&#x29c9;</button></h3>
+        <div id="images"></div>
+      </div>
       <div id="decodedWrap" class="panel hidden">
-        <h3 id="decodedHead">Decoded</h3>
+        <h3 id="decodedHead">Decoded <button class="pop" data-view="decoded"
+                title="open the decoder output in its own window">&#x29c9;</button></h3>
         <pre id="decoded"></pre>
       </div>
     </div>
@@ -267,7 +276,43 @@ label.inline { flex-direction:row; align-items:center; gap:.4rem; color:var(--di
 label.inline input[type=range] { width:8rem; }
 
 #side { grid-area:side; background:var(--panel); border-right:1px solid var(--edge);
-        overflow-y:auto; overflow-x:hidden; }
+        overflow-y:auto; overflow-x:hidden; position:relative; }
+/* The control column's own width handle, on its right edge. */
+#sideGrip { position:sticky; top:0; float:right; width:7px; height:100vh;
+            margin-bottom:-100vh; cursor:ew-resize; z-index:5; }
+#sideGrip:hover, #sideGrip.active { background:#243044; }
+
+/* Open-in-its-own-window buttons. Small and quiet: they decorate headers, and
+   the header is not about them. */
+button.pop { background:transparent; border:0; color:var(--dim); font-size:.85rem;
+             padding:0 .25rem; cursor:pointer; line-height:1; }
+button.pop:hover { color:var(--accent); background:transparent; }
+#scope { position:relative; }
+#popScope { position:absolute; top:.3rem; right:.35rem; z-index:5; }
+
+/* A pop-out window shows ONE region full-height and nothing else. The page is
+   the same page - same script, same polling, same session - just dressed down
+   to a single panel, which is what makes "open the map on the other monitor"
+   free instead of a second application. */
+body[data-view] #toolbar, body[data-view] #side, body[data-view] #status,
+body[data-view] #rds, body[data-view] .hsplit, body[data-view] button.pop
+  { display:none !important; }
+body[data-view] #app { grid-template-columns:1fr; grid-template-rows:1fr;
+                       grid-template-areas:"main"; }
+body[data-view="scope"] #panels { display:none !important; }
+body[data-view="map"] #scope, body[data-view="map"] #imagesWrap,
+body[data-view="map"] #decodedWrap { display:none !important; }
+body[data-view="images"] #scope, body[data-view="images"] #mapWrap,
+body[data-view="images"] #decodedWrap { display:none !important; }
+body[data-view="decoded"] #scope, body[data-view="decoded"] #mapWrap,
+body[data-view="decoded"] #imagesWrap { display:none !important; }
+body[data-view="map"] #panels, body[data-view="images"] #panels,
+body[data-view="decoded"] #panels
+  { flex:1 1 auto; max-height:none; height:auto; }
+body[data-view="map"] #map { flex:1 1 auto; }
+body[data-view="decoded"] #decodedWrap { display:flex; flex-direction:column;
+                                         flex:1 1 auto; min-height:0; }
+body[data-view="decoded"] #decoded { flex:1 1 auto; max-height:none; }
 #side details { border-bottom:1px solid var(--edge); }
 #side summary { cursor:pointer; padding:.5rem .75rem; font-weight:600; font-size:.85rem;
                 letter-spacing:.02em; user-select:none; }
@@ -380,8 +425,10 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
    whatever the splitter grants the panel area. */
 #map { width:100%; flex:1 1 340px; min-height:180px; background:#080a0d;
        border:1px solid var(--edge); border-radius:3px; }
+/* resize:vertical puts the browser's own grab handle on the scrollable
+   innards, so every panel body can be sized without inventing more splitters. */
 #trackList { display:flex; flex-direction:column; gap:.15rem; margin-top:.35rem;
-             max-height:11rem; overflow:auto; }
+             height:11rem; max-height:none; overflow:auto; resize:vertical; }
 .tr { display:flex; flex-wrap:wrap; gap:.15rem .5rem; background:#1b202a;
       border:1px solid var(--edge); border-radius:3px; padding:.2rem .45rem;
       font-size:.75rem; cursor:pointer; }
@@ -396,8 +443,9 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 .img .cap { color:var(--dim); font-size:.72rem; margin-top:.2rem; }
 
 #decoded { background:#080a0d; border:1px solid var(--edge); border-radius:3px;
-           padding:.45rem; max-height:14rem; overflow:auto; font-size:.76rem;
-           white-space:pre-wrap; word-break:break-word; margin:0; }
+           padding:.45rem; height:14rem; max-height:none; overflow:auto;
+           font-size:.76rem; white-space:pre-wrap; word-break:break-word;
+           margin:0; resize:vertical; }
 
 #plugins { display:flex; flex-direction:column; gap:.25rem; }
 .pl { background:#1b202a; border:1px solid var(--edge); border-radius:3px;
@@ -1057,17 +1105,36 @@ function mercYn(lat) {
 }
 
 // Tiles the page holds, keyed 'z/x/y'. A 202 from the server means "asked the
-// radio, ask me again" — the entry is deleted so the next status poll refetches,
-// which IS the retry loop (4 Hz, and the server records the want on every ask).
+// radio, ask me again" — the entry is KEPT with a retry time, and the next
+// draw after that time refetches. TIME-based, never draw-based: a drag
+// redraws at 60 fps, and an early version that deleted the entry on 202
+// refetched every pending tile every frame — hundreds of requests a second,
+// until Chrome's per-origin queue filled and EVERY fetch on the page
+// (spectrum and waterfall included) died with ERR_INSUFFICIENT_RESOURCES.
+// The in-flight cap bounds the damage of any future mistake of that shape.
 // 404 means the tile will never exist and is remembered so nobody asks again.
 const tileCache = new Map();
 let tileFrame = 0;
+let tileInFlight = 0;
 function tileFor(z, x, y) {
   const key = z + '/' + x + '/' + y;
   let e = tileCache.get(key);
-  if (e) { e.used = tileFrame; return e.state === 'ready' ? e.bmp : null; }
-  e = { state: 'loading', bmp: null, used: tileFrame };
-  tileCache.set(key, e);
+  if (e) {
+    e.used = tileFrame;
+    if (e.state === 'ready') return e.bmp;
+    if (e.state !== 'pending' || performance.now() < e.retryAt) return null;
+    // Pending and due: fall through into a fresh fetch of the same entry.
+  } else {
+    e = { state: 'pending', bmp: null, used: tileFrame, retryAt: 0 };
+    tileCache.set(key, e);
+  }
+  // Chrome allows SIX concurrent connections to one HTTP/1.1 origin, and the
+  // audio stream holds one for as long as anyone listens. Tiles get three, so
+  // status + spectrum always have a free lane - a map that starves the
+  // readouts of their connections is 30 seconds of waterfall lag, measured.
+  if (tileInFlight >= 3) return null;   // a later draw will get to it
+  e.state = 'loading';
+  tileInFlight++;
   fetch('/api/tile/' + z + '/' + x + '/' + y, { credentials: 'same-origin' })
     .then(async (r) => {
       if (r.status === 200) {
@@ -1077,10 +1144,15 @@ function tileFor(z, x, y) {
       } else if (r.status === 404) {
         e.state = 'missing';
       } else {
-        tileCache.delete(key);
+        e.state = 'pending';
+        e.retryAt = performance.now() + 500;
       }
     })
-    .catch(() => { tileCache.delete(key); });
+    .catch(() => {
+      e.state = 'pending';
+      e.retryAt = performance.now() + 2500;   // the server is away; be calm
+    })
+    .finally(() => { tileInFlight = Math.max(0, tileInFlight - 1); });
   return null;
 }
 function pruneTiles() {
@@ -1320,6 +1392,47 @@ function reflectSplitters() {
       .some((id) => !$(id).classList.contains('hidden'));
   $('splitPanels').classList.toggle('hidden', !any);
 }
+
+// --- pop-out windows ---------------------------------------------------------
+// ?view=<region> dresses this same page down to one region; the buttons open
+// that in a fresh browser window. Same origin, same session cookie, same
+// polling - the pop-out is not a second client, just a second viewport.
+const POPOUT_VIEW = new URLSearchParams(location.search).get('view') || '';
+if (['scope', 'map', 'images', 'decoded'].indexOf(POPOUT_VIEW) >= 0) {
+  document.body.dataset.view = POPOUT_VIEW;
+  document.title = 'FoxSDR - ' + POPOUT_VIEW;
+}
+document.querySelectorAll('button.pop').forEach((b) => {
+  b.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    window.open('/?view=' + b.dataset.view, 'foxsdr-' + b.dataset.view,
+                'width=1000,height=700,noopener');
+  });
+});
+
+// --- the control column's width ----------------------------------------------
+(function setupSideGrip() {
+  const saved = localStorage.getItem('foxsdr.sideW');
+  if (saved) document.documentElement.style.setProperty('--side', saved);
+  const grip = $('sideGrip');
+  if (!grip) return;
+  let st = null;
+  grip.addEventListener('mousedown', (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    st = { x: ev.clientX, w: document.getElementById('side').getBoundingClientRect().width };
+    grip.classList.add('active');
+  });
+  window.addEventListener('mousemove', (ev) => {
+    if (!st) return;
+    const w = Math.round(Math.max(220, Math.min(window.innerWidth * 0.6, st.w + (ev.clientX - st.x))));
+    document.documentElement.style.setProperty('--side', w + 'px');
+    localStorage.setItem('foxsdr.sideW', w + 'px');
+  });
+  window.addEventListener('mouseup', () => {
+    if (st) { st = null; grip.classList.remove('active'); }
+  });
+})();
 
 $('map').addEventListener('click', (ev) => {
   if (mapDragMoved) { mapDragMoved = false; return; }
@@ -1793,7 +1906,15 @@ function drawWaterfall(bins, wireMin, wireMax) {
   ctx.putImageData(row, 0, 0);
 }
 
+let specBusy = false;
 async function pollSpectrum() {
+  // Never overlapped: on a slow link a 66 ms cadence must fall behind
+  // gracefully (fewer rows), not stack requests until the pool is starved.
+  if (specBusy) return;
+  specBusy = true;
+  try { await pollSpectrumOnce(); } finally { specBusy = false; }
+}
+async function pollSpectrumOnce() {
   const s = await getJson('/api/spectrum?since=' + seq);
   if (!s || !s.bins) return;
   seq = s.seq;
@@ -1816,12 +1937,23 @@ $('spectrum').addEventListener('click', (e) => {
   control({ vfoOffsetHz: Math.round((f - 0.5) * lastSpanHz) });
 });
 
+// TWO CADENCES. Status at 4 Hz is plenty for readouts and lists - but the
+// waterfall grows ONE ROW per spectrum poll, so its row rate IS the poll
+// rate. At 4 Hz the picture a little way down the panel is half a minute
+// old while the desktop's is seconds old (user-reported as "30 s behind");
+// ~15 Hz reads as live. Each response is ~2 KB on a kept-alive connection,
+// so the faster cadence costs ~30 KB/s and no extra connections.
+let specTimer = null;
 function startPolling() {
   if (timer) return;
-  timer = setInterval(() => { pollStatus(); pollSpectrum(); }, 250);
+  timer = setInterval(() => { pollStatus(); }, 250);
+  specTimer = setInterval(() => { pollSpectrum(); }, 66);
   pollStatus(); pollSpectrum();
 }
-function stopPolling() { if (timer) { clearInterval(timer); timer = null; } }
+function stopPolling() {
+  if (timer) { clearInterval(timer); timer = null; }
+  if (specTimer) { clearInterval(specTimer); specTimer = null; }
+}
 
 async function refreshSession() {
   const s = await getJson('/api/session');
