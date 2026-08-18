@@ -10,3 +10,8 @@ installer/Output/
 # name (which is an email address). Nothing secret, but it does not belong in
 # a repository that may become public.
 telemetry-worker/.wrangler/
+
+# Session handover notes — operational detail (hosts, network layout, business
+# notes) that must never ship in the public repository. Kept locally only;
+# the file was also scrubbed from history before the repo went public.
+HANDOVER.md
