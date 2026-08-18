@@ -1,0 +1,14 @@
+name = "foxsdr-usage"
+main = "worker.js"
+compatibility_date = "2026-08-18"
+
+# Analytics Engine rather than a database: it is built for exactly this
+# shape of write-once, aggregate-read counter, it costs nothing at this
+# volume, and it cannot accidentally become a store of per-user history
+# because there is nothing to query row-by-row about a person.
+[[analytics_engine_datasets]]
+binding = "USAGE"
+dataset = "foxsdr_usage"
+
+# Deliberately NOT set: no KV, no D1, no R2, no logpush. There is nowhere
+# for this Worker to persist a request even if a future edit tried to.

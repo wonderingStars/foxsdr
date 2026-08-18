@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+#include "core/telemetry.hpp"
+
+#include <algorithm>
+#include <cstdio>
+
+#include <nlohmann/json.hpp>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#endif
+
+namespace cascade::core {
+
+namespace {
+
+// Keys worth keeping from a SoapySDR argument string. `driver` says which
+// backend, `product`/`type` say which model. Everything else - serial, label
+// (which embeds the serial), addr, uri - either identifies the individual
+// unit or the network it is on.
+bool interestingKey(const std::string& k) {
+    return k == "driver" || k == "product" || k == "type";
+}
+
+std::string trim(const std::string& s) {
+    std::size_t a = 0, b = s.size();
+    while (a < b && (s[a] == ' ' || s[a] == '\t')) { ++a; }
+    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t')) { --b; }
+    return s.substr(a, b - a);
+}
+
+std::string lower(std::string s) {
+    for (char& c : s) {
+        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    return s;
+}
+
+}  // namespace
+
+std::string sanitiseDevice(const std::string& soapyArgs) {
+    std::vector<std::string> parts;
+    std::size_t at = 0;
+    while (at <= soapyArgs.size()) {
+        const std::size_t comma = soapyArgs.find(',', at);
+        const std::string field =
+            soapyArgs.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+        const std::size_t eq = field.find('=');
+        if (eq != std::string::npos) {
+            const std::string k = lower(trim(field.substr(0, eq)));
+            const std::string v = trim(field.substr(eq + 1));
+            // Bounded, and only ever from the allow list.
+            if (interestingKey(k) && !v.empty() && v.size() <= 32) {
+                const std::string lv = lower(v);
+                if (std::find(parts.begin(), parts.end(), lv) == parts.end()) {
+                    parts.push_back(lv);
+                }
+            }
+        }
+        if (comma == std::string::npos) { break; }
+        at = comma + 1;
+    }
+    std::string out;
+    for (const std::string& p : parts) {
+        if (!out.empty()) { out += ' '; }
+        out += p;
+    }
+    return out;
+}
+
+std::string newInstallId() {
+#if defined(_WIN32)
+    unsigned char bytes[16] = {0};
+    // The system CSPRNG, not rand(): an id that could be predicted from the
+    // launch time would let reports be correlated by someone who guessed it.
+    if (::BCryptGenRandom(nullptr, bytes, sizeof(bytes),
+                          BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        return std::string();
+    }
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.reserve(32);
+    for (unsigned char b : bytes) {
+        out += kHex[(b >> 4) & 0x0F];
+        out += kHex[b & 0x0F];
+    }
+    return out;
+#else
+    return std::string();
+#endif
+}
+
+bool validInstallId(const std::string& id) {
+    if (id.size() != 32) { return false; }
+    for (char c : id) {
+        const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!hex) { return false; }
+    }
+    return true;
+}
+
+std::string osDescription() {
+#if defined(_WIN32)
+    // The build number is the useful part (it distinguishes Windows 10 from
+    // 11), and it is shared by millions of machines. RtlGetVersion rather
+    // than GetVersionEx because the latter lies without a manifest.
+    typedef LONG(WINAPI * RtlGetVersionFn)(PRTL_OSVERSIONINFOW);
+    HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    if (ntdll != nullptr) {
+        auto fn = reinterpret_cast<RtlGetVersionFn>(
+            reinterpret_cast<void*>(::GetProcAddress(ntdll, "RtlGetVersion")));
+        RTL_OSVERSIONINFOW vi{};
+        vi.dwOSVersionInfoSize = sizeof(vi);
+        if (fn != nullptr && fn(&vi) == 0) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "Windows %lu.%lu.%lu",
+                          static_cast<unsigned long>(vi.dwMajorVersion),
+                          static_cast<unsigned long>(vi.dwMinorVersion),
+                          static_cast<unsigned long>(vi.dwBuildNumber));
+            return std::string(buf);
+        }
+    }
+    return "Windows";
+#else
+    return "unknown";
+#endif
+}
+
+std::string archDescription() {
+#if defined(_M_X64) || defined(__x86_64__)
+    return "x64";
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    return "arm64";
+#elif defined(_M_IX86) || defined(__i386__)
+    return "x86";
+#else
+    return "unknown";
+#endif
+}
+
+std::string TelemetryReport::toJson() const {
+    nlohmann::json j;
+    j["id"] = installId;
+    j["v"] = appVersion;
+    j["os"] = os;
+    j["arch"] = arch;
+    j["launches"] = launches;
+    j["crashes"] = crashes;
+    j["sessionSec"] = session.seconds;
+    j["sdr"] = session.sdrModel;
+    nlohmann::json modes = nlohmann::json::object();
+    for (const auto& kv : session.modeSeconds) {
+        modes[kv.first] = kv.second;
+    }
+    j["modes"] = std::move(modes);
+    j["panels"] = session.panels;
+    j["plugins"] = session.plugins;
+    // replace, not throw: a plugin name is third-party text and must not be
+    // able to make the report unserialisable (see web_server.cpp for the same
+    // hazard taking down the whole browser UI).
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+}  // namespace cascade::core
