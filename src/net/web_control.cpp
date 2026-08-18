@@ -24,7 +24,8 @@ const char* const kKnownKeys[] = {
     "sampleRateHz", "gainName",    "gainDb",         "agc",
     "scanDevices",  "recordIq",    "recordAudio",    "bookmarkAdd",
     "bookmarkTune", "bookmarkRemove", "scannerActive", "scanStartHz",
-    "scanStopHz",   "scanStepHz"};
+    "scanStopHz",   "scanStepHz",  "pluginFetch",    "pluginInstall",
+    "acknowledgeNotice", "pluginRemove", "pluginTuneName", "pluginTuneAllowed"};
 
 // Longest string a control field will accept. Device kwargs and antenna names
 // are short by nature; a cap keeps a hostile client from making the
@@ -110,6 +111,9 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"recordIq", &req.recordIq},
         {"recordAudio", &req.recordAudio},
         {"scannerActive", &req.scannerActive},
+        {"pluginFetch", &req.pluginFetch},
+        {"acknowledgeNotice", &req.acknowledgeNotice},
+        {"pluginTuneAllowed", &req.pluginTuneAllowed},
     };
     for (const BoolField& f : boolFields) {
         const auto it = j.find(f.key);
@@ -187,6 +191,9 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"antenna", &req.antenna},
         {"gainName", &req.gainName},
         {"bookmarkAdd", &req.bookmarkAdd},
+        {"pluginInstall", &req.pluginInstall},
+        {"pluginRemove", &req.pluginRemove},
+        {"pluginTuneName", &req.pluginTuneName},
     };
     for (const StringField& f : stringFields) {
         const auto it = j.find(f.key);
@@ -246,6 +253,26 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
             return false;
         }
         *f.dst = v;
+    }
+
+    // A permission is a NAME and a DECISION; either alone cannot be acted on,
+    // and guessing the missing half is the last thing to do with a grant that
+    // lets a plugin move the receiver.
+    if (req.pluginTuneName.has_value() != req.pluginTuneAllowed.has_value()) {
+        error = "pluginTuneName and pluginTuneAllowed must be given together";
+        return false;
+    }
+    if (req.pluginInstall && req.pluginInstall->empty()) {
+        error = "pluginInstall must name a catalogue entry";
+        return false;
+    }
+    if (req.pluginRemove && req.pluginRemove->empty()) {
+        error = "pluginRemove must name an installed file";
+        return false;
+    }
+    if (req.pluginTuneName && req.pluginTuneName->empty()) {
+        error = "pluginTuneName must not be empty";
+        return false;
     }
 
     if (req.bookmarkAdd && req.bookmarkAdd->empty()) {

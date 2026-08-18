@@ -208,11 +208,40 @@ struct RadioStatus {
         std::string name;
         std::string version;
         std::string licence;
+        std::string fileName;   // what pluginRemove names
         bool loaded = false;
         std::string error;      // empty iff loaded
         std::string idleReason; // why it is loaded but not being fed, if so
+        // Declares CASCADE_CAP_HOST_CLIENT, i.e. it can ASK to move the
+        // receiver — and whether the user has said yes.
+        bool canRequestTune = false;
+        bool tuneAllowed = false;
     };
     std::vector<Plugin> plugins;
+
+    // --- Plugin catalogue --------------------------------------------------
+    // Empty until someone presses Browse. NOTHING here causes a fetch: the
+    // published catalogue's promise is that the application does not contact
+    // the origin unasked, and a status poll must not become the thing that
+    // breaks it.
+    struct CatalogEntry {
+        std::string id;
+        std::string name;
+        std::string version;
+        std::string licence;
+        std::string summary;
+        std::string legalNotice;   // must be acknowledged before Install
+        bool installed = false;
+        // Empty when Install may be pressed; otherwise the reason it may not,
+        // from the SAME predicate the desktop's button uses.
+        std::string blockedReason;
+    };
+    std::vector<CatalogEntry> catalogue;
+    std::string catalogueStatus;
+    std::string catalogueError;
+    bool catalogueBusy = false;    // a fetch or a download is in flight
+    std::string installReport;     // last success, verbatim
+    std::string installError;      // last failure, verbatim
 
     // --- Decoded images ----------------------------------------------------
     // METADATA only. The pixels are fetched separately from /api/image/<n>,

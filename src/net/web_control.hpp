@@ -137,6 +137,25 @@ struct ControlRequest {
     std::optional<double> scanStopHz;
     std::optional<double> scanStepHz;
 
+    // --- Plugins ---------------------------------------------------------
+    // Fetch the catalogue. A REQUEST: this is the only thing in the product
+    // that contacts the catalogue origin, and it still happens only because
+    // someone asked — the browser is simply another way of asking.
+    std::optional<bool> pluginFetch;
+    // Install the catalogue entry with this id. `acknowledgeNotice` is the
+    // browser's equivalent of ticking the legal-notice box, and the install
+    // gate refuses without it exactly as the desktop's does — the SAME
+    // predicate decides both, so the two can never disagree about what is
+    // installable.
+    std::optional<std::string> pluginInstall;
+    std::optional<bool> acknowledgeNotice;
+    // Remove an installed plugin by FILE NAME, as the status reports it.
+    std::optional<std::string> pluginRemove;
+    // Grant or revoke one plugin's permission to move the receiver. Both
+    // fields or neither.
+    std::optional<std::string> pluginTuneName;
+    std::optional<bool> pluginTuneAllowed;
+
     bool empty() const {
         return !running && !centerHz && !vfoOffsetHz && !mode && !bandwidthHz &&
                !squelchDb && !volume && !dbMin && !dbMax && !deemphasisIndex &&
@@ -145,7 +164,9 @@ struct ControlRequest {
                !soapyArgs && !antenna && !sampleRateHz && !gainName && !gainDb &&
                !agc && !scanDevices && !recordIq && !recordAudio &&
                !bookmarkAdd && !bookmarkTune && !bookmarkRemove &&
-               !scannerActive && !scanStartHz && !scanStopHz && !scanStepHz;
+               !scannerActive && !scanStartHz && !scanStopHz && !scanStepHz &&
+               !pluginFetch && !pluginInstall && !pluginRemove &&
+               !pluginTuneName && !pluginTuneAllowed;
     }
 };
 

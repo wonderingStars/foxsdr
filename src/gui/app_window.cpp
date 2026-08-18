@@ -4090,7 +4090,34 @@ void AppWindow::publishWebSnapshot() {
         w.licence = p.licence;
         w.loaded = p.loaded;
         w.error = p.error;
+        w.fileName = std::filesystem::path(p.path).filename().string();
+        w.canRequestTune = (p.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u;
+        w.tuneAllowed = std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(),
+                                  p.name) != pluginTuneAllowed_.end();
         s.plugins.push_back(std::move(w));
+    }
+
+    s.catalogueStatus = catalogStatus_;
+    s.catalogueError = catalogError_;
+    s.catalogueBusy = catalogPending_ || installPending_;
+    s.installReport = installReport_;
+    s.installError = installError_;
+    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+        const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(i)];
+        cascade::net::RadioStatus::CatalogEntry c;
+        c.id = e.id;
+        c.name = e.name;
+        c.version = e.version;
+        c.licence = e.licence;
+        c.summary = e.summary;
+        c.legalNotice = e.legalNotice;
+        c.installed = catalogEntryInstalled(e);
+        // THE SAME predicate the desktop's Install button consults, asked as
+        // "would this be installable if the notice were acknowledged" — so the
+        // browser and the window can never disagree about what may be
+        // installed, and the notice itself is still a separate, explicit act.
+        c.blockedReason = pluginInstallBlockedReason(i, /*acknowledged=*/true);
+        s.catalogue.push_back(std::move(c));
     }
 
     // The tail of the decoder log. Bounded here rather than sending the whole
@@ -4392,6 +4419,42 @@ void AppWindow::applyWebControls() {
         if (r.scanStartHz.has_value()) { scanStartMhz_ = *r.scanStartHz / 1.0e6; }
         if (r.scanStopHz.has_value()) { scanStopMhz_ = *r.scanStopHz / 1.0e6; }
         if (r.scanStepHz.has_value()) { scanStepKhz_ = *r.scanStepHz / 1.0e3; }
+        // --- Plugins ---------------------------------------------------------
+        if (r.pluginFetch.value_or(false)) {
+            startCatalogFetch();
+        }
+        if (r.pluginInstall.has_value()) {
+            // The legal notice must be acknowledged explicitly, exactly as the
+            // desktop requires a ticked box — and the gate is the SAME
+            // predicate, so a plugin the window refuses to install is refused
+            // here too, for the same stated reason.
+            const bool ack = r.acknowledgeNotice.value_or(false);
+            bool done = false;
+            for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+                if (catalog_[static_cast<std::size_t>(i)].id != *r.pluginInstall) {
+                    continue;
+                }
+                const std::string blocked = pluginInstallBlockedReason(i, ack);
+                if (!blocked.empty()) {
+                    installError_ = blocked;
+                } else {
+                    startInstall(catalog_[static_cast<std::size_t>(i)]);
+                }
+                done = true;
+                break;
+            }
+            if (!done) {
+                installError_ = "no catalogue entry with that id; fetch the "
+                                "catalogue and try again";
+            }
+        }
+        if (r.pluginRemove.has_value()) {
+            removeInstalledPlugin(*r.pluginRemove);
+        }
+        if (r.pluginTuneName.has_value() && r.pluginTuneAllowed.has_value()) {
+            setPluginTuneAllowed(*r.pluginTuneName, *r.pluginTuneAllowed);
+        }
+
         if (r.scannerActive.has_value()) {
             if (*r.scannerActive) {
                 cascade::core::Scanner::Params p;

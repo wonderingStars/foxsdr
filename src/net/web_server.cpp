@@ -130,6 +130,9 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <label>Centre (MHz)<input id="centre" type="number" step="0.000001"></label>
       <button id="tune">Tune</button>
     </div>
+    <div class="row">
+      <div id="freqDigits" title="scroll a digit to tune, like the desktop readout"></div>
+    </div>
     <div id="modes" class="row"></div>
     <div class="row">
       <label>VFO offset <span id="vfoVal"></span><input id="vfo" type="range" min="-500" max="500" step="1"></label>
@@ -188,6 +191,13 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
   <pre id="decoded" class="hidden"></pre>
   <h2>Plugins</h2>
   <div id="plugins"></div>
+  <div class="row">
+    <button id="pluginFetch">Get plugins</button>
+    <span id="catStatus" class="dim"></span>
+  </div>
+  <p id="catError" class="error"></p>
+  <p id="installReport" class="ok"></p>
+  <div id="catalogue"></div>
   <button id="logout" class="hidden">Sign out</button>
 </section>
 <script src="/app.js"></script>
@@ -269,6 +279,21 @@ button.on { background:#7a2020; color:#ffd7d7; }
 .img img { display:block; max-width:100%; image-rendering:pixelated;
            background:#080a0d; border-radius:2px; }
 .img .cap { color:var(--dim); font-size:.75rem; margin-top:.25rem; }
+.ok { color:#8fe0a8; min-height:1.2em; }
+#catalogue { display:flex; flex-direction:column; gap:.35rem; }
+.cat { background:#171b22; border:1px solid #232833; border-radius:3px; padding:.45rem .6rem; }
+.cat .hd { display:flex; gap:.5rem; align-items:baseline; }
+.cat .hd .nm { font-weight:600; }
+.cat .notice { background:#2a1f10; border:1px solid #5a4a10; color:#ffe9a8;
+               border-radius:3px; padding:.35rem .5rem; margin:.35rem 0;
+               font-size:.8rem; }
+.cat label.check { margin-right:.5rem; }
+#freqDigits { display:inline-flex; gap:1px; font-variant-numeric:tabular-nums;
+              font-size:1.35rem; letter-spacing:.02em; cursor:ns-resize;
+              user-select:none; }
+#freqDigits span { padding:0 .05em; border-radius:2px; }
+#freqDigits span.d:hover { background:#243044; }
+#freqDigits span.lead { color:#3d4653; }
 )CSS";
 
 // THE CLIENT SCRIPT IS SPLIT ACROSS SEVERAL LITERALS because MSVC caps a single
@@ -574,9 +599,122 @@ function reflectImages(s) {
   });
 }
 
+// PER-DIGIT WHEEL TUNING, the desktop readout's gesture. Each digit is its own
+// element carrying its decade, so scrolling one moves the centre by exactly
+// that decade — which is the only way to get from 100 MHz to 433 MHz in a
+// sane number of notches.
+const FREQ_DIGITS = 10;   // 9,999,999,999 Hz covers everything this receives
+let freqShownHz = -1;
+
+function renderFreqDigits(hz) {
+  const box = $('freqDigits');
+  const whole = Math.max(0, Math.round(hz));
+  const text = String(whole).padStart(FREQ_DIGITS, '0');
+  if (box.childElementCount !== FREQ_DIGITS + 3) {
+    box.innerHTML = '';
+    for (let i = 0; i < FREQ_DIGITS; i++) {
+      const decade = FREQ_DIGITS - 1 - i;
+      const d = document.createElement('span');
+      d.className = 'd';
+      d.dataset.decade = decade;
+      d.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const step = Math.pow(10, parseInt(d.dataset.decade, 10));
+        control({ centerHz: Math.max(0, Math.round(freqShownHz + (e.deltaY < 0 ? step : -step))) });
+      }, { passive: false });
+      box.appendChild(d);
+      // Thousands separators, so the readout groups like the desktop's.
+      if (decade === 9 || decade === 6 || decade === 3) {
+        const sep = document.createElement('span');
+        sep.textContent = ',';
+        box.appendChild(sep);
+      }
+    }
+  }
+  freqShownHz = whole;
+  let leading = true;
+  let k = 0;
+  Array.from(box.children).forEach((el) => {
+    if (!el.classList.contains('d')) return;
+    const ch = text[k++];
+    if (ch !== '0') leading = false;
+    el.textContent = ch;
+    // Dim the leading zeros rather than hiding them: the digit still has to be
+    // scrollable, which is how you tune UP into an empty decade.
+    el.classList.toggle('lead', leading);
+  });
+}
+
+let lastCatKey = '';
+function reflectCatalogue(s) {
+  $('catStatus').textContent = s.catalogueBusy ? 'working...' : (s.catalogueStatus || '');
+  $('pluginFetch').disabled = s.catalogueBusy;
+  $('catError').textContent = s.catalogueError || s.installError || '';
+  $('installReport').textContent = s.installReport || '';
+
+  const key = s.catalogue.map(e => e.id + e.version + e.installed + e.blockedReason).join('|');
+  if (key === lastCatKey) return;
+  lastCatKey = key;
+  const box = $('catalogue');
+  box.innerHTML = '';
+  s.catalogue.forEach((e) => {
+    const d = document.createElement('div');
+    d.className = 'cat';
+    const hd = document.createElement('div');
+    hd.className = 'hd';
+    hd.innerHTML = '<span class="nm">' + e.name + '</span>' +
+                   '<span class="meta">' + e.version + '  ' + (e.licence || '') + '</span>';
+    d.appendChild(hd);
+    if (e.summary) {
+      const sm = document.createElement('div');
+      sm.className = 'meta';
+      sm.textContent = e.summary;
+      d.appendChild(sm);
+    }
+    let ack = null;
+    if (e.legalNotice) {
+      const n = document.createElement('div');
+      n.className = 'notice';
+      n.textContent = e.legalNotice;
+      d.appendChild(n);
+      const lab = document.createElement('label');
+      lab.className = 'check';
+      ack = document.createElement('input');
+      ack.type = 'checkbox';
+      lab.appendChild(ack);
+      lab.appendChild(document.createTextNode(' I have read this'));
+      d.appendChild(lab);
+    }
+    const btn = document.createElement('button');
+    if (e.installed) {
+      btn.textContent = 'Installed';
+      btn.disabled = true;
+    } else if (e.blockedReason) {
+      btn.textContent = 'Unavailable';
+      btn.disabled = true;
+      btn.title = e.blockedReason;
+    } else {
+      btn.textContent = 'Install';
+      btn.addEventListener('click', () => {
+        lastCatKey = '';
+        control({ pluginInstall: e.id, acknowledgeNotice: !ack || ack.checked });
+      });
+    }
+    d.appendChild(btn);
+    if (e.blockedReason && !e.installed) {
+      const why = document.createElement('div');
+      why.className = 'meta';
+      why.textContent = e.blockedReason;
+      d.appendChild(why);
+    }
+    box.appendChild(d);
+  });
+}
+
 let lastPluginKey = '';
 function reflectPlugins(s) {
-  const key = s.plugins.map(p => p.name + p.version + p.loaded + p.error).join('|');
+  const key = s.plugins.map(p => p.name + p.version + p.loaded + p.error +
+                                 p.tuneAllowed).join('|');
   if (key === lastPluginKey) return;
   lastPluginKey = key;
   const box = $('plugins');
@@ -588,10 +726,51 @@ function reflectPlugins(s) {
   s.plugins.forEach((p) => {
     const d = document.createElement('div');
     d.className = 'pl' + (p.loaded ? '' : ' bad');
-    const head = (p.name || '(unnamed)') + (p.version ? ' ' + p.version : '');
-    const meta = p.loaded ? (p.licence || 'licence not stated')
-                          : ('refused: ' + (p.error || 'reason not reported'));
-    d.innerHTML = '<div>' + head + '</div><div class="meta">' + meta + '</div>';
+    const head = document.createElement('div');
+    head.textContent = (p.name || '(unnamed)') + (p.version ? ' ' + p.version : '');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = p.loaded ? (p.licence || 'licence not stated')
+                                : ('refused: ' + (p.error || 'reason not reported'));
+    d.appendChild(head);
+    d.appendChild(meta);
+
+    // RECEIVER CONTROL. Only offered for a plugin that declares it can ask;
+    // the grant is DENIED by default and this is the only way to give it, so
+    // without this row a satellite tracker's Doppler correction is unreachable
+    // from the browser exactly as it was from the window before 0.20.0.
+    if (p.canRequestTune) {
+      const lab = document.createElement('label');
+      lab.className = 'check';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = p.tuneAllowed;
+      cb.addEventListener('change', () => {
+        lastPluginKey = '';
+        control({ pluginTuneName: p.name, pluginTuneAllowed: cb.checked });
+      });
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(' may tune the receiver'));
+      d.appendChild(lab);
+    }
+
+    if (p.fileName) {
+      const rm = document.createElement('button');
+      rm.className = 'del';
+      rm.textContent = 'Remove';
+      rm.addEventListener('click', () => {
+        // Two clicks, like the desktop's confirm row: removing a plugin
+        // deletes a file, and a single stray click should not.
+        if (rm.dataset.armed === '1') {
+          lastPluginKey = '';
+          control({ pluginRemove: p.fileName });
+        } else {
+          rm.dataset.armed = '1';
+          rm.textContent = 'Really remove?';
+        }
+      });
+      d.appendChild(rm);
+    }
     box.appendChild(d);
   });
 }
@@ -684,6 +863,7 @@ function reflectExtras(s) {
 function reflect(s) {
   $('playstop').textContent = s.running ? 'Stop' : 'Start';
   syncControl($('centre'), (s.centerHz / 1e6).toFixed(6));
+  renderFreqDigits(s.centerHz);
   syncControl($('vfo'), Math.round(s.vfoOffsetHz / 1000));
   $('vfoVal').textContent = (s.vfoOffsetHz / 1000).toFixed(0) + ' kHz';
   let bwIdx = 0, best = Infinity;
@@ -730,6 +910,7 @@ function reflect(s) {
   reflectTracks(s);
   reflectPlugins(s);
   reflectImages(s);
+  reflectCatalogue(s);
 
   // RDS, shown only when there is something to show.
   const showRds = s.mode === 'WFM' && (s.rdsSynced || s.pilotLocked);
@@ -915,6 +1096,12 @@ $('srate').addEventListener('change', () => {
   control({ sampleRateHz: parseFloat($('srate').value) });
 });
 $('agc').addEventListener('change', () => control({ agc: $('agc').checked }));
+$('pluginFetch').addEventListener('click', () => {
+  // The ONLY thing that contacts the catalogue origin, and it still happens
+  // only because somebody pressed this.
+  lastCatKey = '';
+  control({ pluginFetch: true });
+});
 $('recIq').addEventListener('click', () => {
   control({ recordIq: $('recIq').textContent === 'Record IQ' });
 });
@@ -1512,11 +1699,34 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 plugins.push_back({{"name", p.name},
                                    {"version", p.version},
                                    {"licence", p.licence},
+                                   {"fileName", p.fileName},
                                    {"loaded", p.loaded},
                                    {"error", p.error},
-                                   {"idleReason", p.idleReason}});
+                                   {"idleReason", p.idleReason},
+                                   {"canRequestTune", p.canRequestTune},
+                                   {"tuneAllowed", p.tuneAllowed}});
             }
             j["plugins"] = std::move(plugins);
+
+            nlohmann::json cat = nlohmann::json::array();
+            for (const RadioStatus::CatalogEntry& e : s.catalogue) {
+                cat.push_back({{"id", e.id},
+                               {"name", e.name},
+                               {"version", e.version},
+                               {"licence", e.licence},
+                               {"summary", e.summary},
+                               {"legalNotice", e.legalNotice},
+                               {"installed", e.installed},
+                               {"blockedReason", e.blockedReason}});
+            }
+            j["catalogue"] = std::move(cat);
+        }
+        j["catalogueStatus"] = s.catalogueStatus;
+        j["catalogueError"] = s.catalogueError;
+        j["catalogueBusy"] = s.catalogueBusy;
+        j["installReport"] = s.installReport;
+        j["installError"] = s.installError;
+        {
 
             nlohmann::json images = nlohmann::json::array();
             for (const RadioStatus::Image& im : s.images) {
