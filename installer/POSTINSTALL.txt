@@ -44,6 +44,21 @@ RUNTIME NOTES
 
 LICENSE
 -------
-MIT — see LICENSE.txt in the install folder. FoxSDR is an
-independent project, not affiliated with or endorsed by SDR++ or its
-authors.
+Free for noncommercial use; commercial use requires a paid licence.
+
+FoxSDR is licensed under the PolyForm Noncommercial License 1.0.0 — see
+LICENSE.txt in the install folder for the full terms. If you are a
+hobbyist, an amateur radio operator, a student, a charity, a school or a
+public body, it is free, permanently and unconditionally: no trial, no
+registration, no licence key, no activation, no telemetry, and nothing
+withheld. Using it in a business, selling it, bundling it with hardware
+or building a product from it requires a commercial licence.
+
+Two deliberate exceptions: the plugin interface header
+(src/core/plugin_abi.h) is MIT, so anyone may write plugins without a
+licence from us; and the bundled third-party components keep their own
+permissive licences — see THIRD-PARTY-LICENSES.txt, which is installed
+alongside this file.
+
+FoxSDR is an independent project, not affiliated with or endorsed by
+SDR++ or its authors.

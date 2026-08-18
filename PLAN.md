@@ -1,7 +1,11 @@
 # cascade — project plan
 
-A from-scratch, MIT-licensed SDR receiver application whose GUI and feature set
-match SDR++, intended for free public release under its own name.
+A from-scratch SDR receiver application whose GUI and feature set match SDR++,
+released under its own name. Licensing: PolyForm Noncommercial 1.0.0 — free for
+noncommercial use, paid licence for commercial use — with the plugin interface
+header (`src/core/plugin_abi.h`) deliberately exempt and MIT. (This file
+originally said "MIT-licensed"; that was the plan before the dual-licensing
+decision, and the LICENSE file has always been the authority.)
 
 This file is the specification every implementation agent works from. Agents do
 not see the conversation that produced it; everything needed is here.

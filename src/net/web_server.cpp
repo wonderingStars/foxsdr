@@ -32,6 +32,20 @@ constexpr char kCookieName[] = "foxsdr_session";
 // hostile client cannot make the server buffer anything worth mentioning.
 constexpr std::size_t kMaxPayloadBytes = 8 * 1024;
 
+// EVERY dump() IN THIS FILE PASSES error_handler_t::replace, and that is a
+// correctness requirement rather than a nicety.
+//
+// nlohmann's default behaviour is to THROW on a string that is not valid
+// UTF-8. Much of what this server serialises is text produced by decoder
+// plugins from radio noise — POCSAG and RTTY turn whatever is on the air into
+// characters, and the Inmarsat-C decoder is published knowing its constants
+// are unverified, so producing rubbish is its expected behaviour. A single
+// byte above 127 in one decoded line would therefore throw inside the status
+// handler and take the ENTIRE browser interface down — not that one line, the
+// whole readout — until the offending line aged out of the log. Third-party
+// plugin output must never be able to do that, so invalid sequences become
+// U+FFFD and the response still goes out.
+
 std::string cookieAttributes() {
     return std::string("; Path=/; HttpOnly; SameSite=Strict");
 }
@@ -511,9 +525,21 @@ function setLinkUp(up) {
   if (el) el.classList.toggle('hidden', up);
 }
 
+// EVERY POLL IS TIMED OUT, and that is not belt-and-braces. fetch() has no
+// timeout of its own: when the application goes away mid-request - which it
+// does on every upgrade, and which the receiver being an app the user can
+// close makes ordinary - the browser can leave the promise pending
+// indefinitely. A poller that awaits it while holding a "one at a time" guard
+// then never runs again, so the spectrum and waterfall freeze for good while
+// the status poll keeps updating and the page still looks connected. Measured
+// responses here are 2-5 ms, so four seconds is far beyond any real answer and
+// still recovers quickly.
+const POLL_TIMEOUT_MS = 4000;
 async function getJson(url) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), POLL_TIMEOUT_MS);
   try {
-    const r = await fetch(url, { credentials: 'same-origin' });
+    const r = await fetch(url, { credentials: 'same-origin', signal: ac.signal });
     if (r.status === 401) { stopPolling(); await refreshSession(); return null; }
     setLinkUp(true);
     if (!r.ok) return null;
@@ -521,6 +547,8 @@ async function getJson(url) {
   } catch (e) {
     setLinkUp(false);
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -2232,6 +2260,11 @@ private:
     mutable AudioRing audio_;
     std::atomic<int> listeners_{0};
 
+    // Highest spectrum sequence this process has served. Zero at start-up,
+    // which is exactly why a cursor left over from a previous run reads as
+    // impossible and gets reset — see the spectrum handler.
+    mutable std::atomic<std::uint64_t> maxSeenSeq_{0};
+
     std::unique_ptr<httplib::Server> svr_;
     std::thread thread_;
     std::atomic<bool> running_{false};
@@ -2242,7 +2275,7 @@ void WebServer::Impl::deny(httplib::Response& res, const std::string& message,
     nlohmann::json j;
     j["error"] = message;
     res.status = status;
-    res.set_content(j.dump(), "application/json");
+    res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
 }
 
 bool WebServer::Impl::authorised(const httplib::Request& req) const {
@@ -2301,7 +2334,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["authRequired"] = d.authRequired;
         j["authenticated"] = authorised(req);
         j["reachableOffMachine"] = d.reachableOffMachine;
-        res.set_content(j.dump(), "application/json");
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
     svr.Post("/api/login", [this](const httplib::Request& req, httplib::Response& res) {
@@ -2367,7 +2400,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                                          cookieAttributes());
         nlohmann::json j;
         j["ok"] = true;
-        res.set_content(j.dump(), "application/json");
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
     svr.Post("/api/logout", [this](const httplib::Request& req, httplib::Response& res) {
@@ -2380,7 +2413,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                                          "; Max-Age=0");
         nlohmann::json j;
         j["ok"] = true;
-        res.set_content(j.dump(), "application/json");
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
     svr.Get("/api/status", [this](const httplib::Request& req, httplib::Response& res) {
@@ -2568,7 +2601,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["scanStartHz"] = s.scanStartHz;
         j["scanStopHz"] = s.scanStopHz;
         j["scanStepHz"] = s.scanStepHz;
-        res.set_content(j.dump(), "application/json");
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
     // Live audio as an endless chunked response of 16-bit little-endian PCM.
@@ -2689,7 +2722,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 nlohmann::json j;
                 j["pending"] = true;
                 res.status = 202;
-                res.set_content(j.dump(), "application/json");
+                res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
                 return;
             }
         }
@@ -2726,7 +2759,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         res.status = 202;
         nlohmann::json j;
         j["accepted"] = true;
-        res.set_content(j.dump(), "application/json");
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
     svr.Get("/api/spectrum", [this](const httplib::Request& req, httplib::Response& res) {
@@ -2742,7 +2775,28 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 snap.seq = 0;  // an unparseable cursor means "send me anything"
             }
         }
+        // A CURSOR FROM THE FUTURE CAN ONLY BE A CURSOR FROM A PREVIOUS RUN.
+        // Frame sequence numbers restart at zero when the application does, so
+        // a browser left open across a restart - an upgrade, a crash, or the
+        // user simply closing and reopening the receiver - would otherwise go
+        // on asking for a frame newer than any that will ever be produced. The
+        // status poll keeps working, so the page looks alive while the
+        // spectrum and waterfall stay frozen for ever, and only a manual
+        // reload fixes it. Treating an impossible cursor as "start again" is
+        // what makes every already-open page recover by itself.
+        if (snap.seq > maxSeenSeq_.load(std::memory_order_relaxed)) {
+            snap.seq = 0;
+        }
         const bool fresh = spectrum_ ? spectrum_(snap) : false;
+        if (fresh) {
+            // Highest sequence this PROCESS has served, which is what makes
+            // the test above mean "impossible" rather than merely "large".
+            std::uint64_t seen = maxSeenSeq_.load(std::memory_order_relaxed);
+            while (snap.seq > seen &&
+                   !maxSeenSeq_.compare_exchange_weak(seen, snap.seq,
+                                                      std::memory_order_relaxed)) {
+            }
+        }
         nlohmann::json j;
         j["seq"] = snap.seq;
         j["fresh"] = fresh;
@@ -2754,7 +2808,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             const std::vector<std::uint8_t> q = quantiseSpectrum(snap.dbBins);
             j["bins"] = base64Encode(q);
         }
-        res.set_content(j.dump(), "application/json");
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 }
 
@@ -2791,6 +2845,32 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
     audio_.reset();
 
     svr_ = std::make_unique<httplib::Server>();
+    // WITHOUT THIS, A THROWING HANDLER IS AN EMPTY 500 AND NOTHING ELSE —
+    // no message, no route, nothing in any log. That is the difference
+    // between a two-minute diagnosis and an afternoon: a serialisation
+    // failure in the status handler takes the whole browser UI down, and
+    // the only visible symptom is that the page stops updating. The message
+    // goes to the application's console AND to the client, because whoever
+    // is looking at the browser is the person who needs it.
+    svr_->set_exception_handler([](const httplib::Request& req,
+                                   httplib::Response& res,
+                                   std::exception_ptr ep) {
+        std::string what = "unknown exception";
+        try {
+            std::rethrow_exception(ep);
+        } catch (const std::exception& e) {
+            what = e.what();
+        } catch (...) {
+        }
+        std::fprintf(stderr, "cascade: web handler threw on %s %s: %s\n",
+                     req.method.c_str(), req.path.c_str(), what.c_str());
+        std::fflush(stderr);
+        nlohmann::json j;
+        j["error"] = what;
+        j["path"] = req.path;
+        res.status = 500;
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+    });
     svr_->set_payload_max_length(kMaxPayloadBytes);
     // Without these a single stalled peer holds a worker thread indefinitely.
     svr_->set_read_timeout(10, 0);

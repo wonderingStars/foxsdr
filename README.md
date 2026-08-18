@@ -5,6 +5,11 @@ waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
 RDS, recording, bookmarks, a scanner, band plans, and hardware support for any
 radio SoapySDR can reach.
 
+It also has a **map** for decoded targets — aircraft, ships, stations — and can
+serve its whole interface to a **browser** on your own network, so the receiver
+can sit where the antenna is and be driven from anywhere in the house.
+Decoders arrive as optional [plugins](#plugins) from an in-app catalogue.
+
 Built clean-room — no GPL code and no GPL-linked dependencies anywhere in the
 tree. That discipline is what leaves the licensing free to choose (see
 [License](#license)); it is not itself a licence claim.
@@ -13,11 +18,38 @@ Internal project/binary name: `cascade`.
 
 ## Status
 
-Early development. See [PLAN.md](PLAN.md) for the roadmap (P0–P6) and the
-architecture. Currently: GUI shell, FFT/spectrum estimator, and the core DSP
-primitives (SPSC ring, FIR design + decimation, NCO/mixer, quadrature
-discriminator, AGC) — each with a unit-test suite verified by independent
-adversarial review.
+Working and in use, and still pre-1.0 — the interface and the plugin catalogue
+are still moving. What is in the current build:
+
+- **Receiver.** Spectrum and waterfall, NFM/WFM/AM/DSB/USB/LSB/CW, squelch,
+  AGC, noise reduction, manual and automatic notch, de-emphasis, stereo FM with
+  pilot lock, and RDS (programme service name, radio text, PI, PTY).
+- **Hardware.** Anything SoapySDR reaches, with antenna, sample-rate and
+  per-stage gain selection. Developed against an Ettus B200; the built-in
+  signal generator and IQ-file playback mean it runs with no radio at all.
+- **Working with signals.** Bookmarks, a band scanner, band plans, and
+  recording of both audio and raw I/Q.
+- **Map and decoders.** Aircraft, vessels and stations plotted together, with
+  optional map imagery from a basemap plugin. Decoder plugins produce text or
+  pictures (slow-scan and weather-satellite images, shown in their own windows
+  and saveable).
+- **Browser access.** The full interface over HTTP on your LAN, at feature
+  parity with the desktop, with password authentication and live audio. Off by
+  default; see [Browser access](#browser-access) for the security posture.
+
+**Verification, honestly stated.** The DSP core and every decoder carry unit
+tests (`ctest` runs 51 suites), and the audio chain has been confirmed by ear
+on broadcast FM. Of the decoders, **ADS-B is the one confirmed against real
+off-air signals** — aircraft decoded live, with ICAO address blocks and
+callsigns agreeing across independent message types. The others (AIS, APRS,
+SSTV, Morse, RTTY, POCSAG) are verified against synthesised signals and
+published constants, which is real evidence but not the same thing. The
+Inmarsat-C plugin is published at 0.1.0 and explicitly marked EXPERIMENTAL:
+roughly ten of its air-interface constants are reconstructed guesses, and it
+will most likely decode nothing off air. Each plugin's catalogue entry says
+where it stands.
+
+See [PLAN.md](PLAN.md) for the roadmap and architecture.
 
 ## Building (Windows)
 
@@ -76,7 +108,49 @@ red with a one-click Update when the catalogue has a newer build. Plugins the
 catalogue has never described (private or hand-installed builds) are left
 alone and keep loading.
 
-## Installer
+## Browser access
+
+FoxSDR can serve its interface to a browser, so the receiver can live where the
+antenna is. Open **Web access** in the settings panel, set a password, tick it
+and press Apply; the panel then shows the address to open on another machine.
+
+Read the security posture before exposing it:
+
+- **It is off by default, and defaults to loopback** (this machine only).
+- **A password is required for any binding beyond this machine.** Without one,
+  a LAN bind is refused outright — no socket is opened at all, rather than a
+  socket opened without a gate.
+- **There is no TLS.** The server speaks plain HTTP deliberately: it links no
+  crypto library, so it cannot honestly offer transport security. On a home
+  LAN that is a reasonable trade. **Do not port-forward it to the internet.**
+  To reach it from outside, terminate TLS in front of it — a reverse proxy
+  (Caddy, nginx) or a tunnel such as Tailscale or Cloudflare Tunnel — and never
+  expose its port directly.
+- Passwords are stored hashed (PBKDF2-HMAC-SHA256), never in the clear;
+  sessions are cookie-based, expire, and are revoked whenever the settings
+  change.
+
+The browser client does everything the desktop does, with two deliberate
+exceptions: it cannot name an I/Q file or a recording directory, because those
+are host filesystem paths rather than settings.
+
+## Installing
+
+Download `foxsdr-setup-<version>.exe` from the releases page and run it. It
+installs `cascade.exe`, the SoapySDR runtime, the app-local Microsoft C runtime,
+the licence and post-install notes; it writes nothing outside the install
+directory and your own user profile, and it uninstalls cleanly from
+Add/Remove Programs.
+
+**The setup executable is not code-signed yet**, so Windows SmartScreen will
+show "Windows protected your PC". Choose **More info → Run anyway** if you are
+happy to proceed. Signing is planned.
+
+Radio hardware support is a separate install (PothosSDR or radioconda) — see
+`POSTINSTALL.txt` in the install folder. FoxSDR runs with no hardware at all
+using the signal generator or I/Q playback.
+
+## Building the installer
 
 A Windows installer (Inno Setup 6) lives under `installer/` — it packages
 `cascade.exe`, `SoapySDR.dll`, the app-local MSVC runtime, the license, and

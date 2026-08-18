@@ -415,6 +415,109 @@ void testSpectrumEndpoint() {
     server.stop();
 }
 
+void testInvalidUtf8FromAPluginDoesNotKillTheApi() {
+    // A DECODER PLUGIN MUST NOT BE ABLE TO TAKE DOWN THE BROWSER INTERFACE.
+    // Decoders turn radio noise into text: POCSAG and RTTY will happily emit
+    // whatever is on the air, and the Inmarsat-C decoder ships knowing its
+    // constants are unverified. nlohmann THROWS on invalid UTF-8 by default,
+    // so one stray byte above 127 in one decoded line would otherwise throw
+    // inside the status handler and blank the whole readout — every panel,
+    // not just that line.
+    WebServer server;
+    server.setStatusProvider([]() {
+        RadioStatus s = sampleStatus();
+        // A lone 0xFF and a truncated multi-byte sequence: neither is valid
+        // UTF-8, and both are exactly what a misconfigured decoder emits.
+        RadioStatus::DecodedLine bad;
+        bad.plugin = "POCSAG";
+        bad.text = std::string("noise \xFF\xFE then \xE2\x82 truncated");
+        s.decoded.push_back(bad);
+        // The same hazard by a different route: a track label from a plugin.
+        RadioStatus::Track t;
+        t.id = "ABC123";
+        t.label = std::string("bad\xC3");
+        t.plugin = "ADS-B";
+        s.tracks.push_back(t);
+        return s;
+    });
+
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    auto r = cli.Get("/api/status");
+    CHECK(static_cast<bool>(r));
+    if (r) {
+        // The whole point: 200 with a usable body, not an empty 500.
+        CHECK(r->status == 200);
+        CHECK(!r->body.empty());
+        // And the rest of the readout still arrived intact alongside it.
+        CHECK(r->body.find("\"mode\":\"WFM\"") != std::string::npos);
+        CHECK(r->body.find("POCSAG") != std::string::npos);
+        CHECK(r->body.find("ABC123") != std::string::npos);
+    }
+
+    server.stop();
+}
+
+void testStaleCursorFromAPreviousRunRecovers() {
+    // THE BUG THIS GUARDS. Frame sequence numbers restart at zero when the
+    // application does, but a browser left open across a restart keeps its
+    // cursor. Without the impossible-cursor reset it asks for ever for a
+    // frame newer than any that will exist: the status poll keeps working, so
+    // the page looks connected while the spectrum and waterfall are frozen
+    // permanently, and only a manual reload recovers. Found by killing the
+    // app under a live page and watching it never come back.
+    WebServer server;
+    server.setSpectrumProvider([](SpectrumSnapshot& inOut) {
+        // A freshly started receiver: its newest frame is sequence 5.
+        if (inOut.seq >= 5) {
+            return false;
+        }
+        inOut.seq = 5;
+        inOut.centerHz = 100000000.0;
+        inOut.spanHz = 2000000.0;
+        inOut.dbBins.assign(8, kSpectrumDbMax);
+        return true;
+    });
+
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    // A cursor from the previous run — far beyond anything this process has
+    // produced. It must still be served a frame.
+    auto stale = cli.Get("/api/spectrum?since=358049");
+    CHECK(static_cast<bool>(stale));
+    if (stale) {
+        CHECK(stale->status == 200);
+        CHECK(stale->body.find("\"fresh\":true") != std::string::npos);
+        CHECK(stale->body.find("\"seq\":5") != std::string::npos);
+    }
+
+    // And normal cursor behaviour is untouched: having been given frame 5,
+    // asking again with 5 yields nothing new rather than the same frame twice
+    // (which would double every waterfall row).
+    auto repeat = cli.Get("/api/spectrum?since=5");
+    CHECK(static_cast<bool>(repeat));
+    if (repeat) {
+        CHECK(repeat->status == 200);
+        CHECK(repeat->body.find("\"fresh\":false") != std::string::npos);
+    }
+
+    server.stop();
+}
+
 void testRestartRevokesSessions() {
     WebServerConfig cfg = loopbackConfig();
     cfg.passwordRecord = realRecord();
@@ -893,6 +996,8 @@ int main() {
     testSessionExpiresOnTheInjectedClock();
     testOffMachineBindWithoutPasswordNeverListens();
     testSpectrumEndpoint();
+    testInvalidUtf8FromAPluginDoesNotKillTheApi();
+    testStaleCursorFromAPreviousRunRecovers();
     testRestartRevokesSessions();
     testControlQueue();
     testControlRequiresAuth();
