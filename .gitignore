@@ -5,3 +5,8 @@ build*/
 *.exe
 .claude/
 installer/Output/
+
+# Wrangler's local cache — it stores the Cloudflare account id and account
+# name (which is an email address). Nothing secret, but it does not belong in
+# a repository that may become public.
+telemetry-worker/.wrangler/
