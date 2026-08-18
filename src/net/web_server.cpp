@@ -213,9 +213,11 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
   <main id="main">
     <div id="scope">
       <canvas id="spectrum" title="click to tune the VFO here"></canvas>
+      <div id="splitScope" class="hsplit" title="drag to resize"></div>
       <canvas id="waterfall"></canvas>
     </div>
     <div id="rds" class="hidden"></div>
+    <div id="splitPanels" class="hsplit hidden" title="drag to resize"></div>
     <div id="panels">
       <div id="mapWrap" class="panel hidden">
         <h3>Map</h3>
@@ -291,8 +293,19 @@ label.inline input[type=range] { width:8rem; }
              border:1px solid var(--edge); border-radius:0 0 3px 3px; }
 #panels { flex:0 0 auto; max-height:42%; overflow-y:auto; display:flex;
           flex-direction:column; gap:.5rem; }
+/* Drag handles between the stacked regions, the desktop's splitters. The
+   handle is 7px of grab area with a short visible pill in the middle. */
+.hsplit { flex:0 0 7px; cursor:ns-resize; position:relative; user-select:none; }
+.hsplit::after { content:''; position:absolute; left:44%; right:44%; top:2px;
+                 bottom:2px; border-radius:2px; background:var(--edge); }
+.hsplit:hover::after, .hsplit.active::after { background:var(--accent); }
+/* Panels must not SHRINK inside their scroll area - when the area is smaller
+   than the content, the right answer is the scrollbar, not squashed panels.
+   The map panel alone also GROWS, so dragging the splitter up gives the extra
+   height to the map rather than to a gap. */
 .panel { background:var(--panel); border:1px solid var(--edge); border-radius:3px;
-         padding:.5rem .6rem; }
+         padding:.5rem .6rem; flex:0 0 auto; }
+#mapWrap { display:flex; flex-direction:column; flex:1 0 auto; min-height:0; }
 .panel h3 { margin:0 0 .4rem; font-size:.8rem; color:var(--dim);
             text-transform:uppercase; letter-spacing:.06em; }
 
@@ -361,8 +374,12 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 .bm button { padding:.15rem .4rem; font-size:.72rem; }
 .bm button.del, button.del { background:#5a1c1c; border-color:#7a2020; color:#ffd7d7; }
 
-#map { width:100%; height:340px; background:#080a0d; border:1px solid var(--edge);
-       border-radius:3px; }
+/* A FIXED flex-basis, never content-derived: the canvas's intrinsic size is
+   its pixel buffer, which fitCanvas() sets from the rendered box, and letting
+   the two feed each other is the runaway documented at #scope. Grow soaks up
+   whatever the splitter grants the panel area. */
+#map { width:100%; flex:1 1 340px; min-height:180px; background:#080a0d;
+       border:1px solid var(--edge); border-radius:3px; }
 #trackList { display:flex; flex-direction:column; gap:.15rem; margin-top:.35rem;
              max-height:11rem; overflow:auto; }
 .tr { display:flex; gap:.5rem; background:#1b202a; border:1px solid var(--edge);
@@ -1223,6 +1240,76 @@ $('map').addEventListener('dblclick', () => {
   redrawMap();
 });
 
+// --- splitters ---------------------------------------------------------------
+// The desktop's draggable dividers, for the browser: one between spectrum and
+// waterfall, one between the waterfall and the panel area (drag UP to give the
+// map the height the waterfall loses). Sizes are a per-device display
+// preference, so they live in localStorage, not in the radio's config.
+function dragSplit(handle, getStart, onMove) {
+  let st = null;
+  handle.addEventListener('mousedown', (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    st = { y: ev.clientY, v: getStart() };
+    handle.classList.add('active');
+  });
+  window.addEventListener('mousemove', (ev) => {
+    if (!st) return;
+    onMove(ev.clientY - st.y, st.v);
+  });
+  window.addEventListener('mouseup', () => {
+    if (st) { st = null; handle.classList.remove('active'); }
+  });
+}
+(function setupSplitters() {
+  const spec = $('spectrum'), scope = $('scope'), panels = $('panels');
+  const mapC = $('map');
+  const savedSpec = localStorage.getItem('foxsdr.splitSpec');
+  if (savedSpec) spec.style.flexBasis = savedSpec;
+  const takePanels = (px) => {
+    panels.style.flexBasis = px + 'px';
+    panels.style.height = px + 'px';
+    panels.style.maxHeight = 'none';
+  };
+  const savedPan = localStorage.getItem('foxsdr.splitPanels');
+  if (savedPan) takePanels(parseInt(savedPan, 10));
+  const savedMap = localStorage.getItem('foxsdr.mapH');
+  if (savedMap) mapC.style.flexBasis = parseInt(savedMap, 10) + 'px';
+  dragSplit($('splitScope'),
+    () => spec.getBoundingClientRect().height,
+    (dy, start) => {
+      // Bounded so neither trace can be dragged out of existence.
+      const px = Math.max(60, Math.min(scope.clientHeight - 80, start + dy));
+      const pct = (px / scope.clientHeight * 100).toFixed(1) + '%';
+      spec.style.flexBasis = pct;
+      localStorage.setItem('foxsdr.splitSpec', pct);
+    });
+  dragSplit($('splitPanels'),
+    () => ({ p: panels.getBoundingClientRect().height,
+             m: mapC.getBoundingClientRect().height }),
+    (dy, start) => {
+      // Dragging UP (negative dy) grows the panel area at the scope's
+      // expense — and the MAP CANVAS grows by the same amount, because the
+      // area is a scroll container: with other panels below, spare height
+      // becomes scroll room, so growing the area alone never grows the map,
+      // which is the thing the user is dragging for.
+      const mainEl = $('main');
+      const px = Math.round(Math.max(120, Math.min(mainEl.clientHeight - 160, start.p - dy)));
+      takePanels(px);
+      localStorage.setItem('foxsdr.splitPanels', String(px));
+      const mapPx = Math.round(Math.max(180, start.m + (px - start.p)));
+      mapC.style.flexBasis = mapPx + 'px';
+      localStorage.setItem('foxsdr.mapH', String(mapPx));
+      redrawMap();
+    });
+})();
+// The panel splitter only exists when there is a panel to resize.
+function reflectSplitters() {
+  const any = ['mapWrap', 'imagesWrap', 'decodedWrap']
+      .some((id) => !$(id).classList.contains('hidden'));
+  $('splitPanels').classList.toggle('hidden', !any);
+}
+
 $('map').addEventListener('click', (ev) => {
   if (mapDragMoved) { mapDragMoved = false; return; }
   const c = $('map');
@@ -1372,6 +1459,7 @@ function reflect(s) {
   reflectPlugins(s);
   reflectImages(s);
   reflectCatalogue(s);
+  reflectSplitters();
 
   // RDS, shown only when there is something to show.
   const showRds = s.mode === 'WFM' && (s.rdsSynced || s.pilotLocked);
