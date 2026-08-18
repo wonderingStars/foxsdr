@@ -93,207 +93,323 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header><h1>FoxSDR</h1><span id="remote" class="badge hidden">remote access</span><span id="link" class="badge warn hidden">disconnected</span></header>
+
 <section id="login" class="hidden">
-  <h2>Sign in</h2>
-  <form id="loginForm">
-    <label>User <input id="user" autocomplete="username" required></label>
-    <label>Password <input id="pass" type="password" autocomplete="current-password" required></label>
-    <button type="submit">Sign in</button>
-  </form>
-  <p id="loginError" class="error"></p>
+  <div class="loginbox">
+    <h1>FoxSDR</h1>
+    <h2>Sign in</h2>
+    <form id="loginForm">
+      <label>User <input id="user" autocomplete="username" required></label>
+      <label>Password <input id="pass" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="primary">Sign in</button>
+    </form>
+    <p id="loginError" class="error"></p>
+  </div>
 </section>
-<section id="app" class="hidden">
-  <div id="status"></div>
-  <canvas id="spectrum" width="1024" height="256" title="click to tune the VFO here"></canvas>
-  <canvas id="waterfall" width="1024" height="220"></canvas>
-  <div id="rds" class="hidden"></div>
-  <div id="controls">
-    <div class="row">
-      <label>Source<select id="srcSel"></select></label>
-      <button id="scan">Scan for devices</button>
-      <span id="srcBusy" class="dim"></span>
-    </div>
-    <div class="row" id="devRow">
-      <label>Antenna<select id="antenna"></select></label>
-      <label>Sample rate<select id="srate">
-        <option value="1000000">1 MS/s</option><option value="2000000">2 MS/s</option>
-        <option value="4000000">4 MS/s</option><option value="8000000">8 MS/s</option>
-      </select></label>
-      <label class="check"><input id="agc" type="checkbox"> Hardware AGC</label>
-    </div>
-    <div class="row" id="gainRow"></div>
-    <p id="srcError" class="error"></p>
-    <div class="row">
-      <button id="playstop">Start</button>
-      <button id="listen">Listen</button>
-      <label>Centre (MHz)<input id="centre" type="number" step="0.000001"></label>
-      <button id="tune">Tune</button>
-    </div>
-    <div class="row">
-      <div id="freqDigits" title="scroll a digit to tune, like the desktop readout"></div>
-    </div>
-    <div id="modes" class="row"></div>
-    <div class="row">
-      <label>VFO offset <span id="vfoVal"></span><input id="vfo" type="range" min="-500" max="500" step="1"></label>
-      <label>Bandwidth <span id="bwVal"></span><input id="bw" type="range" min="0" max="5" step="1"></label>
-    </div>
-    <div class="row">
-      <label>Squelch <span id="sqVal"></span><input id="sq" type="range" min="-120" max="0" step="1"></label>
-      <label>Volume <span id="volVal"></span><input id="vol" type="range" min="0" max="1" step="0.01"></label>
-    </div>
-    <div class="row">
-      <label>Min dB <span id="dbMinVal"></span><input id="dbMin" type="range" min="-160" max="-20" step="1"></label>
-      <label>Max dB <span id="dbMaxVal"></span><input id="dbMax" type="range" min="-100" max="20" step="1"></label>
-    </div>
-    <div class="row" id="fmRow">
+
+<div id="app" class="hidden">
+
+  <header id="toolbar">
+    <span class="brand">FoxSDR</span>
+    <button id="playstop" class="primary">Start</button>
+    <button id="listen">Listen</button>
+    <div id="freqDigits" title="scroll a digit to tune, like the desktop readout"></div>
+    <span class="unit">Hz</span>
+    <label class="inline">Vol <input id="vol" type="range" min="0" max="1" step="0.01"><span id="volVal" class="val"></span></label>
+    <span class="spacer"></span>
+    <span id="remote" class="badge hidden">remote access</span>
+    <span id="link" class="badge warn hidden">disconnected</span>
+    <button id="logout" class="hidden">Sign out</button>
+  </header>
+
+  <aside id="side">
+
+    <details open><summary>Source</summary><div class="sec">
+      <label>Device<select id="srcSel"></select></label>
+      <div class="row">
+        <button id="scan">Scan for devices</button>
+        <span id="srcBusy" class="dim"></span>
+      </div>
+      <div id="devRow" class="hidden colgap">
+        <label>Antenna<select id="antenna"></select></label>
+        <label>Sample rate<select id="srate">
+          <option value="1000000">1 MS/s</option><option value="2000000">2 MS/s</option>
+          <option value="4000000">4 MS/s</option><option value="8000000">8 MS/s</option>
+        </select></label>
+        <label class="check"><input id="agc" type="checkbox"> Hardware AGC</label>
+      </div>
+      <div id="gainRow" class="hidden colgap"></div>
+      <p id="srcError" class="error"></p>
+    </div></details>
+
+    <details open><summary>Radio</summary><div class="sec">
+      <div id="modes" class="modes"></div>
+      <div class="row tight">
+        <label class="grow">Centre (MHz)<input id="centre" type="number" step="0.000001"></label>
+        <button id="tune">Tune</button>
+      </div>
+      <label>VFO offset <span id="vfoVal" class="val"></span><input id="vfo" type="range" min="-500" max="500" step="1"></label>
+      <label>Bandwidth <span id="bwVal" class="val"></span><input id="bw" type="range" min="0" max="5" step="1"></label>
+      <label>Squelch <span id="sqVal" class="val"></span><input id="sq" type="range" min="-120" max="0" step="1"></label>
       <label>De-emphasis<select id="deemph">
         <option value="0">50 us</option><option value="1">75 us</option><option value="2">off</option>
       </select></label>
       <label class="check"><input id="stereo" type="checkbox"> Stereo</label>
-    </div>
-    <div class="row">
+      <p id="ctlError" class="error"></p>
+    </div></details>
+
+    <details open><summary>Display</summary><div class="sec">
+      <label>Min dB <span id="dbMinVal" class="val"></span><input id="dbMin" type="range" min="-160" max="-20" step="1"></label>
+      <label>Max dB <span id="dbMaxVal" class="val"></span><input id="dbMax" type="range" min="-100" max="20" step="1"></label>
+    </div></details>
+
+    <details><summary>Audio filters</summary><div class="sec">
       <label class="check"><input id="nr" type="checkbox"> Noise reduction</label>
-      <label>Strength <span id="nrVal"></span><input id="nrStrength" type="range" min="0" max="1" step="0.01"></label>
-    </div>
-    <div class="row">
+      <label>Strength <span id="nrVal" class="val"></span><input id="nrStrength" type="range" min="0" max="1" step="0.01"></label>
       <label class="check"><input id="notch" type="checkbox"> Notch</label>
-      <label>Notch Hz <span id="notchVal"></span><input id="notchFreq" type="range" min="10" max="8000" step="10"></label>
+      <label>Notch <span id="notchVal" class="val"></span><input id="notchFreq" type="range" min="10" max="8000" step="10"></label>
       <label class="check"><input id="autoNotch" type="checkbox"> Auto-notch <span id="anState" class="dim"></span></label>
-    </div>
-    <p id="ctlError" class="error"></p>
-    <div class="row">
-      <button id="recIq">Record IQ</button>
-      <button id="recAudio">Record audio</button>
-      <span id="recInfo" class="dim"></span>
-    </div>
-    <p id="recError" class="error"></p>
-    <div class="row">
-      <label>Bookmark name<input id="bmName" placeholder="name this frequency"></label>
-      <button id="bmAdd">Add current</button>
-    </div>
-    <div id="bookmarks"></div>
-    <div class="row">
-      <label>Scan from (MHz)<input id="scanFrom" type="number" step="0.001"></label>
-      <label>to (MHz)<input id="scanTo" type="number" step="0.001"></label>
-      <label>step (kHz)<input id="scanStep" type="number" step="1"></label>
-      <button id="scanToggle">Start scan</button>
+    </div></details>
+
+    <details><summary>Recorder</summary><div class="sec">
+      <div class="row"><button id="recIq">Record IQ</button><button id="recAudio">Record audio</button></div>
+      <div id="recInfo" class="dim"></div>
+      <p id="recError" class="error"></p>
+    </div></details>
+
+    <details><summary>Bookmarks</summary><div class="sec">
+      <div class="row tight">
+        <label class="grow">Name<input id="bmName" placeholder="name this frequency"></label>
+        <button id="bmAdd">Add</button>
+      </div>
+      <div id="bookmarks"></div>
+    </div></details>
+
+    <details><summary>Scanner</summary><div class="sec">
+      <div class="row tight">
+        <label>From (MHz)<input id="scanFrom" type="number" step="0.001"></label>
+        <label>To (MHz)<input id="scanTo" type="number" step="0.001"></label>
+      </div>
+      <div class="row tight">
+        <label class="grow">Step (kHz)<input id="scanStep" type="number" step="1"></label>
+        <button id="scanToggle">Start scan</button>
+      </div>
       <span id="scanState" class="dim"></span>
+    </div></details>
+
+    <details><summary>Plugins</summary><div class="sec">
+      <div id="plugins"></div>
+      <div class="row"><button id="pluginFetch">Get plugins</button><span id="catStatus" class="dim"></span></div>
+      <p id="catError" class="error"></p>
+      <p id="installReport" class="ok"></p>
+      <div id="catalogue"></div>
+    </div></details>
+
+  </aside>
+
+  <main id="main">
+    <div id="scope">
+      <canvas id="spectrum" title="click to tune the VFO here"></canvas>
+      <canvas id="waterfall"></canvas>
     </div>
-  </div>
-  <div id="mapWrap" class="hidden">
-    <h2>Map</h2>
-    <canvas id="map" width="1024" height="420"></canvas>
-    <div id="trackList"></div>
-  </div>
-  <div id="imagesWrap" class="hidden"><h2>Pictures</h2><div id="images"></div></div>
-  <h2 id="decodedHead" class="hidden">Decoded</h2>
-  <pre id="decoded" class="hidden"></pre>
-  <h2>Plugins</h2>
-  <div id="plugins"></div>
-  <div class="row">
-    <button id="pluginFetch">Get plugins</button>
-    <span id="catStatus" class="dim"></span>
-  </div>
-  <p id="catError" class="error"></p>
-  <p id="installReport" class="ok"></p>
-  <div id="catalogue"></div>
-  <button id="logout" class="hidden">Sign out</button>
-</section>
+    <div id="rds" class="hidden"></div>
+    <div id="panels">
+      <div id="mapWrap" class="panel hidden">
+        <h3>Map</h3>
+        <canvas id="map"></canvas>
+        <div id="trackList"></div>
+      </div>
+      <div id="imagesWrap" class="panel hidden"><h3>Pictures</h3><div id="images"></div></div>
+      <div id="decodedWrap" class="panel hidden">
+        <h3 id="decodedHead">Decoded</h3>
+        <pre id="decoded"></pre>
+      </div>
+    </div>
+  </main>
+
+  <footer id="status"></footer>
+</div>
+
 <script src="/app.js"></script>
 </body>
 </html>
 )HTML";
 
 constexpr char kAppCss[] = R"CSS(
-:root { color-scheme: dark; --bg:#12151a; --fg:#e6e9ee; --dim:#8a93a0; --accent:#4fb0ff; }
+:root { color-scheme: dark;
+  --bg:#0f1216; --panel:#161a21; --edge:#242a34; --fg:#e6e9ee; --dim:#8a93a0;
+  --accent:#4fb0ff; --side:310px; --bar:52px; }
 * { box-sizing: border-box; }
-body { margin:0; padding:1rem; background:var(--bg); color:var(--fg);
-       font:14px/1.5 system-ui, sans-serif; }
-header { display:flex; align-items:center; gap:.75rem; margin-bottom:1rem; }
-h1 { font-size:1.1rem; margin:0; letter-spacing:.02em; }
-h2 { font-size:1rem; margin:0 0 .75rem; }
-.hidden { display:none; }
-.badge { background:#7a2020; color:#ffd7d7; padding:.15rem .5rem; border-radius:3px;
-         font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; }
-.badge.warn { background:#5a4a10; color:#ffe9a8; }
-.error { color:#ff9b9b; min-height:1.5em; }
-form { display:flex; flex-direction:column; gap:.5rem; max-width:20rem; }
-label { display:flex; flex-direction:column; gap:.2rem; color:var(--dim); font-size:.8rem; }
-input { background:#1c2029; border:1px solid #2c3240; color:var(--fg);
-        padding:.4rem; border-radius:3px; font:inherit; }
-button { background:var(--accent); color:#04121f; border:0; padding:.45rem .9rem;
-         border-radius:3px; font:inherit; font-weight:600; cursor:pointer; }
-canvas { width:100%; height:auto; background:#080a0d; border:1px solid #232833;
-         border-radius:3px; image-rendering:pixelated; }
-#status { display:grid; grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));
-          gap:.5rem; margin-bottom:.75rem; }
-.cell { background:#171b22; border:1px solid #232833; border-radius:3px; padding:.4rem .6rem; }
-.cell .k { color:var(--dim); font-size:.7rem; text-transform:uppercase;
-           letter-spacing:.05em; display:block; }
-.cell .v { font-variant-numeric:tabular-nums; }
-#controls { margin-top:.75rem; display:flex; flex-direction:column; gap:.6rem; }
-.row { display:flex; flex-wrap:wrap; gap:.75rem; align-items:flex-end; }
-.row label { flex:1 1 10rem; }
-.row input[type=range] { width:100%; }
-#modes button { flex:0 0 auto; background:#1c2029; color:var(--fg); font-weight:400; }
-#modes button.on { background:var(--accent); color:#04121f; font-weight:600; }
-#centre { width:11rem; font-variant-numeric:tabular-nums; }
-#spectrum { border-bottom:0; border-radius:3px 3px 0 0; cursor:crosshair; }
-#waterfall { border-top:0; border-radius:0 0 3px 3px; }
-.row label.check { flex:0 0 auto; flex-direction:row; align-items:center; gap:.35rem;
-                   color:var(--fg); font-size:.85rem; }
-.row label.check input { width:auto; }
-select { background:#1c2029; border:1px solid #2c3240; color:var(--fg);
-         padding:.35rem; border-radius:3px; font:inherit; }
+html, body { height:100%; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font:13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; overflow:hidden; }
+.hidden { display:none !important; }
+
+/* The desktop's shape: a toolbar across the top, a fixed control column down
+   the left, the spectrum filling everything else, a status strip beneath. */
+#app { display:grid; height:100vh;
+       grid-template-columns: var(--side) 1fr;
+       grid-template-rows: var(--bar) 1fr auto;
+       grid-template-areas: "bar bar" "side main" "foot foot"; }
+
+#toolbar { grid-area:bar; display:flex; align-items:center; gap:.6rem;
+           padding:0 .75rem; background:var(--panel);
+           border-bottom:1px solid var(--edge); }
+.brand { font-weight:700; letter-spacing:.02em; margin-right:.25rem; }
+.spacer { flex:1 1 auto; }
+.unit { color:var(--dim); font-size:.75rem; margin-left:-.3rem; }
+label.inline { flex-direction:row; align-items:center; gap:.4rem; color:var(--dim); }
+label.inline input[type=range] { width:8rem; }
+
+#side { grid-area:side; background:var(--panel); border-right:1px solid var(--edge);
+        overflow-y:auto; overflow-x:hidden; }
+#side details { border-bottom:1px solid var(--edge); }
+#side summary { cursor:pointer; padding:.5rem .75rem; font-weight:600; font-size:.85rem;
+                letter-spacing:.02em; user-select:none; }
+#side summary:hover { background:#1b202a; }
+.sec { padding:.15rem .75rem .7rem; display:flex; flex-direction:column; gap:.5rem; }
+.colgap { display:flex; flex-direction:column; gap:.5rem; }
+
+#main { grid-area:main; display:flex; flex-direction:column; min-width:0;
+        min-height:0; overflow:hidden; padding:.5rem; gap:.5rem; }
+/* Spectrum above waterfall, sharing the frequency axis - the pair fills
+   whatever height is left, exactly as the desktop's centre panel does. */
+/* min-height:0 on every one of these is load-bearing. A canvas's INTRINSIC
+   size comes from its pixel buffer, and fitCanvas() sets that buffer from the
+   rendered box - so with flex's default min-height:auto the two feed each
+   other and the canvases grow without bound (measured: 972 px and 1360 px
+   tall inside an 818 px panel). min-height:0 lets flex shrink them below
+   their content size, which breaks the loop. */
+#scope { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+#spectrum { flex:0 0 42%; width:100%; min-height:0; display:block; background:#080a0d;
+            border:1px solid var(--edge); border-bottom:0;
+            border-radius:3px 3px 0 0; cursor:crosshair; }
+#waterfall { flex:1 1 auto; width:100%; min-height:0; display:block; background:#080a0d;
+             border:1px solid var(--edge); border-radius:0 0 3px 3px; }
+#panels { flex:0 0 auto; max-height:42%; overflow-y:auto; display:flex;
+          flex-direction:column; gap:.5rem; }
+.panel { background:var(--panel); border:1px solid var(--edge); border-radius:3px;
+         padding:.5rem .6rem; }
+.panel h3 { margin:0 0 .4rem; font-size:.8rem; color:var(--dim);
+            text-transform:uppercase; letter-spacing:.06em; }
+
+#status { grid-area:foot; display:flex; flex-wrap:wrap; gap:.9rem;
+          padding:.35rem .75rem; background:var(--panel);
+          border-top:1px solid var(--edge); font-size:.78rem; }
+#status .cell { display:flex; gap:.35rem; align-items:baseline; }
+#status .k { color:var(--dim); text-transform:uppercase; letter-spacing:.05em;
+             font-size:.68rem; }
+#status .v { font-variant-numeric:tabular-nums; }
+
+h1 { font-size:1.1rem; margin:0 0 .5rem; }
+h2 { font-size:.95rem; margin:0 0 .6rem; }
+label { display:flex; flex-direction:column; gap:.15rem; color:var(--dim);
+        font-size:.75rem; }
+label .val { color:var(--fg); font-variant-numeric:tabular-nums; }
+input, select { background:#1c2029; border:1px solid var(--edge); color:var(--fg);
+                padding:.3rem; border-radius:3px; font:inherit; width:100%; }
+input[type=range] { padding:0; }
+input[type=checkbox] { width:auto; }
+button { background:#232a35; color:var(--fg); border:1px solid var(--edge);
+         padding:.32rem .7rem; border-radius:3px; font:inherit; cursor:pointer; }
+button:hover:not(:disabled) { background:#2c3543; }
+button:disabled { opacity:.5; cursor:default; }
+button.primary { background:var(--accent); color:#04121f; border-color:var(--accent);
+                 font-weight:600; }
+button.on { background:#7a2020; border-color:#7a2020; color:#ffd7d7; }
+.row { display:flex; gap:.5rem; align-items:flex-end; flex-wrap:wrap; }
+.row.tight { flex-wrap:nowrap; }
+.grow { flex:1 1 auto; }
+label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg);
+              font-size:.8rem; }
 .dim { color:var(--dim); font-size:.75rem; }
-#rds { background:#171b22; border:1px solid #232833; border-radius:3px;
-       padding:.5rem .6rem; margin-top:.5rem; display:grid; gap:.25rem;
-       grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); }
-#rds .rt { grid-column:1/-1; font-variant-numeric:tabular-nums; }
-#bookmarks { display:flex; flex-direction:column; gap:.25rem; }
-.bm { display:flex; align-items:center; gap:.5rem; background:#171b22;
-      border:1px solid #232833; border-radius:3px; padding:.3rem .5rem; }
-.bm .f { font-variant-numeric:tabular-nums; color:var(--dim); }
-.bm .n { flex:1 1 auto; }
-.bm button { padding:.2rem .5rem; font-size:.8rem; }
-.bm button.del { background:#7a2020; color:#ffd7d7; }
-#decoded { background:#080a0d; border:1px solid #232833; border-radius:3px;
-           padding:.5rem; max-height:16rem; overflow:auto; font-size:.8rem;
-           white-space:pre-wrap; word-break:break-word; margin:.25rem 0 0; }
-button.on { background:#7a2020; color:#ffd7d7; }
-#map { background:#080a0d; border:1px solid #232833; border-radius:3px; }
-#trackList { display:flex; flex-direction:column; gap:.2rem; margin-top:.4rem;
-             max-height:12rem; overflow:auto; }
-.tr { display:flex; gap:.6rem; background:#171b22; border:1px solid #232833;
-      border-radius:3px; padding:.25rem .5rem; font-size:.8rem; }
-.tr .id { font-variant-numeric:tabular-nums; color:var(--dim); min-width:6rem; }
-.tr .pos { font-variant-numeric:tabular-nums; margin-left:auto; color:var(--dim); }
-#plugins { display:flex; flex-direction:column; gap:.25rem; }
-.pl { background:#171b22; border:1px solid #232833; border-radius:3px;
-      padding:.3rem .5rem; font-size:.85rem; }
-.pl.bad { border-color:#7a2020; }
-.pl .meta { color:var(--dim); font-size:.75rem; }
-#images { display:flex; flex-wrap:wrap; gap:.75rem; }
-.img { background:#171b22; border:1px solid #232833; border-radius:3px; padding:.4rem; }
-.img img { display:block; max-width:100%; image-rendering:pixelated;
-           background:#080a0d; border-radius:2px; }
-.img .cap { color:var(--dim); font-size:.75rem; margin-top:.25rem; }
-.ok { color:#8fe0a8; min-height:1.2em; }
-#catalogue { display:flex; flex-direction:column; gap:.35rem; }
-.cat { background:#171b22; border:1px solid #232833; border-radius:3px; padding:.45rem .6rem; }
-.cat .hd { display:flex; gap:.5rem; align-items:baseline; }
-.cat .hd .nm { font-weight:600; }
-.cat .notice { background:#2a1f10; border:1px solid #5a4a10; color:#ffe9a8;
-               border-radius:3px; padding:.35rem .5rem; margin:.35rem 0;
-               font-size:.8rem; }
-.cat label.check { margin-right:.5rem; }
+.error { color:#ff9b9b; margin:0; font-size:.78rem; }
+.ok { color:#8fe0a8; margin:0; font-size:.78rem; }
+.badge { background:#7a2020; color:#ffd7d7; padding:.15rem .5rem; border-radius:3px;
+         font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; }
+.badge.warn { background:#5a4a10; color:#ffe9a8; }
+
+/* Frequency readout: big, tabular, one element per digit so each can be
+   scrolled independently. */
 #freqDigits { display:inline-flex; gap:1px; font-variant-numeric:tabular-nums;
-              font-size:1.35rem; letter-spacing:.02em; cursor:ns-resize;
-              user-select:none; }
-#freqDigits span { padding:0 .05em; border-radius:2px; }
+              font-size:1.5rem; font-weight:600; letter-spacing:.01em;
+              cursor:ns-resize; user-select:none; }
+#freqDigits span { padding:0 .04em; border-radius:2px; }
 #freqDigits span.d:hover { background:#243044; }
 #freqDigits span.lead { color:#3d4653; }
+
+.modes { display:grid; grid-template-columns:repeat(4,1fr); gap:.25rem; }
+.modes button { padding:.28rem 0; font-size:.78rem; }
+.modes button.on { background:var(--accent); border-color:var(--accent);
+                   color:#04121f; font-weight:600; }
+
+#rds { flex:0 0 auto; background:var(--panel); border:1px solid var(--edge);
+       border-radius:3px; padding:.4rem .6rem; display:grid; gap:.2rem;
+       grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); font-size:.78rem; }
+#rds .rt { grid-column:1/-1; font-variant-numeric:tabular-nums; }
+
+#bookmarks { display:flex; flex-direction:column; gap:.2rem; }
+.bm { display:flex; align-items:center; gap:.4rem; background:#1b202a;
+      border:1px solid var(--edge); border-radius:3px; padding:.25rem .4rem;
+      font-size:.75rem; }
+.bm .f { font-variant-numeric:tabular-nums; color:var(--dim); }
+.bm .n { flex:1 1 auto; color:var(--fg); overflow:hidden; text-overflow:ellipsis;
+         white-space:nowrap; }
+.bm button { padding:.15rem .4rem; font-size:.72rem; }
+.bm button.del, button.del { background:#5a1c1c; border-color:#7a2020; color:#ffd7d7; }
+
+#map { width:100%; height:340px; background:#080a0d; border:1px solid var(--edge);
+       border-radius:3px; }
+#trackList { display:flex; flex-direction:column; gap:.15rem; margin-top:.35rem;
+             max-height:11rem; overflow:auto; }
+.tr { display:flex; gap:.5rem; background:#1b202a; border:1px solid var(--edge);
+      border-radius:3px; padding:.2rem .45rem; font-size:.75rem; }
+.tr .id { font-variant-numeric:tabular-nums; color:var(--dim); min-width:5.5rem; }
+.tr .pos { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums; }
+
+#images { display:flex; flex-wrap:wrap; gap:.6rem; }
+.img { background:#1b202a; border:1px solid var(--edge); border-radius:3px; padding:.35rem; }
+.img img { display:block; max-width:100%; image-rendering:pixelated; background:#080a0d; }
+.img .cap { color:var(--dim); font-size:.72rem; margin-top:.2rem; }
+
+#decoded { background:#080a0d; border:1px solid var(--edge); border-radius:3px;
+           padding:.45rem; max-height:14rem; overflow:auto; font-size:.76rem;
+           white-space:pre-wrap; word-break:break-word; margin:0; }
+
+#plugins { display:flex; flex-direction:column; gap:.25rem; }
+.pl { background:#1b202a; border:1px solid var(--edge); border-radius:3px;
+      padding:.3rem .45rem; font-size:.78rem; }
+.pl.bad { border-color:#7a2020; }
+.pl .meta, .cat .meta { color:var(--dim); font-size:.72rem; }
+.pl button { margin-top:.25rem; padding:.15rem .45rem; font-size:.72rem; }
+#catalogue { display:flex; flex-direction:column; gap:.3rem; }
+.cat { background:#1b202a; border:1px solid var(--edge); border-radius:3px; padding:.4rem .5rem; }
+.cat .hd { display:flex; gap:.4rem; align-items:baseline; flex-wrap:wrap; }
+.cat .hd .nm { font-weight:600; font-size:.8rem; }
+.cat .notice { background:#2a1f10; border:1px solid #5a4a10; color:#ffe9a8;
+               border-radius:3px; padding:.3rem .45rem; margin:.3rem 0; font-size:.75rem; }
+.cat button { margin-top:.3rem; padding:.18rem .5rem; font-size:.75rem; }
+
+#login { display:grid; place-items:center; height:100vh; }
+.loginbox { background:var(--panel); border:1px solid var(--edge); border-radius:4px;
+            padding:1.5rem; width:min(22rem,90vw); }
+.loginbox form { display:flex; flex-direction:column; gap:.6rem; }
+
+/* Narrow screens - a phone gets the spectrum first and the controls below it,
+   because on a phone the picture is the point and the panel is a menu. */
+@media (max-width: 820px) {
+  body { overflow:auto; }
+  #app { height:auto; grid-template-columns:1fr;
+         grid-template-rows:auto auto auto auto;
+         grid-template-areas:"bar" "main" "side" "foot"; }
+  #side { border-right:0; border-top:1px solid var(--edge); overflow:visible; }
+  #main { height:auto; overflow:visible; }
+  #scope { min-height:300px; }
+  #panels { max-height:none; overflow:visible; }
+  #toolbar { flex-wrap:wrap; height:auto; padding:.4rem .75rem; }
+  #freqDigits { font-size:1.2rem; }
+  label.inline input[type=range] { width:6rem; }
+}
 )CSS";
 
 // THE CLIENT SCRIPT IS SPLIT ACROSS SEVERAL LITERALS because MSVC caps a single
@@ -508,7 +624,9 @@ function reflectTracks(s) {
   $('mapWrap').classList.toggle('hidden', !has);
   if (!has) return;
 
-  const c = $('map'), ctx = c.getContext('2d');
+  const c = $('map');
+  fitCanvas(c);
+  const ctx = c.getContext('2d');
   const w = c.width, h = c.height;
   ctx.clearRect(0, 0, w, h);
 
@@ -847,8 +965,7 @@ function reflectExtras(s) {
   if (decKey !== lastDecodedKey) {
     lastDecodedKey = decKey;
     const has = s.decoded.length > 0;
-    $('decoded').classList.toggle('hidden', !has);
-    $('decodedHead').classList.toggle('hidden', !has);
+    $('decodedWrap').classList.toggle('hidden', !has);
     if (has) {
       const el = $('decoded');
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
@@ -1154,6 +1271,27 @@ async function pollStatus() {
 let viewDbMin = -110, viewDbMax = 0;
 let lastSpanHz = 0, lastVfoHz = 0;
 
+// The canvases are SIZED BY CSS (they fill the centre panel), so their pixel
+// buffers have to be matched to their rendered size. Without this the browser
+// stretches the 300x150 default across the panel and the trace looks soft and
+// the waterfall smears. Re-run on resize, and account for device pixel ratio
+// so it stays sharp on a phone or a scaled display.
+function fitCanvas(c) {
+  const r = c.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(r.width * dpr));
+  const h = Math.max(1, Math.round(r.height * dpr));
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; return true; }
+  return false;
+}
+function fitCanvases() {
+  fitCanvas($('spectrum'));
+  // Resizing clears the waterfall's history; there is nothing to preserve it
+  // from, since the pixels ARE the history.
+  fitCanvas($('waterfall'));
+}
+window.addEventListener('resize', fitCanvases);
+
 function binToUnit(q, wireMin, wireMax) {
   const db = wireMin + (q / 255) * (wireMax - wireMin);
   const span = (viewDbMax - viewDbMin) || 1;
@@ -1220,6 +1358,7 @@ async function pollSpectrum() {
   const raw = atob(s.bins);
   const bins = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bins[i] = raw.charCodeAt(i);
+  fitCanvases();
   drawSpectrum(bins, s.dbMin, s.dbMax);
   drawWaterfall(bins, s.dbMin, s.dbMax);
 }
