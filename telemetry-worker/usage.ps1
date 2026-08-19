@@ -17,9 +17,13 @@
 # The account id is read from wrangler's cache if it is there, so normally you
 # only supply the token. Neither value is stored by this script.
 #
-#   pwsh telemetry-worker/usage.ps1              # last 30 days
-#   pwsh telemetry-worker/usage.ps1 -Days 1      # yesterday
-#   pwsh telemetry-worker/usage.ps1 -Raw "SELECT ..."   # any query
+# Run it with Windows PowerShell (powershell), NOT pwsh: PowerShell 7 is not
+# installed on the machine this project is developed on, and "pwsh is not
+# recognized" is a confusing first thing to meet. Nothing here needs 7.
+#
+#   powershell -File telemetry-worker/usage.ps1              # last 30 days
+#   powershell -File telemetry-worker/usage.ps1 -Days 1      # yesterday
+#   powershell -File telemetry-worker/usage.ps1 -Raw "SELECT ..."   # any query
 #
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 

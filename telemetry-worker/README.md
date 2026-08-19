@@ -14,9 +14,9 @@ Analytics Engine has no dashboard, so a dataset that is never queried is
 indistinguishable from one that was never collected. `usage.ps1` runs the
 queries below and prints a summary:
 
-    pwsh usage.ps1            # last 30 days
-    pwsh usage.ps1 -Days 1    # yesterday
-    pwsh usage.ps1 -Raw "SELECT ..."
+    powershell -File usage.ps1            # last 30 days
+    powershell -File usage.ps1 -Days 1    # yesterday
+    powershell -File usage.ps1 -Raw "SELECT ..."
 
 It needs one thing, once: an API token with the single permission
 **Account | Account Analytics | Read** (Cloudflare dashboard -> My Profile ->

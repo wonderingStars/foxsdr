@@ -18,8 +18,8 @@
 # leave a release binary reporting a nightly version.
 #
 # Usage:
-#   pwsh tools/build-nightly.ps1                 # build, print the constants
-#   pwsh tools/build-nightly.ps1 -Publish        # ...and copy to the website
+#   powershell -File tools/build-nightly.ps1                 # build, print the constants
+#   powershell -File tools/build-nightly.ps1 -Publish        # ...and copy to the website
 #
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
