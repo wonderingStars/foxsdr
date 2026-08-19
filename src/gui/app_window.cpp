@@ -304,6 +304,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
            a.pluginTuneAllowed == b.pluginTuneAllowed &&
+           a.catEnabled == b.catEnabled && a.catBindAll == b.catBindAll &&
+           a.catPort == b.catPort &&
            a.webEnabled == b.webEnabled &&
            a.webBindAddress == b.webBindAddress && a.webPort == b.webPort &&
            a.webUsername == b.webUsername &&
@@ -505,6 +507,12 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         std::lock_guard<std::mutex> lock(webMutex_);
         return webStatus_;
     });
+    // The CAT server reads the SAME published snapshot, so a frequency read
+    // over CAT and one read in the browser can never disagree.
+    catServer_.setStatusProvider([this]() {
+        std::lock_guard<std::mutex> lock(webMutex_);
+        return webStatus_;
+    });
     webServer_.setSpectrumProvider([this](cascade::net::SpectrumSnapshot& inOut) {
         std::lock_guard<std::mutex> lock(webMutex_);
         // Same contract as Pipeline::getLatestFrame: nothing newer than the
@@ -584,6 +592,9 @@ AppWindow::~AppWindow() {
     // during teardown. stop() joins the listener thread, so once it returns no
     // handler is running or can start.
     webServer_.stop();
+    // Same reasoning for the CAT server: its provider captures `this` and
+    // locks webMutex_, which is declared after it and destroyed first.
+    catServer_.stop();
 
     // A catalogue fetch or a plugin download may still be in flight. The
     // std::async futures below block in their own destructors until the
@@ -1156,6 +1167,7 @@ void AppWindow::drawMenuColumn() {
     drawScannerSection();
     drawPluginsSection();
     drawWebSection();
+    drawCatSection();
     drawUsageReportingSection();
     ImGui::EndChild();
 
@@ -4333,8 +4345,22 @@ void AppWindow::publishWebSnapshot() {
 }
 
 void AppWindow::applyWebControls() {
-    const std::vector<cascade::net::ControlRequest> requests =
+    std::vector<cascade::net::ControlRequest> requests =
         webServer_.takePendingControls();
+    // CAT requests are the SAME ControlRequest type, so they are appended here
+    // and applied by the identical code below rather than by a second copy of
+    // it. That is the whole reason CAT emits control requests instead of
+    // touching the radio: a frequency set over CAT and one set from the
+    // browser must do exactly the same thing, including the parts that are
+    // easy to forget — telling the RDS decoder to drop the old station,
+    // clamping the offset against the live sample rate, and moving the
+    // bandwidth to the new mode's default.
+    if (catServer_.running()) {
+        std::vector<cascade::net::ControlRequest> fromCat =
+            catServer_.takePendingControls();
+        requests.insert(requests.end(), std::make_move_iterator(fromCat.begin()),
+                        std::make_move_iterator(fromCat.end()));
+    }
     for (const cascade::net::ControlRequest& r : requests) {
         if (r.running.has_value()) {
             if (*r.running) {
@@ -4666,6 +4692,25 @@ void AppWindow::applyWebControls() {
     }
 }
 
+void AppWindow::refreshCatServer() {
+    catStatus_.clear();
+    if (!catEnabled_) {
+        catServer_.stop();
+        return;
+    }
+    if (catServer_.running()) {
+        return;  // already listening on the configured port
+    }
+    std::string error;
+    if (!catServer_.start(static_cast<std::uint16_t>(catPortMirror_), catBindAll_,
+                          error)) {
+        // Left enabled in the config on purpose: the usual cause is a port
+        // held by something else, which the user fixes and retries. Silently
+        // turning the setting off would hide that.
+        catStatus_ = error;
+    }
+}
+
 void AppWindow::applyWebSettings() {
     webError_.clear();
     webNote_.clear();
@@ -4718,6 +4763,50 @@ void AppWindow::setWebPassword(const std::string& password) {
     // against the new one.
     webServer_.revokeAllSessions();
     applyWebSettings();
+}
+
+void AppWindow::drawCatSection() {
+    if (!ImGui::CollapsingHeader("CAT control (rigctld)")) { return; }
+
+    ImGui::TextWrapped(
+        "Lets logging and digital-mode software drive this receiver over the "
+        "protocol Hamlib's rigctld speaks. Point the client at this machine's "
+        "address on the port below and choose a Hamlib \"NET rigctl\" radio.");
+
+    if (ImGui::Checkbox("Accept CAT connections", &catEnabled_)) {
+        catServer_.stop();  // a port or scope change needs a fresh listener
+        refreshCatServer();
+    }
+
+    if (ImGui::InputInt("Port", &catPortMirror_)) {
+        catPortMirror_ = std::max(1024, std::min(catPortMirror_, 65535));
+        catServer_.stop();
+        refreshCatServer();
+    }
+
+    if (ImGui::Checkbox("Reachable from other machines", &catBindAll_)) {
+        catServer_.stop();
+        refreshCatServer();
+    }
+    if (catBindAll_) {
+        // Said plainly, because it is a blunter exposure than the web server's:
+        // there is no password to add.
+        ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.2f, 1.0f),
+                           "This protocol has no password. Anything that can "
+                           "reach the port can retune the receiver.");
+    }
+
+    if (!catStatus_.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s",
+                           catStatus_.c_str());
+    } else if (catServer_.running()) {
+        ImGui::Text("Listening on %s:%d — %d client(s), %llu command(s)",
+                    catBindAll_ ? "0.0.0.0" : "127.0.0.1", catPortMirror_,
+                    catServer_.clientCount(),
+                    static_cast<unsigned long long>(catServer_.commandCount()));
+    } else {
+        ImGui::TextDisabled("Not listening.");
+    }
 }
 
 void AppWindow::drawWebSection() {
@@ -5010,6 +5099,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     std::snprintf(webUserBuf_, sizeof(webUserBuf_), "%s", webCfg_.username.c_str());
     applyWebSettings();
 
+    catEnabled_ = cfg.catEnabled;
+    catBindAll_ = cfg.catBindAll;
+    catPortMirror_ = cfg.catPort;
+    refreshCatServer();
+
     // VFO after the source/rate restore so the clamps use the REAL rates the
     // chain ended up with, not whatever the file claimed.
     const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
@@ -5135,6 +5229,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
+    cfg.catEnabled = catEnabled_;
+    cfg.catBindAll = catBindAll_;
+    cfg.catPort = catPortMirror_;
     cfg.webEnabled = webCfg_.enabled;
     cfg.webBindAddress = webCfg_.bindAddress;
     cfg.webPort = webCfg_.port;

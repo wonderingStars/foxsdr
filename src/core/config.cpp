@@ -203,6 +203,9 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "webEnabled", out.webEnabled);
     getString(j, "webBindAddress", out.webBindAddress);
     getInt(j, "webPort", out.webPort);
+    getBool(j, "catEnabled", out.catEnabled);
+    getBool(j, "catBindAll", out.catBindAll);
+    getInt(j, "catPort", out.catPort);
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
     getBool(j, "telemetryEnabled", out.telemetryEnabled);
@@ -272,6 +275,9 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // The empty-address rule is the one exception and it is a safety rule, not
     // a validation one: net/web_policy reads "" as "every interface", so a
     // field emptied by a hand-edit would mean the opposite of the safe default.
+    if (out.catPort < 1024 || out.catPort > 65535) {
+        out.catPort = defaults.catPort;
+    }
     if (out.webPort < 1024 || out.webPort > 65535) {
         out.webPort = defaults.webPort;
     }
@@ -348,6 +354,9 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["webEnabled"] = cfg.webEnabled;
     j["webBindAddress"] = cfg.webBindAddress;
     j["webPort"] = cfg.webPort;
+    j["catEnabled"] = cfg.catEnabled;
+    j["catBindAll"] = cfg.catBindAll;
+    j["catPort"] = cfg.catPort;
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
     j["telemetryEnabled"] = cfg.telemetryEnabled;

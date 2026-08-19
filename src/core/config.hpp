@@ -219,6 +219,16 @@ struct AppConfig {
     // numeric UI control, the same treatment volume and notchQ get.
     int webPort = 8073;
 
+    // --- CAT control (rigctld-compatible) ---------------------------------
+    // Lets logging and digital-mode software drive the receiver. OFF by
+    // default, and loopback-only unless deliberately widened, for a blunter
+    // reason than the web server's: this protocol has NO authentication of any
+    // kind, so anything that can reach the port can retune the radio.
+    bool catEnabled = false;
+    bool catBindAll = false;
+    // 4532 is the port rigctld uses, so clients need no configuring.
+    int catPort = 4532;
+
     // Account name for the browser login. An empty value resets to the default.
     std::string webUsername = "admin";
 

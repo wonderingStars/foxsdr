@@ -28,6 +28,7 @@
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
 // web_server.hpp forward-declares it.
+#include "net/cat_server.hpp"
 #include "net/web_server.hpp"
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
@@ -750,6 +751,7 @@ private:
     // conditions — a source swap — that are hardest to reproduce. So the GUI
     // thread assembles one consistent snapshot per frame under webMutex_, and
     // the providers do nothing but copy it out.
+    void drawCatSection();
     void drawWebSection();
     // Copies audio produced since the last frame into the server's ring.
     //
@@ -791,7 +793,12 @@ private:
     // (modeIndex_, vfoOffsetKhz_, squelchDb_ ...) in step, so a change made
     // from a browser shows up on the desktop window and in the debounced
     // config save exactly as though it had been clicked.
+    // Drains BOTH servers' queued requests — the browser's and CAT's — and
+    // applies them through one body of code, so the two can never drift.
     void applyWebControls();
+    // Starts or stops the CAT server to match the current configuration, and
+    // records why in catStatus_ when it will not start.
+    void refreshCatServer();
     // Applies webCfg_ to the server: starts, restarts or stops it, and puts
     // the outcome in webError_ / webNote_. The ONE place that calls
     // WebServer::start, so the panel, the config restore and the password
@@ -802,6 +809,19 @@ private:
     // is not loopback — deliberately, since that is the user removing the only
     // thing protecting an exposed receiver.
     void setWebPassword(const std::string& password);
+
+    cascade::net::CatServer catServer_;
+    // Shown in the panel: empty while things are as configured, otherwise the
+    // reason the server is not listening (a port already held by a real
+    // rigctld being much the most common).
+    std::string catStatus_;
+    // Panel mirrors, assembled into an AppConfig by currentConfig(). There is
+    // no separate dirty flag anywhere in this window: the debounced save
+    // compares the live state against the last saved one, so a setting is
+    // persisted purely by appearing in currentConfig() and configsEqual().
+    bool catEnabled_ = false;
+    bool catBindAll_ = false;
+    int catPortMirror_ = static_cast<int>(cascade::net::kDefaultCatPort);
 
     cascade::net::WebServer webServer_;
     cascade::net::WebServerConfig webCfg_;

@@ -129,6 +129,28 @@ install different binaries from it. Ten of the eleven plugins ship for both;
 only the example plugin is Windows-only, and it is built from this repository
 rather than the plugin repository.
 
+## CAT control
+
+The receiver can be driven by logging software, digital-mode applications and
+anything else that speaks the protocol Hamlib's `rigctld` uses. Turn on **CAT
+control** in the settings panel, then point the client at this machine and
+choose a Hamlib **NET rigctl** radio. Port 4532 is the default because it is
+the one those clients already expect.
+
+Frequency and mode can be read and set; a set that lands inside the band
+already being received moves only the VFO, so there is no retune and no gap in
+the waterfall. PTT always reads *receive* and refuses to key — this is a
+receiver, and saying so plainly is what stops a client from waiting on a
+transmission that will never happen.
+
+**This protocol carries no authentication**, so the server listens on this
+machine only unless you deliberately widen it. Anything that can reach the port
+can retune the radio.
+
+Nothing from Hamlib is used: it is GPL and is neither linked nor read here. The
+implementation follows the published `rigctld(1)` protocol description, the
+same way every decoder in this project is written from its own specification.
+
 ## Plugins
 
 Decoders can be installed as separate native plugins, from an in-app
