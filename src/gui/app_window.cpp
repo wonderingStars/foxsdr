@@ -2397,13 +2397,36 @@ void AppWindow::drawPluginBrowser() {
         if (!e.compatible) {
             ImGui::TextColored(kErrorRed, "not compatible with this version");
         }
+        // THE DETAIL PANE OPENS HERE, under the row that was clicked, rather
+        // than at the foot of the list. With eleven plugins the old layout put
+        // a description and its Install button several screens below the name
+        // they belonged to, so the two could not be seen together - and the
+        // one thing this pane exists to do is show a licence and a legal
+        // notice NEXT TO the decision they govern.
+        if (i == catalogSel_) {
+            drawPluginCatalogueDetail(i);
+            // Still directly under the Install button, which has moved with it.
+            drawPluginResultText();
+        }
         ImGui::PopID();
     }
 
-    // --- Detail pane + install gate -----------------------------------------
-    if (catalogSel_ >= 0 && catalogSel_ < static_cast<int>(catalog_.size())) {
+    // An install result outlives its entry only when nothing is selected at
+    // all (the catalogue was refreshed, say). Drawn once, either way.
+    if (catalogSel_ < 0 || catalogSel_ >= static_cast<int>(catalog_.size())) {
+        drawPluginResultText();
+    }
+}
+
+// --- Detail pane + install gate, for ONE catalogue entry ---------------------
+//
+// Called from inside drawPluginBrowser's list loop, within that row's PushID,
+// so the checkbox and the Install button below belong to the row they follow.
+void AppWindow::drawPluginCatalogueDetail(int idx) {
+    if (idx < 0 || idx >= static_cast<int>(catalog_.size())) { return; }
+    {
         const cascade::core::PluginCatalogEntry& e =
-            catalog_[static_cast<std::size_t>(catalogSel_)];
+            catalog_[static_cast<std::size_t>(idx)];
         ImGui::Separator();
         ImGui::Text("%s %s", e.name.c_str(), e.version.c_str());
         ImGui::TextDisabled("by %s", e.author.empty() ? "(unknown)" : e.author.c_str());
@@ -2433,15 +2456,13 @@ void AppWindow::drawPluginBrowser() {
                             &legalAck_);
         }
 
-        const std::string blocked = pluginInstallBlockedReason(catalogSel_, legalAck_);
+        const std::string blocked = pluginInstallBlockedReason(idx, legalAck_);
         ImGui::BeginDisabled(!blocked.empty());
         if (ImGui::Button("Install", ImVec2(-FLT_MIN, 0.0f))) { startInstall(e); }
         ImGui::EndDisabled();
         if (!blocked.empty()) { ImGui::TextDisabled("Install disabled: %s", blocked.c_str()); }
+        ImGui::Separator();
     }
-
-    // Directly under the Install button, which is where the user is looking.
-    drawPluginResultText();
 }
 
 void AppWindow::drawPluginResultText() {

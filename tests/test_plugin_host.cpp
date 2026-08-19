@@ -46,6 +46,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -876,16 +877,109 @@ void testDefaultDirectory() {
     const std::string d = PluginHost::defaultPluginDir();
     CHECK(!d.empty());
     CHECK(contains(d, "plugins"));
-    // Next to the executable, not a bare relative path - unless the process
-    // path could not be determined at all, which cannot happen for a normal
-    // test binary.
+    // An absolute path, never a bare relative one - unless the process path
+    // could not be determined at all, which cannot happen for a normal test
+    // binary. Which of the two candidates it is depends on where this test
+    // binary sits, so the assertion below is the invariant that matters
+    // rather than the identity of the directory.
     CHECK(fs::path(d).is_absolute());
+    // THE POINT OF THE WHOLE CHOICE: whatever comes back must be somewhere a
+    // plugin can actually be written. A directory that fails this is one
+    // where the catalogue cannot cache a policy and no install can ever
+    // succeed - which is exactly what an installed copy under Program Files
+    // returned before defaultPluginDir learned to fall back.
+    CHECK(PluginHost::directoryIsWritable(d));
     std::printf("  default plugin dir: %s\n", d.c_str());
 
     // Scanning it must be harmless whether or not it exists.
     PluginHost host;
     host.scanDefault();
     CHECK(host.directory() == d);
+}
+
+// The DIRECTORY CHOICE, which is the decision that makes plugins possible at
+// all on an installed copy. Split the way cat_protocol is: a pure function
+// holding the policy, and a probe that touches the filesystem.
+
+void testPluginDirChoice() {
+    // The whole policy, as a pure function.
+    CHECK(PluginHost::choosePluginDir("/exe/plugins", "/user/plugins", true) == "/exe/plugins");
+    CHECK(PluginHost::choosePluginDir("/exe/plugins", "/user/plugins", false) == "/user/plugins");
+    // Nothing in the environment to derive a per-user path from: keep the
+    // real one, so the error the user is shown names a directory that exists
+    // rather than "".
+    CHECK(PluginHost::choosePluginDir("/exe/plugins", "", false) == "/exe/plugins");
+
+    // Both candidates are absolute, named, and distinct on any ordinary
+    // desktop - a fallback that resolved to the same place would be no
+    // fallback at all.
+    const std::string exeDir = PluginHost::exePluginDir();
+    const std::string userDir = PluginHost::userPluginDir();
+    CHECK(!exeDir.empty());
+    CHECK(contains(exeDir, "plugins"));
+    CHECK(!userDir.empty());
+    if (!userDir.empty()) {
+        CHECK(fs::path(userDir).is_absolute());
+        CHECK(contains(userDir, "foxsdr"));
+        CHECK(contains(userDir, "plugins"));
+        CHECK(userDir != exeDir);
+    }
+    std::printf("  exe plugin dir:  %s\n", exeDir.c_str());
+    std::printf("  user plugin dir: %s\n", userDir.c_str());
+}
+
+void testDirectoryWritability() {
+    const fs::path d = tmpDir("writable");
+    CHECK(PluginHost::directoryIsWritable(d.string()));
+    // A directory that does not exist YET answers for the parent that would
+    // have to hold it. This is the first-run case on every installation, and
+    // getting it wrong would send a portable copy to the per-user directory.
+    CHECK(PluginHost::directoryIsWritable((d / "not_yet").string()));
+    CHECK(!fs::exists(d / "not_yet"));
+    // The probe writes, so it must also clean up: nothing may survive it.
+    int leftovers = 0;
+    for (const auto& entry : fs::directory_iterator(d)) {
+        (void)entry;
+        ++leftovers;
+    }
+    CHECK(leftovers == 0);
+    CHECK(!PluginHost::directoryIsWritable(""));
+
+    // A path whose parent is a FILE can hold nothing, on either platform.
+    const fs::path f = d / "a_file";
+    {
+        std::ofstream o(f, std::ios::binary | std::ios::trunc);
+        o << "x";
+    }
+    CHECK(!PluginHost::directoryIsWritable((f / "child").string()));
+
+    // THE CASE THE WRITE PROBE EXISTS FOR, and the one an is_directory check
+    // gets wrong: a directory that exists, lists and traverses perfectly well
+    // and still refuses every write. Reachable portably only on POSIX; the
+    // Windows equivalent is an ACL, verified by hand against Program Files
+    // (BUILTIN\Users hold read+execute there and nothing more), which is
+    // where the reported bug came from.
+#ifndef _WIN32
+    const fs::path ro = d / "read_only";
+    std::error_code ec;
+    fs::create_directories(ro, ec);
+    fs::permissions(ro, fs::perms::owner_read | fs::perms::owner_exec,
+                    fs::perm_options::replace, ec);
+    if (!ec && geteuid() != 0) {
+        CHECK(!PluginHost::directoryIsWritable(ro.string()));
+        // The same path, to the check this replaced. Both answers are here so
+        // the difference between them is the thing under test.
+        CHECK(fs::is_directory(ro, ec));
+    } else {
+        std::printf("  SKIP: read-only directory check (root ignores mode bits)\n");
+    }
+    fs::permissions(ro, fs::perms::owner_all, fs::perm_options::replace, ec);
+#else
+    std::printf("  SKIP: read-only directory check (needs POSIX mode bits)\n");
+#endif
+
+    std::error_code cleanup;
+    fs::remove_all(d, cleanup);
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,6 +1597,8 @@ int main() {
     testDeterministicOrder();
     testUnloadAllIdempotent();
     testDefaultDirectory();
+    testPluginDirChoice();
+    testDirectoryWritability();
     testRealPluginDirs();
     return testSummary("test_plugin_host");
 }

@@ -7,12 +7,15 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
 
 #if defined(_WIN32)
+#include <process.h>  // _getpid, for the write probe's temp name
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -757,7 +760,7 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
 
 PluginHost::~PluginHost() { unloadAll(); }
 
-std::string PluginHost::defaultPluginDir() {
+std::string PluginHost::exePluginDir() {
 #if defined(_WIN32)
     // MAX_PATH is not the limit on modern Windows; grow until it fits rather
     // than truncating an installation under a deep path.
@@ -786,6 +789,98 @@ std::string PluginHost::defaultPluginDir() {
     }
     return (exe.parent_path() / "plugins").string();
 #endif
+}
+
+std::string PluginHost::userPluginDir() {
+#if defined(_WIN32)
+    // LOCALAPPDATA, not APPDATA, and the difference matters: APPDATA roams to
+    // every machine the user signs in to, and a plugin is a native binary
+    // built for one architecture. ConfigStore may roam its JSON; this cannot.
+    const char* base = std::getenv("LOCALAPPDATA");
+    if (base == nullptr || *base == '\0') {
+        base = std::getenv("APPDATA");  // ancient or stripped environments
+    }
+    if (base == nullptr || *base == '\0') {
+        return {};  // no per-user location exists; the caller keeps the exe one
+    }
+    return (fs::path(base) / "foxsdr" / "plugins").string();
+#else
+    // XDG_DATA_HOME rather than XDG_CONFIG_HOME for the same reason: this is
+    // installed program data, not configuration.
+    const char* xdg = std::getenv("XDG_DATA_HOME");
+    if (xdg != nullptr && *xdg != '\0') {
+        return (fs::path(xdg) / "foxsdr" / "plugins").string();
+    }
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0') {
+        return (fs::path(home) / ".local" / "share" / "foxsdr" / "plugins").string();
+    }
+    return {};
+#endif
+}
+
+bool PluginHost::directoryIsWritable(const std::string& dir) {
+    std::error_code ec;
+    if (dir.empty()) {
+        return false;
+    }
+    const fs::path p(dir);
+
+    // Probe the directory when it is there, and the parent that would have to
+    // hold it when it is not. Probing the parent is what makes a FIRST run
+    // answer correctly: the plugins directory does not exist yet in either the
+    // portable case or the installed one, and the two must not look alike.
+    fs::path probeDir = p;
+    if (!fs::is_directory(probeDir, ec)) {
+        probeDir = p.parent_path();
+        if (probeDir.empty()) {
+            probeDir = fs::path(".");
+        }
+        ec.clear();
+        if (!fs::is_directory(probeDir, ec)) {
+            return false;
+        }
+    }
+
+    // THE ONLY HONEST TEST IS A WRITE. An installed program directory is
+    // readable, listable and traversable, and reports itself a perfectly good
+    // directory right up to the moment a file is created in it.
+#if defined(_WIN32)
+    const int pid = _getpid();
+#else
+    const int pid = static_cast<int>(getpid());
+#endif
+    fs::path probe = probeDir / (".foxsdr-write-probe." + std::to_string(pid));
+    ec.clear();
+    fs::remove(probe, ec);  // debris from a killed earlier run
+    bool ok = false;
+    {
+        std::ofstream f(probe, std::ios::binary | std::ios::trunc);
+        if (f) {
+            f.put('x');
+            f.flush();
+            ok = static_cast<bool>(f);
+        }
+    }
+    ec.clear();
+    fs::remove(probe, ec);  // leaves nothing behind either way
+    return ok;
+}
+
+std::string PluginHost::choosePluginDir(const std::string& exeDir, const std::string& userDir,
+                                        bool exeDirWritable) {
+    if (exeDirWritable) {
+        return exeDir;
+    }
+    if (userDir.empty()) {
+        return exeDir;
+    }
+    return userDir;
+}
+
+std::string PluginHost::defaultPluginDir() {
+    const std::string exeDir = exePluginDir();
+    return choosePluginDir(exeDir, userPluginDir(), directoryIsWritable(exeDir));
 }
 
 bool PluginHost::hasPluginExtension(const std::string& filename) {

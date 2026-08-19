@@ -177,6 +177,14 @@ the catalogue before it is allowed to become a file, size-capped, refused on a
 cross-host redirect, and written under a sanitised bare filename inside the
 plugins directory.
 
+**Where that directory is** depends on whether the application can write to its
+own: a portable copy keeps plugins in `plugins/` beside the executable, while an
+installation under a directory the user does not own — `C:\Program Files\FoxSDR`
+being the ordinary case — uses `%LOCALAPPDATA%\foxsdr\plugins` instead
+(`$XDG_DATA_HOME/foxsdr/plugins`, or `~/.local/share/foxsdr/plugins`, on Linux).
+The panel prints the one in use above the catalogue. Nothing needs elevating
+either way.
+
 Compatibility is ABI-exact. A plugin must be built against this host's
 `src/core/plugin_abi.h` and declare exactly its ABI version — a near miss is
 refused rather than loaded, because a struct-layout difference becomes memory

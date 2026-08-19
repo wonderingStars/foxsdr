@@ -135,6 +135,7 @@ private:
     // installed list) and it must be visible whichever half the user is
     // looking at — a failed remove with the browser collapsed would otherwise
     // report nothing at all.
+    void drawPluginCatalogueDetail(int idx);
     void drawPluginResultText();
     // "Receiver control": the checkbox that grants one plugin permission to
     // tune the radio. Without it the permission PluginUi enforces could never

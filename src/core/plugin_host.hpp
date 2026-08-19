@@ -187,13 +187,50 @@ public:
     PluginHost(const PluginHost&) = delete;
     PluginHost& operator=(const PluginHost&) = delete;
 
-    // "<directory of the running executable>/plugins". Next to the binary
-    // rather than in %APPDATA% because plugins are code: putting them where
-    // the installer writes keeps a per-user, non-elevated directory from
-    // becoming a code-injection path into an installed application. Falls
-    // back to the relative "plugins" if the executable path cannot be
+    // Where this installation keeps its plugins.
+    //
+    // "<directory of the running executable>/plugins" WHEN THAT DIRECTORY CAN
+    // BE WRITTEN, which covers a portable copy, a developer build, and an
+    // installation the user chose to put somewhere they own. Next to the
+    // binary stays the preferred answer, because plugins are code and a
+    // directory only the installer can write cannot be quietly repopulated.
+    //
+    // Otherwise a per-user directory: %LOCALAPPDATA%/foxsdr/plugins on
+    // Windows, $XDG_DATA_HOME (or ~/.local/share) /foxsdr/plugins elsewhere.
+    // That is less a weakening of the rule above than an admission of what
+    // the rule was worth. A default installation lands under Program Files,
+    // which is read-only to the user running the app, so WITHOUT this
+    // fallback the catalogue cannot save its version policy and no plugin can
+    // ever be installed at all - which is what shipped, and what this
+    // repairs. The property the original comment claimed to protect does not
+    // hold either way: FoxSDR does not run elevated, so anyone who can write
+    // to the per-user directory can already run code as that user and gains
+    // no privilege by routing it through this application.
+    //
+    // Falls back to the relative "plugins" if the executable path cannot be
     // determined (which would mean a very unusual host process).
     static std::string defaultPluginDir();
+
+    // The two candidates defaultPluginDir() chooses between, exposed so the
+    // choice is testable and so the GUI can name the one in use.
+    static std::string exePluginDir();
+    static std::string userPluginDir();
+
+    // True if this process can actually put a file in `dir`. Probes by
+    // WRITING one and removing it again, because existence, is_directory and
+    // even access() all answer "fine" for an installed program directory that
+    // then refuses every write. When `dir` does not exist yet, the parent
+    // that would have to hold it is probed instead, so the answer means "a
+    // plugin can be installed here" rather than "this exists". Leaves nothing
+    // behind, and never throws.
+    static bool directoryIsWritable(const std::string& dir);
+
+    // The decision itself, pure and total: `exeDir` when it is writable,
+    // otherwise `userDir` - except that an empty `userDir` (nothing in the
+    // environment to derive one from) yields `exeDir`, so the caller reports
+    // the real failure against the real path rather than against "".
+    static std::string choosePluginDir(const std::string& exeDir, const std::string& userDir,
+                                       bool exeDirWritable);
 
     // True if `filename` has the shared-library extension this platform's
     // plugins use (".dll" on Windows, ".so"/".dylib" elsewhere). Case
