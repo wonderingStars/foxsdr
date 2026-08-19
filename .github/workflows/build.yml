@@ -37,7 +37,8 @@ jobs:
             libgl1-mesa-dev libsoapysdr-dev libssl-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
-            libasound2-dev libasound2-plugins
+            libasound2-dev libasound2-plugins \
+            xvfb libgl1-mesa-dri
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -54,8 +55,15 @@ jobs:
           sudo modprobe snd-dummy || true
           printf 'pcm.!default { type null }\nctl.!default { type null }\n' | sudo tee /etc/asound.conf
 
+      # Under a virtual X server, because one test opens a real window and a
+      # bare runner has no display at all — GLFW reports "failed to detect any
+      # supported platform" and the smoke test cannot start. Xvfb plus Mesa's
+      # software renderer means that path is actually exercised here rather
+      # than excluded, which is the whole point of having it.
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: xvfb-run -a ctest --test-dir build --output-on-failure
 
       # The selftest drives the real DSP chain headlessly and asserts a known
       # spectrum peak, so it catches a build that links and passes unit tests
