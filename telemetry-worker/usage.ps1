@@ -99,6 +99,15 @@ $i = $installs[0]
 Write-Host ("installs (unique) : {0}" -f $i.installs)
 Write-Host ("reports (launches): {0}" -f $i.reports)
 
+# The two figures people actually mean by "how many users".
+foreach ($d in 1, 7) {
+    $r = Invoke-Sql "SELECT count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE timestamp > NOW() - INTERVAL '$d' DAY"
+    if ($r) {
+        $label = if ($d -eq 1) { "active today" } else { "active in 7 days" }
+        Write-Host ("{0,-18}: {1}" -f $label, $r[0].installs)
+    }
+}
+
 function Show-Breakdown([string]$title, [string]$sql, [string]$key) {
     $rows = Invoke-Sql $sql
     if (-not $rows) { return }
@@ -109,6 +118,38 @@ function Show-Breakdown([string]$title, [string]$sql, [string]$key) {
         if (-not $label) { $label = "(not reported)" }
         Write-Host ("  {0,-34} {1}" -f $label, $r.installs)
     }
+}
+
+# DAILY ACTIVE INSTALLS, which is the number most worth watching over time.
+#
+# One row per day, counting DISTINCT install ids that reported that day. A
+# report is written once per LAUNCH, so "active" here means "started FoxSDR at
+# least once that day" - not "had it open", which this data cannot answer and
+# which no honest label should imply.
+#
+# The daily figure is always lower than the 30-day one and that is not an
+# error: most people do not use a receiver every day, so a healthy 30-day
+# population of N produces a daily figure well below N.
+$daily = Invoke-Sql @"
+SELECT toDate(timestamp) AS day,
+       count(DISTINCT index1) AS installs,
+       count() AS launches
+FROM foxsdr_usage
+WHERE $window
+GROUP BY day
+ORDER BY day DESC
+"@
+if ($daily) {
+    Write-Host ""
+    Write-Host "Daily active installs" -ForegroundColor Cyan
+    Write-Host ("  {0,-12} {1,>8} {2,>10}" -f "day", "installs", "launches")
+    foreach ($r in $daily) {
+        Write-Host ("  {0,-12} {1,8} {2,10}" -f $r.day, $r.installs, $r.launches)
+    }
+    # A crude trend, because a single day means little on its own: the average
+    # over the window, so today can be read against it.
+    $avg = ($daily | Measure-Object -Property installs -Average).Average
+    Write-Host ("  {0,-12} {1,8:N1}" -f "average", $avg)
 }
 
 Show-Breakdown "By version" `
