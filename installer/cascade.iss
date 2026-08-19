@@ -100,7 +100,16 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; an unelevated per-user install ({autopf} then resolves under %LOCALAPPDATA%).
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=commandline
-VersionInfoVersion={#AppVersion}
+; Windows' VERSIONINFO resource takes a NUMERIC x.y.z[.w] and nothing else, so
+; a pre-release version like "0.56.0-nightly.20260819.abc1234" is rejected
+; outright. The display version above keeps the full string - that is what the
+; user, the About line and any bug report see - while this one carries just the
+; numeric part for the file properties dialog. tools/build-nightly.ps1 passes
+; it; a release build leaves it equal to AppVersion.
+#ifndef AppVersionNumeric
+  #define AppVersionNumeric AppVersion
+#endif
+VersionInfoVersion={#AppVersionNumeric}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

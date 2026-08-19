@@ -27,6 +27,12 @@
 param(
     # Where the website keeps the files it serves. Only used with -Publish.
     [string]$SiteDir = "C:\Users\steve\OneDrive\Documents\fox sdr",
+    # SoapySDR and OpenSSL are the two dependencies that are not vendored, and
+    # they come from vcpkg. A fresh build tree has none of the release tree's
+    # cached configuration, so the toolchain has to be named explicitly or the
+    # configure fails on "Could not find SoapySDR".
+    [string]$Toolchain = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+    [string]$Triplet = "x64-windows",
     [switch]$Publish
 )
 
@@ -42,13 +48,18 @@ $projectLine = Select-String -Path (Join-Path $repo "CMakeLists.txt") -Pattern '
 if (-not $projectLine) { throw "could not read the project version from CMakeLists.txt" }
 $next = $projectLine.Matches[0].Groups[1].Value
 
-$sha = (git rev-parse --short=7 HEAD).Trim()
+$sha = (git rev-parse --short=7 HEAD | Out-String).Trim()
 if (-not $sha) { throw "could not read the commit; a nightly must name what it was built from" }
 
 # A dirty tree produces a build nobody can reproduce from a commit. Say so in
 # the version rather than pretending otherwise.
+#
+# Piped through Out-String because `git status --porcelain` on a CLEAN tree
+# returns $null, not an empty string, and calling .Trim() on it throws - so the
+# first version of this script failed on exactly the case it is meant to
+# handle, and would only have worked on a dirty tree.
 $dirty = ""
-if ((git status --porcelain).Trim()) {
+if ((git status --porcelain | Out-String).Trim()) {
     $dirty = ".dirty"
     Write-Warning "working tree has uncommitted changes - marking the build .dirty"
 }
@@ -60,7 +71,14 @@ Write-Host "Building nightly $version" -ForegroundColor Cyan
 # --- Build ------------------------------------------------------------------
 
 $buildDir = Join-Path $repo "build-nightly"
-cmake -S $repo -B $buildDir -DCASCADE_VERSION_STRING="$version" | Out-Null
+# CMAKE_PREFIX_PATH as well as the toolchain: on this machine vcpkg is in
+# classic (non-manifest) mode, so the toolchain alone does not put the installed
+# tree on the search path and find_package(SoapySDR) fails.
+$vcpkgRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $Toolchain))
+$installed = Join-Path $vcpkgRoot "installed/$Triplet"
+cmake -S $repo -B $buildDir -DCASCADE_VERSION_STRING="$version" `
+    -DCMAKE_TOOLCHAIN_FILE="$Toolchain" -DVCPKG_TARGET_TRIPLET="$Triplet" `
+    -DCMAKE_PREFIX_PATH="$installed" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
 
 # Twice: a file added since the last configure is registered by the
@@ -94,7 +112,11 @@ if (-not (Test-Path $iscc)) { throw "Inno Setup not found" }
 
 # /DBuildDir points the installer at the nightly build tree rather than the
 # release one, so the two never pick up each other's binaries.
-& $iscc /DAppVersion="$version" /DBuildDir="$buildDir\Release" (Join-Path $repo "installer\cascade.iss") | Out-Null
+# AppVersionNumeric as well: Windows' VERSIONINFO resource takes x.y.z and
+# rejects a pre-release suffix, so the file-properties version is the plain
+# number while everything a human reads keeps the full nightly string.
+& $iscc /DAppVersion="$version" /DAppVersionNumeric="$next" /DBuildDir="$buildDir\Release" `
+    (Join-Path $repo "installer\cascade.iss") | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "installer compile failed" }
 
 $setup = Join-Path $repo "installer\Output\foxsdr-setup-$version.exe"

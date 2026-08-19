@@ -6,6 +6,24 @@ foreach(src ${CASCADE_TESTS})
     add_executable(${name} "${src}")
     target_link_libraries(${name} PRIVATE cascade_lib)
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Put SoapySDR.dll beside the test binary EXPLICITLY.
+    #
+    # The application delay-loads it, so a missing runtime there is a readable
+    # message; the tests link it normally, so a missing DLL is a Windows modal
+    # ("The code execution cannot proceed because SoapySDR.dll was not found")
+    # that blocks the run until someone clicks OK — which on an unattended
+    # build means a hang, not a failure.
+    #
+    # This used to be supplied by vcpkg's implicit applocal-deps step, which
+    # made the suite pass in the established build tree and fail in any FRESH
+    # one: the first nightly build hit exactly that modal. Copying it here
+    # depends on nothing implicit and works in a clean clone and in CI.
+    if(WIN32 AND TARGET SoapySDR)
+        add_custom_command(TARGET ${name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:${name}>)
+    endif()
+
     add_test(NAME ${name} COMMAND ${name})
     # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
     # it forever — ctest's default per-test timeout is 1500 s.

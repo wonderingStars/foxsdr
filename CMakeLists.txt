@@ -235,11 +235,27 @@ target_link_libraries(cascade PRIVATE cascade_lib)
 # main() with an unactionable "SoapySDR.dll was not found" modal; with it, the
 # app opens normally and SoapySource::runtimeAvailable() reports the problem
 # in the Source panel while the generator and IQ-file sources keep working.
-# Only the shipped executable needs it — the test binaries always run beside
-# a freshly deployed DLL.
+# Only the shipped executable needs it — the test binaries link it normally and
+# are given a copy of the DLL beside them (see tests/CMakeLists.txt).
 if(MSVC)
     target_link_options(cascade PRIVATE "/DELAYLOAD:SoapySDR.dll")
     target_link_libraries(cascade PRIVATE delayimp)
+endif()
+
+# Stage SoapySDR.dll beside the executable, explicitly.
+#
+# The installer refuses to package a build without it (a deliberate payload
+# check), and until now the file arrived only through vcpkg's implicit
+# applocal-deps step. That works in a build tree that has been around a while
+# and NOT in a fresh one, so the first build from a clean directory failed to
+# package with "SoapySDR.dll not found in build\Release" — and, before that,
+# the test binaries hit a Windows "DLL not found" modal that blocks an
+# unattended build rather than failing it. Both are one missing copy; neither
+# should depend on a side effect of the dependency manager.
+if(WIN32 AND TARGET SoapySDR)
+    add_custom_command(TARGET cascade POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:cascade>)
 endif()
 
 # ---------------------------------------------------------------------------
