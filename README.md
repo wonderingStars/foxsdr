@@ -1,9 +1,28 @@
 # FoxSDR
 
-A from-scratch software-defined radio receiver for Windows and Linux: spectrum and
+A from-scratch software-defined radio receiver for Windows: spectrum and
 waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
 RDS, recording, bookmarks, a scanner, band plans, and hardware support for any
 radio SoapySDR can reach.
+
+> ### ⚠️ Linux is in development and not usable yet
+>
+> **Windows is the only supported platform.** A Linux build exists and its test
+> suite passes, but it is unfinished work rather than a release, and it is not
+> expected to work properly for real use yet:
+>
+> - **No decoder plugins at all.** The published catalogue is Windows-only, so
+>   ADS-B, AIS, APRS, POCSAG and SSTV are all unavailable on Linux.
+> - **Never tested with a radio on Linux.** The port was verified against the
+>   test suite, the built-in signal generator and IQ-file playback. No SDR has
+>   been driven through it on a Linux machine, so the hardware path is unproven.
+> - **Never run on a real Linux desktop.** It has been exercised under WSL and
+>   under a virtual display in CI — neither is a real graphical session with a
+>   real sound card.
+>
+> Treat it as something to build and experiment with, not something to rely on.
+> Reports of what breaks are welcome; it will be announced as supported when it
+> has been proven against real hardware and the plugins exist.
 
 It also has a **map** for decoded targets — aircraft, ships, stations — and can
 serve its whole interface to a **browser** on your own network, so the receiver
@@ -68,7 +87,12 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-## Building (Linux)
+## Building (Linux — in development, see the notice at the top)
+
+**This is unfinished work.** It builds and the tests pass, but no plugins are
+available, it has never been driven with a radio on Linux, and it has never run
+on a real desktop session. Build it to experiment or to help find what is
+broken, not to use as a receiver.
 
 The same vendored dependencies build from source here too. Three system
 packages are needed: OpenGL headers, SoapySDR, and OpenSSL — the last of these
