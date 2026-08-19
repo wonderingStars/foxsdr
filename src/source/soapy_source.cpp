@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/soapy_source.hpp"
 
+#include "source/soapy_modules.hpp"
+
 #include <SoapySDR/Constants.h>
 #include <SoapySDR/Device.hpp>
+#include <SoapySDR/Modules.hpp>
+#include <SoapySDR/Version.hpp>
 #include <SoapySDR/Errors.hpp>
 #include <SoapySDR/Formats.h>
 #include <SoapySDR/Types.hpp>
@@ -63,11 +67,51 @@ bool SoapySource::runtimeAvailable() {
     // not handle, so we must never reach one. Every entry point below checks
     // here first. The handle is intentionally leaked - the module stays
     // loaded for the process lifetime anyway once anything uses it.
-    static const bool available = (::LoadLibraryA("SoapySDR.dll") != nullptr);
+    static const bool available = []() {
+        if (::LoadLibraryA("SoapySDR.dll") == nullptr) { return false; }
+        // THE MODULE SEARCH PATH, fixed here because this is the first moment
+        // it can be: the library is loaded (so its ABI version can be asked
+        // for) and no module has been loaded yet (the search path is read once,
+        // when the first enumeration triggers loading). See soapy_modules.hpp
+        // for what was wrong and why the application found no hardware at all
+        // when installed.
+        ensureVendorModulesVisible(SoapySDR::getABIVersion());
+        return true;
+    }();
     return available;
 #else
-    return true;  // POSIX builds link it normally
+    // POSIX links it normally, but the module search path still has to cover
+    // wherever the distribution put the vendor modules.
+    static const bool ready = []() {
+        ensureVendorModulesVisible(SoapySDR::getABIVersion());
+        return true;
+    }();
+    (void)ready;
+    return true;
 #endif
+}
+
+std::vector<std::string> SoapySource::moduleSearchPaths() {
+    if (!runtimeAvailable()) { return {}; }
+    try {
+        return SoapySDR::listSearchPaths();
+    } catch (...) {
+        return {};
+    }
+}
+
+std::vector<std::string> SoapySource::loadedModules() {
+    if (!runtimeAvailable()) { return {}; }
+    try {
+        return SoapySDR::listModules();
+    } catch (...) {
+        return {};
+    }
+}
+
+std::vector<VendorRoot> SoapySource::vendorInstalls() {
+    if (!runtimeAvailable()) { return {}; }
+    return ensureVendorModulesVisible(SoapySDR::getABIVersion());
 }
 
 std::vector<SoapyDeviceInfo> SoapySource::enumerate() {

@@ -258,6 +258,15 @@ Radio hardware support is a separate install (PothosSDR or radioconda) — see
 `POSTINSTALL.txt` in the install folder. FoxSDR runs with no hardware at all
 using the signal generator or I/Q playback.
 
+FoxSDR locates either of those in its default location and adds it to the
+SoapySDR module search path itself; `SOAPY_SDR_ROOT` overrides the guess and a
+`SOAPY_SDR_PLUGIN_PATH` you set by hand is appended to, never replaced. **An
+RTL-SDR dongle needs one further step on Windows**: it ships bound to the DVB-T
+television driver, under which it is invisible to every SDR application, and
+Zadig must be used to bind WinUSB to "Bulk-In, Interface (Interface 0)" instead.
+`cascade.exe --soapy-check` prints the search paths, the loaded modules and
+either the device it opened or the reason there was none.
+
 ## Building the installer
 
 A Windows installer (Inno Setup 6) lives under `installer/` — it packages

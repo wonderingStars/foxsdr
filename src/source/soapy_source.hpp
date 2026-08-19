@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "source/soapy_modules.hpp"
+
 #include "source/iq_source.hpp"
 
 // Forward declarations instead of <SoapySDR/Device.hpp>: the GUI includes
@@ -65,6 +67,17 @@ public:
     // hardware sources are unavailable. Every Soapy entry point checks this
     // first so a missing runtime yields a message, never a crash.
     static bool runtimeAvailable();
+
+    // Diagnostics for the "no devices found" case, which used to say nothing
+    // at all. A user whose radio is missing needs to know WHERE the
+    // application looked and WHAT it loaded; without that, "no devices" is
+    // indistinguishable from a broken application, and for one release it
+    // genuinely was one.
+    //
+    // All three are safe with no runtime present: they return empty.
+    static std::vector<std::string> moduleSearchPaths();
+    static std::vector<std::string> loadedModules();
+    static std::vector<VendorRoot> vendorInstalls();
 
     // Opens the device described by a SoapySDR kwargs markup string (the
     // .args of an enumerate() entry, or hand-written like "driver=rtlsdr")

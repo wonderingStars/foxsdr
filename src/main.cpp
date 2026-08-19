@@ -260,6 +260,25 @@ int runSoapyCheck() {
     }
     if (pick == nullptr) {
         std::printf("soapy-check FAIL no SoapySDR radio devices enumerated\n");
+        // WHERE IT LOOKED, because "no devices" on its own is the message that
+        // hid a total failure of the module search path for several releases:
+        // it reads identically whether nothing is plugged in, nothing is
+        // installed, or the application is looking in a directory that cannot
+        // exist. These three lines are what turn a support conversation into a
+        // one-command answer.
+        for (const auto& v : cascade::source::SoapySource::vendorInstalls()) {
+            std::printf("soapy-check vendor: %s at %s\n", v.name.c_str(), v.root.c_str());
+        }
+        for (const auto& p : cascade::source::SoapySource::moduleSearchPaths()) {
+            std::printf("soapy-check search: %s\n", p.c_str());
+        }
+        const auto modules = cascade::source::SoapySource::loadedModules();
+        for (const auto& m : modules) {
+            std::printf("soapy-check module: %s\n", m.c_str());
+        }
+        if (modules.empty()) {
+            std::printf("soapy-check modules: none loaded - install PothosSDR or radioconda\n");
+        }
         return 1;
     }
     std::fprintf(stderr, "cascade: soapy-check device: %s (%s)\n",

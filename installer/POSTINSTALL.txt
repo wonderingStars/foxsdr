@@ -20,6 +20,51 @@ LimeSDR or similar, install ONE of:
 Either provides the SoapySDR module set (SoapyUHD, SoapyRTLSDR, ...) plus
 the vendor libraries (uhd.dll, librtlsdr, ...) they need.
 
+FoxSDR finds either automatically, in their default locations, and adds
+them to its own module search path — nothing needs to be configured and
+nothing needs administrator rights. If you installed one somewhere else,
+set SOAPY_SDR_ROOT to its root directory and FoxSDR will prefer that.
+
+(Before 0.55.0 it did NOT find them: FoxSDR searched a directory derived
+from where its own SoapySDR.dll sat, which for a normal installation was
+a path that could not exist. No hardware of any kind was detected. If you
+were told to set SOAPY_SDR_PLUGIN_PATH by hand, you no longer need to —
+though a value you set is still honoured and still takes precedence.)
+
+RTL-SDR DONGLES NEED ONE EXTRA STEP ON WINDOWS
+-----------------------------------------------
+Windows binds RTL dongles to its DVB-T television driver by default, and
+under that driver the dongle is invisible to EVERY SDR application, not
+just this one. To use it for SDR you must replace that driver with
+WinUSB:
+
+  1. Download Zadig from https://zadig.akeo.ie (no installation needed).
+  2. Plug the dongle in and run Zadig.
+  3. Options -> List All Devices.
+  4. In the dropdown select "Bulk-In, Interface (Interface 0)".
+     On a dongle that also does DAB/FM, Interface 0 is the SDR one.
+  5. Choose WinUSB as the target driver and click Replace Driver.
+  6. Unplug the dongle, plug it back in, and press Refresh in FoxSDR.
+
+You only do this once per dongle per machine. In Device Manager, a dongle
+that still needs this shows as "Bulk-In, Interface" with a yellow warning
+triangle (problem code 28, "The drivers for this device are not
+installed").
+
+This step is not something FoxSDR can do for you: it changes a system
+driver binding and needs administrator rights.
+
+CHECKING WHAT FOXSDR CAN SEE
+-----------------------------
+If the Source dropdown does not list your radio, open it and press
+Refresh; the panel then reports where it searched and which vendor
+modules it loaded. From a command prompt the same information comes from:
+
+  "C:\Program Files\FoxSDR\cascade.exe" --soapy-check
+
+which prints every search path, every loaded module, and either the
+device it opened or the reason there was none.
+
 IF YOU HAVE BOTH A STANDALONE UHD INSTALL AND RADIOCONDA
 --------------------------------------------------------
 Launch the app with radioconda's bin directory FIRST on PATH, e.g. from a

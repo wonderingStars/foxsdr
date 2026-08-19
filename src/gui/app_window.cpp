@@ -1251,6 +1251,77 @@ void AppWindow::drawSourceSection() {
     if (ImGui::Button("Refresh")) { scanSoapy(); }
     ImGui::EndDisabled();
 
+    // NO HARDWARE FOUND, explained.
+    //
+    // This block is here because its absence was, for several releases, the
+    // whole of what a user with a radio was told: the dropdown listed the
+    // signal generator and the IQ file, their receiver was simply not there,
+    // and nothing anywhere said why or what to do. That is the worst possible
+    // failure to present, because it is indistinguishable from the
+    // application not supporting their device at all - and it was shown to
+    // users whose only mistake was installing FoxSDR where its own module
+    // search path could not reach their vendor modules.
+    //
+    // Shown only after a scan has actually completed and found nothing, so it
+    // never flashes up during the first enumeration.
+    if (soapyScanned_ && !soapyBusy && soapyDevices_.empty()) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "No radio hardware found");
+        ImGui::TextWrapped(
+            "FoxSDR reaches radios through SoapySDR vendor modules, which are a separate "
+            "install. The signal generator and IQ file playback need no hardware.");
+
+        const std::vector<std::string> modules = cascade::source::SoapySource::loadedModules();
+        const std::vector<cascade::source::VendorRoot> vendors =
+            cascade::source::SoapySource::vendorInstalls();
+
+        if (modules.empty()) {
+            // The common case, and the one worth being loudest about.
+            ImGui::TextWrapped(
+                "No vendor modules are loaded. Install PothosSDR "
+                "(downloads.myriadrf.org/builds/PothosSDR) or radioconda "
+                "(github.com/ryanvolz/radioconda), then press Refresh. Neither needs FoxSDR "
+                "to be reinstalled.");
+        } else {
+            ImGui::TextWrapped("%d vendor module%s loaded, but none reported a device.",
+                               static_cast<int>(modules.size()),
+                               modules.size() == 1u ? " is" : "s are");
+        }
+
+        // THE RTL-SDR CASE, called out by name. It is the most common first
+        // receiver by a wide margin, and on Windows it needs a step that no
+        // other device needs and that nothing in this product used to mention:
+        // the dongle ships bound to the DVB-T television driver, under which
+        // it is invisible to every SDR application, not only this one.
+        ImGui::TextWrapped(
+            "RTL-SDR dongle? Windows also needs a WinUSB driver bound to it. Run Zadig "
+            "(zadig.akeo.ie), tick Options -> List All Devices, select \"Bulk-In, Interface "
+            "(Interface 0)\", choose WinUSB and click Replace Driver. Until that is done the "
+            "dongle is invisible to every SDR application. In Device Manager an unconfigured "
+            "dongle shows as \"Bulk-In, Interface\" with a yellow warning.");
+
+        // The evidence, folded away. A user does not need it; anyone helping
+        // them does, and "where did it look" is the first question worth
+        // asking - it is the question that found the bug this text exists for.
+        if (ImGui::TreeNode("Where FoxSDR looked")) {
+            if (!vendors.empty()) {
+                for (const cascade::source::VendorRoot& v : vendors) {
+                    ImGui::TextWrapped("found %s at %s", v.name.c_str(), v.root.c_str());
+                }
+            } else {
+                ImGui::TextDisabled("no vendor SDR installation detected");
+            }
+            for (const std::string& p : cascade::source::SoapySource::moduleSearchPaths()) {
+                ImGui::TextWrapped("search: %s", p.c_str());
+            }
+            for (const std::string& m : modules) {
+                ImGui::TextWrapped("module: %s", m.c_str());
+            }
+            ImGui::TreePop();
+        }
+        ImGui::Separator();
+    }
+
     // IQ file controls, shown while the combo sits on "IQ file". The pipeline
     // keeps its current source until Open succeeds: a failed open constructs
     // and destroys a throwaway IqFileSource without ever touching the
