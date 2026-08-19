@@ -22,6 +22,13 @@ jobs:
       # libasound2-dev is PortAudio's backend; the -plugins package lets ALSA's
       # default device route to a sound server, which is what makes the audio
       # test meaningful on a machine with no hardware card.
+      #
+      # The wayland packages are not optional on a runner: GLFW enables Wayland
+      # whenever it finds the headers, and the runner image ships those but not
+      # libwayland-bin, so configure fails looking for wayland-scanner. Adding
+      # the tool is the right fix rather than switching Wayland off — it is the
+      # default session on current desktops, and X11-only would leave those
+      # users on XWayland.
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -29,6 +36,7 @@ jobs:
             build-essential cmake ninja-build \
             libgl1-mesa-dev libsoapysdr-dev libssl-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
             libasound2-dev libasound2-plugins
 
       - name: Configure

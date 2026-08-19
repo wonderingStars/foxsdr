@@ -78,8 +78,12 @@ operating system's own CNG and need no package.
 On Debian or Ubuntu:
 
 ```
-sudo apt install build-essential cmake libgl1-mesa-dev libsoapysdr-dev libssl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+sudo apt install build-essential cmake libgl1-mesa-dev libsoapysdr-dev libssl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libasound2-dev
 ```
+
+The window layer builds for both X11 and Wayland. `libwayland-bin` is easy to
+miss because it supplies a build tool rather than a library: without it the
+configure step fails looking for `wayland-scanner`.
 
 ```
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
