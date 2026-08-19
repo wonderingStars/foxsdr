@@ -21,10 +21,19 @@
 //   - NO device serial numbers. The SDR MODEL is useful ("B200"); the serial
 //     is a unique hardware identifier and is stripped - see sanitiseDevice().
 //
-// CONSENT. Reporting is OFF until the user turns it on, and the install id
-// below is generated only at that moment. Storing an identifier on someone's
-// machine for analytics requires consent under PECR regulation 6, and an
-// opt-out default would not be consent. Turning it off again deletes the id.
+// CONSENT. Reporting is ON by default and the user turns it off (owner's
+// decision, 2026-08-18; see the note on AppConfig::telemetryEnabled). The
+// install id is minted on the first run that finds reporting enabled and no
+// id, and DELETED when reporting is switched off, so a later opt-in cannot be
+// linked to an earlier one.
+//
+// The risk that carries is recorded rather than hidden: PECR regulation 6
+// requires consent before storing an identifier on someone's device for
+// analytics, and an opt-out default is not consent. The owner has accepted
+// that knowingly. PRIVACY.md, README.md and the website all state the default
+// in the same words, and this comment is part of that set - it said the
+// opposite for a while, which is worse than saying nothing, because an audit
+// would have believed it.
 //
 // WHEN IT SENDS. At STARTUP, reporting the session that has already finished,
 // never at exit. A network call on the shutdown path can hang the application

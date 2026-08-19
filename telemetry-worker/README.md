@@ -8,6 +8,30 @@ that just ended.
 
     npx wrangler deploy
 
+## Reading the numbers
+
+Analytics Engine has no dashboard, so a dataset that is never queried is
+indistinguishable from one that was never collected. `usage.ps1` runs the
+queries below and prints a summary:
+
+    pwsh usage.ps1            # last 30 days
+    pwsh usage.ps1 -Days 1    # yesterday
+    pwsh usage.ps1 -Raw "SELECT ..."
+
+It needs one thing, once: an API token with the single permission
+**Account | Account Analytics | Read** (Cloudflare dashboard -> My Profile ->
+API Tokens -> Create Token -> Custom token). Scope it to this account and
+nothing else - it needs no zone access, no write anywhere, and it cannot post
+to the Worker.
+
+    $env:CLOUDFLARE_API_TOKEN = "<token>"
+
+The account id comes from wrangler's cache automatically; override it with
+`CLOUDFLARE_ACCOUNT_ID` if that is not present. Neither value is stored.
+
+An empty result is a real answer - nobody reported in that window - and is
+reported as such rather than as an error.
+
 ## Useful queries
 
 Unique installs in the last 30 days — `count(DISTINCT index1)`, **not**

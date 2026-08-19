@@ -20,7 +20,7 @@ One report per launch, describing the session that just finished:
 
 | Field | Example | Why |
 |---|---|---|
-| Install identifier | `4f9c…` (32 random hex characters) | Tells 100 users apart from one user launching 100 times. Generated at random on your machine when you opt in; not derived from your hardware, network or name. |
+| Install identifier | `4f9c…` (32 random hex characters) | Tells 100 users apart from one user launching 100 times. Generated at random on your machine on first run, and **deleted when you turn reporting off**, so a later change of mind cannot be joined back to it; not derived from your hardware, network or name. |
 | Application version | `0.48.0` | Whether people update, and whether an auto-updater is needed. |
 | Operating system | `Windows 10.0.22631` | Which platforms are actually used, and whether a Linux build is worth building. |
 | Architecture | `x64` | As above. |
