@@ -20,6 +20,8 @@
 #include "source/soapy_modules.hpp"
 
 #include <algorithm>
+#include <filesystem>
+#include <initializer_list>
 #include <cstdio>
 #include <map>
 #include <set>
@@ -61,15 +63,44 @@ std::function<bool(const std::string&)> fsWith(std::set<std::string> dirs) {
     };
 }
 
+// A home directory spelled the way THIS platform spells one.
+//
+// The fixtures used Windows paths everywhere, which passed on Windows and
+// failed on Linux for two different reasons - std::filesystem joins with the
+// host separator, so "C:\\Users\\ham" + "bin" became "C:\\Users\\ham/bin" there;
+// and samePath is case- and separator-insensitive only on Windows, by design,
+// so two spellings of one root deduplicated on one platform and not the other.
+//
+// Both were faults in the TEST, not the code: the product never sees a Windows
+// path on Linux. Using a native spelling keeps each platform testing what it
+// will actually be handed.
+#ifdef _WIN32
+const char* kHome = "C:\\Users\\ham";
+const char* kProgramFiles = "C:\\Program Files";
+#else
+const char* kHome = "/home/ham";
+const char* kProgramFiles = "/opt";
+#endif
+
+// Joins with std::filesystem, exactly as the code under test does, so an
+// expectation cannot disagree with it about separators.
+std::string nativeJoin(std::initializer_list<std::string> parts) {
+    std::filesystem::path p;
+    for (const std::string& part : parts) {
+        p /= part;
+    }
+    return p.string();
+}
+
 bool hasRootNamed(const std::vector<VendorRoot>& v, const std::string& name) {
     return std::any_of(v.begin(), v.end(), [&name](const VendorRoot& r) { return r.name == name; });
 }
 
 void testCandidatesCoverTheInstallersPeopleActuallyUse() {
     const auto env = envFrom({
-        {"ProgramFiles", "C:\\Program Files"},
-        {"USERPROFILE", "C:\\Users\\ham"},
-        {"LOCALAPPDATA", "C:\\Users\\ham\\AppData\\Local"},
+        {"ProgramFiles", kProgramFiles},
+        {"USERPROFILE", kHome},
+        {"LOCALAPPDATA", nativeJoin({kHome, "AppData", "Local"})},
     });
     const auto cands = cascade::source::candidateVendorRoots(env);
 
@@ -90,13 +121,13 @@ void testAnExplicitRootOutranksEveryGuess() {
     // A user who set SOAPY_SDR_ROOT has said where their install is. Nothing
     // guessed here may be preferred over that.
     const auto env = envFrom({
-        {"SOAPY_SDR_ROOT", "D:\\sdr"},
-        {"ProgramFiles", "C:\\Program Files"},
+        {"SOAPY_SDR_ROOT", nativeJoin({kHome, "sdr"})},
+        {"ProgramFiles", kProgramFiles},
     });
     const auto cands = cascade::source::candidateVendorRoots(env);
     CHECK(!cands.empty());
     if (!cands.empty()) {
-        CHECK(cands[0].second == "D:\\sdr");
+        CHECK(cands[0].second == nativeJoin({kHome, "sdr"}));
     }
 }
 
@@ -109,21 +140,21 @@ void testAnEmptyEnvironmentProbesNothingAndDoesNotCrash() {
 
 void testOnlyRootsThatActuallyHoldModulesAreAdopted() {
     const auto env = envFrom({
-        {"ProgramFiles", "C:\\Program Files"},
-        {"USERPROFILE", "C:\\Users\\ham"},
+        {"ProgramFiles", kProgramFiles},
+        {"USERPROFILE", kHome},
     });
     const auto cands = cascade::source::candidateVendorRoots(env);
 
     // radioconda present, PothosSDR not.
-    const auto exists = fsWith({"C:/Users/ham/radioconda/Library/lib/SoapySDR/modules0.8"});
+    const auto exists = fsWith({
+        nativeJoin({kHome, "radioconda", "Library", "lib", "SoapySDR", "modules0.8"})});
     const auto roots = cascade::source::resolveVendorRoots(cands, "0.8", exists);
 
     CHECK(roots.size() == 1);
     CHECK(hasRootNamed(roots, "radioconda"));
     CHECK(!hasRootNamed(roots, "PothosSDR"));
     if (roots.size() == 1) {
-        CHECK(roots[0].binDir == std::string("C:\\Users\\ham\\radioconda\\Library\\bin") ||
-              roots[0].binDir == std::string("C:/Users/ham/radioconda/Library/bin"));
+        CHECK(roots[0].binDir == nativeJoin({kHome, "radioconda", "Library", "bin"}));
     }
 }
 
@@ -133,9 +164,10 @@ void testTheAbiVersionIsPartOfThePath() {
     // A directory for a DIFFERENT ABI must not be adopted: loading a module
     // built against another ABI is the kind of near-miss that becomes memory
     // corruption later, which is the same rule the plugin loader applies.
-    const auto env = envFrom({{"USERPROFILE", "C:\\Users\\ham"}});
+    const auto env = envFrom({{"USERPROFILE", kHome}});
     const auto cands = cascade::source::candidateVendorRoots(env);
-    const auto exists = fsWith({"C:/Users/ham/radioconda/Library/lib/SoapySDR/modules0.7"});
+    const auto exists = fsWith({
+        nativeJoin({kHome, "radioconda", "Library", "lib", "SoapySDR", "modules0.7"})});
 
     CHECK(cascade::source::resolveVendorRoots(cands, "0.8", exists).empty());
     CHECK(cascade::source::resolveVendorRoots(cands, "0.7", exists).size() == 1);
@@ -145,12 +177,13 @@ void testTheSameInstallReachedTwiceIsListedOnce() {
     // An active conda environment that is also the default radioconda
     // location is one installation, not two.
     const auto env = envFrom({
-        {"USERPROFILE", "C:\\Users\\ham"},
-        {"CONDA_PREFIX", "C:\\Users\\ham\\radioconda"},
+        {"USERPROFILE", kHome},
+        {"CONDA_PREFIX", nativeJoin({kHome, "radioconda"})},
     });
     const auto cands = cascade::source::candidateVendorRoots(env);
     CHECK(cands.size() >= 2);  // both spellings are probed...
-    const auto exists = fsWith({"C:/Users/ham/radioconda/Library/lib/SoapySDR/modules0.8"});
+    const auto exists = fsWith({
+        nativeJoin({kHome, "radioconda", "Library", "lib", "SoapySDR", "modules0.8"})});
     CHECK(cascade::source::resolveVendorRoots(cands, "0.8", exists).size() == 1);  // ...one adopted
 }
 
@@ -160,9 +193,9 @@ void testPluginPathAppendsAndNeverReplaces() {
     // theirs. Their entries keep their place and their precedence.
     VendorRoot v;
     v.name = "radioconda";
-    v.moduleDir = "C:\\rc\\lib\\SoapySDR\\modules0.8";
+    v.moduleDir = nativeJoin({kHome, "rc", "lib", "SoapySDR", "modules0.8"});
 
-    const std::string existing = "D:\\mine\\modules0.8";
+    const std::string existing = nativeJoin({kHome, "mine", "modules0.8"});
     const std::string out = cascade::source::pluginPathWith(existing, {v}, ';');
 
     CHECK(out.rfind(existing, 0) == 0);  // starts with what was there
@@ -174,19 +207,25 @@ void testPluginPathDoesNotAddADirectoryTwice() {
     // eventually be a very long environment variable.
     VendorRoot v;
     v.name = "radioconda";
-    v.moduleDir = "C:\\rc\\lib\\SoapySDR\\modules0.8";
+    v.moduleDir = nativeJoin({kHome, "rc", "lib", "SoapySDR", "modules0.8"});
 
     CHECK(cascade::source::pluginPathWith(v.moduleDir, {v}, ';').empty());
     // And case- and separator-insensitively on Windows, where these are all
     // the same directory.
 #ifdef _WIN32
-    CHECK(cascade::source::pluginPathWith("c:/rc/lib/soapysdr/modules0.8", {v}, ';').empty());
+    // Same directory, spelled differently: Windows filesystems are
+    // case-insensitive and accept either separator, so this must not be added
+    // a second time. There is no equivalent rule on POSIX, where two spellings
+    // really are two paths - hence the guard.
+    CHECK(cascade::source::pluginPathWith("c:/rc/lib/soapysdr/modules0.8",
+                                          {VendorRoot{"rc", "", "C:\\rc\\lib\\SoapySDR\\modules0.8", ""}},
+                                          ';').empty());
 #endif
 }
 
 void testPluginPathHandlesAnEmptyStartingValue() {
     VendorRoot v;
-    v.moduleDir = "C:\\rc\\lib\\SoapySDR\\modules0.8";
+    v.moduleDir = nativeJoin({kHome, "rc", "lib", "SoapySDR", "modules0.8"});
     CHECK(cascade::source::pluginPathWith("", {v}, ';') == v.moduleDir);
     // No leading separator, which would be an empty entry SoapySDR then skips
     // - harmless, but it would look like a bug to anyone reading the variable.
@@ -194,16 +233,16 @@ void testPluginPathHandlesAnEmptyStartingValue() {
 }
 
 void testNothingToAddYieldsNoChange() {
-    CHECK(cascade::source::pluginPathWith("D:\\mine", {}, ';').empty());
+    CHECK(cascade::source::pluginPathWith(nativeJoin({kHome, "mine"}), {}, ';').empty());
 }
 
 void testTwoInstallsAreBothAdded() {
     // Someone with PothosSDR for their HackRF and radioconda for everything
     // else should get both, in candidate order.
     VendorRoot a;
-    a.moduleDir = "C:\\Program Files\\PothosSDR\\lib\\SoapySDR\\modules0.8";
+    a.moduleDir = nativeJoin({kProgramFiles, "PothosSDR", "lib", "SoapySDR", "modules0.8"});
     VendorRoot b;
-    b.moduleDir = "C:\\Users\\ham\\radioconda\\Library\\lib\\SoapySDR\\modules0.8";
+    b.moduleDir = nativeJoin({kHome, "radioconda", "Library", "lib", "SoapySDR", "modules0.8"});
     const std::string out = cascade::source::pluginPathWith("", {a, b}, ';');
     CHECK(out == a.moduleDir + ";" + b.moduleDir);
 }
