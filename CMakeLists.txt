@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.50.0 LANGUAGES C CXX)
+project(cascade VERSION 0.51.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,17 @@ find_package(OpenGL REQUIRED)
 # NOT vendored, by design — the ABI-boundary exception documented above and
 # in third_party/THIRD_PARTY.md.
 find_package(SoapySDR CONFIG REQUIRED)
+
+# OpenSSL, non-Windows only. Windows takes SHA-256/PBKDF2/entropy from CNG
+# (bcrypt.lib), which is part of the OS and needs no package; every other
+# platform takes the same three primitives from OpenSSL. Apache-2.0, so it
+# satisfies the permissive-only rule, and it is a system library rather than a
+# vendored one for the same reason SoapySDR is: it is the platform's crypto,
+# and shipping our own copy would strand it on the distribution's security
+# updates.
+if(NOT WIN32)
+    find_package(OpenSSL REQUIRED)
+endif()
 
 # ---------------------------------------------------------------------------
 # Vendored dependencies — third_party/, pinned; see THIRD_PARTY.md
@@ -169,6 +180,10 @@ target_link_libraries(cascade_lib PUBLIC
     cascade_pffft
     cascade_httplib
     SoapySDR)
+
+if(NOT WIN32)
+    target_link_libraries(cascade_lib PUBLIC OpenSSL::Crypto)
+endif()
 
 # ---------------------------------------------------------------------------
 # Application

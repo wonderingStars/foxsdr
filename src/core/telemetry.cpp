@@ -13,6 +13,10 @@
 #include <winhttp.h>
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "winhttp.lib")
+#else
+#include <sys/utsname.h>
+
+#include <openssl/rand.h>
 #endif
 
 namespace cascade::core {
@@ -74,14 +78,19 @@ std::string sanitiseDevice(const std::string& soapyArgs) {
 }
 
 std::string newInstallId() {
-#if defined(_WIN32)
     unsigned char bytes[16] = {0};
     // The system CSPRNG, not rand(): an id that could be predicted from the
     // launch time would let reports be correlated by someone who guessed it.
+#if defined(_WIN32)
     if (::BCryptGenRandom(nullptr, bytes, sizeof(bytes),
                           BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
         return std::string();
     }
+#else
+    if (::RAND_bytes(bytes, static_cast<int>(sizeof(bytes))) != 1) {
+        return std::string();
+    }
+#endif
     static const char* kHex = "0123456789abcdef";
     std::string out;
     out.reserve(32);
@@ -90,9 +99,6 @@ std::string newInstallId() {
         out += kHex[b & 0x0F];
     }
     return out;
-#else
-    return std::string();
-#endif
 }
 
 bool validInstallId(const std::string& id) {
@@ -127,6 +133,14 @@ std::string osDescription() {
     }
     return "Windows";
 #else
+    // Kernel name and release only ("Linux 6.8.0"). The distribution name is
+    // deliberately not read from /etc/os-release: it is more identifying than
+    // it is useful, and the point of this field is telling one broad platform
+    // from another.
+    struct utsname u {};
+    if (::uname(&u) == 0) {
+        return std::string(u.sysname) + " " + u.release;
+    }
     return "unknown";
 #endif
 }

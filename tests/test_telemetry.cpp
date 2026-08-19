@@ -7,6 +7,7 @@
 // rather than left to inspection.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <cctype>
 #include <set>
 #include <string>
 
@@ -15,9 +16,30 @@
 #include "core/telemetry.hpp"
 #include "test_check.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 using namespace cascade::core;
 
 namespace {
+
+// This machine's host name, so the OS-description test can assert that the
+// name is absent rather than assuming the implementation left it out. uname()
+// carries it in an adjacent field, which is exactly the kind of thing that
+// gets picked up by a later edit without anyone noticing.
+std::string hostNameForTest() {
+    char buf[256] = {0};
+#if defined(_WIN32)
+    DWORD n = static_cast<DWORD>(sizeof(buf));
+    if (::GetComputerNameA(buf, &n) == 0) { return std::string(); }
+#else
+    if (::gethostname(buf, sizeof(buf) - 1) != 0) { return std::string(); }
+#endif
+    return std::string(buf);
+}
 
 void testDeviceSerialIsStripped() {
     // THE ONE THAT MATTERS. This is the real argument string for the B200 on
@@ -122,9 +144,19 @@ void testPluginNamesCannotBreakTheReport() {
 void testOsAndArchSayNothingIdentifying() {
     const std::string os = osDescription();
     CHECK(!os.empty());
-    // A version string, not a machine name, a path or a user name.
+    // A version string, not a machine name, a path or a user name. The prefix
+    // is the kernel/OS family the build targets; what the property really
+    // asserts is on the three lines below, which hold on every platform.
+#if defined(_WIN32)
     CHECK(os.rfind("Windows", 0) == 0 || os == "unknown");
+#else
+    // uname's sysname: "Linux", "Darwin", "FreeBSD"...
+    CHECK(!os.empty() && (std::isalpha(static_cast<unsigned char>(os[0])) != 0));
+#endif
     CHECK(os.find('@') == std::string::npos);
+    // The host name is the identifying thing uname could leak (nodename), so
+    // assert it is absent by name rather than trusting the field selection.
+    CHECK(os.find(hostNameForTest()) == std::string::npos || hostNameForTest().empty());
     CHECK(os.size() < 40);
     const std::string arch = archDescription();
     CHECK(arch == "x64" || arch == "arm64" || arch == "x86" || arch == "unknown");

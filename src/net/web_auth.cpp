@@ -21,6 +21,14 @@
 #include <bcrypt.h>
 
 #pragma comment(lib, "bcrypt.lib")
+#else
+// POSIX builds take the same three primitives from OpenSSL. It is the system
+// crypto library everywhere this ships, it is Apache-2.0 (so it satisfies the
+// permissive-dependencies rule), and it is already required for the HTTPS
+// client — so it adds no new dependency. Nothing here is hand-rolled: writing
+// our own SHA-256 or PBKDF2 would be the one unacceptable way to close this gap.
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 #endif  // _WIN32
 
 namespace cascade::net {
@@ -63,11 +71,12 @@ std::string ntStatusText(const char* what, NTSTATUS st) {
     return std::string(what) + " failed (NTSTATUS " + buf + ")";
 }
 #else
-// One place to produce the refusal, so every entry point in this file reports
-// the same thing on a platform where the product does not yet ship a server.
-bool unsupported(std::string& error) {
-    error = "cryptographic services are only implemented on Windows in this build";
-    return false;
+// OpenSSL reports failure through a return code rather than an NTSTATUS, so
+// the message carries only the call that failed. These paths fire on genuine
+// library faults (an unavailable digest, an entropy source that will not
+// seed), never on a wrong password.
+std::string opensslText(const char* what) {
+    return std::string(what) + " failed";
 }
 #endif
 
@@ -216,7 +225,13 @@ bool randomBytes(std::uint8_t* out, std::size_t n, std::string& error) {
     }
     return true;
 #else
-    return unsupported(error);
+    // RAND_bytes returns 1 only when the bytes are cryptographically strong;
+    // anything else must fail loudly rather than hand back weak salt.
+    if (::RAND_bytes(out, static_cast<int>(n)) != 1) {
+        error = opensslText("RAND_bytes");
+        return false;
+    }
+    return true;
 #endif
 }
 
@@ -242,9 +257,21 @@ bool sha256(const std::uint8_t* data, std::size_t n, std::vector<std::uint8_t>& 
     }
     return true;
 #else
-    (void)data;
-    (void)n;
-    return unsupported(error);
+    out.resize(kHashBytes);
+    unsigned int written = 0;
+    // A null data pointer with n == 0 is a legitimate call (hashing the empty
+    // string); EVP_Digest accepts it, so no special case is needed here.
+    if (::EVP_Digest(data, n, out.data(), &written, ::EVP_sha256(), nullptr) != 1) {
+        out.clear();
+        error = opensslText("EVP_Digest(SHA256)");
+        return false;
+    }
+    if (written != kHashBytes) {
+        out.clear();
+        error = "EVP_Digest(SHA256) produced an unexpected digest length";
+        return false;
+    }
+    return true;
 #endif
 }
 
@@ -273,6 +300,21 @@ bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,
     ::BCryptCloseAlgorithmProvider(alg, 0);
     if (!BCRYPT_SUCCESS(st)) {
         error = ntStatusText("BCryptDeriveKeyPBKDF2", st);
+        return false;
+    }
+    return true;
+}
+#else
+bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,
+                  std::size_t saltLen, std::uint32_t iterations, std::uint8_t* out,
+                  std::size_t outLen, std::string& error) {
+    // Same construction as the BCrypt path: PBKDF2 with HMAC-SHA256 as the PRF,
+    // so a record written by either build verifies against the other. The
+    // serialized record format is what guarantees that, not this call.
+    if (::PKCS5_PBKDF2_HMAC(password.data(), static_cast<int>(password.size()), salt,
+                            static_cast<int>(saltLen), static_cast<int>(iterations),
+                            ::EVP_sha256(), static_cast<int>(outLen), out) != 1) {
+        error = opensslText("PKCS5_PBKDF2_HMAC(SHA256)");
         return false;
     }
     return true;
@@ -368,7 +410,6 @@ bool hashPassword(const std::string& password, PasswordRecord& out,
                 " characters";
         return false;
     }
-#if defined(_WIN32)
     PasswordRecord rec;
     rec.iterations = kDefaultIterations;
     rec.salt.resize(kSaltBytes);
@@ -382,9 +423,6 @@ bool hashPassword(const std::string& password, PasswordRecord& out,
     }
     out = rec;
     return true;
-#else
-    return unsupported(error);
-#endif
 }
 
 bool verifyPassword(const std::string& password, const PasswordRecord& rec,
@@ -394,7 +432,6 @@ bool verifyPassword(const std::string& password, const PasswordRecord& rec,
         error = "password record is not usable";
         return false;
     }
-#if defined(_WIN32)
     std::vector<std::uint8_t> derived(kHashBytes);
     if (!pbkdf2Sha256(password, rec.salt.data(), rec.salt.size(), rec.iterations,
                       derived.data(), derived.size(), error)) {
@@ -403,10 +440,6 @@ bool verifyPassword(const std::string& password, const PasswordRecord& rec,
     // error stays empty here: a mismatch is a wrong password, not a fault, and
     // the caller distinguishes the two by exactly that (see the header).
     return constantTimeEquals(derived, rec.hash);
-#else
-    (void)password;
-    return unsupported(error);
-#endif
 }
 
 // --- Sessions ----------------------------------------------------------------

@@ -1,0 +1,69 @@
+# Continuous build and test.
+#
+# Linux is built and tested on every push. Windows is deliberately NOT built
+# here: the Windows build consumes SoapySDR from a local vcpkg tree, and a CI
+# runner that installs its own copy would be testing a different dependency
+# set than the one the shipped installer is built against. The Windows build
+# is verified locally before release instead.
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # libasound2-dev is PortAudio's backend; the -plugins package lets ALSA's
+      # default device route to a sound server, which is what makes the audio
+      # test meaningful on a machine with no hardware card.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            libgl1-mesa-dev libsoapysdr-dev libssl-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libasound2-dev libasound2-plugins
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      # The runner has no audio device at all. Rather than let that fail the
+      # job, a dummy ALSA device is provided so the audio path is still
+      # exercised; without this the sink tests would have to be skipped, and a
+      # skipped test proves nothing.
+      - name: Provide a null audio device
+        run: |
+          sudo modprobe snd-dummy || true
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' | sudo tee /etc/asound.conf
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # The selftest drives the real DSP chain headlessly and asserts a known
+      # spectrum peak, so it catches a build that links and passes unit tests
+      # but produces wrong numbers.
+      - name: Selftest
+        run: ./build/cascade --selftest
+
+      - name: Package
+        run: |
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          mkdir -p "dist/foxsdr-$version-linux-x64"
+          cp build/cascade README.md LICENSE PRIVACY.md "dist/foxsdr-$version-linux-x64/"
+          tar -C dist -czf "foxsdr-$version-linux-x64.tar.gz" "foxsdr-$version-linux-x64"
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-linux-x64
+          path: foxsdr-*-linux-x64.tar.gz

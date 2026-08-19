@@ -324,6 +324,15 @@ int main() {
             CHECK(!ao.running());
             CHECK(ao.channels() == 2);  // layout of the ring, not of the stream
 
+            // Baseline, because the open above was REAL: between open and
+            // close the device callback ran against a still-empty ring and
+            // legitimately counted starvation. Windows happened not to fire a
+            // callback in that window and Linux does, which made an absolute
+            // count a property of the audio backend rather than of the code
+            // under test. What this block actually asserts is pullBlock's own
+            // starvation accounting, so it measures the DELTA from here.
+            const std::uint64_t base = ao.underruns();
+
             // writeStereo takes FRAMES and pullBlock takes FRAMES; the
             // samples in between are interleaved L,R and must come back in
             // exactly that order with one volume applied to both channels.
@@ -340,7 +349,7 @@ int main() {
             // 16 frames requested -> 32 samples pulled.
             CHECK(AudioOut::pullBlock(&ao, dst, 16) == 32u);
             for (int i = 0; i < 32; ++i) { CHECK(dst[i] == frames[i] * 0.5f); }
-            CHECK(ao.underruns() == 0u);
+            CHECK(ao.underruns() - base == 0u);
 
             // Starvation covers BOTH channels of every unfilled frame and
             // still counts one event: 16 frames left in the ring, 24 asked
@@ -349,7 +358,7 @@ int main() {
             CHECK(AudioOut::pullBlock(&ao, dst, 24) == 32u);
             for (int i = 0; i < 32; ++i) { CHECK(dst[i] == frames[32 + i] * 0.5f); }
             for (int i = 32; i < 48; ++i) { CHECK(dst[i] == 0.0f); }
-            CHECK(ao.underruns() == 1u);
+            CHECK(ao.underruns() - base == 1u);
 
             // The channel pair is never split: with an odd number of samples
             // of room left, writeStereo must refuse the straddling frame

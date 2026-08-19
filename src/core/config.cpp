@@ -131,6 +131,16 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         return true;  // first run: defaults, and nothing went wrong
     }
 
+    // A directory must be rejected before it is opened. Windows refuses to
+    // open one at all, so `!f` below is enough there; POSIX opens it happily
+    // and then throws on the first read, which aborted the process rather
+    // than reporting a bad path. Checking the type here fails the same way on
+    // both platforms.
+    if (fs::is_directory(fs::path(path), ec)) {
+        error = "config: \"" + path + "\" is a directory, not a file";
+        return false;
+    }
+
     std::ifstream f(path, std::ios::binary);
     if (!f) {
         error = "config: cannot open \"" + path + "\" for reading";

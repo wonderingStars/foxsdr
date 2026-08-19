@@ -68,6 +68,23 @@ using cascade::core::PluginRejection;
 
 namespace {
 
+// The extension the host actually scans for on this platform. Fixtures must
+// use it rather than a literal ".dll": a scan test that stages a .dll on Linux
+// is testing nothing, because the extension filter discards the file before
+// the loader ever sees it, and the test then fails for a reason that has
+// nothing to do with what it is named after.
+#if defined(_WIN32)
+constexpr const char* kModExt = ".dll";
+#elif defined(__APPLE__)
+constexpr const char* kModExt = ".dylib";
+#else
+constexpr const char* kModExt = ".so";
+#endif
+
+// Fixture filename with the platform's module extension: mod("broken") gives
+// "broken.dll" on Windows and "broken.so" elsewhere.
+std::string mod(const char* stem) { return std::string(stem) + kModExt; }
+
 // ---------------------------------------------------------------------------
 // Temp directory helpers
 // ---------------------------------------------------------------------------
@@ -710,7 +727,7 @@ void testScanGarbageModule() {
     // Not a PE image: LoadLibrary must fail, and the host must record that
     // with a reason rather than crashing or skipping silently.
     const char junk[] = "this is not a portable executable";
-    writeFile(d / "broken.dll", junk, sizeof(junk) - 1);
+    writeFile(d / mod("broken"), junk, sizeof(junk) - 1);
 
     PluginHost host;
     host.scan(d.string());
@@ -720,7 +737,7 @@ void testScanGarbageModule() {
         const LoadedPlugin& rec = host.plugins()[0];
         CHECK(!rec.loaded);
         CHECK(!rec.error.empty());
-        CHECK(contains(rec.path, "broken.dll"));
+        CHECK(contains(rec.path, mod("broken").c_str()));
         CHECK(rec.name.empty());          // nothing was believed about it
         CHECK(rec.nativeHandle == nullptr);
         CHECK(rec.decoder == nullptr);
@@ -802,17 +819,17 @@ void testScanRealModuleWithoutEntryPoint() {
 void testDeterministicOrder() {
     const fs::path d = tmpDir("order");
     const char junk[] = "nope";
-    writeFile(d / "zulu.dll", junk, sizeof(junk) - 1);
-    writeFile(d / "alpha.dll", junk, sizeof(junk) - 1);
-    writeFile(d / "mike.dll", junk, sizeof(junk) - 1);
+    writeFile(d / mod("zulu"), junk, sizeof(junk) - 1);
+    writeFile(d / mod("alpha"), junk, sizeof(junk) - 1);
+    writeFile(d / mod("mike"), junk, sizeof(junk) - 1);
 
     PluginHost host;
     host.scan(d.string());
     CHECK(host.plugins().size() == 3);
     if (host.plugins().size() == 3) {
-        CHECK(contains(host.plugins()[0].path, "alpha.dll"));
-        CHECK(contains(host.plugins()[1].path, "mike.dll"));
-        CHECK(contains(host.plugins()[2].path, "zulu.dll"));
+        CHECK(contains(host.plugins()[0].path, mod("alpha").c_str()));
+        CHECK(contains(host.plugins()[1].path, mod("mike").c_str()));
+        CHECK(contains(host.plugins()[2].path, mod("zulu").c_str()));
         // Every candidate produced a record with a reason; none vanished.
         for (const LoadedPlugin& rec : host.plugins()) {
             CHECK(!rec.error.empty());
@@ -832,7 +849,7 @@ void testUnloadAllIdempotent() {
 
     const fs::path d = tmpDir("unload");
     const char junk[] = "nope";
-    writeFile(d / "one.dll", junk, sizeof(junk) - 1);
+    writeFile(d / mod("one"), junk, sizeof(junk) - 1);
     host.scan(d.string());
     CHECK(host.plugins().size() == 1);
 

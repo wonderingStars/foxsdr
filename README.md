@@ -1,6 +1,6 @@
 # FoxSDR
 
-A from-scratch software-defined radio receiver for Windows: spectrum and
+A from-scratch software-defined radio receiver for Windows and Linux: spectrum and
 waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
 RDS, recording, bookmarks, a scanner, band plans, and hardware support for any
 radio SoapySDR can reach.
@@ -67,6 +67,34 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
+
+## Building (Linux)
+
+The same vendored dependencies build from source here too. Three system
+packages are needed: OpenGL headers, SoapySDR, and OpenSSL — the last of these
+supplies SHA-256, PBKDF2 and secure randomness, which on Windows come from the
+operating system's own CNG and need no package.
+
+On Debian or Ubuntu:
+
+```
+sudo apt install build-essential cmake libgl1-mesa-dev libsoapysdr-dev libssl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+```
+
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+```
+
+Audio goes through ALSA. On a machine whose audio is managed by PulseAudio or
+PipeWire, install `libasound2-plugins` so ALSA's default device routes to the
+sound server rather than claiming the hardware directly.
+
+**Plugins are currently built for Windows only.** The Linux application runs
+and the plugin loader handles `.so` modules, but the published catalogue
+contains no Linux builds yet, so the decoders (ADS-B, AIS, APRS, POCSAG, SSTV)
+are unavailable there for now.
 
 ## Plugins
 

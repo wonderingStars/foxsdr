@@ -341,15 +341,25 @@ int main() {
             CHECK(a.platforms.size() == 2u);
 
             // thisPlatform picks the record for the host we are running on.
+            // The fixture carries a windows and a linux record, so which one
+            // is expected depends on the host this test is running on. Naming
+            // the platform literally here made the whole block a Windows-only
+            // assertion that failed everywhere else for the wrong reason.
+            const bool onWindows = std::string(PluginRepo::hostOs()) == "windows";
             const PluginPlatform* p = a.thisPlatform();
             CHECK(p != nullptr);
             if (p != nullptr) {
-                CHECK(p->os == "windows");
+                CHECK(p->os == PluginRepo::hostOs());
                 CHECK(p->arch == "x64");
-                CHECK(p->file == "cascade_pocsag.dll");
-                CHECK(p->url == "https://example.invalid/cascade_pocsag.dll");
-                CHECK(p->sha256 == kHashA);
-                CHECK(p->sizeBytes == 123456u);
+                CHECK(p->file == (onWindows ? "cascade_pocsag.dll"
+                                            : "libcascade_pocsag.so"));
+                CHECK(p->url == (onWindows
+                                     ? "https://example.invalid/cascade_pocsag.dll"
+                                     : "https://example.invalid/libcascade_pocsag.so"));
+                CHECK(p->sha256 == (onWindows ? kHashA : kHashB));
+                // sizeBytes is present only on the windows record; its absence
+                // must read as zero, which is itself worth asserting.
+                CHECK(p->sizeBytes == (onWindows ? 123456u : 0u));
             }
 
             // ...and its ABSENCE is the normal case, which must read as "no
@@ -448,10 +458,19 @@ int main() {
     {
         std::vector<PluginCatalogEntry> v;
         std::string err;
+        // The host's own os/arch, upper-cased, so the case-folding property is
+        // exercised on every platform rather than only where the host happens
+        // to be the one named in the fixture.
+        std::string osUpper = PluginRepo::hostOs();
+        for (char& c : osUpper) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); }
+        std::string archUpper = PluginRepo::hostArch();
+        for (char& c : archUpper) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); }
+
         const std::string doc = std::string(R"JSON({"schemaVersion":1,"plugins":[
             {"id":"x","name":"X","version":"1","abiVersion":)JSON") +
                                 abiText() + R"JSON(,"platforms":[
-              {"os":"Windows","arch":"X64","file":"x.dll",
+              {"os":")JSON" + osUpper + R"JSON(","arch":")JSON" + archUpper +
+                                R"JSON(","file":"x.dll",
                "url":"https://example.invalid/x.dll","sha256":")JSON" +
                                 "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF" +
                                 R"JSON("}]}]})JSON";
