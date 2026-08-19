@@ -15,10 +15,10 @@ radio SoapySDR can reach.
 >   test suite, the built-in signal generator and IQ-file playback. No SDR has
 >   been driven through it on a Linux machine, so the hardware path is unproven,
 >   and that is the single biggest reason not to rely on it yet.
-> - **The decoders are built and installable, but unproven on air here.** Eight
->   plugins now ship for Linux and install from the in-app catalogue (ADS-B,
->   AIS, APRS, POCSAG, SSTV, CW, RTTY, Inmarsat-C); three remain Windows-only
->   (aircraft-info, the basemap, and the example plugin).
+> - **The plugins are built and installable, but unproven on air here.** Ten of
+>   the eleven catalogued plugins now ship for Linux and install from the in-app
+>   catalogue, including the aircraft registry lookup and the map basemap; only
+>   the example plugin is Windows-only.
 > - **Never run on a real Linux desktop.** It has been exercised under WSL and
 >   under a virtual display in CI — neither is a real graphical session with a
 >   real sound card.
@@ -125,9 +125,9 @@ sound server rather than claiming the hardware directly.
 **Plugins: one catalogue, both platforms.** The catalogue lists every build of
 a plugin and each installation picks the one matching its own os and
 architecture, so a Windows and a Linux machine read the identical file and
-install different binaries from it. Eight decoders ship for Linux; three
-plugins are Windows-only for now (aircraft-info and the basemap fetch over
-HTTPS through WinHTTP, and the example plugin is built from this repository).
+install different binaries from it. Ten of the eleven plugins ship for both;
+only the example plugin is Windows-only, and it is built from this repository
+rather than the plugin repository.
 
 ## Plugins
 
