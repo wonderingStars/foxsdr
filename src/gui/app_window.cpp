@@ -36,6 +36,16 @@
 #include "gui/waterfall_view.hpp"
 #include "source/iq_file_source.hpp"
 
+#ifdef _WIN32
+// ShellExecuteW, for handing the verified installer to the shell so its
+// elevation prompt is shown. Last, and after the library headers, for the same
+// reason soapy_source.cpp puts it last: windows.h defines macros that have
+// collided with library headers before.
+#include <windows.h>
+
+#include <shellapi.h>
+#endif
+
 namespace cascade::gui {
 
 namespace {
@@ -549,6 +559,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             // read from the file rather than from freshly defaulted members.
             // Sends nothing unless the user previously opted in.
             telemetryStartup(cfg);
+            updateCheckEnabled_ = cfg.updateCheckEnabled;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
         }
@@ -720,9 +731,17 @@ int AppWindow::run(int frames) {
         pluginStatusHook_ = (status != nullptr && *status != '\0');
     }
 
+    // The update check, on a worker, once, and ONLY in an interactive run.
+    //
+    // A bounded --frames run stays hermetic: it is what ctest and the smoke
+    // tests use, and a build that reached the network during them would make
+    // the suite depend on a server being up and on what that server happened
+    // to say. The same rule the catalogue and config hooks already follow.
+    if (frames < 0) { startUpdateCheck(); }
+
     int rendered = 0;
     frameCounter_ = 0;
-    while (!glfwWindowShouldClose(window)) {
+    while (!glfwWindowShouldClose(window) && !closeRequested_) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
         if (frames >= 0 && rendered >= frames) { break; }
@@ -882,6 +901,7 @@ void AppWindow::drawUi() {
     pollSoapyAsync();
     // Same contract for the catalogue fetch / plugin download.
     pollPluginAsync();
+    pollUpdateAsync();
 }
 
 void AppWindow::drawToolbar() {
@@ -1036,6 +1056,7 @@ void AppWindow::drawMenuColumn() {
                                ImGui::GetStyle().ItemSpacing.y + 4.0f;
     ImGui::BeginChild("##menu_sections", ImVec2(0.0f, -footerHeight),
                       ImGuiChildFlags_None);
+    drawUpdateBanner();
     drawSourceSection();
     if (ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Mode/bandwidth tables live at namespace scope (kModeNames &co):
@@ -1168,6 +1189,7 @@ void AppWindow::drawMenuColumn() {
     drawPluginsSection();
     drawWebSection();
     drawCatSection();
+    drawUpdatesSection();
     drawUsageReportingSection();
     ImGui::EndChild();
 
@@ -1194,6 +1216,165 @@ void AppWindow::drawMenuColumn() {
     ImGui::Text("%.4g MS/s | ch %.4g kHz | underruns %llu",
                 src.sampleRateHz() / 1.0e6, pipeline_.channelRateHz() / 1.0e3,
                 static_cast<unsigned long long>(pipeline_.audio().underruns()));
+}
+
+
+// ---------------------------------------------------------------------------
+// Update check
+//
+// The whole point is the SECOND paragraph of what the user is shown: not "an
+// update is available", which is easy to ignore, but what it fixes. When
+// 0.55.0 restored radio detection there was no way to tell the people running
+// a build that could not see their hardware; most of them are still running
+// it. "There is a new version" would not have moved them. "Your radio cannot
+// be detected on this version" might.
+// ---------------------------------------------------------------------------
+
+void AppWindow::startUpdateCheck() {
+    if (updateStarted_ || updatePending_ || !updateCheckEnabled_) { return; }
+    updateStarted_ = true;
+    updatePending_ = true;
+    updateError_.clear();
+    const std::string endpoint = cascade::core::updateEndpoint();
+    const std::string version = cascade::versionString();
+    updateCheckFuture_ = std::async(std::launch::async, [this, endpoint, version]() {
+        return cascade::core::checkForUpdate(endpoint, version, "", updateResult_,
+                                             updateResultError_);
+    });
+}
+
+void AppWindow::startUpdateDownload() {
+    if (updatePending_ || !update_.newer) { return; }
+    updatePending_ = true;
+    updateDownloading_ = true;
+    updateError_.clear();
+    const cascade::core::UpdateInfo info = update_;
+    updateDownloadFuture_ = std::async(std::launch::async, [this, info]() {
+        return cascade::core::downloadUpdate(info, updateResultPath_, updateResultError_);
+    });
+}
+
+void AppWindow::pollUpdateAsync() {
+    constexpr auto kNoWait = std::chrono::seconds(0);
+
+    if (updatePending_ && !updateDownloading_ && updateCheckFuture_.valid() &&
+        updateCheckFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        const bool ok = updateCheckFuture_.get();
+        updatePending_ = false;
+        if (ok) {
+            update_ = updateResult_;
+        } else {
+            // A failed check is NOT shown. The user did not ask, and an
+            // application that interrupts listening to say it could not reach a
+            // server is worse than one that quietly tries again next launch.
+            updateError_ = updateResultError_;
+        }
+    }
+
+    if (updatePending_ && updateDownloading_ && updateDownloadFuture_.valid() &&
+        updateDownloadFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        const bool ok = updateDownloadFuture_.get();
+        updatePending_ = false;
+        updateDownloading_ = false;
+        if (ok) {
+            updateReadyPath_ = updateResultPath_;
+        } else {
+            // A download failure IS shown: the user pressed a button and is
+            // waiting for it. The message is PluginRepo's verbatim, which for a
+            // digest mismatch names both digests - the one case where the
+            // detail matters more than the tidiness.
+            updateError_ = updateResultError_;
+        }
+    }
+}
+
+bool AppWindow::launchInstaller(const std::string& path) {
+#if defined(_WIN32)
+    // ShellExecute rather than CreateProcess: the installer asks for elevation
+    // through its manifest, and only the shell will show that prompt. The
+    // return is the documented "> 32 means it started" convention.
+    const std::wstring wide(path.begin(), path.end());
+    const HINSTANCE rc = ::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr,
+                                         SW_SHOWNORMAL);
+    return reinterpret_cast<std::intptr_t>(rc) > 32;
+#else
+    // The installer is a Windows setup program; there is nothing to launch
+    // elsewhere, and saying so is better than appearing to succeed.
+    (void)path;
+    return false;
+#endif
+}
+
+void AppWindow::drawUpdateBanner() {
+    if (!updateCheckEnabled_ || updateDismissed_) { return; }
+    if (!update_.newer && updateError_.empty()) { return; }
+    if (!update_.newer) { return; }
+
+    // Amber for an ordinary update, red for one that fixes a build which could
+    // not do its job. The distinction is the server's `critical` flag, and it
+    // is the difference between a notice and a warning.
+    const ImVec4 accent = update_.critical ? kErrorRed : ImVec4(1.0f, 0.8f, 0.35f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, accent);
+    if (update_.critical) {
+        ImGui::TextWrapped("Important update: FoxSDR %s", update_.version.c_str());
+    } else {
+        ImGui::TextWrapped("FoxSDR %s is available", update_.version.c_str());
+    }
+    ImGui::PopStyleColor();
+    ImGui::TextDisabled("you are running %s", cascade::versionString());
+
+    // WHAT IT FIXES, in the author's words, for every release between the one
+    // running and the one offered. Somebody several versions behind sees all of
+    // them, which is the case that matters: the people who most need this are
+    // the furthest back.
+    for (const cascade::core::ReleaseNote& n : update_.notes) {
+        ImGui::Spacing();
+        ImGui::Text("%s%s", n.version.c_str(), n.critical ? "  (important)" : "");
+        for (const std::string& line : n.notes) {
+            ImGui::Bullet();
+            ImGui::TextWrapped("%s", line.c_str());
+        }
+    }
+
+    ImGui::Spacing();
+    if (updateDownloading_) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Downloading...");
+        ImGui::ProgressBar(pluginRepo_.progress(), ImVec2(-FLT_MIN, 0.0f));
+    } else if (!updateReadyPath_.empty()) {
+        // Downloaded AND verified. Running it closes this application, which
+        // the button says outright rather than surprising anyone: an installer
+        // cannot replace a binary that is still running.
+        ImGui::TextWrapped("Downloaded and verified.");
+        if (ImGui::Button("Install now and restart", ImVec2(-FLT_MIN, 0.0f))) {
+            if (launchInstaller(updateReadyPath_)) {
+                requestClose();
+            } else {
+                updateError_ = "could not start the installer at " + updateReadyPath_;
+            }
+        }
+        ImGui::TextDisabled("%s", updateReadyPath_.c_str());
+    } else {
+        ImGui::BeginDisabled(updatePending_);
+        if (ImGui::Button("Download update", ImVec2(-FLT_MIN, 0.0f))) { startUpdateDownload(); }
+        ImGui::EndDisabled();
+        if (update_.sizeBytes > 0) {
+            // Wrapped, not TextDisabled: the sidebar is narrow and the
+            // unwrapped line was cut off mid-word at "verified against its
+            // publis", which reads as a rendering fault rather than a promise.
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+            ImGui::TextWrapped("%.1f MB, verified against its published checksum before anything runs",
+                               static_cast<double>(update_.sizeBytes) / 1.0e6);
+            ImGui::PopStyleColor();
+        }
+    }
+    if (ImGui::SmallButton("Not now")) { updateDismissed_ = true; }
+
+    if (!updateError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
+        ImGui::TextWrapped("%s", updateError_.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::Separator();
 }
 
 void AppWindow::drawSourceSection() {
@@ -5015,6 +5196,43 @@ void AppWindow::drawWebSection() {
     }
 }
 
+void AppWindow::drawUpdatesSection() {
+    if (!ImGui::CollapsingHeader("Updates")) { return; }
+
+    if (ImGui::Checkbox("Check for updates at startup", &updateCheckEnabled_)) {
+        // Off means off immediately: a check already in flight is not waited
+        // for, and none is started again this launch.
+        if (!updateCheckEnabled_) {
+            update_ = cascade::core::UpdateInfo{};
+            updateError_.clear();
+        } else if (!updateStarted_) {
+            startUpdateCheck();
+        }
+    }
+    ImGui::TextWrapped(
+        "Asks foxsdr.com once per launch whether a newer version exists, and sends the version "
+        "you are running and nothing else - no identifier, no cookie. Nothing is downloaded or "
+        "installed unless you press the button. This is not the usage report below; the two "
+        "share nothing.");
+
+    ImGui::TextDisabled("this build: %s", cascade::versionString());
+    if (!updateCheckEnabled_) {
+        ImGui::TextDisabled("checking is off, so you will not be told about a new version");
+    } else if (updatePending_) {
+        ImGui::TextDisabled("checking...");
+    } else if (update_.newer) {
+        ImGui::TextColored(update_.critical ? kErrorRed : ImVec4(1.0f, 0.8f, 0.35f, 1.0f),
+                           "%s is available", update_.version.c_str());
+        if (updateDismissed_ && ImGui::SmallButton("Show it again")) { updateDismissed_ = false; }
+    } else if (updateStarted_ && updateError_.empty()) {
+        ImGui::TextDisabled("up to date");
+    } else if (!updateError_.empty()) {
+        // Only here, never as a banner: a failed check is not the user's
+        // problem and must not interrupt them.
+        ImGui::TextDisabled("last check did not complete: %s", updateError_.c_str());
+    }
+}
+
 void AppWindow::drawUsageReportingSection() {
     if (!ImGui::CollapsingHeader("Usage reporting")) { return; }
 
@@ -5259,6 +5477,11 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
 }
 
 void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
+    // The update setting rides along here because this is the one place the
+    // GUI's copy of the config is written back before the file is saved. It
+    // has nothing to do with telemetry and shares no state with it.
+    cfg.updateCheckEnabled = updateCheckEnabled_;
+
     cfg.telemetryEnabled = telemetryEnabled_;
     cfg.telemetryInstallId = telemetryInstallId_;
     cfg.telemetryLaunches = telemetryLaunches_;

@@ -25,6 +25,7 @@
 
 #include "core/config.hpp"
 #include "core/pipeline.hpp"
+#include "core/updater.hpp"
 #include "core/version.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/rds.hpp"
@@ -877,6 +878,48 @@ int main(int argc, char** argv) {
             }
             frames = static_cast<int>(value);
             ++i;  // consumed the value argument
+        } else if (std::strcmp(argv[i], "--update-check") == 0) {
+            // Support tool, and the way this path is verified without driving
+            // the GUI: ask the real endpoint what this build should be told.
+            // Kept out of the usage string for the same reason as the other
+            // diagnostics - it makes a network call.
+            cascade::core::UpdateInfo info;
+            std::string err;
+            if (!cascade::core::checkForUpdate(cascade::core::updateEndpoint(),
+                                               cascade::versionString(), "", info, err)) {
+                std::printf("update-check FAIL %s\n", err.c_str());
+                return 1;
+            }
+            std::printf("update-check running=%s latest=%s newer=%d critical=%d\n",
+                        cascade::versionString(), info.version.c_str(), info.newer ? 1 : 0,
+                        info.critical ? 1 : 0);
+            if (info.newer) {
+                std::printf("update-check url=%s\n", info.url.c_str());
+                std::printf("update-check sha256=%s\n", info.sha256.c_str());
+                // "--update-check download" runs the same download-and-verify
+                // the button runs, without installing anything. It exists so
+                // that path can be exercised on a machine where actually
+                // installing over the top would be unwelcome, and so a support
+                // conversation can establish whether a download verifies
+                // before anyone reinstalls.
+                if (i + 1 < argc && std::strcmp(argv[i + 1], "download") == 0) {
+                    std::string path;
+                    std::string derr;
+                    if (!cascade::core::downloadUpdate(info, path, derr)) {
+                        std::printf("update-check DOWNLOAD FAIL %s\n", derr.c_str());
+                        return 1;
+                    }
+                    std::printf("update-check downloaded and verified: %s\n", path.c_str());
+                }
+                for (const cascade::core::ReleaseNote& n : info.notes) {
+                    std::printf("update-check note %s (%s)%s\n", n.version.c_str(),
+                                n.date.c_str(), n.critical ? " CRITICAL" : "");
+                    for (const std::string& line : n.notes) {
+                        std::printf("    - %s\n", line.c_str());
+                    }
+                }
+            }
+            return 0;
         } else if (std::strcmp(argv[i], "--version") == 0) {
             // One line, on stdout, and nothing else: this is what the release
             // and nightly scripts read back to check that the binary agrees

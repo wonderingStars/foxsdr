@@ -20,6 +20,7 @@
 #include "core/plugin_runner.hpp"
 #include "core/plugin_ui.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/updater.hpp"
 #include "core/recorder.hpp"
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
@@ -82,6 +83,22 @@ private:
     void drawToolbar();
     void drawFrequencyReadout();
     void drawMenuColumn();
+    // The update banner, and the work behind it. Drawn at the top of the menu
+    // column because a build that cannot see the user's radio is the most
+    // useful thing this application can say to them, and it is worth more than
+    // whatever they opened the panel for.
+    void drawUpdatesSection();
+    void drawUpdateBanner();
+    void startUpdateCheck();
+    void startUpdateDownload();
+    void pollUpdateAsync();
+
+    // Starts the downloaded installer and asks the run loop to exit. Separate
+    // because an installer cannot replace a binary that is still running, so
+    // "install" necessarily means "and close this".
+    bool launchInstaller(const std::string& path);
+    void requestClose() { closeRequested_ = true; }
+
     void drawSourceSection();
     // Runs one SoapySDR enumeration into soapyDevices_ and re-points the
     // combo selection at the active device by args (labels can repeat; a
@@ -705,6 +722,22 @@ private:
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
     std::string catalogError_;   // red: fetch/parse failure, verbatim
     std::string catalogStatus_;  // neutral: "N plugins in the catalogue"
+    // --- update check --------------------------------------------------------
+    bool closeRequested_ = false;     // set by the updater; the run loop honours it
+    bool updateCheckEnabled_ = true;
+    bool updateStarted_ = false;      // one check per launch, no retry storm
+    bool updateDismissed_ = false;    // "not now" hides it until next launch
+    bool updatePending_ = false;      // a check or a download is in flight
+    bool updateDownloading_ = false;
+    cascade::core::UpdateInfo update_;
+    std::string updateError_;
+    std::string updateReadyPath_;     // verified installer, waiting to be run
+    std::future<bool> updateCheckFuture_;
+    std::future<bool> updateDownloadFuture_;
+    cascade::core::UpdateInfo updateResult_;
+    std::string updateResultError_;
+    std::string updateResultPath_;
+
     int catalogSel_ = -1;        // index into catalog_, -1 = nothing selected
     bool legalAck_ = false;      // legal-notice checkbox for the SELECTED entry
     std::string installReport_;  // green: last successful install/remove

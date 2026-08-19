@@ -361,6 +361,28 @@ public:
                           std::string& error);
     static bool sha256File(const std::string& path, std::string& hexOut, std::string& error);
 
+    // --- shared https transport -------------------------------------------
+    //
+    // Exposed so the update check and the update download use THIS client
+    // rather than a second one. Every rule that makes a plugin download safe -
+    // https only, no automatic redirect, a byte cap, certificate and
+    // revocation checking left at their strict defaults - is enforced in one
+    // place, and a second implementation would be a second place for those to
+    // drift apart. The updater fetches an executable; it is the last thing
+    // that should have its own bespoke networking.
+
+    // Fetches a small text document. `maxBytes` bounds it so a hostile or
+    // broken server cannot make the caller allocate without limit.
+    static bool fetchText(const std::string& url, std::uint64_t maxBytes, std::string& out,
+                          std::string& error);
+
+    // Downloads to `destPath`, verifying sha256 BEFORE the file takes its
+    // final name: a partial or substituted download is never left on disk as a
+    // runnable file. Writes through a ".part" sibling and renames on success.
+    static bool fetchVerifiedFile(const std::string& url, const std::string& expectedSha256,
+                                  const std::string& destPath, std::uint64_t maxBytes,
+                                  std::string& error);
+
     // THE INTEGRITY DECISION, as one named function that install() calls.
     //
     // It is factored out for a specific reason: the rest of install() cannot

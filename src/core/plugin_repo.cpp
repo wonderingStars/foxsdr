@@ -1926,6 +1926,89 @@ std::vector<PluginUpdate> PluginRepo::planUpdates(const std::vector<PluginCatalo
 // Network operations
 // ---------------------------------------------------------------------------
 
+
+bool PluginRepo::fetchText(const std::string& url, std::uint64_t maxBytes, std::string& out,
+                           std::string& error) {
+    out.clear();
+    error.clear();
+    if (!isHttpsUrl(url)) {
+        error = "refusing a non-https URL: \"" + url + "\"";
+        return false;
+    }
+    const auto sink = [&out, maxBytes](const void* p, std::size_t n) {
+        if (out.size() + n > maxBytes) { return false; }
+        out.append(static_cast<const char*>(p), n);
+        return true;
+    };
+    return httpsGet(url, maxBytes, sink, nullptr, nullptr, error);
+}
+
+bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& expectedSha256,
+                                   const std::string& destPath, std::uint64_t maxBytes,
+                                   std::string& error) {
+    error.clear();
+    if (!isHttpsUrl(url)) {
+        error = "refusing a non-https download URL: \"" + url + "\"";
+        return false;
+    }
+    if (!isWellFormedSha256(expectedSha256)) {
+        error = "sha256 must be 64 hexadecimal digits";
+        return false;
+    }
+
+    // The temp file sits beside the destination so the final move is a
+    // same-volume rename; a cross-volume "rename" degrades to copy+delete and
+    // reopens the partial-file window this ordering exists to close.
+    const fs::path target(destPath);
+    fs::path tmp = target;
+    tmp += ".part";
+    std::error_code ec;
+    fs::create_directories(target.parent_path(), ec);
+    fs::remove(tmp, ec);  // debris from a killed earlier run
+
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            error = "cannot create \"" + tmp.string() + "\"";
+            return false;
+        }
+        std::uint64_t written = 0;
+        const auto sink = [&f, &written, maxBytes](const void* p, std::size_t n) {
+            written += n;
+            if (written > maxBytes) { return false; }
+            f.write(static_cast<const char*>(p), static_cast<std::streamsize>(n));
+            return static_cast<bool>(f);
+        };
+        if (!httpsGet(url, maxBytes, sink, nullptr, nullptr, error)) {
+            f.close();
+            fs::remove(tmp, ec);
+            return false;
+        }
+    }
+
+    // VERIFY BEFORE NAMING. Until this passes, what is on disk is a ".part"
+    // that nothing will run.
+    std::string actual;
+    if (!sha256File(tmp.string(), actual, error)) {
+        fs::remove(tmp, ec);
+        return false;
+    }
+    if (!sha256Matches(expectedSha256, actual)) {
+        fs::remove(tmp, ec);
+        error = "sha256 mismatch: expected " + toLowerAscii(expectedSha256) + ", got " + actual;
+        return false;
+    }
+
+    fs::remove(target, ec);
+    fs::rename(tmp, target, ec);
+    if (ec) {
+        fs::remove(tmp, ec);
+        error = "cannot move the verified file into place: " + ec.message();
+        return false;
+    }
+    return true;
+}
+
 bool PluginRepo::fetchIndex(const std::string& url, std::string& error) {
     entries_.clear();
     error.clear();

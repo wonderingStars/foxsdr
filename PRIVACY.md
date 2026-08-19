@@ -3,6 +3,38 @@
 FoxSDR collects nothing about you unless you switch it on, and this document
 lists exactly what it sends when you do.
 
+## The update check
+
+Once per launch, FoxSDR asks `https://foxsdr.com/api/update` whether a newer
+version exists. The whole request is:
+
+    GET /api/update?v=0.55.0
+
+That is the entire payload: the version running. No identifier of any kind is
+sent, no cookie is stored, and the answer is not cached anywhere that could be
+correlated with a later request. It is a separate thing from the usage report
+and shares no state with it.
+
+The answer names the newest build, its checksum, and what changed since your
+version - which is shown to you in the application, so you can decide whether
+an update is worth the interruption rather than being told only that one
+exists.
+
+**Nothing is downloaded or installed unless you press the button.** When you
+do, the installer is fetched over https and its SHA-256 is checked against the
+digest the server published *before* the file is given a name anything could
+run. A download that does not match is deleted.
+
+Turn it off under **Settings -> Updates**. With it off the application never
+contacts the update service, and never learns that a new version exists.
+
+Why it defaults to on: version 0.55.0 fixed a fault that stopped every earlier
+build from detecting any radio at all. Of the 49 people who had downloaded one
+of those builds, 46 never returned to the website, and there was no way to
+reach them - the downloads are anonymous, which is the point. Most of them are
+probably still running it. A check that defaulted to off would have reached
+exactly as many.
+
 ## The short version
 
 - **Usage reporting is ON by default, and you can turn it off.** It sends the
@@ -11,7 +43,12 @@ lists exactly what it sends when you do.
 - **No personal data is collected**, and no IP address or location is recorded.
 - **Nothing about what you listen to is ever collected** — no frequencies, no
   positions, no decoded messages. Not when reporting is on, not ever.
-- The application makes exactly one other network request, only when you press
+- **The update check is ON by default, and you can turn it off.** Once per
+  launch the application asks foxsdr.com whether a newer version exists. It
+  sends **the version you are running and nothing else** — no identifier, no
+  install id, no cookie kept — and it is not the usage report; the two share
+  nothing. Nothing is downloaded or installed without you pressing a button.
+- The application makes one other network request, only when you press
   **Browse** in the plugin panel, to fetch the plugin catalogue.
 
 ## What is sent when usage reporting is enabled

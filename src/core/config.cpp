@@ -208,6 +208,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getInt(j, "catPort", out.catPort);
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
+    getBool(j, "updateCheckEnabled", out.updateCheckEnabled);
     getBool(j, "telemetryEnabled", out.telemetryEnabled);
     getString(j, "telemetryInstallId", out.telemetryInstallId);
     getUint64(j, "telemetryLaunches", out.telemetryLaunches);
@@ -359,6 +360,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["catPort"] = cfg.catPort;
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
+    j["updateCheckEnabled"] = cfg.updateCheckEnabled;
     j["telemetryEnabled"] = cfg.telemetryEnabled;
     j["telemetryInstallId"] = cfg.telemetryInstallId;
     j["telemetryLaunches"] = cfg.telemetryLaunches;

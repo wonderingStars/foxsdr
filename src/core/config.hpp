@@ -241,6 +241,23 @@ struct AppConfig {
     // password".
     std::string webPasswordRecord;
 
+    // --- Update check --------------------------------------------------------
+    //
+    // ON by default. It asks foxsdr.com once per launch whether a newer build
+    // exists and what it fixed; nothing is downloaded or installed without a
+    // click.
+    //
+    // The reason it defaults on is concrete rather than a preference: 0.55.0
+    // fixed a fault that stopped every earlier build detecting any radio, and
+    // of the 49 people who had taken one, 46 never returned to the site. There
+    // was no way to tell them. A check that is off by default would have
+    // reached exactly as many of them.
+    //
+    // It sends the running version and nothing else - no install id, no
+    // identifier, no cookie kept. It is NOT the usage report (telemetry.hpp)
+    // and the two share nothing.
+    bool updateCheckEnabled = true;
+
     // --- Anonymous usage reporting (see PRIVACY.md) -------------------------
     //
     // ON by default; the user turns it off (product decision, 2026-08-18).
