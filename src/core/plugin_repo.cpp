@@ -35,6 +35,19 @@
 #pragma comment(lib, "winhttp.lib")
 #else
 #include <unistd.h>
+
+#include <cstdlib>
+
+// The TLS client for this platform. cpp-httplib is already vendored for the
+// web server, and OpenSSL is already a dependency here for SHA-256 and
+// PBKDF2, so the catalogue transport adds no new third-party code — it is the
+// same two libraries the build already carries.
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
+#include <httplib.h>
+
+#include <openssl/evp.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -166,16 +179,37 @@ std::int64_t nowUnix() {
     return static_cast<std::int64_t>(std::time(nullptr));
 }
 
-// The manifest's own view of "is this a plugin file", matching what
-// sanitiseFileName() will accept and what PluginHost will scan.
-bool hasDllExtension(const std::string& name) {
-    if (name.size() <= 4) {
+// This platform's loadable-module extension. ONE definition, used by both the
+// manifest's view of "is this a plugin file" and sanitiseFileName, because the
+// two must agree: a name one accepts and the other rejects either strands a
+// file the manifest is tracking or admits one the scanner will never load.
+// It matches PluginHost::hasPluginExtension by construction.
+#if defined(_WIN32)
+constexpr const char* kModuleExtension = ".dll";
+#elif defined(__APPLE__)
+constexpr const char* kModuleExtension = ".dylib";
+#else
+constexpr const char* kModuleExtension = ".so";
+#endif
+
+// Case-insensitively only where the platform's own loader is: NTFS treats
+// "X.DLL" and "x.dll" as one file, POSIX does not. Matching PluginHost here is
+// not cosmetic — a name this accepted but the scanner skipped would be
+// downloaded, verified, written, and then never loaded, with nothing to say why.
+inline bool hasModuleExtension(const std::string& name) {
+    const std::size_t n = std::strlen(kModuleExtension);
+    if (name.size() <= n) {
         return false;
     }
-    const std::string tail = name.substr(name.size() - 4);
-    return (lowerAscii(tail[0]) == '.' && lowerAscii(tail[1]) == 'd' &&
-            lowerAscii(tail[2]) == 'l' && lowerAscii(tail[3]) == 'l');
+    const std::string tail = name.substr(name.size() - n);
+#if defined(_WIN32)
+    return iequalsAscii(tail, kModuleExtension);
+#else
+    return tail == kModuleExtension;
+#endif
 }
+
+bool hasDllExtension(const std::string& name) { return hasModuleExtension(name); }
 
 // ---------------------------------------------------------------------------
 // Index parsing helpers. Every getter is STRICT about type: a known field
@@ -697,6 +731,269 @@ bool httpsGet(const std::string& url, std::uint64_t maxBytes,
     }
 }
 
+#else  // !_WIN32
+
+// ---------------------------------------------------------------------------
+// POSIX transport and digest.
+//
+// Same contract as the WinHTTP path above, and the same refusals: https only,
+// a byte cap enforced before and during the read, cancellation honoured
+// mid-transfer, and — the one that matters most — redirects followed ONLY
+// within the same host and port. The catalogue's binaries are served from a
+// host that redirects to a different one for release assets, and quietly
+// following that is how a download ends up coming from somewhere the
+// catalogue never named.
+// ---------------------------------------------------------------------------
+
+// Streaming SHA-256 over OpenSSL, mirroring the CNG class above so the
+// download is hashed AS IT ARRIVES rather than read back from a file that
+// something else could have swapped in between.
+class Sha256 {
+public:
+    Sha256() = default;
+    ~Sha256() {
+        if (ctx_ != nullptr) {
+            ::EVP_MD_CTX_free(ctx_);
+        }
+    }
+    Sha256(const Sha256&) = delete;
+    Sha256& operator=(const Sha256&) = delete;
+
+    bool init(std::string& error) {
+        ctx_ = ::EVP_MD_CTX_new();
+        if (ctx_ == nullptr || ::EVP_DigestInit_ex(ctx_, ::EVP_sha256(), nullptr) != 1) {
+            error = "cannot initialise SHA-256";
+            return false;
+        }
+        return true;
+    }
+    bool update(const void* data, std::size_t n, std::string& error) {
+        if (n == 0) {
+            return true;
+        }
+        if (::EVP_DigestUpdate(ctx_, data, n) != 1) {
+            error = "SHA-256 update failed";
+            return false;
+        }
+        return true;
+    }
+    bool finishHex(std::string& hexOut, std::string& error) {
+        unsigned char digest[32] = {0};
+        unsigned int len = 0;
+        if (::EVP_DigestFinal_ex(ctx_, digest, &len) != 1 || len != sizeof(digest)) {
+            error = "SHA-256 finalisation failed";
+            return false;
+        }
+        static const char* kHex = "0123456789abcdef";
+        hexOut.clear();
+        hexOut.reserve(sizeof(digest) * 2);
+        for (unsigned char b : digest) {
+            hexOut += kHex[(b >> 4) & 0x0F];
+            hexOut += kHex[b & 0x0F];
+        }
+        return true;
+    }
+
+private:
+    EVP_MD_CTX* ctx_ = nullptr;
+};
+
+struct UrlParts {
+    std::string host;
+    int port = 443;
+    std::string target;  // path + query, never empty
+};
+
+bool crackHttpsUrl(const std::string& url, UrlParts& out, std::string& error) {
+    out = UrlParts{};
+    if (!startsWithAscii(url, "https://")) {
+        error = "refusing a non-https URL: \"" + url + "\"";
+        return false;
+    }
+    const std::string rest = url.substr(8);
+    if (rest.empty()) {
+        error = "empty URL";
+        return false;
+    }
+    const std::size_t slash = rest.find('/');
+    std::string authority = slash == std::string::npos ? rest : rest.substr(0, slash);
+    out.target = slash == std::string::npos ? "/" : rest.substr(slash);
+    // Credentials in the authority are refused rather than ignored: a URL of
+    // the form https://evil.example@real.example/ reads as the wrong host to
+    // a human and would defeat the same-host redirect check below.
+    if (authority.find('@') != std::string::npos) {
+        error = "refusing a URL with embedded credentials";
+        return false;
+    }
+    const std::size_t colon = authority.rfind(':');
+    if (colon != std::string::npos && authority.find(']') == std::string::npos) {
+        const std::string portText = authority.substr(colon + 1);
+        authority = authority.substr(0, colon);
+        if (portText.empty() ||
+            portText.find_first_not_of("0123456789") != std::string::npos) {
+            error = "malformed port in URL: \"" + url + "\"";
+            return false;
+        }
+        const long p = std::strtol(portText.c_str(), nullptr, 10);
+        if (p <= 0 || p > 65535) {
+            error = "port out of range in URL: \"" + url + "\"";
+            return false;
+        }
+        out.port = static_cast<int>(p);
+    }
+    if (authority.empty()) {
+        error = "URL has no host: \"" + url + "\"";
+        return false;
+    }
+    out.host = authority;
+    return true;
+}
+
+bool resolveSameHostRedirect(const UrlParts& from, const std::string& location, UrlParts& to,
+                             std::string& error) {
+    if (location.empty()) {
+        error = "the server sent an empty redirect target";
+        return false;
+    }
+    if (location[0] == '/' && !(location.size() > 1 && location[1] == '/')) {
+        to.host = from.host;
+        to.port = from.port;
+        to.target = location;
+        return true;
+    }
+    if (startsWithAscii(location, "http://")) {
+        error = "refusing a redirect from https to http: \"" + location + "\"";
+        return false;
+    }
+    if (!startsWithAscii(location, "https://")) {
+        error = "refusing a redirect to an unsupported target: \"" + location + "\"";
+        return false;
+    }
+    UrlParts next;
+    if (!crackHttpsUrl(location, next, error)) {
+        return false;
+    }
+    if (toLowerAscii(from.host) != toLowerAscii(next.host) || from.port != next.port) {
+        error = "refusing a cross-host redirect: \"" + toLowerAscii(from.host) + "\" -> \"" +
+                toLowerAscii(next.host) + "\"";
+        return false;
+    }
+    to = next;
+    return true;
+}
+
+bool httpsGet(const std::string& url, std::uint64_t maxBytes,
+              const std::function<bool(const void*, std::size_t)>& sink,
+              std::atomic<float>* progress, std::atomic<bool>* cancel, std::string& error) {
+    UrlParts parts;
+    if (!crackHttpsUrl(url, parts, error)) {
+        return false;
+    }
+
+    for (int hop = 0;; ++hop) {
+        if (hop > PluginRepo::kMaxRedirects) {
+            error = "too many redirects";
+            return false;
+        }
+        if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+            error = "cancelled";
+            return false;
+        }
+
+        httplib::SSLClient cli(parts.host, parts.port);
+        // Certificate verification is the default and is NOT disabled here.
+        cli.enable_server_certificate_verification(true);
+        // Redirects are handled by this loop, not by the client, because the
+        // client would follow them anywhere.
+        cli.set_follow_location(false);
+        cli.set_connection_timeout(10, 0);
+        cli.set_read_timeout(30, 0);
+        cli.set_write_timeout(20, 0);
+
+        std::uint64_t received = 0;
+        bool overLimit = false;
+        bool sinkFailed = false;
+
+        auto body = [&](const char* data, std::size_t n) {
+            received += n;
+            if (received > maxBytes) {
+                overLimit = true;
+                return false;
+            }
+            if (!sink(data, n)) {
+                sinkFailed = true;
+                return false;
+            }
+            return true;
+        };
+        auto onProgress = [&](std::uint64_t current, std::uint64_t total) {
+            if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+                return false;
+            }
+            if (progress != nullptr && total > 0) {
+                progress->store(static_cast<float>(static_cast<double>(current) /
+                                                   static_cast<double>(total)),
+                                std::memory_order_relaxed);
+            }
+            return true;
+        };
+
+        // Headers are inspected before the body is accepted, so a redirect or
+        // an oversized declared length costs no transfer.
+        httplib::Result res = cli.Get(
+            parts.target, httplib::Headers{{"User-Agent", "cascade-plugin-repo/1.0"}},
+            [&](const httplib::Response& r) {
+                if (r.status >= 300 && r.status < 400) {
+                    return true;  // no body wanted; handled after the call
+                }
+                if (r.status != 200) {
+                    return true;
+                }
+                const std::string len = r.get_header_value("Content-Length");
+                if (!len.empty()) {
+                    const std::uint64_t declared = std::strtoull(len.c_str(), nullptr, 10);
+                    if (declared > maxBytes) {
+                        overLimit = true;
+                        return false;
+                    }
+                }
+                return true;
+            },
+            body, onProgress);
+
+        if (overLimit) {
+            error = "refusing a download larger than " + std::to_string(maxBytes) + " bytes";
+            return false;
+        }
+        if (sinkFailed) {
+            error = "could not write the downloaded data";
+            return false;
+        }
+        if (!res) {
+            if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+                error = "cancelled";
+            } else {
+                error = "request failed: " + httplib::to_string(res.error());
+            }
+            return false;
+        }
+        if (res->status >= 300 && res->status < 400) {
+            UrlParts next;
+            if (!resolveSameHostRedirect(parts, res->get_header_value("Location"), next,
+                                         error)) {
+                return false;
+            }
+            parts = next;
+            continue;
+        }
+        if (res->status != 200) {
+            error = "the server returned HTTP " + std::to_string(res->status);
+            return false;
+        }
+        return true;
+    }
+}
+
 #endif  // _WIN32
 
 }  // namespace
@@ -792,15 +1089,20 @@ bool PluginRepo::sanitiseFileName(const std::string& raw, std::string& out, std:
         error = "file name must start with a letter or a digit: \"" + raw + "\"";
         return false;
     }
-    // Must END in .dll: "evil.dll.exe" fails here, which is the whole point.
-    if (raw.size() <= 4 || !iequalsAscii(raw.substr(raw.size() - 4), ".dll")) {
-        error = "file name does not end in \".dll\": \"" + raw + "\"";
+    // Must END in this platform's module extension: "evil.dll.exe" fails here,
+    // which is the whole point. The extension is the host's own, not a list of
+    // every platform's — a Windows installation has no business writing a .so
+    // into its plugins directory, and PluginHost would not load it anyway.
+    const std::size_t extLen = std::strlen(kModuleExtension);
+    if (!hasModuleExtension(raw)) {
+        error = std::string("file name does not end in \"") + kModuleExtension + "\": \"" +
+                raw + "\"";
         return false;
     }
     // Windows reserved device names are reserved with ANY extension, so
     // "CON.dll" is not a file - creating it either fails oddly or talks to a
     // device. Refuse with a clear reason instead.
-    const std::string stem = toLowerAscii(raw.substr(0, raw.size() - 4));
+    const std::string stem = toLowerAscii(raw.substr(0, raw.size() - extLen));
     static const char* kReserved[] = {"con",  "prn",  "aux",  "nul",  "com1", "com2", "com3",
                                       "com4", "com5", "com6", "com7", "com8", "com9", "lpt1",
                                       "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
@@ -962,24 +1264,17 @@ bool PluginRepo::sha256Hex(const void* data, std::size_t n, std::string& hexOut,
                            std::string& error) {
     hexOut.clear();
     error.clear();
-#if defined(_WIN32)
     Sha256 h;
     if (!h.init(error)) {
         return false;
     }
-    // A null pointer with n == 0 is legal for the caller; give CNG a valid
-    // address anyway rather than relying on it ignoring the pointer.
+    // A null pointer with n == 0 is legal for the caller; give the digest a
+    // valid address anyway rather than relying on it ignoring the pointer.
     static const unsigned char kEmpty = 0;
     if (!h.update(n == 0 ? &kEmpty : data, n, error)) {
         return false;
     }
     return h.finishHex(hexOut, error);
-#else
-    (void)data;
-    (void)n;
-    error = std::string("sha256: ") + "not supported on this platform";
-    return false;
-#endif
 }
 
 bool PluginRepo::sha256Matches(const std::string& expectedHex, const std::string& actualHex) {
@@ -993,7 +1288,6 @@ bool PluginRepo::sha256Matches(const std::string& expectedHex, const std::string
 bool PluginRepo::sha256File(const std::string& path, std::string& hexOut, std::string& error) {
     hexOut.clear();
     error.clear();
-#if defined(_WIN32)
     std::ifstream f(path, std::ios::binary);
     if (!f) {
         error = "cannot open \"" + path + "\" for hashing";
@@ -1019,11 +1313,6 @@ bool PluginRepo::sha256File(const std::string& path, std::string& hexOut, std::s
         return false;
     }
     return h.finishHex(hexOut, error);
-#else
-    (void)path;
-    error = std::string("sha256: ") + "not supported on this platform";
-    return false;
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1648,7 +1937,6 @@ bool PluginRepo::fetchIndex(const std::string& url, std::string& error) {
         error = "refusing a non-https catalogue URL: \"" + url + "\"";
         return false;
     }
-#if defined(_WIN32)
     std::string body;
     body.reserve(64 * 1024);
     const auto sink = [&body](const void* p, std::size_t n) {
@@ -1661,10 +1949,6 @@ bool PluginRepo::fetchIndex(const std::string& url, std::string& error) {
     progress_.store(1.0f, std::memory_order_relaxed);
     // A parse failure leaves entries_ empty, which fetchIndex documents.
     return parseIndex(body, entries_, error);
-#else
-    error = std::string("plugin catalogue: ") + "not supported on this platform";
-    return false;
-#endif
 }
 
 bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& pluginsDir,
@@ -1709,7 +1993,6 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
         return false;
     }
 
-#if defined(_WIN32)
     std::error_code ec;
     fs::create_directories(fs::path(pluginsDir), ec);
     if (!fs::is_directory(fs::path(pluginsDir), ec)) {
@@ -1722,8 +2005,13 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
     // same-volume rename (a cross-volume "rename" degrades to copy+delete,
     // reopening exactly the partial-file window this design closes). The
     // ".part" suffix also keeps PluginHost's ".dll" scan from ever seeing it.
+#ifdef _WIN32
+    const int downloadPid = _getpid();
+#else
+    const int downloadPid = static_cast<int>(getpid());
+#endif
     fs::path tmp = target;
-    tmp += "." + std::to_string(_getpid()) + ".part";
+    tmp += "." + std::to_string(downloadPid) + ".part";
     std::error_code ignored;
     fs::remove(tmp, ignored);  // debris from a killed earlier run
 
@@ -1786,11 +2074,6 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
     progress_.store(1.0f, std::memory_order_relaxed);
     installedPath = target.string();
     return true;
-#else
-    (void)pluginsDir;
-    error = std::string("plugin install: ") + "not supported on this platform";
-    return false;
-#endif
 }
 
 bool PluginRepo::recordInstall(const std::string& pluginsDir, const PluginCatalogEntry& e,

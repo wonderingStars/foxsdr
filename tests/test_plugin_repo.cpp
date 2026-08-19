@@ -80,6 +80,17 @@ namespace {
 const char* kHashA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const char* kHashB = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
+// This platform's module extension, and a helper that builds a fixture name
+// with it. Anything that reaches sanitiseFileName, PluginHost's scan, or the
+// filesystem must use these: a fixture hard-coded to ".dll" is not a plugin
+// file on Linux, so the case under test never runs there.
+#if defined(_WIN32)
+const std::string kExt = ".dll";
+#else
+const std::string kExt = ".so";
+#endif
+std::string mod(const std::string& stem) { return stem + kExt; }
+
 std::string abiText() {
     return std::to_string(static_cast<unsigned>(CASCADE_PLUGIN_ABI_VERSION));
 }
@@ -141,8 +152,8 @@ PluginCatalogEntry makeEntry(const std::string& file, const std::string& url,
 // decides the outcome.
 PluginCatalogEntry catEntry(const std::string& id, const std::string& version,
                             std::uint32_t abi = CASCADE_PLUGIN_ABI_VERSION,
-                            const std::string& file = "probe.dll") {
-    PluginCatalogEntry e = makeEntry(file, "https://example.invalid/probe.dll", kHashA, abi);
+                            const std::string& file = mod("probe")) {
+    PluginCatalogEntry e = makeEntry(file, "https://example.invalid/" + mod("probe"), kHashA, abi);
     e.id = id;
     e.name = id + " decoder";
     e.version = version;
@@ -152,7 +163,7 @@ PluginCatalogEntry catEntry(const std::string& id, const std::string& version,
 // A manifest record as it would look after installing `version` of `id`.
 InstalledPlugin installedRec(const std::string& id, const std::string& version,
                              std::uint32_t abi = CASCADE_PLUGIN_ABI_VERSION,
-                             const std::string& file = "probe.dll") {
+                             const std::string& file = mod("probe")) {
     InstalledPlugin r;
     r.id = id;
     r.name = id + " decoder";
@@ -617,16 +628,34 @@ int main() {
     // rule 6: filename sanitising, the path-traversal guard
     // ---------------------------------------------------------------------
     {
-        // Accepted: ordinary, well-behaved names.
-        const char* good[] = {"good_name-1.0.dll", "a.dll", "cascade_pocsag.dll",
-                              "Plugin.DLL", "x1-2_3.4.dll"};
-        for (const char* g : good) {
+        // Every name below carries THIS platform's module extension. Spelling
+        // them ".dll" unconditionally made the entire table pass on Linux for
+        // the wrong reason: each would have been refused as "wrong extension"
+        // long before the traversal, device-name or stream syntax it is named
+        // after was ever examined.
+#if defined(_WIN32)
+        const std::string EXT = ".dll";
+#else
+        const std::string EXT = ".so";
+#endif
+        const auto n = [&EXT](const std::string& stem) { return stem + EXT; };
+
+        // Accepted: ordinary, well-behaved names. The mixed-case entry is
+        // Windows-only: NTFS resolves "Plugin.DLL" and "plugin.dll" to one
+        // file, POSIX does not, and PluginHost scans case-sensitively there —
+        // so accepting it on Linux would install a file nothing would load.
+        std::vector<std::string> good = {n("good_name-1.0"), n("a"), n("cascade_pocsag"),
+                                         n("x1-2_3.4")};
+#if defined(_WIN32)
+        good.push_back("Plugin.DLL");
+#endif
+        for (const std::string& g : good) {
             std::string out;
             std::string err;
             const bool ok = PluginRepo::sanitiseFileName(g, out, err);
             if (!ok) {
-                std::printf("FAIL sanitiseFileName rejected a good name %s: %s\n", g,
-                            err.c_str());
+                std::printf("FAIL sanitiseFileName rejected a good name %s: %s\n",
+                            g.c_str(), err.c_str());
             }
             CHECK(ok);
             CHECK(out == g);
@@ -634,56 +663,62 @@ int main() {
         }
 
         // Refused: the traversal table.
-        expectBadName("..\\evil.dll", "windows parent traversal");
-        expectBadName("../evil.dll", "posix parent traversal");
-        expectBadName("..\\..\\..\\windows\\system32\\evil.dll", "deep traversal");
-        expectBadName("C:\\evil.dll", "absolute windows path");
-        expectBadName("C:/evil.dll", "absolute windows path, forward slashes");
-        expectBadName("/etc/evil.dll", "absolute posix path");
-        expectBadName("\\\\server\\share\\evil.dll", "UNC path");
-        expectBadName("sub/dir.dll", "relative subdirectory");
-        expectBadName("sub\\dir.dll", "relative subdirectory, backslash");
-        expectBadName("a:b.dll", "NTFS alternate data stream");
-        expectBadName("good.dll:hidden.dll", "ADS appended to a good name");
+        expectBadName("..\\" + n("evil"), "windows parent traversal");
+        expectBadName("../" + n("evil"), "posix parent traversal");
+        expectBadName("..\\..\\..\\windows\\system32\\" + n("evil"), "deep traversal");
+        expectBadName("C:\\" + n("evil"), "absolute windows path");
+        expectBadName("C:/" + n("evil"), "absolute windows path, forward slashes");
+        expectBadName("/etc/" + n("evil"), "absolute posix path");
+        expectBadName("\\\\server\\share\\" + n("evil"), "UNC path");
+        expectBadName("sub/" + n("dir"), "relative subdirectory");
+        expectBadName("sub\\" + n("dir"), "relative subdirectory, backslash");
+        expectBadName("a:" + n("b"), "NTFS alternate data stream");
+        expectBadName(n("good") + ":" + n("hidden"), "ADS appended to a good name");
         expectBadName("no-extension", "no extension at all");
-        expectBadName("evil.dll.exe", "executable masquerading as a dll");
+        expectBadName(n("evil") + ".exe", "executable masquerading as a module");
         expectBadName("evil.exe", "wrong extension");
-        expectBadName(".dll", "extension only");
+        expectBadName(EXT, "extension only");
         expectBadName("", "empty");
         expectBadName("....", "only dots");
-        expectBadName("...dll", "dots then dll");
-        expectBadName("..dll", "two dots then dll");
-        expectBadName(".hidden.dll", "leading dot");
-        expectBadName("-switch.dll", "leading dash");
-        expectBadName(std::string(296, 'a') + ".dll", "300 characters");
-        expectBadName("evil dll.dll", "embedded space");
-        expectBadName("evil\tdll.dll", "embedded tab");
-        expectBadName("%APPDATA%.dll", "environment syntax");
-        expectBadName("evil$.dll", "share syntax");
-        expectBadName("ev*l.dll", "wildcard");
-        expectBadName("\"quoted\".dll", "quotes");
-        expectBadName(std::string("\xC3\xA9") + "vil.dll", "non-ASCII byte");
-        expectBadName("CON.dll", "reserved device name");
-        expectBadName("nul.dll", "reserved device name, lower case");
-        expectBadName("COM1.dll", "reserved serial device");
-        expectBadName("LPT9.dll", "reserved printer device");
-        // The bound itself: 128 characters is accepted, 129 is not.
+        expectBadName("..." + EXT.substr(1), "dots then the extension");
+        expectBadName(".." + EXT.substr(1), "two dots then the extension");
+        expectBadName("." + n("hidden"), "leading dot");
+        expectBadName("-" + n("switch"), "leading dash");
+        expectBadName(std::string(296, 'a') + EXT, "300 characters");
+        expectBadName("evil dll" + EXT, "embedded space");
+        expectBadName("evil\tdll" + EXT, "embedded tab");
+        expectBadName("%APPDATA%" + EXT, "environment syntax");
+        expectBadName("evil$" + EXT, "share syntax");
+        expectBadName("ev*l" + EXT, "wildcard");
+        expectBadName("\"quoted\"" + EXT, "quotes");
+        expectBadName(std::string("\xC3\xA9") + "vil" + EXT, "non-ASCII byte");
+        // Windows device names are reserved with ANY extension. They are
+        // refused on every platform so one catalogue cannot publish a name
+        // that installs on Linux and detonates on Windows.
+        expectBadName(n("CON"), "reserved device name");
+        expectBadName(n("nul"), "reserved device name, lower case");
+        expectBadName(n("COM1"), "reserved serial device");
+        expectBadName(n("LPT9"), "reserved printer device");
+        // The bound itself: kMaxFileNameChars is accepted, one more is not.
+        // Sized from the extension so the boundary is exact on both platforms.
         {
+            const std::size_t stem = PluginRepo::kMaxFileNameChars - EXT.size();
             std::string out;
             std::string err;
-            CHECK(PluginRepo::sanitiseFileName(std::string(124, 'a') + ".dll", out, err));
+            CHECK(PluginRepo::sanitiseFileName(std::string(stem, 'a') + EXT, out, err));
             CHECK(out.size() == PluginRepo::kMaxFileNameChars);
+            expectBadName(std::string(stem + 1, 'a') + EXT, "one over the length bound");
         }
-        expectBadName(std::string(125, 'a') + ".dll", "one over the length bound");
     }
 
     // ---------------------------------------------------------------------
     // rule 2: SHA-256 against published vectors, then over a file
     // ---------------------------------------------------------------------
-#ifdef _WIN32
     {
         // FIPS 180-4 / NIST published vectors. These are the evidence that the
-        // integrity check is a real SHA-256 and not a stand-in.
+        // integrity check is a real SHA-256 and not a stand-in — and, now that
+        // there are two implementations behind this call (CNG on Windows,
+        // OpenSSL elsewhere), that both compute the same standard digest.
         std::string hex;
         std::string err = "stale";
         CHECK(PluginRepo::sha256Hex(nullptr, 0, hex, err));
@@ -731,16 +766,6 @@ int main() {
         std::error_code ec;
         fs::remove_all(d, ec);
     }
-#else
-    {
-        // No CNG: the wrapper must FAIL rather than pretend to have verified.
-        std::string hex;
-        std::string err;
-        CHECK(!PluginRepo::sha256Hex("abc", 3, hex, err));
-        CHECK(!err.empty());
-        std::printf("note: SHA-256 vectors skipped - CNG is Windows-only\n");
-    }
-#endif
 
     // ---------------------------------------------------------------------
     // rule 2: the comparison install() actually decides on
@@ -815,7 +840,7 @@ int main() {
         };
         std::vector<Case> cases;
         // rule 5: wrong ABI.
-        cases.push_back({"abi mismatch", makeEntry("x.dll", url, kHashA, 999u)});
+        cases.push_back({"abi mismatch", makeEntry(mod("x"), url, kHashA, 999u)});
         // rule 6: the traversal guard, before the network.
         cases.push_back({"traversal file name", makeEntry("..\\evil.dll", url, kHashA,
                                                           CASCADE_PLUGIN_ABI_VERSION)});
@@ -825,15 +850,15 @@ int main() {
                                                       CASCADE_PLUGIN_ABI_VERSION)});
         // rule 2: a malformed hash never gets to download anything.
         cases.push_back({"short sha256",
-                         makeEntry("x.dll", url, "abc123", CASCADE_PLUGIN_ABI_VERSION)});
+                         makeEntry(mod("x"), url, "abc123", CASCADE_PLUGIN_ABI_VERSION)});
         cases.push_back({"empty sha256",
-                         makeEntry("x.dll", url, "", CASCADE_PLUGIN_ABI_VERSION)});
-        cases.push_back({"non-hex sha256", makeEntry("x.dll", url, std::string(63, 'a') + "z",
+                         makeEntry(mod("x"), url, "", CASCADE_PLUGIN_ABI_VERSION)});
+        cases.push_back({"non-hex sha256", makeEntry(mod("x"), url, std::string(63, 'a') + "z",
                                                      CASCADE_PLUGIN_ABI_VERSION)});
         // rule 1: http:// refused before the network.
-        cases.push_back({"http url", makeEntry("x.dll", "http://example.invalid/x.dll", kHashA,
+        cases.push_back({"http url", makeEntry(mod("x"), "http://example.invalid/x.dll", kHashA,
                                                CASCADE_PLUGIN_ABI_VERSION)});
-        cases.push_back({"file url", makeEntry("x.dll", "file:///C:/evil.dll", kHashA,
+        cases.push_back({"file url", makeEntry(mod("x"), "file:///C:/evil.dll", kHashA,
                                                CASCADE_PLUGIN_ABI_VERSION)});
 
         int caseIndex = 0;
@@ -867,7 +892,7 @@ int main() {
         PluginPlatform other;
         other.os = "plan9";
         other.arch = "sparc";
-        other.file = "x.dll";
+        other.file = mod("x");
         other.url = url;
         other.sha256 = kHashA;
         noHost.platforms.push_back(other);
@@ -887,7 +912,7 @@ int main() {
 
         // install() must NOT trust a hand-set `compatible` flag over the
         // abiVersion it was built from.
-        PluginCatalogEntry lying = makeEntry("x.dll", url, kHashA, 999u);
+        PluginCatalogEntry lying = makeEntry(mod("x"), url, kHashA, 999u);
         lying.compatible = true;
         const fs::path dir4 = tmpDir("lying");
         CHECK(!repo.install(lying, dir4.string(), installed, err));
@@ -914,7 +939,7 @@ int main() {
         // never "cancelled".
         repo.cancel();
 
-        const PluginCatalogEntry e = makeEntry("probe.dll", "https://127.0.0.1:1/probe.dll",
+        const PluginCatalogEntry e = makeEntry(mod("probe"), "https://127.0.0.1:1/probe.dll",
                                                kHashA, CASCADE_PLUGIN_ABI_VERSION);
         std::string installed = "stale";
         std::string err;
@@ -925,7 +950,7 @@ int main() {
         CHECK(installed.empty());
         CHECK(fs::is_directory(dir));       // created, as documented
         CHECK(countEntries(dir) == 0u);     // and the ".part" temp is gone
-        CHECK(!fs::exists(dir / "probe.dll"));
+        CHECK(!fs::exists(dir / mod("probe")));
 
         std::error_code ec;
         fs::remove_all(dir, ec);
@@ -958,8 +983,8 @@ int main() {
         PluginRepo repo;
         const fs::path dir = tmpDir("remove");
         fs::create_directories(dir);
-        writeText(dir / "keep.dll", "not really a dll");
-        writeText(dir / "goaway.dll", "not really a dll either");
+        writeText(dir / mod("keep"), "not really a dll");
+        writeText(dir / mod("goaway"), "not really a dll either");
 
         // A neighbour OUTSIDE the plugins directory, which a traversal would
         // reach if the sanitiser were not there.
@@ -978,7 +1003,7 @@ int main() {
         CHECK(!repo.remove(dir.string(), "sub/keep.dll", err));
         CHECK(!repo.remove(dir.string(), "", err));
         CHECK(!repo.remove(dir.string(), "keep", err));
-        CHECK(fs::exists(dir / "keep.dll"));
+        CHECK(fs::exists(dir / mod("keep")));
 
         // Not installed: a clean failure, not a crash and not a success.
         err.clear();
@@ -987,13 +1012,13 @@ int main() {
 
         // The ordinary case works.
         err = "stale";
-        CHECK(repo.remove(dir.string(), "goaway.dll", err));
+        CHECK(repo.remove(dir.string(), mod("goaway"), err));
         CHECK(err.empty());
-        CHECK(!fs::exists(dir / "goaway.dll"));
-        CHECK(fs::exists(dir / "keep.dll"));
+        CHECK(!fs::exists(dir / mod("goaway")));
+        CHECK(fs::exists(dir / mod("keep")));
 
         // Removing it twice reports the second attempt honestly.
-        CHECK(!repo.remove(dir.string(), "goaway.dll", err));
+        CHECK(!repo.remove(dir.string(), mod("goaway"), err));
 
         std::error_code ec;
         fs::remove(outside, ec);
@@ -1015,9 +1040,9 @@ int main() {
         fs::create_directories(dir);
         const std::string kSuffix = ".disabled";
 
-        writeText(dir / "retired.dll.disabled", "quarantined bytes");
+        writeText(dir / (mod("retired") + kSuffix), "quarantined bytes");
         writeText(dir / "live.dll", "a loaded plugin");
-        writeText(dir / "other.dll.disabled", "another quarantined plugin");
+        writeText(dir / (mod("other") + kSuffix), "another quarantined plugin");
 
         std::string err = "stale";
 
@@ -1029,22 +1054,22 @@ int main() {
         // allow-list.
         CHECK(!repo.remove(dir.string(), "retired.dll.disabled", err));
         CHECK(!err.empty());
-        CHECK(fs::exists(dir / "retired.dll.disabled"));
+        CHECK(fs::exists(dir / (mod("retired") + kSuffix)));
 
         // The real name is what the caller passes; the suffix is appended by
         // the callee after the name has been validated.
         err = "stale";
-        CHECK(repo.removeQuarantined(dir.string(), "retired.dll", kSuffix, err));
+        CHECK(repo.removeQuarantined(dir.string(), mod("retired"), kSuffix, err));
         CHECK(err.empty());
-        CHECK(!fs::exists(dir / "retired.dll.disabled"));
+        CHECK(!fs::exists(dir / (mod("retired") + kSuffix)));
 
         // Nothing else was touched.
         CHECK(fs::exists(dir / "live.dll"));
-        CHECK(fs::exists(dir / "other.dll.disabled"));
+        CHECK(fs::exists(dir / (mod("other") + kSuffix)));
 
         // Gone already: honest failure, no crash, no false success.
         err.clear();
-        CHECK(!repo.removeQuarantined(dir.string(), "retired.dll", kSuffix, err));
+        CHECK(!repo.removeQuarantined(dir.string(), mod("retired"), kSuffix, err));
         CHECK(!err.empty());
 
         // It must NOT delete a live plugin: "live.dll" has no quarantined
@@ -1067,7 +1092,7 @@ int main() {
         CHECK(!repo.removeQuarantined(dir.string(), "sub/other.dll", kSuffix, err));
         CHECK(!repo.removeQuarantined(dir.string(), "", kSuffix, err));
         CHECK(!repo.removeQuarantined(dir.string(), "other", kSuffix, err));
-        CHECK(fs::exists(dir / "other.dll.disabled"));
+        CHECK(fs::exists(dir / (mod("other") + kSuffix)));
 
         // The SUFFIX is validated in its own right. A caller that could pass a
         // path fragment here would have defeated the name check by the back
@@ -1082,21 +1107,21 @@ int main() {
         // that an UNVALIDATED concatenation would have named is created first,
         // and the assertion is that it SURVIVES.
         struct BadSuffix {
-            const char* suffix;
-            const char* wouldHit;  // file "other.dll" + suffix names
+            std::string suffix;
+            std::string wouldHit;  // the file mod("other") + suffix would name
         };
         const BadSuffix kBad[] = {
-            {"", "other.dll"},                       // empty: would delete the live plugin
-            {"disabled", "other.dlldisabled"},       // no leading dot
-            {".dis abled", "other.dll.dis abled"},   // whitespace
-            {"..disabled", "other.dll..disabled"},   // contains ".."
-            {".dis-abled", "other.dll.dis-abled"},   // '-' is outside the suffix class
+            {"", mod("other")},                          // empty: would delete the live plugin
+            {"disabled", mod("other") + "disabled"},     // no leading dot
+            {".dis abled", mod("other") + ".dis abled"}, // whitespace
+            {"..disabled", mod("other") + "..disabled"}, // contains ".."
+            {".dis-abled", mod("other") + ".dis-abled"}, // '-' is outside the suffix class
         };
         for (const BadSuffix& bad : kBad) {
             const fs::path decoy = dir / bad.wouldHit;
             writeText(decoy, "must survive a rejected suffix");
             err.clear();
-            CHECK(!repo.removeQuarantined(dir.string(), "other.dll", bad.suffix, err));
+            CHECK(!repo.removeQuarantined(dir.string(), mod("other"), bad.suffix, err));
             CHECK(!err.empty());
             CHECK(fs::exists(decoy));  // <- the assertion with teeth
             fs::remove(decoy);
@@ -1106,7 +1131,7 @@ int main() {
         // though the NAME was clean. Without suffix validation the target below
         // resolves out of `dir` entirely, so the file outside must survive.
         const fs::path escapee = dir / ".." / ("plugin_repo_" + std::to_string(TEST_GETPID()) +
-                                               "_suffix_escape.dll");
+                                               "_suffix_escape" + kExt);
         writeText(escapee, "must survive");
         // TWO ".." components, deliberately. Without validation the appended
         // string forms the component "other.dll." first, so one ".." only
@@ -1115,18 +1140,18 @@ int main() {
         // file really is, so this goes red if the validation is removed.
         err.clear();
         CHECK(!repo.removeQuarantined(
-            dir.string(), "other.dll",
-            ".\\..\\..\\plugin_repo_" + std::to_string(TEST_GETPID()) + "_suffix_escape.dll",
+            dir.string(), mod("other"),
+            ".\\..\\..\\plugin_repo_" + std::to_string(TEST_GETPID()) + "_suffix_escape" + kExt,
             err));
         CHECK(!err.empty());
         CHECK(fs::exists(escapee));
 
         // And the legitimate suffix still works throughout.
-        CHECK(fs::exists(dir / "other.dll.disabled"));
+        CHECK(fs::exists(dir / (mod("other") + kSuffix)));
         err = "stale";
-        CHECK(repo.removeQuarantined(dir.string(), "other.dll", kSuffix, err));
+        CHECK(repo.removeQuarantined(dir.string(), mod("other"), kSuffix, err));
         CHECK(err.empty());
-        CHECK(!fs::exists(dir / "other.dll.disabled"));
+        CHECK(!fs::exists(dir / (mod("other") + kSuffix)));
 
         std::error_code ec;
         fs::remove(outsideQ, ec);
@@ -1261,8 +1286,8 @@ int main() {
         // --- round trip through the real save/load path --------------------
         std::vector<InstalledPlugin> plugins;
         plugins.push_back(installedRec("pocsag", "1.0.2", CASCADE_PLUGIN_ABI_VERSION,
-                                       "cascade_pocsag.dll"));
-        plugins.push_back(installedRec("flex", "0.9.0", 7u, "cascade_flex.dll"));
+                                       mod("cascade_pocsag")));
+        plugins.push_back(installedRec("flex", "0.9.0", 7u, mod("cascade_flex")));
         std::vector<CachedPolicy> policies;
         policies.push_back(policy("pocsag", "1.1.0", "1.2.0"));
         policies.push_back(policy("flex", "", "0.9.0"));
@@ -1285,7 +1310,7 @@ int main() {
                 CHECK(back[0].id == "pocsag");
                 CHECK(back[0].name == "pocsag decoder");
                 CHECK(back[0].version == "1.0.2");
-                CHECK(back[0].file == "cascade_pocsag.dll");
+                CHECK(back[0].file == mod("cascade_pocsag"));
                 CHECK(back[0].sha256 == kHashA);
                 CHECK(back[0].abiVersion == static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION));
                 CHECK(back[0].installedAtUnix == 1755200000);
@@ -1307,10 +1332,10 @@ int main() {
         //     belongs to no record, and one file is not the bytes we recorded.
         {
             // cascade_pocsag.dll: present, and NOT what the record claims.
-            writeText(d / "cascade_pocsag.dll", "these are not the installed bytes");
+            writeText(d / mod("cascade_pocsag"), "these are not the installed bytes");
             // cascade_flex.dll: deliberately never created -> missing.
             // stranger.dll: on disk, unrecorded -> unmanaged, left alone.
-            writeText(d / "stranger.dll", "hand installed by the user");
+            writeText(d / mod("stranger"), "hand installed by the user");
 
             PluginInventory inv;
             std::string ierr = "stale";
@@ -1321,19 +1346,17 @@ int main() {
             CHECK(inv.plugins.size() == 2u);
             if (inv.plugins.size() == 2u) {
                 CHECK(!inv.plugins[0].missingFromDisk);
-#ifdef _WIN32
                 CHECK(inv.plugins[0].digestMismatch);  // re-hashed, not assumed
-#endif
                 CHECK(inv.plugins[1].missingFromDisk);
                 CHECK(!inv.plugins[1].digestMismatch);  // absent != tampered
             }
             CHECK(inv.unmanaged.size() == 1u);
             if (inv.unmanaged.size() == 1u) {
-                CHECK(inv.unmanaged[0] == "stranger.dll");
+                CHECK(inv.unmanaged[0] == mod("stranger"));
             }
             // The disagreements are SAID, not silently repaired.
             CHECK(inv.notes.size() >= 3u);
-            CHECK(fs::exists(d / "stranger.dll"));  // unmanaged means untouched
+            CHECK(fs::exists(d / mod("stranger")));  // unmanaged means untouched
             // ...and the manifest itself was not rewritten by a mere read.
             std::vector<InstalledPlugin> stillThere;
             std::vector<CachedPolicy> stillPol;
@@ -1348,13 +1371,13 @@ int main() {
         {
             const fs::path d2 = tmpDir("manifest_ok");
             fs::create_directories(d2);
-            writeText(d2 / "cascade_pocsag.dll", "abc");
+            writeText(d2 / mod("cascade_pocsag"), "abc");
             std::string hex;
             std::string herr;
-            CHECK(PluginRepo::sha256File((d2 / "cascade_pocsag.dll").string(), hex, herr));
+            CHECK(PluginRepo::sha256File((d2 / mod("cascade_pocsag")).string(), hex, herr));
             std::vector<InstalledPlugin> recs;
             InstalledPlugin r = installedRec("pocsag", "1.0.2", CASCADE_PLUGIN_ABI_VERSION,
-                                             "cascade_pocsag.dll");
+                                             mod("cascade_pocsag"));
             r.sha256 = hex;
             recs.push_back(r);
             CHECK(PluginRepo::saveManifest(d2.string(), recs, {}, err));
@@ -1375,7 +1398,7 @@ int main() {
         {
             const fs::path d3 = tmpDir("manifest_corrupt");
             fs::create_directories(d3);
-            writeText(d3 / "cascade_pocsag.dll", "a plugin the user is still using");
+            writeText(d3 / mod("cascade_pocsag"), "a plugin the user is still using");
             writeText(fs::path(PluginRepo::manifestPath(d3.string())), "{ this is not json");
 
             PluginInventory inv;
@@ -1418,16 +1441,23 @@ int main() {
             std::vector<CachedPolicy> q;
             std::vector<std::string> notes;
             std::string e2 = "stale";
+            // Filenames carry THIS platform's extension. The two rows that are
+            // meant to SURVIVE cannot do so with a foreign extension, and the
+            // rows meant to be dropped must be dropped for the flaw each is
+            // named after rather than for the extension.
             const std::string doc = std::string(R"JSON({"schemaVersion":1,"plugins":[
-                {"id":"good","version":"1.0.0","file":"good.dll","sha256":")JSON") +
-                                    kHashA + R"JSON("},
-                {"id":"noversion","file":"x.dll"},
-                {"version":"1.0.0","file":"x.dll"},
-                {"id":"traversal","version":"1.0.0","file":"..\\evil.dll"},
-                {"id":"absolute","version":"1.0.0","file":"C:\\evil.dll"},
+                {"id":"good","version":"1.0.0","file":")JSON") + mod("good") +
+                                    R"JSON(","sha256":")JSON" + kHashA + R"JSON("},
+                {"id":"noversion","file":")JSON" + mod("x") + R"JSON("},
+                {"version":"1.0.0","file":")JSON" + mod("x") + R"JSON("},
+                {"id":"traversal","version":"1.0.0","file":"..\\)JSON" + mod("evil") +
+                                    R"JSON("},
+                {"id":"absolute","version":"1.0.0","file":"C:\\)JSON" + mod("evil") +
+                                    R"JSON("},
                 {"id":"notadll","version":"1.0.0","file":"evil.exe"},
-                {"id":"badhash","version":"1.0.0","file":"badhash.dll","sha256":"nope"},
-                {"id":"good","version":"9.9.9","file":"dupe.dll"},
+                {"id":"badhash","version":"1.0.0","file":")JSON" + mod("badhash") +
+                                    R"JSON(","sha256":"nope"},
+                {"id":"good","version":"9.9.9","file":")JSON" + mod("dupe") + R"JSON("},
                 42
             ]})JSON";
             CHECK(PluginRepo::parseManifest(doc, p, q, notes, e2));
@@ -1655,12 +1685,12 @@ int main() {
         const fs::path d = tmpDir("offline");
         fs::create_directories(d);
         const std::string dir = d.string();
-        writeText(d / "cascade_pocsag.dll", "the plugin the user installed a year ago");
+        writeText(d / mod("cascade_pocsag"), "the plugin the user installed a year ago");
 
         // A year ago: version 1.0.2 was installed from a catalogue that had
         // no floor. It loads.
         PluginCatalogEntry oldCat = catEntry("pocsag", "1.0.2", CASCADE_PLUGIN_ABI_VERSION,
-                                             "cascade_pocsag.dll");
+                                             mod("cascade_pocsag"));
         std::string err = "stale";
         CHECK(PluginRepo::recordInstall(dir, oldCat, err));
         CHECK(err.empty());
@@ -1682,11 +1712,11 @@ int main() {
         // everything below 1.1.0. Only the POLICY is cached - no download.
         std::vector<PluginCatalogEntry> catalogue;
         catalogue.push_back(catEntry("pocsag", "1.2.0", CASCADE_PLUGIN_ABI_VERSION,
-                                     "cascade_pocsag.dll"));
+                                     mod("cascade_pocsag")));
         catalogue[0].minSupportedVersion = "1.1.0";
         CHECK(PluginRepo::cacheCataloguePolicies(dir, catalogue, err));
         CHECK(err.empty());
-        CHECK(fs::exists(d / "cascade_pocsag.dll"));  // nothing was downloaded or replaced
+        CHECK(fs::exists(d / mod("cascade_pocsag")));  // nothing was downloaded or replaced
 
         // Every launch from now on - offline, catalogue unreachable, browser
         // never opened again - reads the cache and blocks.
@@ -1721,7 +1751,7 @@ int main() {
         // publishes is its own to describe.
         std::vector<PluginCatalogEntry> relaxed;
         relaxed.push_back(catEntry("pocsag", "1.2.0", CASCADE_PLUGIN_ABI_VERSION,
-                                   "cascade_pocsag.dll"));
+                                   mod("cascade_pocsag")));
         CHECK(PluginRepo::cacheCataloguePolicies(dir, relaxed, err));
         {
             PluginInventory inv;
@@ -1903,14 +1933,14 @@ int main() {
         const fs::path d = tmpDir("apply");
         fs::create_directories(d);
         const std::string dir = d.string();
-        writeText(d / "probe.dll", "the plugin that must survive a failed update");
+        writeText(d / mod("probe"), "the plugin that must survive a failed update");
 
         // A manifest that must not change.
         std::vector<InstalledPlugin> before{installedRec("evil", "1.0.0")};
         std::string err;
         CHECK(PluginRepo::saveManifest(dir, before, {policy("evil", "", "1.0.0")}, err));
         const std::string manifestBytes = readAll(PluginRepo::manifestPath(dir));
-        const std::string dllBytes = readAll(d / "probe.dll");
+        const std::string dllBytes = readAll(d / mod("probe"));
 
         // A catalogue entry whose file name is a path traversal. planUpdates
         // plans it (planning is not where safety lives) and applyUpdate
@@ -1932,7 +1962,7 @@ int main() {
             CHECK(installed.empty());
             // Nothing downloaded, nothing installed, nothing recorded.
             CHECK(readAll(PluginRepo::manifestPath(dir)) == manifestBytes);
-            CHECK(readAll(d / "probe.dll") == dllBytes);
+            CHECK(readAll(d / mod("probe")) == dllBytes);
             CHECK(!fs::exists(d.parent_path() / "evil.dll"));
             CHECK(countEntries(d) == 2u);  // the dll and the manifest, nothing else
         }
@@ -1976,7 +2006,7 @@ int main() {
                 CHECK(!err.empty());
                 CHECK(installed.empty());
                 CHECK(readAll(PluginRepo::manifestPath(dir)) == manifestBytes);
-                CHECK(readAll(d / "probe.dll") == dllBytes);
+                CHECK(readAll(d / mod("probe")) == dllBytes);
             }
         }
 
@@ -1999,7 +2029,7 @@ int main() {
         {
             PluginRepo repo;
             PluginCatalogEntry e = catEntry("evil", "2.0.0", CASCADE_PLUGIN_ABI_VERSION,
-                                            "probe.dll");
+                                            mod("probe"));
             e.platforms[0].url = "https://127.0.0.1:1/probe.dll";
             PluginUpdate u;
             u.id = e.id;
@@ -2011,7 +2041,7 @@ int main() {
             CHECK(!repo.applyUpdate(u, dir, installed, err));
             CHECK(!err.empty());
             CHECK(err != "cancelled");
-            CHECK(readAll(d / "probe.dll") == dllBytes);
+            CHECK(readAll(d / mod("probe")) == dllBytes);
             CHECK(readAll(PluginRepo::manifestPath(dir)) == manifestBytes);
             CHECK(countEntries(d) == 2u);
         }
@@ -2028,7 +2058,7 @@ int main() {
         const fs::path d = tmpDir("record");
         fs::create_directories(d);
         const std::string dir = d.string();
-        writeText(d / "probe.dll", "installed bytes");
+        writeText(d / mod("probe"), "installed bytes");
 
         PluginCatalogEntry e = catEntry("pocsag", "1.0.0");
         e.minSupportedVersion = "0.9.0";
@@ -2043,7 +2073,7 @@ int main() {
         if (inv.plugins.size() == 1u) {
             CHECK(inv.plugins[0].id == "pocsag");
             CHECK(inv.plugins[0].version == "1.0.0");
-            CHECK(inv.plugins[0].file == "probe.dll");
+            CHECK(inv.plugins[0].file == mod("probe"));
             CHECK(inv.plugins[0].sha256 == kHashA);
             CHECK(inv.plugins[0].abiVersion ==
                   static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION));

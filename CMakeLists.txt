@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.51.0 LANGUAGES C CXX)
+project(cascade VERSION 0.52.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -122,12 +122,17 @@ target_include_directories(cascade_json SYSTEM INTERFACE
 # INTERFACE target carrying the include root plus the Winsock import library the
 # header's socket code needs. SYSTEM so /W4 does not police 747 KB of upstream.
 #
-# TLS IS DELIBERATELY NOT ENABLED. CPPHTTPLIB_OPENSSL_SUPPORT would pull in
-# OpenSSL, which is neither vendored here nor small, and would put a second TLS
-# stack in a product that already reaches the network through WinHTTP (which
-# uses the OS trust store). The server therefore speaks plain HTTP, which is
-# why the bind policy treats loopback and LAN differently and why remote access
-# is documented as "terminate TLS in front of it" rather than "open the port".
+# THE SERVER SPEAKS PLAIN HTTP ON EVERY PLATFORM. That is why the bind policy
+# treats loopback and LAN differently and why remote access is documented as
+# "terminate TLS in front of it" rather than "open the port".
+#
+# The CLIENT is a separate matter. On Windows the plugin catalogue is fetched
+# through WinHTTP, so this stays a plain header-only include. Elsewhere there
+# is no WinHTTP, and plugin_repo.cpp compiles this header with
+# CPPHTTPLIB_OPENSSL_SUPPORT to get an HTTPS client — which adds no new
+# dependency, because OpenSSL is already linked there for SHA-256 and PBKDF2.
+# Enabling it for the client does not enable it for the server: the server is
+# constructed as a plain httplib::Server and never as an SSLServer.
 add_library(cascade_httplib INTERFACE)
 target_include_directories(cascade_httplib SYSTEM INTERFACE
     "${CASCADE_TP}/cpp_httplib/include")
@@ -182,7 +187,11 @@ target_link_libraries(cascade_lib PUBLIC
     SoapySDR)
 
 if(NOT WIN32)
-    target_link_libraries(cascade_lib PUBLIC OpenSSL::Crypto)
+    # Crypto for the password/digest primitives, SSL for the plugin
+    # catalogue's HTTPS client (cpp-httplib built with
+    # CPPHTTPLIB_OPENSSL_SUPPORT). Windows takes both from the OS instead —
+    # CNG and WinHTTP — which is why neither is a dependency there.
+    target_link_libraries(cascade_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL)
 endif()
 
 # ---------------------------------------------------------------------------
