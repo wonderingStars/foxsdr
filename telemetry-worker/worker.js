@@ -88,7 +88,12 @@ export default {
       // not a person.
       indexes: [id],
       blobs: [
-        clamp(body.v, 16),      // blob1  app version
+        // 48, not 16: a nightly version is
+        // "0.57.0-nightly.20260819.b97092e" - 31 characters - and at 16 it
+        // arrived in the dataset as "0.56.0-nightly.2", which identifies
+        // neither the date nor the commit and collapses every nightly into one
+        // bucket. Found by reading the first real usage report.
+        clamp(body.v, 48),      // blob1  app version
         clamp(body.os, 40),     // blob2  OS and build
         clamp(body.arch, 8),    // blob3  architecture
         clamp(body.sdr, 32),    // blob4  SDR model, serial already stripped

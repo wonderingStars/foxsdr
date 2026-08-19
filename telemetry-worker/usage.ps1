@@ -146,7 +146,11 @@ ORDER BY day DESC
 if ($daily) {
     Write-Host ""
     Write-Host "Daily active installs" -ForegroundColor Cyan
-    Write-Host ("  {0,-12} {1,>8} {2,>10}" -f "day", "installs", "launches")
+    # Right alignment in a .NET format string is a POSITIVE width; ">" is not a
+    # thing and throws "Input string was not in a correct format". The data rows
+    # below always had it right, so only the HEADER threw - the one line no test
+    # would have looked at, and the first thing a reader sees.
+    Write-Host ("  {0,-12} {1,8} {2,10}" -f "day", "installs", "launches")
     foreach ($r in $daily) {
         Write-Host ("  {0,-12} {1,8} {2,10}" -f $r.day, $r.installs, $r.launches)
     }
