@@ -27,6 +27,16 @@ set_tests_properties(app_selftest PROPERTIES
     TIMEOUT 60
     PASS_REGULAR_EXPRESSION "selftest PASS")
 
+# --version is read back by tools/build-nightly.ps1 to check the binary agrees
+# with the name its installer is about to be given, so its FORMAT is a contract,
+# not a convenience. The regex pins the injected version too: a build whose
+# CASCADE_VERSION_STRING never reached version.cpp reports the
+# "0.0.0-unconfigured" fallback and fails here rather than shipping.
+add_test(NAME app_version COMMAND cascade --version)
+set_tests_properties(app_version PROPERTIES
+    TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "^FoxSDR ${CASCADE_VERSION_STRING}\n$")
+
 # CLI error contract: each malformed invocation must exit nonzero.
 add_test(NAME app_cli_bad_value COMMAND cascade --frames abc)
 add_test(NAME app_cli_negative COMMAND cascade --frames -1)

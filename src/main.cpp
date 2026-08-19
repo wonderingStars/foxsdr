@@ -25,6 +25,7 @@
 
 #include "core/config.hpp"
 #include "core/pipeline.hpp"
+#include "core/version.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/rds.hpp"
 #include "dsp/vfo.hpp"
@@ -876,6 +877,14 @@ int main(int argc, char** argv) {
             }
             frames = static_cast<int>(value);
             ++i;  // consumed the value argument
+        } else if (std::strcmp(argv[i], "--version") == 0) {
+            // One line, on stdout, and nothing else: this is what the release
+            // and nightly scripts read back to check that the binary agrees
+            // with the version its installer is about to be named after. A
+            // nightly whose binary called itself by the release version would
+            // produce bug reports naming a build that does not exist.
+            std::printf("%s %s\n", cascade::appName(), cascade::versionString());
+            return 0;
         } else if (std::strcmp(argv[i], "--selftest") == 0) {
             selftest = true;
         } else if (std::strcmp(argv[i], "--soapy-check") == 0) {
@@ -910,7 +919,8 @@ int main(int argc, char** argv) {
             toneCheck = true;
         } else {
             std::fprintf(stderr,
-                         "cascade: unknown argument '%s' (usage: cascade [--frames N] [--selftest])\n",
+                         "cascade: unknown argument '%s' (usage: cascade [--frames N] "
+                         "[--selftest] [--version])\n",
                          argv[i]);
             return 1;
         }

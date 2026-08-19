@@ -19,7 +19,22 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.55.0 LANGUAGES C CXX)
+project(cascade VERSION 0.56.0 LANGUAGES C CXX)
+
+# The version string the BINARY reports, which is not always the project
+# version. A nightly is built from this tree with a pre-release suffix naming
+# the date and the commit it came from, and the About line, the usage report
+# and the bug-report form must all say that rather than the release it is
+# heading towards - otherwise a report names a version that does not exist and
+# nobody can tell which build produced it.
+#
+# Set CASCADE_VERSION_STRING to override (tools/build-nightly.ps1 does).
+# Left alone it is the project version, which is what a release build wants.
+if(NOT CASCADE_VERSION_STRING)
+    set(CASCADE_VERSION_STRING "${PROJECT_VERSION}" CACHE STRING
+        "Version string reported by the built binary")
+endif()
+message(STATUS "cascade version string: ${CASCADE_VERSION_STRING}")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -172,6 +187,9 @@ add_library(cascade_lib STATIC
     ${CASCADE_NET})
 
 target_include_directories(cascade_lib PUBLIC src)
+# See src/core/version.cpp: the reported version is injected, never written in.
+target_compile_definitions(cascade_lib PRIVATE
+    CASCADE_VERSION_STRING="${CASCADE_VERSION_STRING}")
 # Vendored targets are listed BEFORE SoapySDR so third_party/ include dirs
 # always precede vcpkg's shared installed-include root (which still contains
 # same-named headers for other consumers of that vcpkg tree).

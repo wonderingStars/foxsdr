@@ -278,6 +278,23 @@ hardware support is installed separately by the user (PothosSDR or
 radioconda) — see `installer/POSTINSTALL.txt`; the app runs with no hardware
 at all (signal generator + IQ playback).
 
+### Stable and nightly
+
+Two channels are published. **Stable** is built from a release commit and is
+the version the download page offers by default. **Nightly** is the same
+product built from `master`, produced by `tools/build-nightly.ps1`, and stamped
+`<next>-nightly.<date>.<sha>` — a pre-release version that sorts *before* the
+release it is heading towards, so nothing can mistake one for the other.
+
+The version is injected by the build (`CASCADE_VERSION_STRING`, defaulting to
+the `project()` version) rather than written into `version.cpp`, so the file
+name, the About line, the usage report and the bug-report form all carry the
+same string. That is the point of the arrangement: a nightly whose binary
+called itself by the release version would produce bug reports naming a build
+that does not exist. `cascade --version` prints it, `ctest` pins the format,
+and the nightly script refuses to package a build whose binary disagrees with
+the name it is about to be given — or one whose tests fail.
+
 ## License
 
 **Free for noncommercial use. Commercial use requires a paid licence.**

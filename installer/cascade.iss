@@ -16,12 +16,24 @@
 ; SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #define AppName "FoxSDR"
-#define AppVersion "0.55.0"
+; Overridable so a nightly can be stamped with its own version:
+;   ISCC.exe /DAppVersion="0.56.0-nightly.20260819.58fe5a3" installer\cascade.iss
+; tools/build-nightly.ps1 does exactly that, and passes the SAME string to
+; CMake as CASCADE_VERSION_STRING so the binary agrees with its installer.
+#ifndef AppVersion
+  #define AppVersion "0.56.0"
+#endif
 #define AppPublisher "Steven Fairclough"
 #define AppExe "cascade.exe"
 ; Install-dir leaf avoids '+' (some tools mishandle it in paths); display name keeps it.
 #define InstallLeaf "FoxSDR"
-#define BuildDir AddBackslash(SourcePath) + "..\build\Release"
+; Overridable so a nightly can be packaged from its own build tree. That tree
+; is kept separate from the release one deliberately: the reported version is a
+; compile definition, and a shared build directory would let a stale object
+; leave a release binary calling itself a nightly.
+#ifndef BuildDir
+  #define BuildDir AddBackslash(SourcePath) + "..\build\Release"
+#endif
 #ifndef VcCrtDir
   #define VcCrtDir "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC\14.44.35112\x64\Microsoft.VC143.CRT"
 #endif
