@@ -357,6 +357,13 @@ private:
         std::string error;
         int row = -1;
         double requestRateHz = 0.0;
+    // The frequency the user was listening to when they changed device.
+    //
+    // A newly opened radio sits wherever its driver defaults to - an RTL-SDR
+    // comes up at 100 MHz - so without carrying this across, changing device
+    // silently retunes the receiver and the audio stops. Captured before the
+    // switch because by the time the open finishes, the old source is gone.
+    double keepCenterHz = 0.0;
     };
     std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
     std::future<SoapyOpenResult> soapyOpenFuture_;

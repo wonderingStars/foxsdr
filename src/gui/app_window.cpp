@@ -1699,6 +1699,32 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     pipeline_.setSource(std::move(r.dev));
     sourceKind_ = "soapy";
     sourceSel_ = r.row;
+
+    // CARRY THE FREQUENCY ACROSS, which is the whole difference between
+    // changing radio and losing what you were listening to.
+    //
+    // A freshly opened device sits at its driver's default - an RTL-SDR comes
+    // up at 100 MHz - so before this, switching from a B200 tuned to 97 MHz
+    // put the receiver on 100 MHz without saying so. The spectrum went empty,
+    // the level fell to the noise floor, the squelch stayed shut, and the
+    // audio stopped: it reads as "changing device breaks the sound" rather
+    // than "your radio is now tuned somewhere else".
+    if (r.keepCenterHz > 0.0) {
+        retuneSourceHz(r.keepCenterHz);
+        // Not every radio covers every band, so say so rather than leaving
+        // the user on a frequency they did not choose. The readback is the
+        // authority - a device may clamp to its range or land on a nearby
+        // tuning step.
+        const double landed = pipeline_.activeSource().centerFrequencyHz();
+        if (std::fabs(landed - r.keepCenterHz) > 1000.0) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                          "this radio could not tune %.6f MHz; it is on %.6f MHz",
+                          r.keepCenterHz / 1e6, landed / 1e6);
+            sourceError_ = buf;
+        }
+    }
+
     followInputRate();  // DSP chain follows the device's actual readback
 }
 
@@ -1733,13 +1759,18 @@ void AppWindow::selectSource(int idx) {
     // for free — a failure never moved the selection in the first place.
     const std::string args = soapyDevices_[d].args;
     const double rate = kSoapyRateHz[kSoapyRateDefaultIndex];
+    // Read the tuned frequency NOW: the old source is destroyed when the new
+    // one is installed, and a device that has never been opened reports 0,
+    // which finishSoapyOpen treats as "nothing to carry".
+    const double keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
     soapyBusyLabel_ = soapyDevices_[d].label;
     soapyOpenPending_ = true;
-    soapyOpenFuture_ = std::async(std::launch::async, [args, rate, idx] {
+    soapyOpenFuture_ = std::async(std::launch::async, [args, rate, idx, keepCenterHz] {
         SoapyOpenResult r;
         r.args = args;
         r.row = idx;
         r.requestRateHz = rate;
+        r.keepCenterHz = keepCenterHz;
         auto dev = std::make_unique<cascade::source::SoapySource>();
         if (!dev->open(args)) {
             r.error = dev->lastError();
