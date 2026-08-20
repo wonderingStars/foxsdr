@@ -392,5 +392,115 @@ int main() {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Output-stream liveness and recovery identity.
+    //
+    // The bug these guard against was reported as "the radio keeps going
+    // silent": the sink is opened once at construction, a USB audio device
+    // re-enumerates, its PortAudio stream dies, and NOTHING in the app ever
+    // asks again. Spectrum, waterfall and squelch all stay live because they
+    // are upstream of the sink, so the receiver looks perfect while the user
+    // hears nothing, and the underrun counter — the one buffer-health number
+    // on screen — freezes instead of climbing, because a callback that is not
+    // being called cannot starve.
+    // -----------------------------------------------------------------------
+    {
+        // A sink that has never opened anything: dead, and known never to
+        // have been alive. Recovery must be able to tell these apart, or a
+        // headless box with no audio device retries an open every second for
+        // the life of the process.
+        AudioOut fresh;
+        CHECK(!fresh.streamAlive());
+        CHECK(!fresh.everOpened());
+        CHECK(fresh.openedDeviceName().empty());
+
+        AudioOut ao;
+        if (!ao.open(-1, 48000.0, 1)) {
+            printOpenFailureDiagnostics(48000.0);
+            CHECK(false);  // this machine has audio; a failure here is real
+        } else {
+            CHECK(ao.everOpened());
+            CHECK(ao.streamAlive());       // running() and alive agree here...
+            CHECK(ao.running());
+            // The request is stored VERBATIM: -1 means "the system default",
+            // an intent a recovery has to preserve rather than resolve.
+            CHECK(ao.openedDeviceRequested() == -1);
+            CHECK(!ao.openedDeviceName().empty());
+            const std::string opened = ao.openedDeviceName();
+
+            ao.close();
+            // ...and here they must not. close() takes the stream down, so
+            // nothing is playing — but the identity of what WAS open has to
+            // survive, because that is exactly the moment recovery needs it.
+            CHECK(!ao.streamAlive());
+            CHECK(!ao.running());
+            CHECK(ao.everOpened());
+            CHECK(ao.openedDeviceName() == opened);
+            CHECK(ao.openedDeviceRequested() == -1);
+        }
+    }
+
+    {
+        // recoveryDeviceIndex: which device a reopen should target.
+        using cascade::sink::recoveryDeviceIndex;
+        const std::vector<AudioDevice> present{
+            AudioDevice{0, "Microsoft Sound Mapper - Output", false},
+            AudioDevice{1, "Speakers (Realtek USB Audio)", true},
+            AudioDevice{2, "Headphones (Arctis Nova Pro Wireless)", false},
+        };
+
+        // "Follow the system default" stays that way whatever the list says.
+        CHECK(recoveryDeviceIndex(-1, "Speakers (Realtek USB Audio)", present) == -1);
+        CHECK(recoveryDeviceIndex(-1, "", present) == -1);
+        CHECK(recoveryDeviceIndex(-1, "", {}) == -1);
+
+        // A chosen device that is still here is reopened, by name.
+        CHECK(recoveryDeviceIndex(1, "Speakers (Realtek USB Audio)", present) == 1);
+        CHECK(recoveryDeviceIndex(2, "Headphones (Arctis Nova Pro Wireless)", present) == 2);
+
+        // THE POINT OF MATCHING BY NAME. A device list renumbers when the set
+        // changes: here the sound mapper is gone and everything shifted down
+        // one. The remembered INDEX 1 now belongs to the headphones, so an
+        // index-based recovery would move the user's audio to a device they
+        // never chose — a worse outcome than the silence it is recovering
+        // from, and a silent one. The name still resolves to the speakers.
+        const std::vector<AudioDevice> renumbered{
+            AudioDevice{0, "Speakers (Realtek USB Audio)", true},
+            AudioDevice{1, "Headphones (Arctis Nova Pro Wireless)", false},
+        };
+        CHECK(recoveryDeviceIndex(1, "Speakers (Realtek USB Audio)", renumbered) == 0);
+
+        // DUPLICATE NAMES ARE THE NORMAL CASE, not an edge case. PortAudio
+        // lists one physical device once per host API, so this machine really
+        // does report "Speakers (Realtek USB Audio)" at two indices (MME and
+        // the second host API). A name-only match would answer with whichever
+        // came first, quietly moving the stream to a different host API than
+        // the one that was open. When the remembered index still holds the
+        // remembered name, nothing moved and that index is the answer.
+        const std::vector<AudioDevice> dupes{
+            AudioDevice{4, "Speakers (Realtek USB Audio)", true},
+            AudioDevice{6, "Headphones (Arctis Nova Pro Wir", false},
+            AudioDevice{11, "Headphones (Arctis Nova Pro Wireless)", false},
+            AudioDevice{12, "Speakers (Realtek USB Audio)", false},
+        };
+        CHECK(recoveryDeviceIndex(12, "Speakers (Realtek USB Audio)", dupes) == 12);
+        CHECK(recoveryDeviceIndex(4, "Speakers (Realtek USB Audio)", dupes) == 4);
+        // Only once the exact pairing is gone does the name alone decide.
+        const std::vector<AudioDevice> dupesShifted{
+            AudioDevice{3, "Speakers (Realtek USB Audio)", true},
+            AudioDevice{11, "Speakers (Realtek USB Audio)", false},
+        };
+        CHECK(recoveryDeviceIndex(12, "Speakers (Realtek USB Audio)", dupesShifted) == 3);
+
+        // The chosen device is genuinely gone: fall back to the default
+        // rather than failing forever. Sound somewhere beats sound nowhere,
+        // and the caller tells the user it happened.
+        const std::vector<AudioDevice> without{
+            AudioDevice{0, "Headphones (Arctis Nova Pro Wireless)", true},
+        };
+        CHECK(recoveryDeviceIndex(1, "Speakers (Realtek USB Audio)", without) == -1);
+        CHECK(recoveryDeviceIndex(1, "Speakers (Realtek USB Audio)", {}) == -1);
+    }
+
     return testSummary("test_audio_out");
 }

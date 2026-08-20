@@ -21,7 +21,15 @@
 ; tools/build-nightly.ps1 does exactly that, and passes the SAME string to
 ; CMake as CASCADE_VERSION_STRING so the binary agrees with its installer.
 #ifndef AppVersion
-  #define AppVersion "0.56.0"
+  ; NOT a literal. The version lives in CMakeLists.txt and CMake writes it into
+  ; generated-version.iss at configure time, so the installer cannot be stamped
+  ; with a different number from the binary it packages.
+  ;
+  ; It was a literal until it drifted: the project moved to 0.57.0 and this file
+  ; still said 0.56.0, so a build of the new code produced an installer named
+  ; after the old release - the same class of mistake as the checksum the
+  ; website published for a file it was not serving.
+  #include "generated-version.iss"
 #endif
 #define AppPublisher "Steven Fairclough"
 #define AppExe "cascade.exe"

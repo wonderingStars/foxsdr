@@ -15,3 +15,4 @@ telemetry-worker/.wrangler/
 # notes) that must never ship in the public repository. Kept locally only;
 # the file was also scrubbed from history before the repo went public.
 HANDOVER.md
+installer/generated-version.iss

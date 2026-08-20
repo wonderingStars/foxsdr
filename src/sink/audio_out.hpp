@@ -85,6 +85,40 @@ public:
 
     bool running() const { return running_; }
 
+    // True while a stream is open AND PortAudio still reports it running.
+    //
+    // NOT the same thing as running(), and the difference is the whole reason
+    // this exists. running_ is our own bookkeeping: it says "we opened a
+    // stream and have not closed it". The stream underneath can die without
+    // anyone telling us — a USB audio device that re-enumerates takes its
+    // stream with it, and re-enumeration is not rare (unplugging the device,
+    // or binding a driver to ANY device on the same controller, which is
+    // exactly what installing WinUSB for an SDR dongle does). PortAudio has
+    // no callback for it: the audio callback simply stops being called.
+    //
+    // The visible symptom is total silence with a perfectly healthy-looking
+    // receiver — spectrum, waterfall and squelch all live, because they sit
+    // upstream of the sink — and a starvation counter frozen at whatever it
+    // reached before the stream died. Nothing recovers it on its own, so
+    // something has to ask; this is the question.
+    bool streamAlive() const;
+
+    // Whether ANY open has ever succeeded on this object. Recovery uses it to
+    // tell "the stream died" from "there was never a device" — on a headless
+    // box the second is normal and must not provoke endless reopen attempts.
+    bool everOpened() const { return everOpened_; }
+
+    // The deviceIndex argument of the last successful open, verbatim: -1 when
+    // the caller asked for the system default. Kept UNRESOLVED on purpose —
+    // "follow the default" is a different intent from "use this device", and
+    // a recovery must preserve which one the user expressed.
+    int openedDeviceRequested() const { return openedRequested_; }
+
+    // Name of the device the last successful open actually landed on. Names
+    // are the only stable handle across a device coming and going: PortAudio
+    // indices are positions in a list that shifts when the set changes.
+    const std::string& openedDeviceName() const { return openedName_; }
+
     // Channel layout of the most recent SUCCESSFUL open (1 until one
     // succeeds). Deliberately retained across close(): it describes how the
     // ring's contents are laid out, and the ring outlives the stream.
@@ -143,6 +177,29 @@ private:
     bool paOk_ = false;    // did OUR Pa_Initialize() succeed?
     bool running_ = false;
     int channels_ = 1;     // layout of the last successful open (see channels())
+    // Identity of the last successful open, retained across close() because
+    // that is precisely when recovery needs it (see streamAlive()).
+    bool everOpened_ = false;
+    int openedRequested_ = -1;
+    std::string openedName_;
 };
+
+// Which device a recovery reopen should target, given what the last
+// successful open asked for and what is present now. Returns a PortAudio
+// device index, or -1 for "the system default".
+//
+// Matching is BY NAME, not by index, because an index is a position in a list
+// that renumbers whenever the set of devices changes. Reopening a stale index
+// after a device disappeared does not merely fail — it can succeed against a
+// different device that inherited the number, moving the user's audio
+// somewhere they never chose, which is a worse outcome than the silence being
+// recovered from.
+//
+// A last open that asked for -1 stays -1: "follow the system default" is an
+// intent to preserve, not a device to pin. If the named device is gone, the
+// default is the only honest fallback — sound somewhere beats sound nowhere,
+// and the caller says so in the UI.
+int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
+                        const std::vector<AudioDevice>& present);
 
 }  // namespace cascade::sink

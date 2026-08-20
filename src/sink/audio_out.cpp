@@ -111,6 +111,13 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     }
     stream_ = stream;
     running_ = true;
+    // Remember what this open WAS, so a later recovery can reproduce it. The
+    // request is stored unresolved (-1 stays -1) and the name comes from the
+    // device actually opened; together they survive the device list being
+    // renumbered underneath us. See recoveryDeviceIndex().
+    everOpened_ = true;
+    openedRequested_ = deviceIndex;
+    openedName_ = info->name != nullptr ? std::string(info->name) : std::string();
     // Only a SUCCESSFUL open changes the layout: a refused stereo open must
     // leave the previous (working) layout description in place, because the
     // caller's fallback path re-opens mono and the producer reads channels()
@@ -129,6 +136,36 @@ void AudioOut::close() {
     Pa_CloseStream(static_cast<PaStream*>(stream_));
     stream_ = nullptr;
     running_ = false;
+}
+
+bool AudioOut::streamAlive() const {
+    if (stream_ == nullptr) { return false; }
+    // Pa_IsStreamActive: 1 = the callback is being called, 0 = stopped, and a
+    // negative PaError when the host API cannot answer at all — which is what
+    // a vanished device tends to produce. Only 1 means the user is hearing
+    // anything, so every other answer is treated as dead. Cheap enough to
+    // call at a polling rate: it reads stream state, it does not touch the
+    // device.
+    return Pa_IsStreamActive(static_cast<PaStream*>(stream_)) == 1;
+}
+
+int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
+                        const std::vector<AudioDevice>& present) {
+    if (lastRequested < 0) { return -1; }  // "follow the default" is the intent
+    // Exact pairing first. PortAudio lists one physical device once per host
+    // API, so names are NOT unique — matching on the name alone would answer
+    // with whichever duplicate came first and quietly move the stream to a
+    // different host API than the one that was open. If the remembered index
+    // still carries the remembered name, nothing moved: reopen it as it was.
+    for (const auto& d : present) {
+        if (d.index == lastRequested && d.name == lastName) { return d.index; }
+    }
+    // The pairing is gone, so the list renumbered (or the device did move
+    // host APIs). Now the name is the best handle there is.
+    for (const auto& d : present) {
+        if (d.name == lastName) { return d.index; }
+    }
+    return -1;  // the chosen device is gone; the default is the only fallback
 }
 
 std::size_t AudioOut::write(const float* samples, std::size_t n) {

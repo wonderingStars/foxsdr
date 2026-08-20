@@ -92,6 +92,15 @@ private:
     void startUpdateCheck();
     void startUpdateDownload();
     void pollUpdateAsync();
+    // Once-a-second check that the output stream is still alive, reopening it
+    // if it is not. See AudioOut::streamAlive() for what kills one; the short
+    // version is that a dead sink is invisible from inside the app, so the
+    // only fix is to keep asking.
+    void pollAudioHealth();
+    // Takes every live plugin handle off the pipeline and the UI, in the one
+    // order that is safe, then unmaps the modules. The ONLY way any code here
+    // may call PluginHost::unloadAll() — see the note in its body.
+    void detachAndUnloadPlugins();
 
     // Starts the downloaded installer and asks the run loop to exit. Separate
     // because an installer cannot replace a binary that is still running, so
@@ -302,6 +311,14 @@ private:
     // come with the settings work in P5); index into devices_, -1 when empty.
     std::vector<cascade::sink::AudioDevice> devices_;
     int deviceIndex_ = -1;
+    // Output-stream watchdog (see pollAudioHealth). The note is shown in the
+    // Sinks panel: a stream that had to be restarted is something the user
+    // should be told about, because the alternative reading of the same
+    // event — audio that stopped and came back on its own — is indistinguish-
+    // able from a fault in their radio.
+    double lastAudioProbeSec_ = 0.0;
+    int audioRecoveries_ = 0;
+    std::string audioHealthNote_;
     float splitRatio_ = 0.4f;  // spectrum's share of the center area
 
     // --- Source menu state (P4) ---------------------------------------------

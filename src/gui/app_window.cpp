@@ -902,6 +902,62 @@ void AppWindow::drawUi() {
     // Same contract for the catalogue fetch / plugin download.
     pollPluginAsync();
     pollUpdateAsync();
+    // And the sink: everything above this line can be working perfectly while
+    // the user hears nothing.
+    pollAudioHealth();
+}
+
+void AppWindow::pollAudioHealth() {
+    cascade::sink::AudioOut& out = pipeline_.audio();
+    // Never opened means there is no device on this machine (or audio is
+    // configured off). That is a steady state, not a fault, and retrying it
+    // once a second forever would be noise.
+    if (!out.everOpened()) { return; }
+
+    // 1 Hz. Fast enough that a dropout is a hiccup rather than an outage,
+    // slow enough that a genuinely absent device is not hammered with open
+    // attempts. ImGui's clock is the frame clock, which is what "once per
+    // second of running UI" should mean here.
+    const double now = ImGui::GetTime();
+    if (now - lastAudioProbeSec_ < 1.0) { return; }
+    lastAudioProbeSec_ = now;
+
+    if (out.streamAlive()) { return; }
+
+    // The stream is dead. Re-enumerate before choosing a target: the device
+    // list is how recoveryDeviceIndex() resolves the remembered NAME to a
+    // current index, and the reason it is done by name is that this list can
+    // renumber between the open and now.
+    devices_ = out.listOutputDevices();
+    const int target = cascade::sink::recoveryDeviceIndex(
+        out.openedDeviceRequested(), out.openedDeviceName(), devices_);
+
+    if (!pipeline_.openAudioDevice(target)) {
+        // Say so rather than failing silently — silent failure is the exact
+        // bug this whole path exists to end. The next tick tries again.
+        audioHealthNote_ = "audio output stopped and could not be reopened";
+        return;
+    }
+
+    ++audioRecoveries_;
+    // Keep the Sinks combo honest about what is actually open. Without this
+    // the panel would name the old device while audio came out of another.
+    for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
+        if (devices_[static_cast<std::size_t>(i)].index == target) {
+            deviceIndex_ = i;
+            break;
+        }
+    }
+    if (target < 0) {
+        for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
+            if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
+        }
+    }
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "output device stopped and was restarted (%d time%s)",
+                  audioRecoveries_, audioRecoveries_ == 1 ? "" : "s");
+    audioHealthNote_ = buf;
 }
 
 void AppWindow::drawToolbar() {
@@ -1145,6 +1201,15 @@ void AppWindow::drawMenuColumn() {
                 ImGui::PopID();
             }
             ImGui::EndCombo();
+        }
+        // Watchdog result. Shown persistently once it has happened: a user
+        // whose audio died and silently came back needs to know it was the
+        // output device, not the radio, or the next report reads "the radio
+        // keeps going silent" and points the search at the wrong end of the
+        // chain.
+        if (!audioHealthNote_.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "%s",
+                               audioHealthNote_.c_str());
         }
     }
     if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -2321,6 +2386,31 @@ bool AppWindow::quarantineBlockedPlugins(std::string& error) {
     return true;
 }
 
+void AppWindow::detachAndUnloadPlugins() {
+    // THE ORDER IS THE FEATURE, and it is why this is a function rather than
+    // an open-coded sequence: it was open-coded, removeInstalledPlugin() then
+    // called unloadAll() on its own, and the careful ordering below existed in
+    // only one of the two places that unmap plugin modules.
+    //
+    // The RUNNER comes off first, in two steps. Detaching it from the pipeline
+    // stops the DSP thread reaching it; clearing it then destroys the decoder
+    // instances. Both must complete before unloadAll(), because a live handle
+    // is memory inside a module about to be unmapped, and destroy() is code
+    // inside that same module. Getting this order wrong is a crash in someone
+    // else's DLL with no useful stack.
+    pipeline_.setPluginRunner(nullptr);
+    pluginRunner_.clear();
+    // Same rule as the runner: a track-source or panel handle is memory inside
+    // a module whose destroy() is code in that same module.
+    pluginUi_.clear();
+    // And the basemap, for exactly the same reason - its handle and its tile
+    // borrows live in a module about to be unmapped.
+    basemap_.detach();
+    trackInfo_.detach();
+
+    pluginHost_.unloadAll();
+}
+
 void AppWindow::rescanPlugins() {
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
@@ -2338,17 +2428,7 @@ void AppWindow::rescanPlugins() {
     // because a live handle is memory inside a module that is about to be
     // unmapped, and destroy() is code inside that same module. Getting this
     // order wrong is a crash in someone else's DLL with no useful stack.
-    pipeline_.setPluginRunner(nullptr);
-    pluginRunner_.clear();
-    // Same rule as the runner: a track-source or panel handle is memory inside
-    // a module whose destroy() is code in that same module.
-    pluginUi_.clear();
-    // And the basemap, for exactly the same reason - its handle and its tile
-    // borrows live in a module about to be unmapped.
-    basemap_.detach();
-    trackInfo_.detach();
-
-    pluginHost_.unloadAll();
+    detachAndUnloadPlugins();
     pluginEnforceError_.clear();
 
     // Un-quarantine BEFORE taking the inventory. Reconciliation and
@@ -2996,17 +3076,23 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     // this process, and fs::remove on it fails with a sharing violation. Two
     // honest answers were available: unload first, or report the failure. We
     // unload — a Remove button that only works after a restart is not a
-    // feature — and the cost is bounded because nothing in the product holds
-    // a decoder instance across frames yet (the host's unloadAll() contract
-    // requires exactly that; see plugin_host.hpp). The rescan below reloads
-    // every survivor in the same frame, so the visible effect is that ONE
-    // plugin disappears.
+    // feature — and the rescan below reloads every survivor in the same
+    // frame, so the visible effect is that ONE plugin disappears.
+    //
+    // Through detachAndUnloadPlugins(), NOT unloadAll() directly. This called
+    // unloadAll() on its own, on the since-falsified premise that "nothing in
+    // the product holds a decoder instance across frames yet" — the runner,
+    // the panel/track-source UI handles, the basemap and the track-info
+    // client all do, which is exactly why rescanPlugins() takes them off in a
+    // prescribed order first. Unmapping a module out from under live handles
+    // is undefined behaviour in third-party code, and whatever it does next it
+    // is not "remove one plugin".
     //
     // If the delete still fails — the file is open in another process, or
     // permissions changed — PluginRepo's reason is shown verbatim in red and
     // the rescan puts everything back exactly as it was. Nothing is lost and
     // nothing is claimed that did not happen.
-    pluginHost_.unloadAll();
+    detachAndUnloadPlugins();
     std::string err;
     if (pluginRepo_.remove(pluginDir_, fileName, err)) {
         installReport_ = "Removed " + fileName;
