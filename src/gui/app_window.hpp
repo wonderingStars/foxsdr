@@ -63,6 +63,162 @@ inline bool asyncOpenStillWanted(std::uint64_t requestedAtGen,
     return requestedAtGen == currentGen;
 }
 
+// One monitor's usable area, in the virtual-desktop coordinates ImGui and the
+// window manager both speak. Its own type rather than an ImGui one so this
+// stays testable without a platform backend.
+struct ScreenRect {
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+};
+
+// How much of the map window has to be reachable for a SAVED geometry to be
+// worth restoring: a title bar's worth. An ImGui window is dragged by its
+// title bar and by nothing else, so a rectangle whose title bar is off the
+// screen cannot be moved back on by any means the user has - the resize grip
+// in the far corner can only resize. 120x30 is a bar wide enough to grab and
+// tall enough to hit.
+constexpr float kMapReachableW = 120.0f;
+constexpr float kMapReachableH = 30.0f;
+
+// Whether a map-window rectangle saved on some PREVIOUS run can still be
+// reached on THIS machine's monitors.
+//
+// The config sanitizer only checks the numbers are sane in isolation
+// (AppConfig::kMapWindowMinPx/kMapWindowMaxPx); it has no idea what displays
+// exist. A geometry saved on a second monitor that has since been unplugged is
+// a perfectly legal rectangle in a place that no longer exists, and restoring
+// it hands the user a window they cannot see or move. That is a NEW failure
+// mode: before the map window's size was persisted it always opened beside the
+// main window, where it could not be lost.
+//
+// The test is on the TITLE BAR STRIP, not on the window as a whole, because
+// overlap somewhere is not the same as being usable - see kMapReachableH.
+// WHICH monitor the title-bar strip landed on, as an index into `workAreas`,
+// or -1 for none. The index is what the size clamp below needs: "it is on
+// screen somewhere" does not say which screen's dimensions the window has to
+// fit inside.
+inline int mapReachableMonitor(int x, int y, int w, int h,
+                               const std::vector<ScreenRect>& workAreas) {
+    if (w <= 0 || h <= 0) { return -1; }
+    const float left = static_cast<float>(x);
+    const float top = static_cast<float>(y);
+    const float right = left + static_cast<float>(w);
+    // The strip is the window's width but only a title bar's height, and it
+    // cannot be taller than the window itself.
+    const float strip = (static_cast<float>(h) < kMapReachableH)
+                            ? static_cast<float>(h)
+                            : kMapReachableH;
+    const float bottom = top + strip;
+    for (std::size_t i = 0; i < workAreas.size(); ++i) {
+        const ScreenRect& r = workAreas[i];
+        const float ix0 = (left > r.x) ? left : r.x;
+        const float ix1 = (right < r.x + r.w) ? right : r.x + r.w;
+        const float iy0 = (top > r.y) ? top : r.y;
+        const float iy1 = (bottom < r.y + r.h) ? bottom : r.y + r.h;
+        if (ix1 - ix0 >= kMapReachableW && iy1 - iy0 >= kMapReachableH) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+inline bool mapGeometryOnScreen(int x, int y, int w, int h,
+                                const std::vector<ScreenRect>& workAreas) {
+    return mapReachableMonitor(x, y, w, h, workAreas) >= 0;
+}
+
+// The share of a monitor's work area the map window OPENS at when nothing was
+// saved. A DEFAULT ONLY: a window that exactly fills the work area looks
+// maximised, and the user then cannot see what it is covering - which is a
+// judgement about a size the host picks, not a limit on one the user picked.
+// Applying it to a restored rectangle shrank a perfectly usable window on
+// every launch (measured: a saved 1120x1300 at 600,60 - bottom 1360, well
+// inside this machine's 1392 px work area - came back 1120x1183, and the 1183
+// was written to the config, so the chosen height degraded once per restart
+// until it reached the share).
+constexpr float kMapWorkAreaShare = 0.85f;
+
+// A RESTORED rectangle is clamped to WHAT ACTUALLY FITS WHERE IT SITS, and to
+// nothing else.
+//
+// Only the position was being checked at first. A geometry saved on a taller
+// or wider display - a 1440p monitor at the office, a laptop panel at home -
+// is a perfectly reachable rectangle whose BOTTOM, and with it the resize
+// grip, is off the screen it reopens on: the user can drag the window but
+// cannot make it smaller, and the geometry is then saved back oversized every
+// frame. The harm is the grip being off the screen, so the test is the screen
+// edge - the work area's right and bottom measured from the window's own
+// origin - and not a share of the monitor.
+//
+// Position is deliberately left alone. mapReachableMonitor has already said
+// the title bar can be grabbed, and moving a window the user placed is a
+// bigger liberty than shrinking one that cannot fit.
+inline void mapClampRestoredSize(int x, int y, int& w, int& h,
+                                 const std::vector<ScreenRect>& workAreas) {
+    const int idx = mapReachableMonitor(x, y, w, h, workAreas);
+    if (idx < 0) { return; }  // not restorable at all; the caller falls back
+    const ScreenRect& r = workAreas[static_cast<std::size_t>(idx)];
+    // Both are positive by construction: the title-bar strip overlapped this
+    // work area by at least kMapReachableW x kMapReachableH, so the window's
+    // own origin is left of its right edge and above its bottom one.
+    int fitW = static_cast<int>(r.x + r.w) - x;
+    int fitH = static_cast<int>(r.y + r.h) - y;
+    // ...but never shrunk to something that is no longer a window. A rectangle
+    // parked with only its title bar showing at the bottom of the screen would
+    // otherwise be restored as a 30 px sliver AND saved that way; a little
+    // overhang is the lesser harm, and the sanitizer's own minimum is the
+    // smallest rectangle this product accepts anywhere.
+    if (fitW < cascade::core::AppConfig::kMapWindowMinPx) {
+        fitW = cascade::core::AppConfig::kMapWindowMinPx;
+    }
+    if (fitH < cascade::core::AppConfig::kMapWindowMinPx) {
+        fitH = cascade::core::AppConfig::kMapWindowMinPx;
+    }
+    if (w > fitW) { w = fitW; }
+    if (h > fitH) { h = fitH; }
+}
+
+// Where the map window OPENS when there is no saved geometry: the proposed
+// rectangle, MOVED so all of it - the resize grip in the bottom-right corner
+// included - is on the screen it lands on.
+//
+// The default size is capped at kMapWorkAreaShare, but the default POSITION
+// was never checked against anything, and the two only make a usable window
+// together. placeAsSeparateWindow anchors the map at the main window's top
+// right plus 60 px, so once the default height grew to use the screen the
+// monitor offers, the bottom fell off the work area whenever the main window
+// sat low: measured on this 5120x1440 desktop with the main window at y=400,
+// the map opened at (1248,491) 1120x1168 - a bottom of 1659 against a work
+// area of 1392 - and that rectangle was then persisted and restored verbatim,
+// because it is not oversized, only misplaced.
+//
+// MOVED rather than shrunk, because the size is the part that was chosen for
+// this monitor on purpose; shrinking it would hand back the scrollbar the
+// derived height exists to avoid. Only a rectangle larger than the whole work
+// area is shrunk, which the share makes impossible unless the small-screen
+// floor in mapDefaultSize is what set it.
+inline void mapPlaceDefaultRect(float& x, float& y, float& w, float& h,
+                                const std::vector<ScreenRect>& workAreas) {
+    if (workAreas.empty()) { return; }
+    // The monitor the proposed rectangle's title bar lands on. A default that
+    // lands nowhere at all means the main window is itself somewhere odd, and
+    // the first work area is a better answer than leaving the map off-screen.
+    int idx = mapReachableMonitor(static_cast<int>(x), static_cast<int>(y),
+                                  static_cast<int>(w), static_cast<int>(h), workAreas);
+    if (idx < 0) { idx = 0; }
+    const ScreenRect& r = workAreas[static_cast<std::size_t>(idx)];
+    if (w > r.w) { w = r.w; }
+    if (h > r.h) { h = r.h; }
+    if (x + w > r.x + r.w) { x = r.x + r.w - w; }
+    if (y + h > r.y + r.h) { y = r.y + r.h - h; }
+    // Bottom-right first, then top-left: a rectangle as large as the work area
+    // has to end up at its origin, not pushed off the top by the nudge above.
+    if (x < r.x) { x = r.x; }
+    if (y < r.y) { y = r.y; }
+}
+
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
 // headless harness) never needs GUI headers.
@@ -161,24 +317,33 @@ private:
     // "Audio filters": noise reduction + manual/auto notch, in the order the
     // pipeline applies them (notch -> auto-notch -> NR; see Pipeline).
     void drawAudioFilterSection();
-    // Loaded plugins with their LICENCE, refused candidates with their
-    // reason, a Remove button per install, a Rescan button, the RETIRED
-    // plugins as red rows, and the "Get plugins" catalogue browser
-    // (drawPluginBrowser).
+    // "Plugin store": everything that talks to the CATALOGUE — the "Get
+    // plugins" toggle and the browser it opens (drawPluginBrowser), which is
+    // where fetching, the update plans and installing live. Split out of the
+    // Plugins section because those are an app store and the section below is
+    // an inventory: one reaches the network, the other never does, and mixing
+    // them made "am I about to download something?" a question the user had to
+    // answer by reading button labels.
+    void drawPluginStoreSection();
+    // "Plugins": what is installed on THIS machine and nothing else. Loaded
+    // plugins with their LICENCE, refused candidates with their reason, a
+    // Remove button per install, a Rescan button, the RETIRED plugins as red
+    // rows, the decoder idle reasons and the per-plugin receiver-control
+    // grants. Nothing here contacts the catalogue.
     void drawPluginsSection();
     // The red rows: every plugin the cached catalogue policy retires, each
     // carrying PluginRepo::pluginBlockMessage() verbatim. Drawn above the
     // installed list because a disabled plugin is the news on this panel.
     void drawBlockedPluginRows();
-    // The catalogue half of the Plugins section: the URL field, the Browse /
+    // The body of the Plugin store section: the URL field, the Browse /
     // Refresh button (the ONLY thing in the product that contacts the
     // catalogue origin), the in-flight progress + Cancel, the entry list and
     // the selected entry's detail pane with the install gate.
     void drawPluginBrowser();
     // The last install/remove outcome: PluginRepo's own error verbatim in
-    // red, or the success line in green. Its own method because BOTH halves
-    // of the section produce one (Install lives in the browser, Remove in the
-    // installed list) and it must be visible whichever half the user is
+    // red, or the success line in green. Its own method because BOTH sections
+    // produce one (Install lives in the store's browser, Remove in the
+    // installed list) and it must be visible whichever one the user is
     // looking at — a failed remove with the browser collapsed would otherwise
     // report nothing at all.
     void drawPluginCatalogueDetail(int idx);
@@ -240,6 +405,16 @@ private:
     // several of them. See the definition for why the position is what decides
     // this — ImGui has no flag for it.
     void placeAsSeparateWindow(int slot);
+    // The same anchor as a VALUE rather than as a side effect. The map needs
+    // it before it is used: its default rectangle has to be checked against
+    // the monitor (mapPlaceDefaultRect), and a function that only calls
+    // SetNextWindowPos cannot answer where the window would have gone.
+    static void separateWindowAnchor(int slot, float& x, float& y);
+    // Where the map window should open when the config has no saved geometry:
+    // a size derived from the MONITOR's work area, not a constant. See the
+    // definition for why a constant was the "map screen isn't large enough"
+    // report.
+    static void mapDefaultSize(float& widthPx, float& heightPx);
     // Translucent service-band rectangles over the spectrum panel, plus the
     // labels that fit. `pos` is the panel's screen-space top-left as recorded
     // before the spectrum was drawn.
@@ -590,6 +765,26 @@ private:
     // before the modules it borrows tiles from are unmapped.
     BasemapCache basemap_;
     bool mapOpen_ = false;
+    // What anyVisibleTarget() said LAST frame, which is the other half of the
+    // self-open rule (cascade::core::mapSelfOpens). Without it the window is
+    // demanded on every frame a target is visible, and a receiver that keeps
+    // hearing its targets - the ordinary case - makes the close button
+    // impossible to use. Starts false so the first target of a session still
+    // brings the map up.
+    bool mapHadVisibleTarget_ = false;
+    // The map window's geometry: seeded from AppConfig at start-up, read back
+    // from ImGui every frame the window is drawn, and written to AppConfig.
+    // ImGui's own .ini persistence is off in this application, so without
+    // these the window reverted to its opening size on every launch however
+    // the user had dragged it. All zero means nothing was ever saved (or the
+    // config sanitizer rejected what was), which is what selects the
+    // monitor-derived default size instead. A session in which the map is
+    // never opened writes back exactly what it read, so closing the map does
+    // not erase the size the user chose.
+    int mapWinW_ = 0;
+    int mapWinH_ = 0;
+    int mapWinX_ = 0;
+    int mapWinY_ = 0;
     // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
     // rather than by the runner because it is written only when a decoder
     // produces a new picture: keeping the GUI's copy out of the runner is what
@@ -782,6 +977,15 @@ private:
     void removeBlockedPlugin(const std::string& fileName);
 
     bool pluginBrowseOpen_ = false;  // "Get plugins" view expanded
+    // Whether the browser was ACTUALLY DRAWN this frame, which is not the same
+    // question as pluginBrowseOpen_ now that the browser lives in its own
+    // collapsible section: the flag can be true while the Plugin store header
+    // is collapsed, and in that state nothing has drawn the install/remove
+    // result text yet. The installed section reads this to decide whether to
+    // draw it — printing it twice in one column reads as two separate
+    // failures, printing it in neither loses a failed remove entirely.
+    // Reset at the top of drawPluginStoreSection, which runs first.
+    bool pluginBrowserDrawnThisFrame_ = false;
     char pluginUrlBuf_[512] = "";    // edit buffer for the catalogue URL
     std::string pluginCatalogueUrl_;  // committed value (persisted)
     std::vector<cascade::core::PluginCatalogEntry> catalog_;

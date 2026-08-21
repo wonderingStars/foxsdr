@@ -447,8 +447,12 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
    flexes horizontally: without it the canvas's own buffer width becomes its
    min-content width, so it can grow and never shrink. Grow soaks up whatever
    the splitter grants the panel area. */
+/* touch-action:none because the pan is OURS. Without it a finger dragged
+   across the map is claimed by the browser as a page scroll before a single
+   pointermove reaches the page, so on a phone - which is what this UI is for -
+   the map cannot be panned at all. */
 #map { flex:1 1 auto; min-width:0; min-height:180px; background:#080a0d;
-       border:1px solid var(--edge); border-radius:3px; }
+       border:1px solid var(--edge); border-radius:3px; touch-action:none; }
 /* Beside the map, scrolling on its own, and resizable by its edge —
    resize:horizontal puts the browser's own grab handle on it, so the split
    between map and list needs no splitter of its own. width (not flex-basis)
@@ -849,8 +853,14 @@ function reflectTracks(s) {
 
   const hits = [];
   s.tracks.forEach((t) => {
+    // Faded targets still draw and are still clickable; a fully dropped one is
+    // skipped ENTIRELY - no marker, no hit, no row - so what can be clicked is
+    // exactly what can be seen.
+    const alpha = trackAlpha(t.ageMs, t.kind);
+    if (alpha <= 0) return;
     const x = xOf(t.lonDeg), y = yOf(t.latDeg);
     hits.push({ id: t.id, x: x, y: y });
+    ctx.globalAlpha = alpha;
     const col = (t.flags & 1) ? '#ff2020' : (TRACK_COLOURS[t.kind] || '#c8d0dc');
     const sel = t.id === selectedTrackId;
     if (t.kind === 1) {
@@ -889,6 +899,9 @@ function reflectTracks(s) {
     ctx.strokeText(lbl, lx, y - 6);
     ctx.fillStyle = '#e6e9ee';
     ctx.fillText(lbl, lx, y - 6);
+    // Restored per target: the attribution box and the next frame's tiles draw
+    // through this same context and must not inherit one aircraft's staleness.
+    ctx.globalAlpha = 1;
   });
   mapHits = hits;
 
@@ -906,10 +919,15 @@ function reflectTracks(s) {
 
   const box = $('trackList');
   box.innerHTML = '';
-  s.tracks.slice(0, 60).forEach((t) => {
+  // Filtered BEFORE the cap, not after: sixty rows of which some are dropped
+  // would hide live targets behind ones the map is no longer drawing.
+  s.tracks.filter((t) => trackAlpha(t.ageMs, t.kind) > 0).slice(0, 60).forEach((t) => {
     const row = document.createElement('div');
     row.className = 'tr' + (t.id === selectedTrackId ? ' sel' : '') +
                     (t.id === followTrackId ? ' fol' : '');
+    // The row fades with its marker, so the list and the map say the same
+    // thing about how current each target is.
+    row.style.opacity = trackAlpha(t.ageMs, t.kind).toFixed(3);
     row.title = 'click to go to it on the map, double-click to follow it';
     const alt = (t.altM === null || !isFinite(t.altM)) ? '-' : Math.round(t.altM) + ' m';
     const spd = (t.speedMps === null || !isFinite(t.speedMps)) ? '-'
@@ -1172,6 +1190,36 @@ function reflectPlugins(s) {
 // The browser map's basemap tiles and aircraft icons. Its own literal: MSVC
 // caps a string literal at 16380 bytes and the neighbours are close to it.
 constexpr char kAppJs2d[] = R"JS(
+// --- staleness --------------------------------------------------------------
+// THE SAME RULE THE DESKTOP MAP APPLIES, with the same numbers - see
+// core/plugin_ui.hpp for why each cadence is what it is. The host has already
+// dropped anything past its kind's drop threshold before the snapshot is
+// built, so what is left for the browser is the FADE half: a target the host
+// still publishes but has not heard from recently reads as faint rather than
+// as current. Without it every marker on this page looks equally live, which
+// is the one thing a target display must never do.
+//
+// Pure, and no clock of its own: the answer depends only on the ageMs the
+// snapshot carries, so a target heard again reports a small ageMs on the very
+// next poll and is back at full strength on that frame - reappearance needs no
+// "I faded this one" memory to undo.
+const TRACK_FADE_MS = { 1: 30000, 2: 300000, 3: 1800000, 4: 120000 };
+const TRACK_DROP_MS = { 1: 60000, 2: 600000, 3: 3600000, 4: 600000 };
+const TRACK_MIN_ALPHA = 0.30;
+function trackAlpha(ageMs, kind) {
+  // An unrecognised kind gets the STATION rule, the most forgiving one there
+  // is, for the host's reason: the page cannot know the reporting cadence of
+  // something it has no name for, and dimming it on an aircraft's schedule
+  // would fade a source that is behaving perfectly.
+  const fade = TRACK_FADE_MS[kind] !== undefined ? TRACK_FADE_MS[kind] : TRACK_FADE_MS[3];
+  const drop = TRACK_DROP_MS[kind] !== undefined ? TRACK_DROP_MS[kind] : TRACK_DROP_MS[3];
+  if (ageMs >= drop) return 0;
+  if (ageMs < fade) return 1;
+  // Linear, because the quantity being shown is elapsed silence and a curve
+  // would make equal silences look unequal.
+  return 1 - (ageMs - fade) / (drop - fade) * (1 - TRACK_MIN_ALPHA);
+}
+
 // --- basemap tiles ----------------------------------------------------------
 // Normalised Web Mercator: the whole world is 0..1 in both axes, so a tile
 // index is the coordinate times 2^z — the same form the desktop uses.
@@ -1302,6 +1350,15 @@ function mercLatN(y) {
   return Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI;
 }
 
+)JS";
+
+// Navigation and the splitters. Split from kAppJs2d for the same reason
+// kAppJs2t was split from kAppJs2: MSVC caps a string literal at 16380 bytes,
+// and the pointer-event pan pushed the previous section past it (C2026,
+// "string too big, trailing characters truncated"). Keep every one of these
+// sections well clear of the cap - the boundaries are arbitrary, so the right
+// answer to a section that has grown is another split, never a squeeze.
+constexpr char kAppJs2e[] = R"JS(
 // --- view state and navigation ----------------------------------------------
 // The view auto-fits to the targets until the user takes it with a drag or
 // the wheel; from then on it is theirs. Double-click hands it back to the
@@ -1346,12 +1403,22 @@ let mapHits = [];   // [{id,x,y}] in canvas pixels, from the last draw
 let mapDrag = null;
 let mapDragMoved = false;
 
-$('map').addEventListener('mousedown', (ev) => {
-  if (ev.button !== 0) return;
-  mapDrag = { x: ev.clientX, y: ev.clientY, moved: false };
+// POINTER events, not mouse events, and that is the whole of the touch story:
+// a browser synthesises mousedown/mouseup from a TAP, but a one-finger DRAG it
+// keeps for itself as a scroll and synthesises nothing at all - so a map wired
+// to mousemove pans under a mouse and is inert under a finger. Measured on the
+// page: a ten-step touch drag across the canvas left mapView bit-identical.
+// One pointer path covers mouse, finger and pen, and setPointerCapture also
+// fixes the mouse case where the button is released outside the window.
+$('map').addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0 || !ev.isPrimary) return;
+  mapDrag = { x: ev.clientX, y: ev.clientY, moved: false, id: ev.pointerId };
+  // Capture so the rest of the gesture is delivered here even when it leaves
+  // the canvas - and so the pointerup arrives, which is what clears the drag.
+  try { ev.target.setPointerCapture(ev.pointerId); } catch (_) {}
 });
-window.addEventListener('mousemove', (ev) => {
-  if (!mapDrag || !mapProj) return;
+window.addEventListener('pointermove', (ev) => {
+  if (!mapDrag || !mapProj || ev.pointerId !== mapDrag.id) return;
   const dx = ev.clientX - mapDrag.x, dy = ev.clientY - mapDrag.y;
   // A few pixels of slop, so an ordinary click on a target does not count as
   // a pan and lose itself.
@@ -1375,9 +1442,15 @@ window.addEventListener('mousemove', (ev) => {
   mapDrag.x = ev.clientX; mapDrag.y = ev.clientY;
   redrawMap();
 });
-window.addEventListener('mouseup', () => {
-  mapDragMoved = !!(mapDrag && mapDrag.moved);
-  mapDrag = null;
+// pointercancel as well as pointerup: a gesture the browser takes away (a
+// system edge swipe, a second finger) ends with a cancel and no up, and a drag
+// left armed would then follow the pointer with nothing held down.
+['pointerup', 'pointercancel'].forEach((t) => {
+  window.addEventListener(t, (ev) => {
+    if (mapDrag && ev.pointerId !== mapDrag.id) return;
+    mapDragMoved = !!(mapDrag && mapDrag.moved);
+    mapDrag = null;
+  });
 });
 
 $('map').addEventListener('wheel', (ev) => {
@@ -2089,7 +2162,8 @@ refreshSession();
 // -time constants, so there is nothing to invalidate.
 const std::string& appJs() {
     static const std::string joined =
-        std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d + kAppJs3;
+        std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d +
+        kAppJs2e + kAppJs3;
     return joined;
 }
 

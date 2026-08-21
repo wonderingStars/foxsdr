@@ -12,18 +12,35 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#define TEST_GETPID _getpid
+#else
+#include <unistd.h>
+#define TEST_GETPID getpid
+#endif
+
 #include <httplib.h>
 
+#include "core/plugin_abi.h"
+#include "core/plugin_ui.hpp"
 #include "dsp/demod.hpp"
 #include "net/web_auth.hpp"
 #include "net/web_server.hpp"
 #include "test_check.hpp"
 
 using namespace cascade::net;
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -1006,6 +1023,262 @@ void testAudioListenerCap() {
     server.stop();
 }
 
+// ---------------------------------------------------------------------------
+// The served client script
+// ---------------------------------------------------------------------------
+// WHY A REAL PARSE AND NOT A SUBSTRING CHECK. app.js is assembled from a
+// handful of raw string literals, and nothing about how it is spliced together
+// is checked by the C++ type system: a section left out of the join, a stray
+// brace, an editing accident inside a literal. All of those still serve a
+// 200 with plausible-looking content, and the script then dies at the first
+// bad statement, taking every handler registered below it with it - which is
+// how a whole feature disappears from the page with no server-side symptom.
+// Only parsing the assembled article can see that, so the suite parses it.
+//
+// Skipped, loudly, when node is not installed: a test that silently passes
+// because its tool is missing is worse than no test.
+
+// Fetches /app.js from a freshly started loopback server. Empty on failure.
+std::string fetchAppJs() {
+    WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    if (port <= 0) {
+        return std::string();
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+    auto res = cli.Get("/app.js");
+    std::string body;
+    if (res && res->status == 200) {
+        body = res->body;
+    }
+    server.stop();
+    return body;
+}
+
+fs::path scratchDir() {
+    const fs::path dir =
+        fs::temp_directory_path() / ("cascade_webjs_" + std::to_string(TEST_GETPID()));
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    return dir;
+}
+
+bool writeFile(const fs::path& p, const std::string& text) {
+    std::ofstream out(p.string(), std::ios::binary);
+    if (!out) {
+        return false;
+    }
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    return static_cast<bool>(out);
+}
+
+std::string readFile(const fs::path& p) {
+    std::ifstream in(p.string(), std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// Runs a command with stdout+stderr captured to `log`. Returns the exit status.
+int runCaptured(const std::string& command, const fs::path& log, std::string& out) {
+    const std::string full = command + " > \"" + log.string() + "\" 2>&1";
+    const int rc = std::system(full.c_str());
+    out = readFile(log);
+    return rc;
+}
+
+bool haveNode(const fs::path& dir) {
+    std::string ignored;
+    return runCaptured("node --version", dir / "node_version.txt", ignored) == 0;
+}
+
+void testServedScriptParses() {
+    const std::string js = fetchAppJs();
+    CHECK(js.size() > 10000u);  // the whole client, not one truncated section
+
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP testServedScriptParses: node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app.js";
+    CHECK(writeFile(jsPath, js));
+
+    std::string output;
+    const int rc = runCaptured("node --check \"" + jsPath.string() + "\"",
+                               dir / "check.txt", output);
+    // The parse error, not just "it failed": the line number is what makes a
+    // truncated literal diagnosable.
+    if (rc != 0) {
+        std::printf("node --check failed:\n%s\n", output.c_str());
+    }
+    CHECK(rc == 0);
+}
+
+// The pan is bound to POINTER events, which is what makes it work under a
+// finger. Structural, because the failure it guards is structural: a page that
+// binds only mousedown/mousemove pans under a mouse and is completely inert on
+// a touchscreen, and every one of these tokens is load-bearing for that.
+void testMapPanIsBoundToPointerEvents() {
+    const std::string js = fetchAppJs();
+    CHECK(js.find("$('map').addEventListener('pointerdown'") != std::string::npos);
+    CHECK(js.find("window.addEventListener('pointermove'") != std::string::npos);
+    CHECK(js.find("'pointerup', 'pointercancel'") != std::string::npos);
+    CHECK(js.find("setPointerCapture") != std::string::npos);
+    // And NOT the mouse-only binding it replaced, which would silently take
+    // the gesture back on a desktop while leaving touch broken.
+    CHECK(js.find("$('map').addEventListener('mousedown'") == std::string::npos);
+
+    // touch-action:none on the canvas, or the browser claims the drag as a
+    // page scroll before a single pointermove is delivered.
+    WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port > 0) {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(5, 0);
+        cli.set_read_timeout(5, 0);
+        auto css = cli.Get("/app.css");
+        CHECK(static_cast<bool>(css));
+        if (css) {
+            CHECK(css->status == 200);
+            // INSIDE THE #map RULE, not merely somewhere in the file: the
+            // comment above that rule names the property too, so a plain
+            // substring search passes with the declaration deleted - which it
+            // did, the first time this was written.
+            // Anchored at the start of a line so it is the canvas's OWN rule,
+            // not the `body[data-view="map"] #map` override that precedes it.
+            const std::string sel = "\n#map { ";
+            const std::size_t at = css->body.find(sel);
+            CHECK(at != std::string::npos);
+            const std::size_t end =
+                (at == std::string::npos) ? std::string::npos : css->body.find('}', at);
+            CHECK(end != std::string::npos);
+            const std::string rule = (at == std::string::npos || end == std::string::npos)
+                                         ? std::string()
+                                         : css->body.substr(at, end - at);
+            CHECK(rule.find("touch-action:none") != std::string::npos);
+        }
+    }
+    server.stop();
+}
+
+// THE BROWSER MUST FADE ON THE SAME CURVE THE DESKTOP DOES. Two views of one
+// set of targets that disagree about which are current is worse than either
+// rule alone, so this runs the SERVED helper under node and compares it, value
+// for value, with core::trackPresentation - the desktop's own function.
+void testTrackFadeMatchesTheDesktopRule() {
+    const std::string js = fetchAppJs();
+    CHECK(js.find("function trackAlpha(") != std::string::npos);
+
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP testTrackFadeMatchesTheDesktopRule: node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app_fade.js";
+    CHECK(writeFile(jsPath, js));
+
+    // Lifts the three constants and the function out of the served script and
+    // calls them. Extraction rather than execution because the script's own
+    // top level touches the DOM, which node has not got.
+    const char* kDriver = R"NODE(
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+function block(name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing function ' + name);
+  let depth = 0, opened = false;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') { depth++; opened = true; }
+    else if (src[j] === '}') { depth--; if (opened && depth === 0) return src.slice(i, j + 1); }
+  }
+  throw new Error('unterminated function ' + name);
+}
+function decl(name) {
+  const m = src.match(new RegExp('^const ' + name + ' = .*;$', 'm'));
+  if (!m) throw new Error('missing const ' + name);
+  return m[0];
+}
+const prelude = [decl('TRACK_FADE_MS'), decl('TRACK_DROP_MS'),
+                 decl('TRACK_MIN_ALPHA'), block('trackAlpha')].join('\n');
+const alpha = new Function(prelude + '\nreturn trackAlpha;')();
+const out = [];
+for (const arg of process.argv.slice(3)) {
+  const parts = arg.split(':');
+  out.push(alpha(Number(parts[0]), Number(parts[1])).toFixed(6));
+}
+console.log(out.join(' '));
+)NODE";
+    const fs::path driver = dir / "fade_driver.js";
+    CHECK(writeFile(driver, kDriver));
+
+    // Every boundary that matters, for every kind the host names plus one it
+    // does not: fresh, the fade instant, the middle of the ramp, one
+    // millisecond before the drop, the drop instant, and past it.
+    struct Case {
+        std::uint64_t ageMs;
+        std::uint32_t kind;
+    };
+    const std::vector<Case> cases = {
+        {0, CASCADE_TRACK_AIRCRAFT},        {29999, CASCADE_TRACK_AIRCRAFT},
+        {30000, CASCADE_TRACK_AIRCRAFT},    {45000, CASCADE_TRACK_AIRCRAFT},
+        {59999, CASCADE_TRACK_AIRCRAFT},    {60000, CASCADE_TRACK_AIRCRAFT},
+        {3600000, CASCADE_TRACK_AIRCRAFT},  {0, CASCADE_TRACK_VESSEL},
+        {420000, CASCADE_TRACK_VESSEL},     {600000, CASCADE_TRACK_VESSEL},
+        {1800000, CASCADE_TRACK_STATION},   {2700000, CASCADE_TRACK_STATION},
+        {3600000, CASCADE_TRACK_STATION},   {120000, CASCADE_TRACK_SATELLITE},
+        {360000, CASCADE_TRACK_SATELLITE},  {600000, CASCADE_TRACK_SATELLITE},
+        {0, 99u},                           {2700000, 99u},
+        {3600000, 99u},
+    };
+
+    std::string args;
+    for (const Case& c : cases) {
+        args += " " + std::to_string(c.ageMs) + ":" + std::to_string(c.kind);
+    }
+    std::string output;
+    const int rc = runCaptured("node \"" + driver.string() + "\" \"" + jsPath.string() + "\"" + args,
+                               dir / "fade.txt", output);
+    if (rc != 0) {
+        std::printf("fade driver failed:\n%s\n", output.c_str());
+    }
+    CHECK(rc == 0);
+
+    std::vector<double> served;
+    {
+        std::istringstream in(output);
+        double v = 0.0;
+        while (in >> v) {
+            served.push_back(v);
+        }
+    }
+    // Whole-container comparison of the SIZE first, and then indexing that the
+    // size has been checked against - never assertions guarded by a size CHECK
+    // that would run out of bounds in exactly the failing run.
+    CHECK(served.size() == cases.size());
+    if (served.size() == cases.size()) {
+        for (std::size_t i = 0; i < cases.size(); ++i) {
+            const cascade::core::TrackPresentation p =
+                cascade::core::trackPresentation(cases[i].ageMs, cases[i].kind);
+            const double want = p.visible ? static_cast<double>(p.alpha) : 0.0;
+            const bool same = std::fabs(served[i] - want) < 1e-4;
+            if (!same) {
+                std::printf("fade mismatch age=%llu kind=%u served=%.6f desktop=%.6f\n",
+                            static_cast<unsigned long long>(cases[i].ageMs),
+                            static_cast<unsigned>(cases[i].kind), served[i], want);
+            }
+            CHECK(same);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1026,5 +1299,8 @@ int main() {
     testAudioStreamsRealSamples();
     testAudioRequiresAuth();
     testAudioListenerCap();
+    testServedScriptParses();
+    testMapPanIsBoundToPointerEvents();
+    testTrackFadeMatchesTheDesktopRule();
     return testSummary("test_web_server");
 }

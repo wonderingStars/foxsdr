@@ -49,7 +49,7 @@ exactly as many.
   install id, no cookie kept — and it is not the usage report; the two share
   nothing. Nothing is downloaded or installed without you pressing a button.
 - The application makes one other network request, only when you press
-  **Browse** in the plugin panel, to fetch the plugin catalogue.
+  **Browse** in the Plugin store panel, to fetch the plugin catalogue.
 
 ## What is sent when usage reporting is enabled
 

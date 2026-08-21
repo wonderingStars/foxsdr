@@ -43,6 +43,73 @@ struct HostTrack {
     std::string plugin;
 };
 
+// How stale a target is allowed to get before the host stops showing it.
+//
+// THIS IS THE HOST'S JOB, and the ABI says so: CascadeTrack::ageMs exists
+// precisely because "the host fades and eventually drops stale targets". A
+// plugin that never evicts - and the shipped ADS-B decoder never does - would
+// otherwise keep every aircraft it has ever heard on the map and in the list
+// for the whole session. Putting the rule here rather than in the drawing code
+// means the map, the flight list, the target counts and the web snapshot all
+// answer the same question the same way, instead of three of them disagreeing.
+//
+// THE THRESHOLDS ARE PER KIND because the sources report at wildly different
+// cadences, and one number would be wrong for all but one of them:
+//
+//   AIRCRAFT (ADS-B)  positions arrive about twice a second; dump1090 and
+//                     tar1090 drop an aircraft at 60 s of silence, so an
+//                     aircraft quiet for 30 s is already anomalous and one
+//                     quiet for 60 s has gone - out of range, or landed.
+//   VESSEL (AIS)      2-10 s under way, up to 3 minutes at anchor, and Class B
+//                     transmits as slowly as every 3 minutes by design. Fading
+//                     at 5 minutes is the first point at which silence is not
+//                     simply a slow reporting class; 10 minutes is gone.
+//   STATION (APRS)    beacons are every 10-30 minutes, and a fixed digipeater
+//                     is not "stale" for being quiet - it has not moved. 30
+//                     and 60 minutes are one and two missed beacon slots at
+//                     the slow end.
+//   SATELLITE         a tracker PROPAGATES a position rather than hearing one,
+//                     so it should update every frame. Two minutes of no new
+//                     position means the propagator has stopped, not that the
+//                     satellite went quiet; 10 minutes before dropping, because
+//                     an orbit that reappears is far more useful than a gap.
+//   UNKNOWN           the host cannot know the cadence of a kind it does not
+//                     recognise, so it uses the MOST forgiving rule it has.
+//                     Dropping an unfamiliar source on an aircraft's schedule
+//                     would erase a target that was behaving perfectly.
+//
+// Times in milliseconds, to match CascadeTrack::ageMs.
+constexpr std::uint64_t kTrackFadeMsAircraft = 30ull * 1000ull;
+constexpr std::uint64_t kTrackDropMsAircraft = 60ull * 1000ull;
+constexpr std::uint64_t kTrackFadeMsVessel = 5ull * 60ull * 1000ull;
+constexpr std::uint64_t kTrackDropMsVessel = 10ull * 60ull * 1000ull;
+constexpr std::uint64_t kTrackFadeMsStation = 30ull * 60ull * 1000ull;
+constexpr std::uint64_t kTrackDropMsStation = 60ull * 60ull * 1000ull;
+constexpr std::uint64_t kTrackFadeMsSatellite = 2ull * 60ull * 1000ull;
+constexpr std::uint64_t kTrackDropMsSatellite = 10ull * 60ull * 1000ull;
+
+// How faint a target may get before it is dropped. Not zero: a marker that
+// reaches full transparency and only THEN disappears has already been invisible
+// for a while, so the user sees a target vanish with no warning at all - which
+// is the behaviour fading exists to avoid.
+constexpr float kTrackMinAlpha = 0.30f;
+
+// The single visibility rule. Pure: same answer for the same inputs, no state,
+// no clock - which is what makes it testable and what makes re-acquisition
+// automatic. A dropped target whose plugin hears it again reports a small
+// ageMs on the very next poll and is visible on that frame; the host keeps no
+// "I dropped this one" memory that would have to be undone.
+struct TrackPresentation {
+    bool visible = true;
+    float alpha = 1.0f;  // 1.0 fresh, ramping to kTrackMinAlpha, then invisible
+};
+TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind);
+
+// How many of `tracks` the rule says to show. The counts beside the map and
+// above the flight list must agree with what is drawn: "30 targets" over a
+// list of twelve is worse than no count at all.
+std::size_t visibleTrackCount(const std::vector<HostTrack>& tracks);
+
 // A polyline. The plugin owns its vertices only until the next poll, so they
 // are copied here too - the host draws on its own schedule and must not hold a
 // pointer into a plugin across frames.
@@ -53,6 +120,57 @@ struct HostPath {
     std::uint32_t flags = 0;
     std::vector<CascadePathPoint> points;
 };
+
+// THE SAME RULE, FOR A TRAIL. A CascadePath carries no age of its own - see
+// the ABI - so the only honest answer about a trail's staleness is its OWNER's:
+// the track with the same id, from the same plugin. Without this the marker
+// obeys the rule and the line under it does not, and a dropped target leaves a
+// trail starting where its marker would have been and running off into empty
+// space - which says "something is here" about the one thing the host has just
+// decided is not.
+//
+// A path with NO matching track keeps today's behaviour (visible, full
+// strength): a source may plot a line that is not a target at all - a
+// footprint, a predicted ground track, a boundary - and the host has no age
+// for it and no business hiding it.
+TrackPresentation pathPresentation(const HostPath& path,
+                                   const std::vector<HostTrack>& tracks);
+
+// Whether there is anything the map would actually DRAW - which is the only
+// honest reason to open the map window on the user's behalf.
+//
+// Asking "are there any tracks at all" instead is a trap, and was one: a
+// source that never evicts (the shipped ADS-B decoder does not) keeps
+// reporting targets the staleness rule has dropped, so the window was demanded
+// again on every single frame, opened itself over whatever the user was doing,
+// showed "0 targets", and could not be closed - the close button cleared the
+// flag and the next frame set it straight back. Measured on the application
+// with a probe reporting one aircraft at ageMs = 3600000.
+//
+// Paths count too, and by the same rule: an orphan path with no owning track
+// is drawn (see pathPresentation), so it is a real reason to open the window,
+// while a trail whose owner has been dropped is not.
+bool anyVisibleTarget(const std::vector<HostTrack>& tracks,
+                      const std::vector<HostPath>& paths);
+
+// Whether the host may open the map ON THE USER'S BEHALF this frame.
+//
+// A TRANSITION, not a state, and that is the whole of it: asking
+// anyVisibleTarget() every frame and opening the window whenever it says yes
+// makes the close button useless in the ORDINARY case, not just the stale one.
+// A source that keeps hearing its targets - which is what an ADS-B receiver
+// does all day - answers yes on every frame, so the click cleared mapOpen_ and
+// the next frame set it straight back. Measured on the application with a
+// probe reporting one aircraft at ageMs = 0: the map was still there 10 s
+// after a close whose hover highlight was confirmed on the button.
+//
+// Firing only on nothing -> something keeps what the self-open is for (the
+// first target of a session brings the map up without the user hunting for a
+// menu) and gives up nothing else: a user who closes it stays closed until the
+// air genuinely goes quiet and something new arrives.
+inline bool mapSelfOpens(bool hadVisibleLastFrame, bool haveVisibleNow) {
+    return haveVisibleNow && !hadVisibleLastFrame;
+}
 
 // One plugin-declared window, resolved once at create time.
 struct HostPanel {

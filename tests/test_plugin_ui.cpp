@@ -486,5 +486,352 @@ int main() {
         CHECK(ui.panels().empty());
     }
 
+    // --- the staleness rule ----------------------------------------------
+    // The ABI promises "the host fades and eventually drops stale targets".
+    // Nothing did, so a plugin that never evicts - the shipped ADS-B decoder
+    // never does - kept every aircraft it had ever heard on the map and in the
+    // list forever. These cases pin the promise.
+    using cascade::core::trackPresentation;
+    using cascade::core::visibleTrackCount;
+
+    // Fresh is fresh, for every kind the ABI names and for one it does not.
+    {
+        const std::uint32_t kinds[] = {CASCADE_TRACK_AIRCRAFT, CASCADE_TRACK_VESSEL,
+                                       CASCADE_TRACK_STATION,  CASCADE_TRACK_SATELLITE,
+                                       CASCADE_TRACK_UNKNOWN,  9999u};
+        for (std::uint32_t k : kinds) {
+            const auto p = trackPresentation(0ull, k);
+            CHECK(p.visible);
+            CHECK_NEAR(p.alpha, 1.0f, 1e-6);
+        }
+    }
+
+    // AIRCRAFT: ADS-B positions arrive twice a second, so 30 s of silence is
+    // already anomalous and 60 s is what dump1090 itself calls gone.
+    {
+        CHECK(trackPresentation(29999ull, CASCADE_TRACK_AIRCRAFT).visible);
+        CHECK_NEAR(trackPresentation(29999ull, CASCADE_TRACK_AIRCRAFT).alpha, 1.0f, 1e-6);
+        // Exactly at the fade threshold the ramp has not moved yet: the fade
+        // BEGINS here, it does not jump.
+        CHECK_NEAR(trackPresentation(30000ull, CASCADE_TRACK_AIRCRAFT).alpha, 1.0f, 1e-6);
+        // Half way between fade and drop, half way down the ramp.
+        CHECK_NEAR(trackPresentation(45000ull, CASCADE_TRACK_AIRCRAFT).alpha, 0.65f, 1e-3);
+        CHECK(trackPresentation(59999ull, CASCADE_TRACK_AIRCRAFT).visible);
+        CHECK_NEAR(trackPresentation(59999ull, CASCADE_TRACK_AIRCRAFT).alpha, 0.30f, 1e-3);
+        // The boundary is inclusive: at the drop threshold it is gone.
+        CHECK(!trackPresentation(60000ull, CASCADE_TRACK_AIRCRAFT).visible);
+        CHECK(!trackPresentation(60001ull, CASCADE_TRACK_AIRCRAFT).visible);
+        CHECK(!trackPresentation(3600000ull, CASCADE_TRACK_AIRCRAFT).visible);
+    }
+
+    // VESSEL: AIS Class B may legitimately transmit only every 3 minutes, so
+    // the aircraft rule applied to a ship would delete a ship behaving
+    // normally. This case is what proves the thresholds really are per kind.
+    {
+        CHECK(trackPresentation(60000ull, CASCADE_TRACK_VESSEL).visible);
+        CHECK_NEAR(trackPresentation(60000ull, CASCADE_TRACK_VESSEL).alpha, 1.0f, 1e-6);
+        CHECK_NEAR(trackPresentation(299999ull, CASCADE_TRACK_VESSEL).alpha, 1.0f, 1e-6);
+        CHECK(trackPresentation(599999ull, CASCADE_TRACK_VESSEL).visible);
+        CHECK(!trackPresentation(600000ull, CASCADE_TRACK_VESSEL).visible);
+    }
+
+    // STATION: an APRS digipeater beacons every 10-30 minutes and has not
+    // moved in between; being quiet is its normal condition.
+    {
+        CHECK_NEAR(trackPresentation(1799999ull, CASCADE_TRACK_STATION).alpha, 1.0f, 1e-6);
+        CHECK(trackPresentation(3599999ull, CASCADE_TRACK_STATION).visible);
+        CHECK(!trackPresentation(3600000ull, CASCADE_TRACK_STATION).visible);
+    }
+
+    // SATELLITE: propagated, not heard, so it should update every frame.
+    {
+        CHECK_NEAR(trackPresentation(119999ull, CASCADE_TRACK_SATELLITE).alpha, 1.0f, 1e-6);
+        CHECK(trackPresentation(599999ull, CASCADE_TRACK_SATELLITE).visible);
+        CHECK(!trackPresentation(600000ull, CASCADE_TRACK_SATELLITE).visible);
+    }
+
+    // AN UNKNOWN KIND GETS THE MOST FORGIVING RULE, never the strictest: the
+    // host cannot know a future kind's cadence, and erasing a target that was
+    // reporting perfectly is the worse of the two mistakes.
+    {
+        CHECK(trackPresentation(60000ull, CASCADE_TRACK_UNKNOWN).visible);
+        CHECK_NEAR(trackPresentation(60000ull, CASCADE_TRACK_UNKNOWN).alpha, 1.0f, 1e-6);
+        CHECK(trackPresentation(3599999ull, 9999u).visible);
+        CHECK(!trackPresentation(3600000ull, 9999u).visible);
+    }
+
+    // ALPHA IS MONOTONIC NON-INCREASING and stays in range. A fade that
+    // brightened again as a target went quieter would say the opposite of what
+    // it means, and one that reached zero before the drop would make targets
+    // vanish with no warning.
+    {
+        const std::uint32_t kinds[] = {CASCADE_TRACK_AIRCRAFT, CASCADE_TRACK_VESSEL,
+                                       CASCADE_TRACK_STATION, CASCADE_TRACK_SATELLITE};
+        for (std::uint32_t k : kinds) {
+            float prev = 2.0f;
+            int stepsVisible = 0;
+            for (std::uint64_t ms = 0ull; ms <= 3600000ull; ms += 1000ull) {
+                const auto p = trackPresentation(ms, k);
+                if (!p.visible) { continue; }
+                ++stepsVisible;
+                CHECK(p.alpha <= prev + 1e-6f);
+                CHECK(p.alpha >= 0.30f - 1e-6f);
+                CHECK(p.alpha <= 1.0f + 1e-6f);
+                prev = p.alpha;
+            }
+            CHECK(stepsVisible > 0);
+        }
+    }
+
+    // RE-ACQUISITION IS AUTOMATIC. The rule is a pure function of the age the
+    // plugin reports, so a target that was dropped reappears on the very frame
+    // its plugin hears it again - the host keeps no "dropped" memory to undo.
+    {
+        std::vector<cascade::core::HostTrack> v(1);
+        std::snprintf(v[0].t.id, CASCADE_TRACK_ID_CHARS, "ABC123");
+        v[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        v[0].t.ageMs = 120000ull;  // two minutes silent: dropped
+        CHECK(visibleTrackCount(v) == 0u);
+        v[0].t.ageMs = 250ull;  // a new message arrives
+        CHECK(visibleTrackCount(v) == 1u);
+        CHECK(trackPresentation(v[0].t.ageMs, v[0].t.kind).visible);
+        CHECK_NEAR(trackPresentation(v[0].t.ageMs, v[0].t.kind).alpha, 1.0f, 1e-6);
+    }
+
+    // The count the UI shows must be the count of what it draws.
+    {
+        std::vector<cascade::core::HostTrack> v(4);
+        v[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        v[0].t.ageMs = 0ull;  // shown
+        v[1].t.kind = CASCADE_TRACK_AIRCRAFT;
+        v[1].t.ageMs = 45000ull;  // faded but shown
+        v[2].t.kind = CASCADE_TRACK_AIRCRAFT;
+        v[2].t.ageMs = 90000ull;  // dropped
+        v[3].t.kind = CASCADE_TRACK_VESSEL;
+        v[3].t.ageMs = 90000ull;  // a ship at the same age is fine
+        CHECK(visibleTrackCount(v) == 3u);
+        CHECK(visibleTrackCount({}) == 0u);
+    }
+
+    // --- the same rule, applied to a TRAIL --------------------------------
+    // A path has no age of its own, so it inherits its owner's. Without this
+    // the marker obeys the staleness rule and the line under it does not: the
+    // dropped target's trail was still drawn, at full strength, starting where
+    // the missing marker would have been. Reproduced on the running app with a
+    // probe plugin publishing a four-point trail owned by an aircraft at
+    // ageMs 61000.
+    using cascade::core::HostPath;
+    using cascade::core::pathPresentation;
+    {
+        std::vector<cascade::core::HostTrack> tr(2);
+        std::snprintf(tr[0].t.id, CASCADE_TRACK_ID_CHARS, "A00");
+        tr[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        tr[0].t.ageMs = 0ull;  // fresh
+        tr[0].plugin = "probe";
+        std::snprintf(tr[1].t.id, CASCADE_TRACK_ID_CHARS, "A61");
+        tr[1].t.kind = CASCADE_TRACK_AIRCRAFT;
+        tr[1].t.ageMs = 61000ull;  // dropped
+        tr[1].plugin = "probe";
+
+        // The owner is fresh: the trail is drawn exactly as before.
+        HostPath fresh;
+        fresh.id = "A00";
+        fresh.plugin = "probe";
+        fresh.kind = CASCADE_TRACK_AIRCRAFT;
+        CHECK(pathPresentation(fresh, tr).visible);
+        CHECK_NEAR(pathPresentation(fresh, tr).alpha, 1.0f, 1e-6);
+
+        // The owner has been dropped: so has the trail.
+        HostPath dropped;
+        dropped.id = "A61";
+        dropped.plugin = "probe";
+        dropped.kind = CASCADE_TRACK_AIRCRAFT;
+        CHECK(!pathPresentation(dropped, tr).visible);
+
+        // NO OWNER AT ALL keeps today's behaviour. A source may plot a line
+        // that is not a target - a footprint, a predicted track - and the host
+        // has no age for it and no business hiding it.
+        HostPath orphan;
+        orphan.id = "NOSUCH";
+        orphan.plugin = "probe";
+        orphan.kind = CASCADE_TRACK_SATELLITE;
+        CHECK(pathPresentation(orphan, tr).visible);
+        CHECK_NEAR(pathPresentation(orphan, tr).alpha, 1.0f, 1e-6);
+
+        // THE PLUGIN IS PART OF THE IDENTITY. Two sources may both use an
+        // ICAO address or an MMSI as an id, and one plugin's silence must not
+        // erase another plugin's trail.
+        HostPath otherPlugin;
+        otherPlugin.id = "A61";
+        otherPlugin.plugin = "somebody-else";
+        otherPlugin.kind = CASCADE_TRACK_AIRCRAFT;
+        CHECK(pathPresentation(otherPlugin, tr).visible);
+
+        // A merely QUIET owner fades its trail by the same fraction, so the
+        // line and the marker dim together rather than the line staying bright
+        // over a marker that is nearly gone.
+        std::vector<cascade::core::HostTrack> quiet(1);
+        std::snprintf(quiet[0].t.id, CASCADE_TRACK_ID_CHARS, "A45");
+        quiet[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        quiet[0].t.ageMs = 45000ull;
+        quiet[0].plugin = "probe";
+        HostPath faded;
+        faded.id = "A45";
+        faded.plugin = "probe";
+        faded.kind = CASCADE_TRACK_AIRCRAFT;
+        CHECK(pathPresentation(faded, quiet).visible);
+        CHECK_NEAR(pathPresentation(faded, quiet).alpha,
+                   trackPresentation(45000ull, CASCADE_TRACK_AIRCRAFT).alpha, 1e-6);
+
+        // THE OWNER'S KIND DECIDES, not the path's. A plugin that mislabels a
+        // trail's kind must not thereby buy its owner a more forgiving rule:
+        // a vessel quiet for 61 s is fine even where an aircraft would be
+        // faded, and the trail follows the vessel.
+        std::vector<cascade::core::HostTrack> ship(1);
+        std::snprintf(ship[0].t.id, CASCADE_TRACK_ID_CHARS, "V61");
+        ship[0].t.kind = CASCADE_TRACK_VESSEL;
+        ship[0].t.ageMs = 61000ull;
+        ship[0].plugin = "probe";
+        HostPath shipTrail;
+        shipTrail.id = "V61";
+        shipTrail.plugin = "probe";
+        shipTrail.kind = CASCADE_TRACK_AIRCRAFT;  // wrong on purpose
+        CHECK(pathPresentation(shipTrail, ship).visible);
+        CHECK_NEAR(pathPresentation(shipTrail, ship).alpha, 1.0f, 1e-6);
+
+        // No tracks at all: nothing to inherit from, so nothing is hidden.
+        CHECK(pathPresentation(dropped, {}).visible);
+    }
+
+    // --- what the map window may OPEN ITSELF for ---------------------------
+    // The map opens on its own the first time a plugin has something to show.
+    // Deciding that from the RAW track list rather than the visible one made
+    // the window impossible to close: a source that never evicts (the shipped
+    // ADS-B decoder does not) keeps reporting dropped targets, so the demand
+    // was re-asserted on the very next frame after the user pressed the close
+    // button. Reproduced on the running application with a probe reporting one
+    // aircraft at ageMs 3600000: the map opened itself, read "0 targets", and
+    // the close button - confirmed to highlight under the cursor - did nothing.
+    using cascade::core::anyVisibleTarget;
+    {
+        std::vector<cascade::core::HostTrack> stale(2);
+        std::snprintf(stale[0].t.id, CASCADE_TRACK_ID_CHARS, "A1");
+        stale[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        stale[0].t.ageMs = 3600000ull;  // the probe's value
+        stale[0].plugin = "probe";
+        std::snprintf(stale[1].t.id, CASCADE_TRACK_ID_CHARS, "A2");
+        stale[1].t.kind = CASCADE_TRACK_AIRCRAFT;
+        stale[1].t.ageMs = 60000ull;  // exactly at the drop threshold
+        stale[1].plugin = "probe";
+
+        // Nothing at all: no demand, which is the state at start-up.
+        CHECK(!anyVisibleTarget({}, {}));
+        // THE DEFECT: reported targets that will not be drawn are not a
+        // reason to open, or to re-open, the window.
+        CHECK(!anyVisibleTarget(stale, {}));
+        // One fresh target among them is.
+        std::vector<cascade::core::HostTrack> mixed = stale;
+        mixed.push_back(cascade::core::HostTrack{});
+        std::snprintf(mixed[2].t.id, CASCADE_TRACK_ID_CHARS, "A3");
+        mixed[2].t.kind = CASCADE_TRACK_AIRCRAFT;
+        mixed[2].t.ageMs = 0ull;
+        mixed[2].plugin = "probe";
+        CHECK(anyVisibleTarget(mixed, {}));
+        // And a merely faded one still counts: it is still drawn.
+        std::vector<cascade::core::HostTrack> faded1(1);
+        std::snprintf(faded1[0].t.id, CASCADE_TRACK_ID_CHARS, "A4");
+        faded1[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        faded1[0].t.ageMs = 45000ull;
+        faded1[0].plugin = "probe";
+        CHECK(anyVisibleTarget(faded1, {}));
+
+        // PATHS OBEY THE SAME RULE THEY ARE DRAWN BY. A trail whose owner has
+        // been dropped is not drawn, so it is not a reason to open the window
+        // either - otherwise the paths half of the test reintroduces exactly
+        // the defect the tracks half just fixed.
+        HostPath ownedByStale;
+        ownedByStale.id = "A1";
+        ownedByStale.plugin = "probe";
+        ownedByStale.kind = CASCADE_TRACK_AIRCRAFT;
+        CHECK(!anyVisibleTarget(stale, {ownedByStale}));
+
+        // An ORPHAN path is drawn (pathPresentation says so), so it is a
+        // reason to open: a footprint or a predicted ground track with no
+        // owning target is still something on the map.
+        HostPath orphanPath;
+        orphanPath.id = "NOSUCH";
+        orphanPath.plugin = "probe";
+        orphanPath.kind = CASCADE_TRACK_SATELLITE;
+        CHECK(anyVisibleTarget(stale, {orphanPath}));
+        CHECK(anyVisibleTarget({}, {orphanPath}));
+
+        // A path owned by a FRESH track opens the window through either half.
+        HostPath ownedByFresh;
+        ownedByFresh.id = "A3";
+        ownedByFresh.plugin = "probe";
+        ownedByFresh.kind = CASCADE_TRACK_AIRCRAFT;
+        CHECK(anyVisibleTarget(mixed, {ownedByFresh}));
+    }
+
+    // --- WHEN the map may open itself: the transition, not the state ---------
+    // Counting only what is drawn fixed the stale case and left the ORDINARY
+    // one broken. A receiver that keeps hearing its targets - which is what an
+    // ADS-B receiver does all day - reports something visible on every frame,
+    // so a rule that asks "is anything visible" each frame re-opened the window
+    // the frame after the close button cleared it. Reproduced on the running
+    // application with a probe reporting one aircraft at ageMs 0: the close
+    // button highlighted under the cursor (152 blue pixels), the click landed,
+    // and the map was still on screen at +2 s and +10 s.
+    using cascade::core::mapSelfOpens;
+    {
+        // Nothing, and still nothing: the start-up state, no demand.
+        CHECK(!mapSelfOpens(false, false));
+        // The first target of a session - the one moment the host is entitled
+        // to put the window up on the user's behalf.
+        CHECK(mapSelfOpens(false, true));
+        // THE DEFECT: a target that was already visible last frame is not a
+        // new reason to open anything.
+        CHECK(!mapSelfOpens(true, true));
+        // Everything going quiet does not open the window either - and it is
+        // what re-arms the next open, so a map closed by the user comes back
+        // when the air has genuinely fallen silent and something new arrives.
+        CHECK(!mapSelfOpens(true, false));
+
+        // THE RULE AS THE WINDOW USES IT, over a run of frames with the same
+        // live target arriving on every one of them. This is the shape of the
+        // live reproduction: open by itself, then a user close that has to
+        // survive every later frame.
+        std::vector<cascade::core::HostTrack> live(1);
+        std::snprintf(live[0].t.id, CASCADE_TRACK_ID_CHARS, "LIVE1");
+        live[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        live[0].t.ageMs = 0ull;
+        live[0].plugin = "probe";
+
+        bool open = false;
+        bool had = false;
+        for (int frame = 0; frame < 3; ++frame) {
+            const bool now = anyVisibleTarget(live, {});
+            if (mapSelfOpens(had, now)) { open = true; }
+            had = now;
+        }
+        CHECK(open);  // it opened itself on the frame the target appeared
+
+        open = false;  // the user presses the close button
+        for (int frame = 0; frame < 100; ++frame) {
+            const bool now = anyVisibleTarget(live, {});
+            if (mapSelfOpens(had, now)) { open = true; }
+            had = now;
+        }
+        CHECK(!open);  // and it stays closed while that target keeps arriving
+
+        // The air goes quiet for a frame and a NEW target arrives: that is a
+        // fresh transition, and the map is allowed back.
+        const bool quiet = anyVisibleTarget({}, {});
+        CHECK(!mapSelfOpens(had, quiet));
+        had = quiet;
+        const bool again = anyVisibleTarget(live, {});
+        CHECK(mapSelfOpens(had, again));
+    }
+
     return testSummary("test_plugin_ui");
 }

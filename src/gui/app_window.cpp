@@ -343,6 +343,12 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
+           // Map geometry takes part, which is what makes a resize save at all.
+           // The debounce restarts on every change, so a drag writes once when
+           // it stops rather than once per frame while it is happening.
+           a.mapWindowWidth == b.mapWindowWidth &&
+           a.mapWindowHeight == b.mapWindowHeight &&
+           a.mapWindowX == b.mapWindowX && a.mapWindowY == b.mapWindowY &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
@@ -1322,6 +1328,10 @@ void AppWindow::drawMenuColumn() {
     drawRecorderSection();
     drawBookmarksSection();
     drawScannerSection();
+    // Store first, then the inventory: it keeps the top-to-bottom order the
+    // one combined section had (browse above installed), and the store must be
+    // drawn first for pluginBrowserDrawnThisFrame_ to mean anything below.
+    drawPluginStoreSection();
     drawPluginsSection();
     drawWebSection();
     drawCatSection();
@@ -2656,6 +2666,43 @@ std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const
     return cascade::core::PluginRepo::planUpdates(catalog_, pluginInventory_.plugins);
 }
 
+void AppWindow::drawPluginStoreSection() {
+    // Reset BEFORE the header test, not inside it: a collapsed store draws no
+    // browser, and the installed section below has to know that so the result
+    // text does not fall down the gap between the two sections.
+    pluginBrowserDrawnThisFrame_ = false;
+
+    // "###pluginstore" for the same reason the section below fixes its own ID:
+    // a label that may grow a suffix later must not take the open/closed state
+    // with it. Nothing persists that state between runs — the app runs with
+    // ImGui's ini file disabled (see the IniFilename assignment in init) — so
+    // both sections simply start closed on every launch, as they always have.
+    if (!ImGui::CollapsingHeader("Plugin store###pluginstore")) { return; }
+    telemetryNotePanel("plugin store");
+
+    // The toggle stays a toggle rather than becoming the header itself. The
+    // header answers "do I want to think about plugins at all"; this answers
+    // "may the catalogue origin be contacted", it is persisted across runs
+    // (AppConfig::pluginBrowserOpen), and collapsing it is how a user parks the
+    // store without losing the section.
+    if (ImGui::Button(pluginBrowseOpen_ ? "Hide browser" : "Get plugins",
+                      ImVec2(-FLT_MIN, 0.0f))) {
+        // Opening the browser is NOT a fetch. The view appears with an empty
+        // list and a Browse button; the catalogue origin is contacted only
+        // when that button is pressed.
+        pluginBrowseOpen_ = !pluginBrowseOpen_;
+    }
+
+    if (pluginBrowseOpen_) {
+        // Still noted separately from "plugin store": expanding the section is
+        // a different act from opening the view that can reach the network, and
+        // the second is the one worth counting.
+        telemetryNotePanel("plugin browser");
+        pluginBrowserDrawnThisFrame_ = true;
+        drawPluginBrowser();
+    }
+}
+
 void AppWindow::drawPluginsSection() {
     // THE BADGE. A user who never expands this section still has to learn that
     // something they installed has stopped working — a silently shorter list
@@ -2677,22 +2724,10 @@ void AppWindow::drawPluginsSection() {
     telemetryNotePanel("plugins");
 
     ImGui::TextDisabled("%s", pluginDir_.c_str());
-    const float half = 0.5f * (ImGui::GetContentRegionAvail().x -
-                               ImGui::GetStyle().ItemSpacing.x);
-    if (ImGui::Button("Rescan", ImVec2(half, 0.0f))) { rescanPlugins(); }
-    ImGui::SameLine();
-    if (ImGui::Button(pluginBrowseOpen_ ? "Hide browser" : "Get plugins",
-                      ImVec2(half, 0.0f))) {
-        // Opening the browser is NOT a fetch. The view appears with an empty
-        // list and a Browse button; the catalogue origin is contacted only
-        // when that button is pressed.
-        pluginBrowseOpen_ = !pluginBrowseOpen_;
-    }
-
-    if (pluginBrowseOpen_) {
-        telemetryNotePanel("plugin browser");
-        drawPluginBrowser();
-    }
+    // Full width now that "Get plugins" has gone to the store section: Rescan
+    // is a local, offline re-read of the plugins folder and is the only button
+    // this section opens with.
+    if (ImGui::Button("Rescan", ImVec2(-FLT_MIN, 0.0f))) { rescanPlugins(); }
 
     drawBlockedPluginRows();
 
@@ -2709,7 +2744,7 @@ void AppWindow::drawPluginsSection() {
         ImGui::TextDisabled("No plugins installed");
         // Still report a remove that just emptied the list — or one that
         // failed, which is exactly when the user needs to be told.
-        if (!pluginBrowseOpen_) { drawPluginResultText(); }
+        if (!pluginBrowserDrawnThisFrame_) { drawPluginResultText(); }
         return;
     }
     // Removal is deferred past the loop: removeInstalledPlugin() rescans,
@@ -2758,10 +2793,12 @@ void AppWindow::drawPluginsSection() {
         ImGui::PopStyleColor();
     }
     if (!removeFile.empty()) { removeInstalledPlugin(removeFile); }
-    // Only when the browser is collapsed: with it open the same text has
-    // already been drawn under the Install button, and printing it twice in
-    // one column reads as two separate failures.
-    if (!pluginBrowseOpen_) { drawPluginResultText(); }
+    // Only when the browser was not drawn this frame: with it on screen the
+    // same text has already been drawn under the Install button, and printing
+    // it twice in one column reads as two separate failures. The test is
+    // "drawn", not "open", because the store section can be collapsed over an
+    // open browser — and then this is the only place the text can appear.
+    if (!pluginBrowserDrawnThisFrame_) { drawPluginResultText(); }
 }
 
 void AppWindow::drawBlockedPluginRows() {
@@ -2815,8 +2852,11 @@ void AppWindow::drawBlockedPluginRows() {
                 // No Update button, because there is nothing to click yet: a
                 // plan needs a catalogue, and nothing fetches one until the
                 // user asks. Say where the button lives rather than showing a
-                // dead one.
-                ImGui::TextDisabled("Press \"Get plugins\", then Browse, to fetch the update.");
+                // dead one — and it now lives in a DIFFERENT SECTION, so the
+                // directions have to name that section or they send the user
+                // hunting through this one for a button that left it.
+                ImGui::TextDisabled("Open \"Plugin store\", press \"Get plugins\", "
+                                    "then Browse, to fetch the update.");
             }
         }
 
@@ -3383,16 +3423,102 @@ void AppWindow::refreshPluginRunner() {
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
-void AppWindow::placeAsSeparateWindow(int slot) {
+void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
     // See the note at the Map window for why overhanging the edge is what
-    // produces a separate operating system window. FirstUseEver throughout, so
-    // this is a starting position and never fights the user afterwards.
+    // produces a separate operating system window.
     const ImGuiViewport* mv = ImGui::GetMainViewport();
     const float stagger = 34.0f * static_cast<float>(slot);
-    ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + mv->Size.x - 140.0f + stagger,
-                                   mv->Pos.y + 60.0f + stagger),
-                            ImGuiCond_FirstUseEver);
+    x = mv->Pos.x + mv->Size.x - 140.0f + stagger;
+    y = mv->Pos.y + 60.0f + stagger;
+}
+
+void AppWindow::placeAsSeparateWindow(int slot) {
+    // FirstUseEver throughout, so this is a starting position and never fights
+    // the user afterwards.
+    float x = 0.0f;
+    float y = 0.0f;
+    separateWindowAnchor(slot, x, y);
+    ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_FirstUseEver);
+}
+
+void AppWindow::mapDefaultSize(float& widthPx, float& heightPx) {
+    // DERIVED FROM THE MONITOR, not a constant. 720x520 was the map's opening
+    // size on every display ever made, and on anything modern it shows about a
+    // dozen of the flight list's rows before the list child grows a scrollbar
+    // - which is exactly the "map screen isn't large enough, it needs to
+    // display without a scroller" report. Measured on the 5120x1440 desktop
+    // this was reproduced on: 30 targets, 12 rows visible, scrollbar.
+    //
+    // The height is asked for in ROWS rather than pixels, because a row is two
+    // lines of text (callsign, then altitude and range) and the whole point is
+    // how many targets fit. That also keeps it right if the font is scaled,
+    // which a pixel constant would not.
+    const float rowH = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+    const float chrome = ImGui::GetFrameHeightWithSpacing() * 2.0f +
+                         ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+    // The list is a fixed 190 px column; the map beside it wants to be several
+    // times that or it is a keyhole, not a map.
+    float want_w = 1120.0f;
+
+    // NEVER LARGER THAN THE SCREEN IT OPENS ON. The monitor's WORK area, so a
+    // taskbar does not end up over the attribution line. ImGui's platform
+    // monitor list is populated by the GLFW backend; when it is empty (a
+    // headless --frames run) the main viewport's own work size is the only
+    // honest answer available.
+    float availW = 0.0f;
+    float availH = 0.0f;
+    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
+    const ImVec2 centre(mv->Pos.x + mv->Size.x * 0.5f, mv->Pos.y + mv->Size.y * 0.5f);
+    for (int i = 0; i < pio.Monitors.Size; ++i) {
+        const ImGuiPlatformMonitor& m = pio.Monitors[i];
+        if (centre.x >= m.MainPos.x && centre.x < m.MainPos.x + m.MainSize.x &&
+            centre.y >= m.MainPos.y && centre.y < m.MainPos.y + m.MainSize.y) {
+            availW = m.WorkSize.x;
+            availH = m.WorkSize.y;
+            break;
+        }
+    }
+    if (availW < 1.0f || availH < 1.0f) {
+        availW = mv->WorkSize.x;
+        availH = mv->WorkSize.y;
+    }
+    // Not the whole thing: see kMapWorkAreaShare. A DEFAULT-ONLY judgement -
+    // a restored rectangle is the user's own and is clamped only to what fits
+    // where it sits - so the two paths are deliberately not the same rule.
+    const float capW = availW * kMapWorkAreaShare;
+    const float capH = availH * kMapWorkAreaShare;
+    if (want_w > capW) { want_w = capW; }
+
+    // THE ROW COUNT COMES FROM THE CAP, not from a number picked in advance.
+    // Asking for a fixed 25 rows and then clamping only ever gives away
+    // height: on the 5120x1440 desktop this was reproduced on, 25 rows asked
+    // for 930 px of a 1183 px allowance and left 253 px of the screen the user
+    // had already agreed to spend unused - so 26 targets, an ordinary ADS-B
+    // load, still scrolled. Asking for as many rows as the allowance holds
+    // makes the default use the screen the monitor actually offers.
+    //
+    // Whole rows rather than the raw allowance, because a part-row at the
+    // bottom of the list is exactly the sliver that makes it look like
+    // something is cut off. At the default font that works out at roughly 23
+    // rows on a 1080p display (1032 px of work area) and 32 on a 1440p one
+    // (1392 px) - both comfortably past the ~26 an ADS-B session reaches.
+    float rows = std::floor((capH - chrome) / rowH);
+    if (rows < 1.0f) { rows = 1.0f; }
+    float want_h = chrome + rowH * rows;
+    // Whole rows fit the cap by construction; this catches only the screen so
+    // small that even the forced single row does not.
+    if (want_h > capH) { want_h = capH; }
+    // A floor below which the window is not a map at all, even on a small
+    // screen. Deliberately ABOVE AppConfig::kMapWindowMinPx: that 320 px is
+    // the smallest rectangle the sanitizer will ACCEPT from a user who dragged
+    // one, and this is the smallest the host will CHOOSE on its own - a size
+    // nobody asked for should be a usable one.
+    if (want_w < 480.0f) { want_w = 480.0f; }
+    if (want_h < 360.0f) { want_h = 360.0f; }
+    widthPx = want_w;
+    heightPx = want_h;
 }
 
 void AppWindow::drawPluginWindows() {
@@ -3401,8 +3527,20 @@ void AppWindow::drawPluginWindows() {
     // for having two kinds of output.
     pluginUi_.poll();
 
-    const bool haveTracks = !pluginUi_.tracks().empty() || !pluginUi_.paths().empty();
-    if (haveTracks) { mapOpen_ = true; }  // opens itself the first time there is something to show
+    // Opens itself the first time there is something to show - counted the way
+    // it is DRAWN, and only on the FRAME THE PICTURE CHANGES. The raw lists
+    // were the wrong question (a source that never evicts keeps reporting
+    // targets the staleness rule has dropped, so the window was demanded over
+    // a map showing "0 targets"), but asking the right question every frame
+    // was still wrong in the ordinary case: a receiver that keeps hearing its
+    // targets answers yes for ever, so the close button was cleared and set
+    // straight back. See mapSelfOpens.
+    const bool haveVisible =
+        cascade::core::anyVisibleTarget(pluginUi_.tracks(), pluginUi_.paths());
+    if (cascade::core::mapSelfOpens(mapHadVisibleTarget_, haveVisible)) {
+        mapOpen_ = true;
+    }
+    mapHadVisibleTarget_ = haveVisible;
 
     if (mapOpen_) {
         telemetryNotePanel("map");
@@ -3415,8 +3553,88 @@ void AppWindow::drawPluginWindows() {
         // right edge rather than flung off to one side, so it appears next to
         // the radio instead of somewhere the user has to hunt for it - and
         // only on first use, so moving or docking it afterwards sticks.
-        placeAsSeparateWindow(0);
+        // ...WHICH IS NO LONGER ENOUGH ON ITS OWN once a saved size is
+        // restored: a window that FITS inside the main viewport is merged into
+        // it, and a map restored to a modest size on a large main window would
+        // silently stop being its own window. NoAutoMerge says outright what
+        // the overhang was only implying, and is what makes restoring an
+        // arbitrary rectangle safe.
+        ImGuiWindowClass mapClass;
+        mapClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+        ImGui::SetNextWindowClass(&mapClass);
+        // ...AND THE SAVED RECTANGLE ONLY COUNTS IF IT IS STILL SOMEWHERE.
+        // The config sanitizer checks the numbers are sane; it cannot know
+        // what monitors exist. A geometry saved on a display that has since
+        // been unplugged restores off-screen, and ImGui's own clamp leaves
+        // only a sliver: measured at 19 px of title bar for a rectangle saved
+        // at (-1500,300), and for (-16000,-16000) only the 19x19 resize grip,
+        // with the title bar off the top - so the map could not be dragged
+        // back at all, and the unusable geometry was then re-saved every
+        // frame. Before the size was persisted the map always opened beside
+        // the main window and this could not happen.
+        std::vector<ScreenRect> workAreas;
+        const ImGuiPlatformIO& mapPio = ImGui::GetPlatformIO();
+        for (int i = 0; i < mapPio.Monitors.Size; ++i) {
+            const ImGuiPlatformMonitor& m = mapPio.Monitors[i];
+            workAreas.push_back(
+                ScreenRect{m.WorkPos.x, m.WorkPos.y, m.WorkSize.x, m.WorkSize.y});
+        }
+        if (workAreas.empty()) {
+            // No platform monitor list: a headless --frames run. The main
+            // viewport's own work area is the only honest answer, exactly as
+            // in mapDefaultSize.
+            const ImGuiViewport* mv = ImGui::GetMainViewport();
+            workAreas.push_back(
+                ScreenRect{mv->WorkPos.x, mv->WorkPos.y, mv->WorkSize.x, mv->WorkSize.y});
+        }
+        if (mapWinW_ > 0 && mapWinH_ > 0 &&
+            mapGeometryOnScreen(mapWinX_, mapWinY_, mapWinW_, mapWinH_, workAreas)) {
+            // ...AND NO BIGGER THAN WHAT FITS WHERE IT SITS. A rectangle saved
+            // on a taller display is reachable by its title bar and still too
+            // tall here, which puts the resize grip off the bottom: the window
+            // can be dragged but not shrunk, and the oversized geometry is then
+            // written back to the config every frame. Only that overhang is
+            // taken off it - a rectangle that fits is the user's own and is
+            // restored untouched.
+            mapClampRestoredSize(mapWinX_, mapWinY_, mapWinW_, mapWinH_, workAreas);
+            // The user's own rectangle, from the config. FirstUseEver, so it
+            // is where the window OPENS and never fights a later drag.
+            ImGui::SetNextWindowPos(
+                ImVec2(static_cast<float>(mapWinX_), static_cast<float>(mapWinY_)),
+                ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(
+                ImVec2(static_cast<float>(mapWinW_), static_cast<float>(mapWinH_)),
+                ImGuiCond_FirstUseEver);
+        } else {
+            // THE DEFAULT RECTANGLE, POSITION INCLUDED. The anchor overhangs
+            // the main window on purpose, but it knows nothing about the
+            // monitor: with a height derived from the screen the bottom - and
+            // the resize grip with it - fell off the work area whenever the
+            // main window sat low, and that rectangle was then persisted and
+            // restored verbatim. Measured at (1248,491) 1120x1168 against a
+            // 1392 px work area. See mapPlaceDefaultRect.
+            float dx = 0.0f;
+            float dy = 0.0f;
+            separateWindowAnchor(0, dx, dy);
+            float dw = 0.0f;
+            float dh = 0.0f;
+            mapDefaultSize(dw, dh);
+            mapPlaceDefaultRect(dx, dy, dw, dh, workAreas);
+            ImGui::SetNextWindowPos(ImVec2(dx, dy), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(dw, dh), ImGuiCond_FirstUseEver);
+        }
         if (ImGui::Begin("Map", &mapOpen_)) {
+            // READ BACK EVERY FRAME, which is the whole of the persistence:
+            // ImGui's own .ini is switched off in this application, so unless
+            // the size is copied out here and into AppConfig it exists only
+            // until the process ends. Rounded to whole pixels because that is
+            // what a window manager deals in and what the config stores.
+            const ImVec2 wpos = ImGui::GetWindowPos();
+            const ImVec2 wsize = ImGui::GetWindowSize();
+            mapWinX_ = static_cast<int>(wpos.x);
+            mapWinY_ = static_cast<int>(wpos.y);
+            mapWinW_ = static_cast<int>(wsize.x);
+            mapWinH_ = static_cast<int>(wsize.y);
             if (ImGui::SmallButton("Fit")) { map_->requestFitToTracks(); }
             ImGui::SameLine();
             // The receiver's own position is asked for, never guessed. It is
@@ -3434,8 +3652,14 @@ void AppWindow::drawPluginWindows() {
                 map_->setHome(static_cast<double>(homeLat), static_cast<double>(homeLon));
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("%d target%s", static_cast<int>(pluginUi_.tracks().size()),
-                                pluginUi_.tracks().size() == 1 ? "" : "s");
+            // COUNTED THE WAY THEY ARE DRAWN. A plugin that never evicts keeps
+            // reporting targets the staleness rule has dropped, and a count of
+            // everything reported over a map showing only what is live is a
+            // number that contradicts the picture beside it.
+            const std::size_t shown =
+                cascade::core::visibleTrackCount(pluginUi_.tracks());
+            ImGui::TextDisabled("%d target%s", static_cast<int>(shown),
+                                shown == 1 ? "" : "s");
 
             // THE FLIGHT LIST, down the left of the map. A map alone answers
             // "where is everything"; the list answers "what am I hearing" and,
@@ -3657,14 +3881,18 @@ void AppWindow::drawPluginWindows() {
 
 void AppWindow::drawTrackList() {
     const std::vector<cascade::core::HostTrack>& tracks = pluginUi_.tracks();
-    if (tracks.empty()) {
+    // THE SAME RULE THE MAP USES, applied here too. A target the map has
+    // dropped must not still be occupying a row: the list is what makes the
+    // window need a scrollbar, and a decoder that never evicts - the shipped
+    // ADS-B one does not - grows it without limit over a session.
+    const std::size_t shown = cascade::core::visibleTrackCount(tracks);
+    if (shown == 0u) {
         ImGui::TextDisabled("No targets.");
         ImGui::TextDisabled("Decoded aircraft, ships and stations appear here.");
         return;
     }
 
-    ImGui::Text("%d target%s", static_cast<int>(tracks.size()),
-                tracks.size() == 1 ? "" : "s");
+    ImGui::Text("%d target%s", static_cast<int>(shown), shown == 1 ? "" : "s");
     // FOLLOW is a toggle rather than a mode buried in a menu, because its
     // effect - the map moving on its own - is confusing if you cannot see at a
     // glance that you asked for it.
@@ -3679,7 +3907,14 @@ void AppWindow::drawTrackList() {
 
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         const cascade::core::HostTrack& ht = tracks[i];
+        const cascade::core::TrackPresentation pres =
+            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+        if (!pres.visible) { continue; }
         ImGui::PushID(static_cast<int>(i));
+        // Going quiet is visible in the list as well as on the map, and by the
+        // same measure: a row that has faded is a target the map is about to
+        // drop, which is the warning that makes the disappearance make sense.
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * pres.alpha);
 
         // The LABEL is the callsign where one has been decoded and the id
         // otherwise. An aircraft's ICAO address is known from its first frame
@@ -3736,6 +3971,7 @@ void AppWindow::drawTrackList() {
             std::strncat(detail, rng, sizeof(detail) - std::strlen(detail) - 1);
         }
         if (detail[0] != '\0') { ImGui::TextDisabled("  %s", detail); }
+        ImGui::PopStyleVar();
         ImGui::PopID();
     }
 }
@@ -4803,6 +5039,12 @@ void AppWindow::publishWebSnapshot() {
     s.scanStepHz = scanStepKhz_ * 1.0e3;
 
     for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+        // THE SAME STALENESS RULE THE DESKTOP MAP APPLIES, so the two views do
+        // not disagree about what is still flying. A dropped target simply
+        // stops appearing in the snapshot; ageMs is still published for the
+        // ones that remain, so the web page is free to fade them on its own
+        // terms - that presentation is the web UI's decision, not this one's.
+        if (!cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { continue; }
         cascade::net::RadioStatus::Track w;
         w.id = t.t.id;
         w.label = t.t.label;
@@ -5674,6 +5916,17 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
 
+    // The map window's rectangle from the last session. Seeded here rather
+    // than read at draw time so the very first Begin("Map") already has it —
+    // ImGui's FirstUseEver only fires once, and a value that arrived a frame
+    // late would be ignored for the whole session. All four are zero when
+    // nothing was saved or the sanitizer rejected it, which is what selects
+    // the monitor-derived default in drawPluginWindows.
+    mapWinW_ = cfg.mapWindowWidth;
+    mapWinH_ = cfg.mapWindowHeight;
+    mapWinX_ = cfg.mapWindowX;
+    mapWinY_ = cfg.mapWindowY;
+
     // Plugin browser. Restoring the URL and the open/closed state does NOT
     // start a fetch — see AppConfig::pluginCatalogueUrl. The user still has
     // to press Browse, on this launch as on every other.
@@ -5897,6 +6150,10 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.notchQ = static_cast<double>(notchQ_);
     cfg.autoNotch = autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
+    cfg.mapWindowWidth = mapWinW_;
+    cfg.mapWindowHeight = mapWinH_;
+    cfg.mapWindowX = mapWinX_;
+    cfg.mapWindowY = mapWinY_;
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;

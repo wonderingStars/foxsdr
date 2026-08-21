@@ -123,6 +123,36 @@ struct AppConfig {
     bool autoNotch = false;
     bool bandPlanOverlay = true;
 
+    // --- Map window geometry --------------------------------------------------
+    // The map is its own operating system window, and ImGui's own .ini
+    // persistence is switched off in this application (IniFilename = nullptr,
+    // so no stray file appears beside the executable). That left the map
+    // opening at a fixed size on every launch no matter what the user had
+    // dragged it to the session before, which is the whole of the "it should
+    // be resizable" report: it always WAS resizable, the size just never
+    // survived.
+    //
+    // ZERO WIDTH MEANS "NOTHING SAVED", and is the default. It is not a legal
+    // window size, so it needs no companion flag, and it is what makes a first
+    // run - and a run after the geometry below is rejected - fall back to the
+    // size derived from the monitor's work area rather than to a constant that
+    // was chosen for somebody else's screen. The POSITION is only honoured
+    // when a size was saved with it: the two were written by the same gesture
+    // and are one decision, and 0,0 is a perfectly legal position that could
+    // not otherwise be told apart from "unset".
+    //
+    // Sanitized on load as a rectangle, not as four numbers: if ANY of them is
+    // outside its documented range the whole geometry is discarded. A
+    // half-rejected rectangle is a rectangle nobody chose, which is the same
+    // rule dbMin/dbMax already follow.
+    //   width/height  kMapWindowMinPx .. kMapWindowMaxPx, or 0 for unset
+    //   x/y           -kMapWindowMaxPx .. kMapWindowMaxPx (a second monitor
+    //                 may legitimately sit at a negative coordinate)
+    int mapWindowWidth = 0;
+    int mapWindowHeight = 0;
+    int mapWindowX = 0;
+    int mapWindowY = 0;
+
     // --- Plugin browser settings (P9) -----------------------------------------
     // Where the in-app plugin browser looks for its catalogue. Persisted so a
     // user — or an enterprise deploying cascade — can point the browser at
@@ -300,6 +330,14 @@ struct AppConfig {
     // A pending report is a few hundred bytes; anything beyond this is a
     // corrupt or tampered config and is dropped rather than posted.
     static constexpr std::size_t kMaxPendingReportBytes = 8192;
+
+    // Bounds for the map window geometry above. The minimum is a window that
+    // can still show its own title bar and toolbar; below that the map is not
+    // a map. The maximum is generous enough for any wall of monitors anyone
+    // will plausibly own and small enough that a hand-edited or corrupt value
+    // cannot ask the window manager for a rectangle it has to fight.
+    static constexpr int kMapWindowMinPx = 320;
+    static constexpr int kMapWindowMaxPx = 16384;
 };
 
 class ConfigStore {

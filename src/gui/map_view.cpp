@@ -19,7 +19,7 @@ constexpr double kEarthRadiusKm = 6371.0;
 
 // Per-kind colours. Chosen to stay distinguishable when several kinds share
 // the map, which is the case this whole design exists to support.
-ImU32 colourFor(std::uint32_t kind, bool stale) {
+ImU32 colourFor(std::uint32_t kind) {
     ImU32 c;
     switch (kind) {
         // Red for aircraft. The pale blue this used to be is legible over a
@@ -34,13 +34,20 @@ ImU32 colourFor(std::uint32_t kind, bool stale) {
         case CASCADE_TRACK_SATELLITE:c = IM_COL32(230, 150, 255, 255); break;
         default:                     c = IM_COL32(200, 200, 200, 255); break;
     }
-    if (stale) {
-        // Faded rather than removed: a target that stopped reporting a minute
-        // ago is still information, and making it vanish the instant it goes
-        // quiet loses the last known position exactly when it matters.
-        c = (c & 0x00FFFFFFu) | (90u << IM_COL32_A_SHIFT);
-    }
     return c;
+}
+
+// Applies a 0..1 fade to a colour's alpha. Faded rather than removed while the
+// target is merely quiet: a target that stopped reporting a moment ago is
+// still information, and making it vanish the instant it goes quiet loses the
+// last known position exactly when it matters. Removal comes later, and from
+// cascade::core::trackPresentation, which knows what cadence this KIND reports
+// at - the one thing a single "older than a minute" test could never know.
+ImU32 fadedColour(ImU32 c, float alpha) {
+    const float a = static_cast<float>((c >> IM_COL32_A_SHIFT) & 0xFFu) * alpha;
+    unsigned int v = static_cast<unsigned int>(a + 0.5f);
+    if (v > 255u) { v = 255u; }
+    return (c & ~(0xFFu << IM_COL32_A_SHIFT)) | (v << IM_COL32_A_SHIFT);
 }
 
 // Aircraft draw as a plane silhouette rather than a dot, rotated to the
@@ -161,29 +168,49 @@ void MapView::draw(float width, float height,
     const bool mercator = tiles != nullptr && tiles->active();
 
     // Fit to content the first time there is any, so the map does not open on
-    // empty ocean while every target is somewhere else.
+    // empty ocean while every target is somewhere else. FITTING IGNORES WHAT
+    // IT WILL NOT DRAW, and waits for something it will: a source that never
+    // evicts keeps reporting a target last heard hours ago and a thousand
+    // miles away, and fitting to it zooms the map out to a continent to
+    // include a marker that is not on screen at all.
     if (fitRequested_ && !tracks.empty()) {
         double minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+        bool any = false;
         for (const auto& ht : tracks) {
+            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                continue;
+            }
+            any = true;
             minLat = std::min(minLat, ht.t.latDeg);
             maxLat = std::max(maxLat, ht.t.latDeg);
             minLon = std::min(minLon, ht.t.lonDeg);
             maxLon = std::max(maxLon, ht.t.lonDeg);
         }
-        centreLat_ = 0.5 * (minLat + maxLat);
-        centreLon_ = 0.5 * (minLon + maxLon);
-        const double need = std::max(maxLon - minLon, (maxLat - minLat) * 2.0);
-        spanDeg_ = std::clamp(need * 1.6, 0.5, 360.0);
-        fitRequested_ = false;
-        fittedOnce_ = true;
+        if (any) {
+            centreLat_ = 0.5 * (minLat + maxLat);
+            centreLon_ = 0.5 * (minLon + maxLon);
+            const double need = std::max(maxLon - minLon, (maxLat - minLat) * 2.0);
+            spanDeg_ = std::clamp(need * 1.6, 0.5, 360.0);
+            fitRequested_ = false;
+            fittedOnce_ = true;
+        }
     }
 
     // FOLLOW, before the projection is set up so the whole frame uses the new
     // centre. A followed target that only re-centred on the NEXT frame would
     // visibly lag its own marker.
+    //
+    // A DROPPED TARGET IS NOT FOLLOWED, but the follow is not cancelled
+    // either: the map simply stops moving where the marker no longer is. The
+    // id is kept because re-acquisition is automatic everywhere else, and a
+    // follow silently cleared by a gap in reception is a setting the user
+    // would have to notice and restore by hand.
     if (!followId_.empty()) {
         for (const auto& ht : tracks) {
             if (followId_ == ht.t.id) {
+                if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                    break;
+                }
                 centreLat_ = ht.t.latDeg;
                 centreLon_ = ht.t.lonDeg;
                 break;
@@ -449,7 +476,17 @@ void MapView::draw(float width, float height,
     // --- paths, under the targets ----------------------------------------
     for (const auto& p : paths) {
         if (p.points.size() < 2) { continue; }
-        const ImU32 col = (colourFor(p.kind, false) & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT);
+        // THE TRAIL OBEYS THE SAME RULE AS ITS OWNER. A path carries no age of
+        // its own, so the host looks the owner up; without this the marker
+        // disappeared on schedule and the line under it did not, leaving a
+        // trail that starts where the missing marker would have been and runs
+        // off into empty space - a drawing that says "something is here" about
+        // the one target the host has just decided is not.
+        const cascade::core::TrackPresentation pres =
+            cascade::core::pathPresentation(p, tracks);
+        if (!pres.visible) { continue; }
+        const ImU32 col = fadedColour(
+            (colourFor(p.kind) & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT), pres.alpha);
         for (std::size_t i = 1; i < p.points.size(); ++i) {
             const double lonA = p.points[i - 1].lonDeg;
             const double lonB = p.points[i].lonDeg;
@@ -469,13 +506,21 @@ void MapView::draw(float width, float height,
     const cascade::core::HostTrack* best = nullptr;
 
     for (const auto& ht : tracks) {
+        // THE HOST'S SINGLE STALENESS RULE, which the ABI says is the host's
+        // job (see CascadeTrack::ageMs). What was here before was a bare
+        // "older than a minute, draw it faint" applied to every kind alike -
+        // so a ship reporting on its normal three-minute Class B schedule was
+        // permanently dimmed, and an aircraft heard once an hour ago was drawn
+        // at full confidence forever because nothing ever removed it.
+        const cascade::core::TrackPresentation pres =
+            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+        if (!pres.visible) { continue; }
         const ImVec2 s = toScreen(ht.t.latDeg, ht.t.lonDeg);
         if (s.x < origin.x - 40 || s.x > origin.x + width + 40 || s.y < origin.y - 40 ||
             s.y > origin.y + height + 40) {
             continue;
         }
-        const bool stale = ht.t.ageMs > 60000ull;
-        const ImU32 col = colourFor(ht.t.kind, stale);
+        const ImU32 col = fadedColour(colourFor(ht.t.kind), pres.alpha);
         // Selected or followed: either way this is the one the user singled
         // out, and it gets the ringed marker.
         const bool picked = (!selectedId_.empty() && selectedId_ == ht.t.id) ||

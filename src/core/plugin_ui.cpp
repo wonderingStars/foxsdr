@@ -19,7 +19,103 @@ std::string bounded(const char* p, std::size_t cap) {
     return std::string(p, n);
 }
 
+// The fade and drop thresholds for one kind. Written as a lookup rather than a
+// chain of ifs at each call site so there is exactly one place a cadence can be
+// wrong, and so an unrecognised kind lands on the forgiving default by
+// construction instead of by someone remembering to write the else branch.
+void staleLimits(std::uint32_t kind, std::uint64_t& fadeMs, std::uint64_t& dropMs) {
+    switch (kind) {
+        case CASCADE_TRACK_AIRCRAFT:
+            fadeMs = kTrackFadeMsAircraft;
+            dropMs = kTrackDropMsAircraft;
+            break;
+        case CASCADE_TRACK_VESSEL:
+            fadeMs = kTrackFadeMsVessel;
+            dropMs = kTrackDropMsVessel;
+            break;
+        case CASCADE_TRACK_STATION:
+            fadeMs = kTrackFadeMsStation;
+            dropMs = kTrackDropMsStation;
+            break;
+        case CASCADE_TRACK_SATELLITE:
+            fadeMs = kTrackFadeMsSatellite;
+            dropMs = kTrackDropMsSatellite;
+            break;
+        default:
+            // See the header: the most forgiving rule the host has, because it
+            // does not know what this kind's reporting cadence is.
+            fadeMs = kTrackFadeMsStation;
+            dropMs = kTrackDropMsStation;
+            break;
+    }
+}
+
 }  // namespace
+
+TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind) {
+    std::uint64_t fadeMs = 0;
+    std::uint64_t dropMs = 0;
+    staleLimits(kind, fadeMs, dropMs);
+
+    TrackPresentation p;
+    if (ageMs >= dropMs) {
+        // GONE, not merely faint. The list row and the marker both disappear,
+        // and the target counts stop counting it.
+        p.visible = false;
+        p.alpha = 0.0f;
+        return p;
+    }
+    if (ageMs < fadeMs) { return p; }  // fresh: full strength
+
+    // Linear from full strength at the fade threshold down to kTrackMinAlpha
+    // just before the drop threshold. Linear rather than anything cleverer
+    // because the value being conveyed is "how long since we last heard it",
+    // and a curve would make equal silences look unequal.
+    //
+    // dropMs > fadeMs holds for every kind above, and ageMs < dropMs here, so
+    // the denominator is non-zero and t stays inside [0,1).
+    const double t = static_cast<double>(ageMs - fadeMs) /
+                     static_cast<double>(dropMs - fadeMs);
+    p.alpha = static_cast<float>(1.0 - t * (1.0 - static_cast<double>(kTrackMinAlpha)));
+    return p;
+}
+
+TrackPresentation pathPresentation(const HostPath& path,
+                                   const std::vector<HostTrack>& tracks) {
+    for (const HostTrack& ht : tracks) {
+        // PLUGIN AND ID BOTH, because neither alone is an identity: two
+        // sources may key on the same ICAO address or MMSI, and one plugin
+        // going quiet must not erase another plugin's trail. Both fields are
+        // filled from the same instance name in PluginUi::poll, so the
+        // comparison is exact rather than approximate.
+        if (ht.plugin != path.plugin) { continue; }
+        if (path.id != ht.t.id) { continue; }
+        // The OWNER'S kind decides, not the path's: the age being judged is
+        // the owner's, and judging it against a cadence the owner does not
+        // report at would be the same mistake one global threshold was.
+        return trackPresentation(ht.t.ageMs, ht.t.kind);
+    }
+    // Unowned: see the header. Not everything a source draws is a target.
+    return TrackPresentation{};
+}
+
+std::size_t visibleTrackCount(const std::vector<HostTrack>& tracks) {
+    std::size_t n = 0;
+    for (const HostTrack& ht : tracks) {
+        if (trackPresentation(ht.t.ageMs, ht.t.kind).visible) { ++n; }
+    }
+    return n;
+}
+
+bool anyVisibleTarget(const std::vector<HostTrack>& tracks,
+                      const std::vector<HostPath>& paths) {
+    // Tracks first, because it is the cheap half and the common one.
+    if (visibleTrackCount(tracks) > 0u) { return true; }
+    for (const HostPath& p : paths) {
+        if (pathPresentation(p, tracks).visible) { return true; }
+    }
+    return false;
+}
 
 // Per-plugin bridge behind CascadeHostApi::ctx. One of these exists for every
 // plugin that declares CASCADE_CAP_HOST_CLIENT, because the host has to know

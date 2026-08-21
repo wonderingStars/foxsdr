@@ -22,6 +22,12 @@
 #include "core/config.hpp"
 
 #include "core/plugin_repo.hpp"  // defaultIndexUrl(), the default catalogue URL
+// mapGeometryOnScreen(): the SECOND half of validating a saved map window.
+// ConfigStore decides whether the numbers are sane; this decides whether the
+// rectangle they describe still exists on this machine, and the two only make
+// sense read together — so the cases live in one file. Pulls in no GLFW or
+// ImGui; see the note at the top of app_window.hpp.
+#include "gui/app_window.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -90,6 +96,12 @@ AppConfig junkConfig() {
     c.notchQ = 1e9;
     c.autoNotch = true;
     c.bandPlanOverlay = false;
+    // Map geometry, away from the "nothing saved" default and out of range, so
+    // a load path that forgets to assign it is caught.
+    c.mapWindowWidth = -5;
+    c.mapWindowHeight = 999999;
+    c.mapWindowX = -999999;
+    c.mapWindowY = 999999;
     // P9 fields, both away from their defaults (and the URL empty-adjacent
     // junk, so a load path that forgets to assign it is caught).
     c.pluginCatalogueUrl = "garbage";
@@ -138,6 +150,10 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.notchQ == b.notchQ);
     CHECK(a.autoNotch == b.autoNotch);
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
+    CHECK(a.mapWindowWidth == b.mapWindowWidth);
+    CHECK(a.mapWindowHeight == b.mapWindowHeight);
+    CHECK(a.mapWindowX == b.mapWindowX);
+    CHECK(a.mapWindowY == b.mapWindowY);
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
@@ -203,6 +219,14 @@ int main() {
         in.notchQ = 42.25;
         in.autoNotch = true;
         in.bandPlanOverlay = false;
+        // Map window geometry: a rectangle nobody would arrive at by accident,
+        // and a NEGATIVE x, because a second monitor to the left of the
+        // primary one is the ordinary case that a naive "must be positive"
+        // rule would silently throw away.
+        in.mapWindowWidth = 1234;
+        in.mapWindowHeight = 987;
+        in.mapWindowX = -1600;
+        in.mapWindowY = 42;
         // P9: the enterprise escape hatch. A URL that is neither the default
         // nor junkConfig()'s value, so the roundtrip proves the FILE is what
         // came back rather than either end's fallback.
@@ -454,6 +478,378 @@ int main() {
         CHECK(d.deemphasisIndex == 0);
         CHECK(d.stereoEnabled);
         CHECK(d.bandPlanOverlay);
+    }
+
+    // --- map window geometry (documented in config.hpp) -----------------------
+    {
+        const std::string path = p("map_window.json");
+        AppConfig out;
+        std::string err;
+
+        // Nothing saved is the default, and is what makes the window fall back
+        // to a size derived from the monitor instead of a fixed constant.
+        const AppConfig d;
+        CHECK(d.mapWindowWidth == 0);
+        CHECK(d.mapWindowHeight == 0);
+        CHECK(d.mapWindowX == 0);
+        CHECK(d.mapWindowY == 0);
+
+        // A plausible rectangle survives untouched, negative coordinates
+        // included: a monitor to the left of the primary one is ordinary.
+        CHECK(writeText(path, "{\"mapWindowWidth\":1600,\"mapWindowHeight\":1000,"
+                              "\"mapWindowX\":-1920,\"mapWindowY\":0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mapWindowWidth == 1600);
+        CHECK(out.mapWindowHeight == 1000);
+        CHECK(out.mapWindowX == -1920);
+        CHECK(out.mapWindowY == 0);
+
+        // The extremes of the documented range are IN range, not out of it.
+        CHECK(writeText(path, "{\"mapWindowWidth\":320,\"mapWindowHeight\":320,"
+                              "\"mapWindowX\":-16384,\"mapWindowY\":16384}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mapWindowWidth == 320);
+        CHECK(out.mapWindowHeight == 320);
+        CHECK(out.mapWindowX == -16384);
+        CHECK(out.mapWindowY == 16384);
+
+        // Absurd values are REJECTED AS A RECTANGLE: one bad component takes
+        // all four with it, because half a rectangle is not a rectangle the
+        // user chose. Each case below breaks exactly one component and asserts
+        // the other three went too.
+        struct Case { const char* json; const char* why; };
+        const Case bad[] = {
+            {"{\"mapWindowWidth\":0,\"mapWindowHeight\":900,\"mapWindowX\":10,"
+             "\"mapWindowY\":10}", "width unset but height set"},
+            {"{\"mapWindowWidth\":900,\"mapWindowHeight\":0,\"mapWindowX\":10,"
+             "\"mapWindowY\":10}", "height unset but width set"},
+            {"{\"mapWindowWidth\":319,\"mapWindowHeight\":900,\"mapWindowX\":10,"
+             "\"mapWindowY\":10}", "width below the minimum"},
+            {"{\"mapWindowWidth\":900,\"mapWindowHeight\":319,\"mapWindowX\":10,"
+             "\"mapWindowY\":10}", "height below the minimum"},
+            {"{\"mapWindowWidth\":-800,\"mapWindowHeight\":900,\"mapWindowX\":10,"
+             "\"mapWindowY\":10}", "negative width"},
+            {"{\"mapWindowWidth\":16385,\"mapWindowHeight\":900,\"mapWindowX\":10,"
+             "\"mapWindowY\":10}", "width past the maximum"},
+            {"{\"mapWindowWidth\":900,\"mapWindowHeight\":100000,\"mapWindowX\":10,"
+             "\"mapWindowY\":10}", "height past the maximum"},
+            {"{\"mapWindowWidth\":900,\"mapWindowHeight\":700,\"mapWindowX\":16385,"
+             "\"mapWindowY\":10}", "x past the maximum"},
+            {"{\"mapWindowWidth\":900,\"mapWindowHeight\":700,\"mapWindowX\":10,"
+             "\"mapWindowY\":-16385}", "y past the minimum"},
+        };
+        for (const Case& c : bad) {
+            CHECK(writeText(path, std::string(c.json) + "\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            // Reported with the reason so a failure names the case.
+            if (out.mapWindowWidth != 0 || out.mapWindowHeight != 0 ||
+                out.mapWindowX != 0 || out.mapWindowY != 0) {
+                std::printf("  (case: %s)\n", c.why);
+            }
+            CHECK(out.mapWindowWidth == 0);
+            CHECK(out.mapWindowHeight == 0);
+            CHECK(out.mapWindowX == 0);
+            CHECK(out.mapWindowY == 0);
+        }
+
+        // And a saved rectangle survives a full save/load roundtrip, which is
+        // the actual promise: a resize the user made must outlive the process.
+        AppConfig in;
+        in.schemaVersion = 1;
+        in.mapWindowWidth = 1570;
+        in.mapWindowHeight = 1020;
+        in.mapWindowX = 1226;
+        in.mapWindowY = 169;
+        const std::string rt = p("map_window_roundtrip.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        out = junkConfig();
+        CHECK(ConfigStore::load(rt, out, err));
+        CHECK(out.mapWindowWidth == 1570);
+        CHECK(out.mapWindowHeight == 1020);
+        CHECK(out.mapWindowX == 1226);
+        CHECK(out.mapWindowY == 169);
+    }
+
+    // --- a saved rectangle that no monitor can still show ----------------------
+    // The sanitizer above passes anything inside +/-16384, which says nothing
+    // about whether the DISPLAY it was saved on still exists. Measured on the
+    // real application before this check existed: a config holding
+    // (-1500,300) 1301x999 restored to (-1282,300) - 19 px of window on
+    // screen - and (-16000,-16000) restored to (-1282,-980), where the only
+    // on-screen part is the 19x19 resize grip, the title bar is off the top,
+    // and the map cannot be reached at all.
+    {
+        using cascade::gui::ScreenRect;
+        using cascade::gui::mapGeometryOnScreen;
+
+        // The machine this was reproduced on: one 5120x1440 display with a
+        // 48 px taskbar.
+        const std::vector<ScreenRect> one{{0.0f, 0.0f, 5120.0f, 1392.0f}};
+
+        // The ordinary case: a window the user placed and left.
+        CHECK(mapGeometryOnScreen(1174, 117, 1120, 930, one));
+        CHECK(mapGeometryOnScreen(0, 0, 1120, 930, one));
+
+        // The two measured failures, both refused.
+        CHECK(!mapGeometryOnScreen(-1500, 300, 1301, 999, one));
+        CHECK(!mapGeometryOnScreen(-16000, -16000, 1301, 999, one));
+
+        // A TITLE BAR OFF THE TOP is unreachable even though most of the
+        // window is on screen: an ImGui window is dragged by its title bar,
+        // and the resize grip in the far corner can only resize.
+        CHECK(!mapGeometryOnScreen(500, -40, 1120, 930, one));
+        // One pixel of bar showing is not a bar.
+        CHECK(!mapGeometryOnScreen(500, -29, 1120, 930, one));
+        // The whole bar showing is.
+        CHECK(mapGeometryOnScreen(500, 0, 1120, 930, one));
+
+        // Horizontally: a sliver is refused, a grabbable width is kept. The
+        // boundary is the documented 120 px.
+        CHECK(!mapGeometryOnScreen(-1181, 100, 1200, 900, one));  // 19 px showing
+        CHECK(!mapGeometryOnScreen(-1081, 100, 1200, 900, one));  // 119 px
+        CHECK(mapGeometryOnScreen(-1080, 100, 1200, 900, one));   // 120 px
+        // And off the right-hand end, which the ordinary "x >= 0" check misses.
+        CHECK(!mapGeometryOnScreen(5101, 100, 1200, 900, one));   // 19 px
+        CHECK(mapGeometryOnScreen(5000, 100, 1200, 900, one));    // 120 px
+
+        // A SECOND MONITOR TO THE LEFT is the case a naive "must be positive"
+        // rule would wrongly reject - and the same rectangle must be refused
+        // once that monitor is gone. This pair is the whole point of taking
+        // the monitor list as an argument.
+        const std::vector<ScreenRect> two{{-1920.0f, 0.0f, 1920.0f, 1032.0f},
+                                          {0.0f, 0.0f, 5120.0f, 1392.0f}};
+        CHECK(mapGeometryOnScreen(-1500, 300, 1301, 999, two));
+        CHECK(!mapGeometryOnScreen(-1500, 300, 1301, 999, one));
+
+        // Degenerate inputs are refused rather than trusted: a zero or
+        // negative size is not a window, and no monitors at all means there is
+        // nothing to be reachable on.
+        CHECK(!mapGeometryOnScreen(100, 100, 0, 900, one));
+        CHECK(!mapGeometryOnScreen(100, 100, 1200, 0, one));
+        CHECK(!mapGeometryOnScreen(100, 100, -1200, -900, one));
+        CHECK(!mapGeometryOnScreen(100, 100, 1200, 900, {}));
+
+        // A window SHORTER than a title bar cannot hide behind the strip
+        // clamp: the config sanitizer's 320 px minimum makes this unreachable
+        // in practice, and it is asserted so a future minimum cannot quietly
+        // make a 10 px window "reachable".
+        CHECK(!mapGeometryOnScreen(100, 100, 1200, 10, one));
+    }
+
+    // --- a saved rectangle that DOES NOT FIT WHERE IT SITS --------------------
+    // Reachability is not the only thing a restored rectangle can get wrong. A
+    // geometry saved on a taller or wider display comes back with its bottom -
+    // and the resize grip with it - off the screen: draggable by the title bar,
+    // impossible to shrink, and written back oversized on every frame.
+    //
+    // WHAT FITS, NOT A SHARE OF THE MONITOR. The first attempt reused
+    // kMapWorkAreaShare (the DEFAULT size's 85%) as the limit, which shrank
+    // windows that were entirely on screen and perfectly usable: measured on
+    // the application, a saved 1120x1300 at 600,60 - bottom 1360 inside a 1392
+    // px work area - was restored as 1120x1183 and the 1183 written back to the
+    // config, so a chosen height could not survive a restart.
+    {
+        using cascade::gui::ScreenRect;
+        using cascade::gui::mapClampRestoredSize;
+        using cascade::gui::mapReachableMonitor;
+
+        // The machine this was reproduced on, again: 5120x1440 with a 48 px
+        // taskbar, so the work area ends at x 5120, y 1392.
+        const std::vector<ScreenRect> one{{0.0f, 0.0f, 5120.0f, 1392.0f}};
+
+        // A rectangle that already fits is left exactly alone.
+        int w = 1120;
+        int h = 930;
+        mapClampRestoredSize(1174, 117, w, h, one);
+        CHECK(w == 1120);
+        CHECK(h == 930);
+
+        // THE REGRESSION: a tall window that still ends above the taskbar is
+        // the user's own choice and survives the restore untouched. 60 + 1300
+        // = 1360 <= 1392, so nothing here is off the screen.
+        w = 1120;
+        h = 1300;
+        mapClampRestoredSize(600, 60, w, h, one);
+        CHECK(w == 1120);
+        CHECK(h == 1300);
+
+        // Saved on a 4K panel, reopened here: the bottom would fall past the
+        // work area, so the height comes down to exactly what is left below
+        // the window's own top (1392 - 117), and the width, which fits, does
+        // not move.
+        w = 1120;
+        h = 1350;
+        mapClampRestoredSize(1174, 117, w, h, one);
+        CHECK(w == 1120);
+        CHECK(h == 1275);
+
+        // Too wide as well, from a wider desktop - and measured from where the
+        // window sits, not from the origin: at x 400 there are 4720 px of work
+        // area to the right of it, and at y 200 there are 1192 below.
+        w = 5000;
+        h = 1300;
+        mapClampRestoredSize(400, 200, w, h, one);
+        CHECK(w == 4720);
+        CHECK(h == 1192);
+
+        // The same size at the origin fits the screen whole, so it is NOT
+        // touched - which is the case the 85% share used to shrink for no
+        // reason at all.
+        w = 5000;
+        h = 1300;
+        mapClampRestoredSize(0, 0, w, h, one);
+        CHECK(w == 5000);
+        CHECK(h == 1300);
+
+        // A WINDOW PARKED WITH ONLY ITS TITLE BAR SHOWING is not shrunk to a
+        // sliver. What fits below y 1362 is 30 px; restoring a 30 px window -
+        // and saving it - would destroy the geometry outright, so the
+        // sanitizer's own minimum is the floor and a little overhang is kept.
+        w = 1120;
+        h = 900;
+        mapClampRestoredSize(600, 1362, w, h, one);
+        CHECK(w == 1120);
+        CHECK(h == AppConfig::kMapWindowMinPx);
+
+        // THE MONITOR IT LANDED ON IS THE ONE THAT DECIDES, not the largest
+        // one attached: a window whose title bar is on the small left-hand
+        // display is measured against that display's edges even though a much
+        // bigger one is plugged in beside it.
+        const std::vector<ScreenRect> two{{-1920.0f, 0.0f, 1920.0f, 1032.0f},
+                                          {0.0f, 0.0f, 5120.0f, 1392.0f}};
+        CHECK(mapReachableMonitor(-1500, 300, 1301, 999, two) == 0);
+        w = 1800;
+        h = 999;
+        mapClampRestoredSize(-1500, 300, w, h, two);
+        CHECK(w == 1500);  // 0 - (-1500): the left monitor ends at x 0
+        CHECK(h == 732);   // 1032 - 300
+        // And the same rectangle on the big monitor is not touched.
+        CHECK(mapReachableMonitor(1174, 117, 1800, 999, two) == 1);
+        w = 1800;
+        h = 999;
+        mapClampRestoredSize(1174, 117, w, h, two);
+        CHECK(w == 1800);
+        CHECK(h == 999);
+
+        // A rectangle that is not restorable at all is left untouched: the
+        // caller falls back to the monitor-derived default rather than opening
+        // a clamped window somewhere the user cannot reach.
+        w = 1301;
+        h = 999;
+        mapClampRestoredSize(-16000, -16000, w, h, one);
+        CHECK(w == 1301);
+        CHECK(h == 999);
+        CHECK(mapReachableMonitor(-16000, -16000, 1301, 999, one) == -1);
+
+        // A work area the platform reports as empty is not reachable, so it
+        // caps nothing either - which is what keeps the clamp from shrinking a
+        // window to nothing on a monitor list that arrived as zeroes.
+        const std::vector<ScreenRect> degenerate{{0.0f, 0.0f, 0.0f, 0.0f}};
+        CHECK(mapReachableMonitor(0, 0, 1120, 930, degenerate) == -1);
+        w = 1120;
+        h = 930;
+        mapClampRestoredSize(0, 0, w, h, degenerate);
+        CHECK(w == 1120);
+        CHECK(h == 930);
+        // No monitors at all, same answer.
+        w = 1120;
+        h = 930;
+        mapClampRestoredSize(0, 0, w, h, {});
+        CHECK(w == 1120);
+        CHECK(h == 930);
+    }
+
+    // --- the DEFAULT rectangle, position included -----------------------------
+    // The default size is capped at 85% of the work area, but the default
+    // POSITION was checked against nothing, so the map opened with its bottom -
+    // and the resize grip in it - off the screen whenever the main window sat
+    // low, and that rectangle was then persisted and restored verbatim (the
+    // restore clamp above does not touch it: it is not too big, only in the
+    // wrong place). Measured on the application with the main window dragged to
+    // y 400: the map opened at (1248,491) 1120x1168, a bottom of 1659 against a
+    // work area of 1392.
+    {
+        using cascade::gui::ScreenRect;
+        using cascade::gui::mapPlaceDefaultRect;
+
+        const std::vector<ScreenRect> one{{0.0f, 0.0f, 5120.0f, 1392.0f}};
+
+        // THE REPRODUCTION, as numbers: the rectangle is moved up until it
+        // ends exactly at the bottom of the work area, and keeps its size -
+        // the height is what the "it needs to display without a scroller"
+        // report asked for.
+        float x = 1248.0f;
+        float y = 491.0f;
+        float w = 1120.0f;
+        float h = 1168.0f;
+        mapPlaceDefaultRect(x, y, w, h, one);
+        CHECK_NEAR(w, 1120.0f, 0.5f);
+        CHECK_NEAR(h, 1168.0f, 0.5f);
+        CHECK_NEAR(x, 1248.0f, 0.5f);
+        CHECK_NEAR(y, 224.0f, 0.5f);  // 1392 - 1168
+
+        // A default that already fits is left exactly where it was asked for.
+        x = 600.0f;
+        y = 60.0f;
+        w = 1120.0f;
+        h = 1168.0f;
+        mapPlaceDefaultRect(x, y, w, h, one);
+        CHECK_NEAR(x, 600.0f, 0.5f);
+        CHECK_NEAR(y, 60.0f, 0.5f);
+        CHECK_NEAR(w, 1120.0f, 0.5f);
+        CHECK_NEAR(h, 1168.0f, 0.5f);
+
+        // Off the RIGHT-HAND end too, which is the same fault on the other
+        // axis: the anchor sits 140 px inside the main window's right edge, and
+        // a main window near the right of the desktop puts the map past it.
+        x = 4500.0f;
+        y = 100.0f;
+        w = 1120.0f;
+        h = 900.0f;
+        mapPlaceDefaultRect(x, y, w, h, one);
+        CHECK_NEAR(x, 4000.0f, 0.5f);  // 5120 - 1120
+        CHECK_NEAR(y, 100.0f, 0.5f);
+
+        // A SECOND MONITOR decides for a window that lands on it, exactly as
+        // the restore clamp does: the left-hand panel is shorter, so the same
+        // rectangle is pushed up further there.
+        const std::vector<ScreenRect> two{{-1920.0f, 0.0f, 1920.0f, 1032.0f},
+                                          {0.0f, 0.0f, 5120.0f, 1392.0f}};
+        x = -1500.0f;
+        y = 400.0f;
+        w = 1120.0f;
+        h = 900.0f;
+        mapPlaceDefaultRect(x, y, w, h, two);
+        CHECK_NEAR(x, -1500.0f, 0.5f);
+        CHECK_NEAR(y, 132.0f, 0.5f);  // 1032 - 900
+
+        // A rectangle BIGGER than the whole work area - only reachable through
+        // the small-screen floor in mapDefaultSize - is shrunk to the work area
+        // and put at its origin, rather than nudged off the top by the move.
+        const std::vector<ScreenRect> tiny{{0.0f, 0.0f, 400.0f, 300.0f}};
+        x = 300.0f;
+        y = 300.0f;
+        w = 480.0f;
+        h = 360.0f;
+        mapPlaceDefaultRect(x, y, w, h, tiny);
+        CHECK_NEAR(w, 400.0f, 0.5f);
+        CHECK_NEAR(h, 300.0f, 0.5f);
+        CHECK_NEAR(x, 0.0f, 0.5f);
+        CHECK_NEAR(y, 0.0f, 0.5f);
+
+        // NO MONITOR LIST AT ALL - the headless --frames run - leaves the
+        // proposal alone: inventing a screen would be worse than the anchor the
+        // main viewport already agreed to.
+        x = 1248.0f;
+        y = 491.0f;
+        w = 1120.0f;
+        h = 1168.0f;
+        mapPlaceDefaultRect(x, y, w, h, {});
+        CHECK_NEAR(x, 1248.0f, 0.5f);
+        CHECK_NEAR(y, 491.0f, 0.5f);
+        CHECK_NEAR(w, 1120.0f, 0.5f);
+        CHECK_NEAR(h, 1168.0f, 0.5f);
     }
 
     // --- P9 plugin browser settings -------------------------------------------

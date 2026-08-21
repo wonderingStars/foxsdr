@@ -196,6 +196,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "notchQ", out.notchQ);
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
+    getInt(j, "mapWindowWidth", out.mapWindowWidth);
+    getInt(j, "mapWindowHeight", out.mapWindowHeight);
+    getInt(j, "mapWindowX", out.mapWindowX);
+    getInt(j, "mapWindowY", out.mapWindowY);
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
@@ -254,6 +258,28 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.sourceKind != "siggen" && out.sourceKind != "file" &&
         out.sourceKind != "soapy") {
         out.sourceKind = defaults.sourceKind;
+    }
+    // Map window geometry is validated as ONE rectangle: any bad component
+    // discards all four, so the window falls back to the size derived from the
+    // monitor rather than to a rectangle half of which somebody hand-edited.
+    // See the header for why zero width is the "nothing saved" sentinel and
+    // why the position rides with the size.
+    {
+        const bool sized = out.mapWindowWidth != 0 || out.mapWindowHeight != 0;
+        const bool sizeOk = out.mapWindowWidth >= AppConfig::kMapWindowMinPx &&
+                            out.mapWindowWidth <= AppConfig::kMapWindowMaxPx &&
+                            out.mapWindowHeight >= AppConfig::kMapWindowMinPx &&
+                            out.mapWindowHeight <= AppConfig::kMapWindowMaxPx;
+        const bool posOk = out.mapWindowX >= -AppConfig::kMapWindowMaxPx &&
+                           out.mapWindowX <= AppConfig::kMapWindowMaxPx &&
+                           out.mapWindowY >= -AppConfig::kMapWindowMaxPx &&
+                           out.mapWindowY <= AppConfig::kMapWindowMaxPx;
+        if (!sized || !sizeOk || !posOk) {
+            out.mapWindowWidth = 0;
+            out.mapWindowHeight = 0;
+            out.mapWindowX = 0;
+            out.mapWindowY = 0;
+        }
     }
     // An empty catalogue URL is a hand-edit (or a deleted value), not a
     // request for "no catalogue": restore the published default rather than
@@ -348,6 +374,10 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["notchQ"] = cfg.notchQ;
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
+    j["mapWindowWidth"] = cfg.mapWindowWidth;
+    j["mapWindowHeight"] = cfg.mapWindowHeight;
+    j["mapWindowX"] = cfg.mapWindowX;
+    j["mapWindowY"] = cfg.mapWindowY;
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;

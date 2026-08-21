@@ -154,7 +154,9 @@ same way every decoder in this project is written from its own specification.
 ## Plugins
 
 Decoders can be installed as separate native plugins, from an in-app
-catalogue ("Plugins" -> "Get plugins"). The catalogue is contacted only when
+catalogue ("Plugin store" -> "Get plugins"). Browsing and installing live in
+that section; what is already installed, and what it is allowed to do, lives in
+the "Plugins" section beneath it. The catalogue is contacted only when
 you press Browse: nothing is fetched at startup, and no plugin ever updates
 itself.
 
