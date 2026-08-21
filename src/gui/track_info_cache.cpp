@@ -108,7 +108,15 @@ std::vector<std::string> TrackInfoCache::drainText() {
     if (!active()) {
         return out;
     }
-    for (;;) {
+    // BOUNDED PER CALL. This runs on the GUI thread, once per frame, and the
+    // loop used to run until the plugin said "nothing left". A plugin that
+    // produces text faster than one frame can drain it never says that — a
+    // decoder stuck in a logging loop is enough, a hostile one is trivial —
+    // and the frame simply never ends. 32 polls of a 4 KB buffer is 128 KB of
+    // status text per frame, orders of magnitude more than anything legitimate
+    // emits; whatever is still queued is taken by the next frame, the same
+    // trade the tile server's per-frame cap makes.
+    for (std::size_t polls = 0; polls < kMaxPollsPerDrain; ++polls) {
         const std::int32_t n = api_->poll_text(handle_, pollBuf_.data(), pollBuf_.size());
         if (n <= 0) {
             break;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <future>
@@ -42,6 +43,25 @@ namespace cascade::gui {
 class SpectrumView;
 class WaterfallView;
 class MapView;
+
+// Whether a device open that finished on a worker thread should still be
+// applied to the pipeline.
+//
+// Opening a SoapySDR device takes seconds, and the user is not frozen while it
+// happens: they can pick the built-in generator, open an IQ file, or drive
+// either from the web UI in the meantime. Without this check the open simply
+// landed when it landed and replaced whatever they had chosen — the radio
+// changed itself, several seconds after they told it not to.
+//
+// The rule is a sequence number rather than a "cancelled" flag because the
+// question is not "was it cancelled" but "is the answer still about the source
+// the user is looking at": every install of a source bumps the counter, the
+// request records the value it was made at, and a result whose value has moved
+// on is about a source selection that no longer exists.
+inline bool asyncOpenStillWanted(std::uint64_t requestedAtGen,
+                                 std::uint64_t currentGen) {
+    return requestedAtGen == currentGen;
+}
 
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
@@ -185,7 +205,9 @@ private:
     // Grants or revokes one plugin, updating both the live PluginUi and the
     // persisted list. One function so the two can never disagree: a grant that
     // took effect but was not saved would come back revoked next launch.
-    void setPluginTuneAllowed(const std::string& plugin, bool allowed);
+    // `pluginKey` is a PluginUi::tuneKey() — the module file name, never the
+    // display name, which the plugin itself chooses.
+    void setPluginTuneAllowed(const std::string& pluginKey, bool allowed);
     // Pushes pluginTuneAllowed_ into pluginUi_. Called after every
     // PluginUi::rebuild, because rebuild follows a clear() that drops the
     // grants along with the instances — without this a rescan silently revoked
@@ -388,6 +410,22 @@ private:
     bool soapyOpenPending_ = false;
     std::string soapyBusyLabel_;  // device name shown while an open is in flight
 
+    // Source-selection sequence number, incremented by EVERY install of a
+    // source into the pipeline (generator, IQ file, or a resolved device).
+    // soapyOpenReqGen_ records the value an in-flight open was requested at;
+    // asyncOpenStillWanted() compares the two when it resolves. See the
+    // predicate's comment above for why a counter and not a flag.
+    std::uint64_t sourceGen_ = 0;
+    std::uint64_t soapyOpenReqGen_ = 0;
+
+    // Drains a pending device open OFF the GUI thread at shutdown. See the
+    // definition for the semantics chosen and what they cost.
+    void reapPendingSoapyOpen();
+    // The same for a pending device SCAN. Separate because the futures are
+    // separate and either may be in flight alone; the definition explains why
+    // this reaper has nothing to release where the open reaper has a handle.
+    void reapPendingSoapyScan();
+
     // Consumes finished scan/open futures; called once per frame.
     void pollSoapyAsync();
     // Applies a resolved open on the GUI thread (panel mirrors, gain priming,
@@ -524,11 +562,14 @@ private:
     std::uint64_t telemetryCrashes_ = 0;
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
     double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
-    double telemetryModeSince_ = 0.0;                     // when the current mode began
+    // Time in the current mode. A plain "since" mark cannot be used here: the
+    // accrual runs once per frame, and a per-frame delta truncated to whole
+    // seconds is always zero, which is what kept modeSeconds empty.
+    cascade::core::SecondAccrual telemetryModeAccrual_;
     std::map<std::string, std::uint64_t> telemetryModeSeconds_;
     std::vector<std::string> telemetryPanels_;
-    // Called on every mode change and at exit, so the seconds land against
-    // the mode that was actually running rather than the last one selected.
+    // Called once per frame, so the seconds land against the mode that was
+    // actually running rather than the last one selected.
     void telemetryAccrueMode();
     void telemetryNotePanel(const char* name);
     // Reads the previous session out of the config, counts a crash if it
@@ -756,11 +797,39 @@ private:
     cascade::core::UpdateInfo update_;
     std::string updateError_;
     std::string updateReadyPath_;     // verified installer, waiting to be run
-    std::future<bool> updateCheckFuture_;
-    std::future<bool> updateDownloadFuture_;
+    // The app-update transfer's own progress and cancel, NOT pluginRepo_'s.
+    // The banner used to read pluginRepo_.progress(), which nothing on this
+    // path ever writes — the bar sat at 0 for the whole download — and
+    // pluginRepo_.cancel() could not reach a transfer started through the
+    // static fetch helper, so quitting mid-update blocked in the future's
+    // destructor until the download finished. One pair per transfer keeps the
+    // plugin browser's bar and this one from reporting each other's bytes.
+    //
+    // DECLARED BEFORE THE FUTURES, deliberately: members are destroyed in
+    // reverse declaration order, and the download future's destructor BLOCKS
+    // until its worker returns — a worker that is still polling this flag. A
+    // pair declared after the future would be destroyed while that read is in
+    // flight.
+    //
+    // THE SAME APPLIES TO EVERY OTHER MEMBER EITHER WORKER TOUCHES, which is
+    // why the three result slots below moved up here from after the futures.
+    // The atomics are only what the workers READ; these are what they WRITE.
+    // downloadUpdate() is handed updateResultPath_ and updateResultError_ by
+    // reference and assigns to them as it goes, and checkForUpdate() does the
+    // same with updateResult_ and updateResultError_ — so declared after the
+    // futures they were std::string and UpdateInfo destructors running while a
+    // worker thread was mid-assignment into them, a use-after-free reached
+    // through a dangling `this` rather than a data race the flags could stop.
+    // The blocking future destructor that makes quit slow is also the only
+    // thing that makes this ordering enough: it guarantees both workers have
+    // returned before anything declared above the futures is destroyed.
+    std::atomic<float> updateProgress_{0.0f};
+    std::atomic<bool> updateCancel_{false};
     cascade::core::UpdateInfo updateResult_;
     std::string updateResultError_;
     std::string updateResultPath_;
+    std::future<bool> updateCheckFuture_;
+    std::future<bool> updateDownloadFuture_;
 
     int catalogSel_ = -1;        // index into catalog_, -1 = nothing selected
     bool legalAck_ = false;      // legal-notice checkbox for the SELECTED entry

@@ -127,13 +127,19 @@ std::string readLines(SockT s, int lines, int timeoutMs = 3000) {
     return out;
 }
 
+// Asks the OS for a free port rather than walking a fixed range.
+//
+// The range this used to scan started at a FIXED number, which made two copies
+// of this suite running at once collide: on Windows SO_REUSEADDR let the second
+// process bind a port the first was already listening on, so each suite's
+// clients were served by the other suite's server. That produced failures with
+// no relation to the code under test — and, until stop() was made to wait for
+// its connection threads, an outright crash when one process tore its server
+// down while the other still held a connection to it. An ephemeral port cannot
+// collide, so the tests below assert the same things with no shared state.
 int startOnFreePort(CatServer& server, std::string& error) {
-    for (int port = 18533; port < 18633; ++port) {
-        if (server.start(static_cast<std::uint16_t>(port), /*bindAll=*/false, error)) {
-            return port;
-        }
-    }
-    return -1;
+    if (!server.start(0, /*bindAll=*/false, error)) return -1;
+    return static_cast<int>(server.boundPort());
 }
 
 void resetStatus() {
@@ -392,6 +398,208 @@ void testConnectionCap() {
     server.stop();
 }
 
+// Reads one queued offset without ever indexing out of range: a CHECK on the
+// size records and continues, so guarding the read with one would still read
+// past the end in exactly the run that has something to report.
+double offsetAt(const std::vector<ControlRequest>& v, std::size_t i) {
+    if (i >= v.size() || !v[i].vfoOffsetHz.has_value()) { return -1.0; }
+    return *v[i].vfoOffsetHz;
+}
+
+void testControlQueueIsCapped() {
+    resetStatus();
+    CatServer server;
+    server.setStatusProvider(provider);
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+
+    SockT c = connectTo(port);
+    CHECK(c != INVALID_SOCKET);
+    if (c == INVALID_SOCKET) {
+        server.stop();
+        return;
+    }
+
+    // NOTHING drains the queue here, which is the stalled-GUI case: a client
+    // that can grow it without limit is a memory leak driven from the network.
+    // Every frequency stays inside the sampled band, so each command queues a
+    // VFO move and the offsets identify which commands survived.
+    const int kFlood = 200;
+    std::string all;
+    for (int i = 0; i < kFlood; ++i) {
+        all += "F " + std::to_string(145'000'000 + i * 1000) + "\n";
+    }
+    CHECK(sendRaw(c, all));
+    const std::string replies = readLines(c, kFlood, 8000);
+    std::size_t lines = 0;
+    for (char ch : replies) {
+        if (ch == '\n') ++lines;
+    }
+    CHECK(lines == static_cast<std::size_t>(kFlood));  // all of them were answered
+
+    const std::vector<ControlRequest> queued = server.takePendingControls();
+    CHECK(queued.size() == cascade::net::kMaxQueuedCatControls);
+    // ...and it is the OLDEST that were dropped, the browser queue's policy:
+    // the last kMaxQueuedCatControls commands are the ones still there.
+    const double firstKeptHz =
+        static_cast<double>(kFlood - static_cast<int>(cascade::net::kMaxQueuedCatControls)) *
+        1000.0;
+    CHECK(offsetAt(queued, 0) == firstKeptHz);
+    CHECK(offsetAt(queued, cascade::net::kMaxQueuedCatControls - 1) ==
+          static_cast<double>(kFlood - 1) * 1000.0);
+
+    closeClient(c);
+    server.stop();
+}
+
+void testStopClosesLiveConnections() {
+    resetStatus();
+    CatServer server;
+    server.setStatusProvider(provider);
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+
+    SockT c = connectTo(port);
+    CHECK(c != INVALID_SOCKET);
+    if (c == INVALID_SOCKET) { server.stop(); return; }
+
+    CHECK(sendRaw(c, "f\n"));
+    CHECK(readLines(c, 1) == "145000000\n");
+    CHECK(server.clientCount() == 1);
+
+    // THE CRASH. Connection threads are detached and capture the server, and
+    // stop() used to close only the listening socket: a client that simply sat
+    // there — which is what a CAT client does nearly all the time — left a
+    // thread parked in recv() holding a pointer to an object the caller was
+    // about to destroy. The next byte that peer sent, or its hang-up, then ran
+    // serveClient against freed memory. A peer can pick that moment, so it is
+    // a remote use-after-free rather than a shutdown-ordering nuisance.
+    //
+    // stop() must therefore be a hard stop: when it returns, no connection
+    // thread is left to touch the object.
+    //
+    // AND IT MUST BE PROMPT. This runs on the GUI thread — unticking "Accept
+    // CAT connections", changing the port, closing the application — so the
+    // wait for those threads has to be bounded by something this process
+    // controls. It cannot be bounded by the peer hanging up: the first hard
+    // stop leaned on shutdown() to wake recv(), which on Windows does not
+    // interrupt a recv() already in progress, so with one idle client
+    // connected stop() blocked until the FIN_WAIT_2 timer expired — measured
+    // at 120.0 s, on the GUI thread, roughly half the time. The sleep below
+    // makes that deterministic rather than a race: it parks the connection
+    // thread inside recv() before stop() is called.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const auto stopBegan = std::chrono::steady_clock::now();
+    server.stop();
+    const auto stopMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - stopBegan)
+                            .count();
+    // One accept poll plus one receive poll is the expected cost, a few
+    // hundred milliseconds; this bound is an order of magnitude above that and
+    // still far below the two-minute stall it exists to catch.
+    CHECK(stopMs < 4000);
+    if (stopMs >= 4000) {
+        std::printf("  stop() took %lld ms with one idle client connected\n",
+                    static_cast<long long>(stopMs));
+    }
+    CHECK(server.clientCount() == 0);
+    CHECK(!server.running());
+
+    // ...and the peer is told, rather than being left holding a socket that
+    // will never answer again.
+    char buf[64];
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(4000);
+    int n = -1;
+    while (std::chrono::steady_clock::now() < deadline) {
+        n = static_cast<int>(::recv(c, buf, sizeof(buf), 0));
+        if (n >= 0) break;  // 0 = closed; a negative is this socket's timeout
+    }
+    CHECK(n == 0);
+
+    closeClient(c);
+}
+
+void testSecondBindOfTheSamePortIsRefused() {
+    resetStatus();
+    CatServer first;
+    first.setStatusProvider(provider);
+    std::string error;
+    const int port = startOnFreePort(first, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+
+    // A control port that retunes the radio must not be quietly takeable by
+    // another local program. On Windows SO_REUSEADDR would let this second
+    // bind SUCCEED and start stealing connections; SO_EXCLUSIVEADDRUSE makes
+    // it fail here instead, through the ordinary bind-error path.
+    CatServer second;
+    second.setStatusProvider(provider);
+    std::string secondError = "stale";
+    CHECK(!second.start(static_cast<std::uint16_t>(port), /*bindAll=*/false,
+                        secondError));
+    CHECK(!second.running());
+    // The message a user sees has to name the port and say what to look for,
+    // not print a bare error number.
+    CHECK(secondError.find(std::to_string(port)) != std::string::npos);
+    CHECK(secondError.find("rigctld") != std::string::npos);
+
+    // The original server is untouched by the failed attempt.
+    CHECK(first.running());
+    SockT c = connectTo(port);
+    CHECK(c != INVALID_SOCKET);
+    if (c != INVALID_SOCKET) {
+        CHECK(sendRaw(c, "f\n"));
+        CHECK(readLines(c, 1) == "145000000\n");
+        closeClient(c);
+    }
+    first.stop();
+}
+
+void testRoguePeerDoesNotDisturbAnotherSession() {
+    resetStatus();
+    CatServer server;
+    server.setStatusProvider(provider);
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+
+    SockT good = connectTo(port);
+    CHECK(good != INVALID_SOCKET);
+    if (good == INVALID_SOCKET) { server.stop(); return; }
+    CHECK(sendRaw(good, "f\n"));
+    CHECK(readLines(good, 1) == "145000000\n");
+
+    // A second peer arrives mid-session and behaves like nothing this protocol
+    // expects: binary rubbish, an out-of-range set, then an abrupt hang-up in
+    // the middle of an unterminated line. Anything on a network port has to
+    // survive this, and it must not leak into the healthy session.
+    SockT rogue = connectTo(port);
+    CHECK(rogue != INVALID_SOCKET);
+    if (rogue != INVALID_SOCKET) {
+        std::string garbage(std::string("\x01\x02\xfe\xff", 4) + "\r\n");
+        garbage += "F 999999999999999\n";       // far outside any tuning range
+        garbage += std::string("\x03\x04", 2) + " unterminated";
+        CHECK(sendRaw(rogue, garbage));
+        const std::string rogueReply = readLines(rogue, 2);
+        // Both complete lines are refused; neither is obeyed.
+        CHECK(rogueReply.find("RPRT 0") == std::string::npos);
+        CHECK(rogueReply.find("RPRT -") != std::string::npos);
+        closeClient(rogue);  // hang up mid-fragment
+    }
+
+    // The healthy session carries on, and nothing the rogue sent was queued
+    // for the GUI thread to apply.
+    CHECK(sendRaw(good, "m\n"));
+    CHECK(readLines(good, 2) == "FM\n12500\n");
+    CHECK(server.takePendingControls().empty());
+    CHECK(server.running());
+
+    closeClient(good);
+    server.stop();
+}
+
 void testStopIsIdempotentAndSafeWithNoClients() {
     resetStatus();
     CatServer server;
@@ -417,6 +625,10 @@ int main() {
     testOverlongLineIsRefusedRatherThanBuffered();
     testIdleConnectionSurvives();
     testConnectionCap();
+    testControlQueueIsCapped();
+    testStopClosesLiveConnections();
+    testSecondBindOfTheSamePortIsRefused();
+    testRoguePeerDoesNotDisturbAnotherSession();
     testStopIsIdempotentAndSafeWithNoClients();
     return testSummary("test_cat_server");
 }

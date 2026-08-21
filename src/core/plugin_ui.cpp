@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 
 namespace cascade::core {
@@ -26,7 +27,7 @@ std::string bounded(const char* p, std::size_t cap) {
 // context could not tell them apart.
 struct HostCtx {
     PluginUi* self = nullptr;
-    std::string plugin;
+    std::string plugin;  // PluginUi::tuneKey(), not the display name
     CascadeHostApi api{};
 };
 
@@ -93,7 +94,10 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
         if (lp.hostClient != nullptr && lp.hostClient->attach != nullptr) {
             auto bridge = std::make_unique<HostCtx>();
             bridge->self = this;
-            bridge->plugin = lp.name;
+            // The permission key, NOT the display name: the name is the
+            // plugin's own to choose, so keying on it would let any module
+            // inherit a granted one's permission by adopting its name.
+            bridge->plugin = tuneKey(lp);
             bridge->api.structSize = static_cast<std::uint32_t>(sizeof(CascadeHostApi));
             bridge->api.ctx = bridge.get();
             bridge->api.centre_hz = &hostCentre;
@@ -239,14 +243,23 @@ void PluginUi::poll() {
     }
 }
 
-bool PluginUi::tuneAllowed(const std::string& plugin) const {
-    return std::find(tuneAllowed_.begin(), tuneAllowed_.end(), plugin) != tuneAllowed_.end();
+std::string PluginUi::tuneKey(const LoadedPlugin& p) {
+    return std::filesystem::path(p.path).filename().string();
 }
 
-void PluginUi::setTuneAllowed(const std::string& plugin, bool allowed) {
-    const auto it = std::find(tuneAllowed_.begin(), tuneAllowed_.end(), plugin);
+bool PluginUi::tuneAllowed(const std::string& pluginKey) const {
+    // An empty key is what a record with no path produces, and it must never
+    // match: otherwise every path-less plugin would share one grant.
+    if (pluginKey.empty()) { return false; }
+    return std::find(tuneAllowed_.begin(), tuneAllowed_.end(), pluginKey) !=
+           tuneAllowed_.end();
+}
+
+void PluginUi::setTuneAllowed(const std::string& pluginKey, bool allowed) {
+    if (pluginKey.empty()) { return; }
+    const auto it = std::find(tuneAllowed_.begin(), tuneAllowed_.end(), pluginKey);
     if (allowed && it == tuneAllowed_.end()) {
-        tuneAllowed_.push_back(plugin);
+        tuneAllowed_.push_back(pluginKey);
     } else if (!allowed && it != tuneAllowed_.end()) {
         tuneAllowed_.erase(it);
     }

@@ -14,11 +14,20 @@
 // (Pipeline already sequences it that way); members are therefore plain, not
 // atomic, on purpose.
 //
+// The ERROR SLOT is the one exception, and it has to be: read() records
+// failures from the source thread at the same time as the GUI reads
+// lastError() and the source loop polls faulted() — a std::string written on
+// one thread and read on another is UB, not a stale value. Those four members
+// (lastError_, faulted_, consecutiveErrors_) live under errorMutex_ and are
+// reached only through setError/clearError/lastError/faulted; nothing else in
+// the class changed, because nothing else is touched concurrently.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <complex>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -163,15 +172,47 @@ public:
     // 0 on timeout — the contract-compliant "retry" signal for a self-paced
     // source — and 0 immediately (no block) when no stream is open, so a
     // pipeline pointed at an unopened source spins safely instead of
-    // crashing. Stream faults (overflow, device loss) also yield 0 with the
-    // fault recorded in lastError(): the caller's retry loop is the right
-    // recovery for all of them.
+    // crashing.
+    //
+    // Errors are CLASSIFIED rather than uniformly retried, because "retry
+    // forever" is the wrong recovery for half of them:
+    //   - timeout: not an error at all. Not even recorded — an idle device
+    //     would otherwise park a permanent message in the GUI.
+    //   - overflow / corruption: the host fell behind or one buffer was
+    //     malformed. Recorded, retried, and treated as proof the device is
+    //     alive (the fault counter resets).
+    //   - any other error code: recorded and counted; kMaxConsecutiveErrors
+    //     of them in a row raises faulted().
+    //   - a driver EXCEPTION: recorded and faulted() immediately. A driver
+    //     that throws out of a stream read has lost the device — that is how
+    //     a USB SDR being unplugged presents.
+    //
+    // A delivered block is also checked for NaN and infinities, which are
+    // replaced with silence before it is handed on; that is recorded like an
+    // overflow (message, no fault) because the device answered and only the
+    // samples were unusable. See sanitizeNonFinite in the .cpp for what the
+    // check costs and why it is done per block rather than per sample.
     std::size_t read(std::complex<float>* dst, std::size_t n) override;
+
+    // Set by read() when the stream is beyond retrying, per the classification
+    // above; lastError() carries the reason. Cleared by a successful open() or
+    // start(), and by teardown — a fault describes a live stream, and after a
+    // reopen there is a new one. Safe from any thread.
+    //
+    // The pipeline's source loop polls this and stops with the message, which
+    // is what turns a pulled radio into "Device stopped: ..." instead of a
+    // frozen spectrum that looks like a hang.
+    bool faulted() const override;
 
     // "SoapySDR: <label>" once open, "SoapySDR: (no device)" otherwise.
     const char* name() const override { return name_.c_str(); }
 
-    const char* lastError() const override { return lastError_.c_str(); }
+    // The pointer is backed by a per-THREAD snapshot taken under errorMutex_,
+    // so it stays valid until the calling thread asks again — long enough for
+    // every caller here, all of which copy it straight into a std::string.
+    // It cannot point at lastError_ itself: that would hand out a buffer the
+    // source thread rewrites.
+    const char* lastError() const override;
 
 private:
     // Releases whatever half-built state exists, swallowing every Soapy
@@ -179,13 +220,25 @@ private:
     // second throw would terminate the process.
     void teardown() noexcept;
 
+    // The only writers of the error slot. Every failure path goes through
+    // setError so no site can forget the lock; clearError also resets the
+    // fault state, which is why open()/start() call it on success.
+    void setError(std::string msg);
+    void clearError();
+
     SoapySDR::Device* dev_ = nullptr;
     SoapySDR::Stream* stream_ = nullptr;
     bool running_ = false;
     double sampleRateHz_ = 0.0;
     double centerFrequencyHz_ = 0.0;
     std::string name_ = "SoapySDR: (no device)";
+
+    // See the error-slot note in the file header: everything below is written
+    // from the source thread and read from the control thread.
+    mutable std::mutex errorMutex_;
     std::string lastError_;
+    bool faulted_ = false;
+    int consecutiveErrors_ = 0;
 };
 
 }  // namespace cascade::source

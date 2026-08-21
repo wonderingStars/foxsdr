@@ -302,15 +302,30 @@ cascade::source::SigGen& Pipeline::sigGen() {
 void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     std::lock_guard<std::mutex> lk(controlMutex_);
     const bool live = run_.load(std::memory_order_relaxed);
-    if (live) {
-        // Quiesce handshake (documented in the header): flag the source loop
-        // down, abort any in-flight bounded read via the source's own stop()
-        // — the order matters, a read that returns after the flag flips must
-        // see srcRun_ false — then join. After the join no thread can touch
-        // the outgoing source.
+    // WHETHER TO QUIESCE IS A QUESTION ABOUT THE THREAD, NOT ABOUT run_.
+    //
+    // This used to be gated on `live`, which is right only while run_ and the
+    // source thread agree about existing. A thread fault breaks that
+    // agreement: noteThreadFault clears run_ from whichever worker died and
+    // cannot join anything, so after a DSP-thread fault run_ is false while
+    // the source thread is still alive and, for a self-paced source, still
+    // parked inside read() waiting on the device. Skipping the handshake then
+    // destroyed the outgoing source underneath that read — a use-after-free
+    // reached by nothing more exotic than "the radio stopped, pick another
+    // one". joinable() answers the question that actually matters, and is
+    // false exactly when a previous stop()/setSource already joined, so the
+    // ordinary paths are unchanged.
+    //
+    // The handshake itself is unchanged and its order still matters: flag the
+    // source loop down, abort any in-flight bounded read via the source's own
+    // stop() — a read that returns after the flag flips must see srcRun_
+    // false — then join. After the join no thread can touch the outgoing
+    // source. active_->stop() is idempotent per the IqSource contract, so
+    // running it for an already-exited thread costs nothing.
+    if (srcThread_.joinable()) {
         srcRun_.store(false, std::memory_order_relaxed);
         active_->stop();
-        if (srcThread_.joinable()) { srcThread_.join(); }
+        srcThread_.join();
     }
     // Swap. Destroying the outgoing external source here is race-free: the
     // source thread is joined (or never existed), and it was the only other
@@ -334,7 +349,10 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
         // first read() never races the device open, then respawn.
         active_->start();
         srcRun_.store(true, std::memory_order_relaxed);
-        srcThread_ = std::thread(&Pipeline::sourceThreadMain, this);
+        // cfg_.sampleRateHz is read HERE, under controlMutex_, and handed to
+        // the thread; see sourceThreadMain's declaration.
+        srcThread_ =
+            std::thread(&Pipeline::sourceThreadMain, this, cfg_.sampleRateHz);
     }
 }
 
@@ -360,7 +378,22 @@ void Pipeline::start() {
         std::lock_guard<std::mutex> flk(faultMutex_);
         faultMsg_.clear();
     }
-    if (srcThread_.joinable()) { srcThread_.join(); }
+    // Abort an in-flight bounded read BEFORE joining, the same order stop()
+    // and setSource use. This join is reached only after a fault (a stopped
+    // pipeline has already joined both threads), and a DSP-thread fault leaves
+    // the SOURCE thread alive and, for a self-paced source, parked inside
+    // read() waiting on the device. Joining it without the abort meant Start
+    // could not return until that read timed out on its own — a device timeout
+    // is commonly a second or more, and controlMutex_ is held throughout, so
+    // pressing Start after the radio dropped froze the application for the
+    // whole of it. active_->stop() is idempotent per the IqSource contract,
+    // and srcRun_ is already false on the fault path; both are set here anyway
+    // so the handshake reads the same as the other two call sites.
+    if (srcThread_.joinable()) {
+        srcRun_.store(false, std::memory_order_relaxed);
+        active_->stop();
+        srcThread_.join();
+    }
     if (dspThread_.joinable()) { dspThread_.join(); }
 
     // A restart is a fresh acquisition: re-prime the average and discard
@@ -408,7 +441,8 @@ void Pipeline::start() {
     run_.store(true, std::memory_order_relaxed);
     srcRun_.store(true, std::memory_order_relaxed);
     dspRun_.store(true, std::memory_order_relaxed);
-    srcThread_ = std::thread(&Pipeline::sourceThreadMain, this);
+    // Same snapshot-under-controlMutex_ as the setSource respawn above.
+    srcThread_ = std::thread(&Pipeline::sourceThreadMain, this, cfg_.sampleRateHz);
     dspThread_ = std::thread(&Pipeline::dspThreadMain, this);
 }
 
@@ -660,19 +694,58 @@ bool Pipeline::setInputRateHz(double rateHz) {
     if (rateHz == cfg_.sampleRateHz) { return true; }
 
     const bool live = run_.load(std::memory_order_relaxed);
-    if (live) {
-        // Quiesce the DSP thread — the mirror image of the setSource source-
-        // thread handshake: clear its private gate, then join. run_ stays set
-        // so the source thread keeps feeding the ring throughout (a full ring
-        // drops overflow by design, never blocks the source); the DSP loop's
-        // 1 ms idle sleep bounds the join latency. After the join NO thread
-        // touches the estimator or the audio chain, so the rebuild below is
-        // race-free by construction. The partial FFT block the thread was
-        // accumulating is discarded — a rate switch is a stream discontinuity
-        // anyway, so mixing old-rate and new-rate samples in one FFT would be
-        // worse than dropping less than one frame.
+    // Same split setSource makes, and for the same reason: whether to QUIESCE
+    // is a question about the thread, whether to RESUME is a question about
+    // run_. A thread fault clears run_ from whichever worker died without
+    // joining anything, so in that state `live` is false while dspThread_ is
+    // still a joinable object.
+    //
+    // Unlike setSource, gating the quiesce on run_ here was never a
+    // use-after-free: setInputRateHz rebuilds only DSP-side blocks, every one
+    // of them under audioMutex_, which processAudioBlock holds for its entire
+    // body — so the rebuild was already mutually excluded from a
+    // dying-but-still-live DSP thread, and it never touches the source, which
+    // is what setSource's bug destroyed underneath a parked read. That was
+    // tested rather than assumed (14400 rate changes across 240 pipelines
+    // faulted from both threads: no tear, no hang, no leak). This is a
+    // consistency fix, not a bug fix, and joinable() is false exactly when a
+    // previous stop()/setInputRateHz already joined and true exactly while a
+    // spawned thread has not been — so on every healthy path (never started,
+    // stopped, running) it agrees with `live` and nothing changes.
+    //
+    // It is still worth making on two counts: it reaps the corpse a fault
+    // leaves behind instead of carrying it to the next start(), and it closes
+    // the one route by which this function could have killed the process —
+    // with the quiesce skipped, the respawn below is a single loosened gate
+    // away from assigning a std::thread onto a joinable one, which is an
+    // immediate std::terminate. The RESUME deliberately stays on `live`: a
+    // rate change is not a restart, and a faulted pipeline must stay down
+    // until start() says otherwise.
+    //
+    // Stated plainly so nobody mistakes the test coverage for more than it is:
+    // NO public-API observation separates the two spellings of this gate. The
+    // only state in which they differ is `run_ false with dspThread_
+    // joinable`, i.e. after a fault, and there dspRun_ is already false and the
+    // DSP loop has already left, so joining the corpse changes nothing a caller
+    // can see (start() would otherwise join it, stop() and ~Pipeline too). The
+    // post-fault rate change IS pinned by test_pipeline.cpp's last block, but
+    // that block passes with either spelling by construction — this line is a
+    // consistency and robustness choice, not a defect fix, and no regression
+    // test can guard it without exposing thread identity the class does not
+    // publish.
+    //
+    // The handshake itself is unchanged — clear the DSP loop's private gate,
+    // then join. run_ stays set (on the live path) so the source thread keeps
+    // feeding the ring throughout (a full ring drops overflow by design, never
+    // blocks the source); the DSP loop's 1 ms idle sleep bounds the join
+    // latency. After the join NO thread touches the estimator or the audio
+    // chain, so the rebuild below is race-free by construction. The partial
+    // FFT block the thread was accumulating is discarded — a rate switch is a
+    // stream discontinuity anyway, so mixing old-rate and new-rate samples in
+    // one FFT would be worse than dropping less than one frame.
+    if (dspThread_.joinable()) {
         dspRun_.store(false, std::memory_order_relaxed);
-        if (dspThread_.joinable()) { dspThread_.join(); }
+        dspThread_.join();
     }
 
     {
@@ -844,9 +917,9 @@ std::string Pipeline::faultMessage() const {
 // 0xC0000409 fail-fast in ucrtbase), and vendor drivers genuinely do throw
 // from deep inside a stream read when the USB device is pulled mid-capture —
 // that is precisely how unplugging the SDR used to kill the whole app.
-void Pipeline::sourceThreadMain() {
+void Pipeline::sourceThreadMain(double chainRateHz) {
     try {
-        sourceThreadBody();
+        sourceThreadBody(chainRateHz);
     } catch (const std::exception& e) {
         noteThreadFault("source thread", e.what());
     } catch (...) {
@@ -864,7 +937,7 @@ void Pipeline::dspThreadMain() {
     }
 }
 
-void Pipeline::sourceThreadBody() {
+void Pipeline::sourceThreadBody(double chainRateHz) {
     using clock = std::chrono::steady_clock;
 
     // Stable for this thread's entire lifetime: setSource only changes
@@ -881,20 +954,23 @@ void Pipeline::sourceThreadBody() {
     // thread entry — sources that can change rate are re-read on the next
     // (re)spawn, and rate changes on a live free-running source are refused
     // by the sources themselves (SigGenSource/file are fixed-rate). Fall back
-    // to the chain's rate if a source reports a nonsense rate.
+    // to the chain's rate if a source reports a nonsense rate — as a SNAPSHOT
+    // handed over at spawn (see the header), never a read of cfg_ from here:
+    // setInputRateHz writes that field under controlMutex_ without ever
+    // joining this thread, so reading it here would be a data race on the one
+    // path that actually uses the value.
     double srcRate = src.sampleRateHz();
-    if (!(srcRate > 0.0)) { srcRate = cfg_.sampleRateHz; }
+    if (!(srcRate > 0.0)) { srcRate = chainRateHz; }
     std::size_t chunk = static_cast<std::size_t>(srcRate * kChunkSec + 0.5);
     if (chunk == 0) { chunk = 1; }
     std::vector<std::complex<float>> buf(chunk);
 
     if (src.selfPaced()) {
         // The device paces: read() blocks (bounded) until samples arrive, so
-        // there is NO clock of our own — a pacing sleep here would let a
-        // real-time device's samples back up and be lost. A zero return
-        // (bounded block timed out with nothing available) is retried
-        // immediately; the source's block bound is what keeps this loop from
-        // spinning hot, and its abortable stop() is what lets stop() and
+        // there is NO clock of our own — a pacing sleep on the DELIVERING
+        // path would let a real-time device's samples back up and be lost. A
+        // zero return (bounded block timed out with nothing available) is
+        // retried, and the source's abortable stop() is what lets stop() and
         // setSource() get this thread out of read() promptly.
         while (run_.load(std::memory_order_relaxed) &&
                srcRun_.load(std::memory_order_relaxed)) {
@@ -904,6 +980,32 @@ void Pipeline::sourceThreadBody() {
                 // side stalled and the ring is full, the excess is dropped
                 // (write() accepts what fits) — never block a live device.
                 ring_.write(buf.data(), got);
+            }
+            // Device loss does NOT arrive here as an exception: a source that
+            // let the driver's throw escape would be torn down mid-fault, so
+            // SoapySource catches it and reports through faulted() instead.
+            // Which means the catch-all in sourceThreadMain never fires for
+            // the commonest hardware failure there is, and without this poll
+            // the loop simply kept reading a dead handle — the spectrum
+            // froze, the app still called itself running, and the user saw a
+            // silently dead radio. Route it into the same fault path.
+            if (src.faulted()) {
+                noteThreadFault("source thread", src.lastError());
+                return;
+            }
+            if (got == 0) {
+                // Retry, but not instantly. The comment above used to claim
+                // the source's own block bound paced this loop; that holds
+                // only while the source still blocks. One that returns 0
+                // without blocking — a closed or dead handle, a driver whose
+                // readStream fails fast — turned the retry into a hot spin
+                // measured at 44 million reads in 200 ms, i.e. a whole core
+                // burned to produce nothing. The backoff runs ONLY when there
+                // were no samples, so a healthy device never reaches it and
+                // pays nothing; 1 ms is a tenth of the 10 ms chunk period, so
+                // even a source that meters data out in small bursts cannot
+                // be starved by it.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
         return;

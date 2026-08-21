@@ -1123,7 +1123,9 @@ function reflectPlugins(s) {
       cb.checked = p.tuneAllowed;
       cb.addEventListener('change', () => {
         lastPluginKey = '';
-        control({ pluginTuneName: p.name, pluginTuneAllowed: cb.checked });
+        // The MODULE FILE, not the display name: the grant is keyed on the
+        // one thing a plugin cannot change by renaming itself.
+        control({ pluginTuneName: p.fileName, pluginTuneAllowed: cb.checked });
       });
       lab.appendChild(cb);
       lab.appendChild(document.createTextNode(' may tune the receiver'));
@@ -2445,7 +2447,12 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         }
 
         std::string verifyError;
-        const bool ok = (user == expectedUser) && verifyPassword(password, record, verifyError);
+        // verifyLogin, not `user == expectedUser && verifyPassword(...)`: that
+        // spelling short-circuits, and answering a wrong user name without
+        // paying the derivation makes the two cases tell themselves apart by
+        // TIMING, which is exactly what the one shared message below exists to
+        // prevent.
+        const bool ok = verifyLogin(user, password, expectedUser, record, verifyError);
         if (!ok) {
             throttle_.recordFailure(client, t);
             // One message for a wrong user AND a wrong password: telling them

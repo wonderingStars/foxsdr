@@ -197,6 +197,40 @@ void testPasswordHashRoundTrip() {
     CHECK(verifyPassword("a-good-long-password", rec2, error));
 }
 
+// A WRONG USER NAME MUST COST WHAT A WRONG PASSWORD COSTS.
+//
+// What leaks here is time, but a wall-clock assertion flakes on a loaded
+// machine, so this counts derivations instead: the answer is exactly one
+// PBKDF2 either way, and a count is not a measurement. Short-circuiting the
+// name check makes it 0 against 1, which is the ~86 ms gap that enumerates
+// account names.
+void testLoginCostsTheSameForAWrongUserAsForAWrongPassword() {
+    std::string error;
+    PasswordRecord rec;
+    CHECK(hashPassword("a-good-long-password", rec, error));
+    CHECK(error.empty());
+
+    const std::uint64_t beforeUser = pbkdf2CallCount();
+    CHECK(!verifyLogin("mallory", "a-good-long-password", "admin", rec, error));
+    const std::uint64_t wrongUserCost = pbkdf2CallCount() - beforeUser;
+    CHECK(error.empty());  // wrong credentials, not a fault
+
+    const std::uint64_t beforePass = pbkdf2CallCount();
+    CHECK(!verifyLogin("admin", "a-good-long-passwore", "admin", rec, error));
+    const std::uint64_t wrongPassCost = pbkdf2CallCount() - beforePass;
+    CHECK(error.empty());
+
+    CHECK(wrongUserCost == wrongPassCost);
+    CHECK(wrongUserCost == 1u);
+
+    // ...and the real pair still gets in, while a right password under any
+    // other name still does not.
+    CHECK(verifyLogin("admin", "a-good-long-password", "admin", rec, error));
+    CHECK(error.empty());
+    CHECK(!verifyLogin("Admin", "a-good-long-password", "admin", rec, error));
+    CHECK(!verifyLogin("", "a-good-long-password", "admin", rec, error));
+}
+
 void testPasswordPolicy() {
     std::string error;
     PasswordRecord rec;
@@ -371,6 +405,7 @@ int main() {
     testRandomBytes();
     testPbkdf2KnownAnswer();
     testPasswordHashRoundTrip();
+    testLoginCostsTheSameForAWrongUserAsForAWrongPassword();
     testPasswordPolicy();
     testRecordSerializeParse();
     testRecordParseRejects();

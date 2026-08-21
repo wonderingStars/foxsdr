@@ -168,6 +168,26 @@ int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
     return -1;  // the chosen device is gone; the default is the only fallback
 }
 
+int clampDeviceRow(int row, const std::vector<AudioDevice>& present) {
+    const int n = static_cast<int>(present.size());
+    if (n == 0) {
+        return -1;  // the combo's "No audio output devices" branch
+    }
+    if (row >= 0 && row < n) {
+        return row;  // still valid: a selection that works is never moved
+    }
+    // Out of range: the list shrank under a remembered row (or nothing has
+    // been chosen yet). Prefer the default device's row; LAST match wins, as
+    // the panel's own default-seeking loop has always done.
+    int fallback = 0;
+    for (int i = 0; i < n; ++i) {
+        if (present[static_cast<std::size_t>(i)].isDefault) {
+            fallback = i;
+        }
+    }
+    return fallback;
+}
+
 std::size_t AudioOut::write(const float* samples, std::size_t n) {
     // SpscRing::write already caps at free space and never blocks; the
     // accepted count is the whole contract.

@@ -20,9 +20,17 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/soapy_source.hpp"
 
+#include <SoapySDR/Device.hpp>
+#include <SoapySDR/Formats.h>
+#include <SoapySDR/Registry.hpp>
+#include <SoapySDR/Types.hpp>
+#include <SoapySDR/Version.hpp>
+
+#include <cmath>
 #include <complex>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -30,6 +38,87 @@
 
 using cascade::source::SoapyDeviceInfo;
 using cascade::source::SoapySource;
+
+namespace {
+
+// --- A registered SoapySDR device that hands back non-finite samples ---------
+//
+// Live-stream behaviour is otherwise untestable here (no radio, and vendor
+// modules may not even be installed), but SoapySDR's device registry is a
+// public in-process API: a factory registered from this file is found by
+// SoapySDR::Device::make exactly like a driver module's, so SoapySource can be
+// opened, started and read for real, through its own driver path, with no test
+// seam added to the production class.
+//
+// Blocks ALTERNATE poisoned/clean. The clean one is what proves the guard is a
+// filter and not a blanket rewrite: its samples must come back bit-exact.
+
+constexpr float kCleanI = 0.25f;
+constexpr float kCleanQ = -0.5f;
+
+bool poisonedIndex(std::size_t i) { return (i % 7) == 0; }
+
+class NonFiniteDevice : public SoapySDR::Device {
+public:
+    std::string getDriverKey() const override { return "fakenonfinite"; }
+    std::string getHardwareKey() const override { return "fake non-finite source"; }
+    size_t getNumChannels(const int) const override { return 1; }
+
+    SoapySDR::Stream* setupStream(const int, const std::string&,
+                                  const std::vector<size_t>&,
+                                  const SoapySDR::Kwargs&) override {
+        // The handle is opaque to SoapySource; any non-null value will do.
+        return reinterpret_cast<SoapySDR::Stream*>(this);
+    }
+    void closeStream(SoapySDR::Stream*) override {}
+    int activateStream(SoapySDR::Stream*, const int, const long long,
+                       const size_t) override {
+        return 0;
+    }
+    int deactivateStream(SoapySDR::Stream*, const int, const long long) override {
+        return 0;
+    }
+    double getSampleRate(const int, const size_t) const override { return 2.4e6; }
+    double getFrequency(const int, const size_t) const override { return 100.0e6; }
+
+    int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
+                   int&, long long&, const long) override {
+        float* p = static_cast<float*>(buffs[0]);
+        const bool poison = (block_++ % 2) == 0;
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+        for (size_t i = 0; i < numElems; ++i) {
+            p[2 * i] = kCleanI;
+            p[2 * i + 1] = kCleanQ;
+            if (poison && poisonedIndex(i)) {
+                // NaN, +Inf and -Inf in turn: a sum-based detector that only
+                // caught one of the three would pass every other block.
+                const int which = static_cast<int>((i / 7) % 3);
+                p[2 * i] = (which == 0) ? nan : ((which == 1) ? inf : -inf);
+                p[2 * i + 1] = (which == 2) ? nan : -inf;
+            }
+        }
+        return static_cast<int>(numElems);
+    }
+
+private:
+    unsigned block_ = 0;
+};
+
+SoapySDR::KwargsList findNonFinite(const SoapySDR::Kwargs& args) {
+    const auto driver = args.find("driver");
+    if (driver != args.end() && driver->second != "fakenonfinite") { return {}; }
+    SoapySDR::Kwargs k;
+    k["driver"] = "fakenonfinite";
+    k["label"] = "fake non-finite source";
+    return SoapySDR::KwargsList{k};
+}
+
+SoapySDR::Device* makeNonFinite(const SoapySDR::Kwargs&) {
+    return new NonFiniteDevice();  // owned by SoapySDR, released by unmake()
+}
+
+}  // namespace
 
 int main() {
     // --- enumerate(): completes, well-formed, repeatable ---------------------
@@ -63,11 +152,16 @@ int main() {
         CHECK(std::strcmp(src.name(), "SoapySDR: (no device)") == 0);
         CHECK(src.lastError() != nullptr);   // never nullptr, empty when none
         CHECK(std::strlen(src.lastError()) == 0);
+        CHECK(!src.faulted());               // nothing to fault on yet
 
         // read() with no stream: immediate 0 (retry signal), dst untouched.
         std::complex<float> buf[8] = {};
         buf[0] = {123.0f, -123.0f};  // sentinel proves no write happened
         CHECK(src.read(buf, 8) == 0u);
+        // ...and that 0 must NOT be a fault. The pipeline stops the whole
+        // source on faulted(), so a no-device read that raised it would turn
+        // "nothing plugged in" into a hard stop with no way back.
+        CHECK(!src.faulted());
         CHECK(buf[0] == std::complex<float>(123.0f, -123.0f));
         CHECK(src.read(nullptr, 8) == 0u);   // defensive null: no crash
         CHECK(src.read(buf, 0) == 0u);
@@ -121,6 +215,10 @@ int main() {
         std::complex<float> buf[16] = {};
         CHECK(src.read(buf, 16) == 0u);
         CHECK(!src.setSampleRateHz(1.0e6));
+        // A failed OPEN is not a stream fault: there is no stream. faulted()
+        // reports only a device lost mid-capture, which is what makes it safe
+        // for the pipeline to treat as "stop everything".
+        CHECK(!src.faulted());
 
         // The failure reason must survive the teardown that follows it —
         // the GUI shows lastError() after closing the half-open attempt.
@@ -159,6 +257,83 @@ int main() {
         // enumerate() still works after the churn (no global state broken).
         const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerate();
         std::printf("soapy devices after churn: %zu\n", devices.size());
+    }
+
+    // --- a device that delivers non-finite samples ---------------------------
+    //
+    // The entry point of the HARDWARE path, the counterpart of the sanitise
+    // source/iq_file_source does for the file path. A driver can deliver NaN
+    // or an infinity — a half-initialised buffer, a converter fed a malformed
+    // packet, a device coming apart on the USB bus — and one such sample
+    // latches the AGC gain, the squelch EMA and the noise reducer's spectrum
+    // downstream, which is heard as the receiver going silent while the
+    // spectrum display stays alive.
+    {
+        // Registered for this block only, so the enumerate() assertions above
+        // and any later test see the machine's real device population.
+        SoapySDR::Registry reg("fakenonfinite", &findNonFinite, &makeNonFinite,
+                               SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        const bool opened = src.open("driver=fakenonfinite");
+        std::printf("fake device open: %s (%s)\n", opened ? "true" : "false",
+                    src.name());
+        CHECK(opened);
+        if (opened) {
+            // The device under test really is the fake, not something the
+            // machine happens to have plugged in.
+            CHECK(std::strcmp(src.name(), "SoapySDR: fake non-finite source") == 0);
+            CHECK(src.start());
+
+            constexpr std::size_t kN = 512;
+            std::vector<std::complex<float>> buf(kN);
+            CHECK(src.read(buf.data(), kN) == kN);
+
+            std::size_t nonFinite = 0;
+            std::size_t wrongSilence = 0;
+            std::size_t cleanMangled = 0;
+            for (std::size_t i = 0; i < kN; ++i) {
+                if (!std::isfinite(buf[i].real()) || !std::isfinite(buf[i].imag())) {
+                    ++nonFinite;
+                } else if (poisonedIndex(i)) {
+                    // Scrubbed to true silence, not to some other number.
+                    if (buf[i] != std::complex<float>(0.0f, 0.0f)) { ++wrongSilence; }
+                } else if (buf[i] != std::complex<float>(kCleanI, kCleanQ)) {
+                    ++cleanMangled;
+                }
+            }
+            std::printf("poisoned block: nonFinite=%zu wrongSilence=%zu "
+                        "cleanMangled=%zu lastError=\"%s\"\n",
+                        nonFinite, wrongSilence, cleanMangled, src.lastError());
+            CHECK(nonFinite == 0u);      // nothing non-finite leaves read()
+            CHECK(wrongSilence == 0u);   // and what was non-finite is silence
+            CHECK(cleanMangled == 0u);   // neighbours in the same block untouched
+
+            // Reported, because a radio delivering NaN is worth seeing in the
+            // GUI — but NOT faulted: the samples arrived, the device is alive,
+            // and stopping the source would be a worse answer than silencing
+            // one block.
+            CHECK(std::strlen(src.lastError()) > 0);
+            CHECK(!src.faulted());
+            CHECK(src.running());
+
+            // The next block is clean, and must come back BIT-EXACT: the
+            // guard is a filter on non-finite values, not a rewrite of the
+            // stream.
+            std::vector<std::complex<float>> clean(kN);
+            CHECK(src.read(clean.data(), kN) == kN);
+            std::size_t cleanMismatch = 0;
+            for (std::size_t i = 0; i < kN; ++i) {
+                if (clean[i] != std::complex<float>(kCleanI, kCleanQ)) {
+                    ++cleanMismatch;
+                }
+            }
+            CHECK(cleanMismatch == 0u);
+            CHECK(!src.faulted());
+
+            src.stop();
+            src.closeDevice();
+            CHECK(!src.isOpen());
+        }
     }
 
     return testSummary("test_soapy_source");

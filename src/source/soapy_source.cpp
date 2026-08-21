@@ -12,6 +12,7 @@
 #include <SoapySDR/Types.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #ifdef _WIN32
@@ -36,6 +37,66 @@ constexpr std::size_t kChannel = 0;
 constexpr long kReadTimeoutUs = 100000;
 
 const char* const kNoDeviceName = "SoapySDR: (no device)";
+
+// A stream error the device can plausibly come back from unaided. Overflow is
+// the everyday one — the host fell behind, samples were dropped, the next read
+// is fine again — and a corrupt packet likewise costs one buffer, not the
+// radio. Every other negative code (SOAPY_SDR_STREAM_ERROR above all, which is
+// what drivers return once the USB endpoint has gone) needs a reopen, so it
+// counts toward the fault threshold instead.
+bool transientStreamError(int ret) {
+    return ret == SOAPY_SDR_OVERFLOW || ret == SOAPY_SDR_CORRUPTION;
+}
+
+// Hard errors are COUNTED, not latched on the first one: drivers do emit a
+// lone spurious code around a retune, and faulting a live radio over that
+// would be a worse bug than the one this fixes. Ten in a row costs at most a
+// second at the 100 ms read bound before the pipeline is told.
+constexpr int kMaxConsecutiveErrors = 10;
+
+// Turns a block a driver just delivered into a block the DSP chain can be
+// trusted with, returning whether anything had to be replaced.
+//
+// WHY HERE, IN THE HOT PATH. A NaN or an infinity from a driver — a
+// half-initialised buffer, the CF32 converter fed a malformed packet, a device
+// coming apart on the bus — is not recoverable further down: it latches the
+// AGC gain, the squelch/S-meter EMA and the noise reducer's spectrum, and the
+// receiver goes silent while the spectrum display stays alive. This is the
+// hardware path's entry point, the counterpart of the sanitise
+// source/iq_file_source does for a file.
+//
+// WHY IT IS AFFORDABLE, measured rather than assumed. A per-sample isfinite
+// test over every sample was the design previously declined for this path, and
+// it costs 26 us per 10 ms block at 2 Msps (0.26% of the real time that block
+// represents; the pipeline reads kChunkSec = 10 ms at a time). What runs here
+// instead is ONE float sum over the block: NaN and either infinity poison a
+// sum they enter, and radio samples are bounded well inside float range — a
+// 61.44 Msps block of 614400 samples of |x| <= 1 sums to at most ~1.2e6
+// against a 3.4e38 ceiling — so a non-finite SUM means a non-finite SAMPLE,
+// exactly, with no false positives to explain away. That pass costs 14 us per
+// block, 0.14% of the block's real time, and because both the work and the
+// budget scale with the sample count that fraction is the same at every rate.
+// The per-sample scrub, three times the price of the detection, runs ONLY on
+// a block that failed it.
+bool sanitizeNonFinite(std::complex<float>* dst, std::size_t n) {
+    // std::complex<float> is specified to be layout-compatible with an array
+    // of two floats, so a block of them is 2n contiguous floats.
+    float* p = reinterpret_cast<float*>(dst);
+    const std::size_t floats = 2 * n;
+    float sum = 0.0f;
+    for (std::size_t i = 0; i < floats; ++i) {
+        sum += p[i];
+    }
+    if (std::isfinite(sum)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < floats; ++i) {
+        if (!std::isfinite(p[i])) {
+            p[i] = 0.0f;  // silence, the only value that cannot mislead
+        }
+    }
+    return true;
+}
 
 // what(): can legitimately be empty for some exception types; the GUI
 // contract is "nonempty lastError on failure", so guarantee a floor here.
@@ -149,9 +210,9 @@ bool SoapySource::open(const std::string& args) {
     // first, or the old device handle (and its USB claim) would leak.
     closeDevice();
     if (!runtimeAvailable()) {
-        lastError_ =
+        setError(
             "SoapySDR runtime not found (SoapySDR.dll). Reinstall, or use the "
-            "signal generator / IQ file sources, which need no hardware.";
+            "signal generator / IQ file sources, which need no hardware.");
         return false;
     }
     try {
@@ -159,11 +220,11 @@ bool SoapySource::open(const std::string& args) {
         if (dev_ == nullptr) {
             // make() normally throws on failure, but a null return is legal
             // API-wise and must not turn into a null deref at setupStream.
-            lastError_ = "SoapySDR::Device::make returned no device for args: " + args;
+            setError("SoapySDR::Device::make returned no device for args: " + args);
             return false;
         }
         if (dev_->getNumChannels(SOAPY_SDR_RX) < 1) {
-            lastError_ = "device has no RX channels (args: " + args + ")";
+            setError("device has no RX channels (args: " + args + ")");
             teardown();
             return false;
         }
@@ -173,7 +234,7 @@ bool SoapySource::open(const std::string& args) {
         stream_ = dev_->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32,
                                     std::vector<std::size_t>{kChannel});
         if (stream_ == nullptr) {
-            lastError_ = "setupStream(RX, CF32) returned no stream (args: " + args + ")";
+            setError("setupStream(RX, CF32) returned no stream (args: " + args + ")");
             teardown();
             return false;
         }
@@ -191,14 +252,14 @@ bool SoapySource::open(const std::string& args) {
             label = "device";
         }
         name_ = "SoapySDR: " + label;
-        lastError_.clear();
+        clearError();
         return true;
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "open failed");
+        setError(describe(e, "open failed"));
         teardown();
         return false;
     } catch (...) {
-        lastError_ = "open failed: non-standard exception (args: " + args + ")";
+        setError("open failed: non-standard exception (args: " + args + ")");
         teardown();
         return false;
     }
@@ -232,12 +293,50 @@ void SoapySource::teardown() noexcept {
     sampleRateHz_ = 0.0;
     centerFrequencyHz_ = 0.0;
     name_ = kNoDeviceName;
+    // The FAULT state goes with the stream that raised it — there is nothing
+    // left to be faulted about. lastError_ deliberately does NOT: teardown
+    // runs immediately after the failures whose reason the GUI still shows
+    // (see closeDevice), and clearing it here would erase every one of them.
+    {
+        std::lock_guard<std::mutex> lk(errorMutex_);
+        faulted_ = false;
+        consecutiveErrors_ = 0;
+    }
+}
+
+void SoapySource::setError(std::string msg) {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    lastError_ = std::move(msg);
+}
+
+void SoapySource::clearError() {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    lastError_.clear();
+    faulted_ = false;
+    consecutiveErrors_ = 0;
+}
+
+bool SoapySource::faulted() const {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    return faulted_;
+}
+
+const char* SoapySource::lastError() const {
+    // The returned pointer outlives the lock, so it cannot point into
+    // lastError_ — the source thread rewrites that string. A thread_local
+    // snapshot gives each calling thread its own backing buffer, which is what
+    // makes this safe for the two callers that genuinely differ: the GUI, and
+    // the pipeline's source loop reading the fault message.
+    static thread_local std::string snapshot;
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    snapshot = lastError_;
+    return snapshot.c_str();
 }
 
 bool SoapySource::start() {
     if (dev_ == nullptr || stream_ == nullptr) {
         // Documented before-open behavior: refuse with a reason, no crash.
-        lastError_ = "start() called with no device open";
+        setError("start() called with no device open");
         return false;
     }
     if (running_) {
@@ -246,17 +345,20 @@ bool SoapySource::start() {
     try {
         const int ret = dev_->activateStream(stream_);
         if (ret != 0) {
-            lastError_ = std::string("activateStream failed: ") + SoapySDR::errToStr(ret);
+            setError(std::string("activateStream failed: ") + SoapySDR::errToStr(ret));
             return false;
         }
         running_ = true;
-        lastError_.clear();
+        // Clears the fault too: a stream that just activated is a new one, and
+        // leaving the previous stream's fault latched would have the pipeline
+        // stop the moment it started.
+        clearError();
         return true;
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "activateStream failed");
+        setError(describe(e, "activateStream failed"));
         return false;
     } catch (...) {
-        lastError_ = "activateStream failed: non-standard exception";
+        setError("activateStream failed: non-standard exception");
         return false;
     }
 }
@@ -272,12 +374,12 @@ void SoapySource::stop() {
         const int ret = dev_->deactivateStream(stream_);
         if (ret != 0) {
             // stop() is void, so the only reporting channel is lastError().
-            lastError_ = std::string("deactivateStream failed: ") + SoapySDR::errToStr(ret);
+            setError(std::string("deactivateStream failed: ") + SoapySDR::errToStr(ret));
         }
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "deactivateStream failed");
+        setError(describe(e, "deactivateStream failed"));
     } catch (...) {
-        lastError_ = "deactivateStream failed: non-standard exception";
+        setError("deactivateStream failed: non-standard exception");
     }
 }
 
@@ -287,38 +389,78 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // immediately rather than burning the 100 ms timeout on nothing.
         return 0;
     }
+    {
+        // Already faulted: do not touch the driver again. Some drivers block
+        // for the full timeout on every call against a handle whose device
+        // has gone, which would make the pipeline's shutdown crawl. The source
+        // loop polls faulted() and leaves; this is the belt to that braces.
+        std::lock_guard<std::mutex> lk(errorMutex_);
+        if (faulted_) { return 0; }
+    }
     void* buffs[1] = {dst};
     int flags = 0;
     long long timeNs = 0;
     try {
         const int ret = dev_->readStream(stream_, buffs, n, flags, timeNs, kReadTimeoutUs);
         if (ret > 0) {
-            return static_cast<std::size_t>(ret);
+            const std::size_t got = static_cast<std::size_t>(ret);
+            const bool scrubbed = sanitizeNonFinite(dst, got);
+            std::lock_guard<std::mutex> lk(errorMutex_);
+            consecutiveErrors_ = 0;  // samples arrived: the device is alive
+            if (scrubbed) {
+                // Classified like an overflow: recorded so the GUI can show
+                // it, and NOT counted toward the fault threshold. The device
+                // answered — a block of it was unusable, which is a reason to
+                // silence that block, not to stop the radio.
+                lastError_ =
+                    "device delivered non-finite samples; that block was "
+                    "replaced with silence";
+            }
+            return got;
         }
-        if (ret != SOAPY_SDR_TIMEOUT) {
-            // Overflow, device loss, etc.: record it, but still answer with
-            // the retry signal — transient faults (overflow) self-heal on
-            // the next call, and fatal ones keep returning 0 until the
-            // control thread notices and closes the device.
+        // A timeout is the bounded block expiring with nothing ready — the
+        // contract's normal "retry" answer, not a failure. Deliberately NOT
+        // recorded: an idle device would otherwise leave a permanent
+        // "readStream failed" in the GUI. (A literal 0 is not a documented
+        // return, but it means no samples either way, so it lands here.)
+        if (ret == SOAPY_SDR_TIMEOUT || ret == 0) {
+            return 0;
+        }
+        {
+            std::lock_guard<std::mutex> lk(errorMutex_);
             lastError_ = std::string("readStream failed: ") + SoapySDR::errToStr(ret);
+            if (transientStreamError(ret)) {
+                consecutiveErrors_ = 0;
+            } else if (++consecutiveErrors_ >= kMaxConsecutiveErrors) {
+                faulted_ = true;
+            }
         }
         return 0;
     } catch (const std::exception& e) {
+        // A driver that THROWS out of a stream read has lost the device: this
+        // is what a USB SDR being unplugged mid-capture does, and it is
+        // exactly the case that used to be swallowed here. Reporting it as a
+        // bare 0 made it indistinguishable from an idle radio, so the pipeline
+        // retried forever and the user watched a frozen spectrum.
+        std::lock_guard<std::mutex> lk(errorMutex_);
         lastError_ = describe(e, "readStream failed");
+        faulted_ = true;
         return 0;
     } catch (...) {
+        std::lock_guard<std::mutex> lk(errorMutex_);
         lastError_ = "readStream failed: non-standard exception";
+        faulted_ = true;
         return 0;
     }
 }
 
 bool SoapySource::setSampleRateHz(double hz) {
     if (dev_ == nullptr) {
-        lastError_ = "setSampleRateHz() called with no device open";
+        setError("setSampleRateHz() called with no device open");
         return false;
     }
     if (!(hz > 0.0)) {  // negated compare so NaN also lands here
-        lastError_ = "setSampleRateHz() requires a positive rate";
+        setError("setSampleRateHz() requires a positive rate");
         return false;
     }
     try {
@@ -328,17 +470,17 @@ bool SoapySource::setSampleRateHz(double hz) {
         sampleRateHz_ = dev_->getSampleRate(SOAPY_SDR_RX, kChannel);
         return true;
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "setSampleRate failed");
+        setError(describe(e, "setSampleRate failed"));
         return false;
     } catch (...) {
-        lastError_ = "setSampleRate failed: non-standard exception";
+        setError("setSampleRate failed: non-standard exception");
         return false;
     }
 }
 
 bool SoapySource::setCenterFrequencyHz(double hz) {
     if (dev_ == nullptr) {
-        lastError_ = "setCenterFrequencyHz() called with no device open";
+        setError("setCenterFrequencyHz() called with no device open");
         return false;
     }
     try {
@@ -348,10 +490,10 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
         centerFrequencyHz_ = dev_->getFrequency(SOAPY_SDR_RX, kChannel);
         return true;
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "setFrequency failed");
+        setError(describe(e, "setFrequency failed"));
         return false;
     } catch (...) {
-        lastError_ = "setFrequency failed: non-standard exception";
+        setError("setFrequency failed: non-standard exception");
         return false;
     }
 }
@@ -369,40 +511,40 @@ std::vector<std::string> SoapySource::listGainNames() {
 
 bool SoapySource::setGainDb(const std::string& name, double db) {
     if (dev_ == nullptr) {
-        lastError_ = "setGainDb() called with no device open";
+        setError("setGainDb() called with no device open");
         return false;
     }
     try {
         dev_->setGain(SOAPY_SDR_RX, kChannel, name, db);
         return true;
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "setGain failed");
+        setError(describe(e, "setGain failed"));
         return false;
     } catch (...) {
-        lastError_ = "setGain failed: non-standard exception";
+        setError("setGain failed: non-standard exception");
         return false;
     }
 }
 
 bool SoapySource::setAutoGain(bool on) {
     if (dev_ == nullptr) {
-        lastError_ = "setAutoGain() called with no device open";
+        setError("setAutoGain() called with no device open");
         return false;
     }
     try {
         if (!dev_->hasGainMode(SOAPY_SDR_RX, kChannel)) {
             // Distinct from a driver fault: the hardware simply has no AGC,
             // and the GUI uses this to grey out the checkbox.
-            lastError_ = "device has no automatic gain mode";
+            setError("device has no automatic gain mode");
             return false;
         }
         dev_->setGainMode(SOAPY_SDR_RX, kChannel, on);
         return true;
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "setGainMode failed");
+        setError(describe(e, "setGainMode failed"));
         return false;
     } catch (...) {
-        lastError_ = "setGainMode failed: non-standard exception";
+        setError("setGainMode failed: non-standard exception");
         return false;
     }
 }
@@ -414,17 +556,17 @@ std::vector<std::string> SoapySource::listAntennas() {
     try {
         return dev_->listAntennas(SOAPY_SDR_RX, kChannel);
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "listAntennas failed");
+        setError(describe(e, "listAntennas failed"));
         return {};
     } catch (...) {
-        lastError_ = "listAntennas failed: non-standard exception";
+        setError("listAntennas failed: non-standard exception");
         return {};
     }
 }
 
 bool SoapySource::setAntenna(const std::string& name) {
     if (dev_ == nullptr) {
-        lastError_ = "setAntenna() called with no device open";
+        setError("setAntenna() called with no device open");
         return false;
     }
     try {
@@ -434,16 +576,16 @@ bool SoapySource::setAntenna(const std::string& name) {
         // failure this whole method exists to end.
         const std::vector<std::string> avail = dev_->listAntennas(SOAPY_SDR_RX, kChannel);
         if (std::find(avail.begin(), avail.end(), name) == avail.end()) {
-            lastError_ = "device has no RX antenna called \"" + name + "\"";
+            setError("device has no RX antenna called \"" + name + "\"");
             return false;
         }
         dev_->setAntenna(SOAPY_SDR_RX, kChannel, name);
         return true;
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "setAntenna failed");
+        setError(describe(e, "setAntenna failed"));
         return false;
     } catch (...) {
-        lastError_ = "setAntenna failed: non-standard exception";
+        setError("setAntenna failed: non-standard exception");
         return false;
     }
 }
@@ -455,10 +597,10 @@ std::string SoapySource::antenna() {
     try {
         return dev_->getAntenna(SOAPY_SDR_RX, kChannel);
     } catch (const std::exception& e) {
-        lastError_ = describe(e, "getAntenna failed");
+        setError(describe(e, "getAntenna failed"));
         return {};
     } catch (...) {
-        lastError_ = "getAntenna failed: non-standard exception";
+        setError("getAntenna failed: non-standard exception");
         return {};
     }
 }

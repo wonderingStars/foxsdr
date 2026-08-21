@@ -79,6 +79,29 @@ struct TelemetryReport {
     std::string toJson() const;
 };
 
+// Whole seconds banked from a clock sampled at ARBITRARY intervals.
+//
+// The caller samples once per rendered frame, so every individual delta is a
+// fraction of a second. Truncating each delta on its own discards all of
+// them, which is how mode-seconds reported zero for a whole release. Here the
+// remainder is CARRIED instead: the mark advances only by the whole seconds
+// actually banked, so 60 frames of 16.7 ms bank one second between them.
+class SecondAccrual {
+public:
+    // Starts (or restarts) accrual at `now`. Nothing is banked, and any
+    // remainder carried from before is dropped with the old mark.
+    void reset(double now);
+
+    // Whole seconds earned since the last call; the sub-second remainder is
+    // kept for the next one. Zero before the first reset, and zero for a
+    // clock that did not move forward.
+    std::uint64_t advance(double now);
+
+private:
+    double mark_ = 0.0;
+    bool started_ = false;
+};
+
 // A device string as SoapySDR reports it, reduced to something that
 // identifies the MODEL and nothing else.
 //

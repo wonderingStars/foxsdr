@@ -67,7 +67,16 @@ private:
         const float rate = (level > target_) ? attack_ : decay_;
         gain_ += rate * (target_ - level);
         if (gain_ > maxGain_) { gain_ = maxGain_; }
-        if (gain_ < 0.0f) { gain_ = 0.0f; }
+        // Written as a negated >= so that NaN — which fails every ordered
+        // comparison, including `gain_ < 0` — lands on 0 as well. A single
+        // non-finite input sample makes the level NaN and the gain NaN with
+        // it, and an unguarded clamp pair lets that NaN survive for the rest
+        // of the session: the loop then multiplies every later sample by NaN
+        // and the sound card is fed silence-shaped garbage forever. Zero is
+        // the right landing point (silence, not a blast), and the decay side
+        // of the loop winds the gain straight back up on the next clean
+        // sample. Costs nothing: it is the same one compare as before.
+        if (!(gain_ >= 0.0f)) { gain_ = 0.0f; }
     }
 
     float target_;

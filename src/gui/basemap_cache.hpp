@@ -82,6 +82,11 @@ public:
 
     std::size_t residentTiles() const { return tiles_.size(); }
 
+    // How many times ONE drainText() may poll the plugin. See drainText's
+    // implementation comment: this is the bound that keeps a talkative plugin
+    // from owning the GUI thread for ever.
+    static constexpr std::size_t kMaxPollsPerDrain = 32;
+
 private:
     struct Entry {
         unsigned int tex = 0;

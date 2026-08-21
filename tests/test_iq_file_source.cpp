@@ -16,15 +16,21 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/iq_file_source.hpp"
 
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -225,6 +231,138 @@ void expectOpenFails(const std::vector<unsigned char>& bytes, const char* tag,
     CHECK(src.read(buf, 4) == 0u);
 }
 
+// ---------------------------------------------------------------------------
+// Stop-responsiveness harness
+// ---------------------------------------------------------------------------
+//
+// read() serves a large request as a sequence of bounded disk reads. On a
+// healthy local file every one of them returns in microseconds, so the whole
+// call looks atomic; on a dead SMB share or a failing USB disk a single read
+// parks in the filesystem for as long as its own timeout, and the pipeline's
+// stop()/setSource() handshake — flag down, source stop(), JOIN the source
+// thread — waits for however many of those reads the loop still intends to
+// issue. That is the hang under test: not one slow read (nothing in user
+// space can shorten that), but the loop continuing to issue MORE of them
+// after stop() has already been asked for.
+//
+// A real disk cannot be made to block on demand, so both fakes below drive
+// the class through its readRaw seam: one counts the reads, the other blocks
+// inside one until the test releases it. Neither asserts a wall-clock latency
+// — the observable is the COUNT of reads issued after the stop, which is
+// exact and cannot flake under load.
+
+// Calls stop() from inside the first disk read, i.e. the control thread's
+// stop() lands while this very chunk is in flight. No threads: the ordering
+// that matters is reproduced exactly, deterministically.
+class StopDuringReadSource : public IqFileSource {
+public:
+    int rawCalls() const { return rawCalls_; }
+
+protected:
+    std::size_t readRaw(unsigned char* dst, std::size_t bytes) override {
+        ++rawCalls_;
+        if (rawCalls_ == 1) {
+            stop();
+        }
+        return IqFileSource::readRaw(dst, bytes);
+    }
+
+private:
+    int rawCalls_ = 0;
+};
+
+// Blocks inside the FIRST disk read until the test releases it, then behaves
+// normally. Only the first read blocks on purpose: an unfixed build must fail
+// this test by finishing the request, never by hanging the suite forever.
+class BlockingReadSource : public IqFileSource {
+public:
+    // Blocks (generously bounded) until the reader thread is parked inside a
+    // disk read. False means it never got there — reported, never ignored.
+    bool waitUntilBlocked() {
+        std::unique_lock<std::mutex> lk(m_);
+        return cv_.wait_for(lk, std::chrono::seconds(30),
+                            [this] { return entered_; });
+    }
+
+    void release() {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            released_ = true;
+        }
+        cv_.notify_all();
+    }
+
+    int rawCalls() const { return rawCalls_.load(); }
+    // Was stop() already complete at the moment the blocked read woke up?
+    bool stopSeenOnWake() const { return stopSeenOnWake_.load(); }
+    void noteStopDone() { stopDone_.store(true); }
+
+protected:
+    std::size_t readRaw(unsigned char* dst, std::size_t bytes) override {
+        if (rawCalls_.fetch_add(1) == 0) {
+            std::unique_lock<std::mutex> lk(m_);
+            entered_ = true;
+            cv_.notify_all();
+            cv_.wait(lk, [this] { return released_; });
+            stopSeenOnWake_.store(stopDone_.load());
+        }
+        return IqFileSource::readRaw(dst, bytes);
+    }
+
+private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    bool entered_ = false;
+    bool released_ = false;
+    std::atomic<int> rawCalls_{0};
+    std::atomic<bool> stopDone_{false};
+    std::atomic<bool> stopSeenOnWake_{false};
+};
+
+// Counts the disk reads ONE open() costs. open()'s RIFF chunk walk goes
+// through readHeaderRaw, the streaming seam's sibling, so the work it puts on
+// the GUI thread is countable without a slow disk and without any timing.
+//
+// Deliberately NOT an override of readRaw: that seam belongs to the playback
+// path, and the two fakes above reserve their FIRST call to it for a read they
+// stall on purpose. Counting from a separate virtual is what lets both live in
+// one file without either changing what the other measures.
+class CountingOpenSource : public IqFileSource {
+public:
+    int headerReads() const { return headerReads_; }
+
+protected:
+    std::size_t readHeaderRaw(unsigned char* dst, std::size_t bytes) override {
+        ++headerReads_;
+        return IqFileSource::readHeaderRaw(dst, bytes);
+    }
+
+private:
+    int headerReads_ = 0;
+};
+
+// RIFF/WAVE whose body is nothing but `count` chunks that declare size 0.
+// A zero-size chunk advances the walk by exactly its own 8-byte header, so an
+// unbounded walk issues one seek+read per 8 bytes of file — which is the
+// failure being bounded, and it is what a truncated recording's run of zeros
+// looks like, not only what a hostile author would write.
+std::vector<unsigned char> zeroChunkWav(std::size_t count) {
+    std::vector<unsigned char> v;
+    putTag(v, "RIFF");
+    putU32(v, 0);
+    putTag(v, "WAVE");
+    for (std::size_t i = 0; i < count; ++i) {
+        putTag(v, "JUNK");
+        putU32(v, 0);
+    }
+    const std::uint32_t riffSize = static_cast<std::uint32_t>(v.size() - 8);
+    v[4] = static_cast<unsigned char>(riffSize & 0xFFu);
+    v[5] = static_cast<unsigned char>((riffSize >> 8) & 0xFFu);
+    v[6] = static_cast<unsigned char>((riffSize >> 16) & 0xFFu);
+    v[7] = static_cast<unsigned char>((riffSize >> 24) & 0xFFu);
+    return v;
+}
+
 // Fixed-seed LCG (Numerical Recipes constants) for deterministic int16
 // sample data — no <random>, per the testing protocol.
 std::uint32_t g_lcg = 0x2468ACE1u;
@@ -335,6 +473,57 @@ int main() {
             CHECK(std::bit_cast<std::uint32_t>(x[i].imag()) ==
                   std::bit_cast<std::uint32_t>(interleaved[2 * i + 1]));
         }
+    }
+
+    // --- float32: non-finite samples are sanitised at the entry point ------
+    // A float32 WAV can encode NaN and both infinities, and nothing downstream
+    // of the source defends the sample path against them: one such sample
+    // latches the AGC gain, the squelch EMA and the noise reducer's spectrum
+    // for the rest of the session. The decoder is the entry point, so it is
+    // where they are replaced with silence. Finite samples in the same buffer
+    // must still come through bit-exact.
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const std::vector<float> interleaved = {
+            0.25f,               -0.5f,                // clean frame
+            nan,                 0.75f,                // NaN in I only
+            0.125f,              -nan,                 // NaN in Q only
+            std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity(),   // both infinities
+            -0.0f,               0.875f,               // -0 is finite: preserved
+        };
+        const std::string path = tmpPath("f32_nonfinite");
+        CHECK(writeFile(path,
+                        wavBytes(3, 2, 250000, 32, bytesFromF32(interleaved))));
+        IqFileSource src;
+        CHECK(src.open(path));
+        CHECK(src.start());
+        const std::size_t frames = interleaved.size() / 2;
+        std::vector<std::complex<float>> x(frames);
+        CHECK(src.read(x.data(), frames) == frames);
+        std::size_t nonFinite = 0;
+        std::size_t wrongZero = 0;
+        std::size_t finiteMismatch = 0;
+        for (std::size_t i = 0; i < frames; ++i) {
+            const float parts[2] = {x[i].real(), x[i].imag()};
+            for (std::size_t c = 0; c < 2; ++c) {
+                const float want = interleaved[2 * i + c];
+                if (!std::isfinite(parts[c])) {
+                    ++nonFinite;
+                } else if (!std::isfinite(want)) {
+                    // Sanitised: exactly +0, so the sample is true silence.
+                    if (std::bit_cast<std::uint32_t>(parts[c]) != 0u) {
+                        ++wrongZero;
+                    }
+                } else if (std::bit_cast<std::uint32_t>(parts[c]) !=
+                           std::bit_cast<std::uint32_t>(want)) {
+                    ++finiteMismatch;
+                }
+            }
+        }
+        CHECK(nonFinite == 0);
+        CHECK(wrongZero == 0);
+        CHECK(finiteMismatch == 0);
     }
 
     // --- loop seam: 1000 frames read as 2500, seam at 1000 and 2000 --------
@@ -451,6 +640,75 @@ int main() {
         }
     }
 
+    // --- stop() mid-read stops issuing disk reads --------------------------
+    // The pipeline's stop()/setSource() handshake clears its run flag, calls
+    // the source's stop(), then JOINS the source thread — so every disk read
+    // read() still chooses to issue after that stop() is time the GUI spends
+    // frozen. On a healthy file that is invisible; on a dead SMB share each
+    // one costs the filesystem's own timeout. read() must therefore hand back
+    // what it already has rather than start another read.
+    {
+        const std::string path = tmpPath("stop_midread");
+        CHECK(writeFile(path, wavBytes(1, 2, 48000, 16, bytesFromI16(seamData))));
+        StopDuringReadSource src;
+        CHECK(src.open(path));
+        CHECK(src.start());
+        // 10000 samples out of a 1000-frame file needs at least ten disk
+        // reads whatever the internal chunk cap is, so "exactly one" below is
+        // a property of the stop check and not of the chunk size.
+        constexpr std::size_t kWant = 10000;
+        std::vector<std::complex<float>> x(kWant,
+                                           std::complex<float>(-999.0f, -999.0f));
+        const std::size_t got = src.read(x.data(), kWant);
+        CHECK(src.rawCalls() == 1);
+        CHECK(got > 0u);
+        CHECK(got < kWant);
+        CHECK(!src.running());
+        // What it did deliver is real data in order: an abort truncates the
+        // request, it never corrupts or zero-pads the part already decoded.
+        std::size_t mismatches = 0;
+        for (std::size_t i = 0; i < got; ++i) {
+            const std::size_t f = i % 1000;
+            if (x[i].real() != static_cast<float>(seamData[2 * f]) / 32768.0f ||
+                x[i].imag() != static_cast<float>(seamData[2 * f + 1]) / 32768.0f) {
+                ++mismatches;
+            }
+        }
+        CHECK(mismatches == 0u);
+        CHECK(src.lastError()[0] == '\0');  // a stop is not an I/O error
+    }
+
+    // --- stop() arriving from another thread while a read is parked --------
+    // Same property, driven the way it actually happens: the control thread
+    // calls stop() while the source thread sits inside a disk read that has
+    // not returned yet. The read that is already in flight cannot be taken
+    // back (that is the filesystem's business); the point is that no further
+    // one is issued once it does return.
+    {
+        const std::string path = tmpPath("stop_blocked_read");
+        CHECK(writeFile(path, wavBytes(1, 2, 48000, 16, bytesFromI16(seamData))));
+        BlockingReadSource src;
+        CHECK(src.open(path));
+        CHECK(src.start());
+        constexpr std::size_t kWant = 10000;
+        std::vector<std::complex<float>> x(kWant,
+                                           std::complex<float>(-999.0f, -999.0f));
+        std::atomic<std::size_t> got{0};
+        std::thread reader([&] { got.store(src.read(x.data(), kWant)); });
+        // Generous (30 s) and only a deadlock escape, never a latency
+        // assertion — a loaded machine cannot turn this into a false red.
+        const bool blocked = src.waitUntilBlocked();
+        CHECK(blocked);
+        src.stop();          // the control thread's abort, issued mid-read
+        src.noteStopDone();
+        src.release();       // ...and only now does the "disk" answer
+        reader.join();
+        CHECK(src.stopSeenOnWake());  // the stop really did land mid-read
+        CHECK(src.rawCalls() == 1);   // and nothing further was issued
+        CHECK(got.load() < kWant);
+        CHECK(!src.running());
+    }
+
     // --- extra RIFF chunks (LIST before fmt, odd-sized JUNK after) skipped -
     {
         const std::vector<std::int16_t> interleaved = {100, -200, 300, -400};
@@ -469,6 +727,76 @@ int main() {
         CHECK(x[0].imag() == -200.0f / 32768.0f);
         CHECK(x[1].real() == 300.0f / 32768.0f);
         CHECK(x[1].imag() == -400.0f / 32768.0f);
+    }
+
+    // --- open()'s chunk walk is bounded, and stops once it has what it needs -
+    {
+        // THE FAILURE THIS GUARDS. open() does its whole RIFF header walk on
+        // the CALLING thread, which for both call sites is the GUI thread, and
+        // the walk's trip count came entirely from the file: a chunk declaring
+        // size 0 moves the cursor 8 bytes, so the loop issued one blocking
+        // seek+read per 8 bytes of file. 40000 such chunks is a 320 KB file
+        // and 40000 reads; a gigabyte capture whose header area was zeroed by
+        // a truncated write is 134 million of them, with the window frozen for
+        // all of it. The bound is what makes Open's cost a property of the
+        // code rather than of the file it was pointed at.
+        //
+        // The file is finite so an unfixed build FAILS this test rather than
+        // hanging the suite — a hang proves nothing about a bound.
+        constexpr std::size_t chunks = 40000;
+        // Compile-time, not a CHECK: both sides are constants, so a runtime
+        // conditional on them is only a warning waiting to happen.
+        static_assert(chunks > IqFileSource::kMaxHeaderChunks * 4,
+                      "the storm must dwarf the bound or it proves nothing");
+        const std::string path = tmpPath("zero_size_chunk_storm");
+        CHECK(writeFile(path, zeroChunkWav(chunks)));
+
+        CountingOpenSource src;
+        CHECK(!src.open(path));  // no fmt, no data: it cannot succeed
+        CHECK(errContains(src, "gave up walking"));
+        // One read for the 12-byte RIFF header, then at most the cap. The
+        // slack covers nothing in particular; it exists so the assertion is
+        // about the ORDER of the bound, not an exact arithmetic identity that
+        // a later refactor would have to chase.
+        CHECK(src.headerReads() <= static_cast<int>(IqFileSource::kMaxHeaderChunks) + 4);
+        if (src.headerReads() > static_cast<int>(IqFileSource::kMaxHeaderChunks) + 4) {
+            std::printf("FAIL open() issued %d disk reads walking %zu chunks (bound %zu)\n",
+                        src.headerReads(), chunks, IqFileSource::kMaxHeaderChunks);
+        }
+
+        // The other half of the contract: a real file is unaffected. It still
+        // opens, with the same rate and samples, and costs a handful of reads
+        // — the walk stops as soon as it holds both fmt and data rather than
+        // reading on to the end.
+        //
+        // The trailing chunks are what make that measurable. A file whose data
+        // chunk is last cannot tell the two behaviours apart; broadcast WAVs
+        // routinely carry metadata after the audio, and walking it is pure
+        // blocking work on the GUI thread for an answer already known.
+        ExtraChunk pad{"JUNK", {1, 2, 3, 4}};
+        std::vector<unsigned char> goodBytes =
+            wavBytes(1, 2, 8000, 16, bytesFromI16({7, -7, 9, -9}), -1, true, true,
+                     {pad}, {pad});
+        for (int i = 0; i < 5000; ++i) {
+            putTag(goodBytes, "JUNK");
+            putU32(goodBytes, 0);
+        }
+        const std::uint32_t goodRiff = static_cast<std::uint32_t>(goodBytes.size() - 8);
+        goodBytes[4] = static_cast<unsigned char>(goodRiff & 0xFFu);
+        goodBytes[5] = static_cast<unsigned char>((goodRiff >> 8) & 0xFFu);
+        goodBytes[6] = static_cast<unsigned char>((goodRiff >> 16) & 0xFFu);
+        goodBytes[7] = static_cast<unsigned char>((goodRiff >> 24) & 0xFFu);
+        const std::string good = tmpPath("bounded_walk_healthy");
+        CHECK(writeFile(good, goodBytes));
+        CountingOpenSource ok;
+        CHECK(ok.open(good));
+        CHECK_NEAR(ok.sampleRateHz(), 8000.0, 0.0);
+        CHECK(ok.headerReads() <= 8);
+        CHECK(ok.start());
+        std::complex<float> got[2];
+        CHECK(ok.read(got, 2) == 2u);
+        CHECK(got[0].real() == 7.0f / 32768.0f);
+        CHECK(got[1].imag() == -9.0f / 32768.0f);
     }
 
     // --- malformed files: each rejected with a specific reason -------------

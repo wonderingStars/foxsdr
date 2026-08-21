@@ -202,4 +202,22 @@ private:
 int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
                         const std::vector<AudioDevice>& present);
 
+// Makes a remembered ROW of a device list safe to subscript against the list
+// as it is NOW. Returns -1 only when `present` is empty.
+//
+// Different question from recoveryDeviceIndex above, which answers "which
+// DEVICE should be reopened" in PortAudio index space. This one is about the
+// combo's selection, which is a POSITION in the vector - and the vector is
+// re-enumerated every time the watchdog finds the stream dead, precisely
+// because a device disappeared. A list that SHRINKS leaves the remembered
+// position past the end, and the Sinks combo subscripts it unguarded on the
+// very next frame (it only checks that the list is non-empty), so a stale row
+// is an out-of-bounds read, not a cosmetic mismatch.
+//
+// A row that no longer exists falls back to the default device's row, or to
+// the first row when nothing is flagged default: whatever is shown may be the
+// wrong device, but the panel says so through the watchdog note, and a wrong
+// name is survivable where reading past the end of the vector is not.
+int clampDeviceRow(int row, const std::vector<AudioDevice>& present);
+
 }  // namespace cascade::sink

@@ -502,5 +502,62 @@ int main() {
         CHECK(recoveryDeviceIndex(1, "Speakers (Realtek USB Audio)", {}) == -1);
     }
 
+    {
+        // clampDeviceRow: the SELECTED ROW, which is a different thing from
+        // the device index above and is where the out-of-bounds lives.
+        //
+        // The watchdog re-enumerates the device list every time it finds the
+        // stream dead, and the reason the stream died is usually that a device
+        // went away — so the new list is SHORTER than the one the selected row
+        // was chosen against. The Sinks combo subscripts that row guarded only
+        // by "the list is not empty", so a stale row reads past the end.
+        using cascade::sink::clampDeviceRow;
+        const std::vector<AudioDevice> five{
+            AudioDevice{0, "Microsoft Sound Mapper - Output", false},
+            AudioDevice{1, "Speakers (Realtek USB Audio)", true},
+            AudioDevice{2, "Headphones (Arctis Nova Pro Wireless)", false},
+            AudioDevice{3, "Digital Output (S/PDIF)", false},
+            AudioDevice{4, "LG HDR 4K (NVIDIA High Definition Audio)", false},
+        };
+        // A row that is still in range is left exactly alone: this must not
+        // move a selection that is perfectly valid.
+        CHECK(clampDeviceRow(0, five) == 0);
+        CHECK(clampDeviceRow(2, five) == 2);
+        CHECK(clampDeviceRow(4, five) == 4);
+
+        // THE BUG. Two devices unplugged; the list is now two long and the
+        // remembered row 4 indexes 21 bytes past the end of the vector.
+        const std::vector<AudioDevice> shrunk{
+            AudioDevice{0, "Microsoft Sound Mapper - Output", false},
+            AudioDevice{1, "Speakers (Realtek USB Audio)", true},
+        };
+        const int clamped = clampDeviceRow(4, shrunk);
+        if (clamped < 0 || clamped >= static_cast<int>(shrunk.size())) {
+            std::printf("FAIL row 4 against a %zu-device list came back as %d\n", shrunk.size(),
+                        clamped);
+        }
+        CHECK(clamped >= 0 && clamped < static_cast<int>(shrunk.size()));
+        // Specifically: the default device's row, which is the closest thing
+        // to a right answer once the chosen one is gone.
+        CHECK(clamped == 1);
+
+        // Nothing flagged default: the first row is the only guaranteed one.
+        const std::vector<AudioDevice> noDefault{
+            AudioDevice{7, "Speakers (Realtek USB Audio)", false},
+        };
+        CHECK(clampDeviceRow(3, noDefault) == 0);
+        CHECK(clampDeviceRow(-1, noDefault) == 0);
+
+        // An empty list has no valid row at all, and -1 is what the combo's
+        // "No audio output devices" branch already expects.
+        CHECK(clampDeviceRow(0, {}) == -1);
+        CHECK(clampDeviceRow(-1, {}) == -1);
+        CHECK(clampDeviceRow(9, {}) == -1);
+
+        // A negative row against a populated list is the startup state (no
+        // device chosen yet) and resolves the same way as a lost one.
+        CHECK(clampDeviceRow(-1, five) == 1);
+    }
+
     return testSummary("test_audio_out");
 }

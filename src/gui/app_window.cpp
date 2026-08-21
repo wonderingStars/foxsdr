@@ -14,6 +14,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include <imgui.h>
@@ -49,6 +50,38 @@
 namespace cascade::gui {
 
 namespace {
+
+// Takes a resolved device-open result and lets it go, which is precisely what
+// closes the device: the result owns the SoapySource and its destructor is the
+// close. Templated only so it can live here, at file scope, without naming
+// AppWindow's private result type.
+template <typename Fut>
+void drainSoapyOpen(Fut& f) {
+    try {
+        auto r = f.get();
+        (void)r;  // destroyed here; ~SoapySource releases the handle
+    } catch (...) {
+        // A worker that threw has no device to release. Never propagate: this
+        // runs during teardown, and on the detached path with no catcher above
+        // it at all.
+    }
+}
+
+// The scan's equivalent, and it is deliberately NOT drainSoapyOpen. That one
+// exists to CLOSE a device — the result owns the SoapySource. A scan result
+// owns nothing but an enumeration list of strings, so there is no handle at
+// stake and this drain has exactly one job: let the future's blocking
+// destructor run somewhere that is not the GUI thread.
+template <typename Fut>
+void drainSoapyScan(Fut& f) {
+    try {
+        auto r = f.get();
+        (void)r;  // just an enumeration list; dropped here
+    } catch (...) {
+        // Never propagate: this runs during teardown, and on the detached path
+        // with no catcher above it at all.
+    }
+}
 
 constexpr float kMenuWidth = 260.0f;  // left column width per parity spec
 
@@ -616,6 +649,26 @@ AppWindow::~AppWindow() {
     // partial DLL is left behind. Harmless when nothing is running.
     pluginRepo_.cancel();
 
+    // The app-update download is the same problem and needs its own flag:
+    // it runs through the STATIC fetch helper, which has no PluginRepo
+    // instance and so was never reachable by the cancel() above.
+    // updateDownloadFuture_ is a member, and a std::async future's destructor
+    // blocks until the worker returns, so before this existed a quit during an
+    // update sat in ~AppWindow for the rest of the transfer — window gone,
+    // process still running, indistinguishable from a hang. The flag is polled
+    // between chunks, so the worker fails out with "cancelled" and deletes its
+    // ".part" file on the way.
+    updateCancel_.store(true, std::memory_order_relaxed);
+
+    // Same problem, no cancel to reach for: a device open may still be inside
+    // SoapySDR::Device::make(). See reapPendingSoapyOpen for the semantics.
+    reapPendingSoapyOpen();
+
+    // And the same again for the lazy device SCAN, which blocks in
+    // SoapySDR::Device::enumerate() and is the likelier of the two to be in
+    // flight at quit — it starts the moment the source combo is opened.
+    reapPendingSoapyScan();
+
     // Safety net (run()'s teardown already does this on the normal path):
     // the recorder members are destroyed before pipeline_ (reverse
     // declaration order), so any tap still installed must be uninstalled
@@ -936,6 +989,13 @@ void AppWindow::pollAudioHealth() {
         // Say so rather than failing silently — silent failure is the exact
         // bug this whole path exists to end. The next tick tries again.
         audioHealthNote_ = "audio output stopped and could not be reopened";
+        // The list above was replaced whatever happened next, and the reason
+        // the stream died is usually that a device went away — so it can be
+        // SHORTER than the one deviceIndex_ was chosen against. The Sinks
+        // combo subscripts that row guarded only by "not empty", so leaving a
+        // stale row here is an out-of-bounds read on the very next frame, on
+        // the one path where nothing else touches it.
+        deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
         return;
     }
 
@@ -953,6 +1013,11 @@ void AppWindow::pollAudioHealth() {
             if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
         }
     }
+    // Neither loop above is guaranteed to assign: a target that opened but is
+    // not in the list we just enumerated (it renumbered again between the two
+    // calls) leaves the old row standing against the new list. Same
+    // out-of-bounds, so the same clamp closes it here too.
+    deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
     char buf[160];
     std::snprintf(buf, sizeof(buf),
                   "output device stopped and was restarted (%d time%s)",
@@ -1005,7 +1070,7 @@ void AppWindow::drawFrequencyReadout() {
     cascade::source::IqSource& src = pipeline_.activeSource();
     const double hz = std::max(0.0, src.centerFrequencyHz());
 
-    // --- Typed entry (double-click the readout) -----------------------------
+    // --- Typed entry (click the readout) ------------------------------------
     // Enter commits, Escape or clicking away cancels. The field is seeded in
     // MHz because that is how frequencies are spoken; parseFrequencyHz still
     // accepts Hz, kHz and GHz with an explicit suffix.
@@ -1100,7 +1165,13 @@ void AppWindow::drawFrequencyReadout() {
     // Tooltip AFTER PopFont: raised inside the 2.2x scope it inherited that
     // scale and painted a banner across the spectrum.
     if (hoveredDigit) {
-        ImGui::SetTooltip("Scroll a digit to tune  |  double-click to type");
+        // "click", not "double-click": the handler above is IsMouseClicked and
+        // has been since double-click was abandoned as unreliable on Text
+        // items. A user who follows the tooltip literally double-clicks, the
+        // first click opens the editor and the second lands outside it and
+        // cancels — so the tooltip was teaching the one gesture that looks
+        // broken.
+        ImGui::SetTooltip("Scroll a digit to tune  |  click to type");
     }
 }
 
@@ -1313,9 +1384,15 @@ void AppWindow::startUpdateDownload() {
     updatePending_ = true;
     updateDownloading_ = true;
     updateError_.clear();
+    // Cleared on entry, exactly as PluginRepo::install() clears its own flags:
+    // a cancel from an abandoned earlier attempt must not silently kill this
+    // one, and the bar starts at zero rather than where the last try stopped.
+    updateProgress_.store(0.0f, std::memory_order_relaxed);
+    updateCancel_.store(false, std::memory_order_relaxed);
     const cascade::core::UpdateInfo info = update_;
     updateDownloadFuture_ = std::async(std::launch::async, [this, info]() {
-        return cascade::core::downloadUpdate(info, updateResultPath_, updateResultError_);
+        return cascade::core::downloadUpdate(info, updateResultPath_, updateResultError_,
+                                             &updateProgress_, &updateCancel_);
     });
 }
 
@@ -1404,7 +1481,12 @@ void AppWindow::drawUpdateBanner() {
     ImGui::Spacing();
     if (updateDownloading_) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Downloading...");
-        ImGui::ProgressBar(pluginRepo_.progress(), ImVec2(-FLT_MIN, 0.0f));
+        // updateProgress_, not pluginRepo_.progress(): this transfer does not
+        // go through a PluginRepo instance, so that value is whatever the
+        // plugin browser last did — which for the common case of never having
+        // opened it is 0, for the whole download.
+        ImGui::ProgressBar(updateProgress_.load(std::memory_order_relaxed),
+                           ImVec2(-FLT_MIN, 0.0f));
     } else if (!updateReadyPath_.empty()) {
         // Downloaded AND verified. Running it closes this application, which
         // the button says outright rather than surprising anyone: an installer
@@ -1589,6 +1671,7 @@ void AppWindow::drawSourceSection() {
                 soapy_ = nullptr;  // before setSource destroys a live Soapy
                 soapyArgs_.clear();
                 sourceError_.clear();
+                ++sourceGen_;  // a device open still in flight is now stale
                 pipeline_.setSource(std::move(file));
                 sourceKind_ = "file";
                 iqOpenPath_ = iqPath_;
@@ -1731,7 +1814,104 @@ void AppWindow::pollSoapyAsync() {
     }
 }
 
+void AppWindow::reapPendingSoapyOpen() {
+    if (!soapyOpenPending_ || !soapyOpenFuture_.valid()) { return; }
+
+    // WHY THIS EXISTS. std::future's destructor for a std::async(launch::async)
+    // task BLOCKS until the worker returns, and soapyOpenFuture_ is a member,
+    // so quitting while a device open was in flight parked the GUI thread
+    // inside ~AppWindow for the whole of SoapySDR::Device::make() — seconds on
+    // a healthy B200, and unbounded against a device that is wedged or has
+    // been unplugged mid-open. The window is already gone by then, so it
+    // presents as the application hanging after it closed.
+    //
+    // Grace period first: an open that is already finished (or a few
+    // milliseconds from it) is reaped right here, which keeps the common case
+    // free of an extra thread and of the process-exit race below. 250 ms is
+    // short enough not to be felt and long enough to cover every open that was
+    // not actually stuck.
+    constexpr auto kQuitGrace = std::chrono::milliseconds(250);
+    if (soapyOpenFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
+        drainSoapyOpen(soapyOpenFuture_);
+        soapyOpenPending_ = false;
+        return;
+    }
+
+    // Still inside make(). THE CONSERVATIVE CHOICE, stated explicitly because
+    // it is a trade and not a free win: the pending work is moved onto a
+    // detached reaper so quit stays responsive, and the reaper's only job is
+    // to take the result and DESTROY it — SoapyOpenResult owns the
+    // SoapySource, whose destructor closes the device, so an open that
+    // completes after quit still releases its handle rather than leaking it
+    // for the lifetime of the process.
+    //
+    // What it does not promise: if the process exits before the reaper
+    // finishes, Windows terminates that thread wherever it happens to be and
+    // the handle is released by the operating system with the process instead.
+    // That is the accepted cost — the alternative on offer is the hang above,
+    // and no amount of waiting can bound a driver call that is not going to
+    // return.
+    std::thread([f = std::move(soapyOpenFuture_)]() mutable {
+        drainSoapyOpen(f);
+    }).detach();
+    soapyOpenPending_ = false;
+}
+
+void AppWindow::reapPendingSoapyScan() {
+    if (!soapyScanPending_ || !soapyScanFuture_.valid()) { return; }
+
+    // THE SAME BLOCKING DESTRUCTOR AS reapPendingSoapyOpen, on the other
+    // future. std::async(launch::async) futures block in ~future until the
+    // worker returns, and soapyScanFuture_ is a member, so quitting while the
+    // lazy scan was in flight parked the GUI thread inside ~AppWindow for the
+    // whole of SoapySDR::Device::enumerate(). That call walks every registered
+    // vendor module's discovery routine — it is multi-second on a healthy
+    // machine with several drivers installed and unbounded against a wedged
+    // one — and the window is already gone by then, so it presents as the
+    // application hanging after it closed. The scan is started lazily the
+    // first time the source combo is opened, which is a moment away from the
+    // user deciding there is no radio here and quitting.
+    //
+    // Grace period first, for the same reason: a scan a few milliseconds from
+    // finishing is reaped right here, keeping the common case free of an extra
+    // thread and of the process-exit race below.
+    constexpr auto kQuitGrace = std::chrono::milliseconds(250);
+    if (soapyScanFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
+        drainSoapyScan(soapyScanFuture_);
+        soapyScanPending_ = false;
+        return;
+    }
+
+    // Still inside enumerate(). Moved onto a detached reaper so quit stays
+    // responsive. WHERE THIS DIFFERS FROM THE OPEN REAPER, and it is worth
+    // being explicit because the two look identical: the open reaper has a
+    // real duty after quit — its result owns the device handle, and dropping
+    // it is what closes the radio. A scan result is an enumeration list and
+    // owns no handle at all, so this reaper releases nothing; it exists purely
+    // so the wait happens off the GUI thread. If the process exits first the
+    // thread is terminated wherever it stands and nothing is left behind that
+    // the operating system would not have reclaimed anyway.
+    std::thread([f = std::move(soapyScanFuture_)]() mutable {
+        drainSoapyScan(f);
+    }).detach();
+    soapyScanPending_ = false;
+}
+
 void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
+    // THE USER MAY HAVE MOVED ON. Opening a device takes seconds and the GUI
+    // stays live throughout, so by the time this runs they may have selected
+    // the generator, opened an IQ file, or done either from the web UI. Before
+    // this check the finished open was applied regardless and the radio
+    // changed itself several seconds after being told otherwise — including
+    // installing a device over a file the user was already listening to.
+    //
+    // Dropping `r` here also closes the device: r.dev owns the SoapySource,
+    // and its destructor is what releases the handle the worker acquired. The
+    // error string is dropped with it on purpose — it describes a device the
+    // user is no longer asking about, and showing it under the source they DID
+    // choose would read as a fault in that source.
+    if (!asyncOpenStillWanted(soapyOpenReqGen_, sourceGen_)) { return; }
+
     // Failure: the combo was never moved, so it still shows the previous
     // source; the reason lands in red under the control.
     if (!r.dev) {
@@ -1761,6 +1941,7 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
 
     soapy_ = r.dev.get();
     soapyArgs_ = r.args;
+    ++sourceGen_;  // this install is itself a source change
     pipeline_.setSource(std::move(r.dev));
     sourceKind_ = "soapy";
     sourceSel_ = r.row;
@@ -1801,6 +1982,7 @@ void AppWindow::selectSource(int idx) {
         // Built-in generator: null restores it, and it cannot fail.
         soapy_ = nullptr;  // before setSource destroys a live Soapy source
         soapyArgs_.clear();
+        ++sourceGen_;  // a device open still in flight is now stale
         pipeline_.setSource(nullptr);
         sourceKind_ = "siggen";
         sourceSel_ = 0;
@@ -1830,6 +2012,10 @@ void AppWindow::selectSource(int idx) {
     const double keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
     soapyBusyLabel_ = soapyDevices_[d].label;
     soapyOpenPending_ = true;
+    // Stamp the request with the selection it belongs to. Nothing is installed
+    // yet, so the counter is NOT bumped here — only the answer's right to be
+    // applied is recorded.
+    soapyOpenReqGen_ = sourceGen_;
     soapyOpenFuture_ = std::async(std::launch::async, [args, rate, idx, keepCenterHz] {
         SoapyOpenResult r;
         r.args = args;
@@ -2260,6 +2446,7 @@ void AppWindow::drawStereoRdsControls() {
 
 void AppWindow::drawAudioFilterSection() {
     if (!ImGui::CollapsingHeader("Audio filters")) { return; }
+    telemetryNotePanel("audio filters");
 
     // The order is the pipeline's, spelled out because it is the part a user
     // cannot infer from the controls.
@@ -2487,6 +2674,7 @@ void AppWindow::drawPluginsSection() {
                       static_cast<int>(blocked));
     }
     if (!ImGui::CollapsingHeader(header)) { return; }
+    telemetryNotePanel("plugins");
 
     ImGui::TextDisabled("%s", pluginDir_.c_str());
     const float half = 0.5f * (ImGui::GetContentRegionAvail().x -
@@ -2501,7 +2689,10 @@ void AppWindow::drawPluginsSection() {
         pluginBrowseOpen_ = !pluginBrowseOpen_;
     }
 
-    if (pluginBrowseOpen_) { drawPluginBrowser(); }
+    if (pluginBrowseOpen_) {
+        telemetryNotePanel("plugin browser");
+        drawPluginBrowser();
+    }
 
     drawBlockedPluginRows();
 
@@ -3214,6 +3405,7 @@ void AppWindow::drawPluginWindows() {
     if (haveTracks) { mapOpen_ = true; }  // opens itself the first time there is something to show
 
     if (mapOpen_) {
+        telemetryNotePanel("map");
         // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
         // what makes ImGui give it a real operating system window rather than
         // merging it into the main one. There is no "always be a separate
@@ -3314,6 +3506,7 @@ void AppWindow::drawPluginWindows() {
         // starts arriving, and not before, is the same rule the map already
         // follows: it opens itself the first time there is something to show.
         if (im.width == 0u || im.height == 0u) { continue; }
+        telemetryNotePanel("image");
         // Its own operating system window, for the same reason as the map: a
         // received picture is something to put beside the radio, or on another
         // screen, not a panel inside it. Staggered per decoder so two plugins
@@ -3663,15 +3856,19 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
 }
 
 void AppWindow::applyPluginTuneGrants() {
-    for (const std::string& p : pluginTuneAllowed_) { pluginUi_.setTuneAllowed(p, true); }
+    // Every entry here is a PluginUi::tuneKey() - a module file name. A config
+    // written by an older build holds DISPLAY NAMES instead; those match no
+    // module, so such a grant reverts to its default of OFF and shows up as a
+    // revocable row rather than quietly granting anything.
+    for (const std::string& k : pluginTuneAllowed_) { pluginUi_.setTuneAllowed(k, true); }
 }
 
-void AppWindow::setPluginTuneAllowed(const std::string& plugin, bool allowed) {
-    pluginUi_.setTuneAllowed(plugin, allowed);
+void AppWindow::setPluginTuneAllowed(const std::string& pluginKey, bool allowed) {
+    pluginUi_.setTuneAllowed(pluginKey, allowed);
     const auto it =
-        std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(), plugin);
+        std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(), pluginKey);
     if (allowed && it == pluginTuneAllowed_.end()) {
-        pluginTuneAllowed_.push_back(plugin);
+        pluginTuneAllowed_.push_back(pluginKey);
     } else if (!allowed && it != pluginTuneAllowed_.end()) {
         pluginTuneAllowed_.erase(it);
     }
@@ -3685,13 +3882,26 @@ void AppWindow::drawPluginTuneControls() {
     // gets a row too: it is the only way to revoke a permission given to
     // something since removed or quarantined, and a grant the user cannot see
     // is exactly the kind that should not exist.
-    std::vector<std::string> rows;
+    //
+    // A row is identified by its MODULE FILE, which is what the grant is keyed
+    // on; the display name only labels it, because a plugin picks its own name
+    // and two of them may print the same one.
+    struct TuneRow {
+        std::string key;    // PluginUi::tuneKey()
+        std::string label;
+    };
+    std::vector<TuneRow> rows;
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        if (p.loaded && p.hostClient != nullptr) { rows.push_back(p.name); }
+        if (!p.loaded || p.hostClient == nullptr) { continue; }
+        const std::string key = cascade::core::PluginUi::tuneKey(p);
+        rows.push_back({key, p.name + " (" + key + ")"});
     }
     const std::size_t loadedRows = rows.size();
     for (const std::string& g : pluginTuneAllowed_) {
-        if (std::find(rows.begin(), rows.end(), g) == rows.end()) { rows.push_back(g); }
+        const auto same = [&g](const TuneRow& r) { return r.key == g; };
+        if (std::find_if(rows.begin(), rows.end(), same) == rows.end()) {
+            rows.push_back({g, g});
+        }
     }
     if (rows.empty()) { return; }
 
@@ -3713,18 +3923,18 @@ void AppWindow::drawPluginTuneControls() {
         "satellite tracker follows Doppler. Off by default.");
 
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        const std::string& name = rows[i];
+        const TuneRow& row = rows[i];
         ImGui::PushID(static_cast<int>(i));
-        bool allowed = pluginUi_.tuneAllowed(name);
-        if (ImGui::Checkbox(name.c_str(), &allowed)) {
-            setPluginTuneAllowed(name, allowed);
+        bool allowed = pluginUi_.tuneAllowed(row.key);
+        if (ImGui::Checkbox(row.label.c_str(), &allowed)) {
+            setPluginTuneAllowed(row.key, allowed);
         }
         // What the plugin has actually DONE with the permission, which is the
         // part that tells the user whether the row matters.
         const std::vector<std::string>& asked = pluginUi_.tuneRequesters();
         if (i >= loadedRows) {
             ImGui::TextDisabled("not currently installed — grant remembered");
-        } else if (std::find(asked.begin(), asked.end(), name) != asked.end()) {
+        } else if (std::find(asked.begin(), asked.end(), row.key) != asked.end()) {
             ImGui::TextDisabled("has asked to tune this session");
         } else {
             ImGui::TextDisabled("has not asked to tune");
@@ -3800,6 +4010,7 @@ void AppWindow::drawDecoderWindow() {
         decoderWindowEverOpened_ = true;
     }
     if (!decoderWindowOpen_) { return; }
+    telemetryNotePanel("decoded");
 
     placeAsSeparateWindow(9);
     if (ImGui::Begin("Decoder output###decoderout", &decoderWindowOpen_)) {
@@ -4071,6 +4282,7 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
 
 void AppWindow::drawRecorderSection() {
     if (!ImGui::CollapsingHeader("Recorder")) { return; }
+    telemetryNotePanel("recorder");
 
     // Destination, always visible so the user knows where takes land. The
     // directory is created by Recorder::start on the first record.
@@ -4161,6 +4373,7 @@ void AppWindow::stopAudioRecording() {
 
 void AppWindow::drawBookmarksSection() {
     if (!ImGui::CollapsingHeader("Bookmarks")) { return; }
+    telemetryNotePanel("bookmarks");
 
     ImGui::SetNextItemWidth(-90.0f);
     ImGui::InputTextWithHint("##bm_name", "name", bookmarkName_,
@@ -4284,6 +4497,7 @@ double AppWindow::currentAbsoluteHz() {
 
 void AppWindow::drawScannerSection() {
     if (!ImGui::CollapsingHeader("Scanner")) { return; }
+    telemetryNotePanel("scanner");
 
     // Mirrors -> Params. Scanner::configure sanitizes (swap, step floor,
     // negative times), so the raw edit values can be handed over as-is.
@@ -4636,10 +4850,17 @@ void AppWindow::publishWebSnapshot() {
         w.licence = p.licence;
         w.loaded = p.loaded;
         w.error = p.error;
-        w.fileName = std::filesystem::path(p.path).filename().string();
+        // Also the tune-grant key, and taken from the one place that computes
+        // it so the two can never drift: the browser echoes this string back
+        // to toggle the permission.
+        w.fileName = cascade::core::PluginUi::tuneKey(p);
         w.canRequestTune = (p.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u;
+        // Keyed on the module file (w.fileName), never on the display name:
+        // the browser sends that same key back to toggle the grant, and a name
+        // is the plugin's own to choose.
         w.tuneAllowed = std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(),
-                                  p.name) != pluginTuneAllowed_.end();
+                                  cascade::core::PluginUi::tuneKey(p)) !=
+                        pluginTuneAllowed_.end();
         // Declared presets, filtered by the SAME rules drawPluginPresets uses:
         // capped, because a plugin is third-party code and a list this long is
         // not a menu, and each frequency positively tested so a value that is
@@ -5157,6 +5378,7 @@ void AppWindow::setWebPassword(const std::string& password) {
 
 void AppWindow::drawCatSection() {
     if (!ImGui::CollapsingHeader("CAT control (rigctld)")) { return; }
+    telemetryNotePanel("cat");
 
     ImGui::TextWrapped(
         "Lets logging and digital-mode software drive this receiver over the "
@@ -5168,7 +5390,14 @@ void AppWindow::drawCatSection() {
         refreshCatServer();
     }
 
-    if (ImGui::InputInt("Port", &catPortMirror_)) {
+    // "Port##cat": the web section draws its own "Port" field, and neither
+    // section pushes an ID (CollapsingHeader, unlike TreeNode, does not open
+    // an ID scope) — so both live in the menu column's one scope. Identical
+    // labels are identical IDs there, which makes ImGui treat the two fields
+    // as ONE widget: typing in either fights the other's value. The "##"
+    // suffix is not shown to the user and is how the rest of this file
+    // separates same-named widgets.
+    if (ImGui::InputInt("Port##cat", &catPortMirror_)) {
         catPortMirror_ = std::max(1024, std::min(catPortMirror_, 65535));
         catServer_.stop();
         refreshCatServer();
@@ -5201,6 +5430,7 @@ void AppWindow::drawCatSection() {
 
 void AppWindow::drawWebSection() {
     if (!ImGui::CollapsingHeader("Web access")) { return; }
+    telemetryNotePanel("web");
 
     if (!webAddressesScanned_) {
         webLocalAddresses_ = cascade::net::localInterfaceAddresses();
@@ -5231,7 +5461,9 @@ void AppWindow::drawWebSection() {
         ImGui::TextDisabled("address: %s", webCfg_.bindAddress.c_str());
     }
 
-    if (ImGui::InputInt("Port", &webPortMirror_)) {
+    // "Port##web": see the matching note in drawCatSection — the two sections
+    // share one ID scope, so both fields need a distinct suffix.
+    if (ImGui::InputInt("Port##web", &webPortMirror_)) {
         webPortMirror_ = std::clamp(webPortMirror_, cascade::net::kMinPort,
                                     cascade::net::kMaxPort);
         webCfg_.port = webPortMirror_;
@@ -5315,6 +5547,7 @@ void AppWindow::drawWebSection() {
 
 void AppWindow::drawUpdatesSection() {
     if (!ImGui::CollapsingHeader("Updates")) { return; }
+    telemetryNotePanel("updates");
 
     if (ImGui::Checkbox("Check for updates at startup", &updateCheckEnabled_)) {
         // Off means off immediately: a check already in flight is not waited
@@ -5352,6 +5585,7 @@ void AppWindow::drawUpdatesSection() {
 
 void AppWindow::drawUsageReportingSection() {
     if (!ImGui::CollapsingHeader("Usage reporting")) { return; }
+    telemetryNotePanel("usage reporting");
 
     // No endpoint compiled in means the feature cannot work, so it is shown as
     // unavailable rather than offering a switch that would collect into
@@ -5398,6 +5632,7 @@ void AppWindow::drawUsageReportingSection() {
         privacyNoticeOpen_ = !privacyNoticeOpen_;
     }
     if (privacyNoticeOpen_) {
+        telemetryNotePanel("privacy notice");
         ImGui::Indent();
         ImGui::TextDisabled(
             "id (random)  version  os  arch  launches  crashes\n"
@@ -5473,6 +5708,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
             file->setCenterFrequencyHz(cfg.centerHz);
             std::snprintf(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
             iqOpenPath_ = cfg.iqFilePath;
+            // No open can be in flight during the startup restore, but the
+            // counter's contract is "every install bumps it" — an invariant
+            // with an exception in it is one nobody can rely on later.
+            ++sourceGen_;
             pipeline_.setSource(std::move(file));
             sourceKind_ = "file";
             sourceSel_ = 1;
@@ -5490,6 +5729,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
             dev->setCenterFrequencyHz(cfg.centerHz);
             soapy_ = dev.get();
             soapyArgs_ = cfg.soapyArgs;
+            ++sourceGen_;  // same invariant as the file branch above
             pipeline_.setSource(std::move(dev));
             sourceKind_ = "soapy";
             // Point the combo at the restored device if this machine still
@@ -5545,15 +5785,15 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
 }
 
 void AppWindow::telemetryAccrueMode() {
-    // Seconds are banked against the mode that was ACTUALLY running, at every
-    // mode change and at exit. Accumulating against the mode selected at
-    // shutdown would credit the whole session to whatever happened to be last.
-    const double now = glfwGetTime();
-    if (telemetryModeSince_ > 0.0 && now > telemetryModeSince_) {
-        const auto secs = static_cast<std::uint64_t>(now - telemetryModeSince_);
-        if (secs > 0) { telemetryModeSeconds_[kModeNames[modeIndex_]] += secs; }
-    }
-    telemetryModeSince_ = now;
+    // Seconds are banked against the mode that was ACTUALLY running, once per
+    // frame. Accumulating against the mode selected at shutdown would credit
+    // the whole session to whatever happened to be last.
+    //
+    // The accrual carries the sub-second remainder between calls. It has to:
+    // a frame is ~17 ms, so every individual delta truncates to zero seconds
+    // and nothing would ever be banked.
+    const std::uint64_t secs = telemetryModeAccrual_.advance(glfwGetTime());
+    if (secs > 0) { telemetryModeSeconds_[kModeNames[modeIndex_]] += secs; }
 }
 
 void AppWindow::telemetryNotePanel(const char* name) {
@@ -5584,7 +5824,7 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     // observation that last time the marker was never set.
     if (!cfg.telemetryCleanExit) { ++telemetryCrashes_; }
     telemetrySessionStart_ = glfwGetTime();
-    telemetryModeSince_ = telemetrySessionStart_;
+    telemetryModeAccrual_.reset(telemetrySessionStart_);
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
     if (telemetryEnabled_ && !telemetryInstallId_.empty() &&

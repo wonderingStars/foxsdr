@@ -135,6 +135,28 @@ void testSetFrequencyRejectsRubbish() {
     }
 }
 
+void testSetFrequencyHonoursTheSameUpperBoundAsTheWeb() {
+    const RadioStatus s = baseStatus();
+    // The web and GUI tune paths refuse a centre above kMaxCenterHz. CAT drives
+    // the SAME receiver, so a client that asks for more has to be refused the
+    // same way rather than being the one route that can push a nonsense
+    // frequency at a driver.
+    const long long limit = static_cast<long long>(cascade::net::kMaxCenterHz);
+
+    const CatResult atLimit = run("F " + std::to_string(limit), s);
+    CHECK(atLimit.reply == "RPRT 0\n");
+    CHECK(atLimit.hasControl);
+
+    const CatResult over = run("F " + std::to_string(limit + 1), s);
+    CHECK(over.reply == "RPRT -1\n");
+    CHECK(!over.hasControl);
+
+    // Far over, not just one Hz over — the shape a runaway client produces.
+    const CatResult wayOver = run("F 999000000000", s);
+    CHECK(wayOver.reply == "RPRT -1\n");
+    CHECK(!wayOver.hasControl);
+}
+
 void testGetMode() {
     RadioStatus s = baseStatus();
     s.mode = "USB";
@@ -184,6 +206,50 @@ void testSetMode() {
     const CatResult bad = run("M PKTUSB 2400", s);
     CHECK(bad.reply == "RPRT -1\n");
     CHECK(!bad.hasControl);
+}
+
+void testSetModeHonoursTheSamePassbandBoundsAsTheWeb() {
+    const RadioStatus s = baseStatus();
+    // The web path clamps a requested passband to [kMinBandwidthHz,
+    // kMaxBandwidthHz] (web_control.hpp). CAT drives the SAME receiver and the
+    // same filter, so a CAT client asking for a 1 Hz or a 999 MHz passband has
+    // to be refused the same way rather than being the one route that can hand
+    // a nonsense width to the demodulator.
+    const long long lo = static_cast<long long>(cascade::net::kMinBandwidthHz);
+    const long long hi = static_cast<long long>(cascade::net::kMaxBandwidthHz);
+
+    // Both limits themselves are legal — asserted from inside so that widening
+    // the check by one Hz cannot pass unnoticed either.
+    const CatResult atLo = run("M USB " + std::to_string(lo), s);
+    CHECK(atLo.reply == "RPRT 0\n");
+    CHECK(atLo.hasControl);
+    CHECK(atLo.control.bandwidthHz.has_value());
+
+    const CatResult atHi = run("M USB " + std::to_string(hi), s);
+    CHECK(atHi.reply == "RPRT 0\n");
+    CHECK(atHi.hasControl);
+    CHECK(atHi.control.bandwidthHz.has_value());
+
+    const CatResult under = run("M USB " + std::to_string(lo - 1), s);
+    CHECK(under.reply == "RPRT -1\n");
+    CHECK(!under.hasControl);  // and no mode change slipped through either
+
+    const CatResult over = run("M USB " + std::to_string(hi + 1), s);
+    CHECK(over.reply == "RPRT -1\n");
+    CHECK(!over.hasControl);
+
+    // Far over, not just one Hz over — the shape a runaway client produces.
+    const CatResult wayOver = run("M USB 999000000", s);
+    CHECK(wayOver.reply == "RPRT -1\n");
+    CHECK(!wayOver.hasControl);
+
+    // A passband of 0 keeps its Hamlib meaning ("the mode's default") and must
+    // survive the new bound even though it sits below kMinBandwidthHz.
+    const CatResult zero = run("M USB 0", s);
+    CHECK(zero.reply == "RPRT 0\n");
+    CHECK(zero.hasControl);
+    CHECK(zero.control.mode.has_value());
+    CHECK(!zero.control.bandwidthHz.has_value());
 }
 
 void testModeTokenRoundTrip() {
@@ -344,8 +410,10 @@ int main() {
     testSetFrequencyOutsideBandRetunes();
     testTunePlanBoundary();
     testSetFrequencyRejectsRubbish();
+    testSetFrequencyHonoursTheSameUpperBoundAsTheWeb();
     testGetMode();
     testSetMode();
+    testSetModeHonoursTheSamePassbandBoundsAsTheWeb();
     testModeTokenRoundTrip();
     testVfoAndSplit();
     testPttIsAlwaysReceive();

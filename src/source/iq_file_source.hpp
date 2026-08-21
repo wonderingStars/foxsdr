@@ -75,6 +75,16 @@ public:
     // must never return 0 for n > 0, or the pipeline's pacing loop would
     // misread it as a transient and spin.
     //
+    // Abortable: a large request is served as a sequence of bounded disk
+    // reads and stop() is re-checked between them, so a stop() from the
+    // control thread truncates the request — read() returns however many
+    // samples it had already decoded (possibly 0) instead of finishing the
+    // fill. This is what keeps the Pipeline's stop()/setSource() join bounded
+    // to ONE disk read when the backing file lives on a dead SMB share or a
+    // failing USB device; on a healthy local file it is unobservable. The
+    // truncated return is the "stopped" answer, not an error: lastError()
+    // is left untouched.
+    //
     // Threading: read() only from the pipeline's source thread; open()/
     // start() must not overlap an in-flight read() (the Pipeline serializes
     // this by parking the source thread across restarts).
@@ -84,6 +94,38 @@ public:
     const char* name() const override { return name_.c_str(); }
 
     const char* lastError() const override { return lastError_.c_str(); }
+
+    // How many RIFF chunk headers ONE open() may walk. See the loop's comment:
+    // open() runs on the GUI thread and the walk's trip count was set by the
+    // file's own contents, so a run of zero-size chunks bought one blocking
+    // read per 8 bytes of file. Far above anything a real recording contains.
+    static constexpr std::size_t kMaxHeaderChunks = 256;
+
+protected:
+    // The one raw-disk seam: reads up to `bytes` bytes from the current file
+    // position into dst and returns how many actually arrived (short == the
+    // file failed underneath us). Virtual for exactly one reason — a test
+    // cannot make a real disk block on demand, and the stop() responsiveness
+    // read() owes the pipeline is only observable while a read is IN FLIGHT.
+    // Production always runs the ifstream body; the indirect call is paid once
+    // per 16-32 KiB chunk, which is noise against the syscall it wraps.
+    virtual std::size_t readRaw(unsigned char* dst, std::size_t bytes);
+
+    // The same seam for open()'s RIFF header walk (it seeks, then calls this),
+    // so the count of blocking reads that walk costs is observable by the same
+    // means — which is what the kMaxHeaderChunks bound is measured against.
+    //
+    // A SECOND virtual and not a reuse of readRaw, which is a real distinction
+    // and not tidiness. A readRaw fake is written against the STREAMING path,
+    // where "the first read" means the first read of a playback request — the
+    // suite's blocking fake parks in exactly that call to reproduce a stalled
+    // disk. Feeding open()'s header reads through the same function silently
+    // moves that first call from read() into open(), and a fake that meant to
+    // stall playback stalls the file being opened instead. Splitting them
+    // keeps each seam's contract its own; the default body below is the same
+    // ifstream read, reached NON-virtually so an override of one never
+    // reroutes the other.
+    virtual std::size_t readHeaderRaw(unsigned char* dst, std::size_t bytes);
 
 private:
     enum class SampleFormat { none, pcm16, float32 };

@@ -3,6 +3,7 @@
 #include "core/telemetry.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 #include <nlohmann/json.hpp>
@@ -46,6 +47,24 @@ std::string lower(std::string s) {
 }
 
 }  // namespace
+
+void SecondAccrual::reset(double now) {
+    mark_ = now;
+    started_ = true;
+}
+
+std::uint64_t SecondAccrual::advance(double now) {
+    if (!started_ || now <= mark_) {
+        // Never started, or the clock did not move forward. Re-mark and bank
+        // nothing rather than let a backwards step produce a huge count.
+        mark_ = now;
+        started_ = true;
+        return 0;
+    }
+    const double whole = std::floor(now - mark_);
+    mark_ += whole;  // the sub-second remainder is CARRIED, not discarded
+    return static_cast<std::uint64_t>(whole);
+}
 
 std::string sanitiseDevice(const std::string& soapyArgs) {
     std::vector<std::string> parts;

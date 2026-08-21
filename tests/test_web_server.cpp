@@ -181,9 +181,13 @@ void testPasswordGateOnLoopback() {
         CHECK(session->body.find("\"authenticated\":false") != std::string::npos);
     }
 
-    // Wrong password.
+    // Wrong password. The derivation count is sampled around each of the two
+    // failing logins below because the identical BODY they return is only half
+    // of not distinguishing them — see the assertion after them.
+    const std::uint64_t beforeBad = pbkdf2CallCount();
     auto bad = cli.Post("/api/login", loginBody("admin", "wrong-password-here"),
                         "application/json");
+    const std::uint64_t badCost = pbkdf2CallCount() - beforeBad;
     CHECK(static_cast<bool>(bad));
     if (bad) {
         CHECK(bad->status == 401);
@@ -191,13 +195,28 @@ void testPasswordGateOnLoopback() {
     }
 
     // Right password, wrong user — and the message must not distinguish them.
+    const std::uint64_t beforeWrongUser = pbkdf2CallCount();
     auto wrongUser = cli.Post("/api/login", loginBody("root", kPassword),
                               "application/json");
+    const std::uint64_t wrongUserCost = pbkdf2CallCount() - beforeWrongUser;
     CHECK(static_cast<bool>(wrongUser));
     if (wrongUser) {
         CHECK(wrongUser->status == 401);
         CHECK(bad && wrongUser->body == bad->body);
     }
+
+    // The wrong user name must cost the same NUMBER of key derivations as the
+    // wrong password, or the two cases tell themselves apart by TIMING and the
+    // shared message above buys nothing. verifyLogin() guarantees this and is
+    // tested directly in test_web_auth.cpp — what is pinned HERE is that the
+    // HTTP handler actually CALLS it: reverting this route to the short-
+    // circuiting `user == expectedUser && verifyPassword(...)` spelling leaves
+    // every other assertion in this suite green and drops this one to zero.
+    // Counted, not timed, so a loaded machine cannot make it flake; the client
+    // is synchronous and single-threaded, so each Post's derivation has landed
+    // before the sample after it is taken.
+    CHECK(badCost == 1u);
+    CHECK(wrongUserCost == badCost);
 
     // A form-encoded post is refused before any password work happens (CSRF).
     auto wrongType = cli.Post("/api/login", "username=admin&password=x",

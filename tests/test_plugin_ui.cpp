@@ -123,11 +123,26 @@ struct FakeHostClient {
 };
 FakeHostClient g_hc;
 int g_orderCounter = 0;
+// Every bridge handed out, in rebuild order. One plugin overwrites g_hc.api,
+// so a case with two plugins needs each one's own handle.
+std::vector<const CascadeHostApi*> g_attached;
 
 void hcAttach(const CascadeHostApi* h) {
     ++g_hc.attaches;
     g_hc.api = h;
     g_hc.attachOrderMarker = ++g_orderCounter;
+    g_attached.push_back(h);
+}
+
+// Bounds-safe: a CHECK on the size records and continues, so indexing behind
+// one would read past the end in exactly the run that has something to report.
+int32_t requestTuneFrom(std::size_t i, double hz) {
+    if (i >= g_attached.size() || g_attached[i] == nullptr) { return CASCADE_TUNE_FAILED; }
+    return g_attached[i]->request_tune(g_attached[i]->ctx, hz);
+}
+
+std::string requesterAt(const std::vector<std::string>& v, std::size_t i) {
+    return i < v.size() ? v[i] : std::string();
 }
 
 CascadeHostClientApi makeHostClientApi() {
@@ -142,6 +157,19 @@ LoadedPlugin plug(const char* name) {
     p.loaded = true;
     p.name = name;
     p.version = "1.0.0";
+    // The host finds every plugin as a FILE, and that file is what a tune
+    // grant is keyed on, so a fake plugin without one could never be granted
+    // anything. The display name above is deliberately not the key.
+    p.path = std::string("C:/plugins/") + name + ".dll";
+    return p;
+}
+
+// The same, with the module file the host found it in. A tune grant is keyed
+// on that file, never on the display name above, so a case about permissions
+// has to say which file each plugin came from.
+LoadedPlugin plugAt(const char* name, const char* path) {
+    LoadedPlugin p = plug(name);
+    p.path = path;
     return p;
 }
 
@@ -150,6 +178,7 @@ void resetAll() {
     g_pn = FakePanel{};
     g_hc = FakeHostClient{};
     g_orderCounter = 0;
+    g_attached.clear();
 }
 
 HostServices workingServices(int* tuneCalls, double* lastTuned) {
@@ -313,31 +342,31 @@ int main() {
         // move the user's receiver.
         CHECK(g_hc.api->request_tune(g_hc.api->ctx, 137100000.0) == CASCADE_TUNE_DENIED);
         CHECK(tuneCalls == 0);
-        CHECK(ui.lastDeniedPlugin() == "Tracker");
+        // Reported by MODULE, which is what the permission is keyed on.
+        CHECK(ui.lastDeniedPlugin() == "Tracker.dll");
 
         // ...but the attempt is RECORDED, so the GUI can offer the toggle for
         // exactly the plugins that want it. A denied tracker must be
         // discoverable, not invisible.
-        CHECK(ui.tuneRequesters().size() == 1u);
-        CHECK(ui.tuneRequesters()[0] == "Tracker");
-        CHECK(!ui.tuneAllowed("Tracker"));
+        CHECK(ui.tuneRequesters() == std::vector<std::string>{"Tracker.dll"});
+        CHECK(!ui.tuneAllowed("Tracker.dll"));
 
         // Granted: the request reaches the receiver.
-        ui.setTuneAllowed("Tracker", true);
-        CHECK(ui.tuneAllowed("Tracker"));
+        ui.setTuneAllowed("Tracker.dll", true);
+        CHECK(ui.tuneAllowed("Tracker.dll"));
         CHECK(g_hc.api->request_tune(g_hc.api->ctx, 137100000.0) == CASCADE_TUNE_OK);
         CHECK(tuneCalls == 1);
         CHECK(lastTuned == 137100000.0);
 
         // Revoked again mid-session.
-        ui.setTuneAllowed("Tracker", false);
+        ui.setTuneAllowed("Tracker.dll", false);
         CHECK(g_hc.api->request_tune(g_hc.api->ctx, 137100000.0) == CASCADE_TUNE_DENIED);
         CHECK(tuneCalls == 1);
 
         // Nonsense frequencies are refused by the host, never handed to a
         // driver. Written as a positive range test because the negation would
         // let NaN straight through.
-        ui.setTuneAllowed("Tracker", true);
+        ui.setTuneAllowed("Tracker.dll", true);
         CHECK(g_hc.api->request_tune(g_hc.api->ctx, std::nan("")) == CASCADE_TUNE_OUT_OF_RANGE);
         CHECK(g_hc.api->request_tune(g_hc.api->ctx, -1.0) == CASCADE_TUNE_OUT_OF_RANGE);
         CHECK(g_hc.api->request_tune(g_hc.api->ctx, 0.0) == CASCADE_TUNE_OUT_OF_RANGE);
@@ -357,10 +386,54 @@ int main() {
         double lastTuned = 0.0;
         ui.setServices(workingServices(&tuneCalls, &lastTuned));
         ui.rebuild({a});
-        ui.setTuneAllowed("Allowed", true);
-        CHECK(ui.tuneAllowed("Allowed"));
-        // A different plugin name is NOT covered by that grant.
-        CHECK(!ui.tuneAllowed("Other"));
+        ui.setTuneAllowed("Allowed.dll", true);
+        CHECK(ui.tuneAllowed("Allowed.dll"));
+        // A different module is NOT covered by that grant — nor is the display
+        // name, which is not the key at all.
+        CHECK(!ui.tuneAllowed("Other.dll"));
+        CHECK(!ui.tuneAllowed("Allowed"));
+    }
+
+    // --- a grant belongs to the MODULE, not to the name it prints --------
+    {
+        // A plugin's display name comes out of its own descriptor, so a
+        // hostile plugin can call itself whatever a granted one calls itself.
+        // Keyed on that name, dropping such a file into the plugins directory
+        // would inherit permission to move the user's receiver.
+        resetAll();
+        const CascadeHostClientApi hapi = makeHostClientApi();
+        LoadedPlugin good = plugAt("Tracker", "C:/plugins/sattrack.dll");
+        good.hostClient = &hapi;
+        LoadedPlugin impostor = plugAt("Tracker", "C:/plugins/impostor.dll");
+        impostor.hostClient = &hapi;
+
+        int tuneCalls = 0;
+        double lastTuned = 0.0;
+        PluginUi ui;
+        ui.setServices(workingServices(&tuneCalls, &lastTuned));
+        ui.rebuild({good, impostor});
+        CHECK(g_attached.size() == 2u);
+
+        // The real tracker asks and is refused, which is what puts it on the
+        // settings row; the user then grants exactly the identity the host
+        // recorded, as the checkbox does.
+        CHECK(requestTuneFrom(0, 137100000.0) == CASCADE_TUNE_DENIED);
+        CHECK(ui.tuneRequesters().size() == 1u);
+        ui.setTuneAllowed(requesterAt(ui.tuneRequesters(), 0), true);
+
+        // The granted module tunes...
+        CHECK(requestTuneFrom(0, 137100000.0) == CASCADE_TUNE_OK);
+        // ...and the one that merely shares its name does not.
+        CHECK(requestTuneFrom(1, 145800000.0) == CASCADE_TUNE_DENIED);
+        CHECK(tuneCalls == 1);
+        CHECK(lastTuned == 137100000.0);
+
+        // The key is the module file name, which the plugin cannot change by
+        // renaming itself.
+        CHECK(PluginUi::tuneKey(good) == "sattrack.dll");
+        CHECK(PluginUi::tuneKey(impostor) == "impostor.dll");
+        CHECK(ui.tuneAllowed("sattrack.dll"));
+        CHECK(!ui.tuneAllowed("impostor.dll"));
     }
 
     // --- with no services installed, tuning fails cleanly ----------------
@@ -373,7 +446,7 @@ int main() {
         p.trackSource = &tapi;
         PluginUi ui;  // setServices never called
         ui.rebuild({p});
-        ui.setTuneAllowed("Tracker", true);
+        ui.setTuneAllowed("Tracker.dll", true);
         CHECK(g_hc.api->request_tune(g_hc.api->ctx, 137100000.0) == CASCADE_TUNE_NO_DEVICE);
         CHECK(g_hc.api->centre_hz(g_hc.api->ctx) == 0.0);
     }

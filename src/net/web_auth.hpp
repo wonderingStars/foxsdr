@@ -170,6 +170,31 @@ bool hashPassword(const std::string& password, PasswordRecord& out, std::string&
 bool verifyPassword(const std::string& password, const PasswordRecord& rec,
                     std::string& error);
 
+// Checks a user name AND a password against the configured account, paying the
+// SAME derivation cost whichever of the two is wrong.
+//
+// The obvious spelling — `user == expectedUser && verifyPassword(...)` — short-
+// circuits, so a wrong user name is answered in microseconds while a wrong
+// password costs a full PBKDF2 (about 86 ms at kDefaultIterations). That gap is
+// measurable from anywhere that can reach the port, and it enumerates which
+// account names exist however carefully the two are given one shared error
+// message. So the derivation runs unconditionally and the two results are
+// combined afterwards.
+//
+// Same return contract as verifyPassword: false with `error` empty means the
+// credentials were wrong; false with `error` set means the check could not be
+// performed.
+bool verifyLogin(const std::string& user, const std::string& password,
+                 const std::string& expectedUser, const PasswordRecord& rec,
+                 std::string& error);
+
+// Key derivations performed since this process started. DIAGNOSTIC ONLY, and
+// exposed for exactly one reason: it lets a test assert that a wrong user name
+// costs the same NUMBER of derivations as a wrong password — the property
+// above — without a wall-clock measurement that a loaded machine can make
+// flake. Nothing may branch on it.
+std::uint64_t pbkdf2CallCount();
+
 // --- Sessions ----------------------------------------------------------------
 
 inline constexpr std::size_t kTokenBytes = 32;      // 256 bits

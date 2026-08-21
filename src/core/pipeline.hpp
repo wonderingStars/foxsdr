@@ -159,6 +159,14 @@ public:
     // The DSP thread keeps running throughout, draining whatever the ring
     // still holds, so consumers see at worst a brief frame-rate dip — never
     // a stall, a deadlock, or a frame from a half-swapped source.
+    //
+    // Steps 1-3 run whenever the source THREAD exists (joinable), not merely
+    // while running() is true. The two differ after a thread fault: the fault
+    // clears the run flag from the worker that died and joins nothing, so a
+    // swap made from the "Device stopped" state would otherwise destroy a
+    // source whose read() is still parked in the driver. Step 5 stays gated
+    // on running(), so a faulted or stopped pipeline is never restarted by a
+    // swap.
     void setSource(std::unique_ptr<cascade::source::IqSource> s);
 
     // The source currently feeding the ring (the built-in generator unless
@@ -392,9 +400,16 @@ private:
     // comment above sourceThreadMain in the .cpp: an exception escaping a
     // std::thread terminates the process, and yanking a USB SDR mid-stream
     // makes vendor drivers throw.
-    void sourceThreadMain();
+    // `chainRateHz` is a SNAPSHOT of cfg_.sampleRateHz taken by the spawning
+    // call under controlMutex_, not read on the thread. setInputRateHz writes
+    // that field under controlMutex_ alone and deliberately never joins the
+    // source thread, so a read from this thread would be a data race on a
+    // double — and the value is only ever consulted when a source reports a
+    // nonsense rate, which is precisely the path that would then act on a torn
+    // one. Passing it through the spawn edge needs no lock and no atomic.
+    void sourceThreadMain(double chainRateHz);
     void dspThreadMain();
-    void sourceThreadBody();
+    void sourceThreadBody(double chainRateHz);
     void dspThreadBody();
     void noteThreadFault(const char* where, const char* what);
     void processAudioBlock(const std::complex<float>* in, std::size_t n);

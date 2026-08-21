@@ -50,6 +50,24 @@ public:
     // never returned by free-running sources.
     virtual std::size_t read(std::complex<float>* dst, std::size_t n) = 0;
 
+    // True once the producer has hit a failure it cannot recover from by
+    // being read again — a device pulled mid-stream is the case this exists
+    // for. read() still returns 0 in that state, which is indistinguishable
+    // from "nothing available yet" on its own: without this flag a dead radio
+    // and an idle one look identical to the caller, and the pipeline's source
+    // loop retried a dead device forever (frozen spectrum, one pegged core).
+    //
+    // The pipeline's source thread polls it after every read and routes a
+    // true into its thread-fault path, so an implementation that sets it MUST
+    // also make lastError() safe to call from that thread — it is the fault
+    // message. Latching is the implementation's choice; SoapySource clears on
+    // open()/start().
+    //
+    // Default false: sources that cannot lose a device (the generator, file
+    // playback) report their per-call failures through read()/lastError() and
+    // need no override.
+    virtual bool faulted() const { return false; }
+
     // Short human-readable identity for the Source menu ("Signal generator",
     // "IQ file: capture.wav", "SoapySDR: B200").
     virtual const char* name() const = 0;

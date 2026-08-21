@@ -1,5 +1,6 @@
 // End-to-end tests for the Pipeline's P7 audio wiring: broadcast-FM stereo,
-// the RDS tap, and the reset-on-retune rule.
+// the RDS tap, the reset-on-retune rule, and a NaN-bearing capture driven
+// through the real file decoder into the real audio chain.
 //
 // WHY THIS EXISTS. dsp/stereo_fm and dsp/rds already have exhaustive unit
 // suites, but both are fed a synthetic composite there. Nothing proved the
@@ -18,19 +19,31 @@
 // compared against a constant taken from the implementation.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#define TEST_GETPID _getpid
+#else
+#include <unistd.h>
+#define TEST_GETPID getpid
+#endif
+
 #include "core/pipeline.hpp"
 #include "dsp/demod.hpp"
+#include "source/iq_file_source.hpp"
 #include "source/iq_source.hpp"
 #include "test_check.hpp"
 
@@ -252,6 +265,210 @@ bool waitFor(Pred pred, int timeoutMs) {
     return pred();
 }
 
+// --- A float32 IQ capture on disk, and one run of the whole chain over it ----
+//
+// WHY A FILE. Every non-finite guard in this tree — the decoder's entry
+// sanitise, the AGC, the squelch/S-meter EMA, the noise reducer — is proven in
+// isolation by its own unit suite, and each of those suites feeds its subject
+// directly. Nothing showed the pieces WIRED: that a capture carrying NaN and
+// both infinities, decoded by the real file source and pushed through the real
+// pipeline, cannot put a single non-finite sample into the audio the user
+// hears, and that the chain is still tracking the signal afterwards rather
+// than sitting latched. That is an integration claim, so the input has to
+// arrive the way a corrupt recording really does: as a WAV on disk.
+//
+// Only the minimum RIFF a valid float32 capture needs is written here. Every
+// header edge case belongs to tests/test_iq_file_source.cpp, which pins them.
+
+void putU16(std::vector<unsigned char>& v, std::uint16_t x) {
+    v.push_back(static_cast<unsigned char>(x & 0xFFu));
+    v.push_back(static_cast<unsigned char>((x >> 8) & 0xFFu));
+}
+
+void putU32(std::vector<unsigned char>& v, std::uint32_t x) {
+    v.push_back(static_cast<unsigned char>(x & 0xFFu));
+    v.push_back(static_cast<unsigned char>((x >> 8) & 0xFFu));
+    v.push_back(static_cast<unsigned char>((x >> 16) & 0xFFu));
+    v.push_back(static_cast<unsigned char>((x >> 24) & 0xFFu));
+}
+
+void putTag(std::vector<unsigned char>& v, const char* tag4) {
+    v.insert(v.end(), tag4, tag4 + 4);
+}
+
+bool writeFloatIqWav(const std::string& path, std::uint32_t rateHz,
+                     const std::vector<float>& interleaved) {
+    std::vector<unsigned char> v;
+    putTag(v, "RIFF");
+    putU32(v, 0);  // patched below
+    putTag(v, "WAVE");
+    putTag(v, "fmt ");
+    putU32(v, 16);
+    putU16(v, 3);  // WAVE_FORMAT_IEEE_FLOAT
+    putU16(v, 2);  // ch0 = I, ch1 = Q
+    putU32(v, rateHz);
+    putU32(v, rateHz * 2u * 4u);  // byte rate
+    putU16(v, 8);                 // block align
+    putU16(v, 32);                // bits per sample
+    putTag(v, "data");
+    putU32(v, static_cast<std::uint32_t>(interleaved.size() * 4));
+    for (const float s : interleaved) {
+        putU32(v, std::bit_cast<std::uint32_t>(s));
+    }
+    const std::uint32_t riffSize = static_cast<std::uint32_t>(v.size() - 8);
+    v[4] = static_cast<unsigned char>(riffSize & 0xFFu);
+    v[5] = static_cast<unsigned char>((riffSize >> 8) & 0xFFu);
+    v[6] = static_cast<unsigned char>((riffSize >> 16) & 0xFFu);
+    v[7] = static_cast<unsigned char>((riffSize >> 24) & 0xFFu);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(v.data()),
+            static_cast<std::streamsize>(v.size()));
+    return static_cast<bool>(f);
+}
+
+// 240 kHz: decimation round(240000/200000) = 1, so the channel rate is the
+// input rate and integer, which the pipeline's rate contract requires.
+constexpr double kNanFileRateHz = 240000.0;
+constexpr std::size_t kNanFileFrames = 24000;  // 100 ms per pass through the file
+constexpr float kCarrierAmplitude = 0.5f;
+
+// A constant DC phasor. In CW a carrier sitting on the VFO centre beats
+// against the demodulator's own 700 Hz sidetone, so the audio the chain must
+// keep producing is a pure tone whose PITCH comes from the mode and whose
+// LEVEL comes from the AGC — neither is read back from the implementation, and
+// neither depends on modulation the file would have to carry.
+std::vector<float> dcCarrierFrames() {
+    std::vector<float> v(2 * kNanFileFrames, 0.0f);
+    for (std::size_t i = 0; i < kNanFileFrames; ++i) {
+        v[2 * i] = kCarrierAmplitude;  // I
+        v[2 * i + 1] = 0.0f;           // Q
+    }
+    return v;
+}
+
+// The same carrier with a short burst of NaN and both infinities spliced in.
+// The burst is deliberately SHORT relative to the file (64 frames in 24000,
+// 0.27 ms in 100 ms): the source loops, so the chain meets the burst afresh on
+// every pass and is still meeting it while the measurement below is taken —
+// which is what makes "it recovered" mean "it recovers every time", not "it
+// survived one hit". At that duty cycle the hole itself moves the audio RMS by
+// far less than the tolerance used, while a latched AGC gain, squelch EMA or
+// noise-reduction spectrum moves it by everything.
+std::vector<float> poisonedCarrierFrames() {
+    std::vector<float> v = dcCarrierFrames();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    constexpr std::size_t kBurstStart = 800;
+    constexpr std::size_t kBurstFrames = 64;
+    for (std::size_t i = 0; i < kBurstFrames; ++i) {
+        const std::size_t f = kBurstStart + i;
+        v[2 * f] = (i % 3 == 0) ? nan : ((i % 3 == 1) ? inf : -inf);
+        v[2 * f + 1] = (i % 2 == 0) ? -nan : -inf;
+    }
+    return v;
+}
+
+// Dominant audio frequency of one tap window on the 48 kHz grid, by direct DFT
+// over bins 1..N/2 (DC excluded so it can never win). An in-test reference
+// computation, independent of the project's FFT wrapper.
+double dominantHz(const std::vector<float>& w) {
+    std::size_t bestBin = 1;
+    double bestPow = -1.0;
+    for (std::size_t k = 1; k <= w.size() / 2; ++k) {
+        double re = 0.0;
+        double im = 0.0;
+        const double s = -kTwoPi * static_cast<double>(k) /
+                         static_cast<double>(w.size());
+        for (std::size_t i = 0; i < w.size(); ++i) {
+            const double angle = s * static_cast<double>(i);
+            const double x = static_cast<double>(w[i]);
+            re += x * std::cos(angle);
+            im += x * std::sin(angle);
+        }
+        const double pw = re * re + im * im;
+        if (pw > bestPow) {
+            bestPow = pw;
+            bestBin = k;
+        }
+    }
+    return static_cast<double>(bestBin) *
+           cascade::core::Pipeline::kAudioRateHz /
+           static_cast<double>(w.size());
+}
+
+struct ChainRun {
+    int windows = 0;          // tap windows actually inspected
+    std::size_t nonFinite = 0;  // audio samples that were not finite
+    double rms = 0.0;         // steady-state audio level
+    double toneHz = -1.0;     // steady-state audio pitch
+};
+
+constexpr int kNanWindows = 16;   // ~1.4 s of audio at 48 kHz
+constexpr int kNanWarmup = 6;     // windows discarded while the AGC converges
+constexpr std::size_t kNanWin = 4096;  // one full tap window
+
+// Plays `wavPath` through a complete pipeline — file decoder, VFO, CW demod,
+// AGC, squelch, noise reduction — and watches the audio tap, the last point
+// before the samples are handed to the sound device.
+//
+// Consecutive windows are gated on the producer counter advancing by a whole
+// window, so the windows tile the stream rather than re-reading one another;
+// nothing here is timed against the wall clock beyond the liveness deadline
+// that turns a stalled chain into a failure instead of a hang.
+ChainRun playThroughChain(const std::string& wavPath) {
+    ChainRun r;
+    cascade::core::Pipeline::Config cfg;
+    cfg.sampleRateHz = kNanFileRateHz;
+    cfg.fftSize = 1024;
+    cfg.averagingAlpha = 0.5f;
+    cfg.audioEnabled = false;  // headless: the tap is what gets measured
+    cascade::core::Pipeline pipeline(cfg);
+    pipeline.setDemodMode(cascade::dsp::DemodMode::CW);
+    pipeline.setVfoOffsetHz(0.0);
+    pipeline.setSquelchDb(-120.0f);           // in the path, never gating
+    pipeline.setNoiseReductionEnabled(true);  // and the noise reducer with it
+
+    auto src = std::make_unique<cascade::source::IqFileSource>();
+    if (!src->open(wavPath)) {
+        std::printf("  open failed: %s\n", src->lastError());
+        return r;
+    }
+    pipeline.setSource(std::move(src));
+    pipeline.start();
+
+    std::vector<float> win(kNanWin, 0.0f);
+    double acc = 0.0;
+    int accWindows = 0;
+    for (int i = 0; i < kNanWindows; ++i) {
+        const std::uint64_t base = pipeline.audioSamplesProduced();
+        const bool advanced = waitFor(
+            [&] { return pipeline.audioSamplesProduced() - base >= kNanWin; },
+            30000);
+        if (!advanced) { break; }
+        if (pipeline.audioTap(win.data(), win.size()) != win.size()) { continue; }
+        ++r.windows;
+        for (const float s : win) {
+            if (!std::isfinite(s)) { ++r.nonFinite; }
+        }
+        if (i >= kNanWarmup) {
+            // Sum of squares over every steady-state window: a level that is
+            // not finite would poison this, which the nonFinite count catches
+            // first and reports specifically.
+            for (const float s : win) {
+                acc += static_cast<double>(s) * static_cast<double>(s);
+            }
+            ++accWindows;
+        }
+    }
+    if (accWindows > 0) {
+        r.rms = std::sqrt(acc / (static_cast<double>(accWindows) *
+                                 static_cast<double>(kNanWin)));
+        r.toneHz = dominantHz(win);  // the last window, i.e. steady state
+    }
+    pipeline.stop();
+    return r;
+}
+
 }  // namespace
 
 int main() {
@@ -400,6 +617,90 @@ int main() {
     std::printf("mono downmix mismatches over %zu frames: %zu\n", frames, mismatches);
     CHECK(frames == kWin);
     CHECK(mismatches == 0u);
+
+    // --- A NaN-bearing capture, decoder to audio, in one run -----------------
+    //
+    // WHAT THIS PINS: the WIRING. That a float32 capture carrying NaN and both
+    // infinities, read by source/iq_file_source and pushed through the live
+    // pipeline (VFO, CW demod, AGC, squelch, noise reduction), puts no
+    // non-finite sample into the audio stream, and that the chain keeps
+    // TRACKING the signal while the bursts keep arriving instead of latching.
+    //
+    // WHAT IT CANNOT PIN: which guard did the containing. Each individual
+    // guard is proven, and proven to be load-bearing, by its own unit suite —
+    // tests/test_iq_file_source.cpp for the decoder's entry sanitise,
+    // test_demod_agc.cpp for the AGC, test_squelch.cpp for the gate and meter,
+    // test_noise_reduction.cpp for the spectral state. This case would still
+    // pass if one of them were removed and another happened to cover for it,
+    // which is exactly why those suites exist alongside it.
+    //
+    // The reference is a second run of the SAME chain over the SAME carrier
+    // with the burst left out — the idiom test_demod_agc.cpp uses for AGC
+    // recovery — so the expected audio level is measured, never a constant
+    // read back from the implementation.
+    {
+        const std::string tag = std::to_string(TEST_GETPID());
+        const std::string cleanPath = "pipeline_audio_" + tag + "_clean.wav";
+        const std::string nanPath = "pipeline_audio_" + tag + "_nan.wav";
+        CHECK(writeFloatIqWav(cleanPath,
+                              static_cast<std::uint32_t>(kNanFileRateHz),
+                              dcCarrierFrames()));
+        CHECK(writeFloatIqWav(nanPath, static_cast<std::uint32_t>(kNanFileRateHz),
+                              poisonedCarrierFrames()));
+
+        const ChainRun clean = playThroughChain(cleanPath);
+        const ChainRun poisoned = playThroughChain(nanPath);
+        std::printf("clean:    windows=%d nonFinite=%zu rms=%.6f tone=%.1f Hz\n",
+                    clean.windows, clean.nonFinite, clean.rms, clean.toneHz);
+        std::printf("poisoned: windows=%d nonFinite=%zu rms=%.6f tone=%.1f Hz\n",
+                    poisoned.windows, poisoned.nonFinite, poisoned.rms,
+                    poisoned.toneHz);
+
+        // The reference itself really moved: audio flowed for the whole run
+        // and it is the 700 Hz CW sidetone at a level the AGC drove up. A
+        // reference that produced silence would make every comparison below
+        // vacuously true.
+        CHECK(clean.windows == kNanWindows);
+        CHECK(clean.nonFinite == 0u);
+        CHECK(clean.rms > 0.01);
+        CHECK(std::fabs(clean.toneHz - 700.0) <= 40.0);
+
+        // (a) Not one non-finite sample ever reaches the audio stream.
+        //
+        // Measured note on what makes this red: the containment is REDUNDANT.
+        // dsp/noise_reduction's per-sample isfinite substitution runs on every
+        // audio sample whether or not reduction is enabled — the pipeline
+        // calls process() unconditionally — so it alone keeps this count at 0
+        // even with the decoder's entry sanitise deleted (verified: the level
+        // in (b) collapses, this count does not). Deleting BOTH is what turns
+        // this red, which is the honest statement of what it watches: the
+        // whole path's output, not any one guard in it.
+        CHECK(poisoned.windows == kNanWindows);
+        CHECK(poisoned.nonFinite == 0u);
+
+        // (b) Recovery: with bursts still arriving every 100 ms, the audio is
+        // the same tone at the same level as the run that never saw one.
+        //
+        // The 3% band is set from the separation actually measured, not from
+        // taste: a healthy build lands 0.10-0.14% below the reference over
+        // repeated runs (the burst's own 0.27% duty-cycle hole, sanitised to
+        // silence at the decoder), while a build with that entry sanitise
+        // removed lands 12.6-12.9% below it — NaN reaches the channel filter
+        // and each 64-frame burst takes a filter-length hole of audio with it.
+        // Two orders of magnitude apart, so 3% is a threshold rather than a
+        // fitted bound. A latched AGC gain, squelch EMA or noise-reduction
+        // spectrum leaves the level at zero, not within any band at all.
+        CHECK(std::fabs(poisoned.toneHz - 700.0) <= 40.0);
+        CHECK(poisoned.rms > 0.0);
+        CHECK(std::fabs(poisoned.rms - clean.rms) <= 0.03 * clean.rms);
+
+        // Kept on failure for inspection, removed on success — the same
+        // convention tests/test_iq_file_source.cpp uses for its captures.
+        if (g_checksFailed == 0) {
+            std::remove(cleanPath.c_str());
+            std::remove(nanPath.c_str());
+        }
+    }
 
     return testSummary("test_pipeline_audio");
 }

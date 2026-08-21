@@ -36,13 +36,21 @@
 #include <complex>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include "core/pipeline.hpp"
+#include "core/plugin_host.hpp"
+#include "core/plugin_runner.hpp"
+// For asyncOpenStillWanted (block 6). Free function in a header that pulls in
+// no GLFW/ImGui — see the note at the top of app_window.hpp.
+#include "gui/app_window.hpp"
 #include "source/iq_source.hpp"
 #include "test_check.hpp"
 
@@ -70,6 +78,21 @@ struct FakeState {
     std::atomic<std::uint64_t> delivered{0};      // samples handed to caller
     std::atomic<std::uint64_t> zeroReturns{0};    // reads that returned 0
     std::atomic<bool> finished{false};            // metered source exhausted
+
+    // --- Destroy-under-read latch (block 5) ---------------------------------
+    // The gate a parked read blocks on lives HERE, in test-owned state, not in
+    // the fake. That is deliberate: block 5 deliberately provokes a swap that
+    // may destroy the fake while a read is parked, and a read parked on the
+    // fake's OWN mutex/condition_variable would then be waiting on freed
+    // memory — the failure would arrive as an access violation instead of as
+    // a named CHECK. Parked on test-owned memory it stays well defined long
+    // enough to report.
+    std::mutex gateM;
+    std::condition_variable gateCv;
+    std::atomic<bool> park{false};       // test asks the fake to park in read()
+    std::atomic<bool> parked{false};     // fake is inside the parked read()
+    std::atomic<bool> gateOpen{false};   // release for the parked read
+    std::atomic<bool> loopDone{false};   // source loop's last touch after destroy
 };
 
 // Read-entry bracket. Order matters (see the file header): increment inRead
@@ -327,6 +350,130 @@ private:
     bool abort_ = false;
 };
 
+// Self-paced fake for the DSP-FAULT swap case (block 5). It delivers full
+// chunks until the test raises st.park, then enters one read() that blocks on
+// the TEST-OWNED gate until something aborts it. Its stop() is that abort, so
+// a pipeline that honours the quiesce handshake gets it out of read()
+// promptly; a pipeline that skips the handshake destroys it while that read
+// is still in flight, which is exactly what the block is written to catch.
+class LatchSource final : public IqSource {
+public:
+    explicit LatchSource(FakeState& st) : st_(st) {}
+
+    ~LatchSource() override {
+        // Latch the overlap FIRST — that is the property under test, and it
+        // has to be recorded before anything else can go wrong.
+        markDestroyed(st_);
+        if (st_.inRead.load() == 0) { return; }  // correct impl: nothing parked
+
+        // BUGGY PATH ONLY. A read is in flight on an object being destroyed.
+        // The flags are latched already, so the destructor's remaining job is
+        // to make the failure REPORTABLE rather than a 0xC0000005: release the
+        // parked read and stay inside this destructor body until the source
+        // loop has finished touching us. Inside a destructor body the dynamic
+        // type is still LatchSource and every member is still alive, so the
+        // loop's post-read virtual call (faulted(), below) remains well
+        // defined for as long as we are here. Bounded, so a wedged loop fails
+        // the suite instead of hanging it.
+        { std::lock_guard<std::mutex> lk(st_.gateM); st_.gateOpen.store(true); }
+        st_.gateCv.notify_all();
+        const auto deadline = steady_clock::now() + std::chrono::seconds(10);
+        while (!st_.loopDone.load() && steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(milliseconds(1));
+        }
+    }
+
+    bool start() override { return true; }
+    void stop() override {
+        { std::lock_guard<std::mutex> lk(st_.gateM); st_.gateOpen.store(true); }
+        st_.gateCv.notify_all();
+    }
+    bool running() const override { return !st_.gateOpen.load(); }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 1000000.0; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return 0.0; }
+    bool setCenterFrequencyHz(double) override { return true; }
+
+    // The source loop calls this immediately after every read() returns, and
+    // on the exit iteration it is the LAST thing it touches on the source.
+    // That makes it the "you may be freed now" signal the destructor above
+    // waits for on the buggy path; while the fake is alive it is an ordinary
+    // "no fault here".
+    bool faulted() const override {
+        if (st_.destroyed.load()) { st_.loopDone.store(true); }
+        return false;
+    }
+
+    std::size_t read(std::complex<float>* dst, std::size_t n) override {
+        // Bind the test-owned state BEFORE parking: on the buggy path `this`
+        // is destroyed while this call is still on the stack, so nothing below
+        // the park may reach through the object again.
+        FakeState& st = st_;
+        ReadScope scope(st);
+        if (!st.park.load()) {
+            if (dst == nullptr || n == 0) { return 0; }
+            for (std::size_t i = 0; i < n; ++i) {
+                dst[i] = std::complex<float>(0.25f, 0.0f);
+            }
+            st.delivered.fetch_add(n);
+            return n;
+        }
+        std::unique_lock<std::mutex> lk(st.gateM);
+        st.parked.store(true);
+        // Generous but bounded: the abort is supposed to arrive in
+        // milliseconds, and 20 s only ever elapses when the thing under test
+        // is broken.
+        st.gateCv.wait_for(lk, std::chrono::seconds(20),
+                           [&] { return st.gateOpen.load(); });
+        return 0;
+    }
+
+    const char* name() const override { return "latch fake"; }
+    const char* lastError() const override { return ""; }
+
+private:
+    FakeState& st_;
+};
+
+// --- A plugin that throws, to fault the DSP thread on demand -----------------
+//
+// The DSP-thread fault is not reachable from a fake SOURCE: a source that
+// faults does so ON the source thread, which then leaves read() and exits, so
+// there is never a read in flight to destroy under. The fault has to come from
+// the OTHER thread, and the only third-party code the DSP thread runs is a
+// decoder plugin — whose ABI says "never throws" and whose catch-all in
+// Pipeline::dspThreadMain exists precisely because that promise can be broken.
+// So the fault is injected exactly where the product would really take one.
+//
+// process() blocks until the source has parked before it throws. A real
+// decoder must not block (the ABI says so), but that rendezvous is what makes
+// the test deterministic rather than a race between the DSP thread's next
+// block and the source thread's next read.
+struct ThrowingIqDecoder {
+    FakeState* st = nullptr;
+    std::atomic<int> calls{0};
+};
+
+ThrowingIqDecoder g_iqDecoder;
+
+void* iqCreate(double, double) { return &g_iqDecoder; }
+
+void iqProcess(void*, const float*, std::size_t) {
+    g_iqDecoder.calls.fetch_add(1);
+    if (g_iqDecoder.st != nullptr) {
+        const auto deadline = steady_clock::now() + std::chrono::seconds(20);
+        while (!g_iqDecoder.st->parked.load() && steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(milliseconds(1));
+        }
+    }
+    throw std::runtime_error("decoder plugin exploded");
+}
+
+std::int32_t iqPoll(void*, char*, std::size_t) { return 0; }
+
+void iqDestroy(void*) {}
+
 // --- Helpers -----------------------------------------------------------------
 
 std::size_t argmax(const std::vector<float>& v) {
@@ -532,6 +679,205 @@ int main() {
 
             p.stop();
         }
+    }
+
+    // --- 5. Swapping AFTER a DSP-thread fault must still quiesce the source
+    //        thread. The quiesce handshake used to be gated on run_, and a
+    //        thread fault clears run_ WITHOUT joining anything — so from the
+    //        moment the DSP thread died, setSource believed there was no
+    //        source thread to wait for and destroyed the source while its
+    //        read() was still parked inside the driver. That is a
+    //        use-after-free on the source thread, reached by the ordinary
+    //        "the radio stopped, pick another one" click.
+    //
+    //        The sequencing is a rendezvous, not a race: the plugin's
+    //        process() (running on the DSP thread) waits until the source has
+    //        parked inside read() before it throws, so at the instant run_
+    //        clears there is guaranteed to be a read in flight. ---------------
+    {
+        FakeState latchSt;
+        {
+            // Declared before the pipeline so it outlives it: the DSP thread
+            // dereferences this pointer every block.
+            cascade::core::PluginRunner runner;
+
+            CascadeIqDecoderApi api{};
+            api.structSize = static_cast<std::uint32_t>(sizeof(CascadeIqDecoderApi));
+            api.requiredRateHz = 0.0;  // "any rate": always instantiated
+            api.preferredRateHz = 0.0;
+            api.create = &iqCreate;
+            api.process = &iqProcess;
+            api.retune = nullptr;
+            api.poll_text = &iqPoll;
+            api.destroy = &iqDestroy;
+
+            cascade::core::LoadedPlugin lp;
+            lp.loaded = true;
+            lp.name = "exploding";
+            lp.version = "1.0.0";
+            lp.iqDecoder = &api;
+            std::vector<cascade::core::LoadedPlugin> plugins{lp};
+
+            g_iqDecoder.st = &latchSt;
+            g_iqDecoder.calls.store(0);
+            runner.rebuild(plugins, 48000.0, cfg.sampleRateHz, 0.0);
+            CHECK(runner.activeCount() == 1);
+
+            Pipeline p(cfg);
+            p.setPluginRunner(&runner);
+            p.setSource(std::make_unique<LatchSource>(latchSt));
+            p.start();
+
+            // The source loop is running and the DSP thread has reached the
+            // plugin (where it now waits for the park).
+            CHECK(waitUntil([&] { return latchSt.readCalls.load() >= 2; }));
+            CHECK(waitUntil([&] { return g_iqDecoder.calls.load() > 0; }));
+
+            // Park the source inside read(), which releases the plugin's
+            // throw and takes the DSP thread — and with it run_ — down.
+            latchSt.park.store(true);
+            CHECK(waitUntil([&] { return latchSt.parked.load(); }));
+            CHECK(waitUntil([&] { return p.faulted(); }));
+            CHECK(waitUntil([&] { return !p.running(); }));
+            const std::string msg = p.faultMessage();
+            CHECK(msg.find("DSP thread") != std::string::npos);
+            CHECK(msg.find("decoder plugin exploded") != std::string::npos);
+
+            // The state the bug needs: run_ is false, and the source thread is
+            // STILL inside read(). If this ever stops holding, the block below
+            // proves nothing, so it is asserted rather than assumed.
+            CHECK(latchSt.inRead.load() > 0);
+
+            // The user picks another source. This must wait for the parked
+            // read to leave before destroying what it is parked in.
+            p.setSource(nullptr);
+
+            CHECK(latchSt.destroyed.load() == true);           // it really was destroyed
+            CHECK(latchSt.tornDestruction.load() == false);    // ...but not under a read
+            CHECK(latchSt.readAfterDestroy.load() == false);
+            CHECK(latchSt.inRead.load() == 0);                 // the read had exited first
+
+            // And the pipeline is left restartable rather than wedged: detach
+            // the exploding plugin, restart, and frames must flow again.
+            p.setPluginRunner(nullptr);
+            p.sigGen().setTone(0, toneHz, 0.0f);
+            p.sigGen().setNoiseFloorDb(-300.0f);
+            p.start();
+            CHECK(p.faulted() == false);
+            SpectrumFrame f;
+            CHECK(waitForPeakAt(p, f, toneBin));
+            p.stop();
+            p.setPluginRunner(nullptr);
+        }
+        g_iqDecoder.st = nullptr;
+    }
+
+    // --- 5b. RESTARTING after a DSP-thread fault must abort the in-flight read
+    //         before joining, exactly as stop() and setSource do.
+    //
+    //         Same state as block 5 — run_ cleared by the fault, the source
+    //         thread still parked inside a self-paced read() — but the user
+    //         presses Start instead of picking another source. start() joined
+    //         the source thread WITHOUT calling active_->stop() first, so the
+    //         join could only complete when the parked read gave up on its own:
+    //         the whole of the device's read timeout, during which start()
+    //         holds controlMutex_ and the application is wedged. Real drivers
+    //         use timeouts of a second or more, and the fake below uses the
+    //         same 20 s bound the other blocks do, so the difference between
+    //         aborting and waiting is not subtle.
+    //
+    //         The bound is deliberately generous: what is being measured is
+    //         "returned promptly" against "waited out a full read timeout",
+    //         and a loaded machine cannot turn one into the other. -----------
+    {
+        FakeState latchSt;
+        {
+            cascade::core::PluginRunner runner;
+
+            CascadeIqDecoderApi api{};
+            api.structSize = static_cast<std::uint32_t>(sizeof(CascadeIqDecoderApi));
+            api.requiredRateHz = 0.0;
+            api.preferredRateHz = 0.0;
+            api.create = &iqCreate;
+            api.process = &iqProcess;
+            api.retune = nullptr;
+            api.poll_text = &iqPoll;
+            api.destroy = &iqDestroy;
+
+            cascade::core::LoadedPlugin lp;
+            lp.loaded = true;
+            lp.name = "exploding";
+            lp.version = "1.0.0";
+            lp.iqDecoder = &api;
+            std::vector<cascade::core::LoadedPlugin> plugins{lp};
+
+            g_iqDecoder.st = &latchSt;
+            g_iqDecoder.calls.store(0);
+            runner.rebuild(plugins, 48000.0, cfg.sampleRateHz, 0.0);
+            CHECK(runner.activeCount() == 1);
+
+            Pipeline p(cfg);
+            p.setPluginRunner(&runner);
+            p.setSource(std::make_unique<LatchSource>(latchSt));
+            p.start();
+
+            CHECK(waitUntil([&] { return latchSt.readCalls.load() >= 2; }));
+            CHECK(waitUntil([&] { return g_iqDecoder.calls.load() > 0; }));
+
+            latchSt.park.store(true);
+            CHECK(waitUntil([&] { return latchSt.parked.load(); }));
+            CHECK(waitUntil([&] { return p.faulted(); }));
+            CHECK(waitUntil([&] { return !p.running(); }));
+
+            // The state the bug needs, asserted rather than assumed: run_ is
+            // false and a read is still in flight on the source thread.
+            CHECK(latchSt.inRead.load() > 0);
+
+            // Detach the exploding plugin so the restart is about the join and
+            // nothing else, then press Start and time it.
+            p.setPluginRunner(nullptr);
+            const auto t0 = steady_clock::now();
+            p.start();
+            const auto elapsed = std::chrono::duration_cast<milliseconds>(
+                                     steady_clock::now() - t0)
+                                     .count();
+            std::printf("start() after a DSP fault took %lld ms\n",
+                        static_cast<long long>(elapsed));
+            // The parked read's own bound is 20 s; aborting it costs
+            // milliseconds. Anything near the bound means start() sat waiting.
+            CHECK(elapsed < 5000);
+
+            // ...and it really did restart, rather than returning early.
+            CHECK(p.running());
+            CHECK(!p.faulted());
+            CHECK(p.faultMessage().empty());
+
+            p.stop();
+            CHECK(!p.running());
+            CHECK(latchSt.readAfterDestroy.load() == false);
+            CHECK(latchSt.tornDestruction.load() == false);
+        }
+        g_iqDecoder.st = nullptr;
+    }
+
+    // --- 6. The other half of "the user switched away": a device open that
+    //        finishes on a worker AFTER the user picked something else must
+    //        not be applied. The GUI wiring around it is not reachable from a
+    //        unit test (it needs a window, a real driver and a multi-second
+    //        open), but the decision the wiring now defers to is, so it is
+    //        asserted here rather than left to inspection alone. -------------
+    {
+        // Nothing installed since the request: the answer is still about the
+        // source the user is looking at.
+        CHECK(cascade::gui::asyncOpenStillWanted(0, 0) == true);
+        CHECK(cascade::gui::asyncOpenStillWanted(7, 7) == true);
+        // The user installed a source in the meantime (generator, IQ file, or
+        // a device that resolved first): the answer is stale.
+        CHECK(cascade::gui::asyncOpenStillWanted(7, 8) == false);
+        CHECK(cascade::gui::asyncOpenStillWanted(0, 1) == false);
+        // Two switches while one open was in flight is still just "stale" —
+        // the counter is compared, never differenced.
+        CHECK(cascade::gui::asyncOpenStillWanted(7, 9) == false);
     }
 
     return testSummary("test_source_swap");

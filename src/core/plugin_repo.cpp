@@ -1945,7 +1945,8 @@ bool PluginRepo::fetchText(const std::string& url, std::uint64_t maxBytes, std::
 
 bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& expectedSha256,
                                    const std::string& destPath, std::uint64_t maxBytes,
-                                   std::string& error) {
+                                   std::string& error, std::atomic<float>* progress,
+                                   std::atomic<bool>* cancel) {
     error.clear();
     if (!isHttpsUrl(url)) {
         error = "refusing a non-https download URL: \"" + url + "\"";
@@ -1979,7 +1980,7 @@ bool PluginRepo::fetchVerifiedFile(const std::string& url, const std::string& ex
             f.write(static_cast<const char*>(p), static_cast<std::streamsize>(n));
             return static_cast<bool>(f);
         };
-        if (!httpsGet(url, maxBytes, sink, nullptr, nullptr, error)) {
+        if (!httpsGet(url, maxBytes, sink, progress, cancel, error)) {
             f.close();
             fs::remove(tmp, ec);
             return false;

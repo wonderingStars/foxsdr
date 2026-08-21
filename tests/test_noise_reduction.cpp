@@ -327,5 +327,54 @@ int main() {
         CHECK(bad == 0);
     }
 
+    // ---------------------------------------------------------------------
+    // A burst of non-finite input must not latch the output.
+    //
+    // The forward transform spreads a single NaN over every bin at once, and
+    // from there it lives in the smoothed power, the noise floor, the per-bin
+    // gain (which is averaged with the previous frame's, so it can never be
+    // rinsed out) and the overlap-add accumulator. Unguarded, the reducer
+    // emits NaN for the rest of the session. Recovery is measured against a
+    // reducer that saw only the clean tail: same tone level, same suppression.
+    // ---------------------------------------------------------------------
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+        std::vector<float> burst(2048);
+        for (std::size_t i = 0; i < burst.size(); ++i) {
+            burst[i] = (i % 3 == 0) ? nan : ((i % 3 == 1) ? inf : -inf);
+        }
+
+        NoiseReduction poisoned(kFs, 512);
+        poisoned.setStrength(0.7f);
+        std::vector<float> scratch(burst.size());
+        poisoned.process(burst.data(), burst.size(), scratch.data());
+
+        const auto clean = makeNoisyTone(48000, 0.4, 0.3, 0xC0FFEEu);
+        std::vector<float> got(clean.size());
+        poisoned.process(clean.data(), clean.size(), got.data());
+
+        NoiseReduction fresh(kFs, 512);
+        fresh.setStrength(0.7f);
+        std::vector<float> want(clean.size());
+        fresh.process(clean.data(), clean.size(), want.data());
+
+        // The decisive assertion: nothing non-finite survives the burst.
+        std::size_t nonFinite = 0;
+        for (float v : got) {
+            if (!std::isfinite(v)) { ++nonFinite; }
+        }
+        CHECK(nonFinite == 0);
+
+        // And the tail is genuinely the same signal, not merely finite: both
+        // tone energy and residual noise must match the unpoisoned reducer.
+        const std::size_t tail = clean.size() / 2;
+        const ToneNoise a = measure(got.data() + tail, clean.size() - tail);
+        const ToneNoise b = measure(want.data() + tail, clean.size() - tail);
+        CHECK(b.tone > 0.0);
+        CHECK_NEAR(a.tnrDb(), b.tnrDb(), 0.5);
+        CHECK(std::fabs(a.tone - b.tone) <= 0.02 * b.tone);
+    }
+
     return testSummary("test_noise_reduction");
 }

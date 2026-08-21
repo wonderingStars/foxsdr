@@ -14,6 +14,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -67,6 +68,31 @@ std::size_t observedHoldSamples(double fs, float th, float holdMs) {
     }
     CHECK(count < bound);  // it must actually close
     return count;
+}
+
+// Feeds `count` samples whose I and Q are non-finite — the burst a corrupt IQ
+// capture (or any upstream NaN) puts into the meter.
+void feedNonFinite(cascade::dsp::Squelch& sq, std::size_t count) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    float audio = 0.0f;
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::complex<float> s = (i % 2 == 0)
+                                          ? std::complex<float>{nan, nan}
+                                          : std::complex<float>{inf, -inf};
+        audio = 0.0f;
+        sq.process(&s, 1, &audio);
+    }
+}
+
+// Feeds `count` samples of true silence.
+void feedSilence(cascade::dsp::Squelch& sq, std::size_t count) {
+    const std::complex<float> zero{0.0f, 0.0f};
+    float audio = 0.0f;
+    for (std::size_t i = 0; i < count; ++i) {
+        audio = 0.0f;
+        sq.process(&zero, 1, &audio);
+    }
 }
 
 }  // namespace
@@ -247,6 +273,101 @@ int main() {
         CHECK(sq.isOpen());
         sq.process(nullptr, 0, nullptr);  // n=0 while open: state untouched
         CHECK(sq.isOpen());
+    }
+
+    // --- PowerMeter: a non-finite burst must not freeze the S-meter ---------
+    // An unguarded EMA that has taken one NaN reads NaN forever, so the
+    // S-meter needle stops responding to the signal for the rest of the
+    // session. The reading must come back to the analytic power of the clean
+    // tone that follows.
+    {
+        cascade::dsp::PowerMeter m;
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const std::complex<float> bad{nan, nan};
+        for (std::size_t i = 0; i < 256; ++i) { m.process(&bad, 1); }
+        CHECK(std::isfinite(m.powerDb()));
+
+        auto clean = makeTone(0.05, 0.1, 4096);  // power 0.01 -> -20 dB
+        m.process(clean.data(), clean.size());
+        CHECK_NEAR(m.powerDb(), -20.0, 0.2);
+    }
+
+    // --- Squelch: a non-finite burst must not freeze the gate CLOSED --------
+    // NaN fails both the open and the close comparison, so the gate falls into
+    // the "inside the hysteresis band" branch on every later sample and keeps
+    // whatever state it had — a permanently dead receiver.
+    {
+        cascade::dsp::Squelch sq(48000.0);
+        sq.setThresholdDb(-50.0f);
+        CHECK(!sq.isOpen());  // starts closed, per the constructor contract
+        feedNonFinite(sq, 1000);
+        feedLevel(sq, -20.0, 4000);  // 30 dB over threshold: must key the gate
+        CHECK(sq.isOpen());
+    }
+
+    // --- Squelch: a non-finite burst must not freeze the gate OPEN ----------
+    // The same freeze in the other direction: permanent full-scale hiss.
+    {
+        cascade::dsp::Squelch sq(48000.0);
+        sq.setThresholdDb(-50.0f);
+        sq.setHoldMs(1.0f);
+        feedLevel(sq, -20.0, 4000);
+        CHECK(sq.isOpen());
+        feedNonFinite(sq, 1000);
+        feedSilence(sq, 4000);  // well past the 1 ms (48-sample) hold
+        CHECK(!sq.isOpen());
+    }
+
+    // --- Squelch: a non-finite THRESHOLD must not freeze the gate -----------
+    // The same freeze as the two bursts above, reached through the CONTROL
+    // path instead of the sample path: NaN thresholds make openLin_ and
+    // closeLin_ NaN, both the open and the close comparison then fail on every
+    // sample, and the gate keeps whatever state it had for the rest of the
+    // session. A broken control value must leave the last valid thresholds in
+    // force, so the gate still keys and unkeys on a clean signal.
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        cascade::dsp::Squelch sq(48000.0);
+        sq.setThresholdDb(-50.0f);
+        sq.setHoldMs(1.0f);  // 48 samples: the feeds below clear it easily
+        sq.setThresholdDb(nan);
+        CHECK(!sq.isOpen());  // still closed: nothing has keyed it yet
+
+        feedLevel(sq, -20.0, 4000);  // 30 dB over the last VALID threshold
+        CHECK(sq.isOpen());
+        feedSilence(sq, 4000);  // and it must be able to close again
+        CHECK(!sq.isOpen());
+    }
+
+    // Infinity is the same class of broken control value, and it fails in the
+    // opposite direction: +inf thresholds make every sample "below close", so
+    // an unguarded setter would leave the gate permanently shut.
+    {
+        const float inf = std::numeric_limits<float>::infinity();
+        cascade::dsp::Squelch sq(48000.0);
+        sq.setThresholdDb(-50.0f);
+        sq.setThresholdDb(inf);
+        feedLevel(sq, -20.0, 4000);
+        CHECK(sq.isOpen());
+    }
+
+    // --- Squelch: the gated audio stays finite after a non-finite burst -----
+    {
+        cascade::dsp::Squelch sq(48000.0);
+        sq.setThresholdDb(-50.0f);
+        feedNonFinite(sq, 1000);
+        const float a = static_cast<float>(std::pow(10.0, -20.0 / 20.0));
+        const std::complex<float> s{a, 0.0f};
+        std::size_t nonFinite = 0;
+        float peak = 0.0f;
+        for (std::size_t i = 0; i < 4000; ++i) {
+            float audio = 1.0f;
+            sq.process(&s, 1, &audio);
+            if (!std::isfinite(audio)) { ++nonFinite; }
+            if (audio > peak) { peak = audio; }
+        }
+        CHECK(nonFinite == 0);
+        CHECK_NEAR(peak, 1.0, 1e-6);  // the gate really opened all the way
     }
 
     return testSummary("test_squelch");

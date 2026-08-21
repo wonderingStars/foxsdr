@@ -5,14 +5,21 @@
 // remembered so the plugin is never asked again, and that third-party strings
 // are bounded before the GUI renders them every frame.
 //
+// ALSO gui/basemap_cache.hpp's drainText, which is the same code draining the
+// same kind of plugin against the same GUI thread and had the same unbounded
+// loop. Its bound lives beside its twin's rather than in a file of its own so
+// that changing one and not the other is visible in a single place.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstring>
 #include <map>
 #include <string>
 
+#include "gui/basemap_cache.hpp"
 #include "gui/track_info_cache.hpp"
 #include "test_check.hpp"
 
+using cascade::gui::BasemapCache;
 using cascade::gui::TrackInfoCache;
 
 namespace {
@@ -62,6 +69,78 @@ std::int32_t fakePollText(void*, char* buf, size_t cap) {
     return 6;
 }
 void fakeDestroy(void*) { ++g_destroys; }
+
+// A plugin that never stops talking. Its own table (not fakeApi's) so the
+// one-shot static in fakePollText stays untouched by these tests.
+//
+// It DOES stop eventually - g_floodLeft is finite - because a genuinely
+// endless fake turns the unfixed code's failure into a hung test rather than a
+// named one, and a hang proves nothing about the bound.
+long g_floodLeft = 0;
+long g_floodServed = 0;
+std::int32_t floodPollText(void*, char* buf, size_t cap) {
+    if (g_floodLeft <= 0 || cap < 8) {
+        return 0;
+    }
+    --g_floodLeft;
+    ++g_floodServed;
+    std::memcpy(buf, "0123456\n", 8);
+    return 8;
+}
+
+CascadeTrackInfoApi floodApi() {
+    CascadeTrackInfoApi t{};
+    t.structSize = static_cast<std::uint32_t>(sizeof(CascadeTrackInfoApi));
+    t.create = &fakeCreate;
+    t.get_info = &fakeGetInfo;
+    t.release_info = &fakeRelease;
+    t.poll_text = &floodPollText;
+    t.destroy = &fakeDestroy;
+    return t;
+}
+
+// The same never-stops-talking plugin, wearing the basemap table. Separate
+// counters from the track-info flood so the two bounds are measured
+// independently - a shared counter would let one test's polls satisfy the
+// other's assertion.
+long g_bmFloodLeft = 0;
+long g_bmFloodServed = 0;
+int g_bmCreates = 0;
+int g_bmDestroys = 0;
+
+void* bmCreate() {
+    ++g_bmCreates;
+    return reinterpret_cast<void*>(1);
+}
+std::int32_t bmGetTile(void*, std::uint32_t, std::uint32_t, std::uint32_t, CascadeTile*) {
+    return CASCADE_TILE_MISSING;
+}
+void bmReleaseTile(void*, const CascadeTile*) {}
+std::int32_t bmFloodPollText(void*, char* buf, size_t cap) {
+    if (g_bmFloodLeft <= 0 || cap < 8) {
+        return 0;
+    }
+    --g_bmFloodLeft;
+    ++g_bmFloodServed;
+    std::memcpy(buf, "0123456\n", 8);
+    return 8;
+}
+void bmDestroy(void*) { ++g_bmDestroys; }
+
+CascadeBasemapApi basemapFloodApi() {
+    CascadeBasemapApi b{};
+    b.structSize = static_cast<std::uint32_t>(sizeof(CascadeBasemapApi));
+    b.attribution = "(c) test";
+    b.minZoom = 0;
+    b.maxZoom = 19;
+    b.tileSize = 256;
+    b.create = &bmCreate;
+    b.get_tile = &bmGetTile;
+    b.release_tile = &bmReleaseTile;
+    b.poll_text = &bmFloodPollText;
+    b.destroy = &bmDestroy;
+    return b;
+}
 
 CascadeTrackInfoApi fakeApi() {
     CascadeTrackInfoApi t{};
@@ -186,6 +265,91 @@ void testDrainTextAssemblesLines() {
     }
 }
 
+void testDrainTextIsBoundedPerCall() {
+    // THE FAILURE THIS GUARDS. drainText runs on the GUI thread, once per
+    // frame, and polled the plugin until it said "nothing left". A plugin that
+    // produces text faster than 60 Hz can drain it - a buggy one in a loop, or
+    // a hostile one deliberately - never says that, so the frame never ends
+    // and the whole application stops responding. Bounding the drain gives the
+    // frame back; whatever is still queued is drained by the next frame,
+    // exactly like the tile server's per-frame cap.
+    resetFake();
+    const CascadeTrackInfoApi api = floodApi();
+    TrackInfoCache c;
+    c.attach(&api);
+
+    g_floodLeft = 200000;  // far more than any per-frame bound may take
+    g_floodServed = 0;
+    const std::vector<std::string> first = c.drainText();
+
+    // The bound is on the POLLS, which is what costs the frame; each poll here
+    // carries exactly one line, so the line count is the visible proxy.
+    CHECK(g_floodServed <= TrackInfoCache::kMaxPollsPerDrain);
+    CHECK(first.size() <= TrackInfoCache::kMaxPollsPerDrain);
+    if (g_floodServed > TrackInfoCache::kMaxPollsPerDrain) {
+        std::printf("FAIL one drainText call polled %ld times (bound %zu)\n", g_floodServed,
+                    TrackInfoCache::kMaxPollsPerDrain);
+    }
+    // Bounded, not broken: it still delivered something, and the next frame
+    // picks up where this one stopped rather than losing the backlog.
+    CHECK(!first.empty());
+    const long servedAfterFirst = g_floodServed;
+    const std::vector<std::string> second = c.drainText();
+    CHECK(!second.empty());
+    CHECK(g_floodServed > servedAfterFirst);
+
+    // And a plugin with nothing to say still costs exactly one poll.
+    g_floodLeft = 0;
+    const long before = g_floodServed;
+    CHECK(c.drainText().empty());
+    CHECK(g_floodServed == before);
+}
+
+void testBasemapDrainTextIsBoundedPerCall() {
+    // THE SAME FAILURE, THE OTHER CACHE. BasemapCache::drainText also runs on
+    // the GUI thread once per frame, and also polled the plugin until it said
+    // "nothing left" - so a tile server whose plugin logs a line per failed
+    // request faster than a frame drains them ends the frame never. This is
+    // the more likely of the two to happen by accident: a wrong tile URL makes
+    // every request fail, and failures are exactly what a plugin logs.
+    const CascadeBasemapApi api = basemapFloodApi();
+    g_bmCreates = 0;
+    g_bmDestroys = 0;
+    BasemapCache c;
+    c.attach(&api);
+    CHECK(c.active());
+    CHECK(g_bmCreates == 1);
+
+    g_bmFloodLeft = 200000;  // far more than any per-frame bound may take
+    g_bmFloodServed = 0;
+    const std::vector<std::string> first = c.drainText();
+
+    // The bound is on the POLLS, which is what costs the frame; each poll here
+    // carries exactly one line, so the line count is the visible proxy.
+    CHECK(g_bmFloodServed <= BasemapCache::kMaxPollsPerDrain);
+    CHECK(first.size() <= BasemapCache::kMaxPollsPerDrain);
+    if (g_bmFloodServed > static_cast<long>(BasemapCache::kMaxPollsPerDrain)) {
+        std::printf("FAIL one BasemapCache::drainText polled %ld times (bound %zu)\n",
+                    g_bmFloodServed, BasemapCache::kMaxPollsPerDrain);
+    }
+    // Bounded, not broken: the frame still got status text, and the backlog is
+    // taken by the next frame rather than dropped.
+    CHECK(!first.empty());
+    const long servedAfterFirst = g_bmFloodServed;
+    const std::vector<std::string> second = c.drainText();
+    CHECK(!second.empty());
+    CHECK(g_bmFloodServed > servedAfterFirst);
+
+    // And a plugin with nothing to say still costs exactly one poll.
+    g_bmFloodLeft = 0;
+    const long before = g_bmFloodServed;
+    CHECK(c.drainText().empty());
+    CHECK(g_bmFloodServed == before);
+
+    c.detach();
+    CHECK(g_bmDestroys == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -193,5 +357,7 @@ int main() {
     testFieldsAreBounded();
     testEvictionIsBoundedAndOldestFirst();
     testDrainTextAssemblesLines();
+    testDrainTextIsBoundedPerCall();
+    testBasemapDrainTextIsBoundedPerCall();
     return testSummary("test_track_info_cache");
 }

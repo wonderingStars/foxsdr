@@ -2,6 +2,7 @@
 #include "source/iq_file_source.hpp"
 
 #include <bit>
+#include <cmath>
 #include <cstring>
 
 namespace cascade::source {
@@ -32,6 +33,12 @@ std::uint32_t u32le(const unsigned char* p) {
 std::int16_t i16le(const unsigned char* p) {
     // uint16 -> int16 is well-defined two's-complement modulo in C++20.
     return static_cast<std::int16_t>(u16le(p));
+}
+
+// NaN and the infinities become true silence; every finite value, -0 and
+// subnormals included, passes through untouched.
+float sanitize(float v) {
+    return std::isfinite(v) ? v : 0.0f;
 }
 
 }  // namespace
@@ -75,14 +82,17 @@ bool IqFileSource::open(const std::string& wavPath) {
     const std::uint64_t fileSize = static_cast<std::uint64_t>(
         static_cast<std::streamoff>(file_.tellg()));
 
-    // Positioned reads keep the chunk walk independent of stream state.
+    // Positioned reads keep the chunk walk independent of stream state, and
+    // they go through readHeaderRaw for the same reason read()'s chunk loop
+    // goes through readRaw: it is the seam where the disk can be made to fail
+    // or block on demand, and open() runs on the GUI thread where the blocking
+    // work is the thing being measured. Behaviourally identical to the inline
+    // read it replaces — the default body IS that read.
     auto readAt = [this](std::uint64_t off, unsigned char* buf,
                          std::size_t len) -> bool {
         file_.clear();
         file_.seekg(static_cast<std::streamoff>(off));
-        file_.read(reinterpret_cast<char*>(buf),
-                   static_cast<std::streamsize>(len));
-        return static_cast<std::size_t>(file_.gcount()) == len;
+        return readHeaderRaw(buf, len) == len;
     };
 
     unsigned char hdr[12];
@@ -106,8 +116,28 @@ bool IqFileSource::open(const std::string& wavPath) {
     // Walk every chunk: unknown ones (LIST, JUNK, bext, ...) are skipped by
     // size. RIFF chunks are word-aligned, so an odd size carries one pad
     // byte that belongs to the chunk, not to the next header.
+    //
+    // BOUNDED, because this loop runs on the GUI thread and its trip count was
+    // set entirely by the file's own contents. A chunk that declares size 0
+    // advances `pos` by exactly 8, so a file of zero-size chunks costs one
+    // seek+read per 8 bytes: over a gigabyte-scale capture that is 134 million
+    // blocking reads before Open returns, with the window frozen throughout —
+    // and it needs no hostile author, a truncated or partially-overwritten
+    // recording produces the same run of zeros. The cap is the same trade
+    // read()'s chunking makes: bound the work, then say plainly what was not
+    // finished. It cannot reject a real file — a WAV with more than 256 chunks
+    // before both fmt and data does not occur outside a fuzzer.
+    //
+    // What this does NOT fix, stated because it is the reason the loop was
+    // looked at: ONE read against a dead SMB share still parks for that
+    // filesystem's own timeout, and nothing in user space can shorten it.
+    // open() cannot honour an abort flag the way read() does either — read()'s
+    // flag is set by a different thread, whereas open() runs ON the thread
+    // that would have to set it. Bounding the COUNT is the part that is
+    // actually in this code's gift.
     std::uint64_t pos = 12;
-    while (pos + 8 <= fileSize) {
+    std::size_t walked = 0;
+    for (; walked < kMaxHeaderChunks && pos + 8 <= fileSize; ++walked) {
         unsigned char ch[8];
         if (!readAt(pos, ch, 8)) {
             break;
@@ -136,6 +166,21 @@ bool IqFileSource::open(const std::string& wavPath) {
             haveData = true;
         }
         pos = body + size + (size & 1u);
+        // Nothing after this point can change the outcome: both finders are
+        // one-shot (`&& !haveFmt`, `&& !haveData`), so every later chunk is
+        // read and discarded. Stopping here is outcome-preserving and takes
+        // the trailing-metadata reads of a broadcast WAV off the GUI thread.
+        if (haveFmt && haveData) {
+            break;
+        }
+    }
+    if (walked == kMaxHeaderChunks && !(haveFmt && haveData)) {
+        // Named separately from "missing fmt chunk": the difference between a
+        // file that lacks a chunk and one whose chunk table was not walked to
+        // the end is the whole reason a user would look at the message.
+        return fail("gave up walking RIFF chunks after " +
+                    std::to_string(kMaxHeaderChunks) +
+                    " of them without finding both fmt and data (corrupt file?)");
     }
 
     if (!haveFmt) {
@@ -244,13 +289,33 @@ void IqFileSource::convertFrames(const unsigned char* raw,
         }
     } else {
         // bit_cast from the assembled little-endian word: bit-exact
-        // passthrough with no aliasing or alignment hazards.
+        // passthrough with no aliasing or alignment hazards — except that a
+        // float32 WAV can encode NaN and both infinities, and no stage of the
+        // DSP chain defends its sample path against them. One such sample
+        // latches the AGC gain, the squelch/S-meter EMA and the noise
+        // reducer's spectrum, which is heard as the receiver going silent
+        // while the spectrum display stays alive. This decoder is the entry
+        // point, so it is where a corrupt or crafted capture is turned back
+        // into silence. The int16 branch above needs no equivalent: every
+        // int16 scaled by 2^-15 is finite by construction.
         for (std::size_t i = 0; i < frames; ++i) {
             const unsigned char* p = raw + i * 8;
-            dst[i] = std::complex<float>(std::bit_cast<float>(u32le(p)),
-                                         std::bit_cast<float>(u32le(p + 4)));
+            dst[i] = std::complex<float>(sanitize(std::bit_cast<float>(u32le(p))),
+                                         sanitize(std::bit_cast<float>(u32le(p + 4))));
         }
     }
+}
+
+std::size_t IqFileSource::readRaw(unsigned char* dst, std::size_t bytes) {
+    file_.read(reinterpret_cast<char*>(dst),
+               static_cast<std::streamsize>(bytes));
+    return static_cast<std::size_t>(file_.gcount());
+}
+
+std::size_t IqFileSource::readHeaderRaw(unsigned char* dst, std::size_t bytes) {
+    // QUALIFIED on purpose: the header path must reach the ifstream itself,
+    // not whatever a subclass did to the streaming seam. See the header.
+    return IqFileSource::readRaw(dst, bytes);
 }
 
 std::size_t IqFileSource::read(std::complex<float>* dst, std::size_t n) {
@@ -261,6 +326,35 @@ std::size_t IqFileSource::read(std::complex<float>* dst, std::size_t n) {
     }
     std::size_t delivered = 0;
     while (delivered < n) {
+        // Abort point between chunks. A large request is served as a sequence
+        // of bounded disk reads, and on a healthy local file the whole loop
+        // costs microseconds — but the backing file can be an SMB share that
+        // just went away or a USB disk that is failing, where ONE read parks
+        // in the filesystem for its own timeout. The pipeline's stop() and
+        // setSource() both clear their run flag, call this source's stop(),
+        // then JOIN the source thread, so every further read this loop
+        // chooses to issue after that stop() is time the GUI spends frozen.
+        // Re-checking here bounds that to the single read already in flight
+        // instead of ceil(n / chunk) of them.
+        //
+        // The read in flight is deliberately NOT cancelled. The Windows
+        // mechanism for that is CancelSynchronousIo against the reading
+        // thread, which this class cannot use honestly: it never learns that
+        // thread's handle (the Pipeline owns the thread and only ever calls
+        // read() on it), the cancellation would have to be raced against the
+        // thread leaving read() or it lands on unrelated I/O, and it leaves
+        // the ifstream in an implementation-defined state mid-buffer. A
+        // chunk-bounded stall with the stream intact is the conservative
+        // trade; the alternative buys one chunk of latency for a Win32-only
+        // cancellation protocol and an undefined stream.
+        //
+        // Returning short here is not the "free-running sources never return
+        // 0" case: the source is stopped, which is exactly the state whose
+        // documented answer is 0 (see the guard above). lastError_ stays
+        // untouched — a stop is not an I/O failure.
+        if (!running_.load(std::memory_order_acquire)) {
+            return delivered;
+        }
         if (nextFrame_ >= frameCount_) {
             // The loop seam: jump straight back to frame 0 so the first
             // frame follows the last with no gap and no repeats. clear()
@@ -279,9 +373,7 @@ std::size_t IqFileSource::read(std::complex<float>* dst, std::size_t n) {
             want = kIoFrames;
         }
         const std::size_t wantBytes = want * bytesPerFrame_;
-        file_.read(reinterpret_cast<char*>(ioBuf_.data()),
-                   static_cast<std::streamsize>(wantBytes));
-        if (static_cast<std::size_t>(file_.gcount()) != wantBytes) {
+        if (readRaw(ioBuf_.data(), wantBytes) != wantBytes) {
             // open() validated that the data chunk fits the file, so a short
             // read can only mean the file changed underneath us or the disk
             // failed. Zero-fill and still return n: a free-running source

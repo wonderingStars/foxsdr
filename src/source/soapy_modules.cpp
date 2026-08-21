@@ -207,6 +207,41 @@ const std::vector<VendorRoot>& ensureVendorModulesVisible(const std::string& abi
         // search order, which is not the default for LoadLibrary without flags.
         // Setting it here affects only subsequent loads, and the modules are
         // loaded later, on first enumeration.
+        //
+        // IT IS ALSO PROCESS-WIDE AND ONE-WAY: from here on, every plain-name
+        // load in this process - any thread, any library, ours or a
+        // dependency's - searches the application directory, the
+        // AddDllDirectory set and System32, and no longer PATH or the current
+        // directory. That is a large blast radius for one line, so every load
+        // in the tree that can run after it was enumerated and then MEASURED,
+        // with a two-DLL probe loaded before and after this call in separate
+        // processes (one-way means one process can only answer once):
+        //
+        //   - SoapySDR.dll itself is the CALLER, not a victim. The plain-name
+        //     LoadLibraryA in SoapySource::runtimeAvailable runs first and
+        //     pins the module; a plain-name load of an ALREADY-LOADED module
+        //     still returns it afterwards (measured), which is also how the
+        //     /DELAYLOAD:SoapySDR.dll thunks resolve on every later call. The
+        //     ordering is the immunity - nothing may call into SoapySDR, or
+        //     reach this function, ahead of that load.
+        //   - Plugins load through PluginHost's LoadLibraryExW(absolute path,
+        //     LOAD_WITH_ALTERED_SEARCH_PATH). Measured unaffected: a
+        //     dependency sitting BESIDE the plugin still resolves after this
+        //     call, which is exactly the arrangement plugin_host.cpp offers a
+        //     plugin author. One shipped beside a PATH-only dependency would
+        //     break, but none is: the example plugin imports KERNEL32 alone,
+        //     and the CRT a /MD build would add lives in System32.
+        //   - GLFW (user32, dwmapi, shcore, ntdll, dinput8, xinput*,
+        //     opengl32, vulkan-1), Dear ImGui (opengl32) and PortAudio
+        //     (dsound, avrt, ksuser) load by plain name, and every one of
+        //     those is a System32 DLL, which stays in the search set.
+        //   - The vendor modules, which SoapySDR loads with LoadLibrary(path)
+        //     and no flags, are the reason for the loop below: their
+        //     dependencies used to be found on PATH and now must come from the
+        //     AddDllDirectory set, so every adopted root contributes its bin
+        //     directory - pinned by the test of that name, because a module
+        //     directory added without one would be the regression this line
+        //     could actually cause.
         ::SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         for (const VendorRoot& v : adopted) {
             std::error_code ec;

@@ -95,7 +95,18 @@ float NoiseReduction::popOut() {
 std::size_t NoiseReduction::process(const float* in, std::size_t n, float* out) {
     for (std::size_t i = 0; i < n; ++i) {
         // Read before any write so in == out is legal.
-        const float x = in[i];
+        float x = in[i];
+        // A non-finite sample cannot be allowed into either history. The
+        // forward transform spreads one NaN across every bin at once, and
+        // from the spectrum it reaches the smoothed power, the noise floor
+        // and the per-bin gain — which is averaged with the previous frame's,
+        // so nothing can ever rinse it out again and the reducer emits NaN
+        // for the rest of the session. Substituting silence here is one test
+        // per input sample, against the ring writes, the frame copy and the
+        // transform this sample is about to pay for; guarding further in
+        // would be no cheaper (the frame copy runs n_ times per hop_) and
+        // would still leave the bypass delay line carrying the NaN.
+        if (!std::isfinite(x)) { x = 0.0f; }
 
         // The bypass delay line runs unconditionally: it is what makes a
         // strength or enable change take effect without a discontinuity.

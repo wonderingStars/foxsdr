@@ -30,6 +30,14 @@ public:
             // std::norm is re^2+im^2 (no sqrt): instantaneous power.
             ema += alpha_ * (std::norm(in[i]) - ema);
         }
+        // One non-finite input sample poisons the pole permanently: NaN feeds
+        // itself through every later update, and since NaN fails every ordered
+        // comparison the squelch reading it can no longer open OR close and
+        // the S-meter stops moving — for the rest of the session. Restarting
+        // the average from zero is the recovery: the pole re-converges from
+        // the floor over its normal time constant. One test per process()
+        // call, not per sample, so the RF-rate loop above is untouched.
+        if (!std::isfinite(ema)) { ema = 0.0f; }
         ema_ = ema;
     }
 
@@ -92,6 +100,18 @@ public:
     // in the linear power domain so the per-sample comparison is a float
     // compare, not a log.
     void setThresholdDb(float db) {
+        // The same freeze the meter guards against on the SAMPLE path, reached
+        // through the CONTROL path: a non-finite db makes both thresholds
+        // non-finite, and since NaN fails every ordered comparison the gate
+        // then falls into the "inside the hysteresis band" branch of process()
+        // on every sample and keeps whatever state it had for the rest of the
+        // session (+inf is as bad in the other direction — every sample reads
+        // "below close" and the gate can never key). Ignoring the command,
+        // rather than clamping to some invented dB limit, is the conservative
+        // answer: a broken control value leaves the gate behaving exactly as
+        // it did before it arrived, and the constructor has always installed a
+        // valid default, so there is always a last-valid pair to keep.
+        if (!std::isfinite(db)) { return; }
         openLin_ = static_cast<float>(std::pow(10.0, static_cast<double>(db) / 10.0));
         closeLin_ = static_cast<float>(
             std::pow(10.0, static_cast<double>(db - kHysteresisDb) / 10.0));

@@ -5,6 +5,7 @@
 #include "net/web_auth.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -279,10 +280,14 @@ bool sha256(const std::uint8_t* data, std::size_t n, std::vector<std::uint8_t>& 
 
 namespace {
 
+// Behind pbkdf2CallCount(); see the header for why it exists.
+std::atomic<std::uint64_t> g_pbkdf2Calls{0};
+
 #if defined(_WIN32)
 bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,
                   std::size_t saltLen, std::uint32_t iterations, std::uint8_t* out,
                   std::size_t outLen, std::string& error) {
+    g_pbkdf2Calls.fetch_add(1, std::memory_order_relaxed);
     BCRYPT_ALG_HANDLE alg = nullptr;
     // BCRYPT_ALG_HANDLE_HMAC_FLAG is what makes this handle usable as the PRF;
     // without it BCryptDeriveKeyPBKDF2 fails with STATUS_INVALID_HANDLE.
@@ -308,6 +313,7 @@ bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,
 bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,
                   std::size_t saltLen, std::uint32_t iterations, std::uint8_t* out,
                   std::size_t outLen, std::string& error) {
+    g_pbkdf2Calls.fetch_add(1, std::memory_order_relaxed);
     // Same construction as the BCrypt path: PBKDF2 with HMAC-SHA256 as the PRF,
     // so a record written by either build verifies against the other. The
     // serialized record format is what guarantees that, not this call.
@@ -440,6 +446,26 @@ bool verifyPassword(const std::string& password, const PasswordRecord& rec,
     // error stays empty here: a mismatch is a wrong password, not a fault, and
     // the caller distinguishes the two by exactly that (see the header).
     return constantTimeEquals(derived, rec.hash);
+}
+
+std::uint64_t pbkdf2CallCount() {
+    return g_pbkdf2Calls.load(std::memory_order_relaxed);
+}
+
+bool verifyLogin(const std::string& user, const std::string& password,
+                 const std::string& expectedUser, const PasswordRecord& rec,
+                 std::string& error) {
+    // NOT short-circuited, and deliberately so (see the header): both operands
+    // are evaluated into locals BEFORE they are combined, so the derivation is
+    // paid whether or not the user name matched. Verifying the supplied
+    // password against the real record costs exactly what a wrong password
+    // costs, because the cost is set by the record's salt and iteration count
+    // and not by the password — no dummy record is needed, and one would have
+    // to be kept cost-identical for ever.
+    const bool userOk = user.size() == expectedUser.size() &&
+                        constantTimeEquals(user.data(), expectedUser.data(), user.size());
+    const bool passOk = verifyPassword(password, rec, error);
+    return userOk && passOk;
 }
 
 // --- Sessions ----------------------------------------------------------------

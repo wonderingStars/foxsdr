@@ -247,6 +247,45 @@ void testTwoInstallsAreBothAdded() {
     CHECK(out == a.moduleDir + ";" + b.moduleDir);
 }
 
+void testEveryModuleDirAddedComesWithItsVendorBinDir() {
+    // THE INVARIANT THAT PAYS FOR THE PROCESS-WIDE SEARCH-ORDER CHANGE.
+    //
+    // ensureVendorModulesVisible calls SetDefaultDllDirectories, which is
+    // process-wide and one-way and takes PATH out of the DLL search for
+    // everything loaded afterwards. The modules found through the plugin path
+    // are loaded by SoapySDR with a bare LoadLibrary(path), so their own
+    // dependencies - rtlsdr.dll, libusb-1.0.dll and friends - used to be found
+    // on PATH and now can only be found in a directory handed to
+    // AddDllDirectory. The only such directories are the bin directories of
+    // the adopted roots.
+    //
+    // So a module directory that reaches SOAPY_SDR_PLUGIN_PATH without a bin
+    // directory to go with it is a module we teach SoapySDR to find and then
+    // cannot load: found-then-failed, which reports to the user as no device,
+    // identically to not finding it at all. That is the one regression that
+    // line can cause, and this is what says it has not happened.
+    const auto env = envFrom({
+        {"ProgramFiles", kProgramFiles},
+        {"USERPROFILE", kHome},
+    });
+    const auto exists = fsWith({
+        nativeJoin({kProgramFiles, "PothosSDR", "lib", "SoapySDR", "modules0.8"}),
+        nativeJoin({kHome, "radioconda", "Library", "lib", "SoapySDR", "modules0.8"}),
+    });
+    const auto roots =
+        cascade::source::resolveVendorRoots(cascade::source::candidateVendorRoots(env), "0.8", exists);
+    CHECK(roots.size() == 2);  // both installs, so the loop below is not vacuous
+
+    const std::string added = cascade::source::pluginPathWith("", roots, ';');
+    for (const VendorRoot& r : roots) {
+        // Every root that contributes a module directory to the plugin path
+        // also names the bin directory AddDllDirectory will be given for it.
+        CHECK(added.find(r.moduleDir) != std::string::npos);
+        CHECK(!r.binDir.empty());
+        CHECK(r.binDir == nativeJoin({r.root, "bin"}));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -261,5 +300,6 @@ int main() {
     testPluginPathHandlesAnEmptyStartingValue();
     testNothingToAddYieldsNoChange();
     testTwoInstallsAreBothAdded();
+    testEveryModuleDirAddedComesWithItsVendorBinDir();
     return testSummary("test_soapy_modules");
 }

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -261,6 +262,53 @@ int main() {
         CHECK(std::isfinite(agc.gain()));
         CHECK(agc.gain() <= maxGain);
         CHECK_NEAR(agc.gain(), maxGain, 1e-4);
+    }
+
+    // --- AGC: a non-finite input burst must not latch the gain -------------
+    // One NaN sample makes the level NaN, and every clamp comparison in the
+    // update is false for NaN, so an unguarded loop keeps gain_ = NaN for the
+    // rest of the session and feeds NaN to the sound card. The gain must be
+    // finite the moment the burst ends and must re-converge on clean input to
+    // the same place a loop that never saw the burst reaches — the reference
+    // here is a second Agc fed only the clean tone.
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+
+        cascade::dsp::Agc poisoned(1.0f, 0.1f, 0.01f, 100.0f);
+        std::vector<float> burst(256);
+        for (std::size_t i = 0; i < burst.size(); ++i) {
+            burst[i] = (i % 3 == 0) ? nan : ((i % 3 == 1) ? inf : -inf);
+        }
+        std::vector<float> burstOut(burst.size());
+        poisoned.process(burst.data(), burstOut.data(), burst.size());
+        // The decisive assertion: the burst is over, the state must not be.
+        CHECK(std::isfinite(poisoned.gain()));
+
+        const std::size_t N = 60000;
+        std::vector<float> clean(N);
+        for (std::size_t i = 0; i < N; ++i) {
+            clean[i] = static_cast<float>(
+                0.05 * std::cos(kTwoPi * 0.01 * static_cast<double>(i)));
+        }
+        std::vector<float> out(N);
+        poisoned.process(clean.data(), out.data(), N);
+
+        cascade::dsp::Agc reference(1.0f, 0.1f, 0.01f, 100.0f);
+        std::vector<float> refOut(N);
+        reference.process(clean.data(), refOut.data(), N);
+
+        CHECK(std::isfinite(reference.gain()));
+        CHECK(reference.gain() > 1.0f);  // the reference itself really moved
+        CHECK(std::isfinite(poisoned.gain()));
+        CHECK(std::fabs(poisoned.gain() - reference.gain()) <=
+              0.02f * reference.gain());
+
+        std::size_t nonFinite = 0;
+        for (std::size_t i = N / 2; i < N; ++i) {
+            if (!std::isfinite(out[i])) { ++nonFinite; }
+        }
+        CHECK(nonFinite == 0);
     }
 
     return testSummary("test_demod_agc");

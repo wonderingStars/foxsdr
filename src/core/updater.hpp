@@ -25,6 +25,7 @@
 #ifndef CASCADE_CORE_UPDATER_HPP
 #define CASCADE_CORE_UPDATER_HPP
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -61,6 +62,18 @@ struct UpdateInfo {
 // offered as an upgrade to the stable that superseded it, permanently.
 int compareVersions(const std::string& a, const std::string& b);
 
+// Is this a version this product could actually have published?
+//
+// Accepts a dotted numeric core with an optional pre-release suffix, and
+// nothing else: 0.58.0 and 0.57.0-nightly.20260819.b97092e both pass.
+//
+// THIS IS A SECURITY CHECK, not a tidiness one. The version names the
+// installer that downloadUpdate writes into a temp directory, and that file is
+// then handed to the shell, so an unvalidated version out of a manifest is a
+// path traversal to an arbitrary executable. A structural parse is used rather
+// than a list of banned characters, because ".." contains no banned character.
+bool wellFormedVersion(const std::string& v);
+
 // Parses the /api/update document. Pure, so the whole decision is testable
 // without a network: a malformed or hostile answer must not be able to make
 // the application download anything.
@@ -91,7 +104,23 @@ std::string updateEndpoint();
 // The digest is checked BEFORE the file is given its final name, so a partial
 // or substituted download is never a runnable .exe on the user's disk - the
 // same order the plugin installer uses.
-bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error);
+//
+// PROGRESS AND CANCEL are the caller's atomics, borrowed for the duration and
+// both optional. The transfer stores 0..1 into `progress` as the bytes arrive
+// (it stays at 0 when the server declares no Content-Length, because progress
+// that lies is worse than progress that waits), and polls `cancel` before it
+// connects and again between chunks, so a quit does not have to wait out the
+// download. `progress` is reset to 0 on entry: a second attempt must not start
+// its bar wherever the failed first one stopped.
+//
+// WHY THEY ARE NOT PluginRepo's. The plugin browser's bar and this one are
+// different transfers that can be in flight at the same time, and PluginRepo's
+// own progress_/cancel_ belong to whatever install() or fetchIndex() is doing;
+// sharing them would have this bar show that transfer's percentage and a
+// plugin cancel abort the app update. The caller therefore owns a pair.
+bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error,
+                    std::atomic<float>* progress = nullptr,
+                    std::atomic<bool>* cancel = nullptr);
 
 }  // namespace cascade::core
 

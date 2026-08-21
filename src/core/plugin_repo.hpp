@@ -379,9 +379,18 @@ public:
     // Downloads to `destPath`, verifying sha256 BEFORE the file takes its
     // final name: a partial or substituted download is never left on disk as a
     // runnable file. Writes through a ".part" sibling and renames on success.
+    //
+    // STATIC, so it has no instance to take progress_/cancel_ from — the
+    // caller passes its own pair, or nullptr for neither. Both are optional
+    // and behave exactly as the member transfers': 0..1 stored as the bytes
+    // arrive (left at 0 when the server declares no length), and the flag
+    // polled between chunks so the transfer can be stopped. The updater is the
+    // caller that needs them: an app-update download with no cancel is one
+    // that a quit has to wait out.
     static bool fetchVerifiedFile(const std::string& url, const std::string& expectedSha256,
                                   const std::string& destPath, std::uint64_t maxBytes,
-                                  std::string& error);
+                                  std::string& error, std::atomic<float>* progress = nullptr,
+                                  std::atomic<bool>* cancel = nullptr);
 
     // THE INTEGRITY DECISION, as one named function that install() calls.
     //

@@ -103,12 +103,24 @@ public:
     const std::vector<HostPanel>& panels() const { return panels_; }
 
     // --- Tune permission -------------------------------------------------
+    // WHAT A GRANT IS KEYED ON: the plugin's MODULE FILE NAME, which the host
+    // reads off disk, and NOT its display name. The display name comes out of
+    // the plugin's own descriptor, so keying on it lets any plugin inherit
+    // another's permission simply by claiming its name; the file name it
+    // cannot change without replacing the granted file itself, which needs
+    // write access to the plugins directory and is already game over.
+    //
+    // The scan produces one record per file in one directory, so the file name
+    // is unique across a scan. Empty when the record has no path, and an empty
+    // key never matches a grant.
+    static std::string tuneKey(const LoadedPlugin& p);
+
     // Which plugins have asked to control the receiver at least once, so the
     // GUI can offer the toggle only where it means something. A plugin that
-    // never asks never appears.
+    // never asks never appears. These are tuneKey() values, not display names.
     const std::vector<std::string>& tuneRequesters() const { return tuneRequesters_; }
-    bool tuneAllowed(const std::string& plugin) const;
-    void setTuneAllowed(const std::string& plugin, bool allowed);
+    bool tuneAllowed(const std::string& pluginKey) const;
+    void setTuneAllowed(const std::string& pluginKey, bool allowed);
 
     // The last refusal, for display: "X asked to tune and was not allowed" is
     // the message that turns a mysteriously idle tracker into an obvious

@@ -8,8 +8,10 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cctype>
+#include <cstdint>
 #include <set>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -141,6 +143,51 @@ void testPluginNamesCannotBreakTheReport() {
     CHECK(j["plugins"].size() == 1);
 }
 
+void testModeSecondsAccrueAcrossFrames() {
+    // THE ONE THAT MATTERS FOR MODE SECONDS. Accrual is sampled once per
+    // rendered frame, so every delta is a fraction of a second. Truncating
+    // each delta on its own banks nothing at all, which is how "modes used"
+    // arrived at the endpoint empty for a whole release while the session
+    // seconds beside it were correct.
+    SecondAccrual a;
+    a.reset(1000.0);
+    std::uint64_t banked = 0;
+    for (int k = 1; k <= 60; ++k) { banked += a.advance(1000.0 + 0.0167 * k); }
+    CHECK(banked == 1);  // 60 frames at 16.7 ms is one second of wall clock
+    for (int k = 61; k <= 120; ++k) { banked += a.advance(1000.0 + 0.0167 * k); }
+    CHECK(banked == 2);
+
+    // A long step banks its whole seconds at once and carries the rest, so
+    // the second call sees 0.75 s of credit it did not have to earn again.
+    SecondAccrual b;
+    b.reset(0.0);
+    CHECK(b.advance(2.75) == 2);
+    CHECK(b.advance(3.30) == 1);
+
+    // Nothing is banked before a reset, and a clock that steps backwards
+    // re-marks rather than producing a huge count from a negative delta.
+    SecondAccrual c;
+    CHECK(c.advance(5.0) == 0);
+    SecondAccrual d;
+    d.reset(10.0);
+    CHECK(d.advance(4.0) == 0);
+    CHECK(d.advance(5.5) == 1);
+}
+
+void testPanelsReachThePayload() {
+    // "Panels opened" was empty in every report ever sent, because nothing
+    // called the recorder. Whether the GUI calls it cannot be asserted from
+    // here; what can is that a noted panel survives the trip into the
+    // payload, in order and without being folded away.
+    TelemetryReport r;
+    r.installId = newInstallId();
+    r.appVersion = "0.48.0";
+    r.session.panels = {"map", "decoded", "scanner"};
+    const nlohmann::json j = nlohmann::json::parse(r.toJson());
+    const std::vector<std::string> got = j["panels"].get<std::vector<std::string>>();
+    CHECK(got == std::vector<std::string>({"map", "decoded", "scanner"}));
+}
+
 void testOsAndArchSayNothingIdentifying() {
     const std::string os = osDescription();
     CHECK(!os.empty());
@@ -169,6 +216,8 @@ int main() {
     testInstallIdIsRandomAndValidated();
     testPayloadContainsOnlyTheAgreedFields();
     testPluginNamesCannotBreakTheReport();
+    testModeSecondsAccrueAcrossFrames();
+    testPanelsReachThePayload();
     testOsAndArchSayNothingIdentifying();
     return testSummary("test_telemetry");
 }

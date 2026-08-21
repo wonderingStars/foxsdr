@@ -100,6 +100,48 @@ std::vector<int> numericParts(const std::string& v, std::string& pre) {
 
 }  // namespace
 
+bool wellFormedVersion(const std::string& v) {
+    // A STRUCTURAL PARSE, not a charset filter. A filter that only banned odd
+    // characters would still accept "..", and ".." is the whole attack: this
+    // string names the downloaded installer and that file is then executed.
+    if (v.empty() || v.size() > 64) { return false; }
+
+    // Dotted numeric core: at least one part, each 1 to 9 digits and nothing
+    // else. An empty part is what "1..2" and a leading dot look like.
+    std::size_t i = 0;
+    int parts = 0;
+    while (true) {
+        std::size_t digits = 0;
+        while (i < v.size() && v[i] >= '0' && v[i] <= '9') { ++i; ++digits; }
+        if (digits == 0 || digits > 9) { return false; }
+        if (++parts > 4) { return false; }
+        if (i < v.size() && v[i] == '.') { ++i; continue; }
+        break;
+    }
+    if (i == v.size()) { return true; }  // a plain release: 0.58.0
+
+    // Optional pre-release suffix: one hyphen, then dot-separated segments of
+    // letters and digits - 0.57.0-nightly.20260819.b97092e. No segment may be
+    // empty, which is what keeps ".." out, and nothing outside [0-9A-Za-z.]
+    // gets in at all, which is what keeps separators, colons and spaces out.
+    if (v[i] != '-') { return false; }
+    ++i;
+    std::size_t segment = 0;
+    for (; i < v.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(v[i]);
+        if (c == '.') {
+            if (segment == 0) { return false; }
+            segment = 0;
+            continue;
+        }
+        const bool alnum = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                           (c >= 'A' && c <= 'Z');
+        if (!alnum) { return false; }
+        ++segment;
+    }
+    return segment != 0;
+}
+
 int compareVersions(const std::string& a, const std::string& b) {
     std::string aPre, bPre;
     const std::vector<int> an = numericParts(a, aPre);
@@ -141,6 +183,10 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
     // THE THREE FIELDS THAT MAKE A DOWNLOAD SAFE. Each is refused rather than
     // warned about, because a manifest missing any of them cannot be acted on
     // and pretending otherwise is how an updater becomes an exploit.
+    if (!wellFormedVersion(out.version)) {
+        error = "refusing an update version that does not parse: \"" + out.version + "\"";
+        return false;
+    }
     if (!wellFormedSha256(out.sha256)) {
         error = "the update service gave no usable checksum for " + out.version;
         return false;
@@ -220,16 +266,27 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
     return parseUpdateManifest(body, currentVersion, out, error);
 }
 
-bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error) {
+bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error,
+                    std::atomic<float>* progress, std::atomic<bool>* cancel) {
     outPath.clear();
     error.clear();
+    // Reset before anything can read it: a second attempt after a failed one
+    // would otherwise start its bar wherever the first one stopped.
+    if (progress != nullptr) {
+        progress->store(0.0f, std::memory_order_relaxed);
+    }
     if (!info.newer || info.url.empty()) {
         error = "there is no update to download";
         return false;
     }
     // Re-checked here as well as at parse time: downloadUpdate is public, and
     // a caller that built an UpdateInfo by hand must not be able to skip the
-    // host rule.
+    // host rule - or the version rule, which matters more here, because the
+    // version below becomes a path and that path is later executed.
+    if (!wellFormedVersion(info.version)) {
+        error = "refusing an update version that does not parse: \"" + info.version + "\"";
+        return false;
+    }
     if (!urlIsOnAllowedHost(info.url)) {
         error = "refusing an update URL that is not on " + std::string(kAllowedHost);
         return false;
@@ -249,8 +306,13 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     const fs::path dest = dir / ("foxsdr-setup-" + info.version + ".exe");
 
     if (!PluginRepo::fetchVerifiedFile(info.url, info.sha256, dest.string(), kMaxInstallerBytes,
-                                       error)) {
+                                       error, progress, cancel)) {
         return false;
+    }
+    // The bar sat at whatever the last chunk made it; the file is verified and
+    // named, so say so rather than stopping at 99%.
+    if (progress != nullptr) {
+        progress->store(1.0f, std::memory_order_relaxed);
     }
     outPath = dest.string();
     return true;

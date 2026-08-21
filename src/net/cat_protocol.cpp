@@ -266,7 +266,12 @@ CatResult executeCatLine(const std::string& line, const RadioStatus& status) {
         }
         case 'F': {
             double hz = 0.0;
-            if (!parseHz(arg(1), hz) || hz < 0.0) return fail(kCatEinval);
+            // The SAME range the web and GUI tune paths enforce
+            // (web_control.hpp): CAT drives one receiver, so a bound that only
+            // one of its control surfaces applies is no bound at all.
+            if (!parseHz(arg(1), hz) || hz < kMinCenterHz || hz > kMaxCenterHz) {
+                return fail(kCatEinval);
+            }
             const TunePlan plan =
                 planTune(hz, status.centerHz, status.sampleRateHz);
             CatResult r = ok();
@@ -302,7 +307,17 @@ CatResult executeCatLine(const std::string& line, const RadioStatus& status) {
             if (!widthArg.empty()) {
                 double width = 0.0;
                 if (!parseHz(widthArg, width) || width < 0.0) return fail(kCatEinval);
-                if (width > 0.0) r.control.bandwidthHz = width;
+                if (width > 0.0) {
+                    // The SAME range the web path enforces (web_control.hpp),
+                    // for the same reason the 'F' bound above exists: CAT
+                    // drives one receiver and one filter, so a bound only one
+                    // control surface applies is no bound at all. The zero
+                    // case is excluded because it never reaches the filter.
+                    if (width < kMinBandwidthHz || width > kMaxBandwidthHz) {
+                        return fail(kCatEinval);
+                    }
+                    r.control.bandwidthHz = width;
+                }
             }
             return r;
         }
