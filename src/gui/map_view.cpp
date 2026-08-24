@@ -37,6 +37,37 @@ ImU32 colourFor(std::uint32_t kind) {
     return c;
 }
 
+// WHAT COLOUR A TARGET ACTUALLY DRAWS IN, in strict order of precedence:
+//
+//   1. EMERGENCY wins over everything. A squawk of 7500/7600/7700 - which is
+//      what a plugin sets CASCADE_TRACK_FLAG_EMERGENCY for - is the one thing
+//      on the map that must never be mistaken for anything else, so it takes
+//      the one hue the altitude palette deliberately does not contain. (The
+//      flag has been in the ABI since the beginning and nothing drew it until
+//      now; an aircraft in trouble was the same red as the one beside it.)
+//   2. ALTITUDE BAND, when the altitude is known. This is what makes an
+//      approach and a cruise read differently at a glance, which is the whole
+//      point of colouring by altitude at all.
+//   3. THE KIND COLOUR, when it is not. altM is NaN by ABI contract when the
+//      source does not report it, and a ship or an APRS station reporting no
+//      altitude is not a thing at sea level - it is a thing whose altitude is
+//      not part of what it transmits. Those keep the per-kind colour they have
+//      always had, which is also what keeps several kinds on one map
+//      distinguishable.
+//
+// Selection is not in this list because it is not a colour: a selected target
+// gets a RINGED marker in whatever colour it already had (see the draw loop),
+// so it stands out without hiding what its altitude was.
+ImU32 colourForTrack(const CascadeTrack& t) {
+    if ((t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
+        return IM_COL32(255, 45, 45, 255);
+    }
+    const int band = altitudeBandIndex(t.altM);
+    if (band < 0) { return colourFor(t.kind); }
+    const AltBandStyle& s = altBandStyle(band);
+    return IM_COL32(s.r, s.g, s.b, 255);
+}
+
 // Applies a 0..1 fade to a colour's alpha. Faded rather than removed while the
 // target is merely quiet: a target that stopped reporting a moment ago is
 // still information, and making it vanish the instant it goes quiet loses the
@@ -72,7 +103,14 @@ constexpr float kPlaneHalf[][2] = {
 };
 constexpr int kPlaneHalfCount = static_cast<int>(sizeof(kPlaneHalf) / sizeof(kPlaneHalf[0]));
 
-void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, ImU32 col) {
+// `filled` false draws the same silhouette as an OUTLINE. It is how an aircraft
+// with NO REPORTED ALTITUDE is told apart from one at sea level: those two are
+// different facts, they must not look alike, and a hue comparison at nine
+// pixels is not a reliable way to tell them apart - a hollow shape against a
+// solid one is. Only aircraft get this cue, because altitude is a thing an
+// aircraft is expected to report and a ship or a base station is not.
+void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, ImU32 col,
+              bool filled = true) {
     // Course 0 is north, which on screen is straight up; an unknown course
     // (NaN by ABI contract) draws the plane pointing north rather than
     // inventing a heading line the way the tick for other kinds would.
@@ -89,29 +127,19 @@ void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, Im
     for (int i = kPlaneHalfCount - 2; i >= 1; --i) {
         put(-kPlaneHalf[i][0], kPlaneHalf[i][1]);
     }
-    dl->AddConcavePolyFilled(pts, n, col);
+    if (filled) {
+        dl->AddConcavePolyFilled(pts, n, col);
+    } else {
+        dl->AddPolyline(pts, n, col, ImDrawFlags_Closed, 1.5f);
+    }
 }
 
-double greatCircleKm(double lat1, double lon1, double lat2, double lon2) {
-    const double p1 = lat1 * kPi / 180.0;
-    const double p2 = lat2 * kPi / 180.0;
-    const double dp = (lat2 - lat1) * kPi / 180.0;
-    const double dl = (lon2 - lon1) * kPi / 180.0;
-    const double a = std::sin(dp / 2) * std::sin(dp / 2) +
-                     std::cos(p1) * std::cos(p2) * std::sin(dl / 2) * std::sin(dl / 2);
-    return 2.0 * kEarthRadiusKm * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
-}
-
-double bearingDeg(double lat1, double lon1, double lat2, double lon2) {
-    const double p1 = lat1 * kPi / 180.0;
-    const double p2 = lat2 * kPi / 180.0;
-    const double dl = (lon2 - lon1) * kPi / 180.0;
-    const double y = std::sin(dl) * std::cos(p2);
-    const double x = std::cos(p1) * std::sin(p2) - std::sin(p1) * std::cos(p2) * std::cos(dl);
-    double b = std::atan2(y, x) * 180.0 / kPi;
-    if (b < 0.0) { b += 360.0; }
-    return b;
-}
+// The private great-circle and bearing helpers that used to live here are gone
+// too: gui/track_metrics.hpp now holds the tested pair, and this view's hover
+// readout, the track table's columns and the coverage accumulator all measure
+// with the same arithmetic instead of with three copies of it. The old local
+// bearing also answered 000 for a target directly overhead, where the tested
+// one says explicitly that there is no such direction.
 
 // Graticule step that keeps roughly 4-10 lines across the view at any zoom.
 double graticuleStep(double spanDeg) {
@@ -473,6 +501,81 @@ void MapView::draw(float width, float height,
         dl->AddText(ImVec2(h.x + 6.0f, h.y + 2.0f), IM_COL32(220, 220, 220, 255), "RX");
     }
 
+    // --- coverage overlay, over the rings and under the targets ------------
+    //
+    // The furthest anything has been heard in each five-degree sector, drawn as
+    // one closed polygon around the receiver. It is the cheapest antenna
+    // diagnostic there is: the nulls in a real pattern are visible as notches,
+    // and a mast or a building in one direction shows up as a flat side.
+    //
+    // NO RECEIVER POSITION MEANS NO OVERLAY, silently. The whole shape is a set
+    // of distances FROM somewhere, so without that somewhere there is nothing
+    // to draw and nothing sensible to draw it around - the map window's own
+    // controls say why, which is the right place for an explanation.
+    //
+    // A SECTOR WITH NOTHING IN IT COLLAPSES TO THE CENTRE rather than being
+    // interpolated across from its neighbours. A notch in this picture is the
+    // interesting part; smoothing it away would turn the one thing worth seeing
+    // into a rounder blob.
+    if (hasHome_ && coverage_ != nullptr && !coverage_->empty()) {
+        const ImVec2 h = toScreen(homeLat_, homeLon_);
+        // Each vertex sits at the MIDDLE of its sector's arc, so a lone
+        // sighting draws a spike pointing the way it was actually heard rather
+        // than a wedge whose edge is the bearing.
+        //
+        // THE VERTEX IS A GREAT-CIRCLE DESTINATION, not a flat offset. What
+        // stood here was a plate-carree step - latitude plus km/111.32*cos(brg),
+        // longitude plus km/(111.32*cos(lat))*sin(brg) - under a comment
+        // claiming it was within a pixel of the real thing. It is not: from
+        // 51.5 N that shortcut is 1.1 km out at 100 km, 9.9 km at 300, 27.4 km
+        // at 500 and 110 km at 1000, and 300-500 km is ordinary reach for the
+        // ADS-B and APRS sources this ships with, so the lobe was skewed by
+        // tens of kilometres exactly where it gets looked at. destinationPoint
+        // in track_metrics.hpp does it properly and is tested against an
+        // external reference; see coverageVertex.
+        //
+        // AND THE LONGITUDE IS AN OFFSET, not a place. toScreen normalises each
+        // longitude into +/-180 of the view centre, which is right for one
+        // target and wrong for a CONNECTED shape: a receiver at 179.5 E has
+        // vertices either side of the antimeridian, each normalising to the
+        // opposite edge of the map, and both the polyline and the fill then
+        // ran straight across the world. Placing every vertex as a CONTINUOUS
+        // longitude offset from the receiver's own pixel removes the seam
+        // entirely rather than special-casing it - x is a fixed scale of
+        // longitude in both projections this view offers, so the offset in
+        // pixels is exact - and it costs an ordinary receiver nothing, because
+        // away from the antimeridian the offset IS the difference.
+        //
+        // The latitude still goes through toScreen, which is what keeps the
+        // radius right under Mercator: a Mercator pixel is not a linear
+        // function of kilometres.
+        const double pxPerLonDeg = static_cast<double>(width) / lonSpan;
+        ImVec2 pts[CoverageMap::kBuckets];
+        for (int i = 0; i < CoverageMap::kBuckets; ++i) {
+            const double km = coverage_->maxKm(i);
+            if (km <= 0.0) {
+                pts[i] = h;
+                continue;
+            }
+            const double brg = (static_cast<double>(i) + 0.5) * CoverageMap::kBucketDeg;
+            const CoverageVertex v = coverageVertex(homeLat_, homeLon_, brg, km);
+            // Clamped off the poles because mercY is infinite there; the
+            // longitude needs no such guard now that it is an offset.
+            const ImVec2 p = toScreen(std::clamp(v.latDeg, -89.9, 89.9), homeLon_);
+            pts[i] = ImVec2(h.x + static_cast<float>(v.dLonDeg * pxPerLonDeg), p.y);
+        }
+        // Faint fill, brighter edge: the fill says where the coverage is and
+        // must not hide the map or the targets inside it, and the edge is the
+        // line the eye actually reads the shape from.
+        // CONCAVE, not convex. A real coverage lobe has notches in it - that is
+        // the whole reason to look at one - and AddConvexPolyFilled on a
+        // concave outline fills the triangle fan rather than the shape,
+        // painting over exactly the nulls the picture exists to show.
+        dl->AddConcavePolyFilled(pts, CoverageMap::kBuckets, IM_COL32(80, 170, 255, 34));
+        dl->AddPolyline(pts, CoverageMap::kBuckets, IM_COL32(110, 200, 255, 190),
+                        ImDrawFlags_Closed, 1.5f);
+    }
+
     // --- paths, under the targets ----------------------------------------
     for (const auto& p : paths) {
         if (p.points.size() < 2) { continue; }
@@ -485,8 +588,27 @@ void MapView::draw(float width, float height,
         const cascade::core::TrackPresentation pres =
             cascade::core::pathPresentation(p, tracks);
         if (!pres.visible) { continue; }
-        const ImU32 col = fadedColour(
-            (colourFor(p.kind) & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT), pres.alpha);
+        // THE TRAIL TAKES ITS OWNER'S COLOUR, altitude included, so a climbing
+        // aircraft's trail is the same colour as its marker instead of the
+        // generic per-kind line that used to sit under a banded marker.
+        //
+        // ONE COLOUR FOR THE WHOLE TRAIL, not a gradient along it: a
+        // CascadePathPoint carries a latitude and a longitude and nothing else
+        // (see the ABI), so the altitude at each vertex is simply not in the
+        // data. Colouring per segment would mean inventing it.
+        //
+        // An UNOWNED path - a footprint circle, a predicted track, anything not
+        // reporting as a target - has no altitude to take, and falls back to
+        // the path's own kind colour exactly as before.
+        ImU32 base = colourFor(p.kind);
+        for (const auto& ht : tracks) {
+            if (ht.plugin == p.plugin && p.id == ht.t.id) {
+                base = colourForTrack(ht.t);
+                break;
+            }
+        }
+        const ImU32 col =
+            fadedColour((base & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT), pres.alpha);
         for (std::size_t i = 1; i < p.points.size(); ++i) {
             const double lonA = p.points[i - 1].lonDeg;
             const double lonB = p.points[i].lonDeg;
@@ -501,6 +623,9 @@ void MapView::draw(float width, float height,
 
     // --- targets ----------------------------------------------------------
     hoveredId_.clear();
+    // Whether anything actually drawn has a reported altitude, which is what
+    // decides whether the altitude legend below is information or clutter.
+    bool anyBanded = false;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     float bestDist = 14.0f;  // hit radius in pixels
     const cascade::core::HostTrack* best = nullptr;
@@ -520,11 +645,20 @@ void MapView::draw(float width, float height,
             s.y > origin.y + height + 40) {
             continue;
         }
-        const ImU32 col = fadedColour(colourFor(ht.t.kind), pres.alpha);
+        const ImU32 col = fadedColour(colourForTrack(ht.t), pres.alpha);
         // Selected or followed: either way this is the one the user singled
         // out, and it gets the ringed marker.
         const bool picked = (!selectedId_.empty() && selectedId_ == ht.t.id) ||
                             (!followId_.empty() && followId_ == ht.t.id);
+        const bool altKnown = altitudeBandIndex(ht.t.altM) >= 0;
+        if (altKnown) { anyBanded = true; }
+        // An emergency also gets a ring of its own, so it survives being
+        // selected (where the marker is knocked out of a disc and the emergency
+        // hue is no longer the fill) and survives a colour-blind reading.
+        if ((ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
+            dl->AddCircle(s, 16.0f, fadedColour(IM_COL32(255, 45, 45, 255), pres.alpha), 0,
+                          2.0f);
+        }
 
         if (ht.t.kind == CASCADE_TRACK_AIRCRAFT) {
             // The silhouette IS the heading indicator, so no tick.
@@ -532,7 +666,7 @@ void MapView::draw(float width, float height,
                 dl->AddCircleFilled(s, 13.0f, col);
                 addPlane(dl, s, ht.t.courseDeg, 8.0f, IM_COL32(16, 20, 26, 255));
             } else {
-                addPlane(dl, s, ht.t.courseDeg, 9.0f, col);
+                addPlane(dl, s, ht.t.courseDeg, 9.0f, col, altKnown);
             }
         } else {
             // A course, where known, is drawn as a heading tick. It is the
@@ -599,7 +733,12 @@ void MapView::draw(float width, float height,
         // rather than as zero - "0 kt" and "no speed reported" are different
         // facts and must not look the same.
         if (!std::isnan(best->t.altM)) {
-            ImGui::Text("alt     %.0f m (%.0f ft)", best->t.altM, best->t.altM * 3.28084);
+            // The band is named as well as the number, so the colour on the map
+            // and the figure in the tooltip can be tied together without
+            // counting swatches in the legend.
+            ImGui::Text("alt     %.0f m (%.0f ft, %s)", best->t.altM,
+                        best->t.altM * 3.28084,
+                        altBandStyle(altitudeBandIndex(best->t.altM)).label);
         } else {
             ImGui::TextDisabled("alt     unknown");
         }
@@ -614,12 +753,58 @@ void MapView::draw(float width, float height,
             ImGui::TextDisabled("course  unknown");
         }
         if (hasHome_) {
-            ImGui::Text("range   %.1f km at %.0f deg",
-                        greatCircleKm(homeLat_, homeLon_, best->t.latDeg, best->t.lonDeg),
-                        bearingDeg(homeLat_, homeLon_, best->t.latDeg, best->t.lonDeg));
+            const double km =
+                greatCircleKm(homeLat_, homeLon_, best->t.latDeg, best->t.lonDeg);
+            const double brg =
+                initialBearingDeg(homeLat_, homeLon_, best->t.latDeg, best->t.lonDeg);
+            // A target at the receiver's own coordinates has no bearing from
+            // it, and printing "nan deg" would be worse than saying so.
+            if (std::isnan(brg)) {
+                ImGui::Text("range   %.1f km, bearing undefined", km);
+            } else {
+                ImGui::Text("range   %.1f km at %.0f deg", km, brg);
+            }
         }
         ImGui::Text("age     %.1f s", static_cast<double>(best->t.ageMs) / 1000.0);
         ImGui::EndTooltip();
+    }
+
+    // --- altitude legend ---------------------------------------------------
+    // WORTH ITS SPACE, and only just: six swatches and six labels down the
+    // right edge, about twenty lines of drawing and no layout of its own.
+    // Without it the colours are a code the user has to guess at, and guessing
+    // "green is higher than orange" is exactly the sort of thing that is right
+    // until the day it matters. It costs nothing when it would be noise,
+    // because it is DRAWN ONLY WHEN SOMETHING ON SCREEN HAS AN ALTITUDE: a map
+    // of ships and APRS stations, which report none, never shows it.
+    if (anyBanded) {
+        const float sw = kAltLegendSwatch;
+        const float pad = kAltLegendPad;
+        const float lh = ImGui::GetTextLineHeight();
+        const float rowStep = lh + 2.0f;
+        const float boxH = rowStep * static_cast<float>(kAltBandCount) + 8.0f;
+        // MEASURED WITH THE FONT IN USE, not assumed. A constant here was 74 px
+        // and clipped half the labels against the map's clip rect; the width
+        // has to come from the same CalcTextSize that will draw them.
+        const float boxW = altLegendWidth(
+            [](const char* s) { return ImGui::CalcTextSize(s).x; });
+        const ImVec2 tl(origin.x + width - boxW - 8.0f, origin.y + 8.0f);
+        dl->AddRectFilled(tl, ImVec2(tl.x + boxW, tl.y + boxH), IM_COL32(16, 20, 26, 190),
+                          3.0f);
+        dl->AddRect(tl, ImVec2(tl.x + boxW, tl.y + boxH), IM_COL32(70, 82, 98, 200), 3.0f);
+        for (int i = 0; i < kAltBandCount; ++i) {
+            // Highest band at the TOP, which is the way an altitude scale is
+            // read everywhere else.
+            const AltBandStyle& s = altBandStyle(kAltBandCount - 1 - i);
+            const float y = tl.y + 4.0f + rowStep * static_cast<float>(i);
+            // Laid out from the same padding the width was computed from, so
+            // the two cannot disagree about where the label starts.
+            dl->AddRectFilled(ImVec2(tl.x + pad, y + (lh - sw) * 0.5f),
+                              ImVec2(tl.x + pad + sw, y + (lh + sw) * 0.5f),
+                              IM_COL32(s.r, s.g, s.b, 255), 2.0f);
+            dl->AddText(ImVec2(tl.x + pad + sw + pad, y), IM_COL32(200, 208, 218, 255),
+                        s.label);
+        }
     }
 
     // Scale bar: a map with no basemap and no scale is a scatter plot.

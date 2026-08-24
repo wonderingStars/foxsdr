@@ -29,6 +29,7 @@
 // ImGui; see the note at the top of app_window.hpp.
 #include "gui/app_window.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -102,6 +103,13 @@ AppConfig junkConfig() {
     c.mapWindowHeight = 999999;
     c.mapWindowX = -999999;
     c.mapWindowY = 999999;
+    // A receiver position that must never survive a load: a config that does
+    // not mention one has none, and a leftover here would put every distance
+    // and bearing on the map - and the whole coverage overlay - at a place the
+    // user never set.
+    c.rxPositionSet = true;
+    c.rxLatDeg = 999.0;
+    c.rxLonDeg = -999.0;
     // P9 fields, both away from their defaults (and the URL empty-adjacent
     // junk, so a load path that forgets to assign it is caught).
     c.pluginCatalogueUrl = "garbage";
@@ -163,6 +171,9 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mapWindowHeight == b.mapWindowHeight);
     CHECK(a.mapWindowX == b.mapWindowX);
     CHECK(a.mapWindowY == b.mapWindowY);
+    CHECK(a.rxPositionSet == b.rxPositionSet);
+    CHECK(a.rxLatDeg == b.rxLatDeg);
+    CHECK(a.rxLonDeg == b.rxLonDeg);
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
@@ -238,6 +249,14 @@ int main() {
         in.mapWindowHeight = 987;
         in.mapWindowX = -1600;
         in.mapWindowY = 42;
+        // The receiver's position: a real place with a NEGATIVE longitude and
+        // fractional minutes, so a load path that rounded it, dropped the sign
+        // or forgot the field entirely is caught. This is the field the
+        // distance and bearing columns are measured from, so losing it silently
+        // is the failure the whole persistence exists to prevent.
+        in.rxPositionSet = true;
+        in.rxLatDeg = 53.480759;
+        in.rxLonDeg = -2.242631;
         // P9: the enterprise escape hatch. A URL that is neither the default
         // nor junkConfig()'s value, so the roundtrip proves the FILE is what
         // came back rather than either end's fallback.
@@ -587,6 +606,127 @@ int main() {
         CHECK(out.mapWindowHeight == 1020);
         CHECK(out.mapWindowX == 1226);
         CHECK(out.mapWindowY == 169);
+    }
+
+    // --- the receiver's own position (documented in config.hpp) ---------------
+    {
+        const std::string path = p("rx_position.json");
+        AppConfig out;
+        std::string err;
+
+        // Unset is the default, and unset is what makes every distance and
+        // bearing say "no RX" instead of measuring from the Gulf of Guinea.
+        const AppConfig d;
+        CHECK(d.rxPositionSet == false);
+        CHECK(d.rxLatDeg == 0.0);
+        CHECK(d.rxLonDeg == 0.0);
+
+        // A real position survives untouched, negative longitude included.
+        CHECK(writeText(path, "{\"rxPositionSet\":true,\"rxLatDeg\":53.480759,"
+                              "\"rxLonDeg\":-2.242631}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rxPositionSet);
+        CHECK(out.rxLatDeg == 53.480759);
+        CHECK(out.rxLonDeg == -2.242631);
+
+        // THE ORIGIN IS A PLACE. 0,0 with the flag set is a receiver on the
+        // equator at the prime meridian, and must load as a SET position - it
+        // is the case a bare "all zero means unset" sentinel would get wrong,
+        // and the reason this field carries a flag of its own.
+        CHECK(writeText(path,
+                        "{\"rxPositionSet\":true,\"rxLatDeg\":0,\"rxLonDeg\":0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rxPositionSet);
+        CHECK(out.rxLatDeg == 0.0);
+        CHECK(out.rxLonDeg == 0.0);
+
+        // The extremes of the documented range are IN range: the poles and the
+        // antimeridian are legal positions, not rounding slop.
+        const char* edges[] = {
+            "{\"rxPositionSet\":true,\"rxLatDeg\":90,\"rxLonDeg\":180}",
+            "{\"rxPositionSet\":true,\"rxLatDeg\":-90,\"rxLonDeg\":-180}",
+        };
+        for (const char* e : edges) {
+            CHECK(writeText(path, std::string(e) + "\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.rxPositionSet);
+            CHECK(std::fabs(out.rxLatDeg) == 90.0);
+            CHECK(std::fabs(out.rxLonDeg) == 180.0);
+        }
+
+        // OUT OF RANGE DISCARDS THE WHOLE POSITION, the same rule the map
+        // rectangle follows: half a position clamped to a place nobody chose
+        // would still be a place the coverage map measured from.
+        struct RxCase { const char* json; const char* why; };
+        const RxCase bad[] = {
+            {"{\"rxPositionSet\":true,\"rxLatDeg\":90.001,\"rxLonDeg\":0}",
+             "latitude past the north pole"},
+            {"{\"rxPositionSet\":true,\"rxLatDeg\":-90.001,\"rxLonDeg\":0}",
+             "latitude past the south pole"},
+            {"{\"rxPositionSet\":true,\"rxLatDeg\":91,\"rxLonDeg\":0}",
+             "latitude well out of range"},
+            {"{\"rxPositionSet\":true,\"rxLatDeg\":0,\"rxLonDeg\":180.001}",
+             "longitude past the antimeridian, east"},
+            {"{\"rxPositionSet\":true,\"rxLatDeg\":0,\"rxLonDeg\":-180.001}",
+             "longitude past the antimeridian, west"},
+            {"{\"rxPositionSet\":true,\"rxLatDeg\":0,\"rxLonDeg\":360}",
+             "longitude in 0..360 form, which this field is not"},
+            // Coordinates without the flag are not a position either: nothing
+            // set them, so nothing may read them.
+            {"{\"rxPositionSet\":false,\"rxLatDeg\":53.48,\"rxLonDeg\":-2.24}",
+             "coordinates present but the flag says unset"},
+        };
+        for (const RxCase& c : bad) {
+            CHECK(writeText(path, std::string(c.json) + "\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.rxPositionSet || out.rxLatDeg != 0.0 || out.rxLonDeg != 0.0) {
+                std::printf("  (case: %s)\n", c.why);
+            }
+            CHECK(!out.rxPositionSet);
+            CHECK(out.rxLatDeg == 0.0);
+            CHECK(out.rxLonDeg == 0.0);
+        }
+
+        // A COORDINATE THAT OVERFLOWS A DOUBLE never reaches the range check at
+        // all: JSON has no infinity, so nlohmann refuses the literal and the
+        // whole file is corrupt. Asserted here rather than left as a case in
+        // the table above, because "load fails and every field defaults" is a
+        // different outcome from "this one position was discarded" — and it is
+        // the outcome that makes an isfinite() test on these two fields
+        // unreachable from a file, which is why the sanitizer states its range
+        // POSITIVELY (a NaN fails `lat >= -90` without a separate test for it).
+        const char* overflow[] = {
+            "{\"rxPositionSet\":true,\"rxLatDeg\":51.5,\"rxLonDeg\":1e400}",
+            "{\"rxPositionSet\":true,\"rxLatDeg\":-1e400,\"rxLonDeg\":0}",
+        };
+        for (const char* o : overflow) {
+            CHECK(writeText(path, std::string(o) + "\n"));
+            out = junkConfig();
+            CHECK(!ConfigStore::load(path, out, err));
+            CHECK(!err.empty());
+            CHECK(!out.rxPositionSet);
+            CHECK(out.rxLatDeg == 0.0);
+            CHECK(out.rxLonDeg == 0.0);
+        }
+
+        // And a set position survives a full save/load roundtrip, which is the
+        // actual promise: the antenna has not moved, so neither has the number.
+        AppConfig in;
+        in.schemaVersion = 1;
+        in.rxPositionSet = true;
+        in.rxLatDeg = -33.865143;
+        in.rxLonDeg = 151.209900;
+        const std::string rt = p("rx_position_roundtrip.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        out = junkConfig();
+        CHECK(ConfigStore::load(rt, out, err));
+        CHECK(out.rxPositionSet);
+        CHECK(out.rxLatDeg == -33.865143);
+        CHECK(out.rxLonDeg == 151.209900);
     }
 
     // --- a saved rectangle that no monitor can still show ----------------------

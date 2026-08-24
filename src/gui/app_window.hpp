@@ -26,6 +26,10 @@
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
 #include "gui/track_info_cache.hpp"
+// CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
+// receiver-relative features. Header-only and ImGui-free, so including it here
+// keeps app_window.hpp usable from the tests (see the note below).
+#include "gui/track_metrics.hpp"
 #include "core/telemetry.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
@@ -833,6 +837,34 @@ private:
     int mapWinH_ = 0;
     int mapWinX_ = 0;
     int mapWinY_ = 0;
+    // The receiver's own position, seeded from AppConfig and written back to
+    // it. This used to be two static locals beside the "Set RX here" button,
+    // which meant it died with the process: range rings had to be re-entered
+    // every launch, and a distance column built on that would have measured
+    // every target from 0N 0E. See AppConfig::rxPositionSet for why an
+    // explicit flag rather than a sentinel coordinate.
+    //
+    // The two INPUT fields are separate from the applied position on purpose:
+    // typing a latitude must not move the range rings until the button is
+    // pressed, or every intermediate keystroke would be a different receiver.
+    bool rxSet_ = false;
+    double rxLat_ = 0.0;
+    double rxLon_ = 0.0;
+    double rxLatInput_ = 0.0;
+    double rxLonInput_ = 0.0;
+    // How far anything has been heard, per five-degree bearing bucket. Fed
+    // once per frame from the visible tracks - which is every track source at
+    // once, not just ADS-B - and drawn over the map when coverageShow_ is on.
+    // Session-scoped by design; see CoverageMap.
+    CoverageMap coverage_;
+    bool coverageShow_ = false;
+    // Sort state for the track table, remembered across frames because ImGui's
+    // table sort specs are only reported on the frame the user clicks. SEEDED
+    // FROM THE SAME CONSTANT the table's DefaultSort column is pinned to, so
+    // the opening order the code states is the one the screen shows - written
+    // separately, the two disagreed and the constant here was simply dead.
+    TrackSortKey trackSortKey_ = trackSortKeyForColumn(kTrackSortDefaultColumn);
+    bool trackSortAscending_ = true;
     // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
     // rather than by the runner because it is written only when a decoder
     // produces a new picture: keeping the GUI's copy out of the runner is what

@@ -162,6 +162,41 @@ struct AppConfig {
     int mapWindowX = 0;
     int mapWindowY = 0;
 
+    // --- The receiver's own position ------------------------------------------
+    // Where the antenna is, in degrees. It is the origin of every
+    // receiver-relative number the map produces: the range rings, the range and
+    // bearing in the hover readout, the DISTANCE and BEARING columns of the
+    // track table, and the coverage map's whole coordinate system.
+    //
+    // WHY IT IS PERSISTED, AND WHY THAT IS NOT COSMETIC. It used to live in two
+    // static locals beside the "Set RX here" button, which meant it was lost on
+    // every restart - so a distance column reading from it would have measured
+    // from 0N 0E, in the Gulf of Guinea, and reported a few thousand kilometres
+    // for an aircraft overhead. An antenna does not move between launches; the
+    // number that says where it is should not either.
+    //
+    // A SEPARATE "IS SET" FLAG, unlike the map geometry above, which uses zero
+    // width as its "nothing saved" sentinel. There is no such spare value here:
+    // 0.0, 0.0 is a real place on the equator, and a receiver on Null Island
+    // must not be told it has no position. The flag is the only honest way to
+    // tell "unset" from "set to the origin".
+    //
+    // NOTHING GUESSES IT. Inferring the receiver's position from a decoded
+    // target would be confidently wrong the moment the first aircraft appears,
+    // and the coverage map built on that guess would be a picture of the wrong
+    // antenna. Unset stays unset until the user says otherwise, and every
+    // consumer says "no RX position" rather than showing a number.
+    //
+    // Sanitized on load as ONE position, the same rule the rectangle above
+    // follows: a latitude outside -90..90, a longitude outside -180..180, or a
+    // non-finite either - all reachable by hand-editing the file - discards the
+    // whole position rather than clamping half of it to a place nobody chose.
+    // Coordinates present without the flag are discarded too: a position nobody
+    // set is not a position.
+    bool rxPositionSet = false;
+    double rxLatDeg = 0.0;
+    double rxLonDeg = 0.0;
+
     // --- Plugin browser settings (P9) -----------------------------------------
     // Where the in-app plugin browser looks for its catalogue. Persisted so a
     // user — or an enterprise deploying cascade — can point the browser at

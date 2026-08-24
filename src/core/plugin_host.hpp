@@ -178,6 +178,55 @@ struct LoadedPlugin {
     void* nativeHandle = nullptr;
 };
 
+// ONE VERSION OF A PLUGIN RUNS, NEVER TWO.
+//
+// A plugin's file name embeds its version, so installing 1.1.0 over 1.0.1 ADDS
+// a file rather than replacing one, and nothing removes the old file. Both
+// modules are then perfectly loadable, so scan() loads both, each gets its own
+// instances, and the results are doubled: a track source reports every
+// aircraft twice (the user's report was "4 targets" for two aeroplanes, drawn
+// as two markers because the duplicates share coordinates), a decoder decodes
+// twice, a basemap fights itself.
+//
+// This is the host's refusal to be confused by that. Given the records of one
+// scan, in scan order, it keeps exactly ONE loaded record per declared plugin
+// id and turns the rest OFF - loaded = false, capability pointers cleared, and
+// an `error` saying which file was kept instead. Returns how many it turned
+// off.
+//
+//   THE ID is the descriptor's `name`, copied into LoadedPlugin::name by the
+//   loader. It is the only identity the module itself declares; the file name
+//   is precisely what changes between two copies of one plugin. Compared
+//   exactly, byte for byte.
+//
+//   THE WINNER is the HIGHEST VERSION, ordered by PluginRepo::compareVersions
+//   - the catalogue's own comparator, reused rather than reimplemented so the
+//   host and the update check can never disagree about which of two versions
+//   is newer. It compares dotted parts as NUMBERS: comparing them as text puts
+//   "1.10.0" below "1.9.0" and would keep the older plugin, which is the exact
+//   opposite of the point.
+//
+//   THE TIE-BREAK, for two files declaring the same id AND the same version,
+//   is the FIRST record in the list. scan() sorts its candidates by path, so
+//   that is the lexicographically first file name, and it is the same file on
+//   every run - a scan that loaded a different module depending on the order
+//   the filesystem happened to return would be worse than one that is
+//   consistently wrong.
+//
+// DELETES NOTHING. It does not unlink, rename, move or truncate any file, and
+// it does not close a module either - it only marks records, leaving
+// nativeHandle set so its caller can unmap what it turned off. The stale file
+// stays on disk, inert, until the user removes it with the Remove button the
+// Plugins section already offers.
+//
+// Records that did not load are ignored entirely: their descriptor was never
+// read, so they have no id, and two unrelated broken files must stay two
+// separately reported problems.
+//
+// Pure apart from the vector it is handed, so the whole policy is testable
+// without a DLL, a filesystem or a loader.
+std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records);
+
 // The plugin's MODULE FILE NAME, which is the identity every per-plugin
 // decision in this product is keyed on: the tune grant, and now the stop.
 //

@@ -218,6 +218,9 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getInt(j, "mapWindowHeight", out.mapWindowHeight);
     getInt(j, "mapWindowX", out.mapWindowX);
     getInt(j, "mapWindowY", out.mapWindowY);
+    getBool(j, "rxPositionSet", out.rxPositionSet);
+    getDouble(j, "rxLatDeg", out.rxLatDeg);
+    getDouble(j, "rxLonDeg", out.rxLonDeg);
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
@@ -299,6 +302,25 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.mapWindowHeight = 0;
             out.mapWindowX = 0;
             out.mapWindowY = 0;
+        }
+    }
+    // The receiver's position is validated as ONE position, for the same reason
+    // the rectangle above is validated as one rectangle: a latitude clamped to
+    // a pole beside a longitude the user did type is a place nobody chose, and
+    // it would then be the origin of every range, bearing and coverage wedge on
+    // the map. See the header for why the flag exists rather than a sentinel.
+    //
+    // WRITTEN AS A POSITIVE RANGE TEST, not as the negation of one. `!(lat >
+    // 90 || lat < -90)` accepts NaN; `lat >= -90 && lat <= 90` rejects it,
+    // which is the same rule the preset frequency check follows and the reason
+    // no separate isfinite() test is needed here.
+    {
+        const bool inRange = out.rxLatDeg >= -90.0 && out.rxLatDeg <= 90.0 &&
+                             out.rxLonDeg >= -180.0 && out.rxLonDeg <= 180.0;
+        if (!out.rxPositionSet || !inRange) {
+            out.rxPositionSet = false;
+            out.rxLatDeg = 0.0;
+            out.rxLonDeg = 0.0;
         }
     }
     // An empty catalogue URL is a hand-edit (or a deleted value), not a
@@ -399,6 +421,9 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["mapWindowHeight"] = cfg.mapWindowHeight;
     j["mapWindowX"] = cfg.mapWindowX;
     j["mapWindowY"] = cfg.mapWindowY;
+    j["rxPositionSet"] = cfg.rxPositionSet;
+    j["rxLatDeg"] = cfg.rxLatDeg;
+    j["rxLonDeg"] = cfg.rxLonDeg;
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
