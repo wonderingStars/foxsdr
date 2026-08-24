@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "core/plugin_ui.hpp"
+#include "gui/track_metrics.hpp"
 
 namespace cascade::gui {
 
@@ -65,6 +66,14 @@ public:
     // decoded track would be wrong the moment a plugin reports an aircraft.
     void setHome(double latDeg, double lonDeg);
     void clearHome() { hasHome_ = false; }
+    // THE COVERAGE OVERLAY, borrowed for the next draw() and null when the user
+    // has it switched off. A pointer rather than a copy because the accumulator
+    // is fed every frame by the window that owns it, and rather than a second
+    // boolean parameter because "no coverage to draw" and "coverage hidden" are
+    // the same instruction to this class. Drawn only when a home position is
+    // set: every wedge in it is a distance FROM somewhere, and without that
+    // somewhere there is nothing to centre it on.
+    void setCoverage(const CoverageMap* coverage) { coverage_ = coverage; }
     bool hasHome() const { return hasHome_; }
     double homeLatDeg() const { return homeLat_; }
     double homeLonDeg() const { return homeLon_; }
@@ -113,6 +122,7 @@ private:
     bool hasHome_ = false;
     double homeLat_ = 0.0;
     double homeLon_ = 0.0;
+    const CoverageMap* coverage_ = nullptr;  // borrowed, may be null
 
     bool fitRequested_ = true;  // fit once, the first time there is anything
     bool fittedOnce_ = false;

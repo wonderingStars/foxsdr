@@ -311,19 +311,11 @@ void applyWindowIcon(GLFWwindow* window) {
                       images);
 }
 
-// Great-circle distance in km, for the range column in the track list. The map
-// has its own copy for its range rings; duplicating six lines of trigonometry
-// is better than exposing one view's internals to the window that owns it.
-double greatCircleKmForList(double lat1, double lon1, double lat2, double lon2) {
-    const double kR = 6371.0;
-    const double p1 = lat1 * 3.14159265358979323846 / 180.0;
-    const double p2 = lat2 * 3.14159265358979323846 / 180.0;
-    const double dp = (lat2 - lat1) * 3.14159265358979323846 / 180.0;
-    const double dl = (lon2 - lon1) * 3.14159265358979323846 / 180.0;
-    const double a = std::sin(dp * 0.5) * std::sin(dp * 0.5) +
-                     std::cos(p1) * std::cos(p2) * std::sin(dl * 0.5) * std::sin(dl * 0.5);
-    return 2.0 * kR * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
-}
+// The private great-circle helper that used to live here is gone: the track
+// table needs a BEARING as well as a distance, the coverage accumulator needs
+// both, and a third private copy of the trigonometry would have been a third
+// place for one of them to be wrong. Both now come from gui/track_metrics.hpp,
+// which is where they are tested against known pairs.
 
 // Field-wise AppConfig comparison for the save debounce. Exact float
 // compares are correct here: both sides come from the same currentConfig()
@@ -349,6 +341,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.mapWindowWidth == b.mapWindowWidth &&
            a.mapWindowHeight == b.mapWindowHeight &&
            a.mapWindowX == b.mapWindowX && a.mapWindowY == b.mapWindowY &&
+           a.rxPositionSet == b.rxPositionSet && a.rxLatDeg == b.rxLatDeg &&
+           a.rxLonDeg == b.rxLonDeg &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
@@ -756,7 +750,19 @@ int AppWindow::run(int frames) {
         waterfall_ = std::make_unique<WaterfallView>(static_cast<int>(kFftSize),
                                                      kWaterfallHistory);
     }
-    if (!map_) { map_ = std::make_unique<MapView>(); }
+    if (!map_) {
+        map_ = std::make_unique<MapView>();
+        // SEEDED HERE AS WELL AS IN applyConfig, because the view does not
+        // exist yet when the config is applied: applyConfig runs from the
+        // constructor and this runs from run(). Without this the restored
+        // receiver position reached the track table (which reads the window's
+        // own fields) but not the map, so a relaunch came back with a populated
+        // distance column and no range rings, no RX marker and no coverage
+        // overlay - found on the running application, which is the only place
+        // an ordering bug between a constructor and a lazily-created view can
+        // be seen at all.
+        if (rxSet_) { map_->setHome(rxLat_, rxLon_); }
+    }
 
     // Interactive runs start receiving immediately. A radio that opens with
     // dead black panels and no hint that a button must be pressed reads as
@@ -3671,6 +3677,27 @@ void AppWindow::drawPluginWindows() {
     // for having two kinds of output.
     pluginUi_.poll();
 
+    // --- coverage accumulation ------------------------------------------------
+    // FED HERE RATHER THAN INSIDE THE MAP WINDOW, because the antenna is
+    // hearing things whether or not the map is open and whether or not the
+    // overlay is switched on. Tying the measurement to a window being visible
+    // would make the picture a record of when the user happened to be looking.
+    //
+    // Costs one distance and one bearing per visible target per frame against a
+    // 72-entry array - a few microseconds for a busy sky - and the array is the
+    // only thing that grows, which is to say nothing grows. The staleness rule
+    // is applied first so a plugin that never evicts cannot keep re-recording
+    // an aircraft it last heard an hour ago.
+    if (rxSet_) {
+        for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                continue;
+            }
+            coverage_.record(initialBearingDeg(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg),
+                             greatCircleKm(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg));
+        }
+    }
+
     // Opens itself the first time there is something to show - counted the way
     // it is DRAWN, and only on the FRAME THE PICTURE CHANGES. The raw lists
     // were the wrong question (a source that never evicts keeps reporting
@@ -3784,16 +3811,45 @@ void AppWindow::drawPluginWindows() {
             // The receiver's own position is asked for, never guessed. It is
             // what range and bearing are measured from, and inferring it from
             // a decoded target would be confidently wrong.
-            static float homeLat = 0.0f;
-            static float homeLon = 0.0f;
-            ImGui::SetNextItemWidth(90.0f);
-            ImGui::InputFloat("##homelat", &homeLat, 0.0f, 0.0f, "%.4f");
+            //
+            // DOUBLE, NOT FLOAT, and persisted. A float carries about seven
+            // significant digits, which runs out inside the decimal part of a
+            // latitude and moves the origin of every range ring by metres for
+            // no reason; and the pair used to be static LOCALS, so the position
+            // died with the process. Both are now AppConfig fields - see
+            // AppConfig::rxPositionSet.
+            ImGui::SetNextItemWidth(96.0f);
+            ImGui::InputDouble("##homelat", &rxLatInput_, 0.0, 0.0, "%.5f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Receiver latitude, degrees north (-90..90)");
+            }
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(90.0f);
-            ImGui::InputFloat("##homelon", &homeLon, 0.0f, 0.0f, "%.4f");
+            ImGui::SetNextItemWidth(96.0f);
+            ImGui::InputDouble("##homelon", &rxLonInput_, 0.0, 0.0, "%.5f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Receiver longitude, degrees east (-180..180)");
+            }
             ImGui::SameLine();
+            // REFUSED RATHER THAN CLAMPED, and by the same positive range test
+            // the config sanitizer uses, so a typo cannot silently install a
+            // receiver at the pole and quietly make every distance wrong. The
+            // button simply does not accept the pair.
+            const bool rxInputOk = rxLatInput_ >= -90.0 && rxLatInput_ <= 90.0 &&
+                                   rxLonInput_ >= -180.0 && rxLonInput_ <= 180.0;
+            ImGui::BeginDisabled(!rxInputOk);
             if (ImGui::SmallButton("Set RX here")) {
-                map_->setHome(static_cast<double>(homeLat), static_cast<double>(homeLon));
+                rxLat_ = rxLatInput_;
+                rxLon_ = rxLonInput_;
+                rxSet_ = true;
+                map_->setHome(rxLat_, rxLon_);
+                // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it
+                // was measured from somewhere else, and keeping them would draw
+                // one antenna's pattern around another antenna's position.
+                coverage_.reset();
+            }
+            ImGui::EndDisabled();
+            if (!rxInputOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Latitude must be -90..90 and longitude -180..180");
             }
             ImGui::SameLine();
             // COUNTED THE WAY THEY ARE DRAWN. A plugin that never evicts keeps
@@ -3805,11 +3861,51 @@ void AppWindow::drawPluginWindows() {
             ImGui::TextDisabled("%d target%s", static_cast<int>(shown),
                                 shown == 1 ? "" : "s");
 
+            // --- the coverage overlay's controls ---------------------------
+            // A second row, because the first is already the position entry and
+            // the two are different jobs: one says where the antenna is, this
+            // one says what it has managed to hear from there.
+            ImGui::Checkbox("Coverage", &coverageShow_);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Furthest anything has been heard, per 5 degrees of bearing.\n"
+                    "Measured from the receiver position, this session only.");
+            }
+            ImGui::SameLine();
+            // RESET IS NOT OPTIONAL. A single spurious decode at an impossible
+            // range - and a noisy band produces them - would otherwise stretch
+            // one wedge to the horizon for the rest of the session and make the
+            // whole picture useless. One button undoes it.
+            ImGui::BeginDisabled(coverage_.empty());
+            if (ImGui::SmallButton("Reset coverage")) { coverage_.reset(); }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (!rxSet_) {
+                // DEGRADED, AND SAYING SO. Without a receiver position there is
+                // nothing to measure a bearing from, so the accumulator is
+                // never fed and the overlay would be an empty circle the user
+                // could not explain.
+                ImGui::TextDisabled("set the RX position to measure coverage");
+            } else if (coverage_.empty()) {
+                ImGui::TextDisabled("nothing heard yet");
+            } else {
+                ImGui::TextDisabled("%d of %d bearings, best %.0f km",
+                                    coverage_.filledBuckets(), CoverageMap::kBuckets,
+                                    coverage_.peakKm());
+            }
+
             // THE FLIGHT LIST, down the left of the map. A map alone answers
             // "where is everything"; the list answers "what am I hearing" and,
             // clicked, "take me to that one" - which is the question a
             // callsign actually prompts.
-            const float listWidth = 190.0f;
+            //
+            // WIDE ENOUGH TO BE A TABLE. It was 190 px and held one label per
+            // target; it now holds eight sortable columns, and a table squeezed
+            // narrower than its headings sorts by columns nobody can read.
+            // Capped at a share of the window as well as at a constant, so a
+            // map dragged small still leaves a map.
+            const ImVec2 mapAvail = ImGui::GetContentRegionAvail();
+            const float listWidth = std::min(480.0f, std::max(190.0f, mapAvail.x * 0.5f));
             ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
             drawTrackList();
             ImGui::EndChild();
@@ -3825,6 +3921,10 @@ void AppWindow::drawPluginWindows() {
             const bool credit = basemap_.active() && !basemap_.attribution().empty();
             if (credit) { avail.y -= ImGui::GetTextLineHeightWithSpacing(); }
             if (avail.y < 32.0f) { avail.y = 32.0f; }
+            // Borrowed for the frame, and null when the overlay is switched off
+            // - which is how the map is told to skip it without growing another
+            // boolean parameter. The accumulator keeps filling either way.
+            map_->setCoverage(coverageShow_ ? &coverage_ : nullptr);
             map_->draw(avail.x, avail.y, pluginUi_.tracks(), pluginUi_.paths(),
                        &basemap_, &trackInfo_);
             if (credit) {
@@ -4049,25 +4149,116 @@ void AppWindow::drawTrackList() {
     }
     ImGui::Separator();
 
+    // --- build the rows ------------------------------------------------------
+    // Reduced to numbers FIRST, sorted second, drawn third. The host's track
+    // vector is the plugins' output and is rebuilt on every poll, so sorting it
+    // in place would be undone by the next frame; and a comparator that read
+    // through to the plugin data would have to recompute a great circle per
+    // comparison instead of once per target.
+    std::vector<TrackRow> rows;
+    rows.reserve(shown);
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         const cascade::core::HostTrack& ht = tracks[i];
-        const cascade::core::TrackPresentation pres =
-            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
-        if (!pres.visible) { continue; }
-        ImGui::PushID(static_cast<int>(i));
-        // Going quiet is visible in the list as well as on the map, and by the
-        // same measure: a row that has faded is a target the map is about to
-        // drop, which is the warning that makes the disappearance make sense.
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * pres.alpha);
-
+        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
+        TrackRow r;
         // The LABEL is the callsign where one has been decoded and the id
         // otherwise. An aircraft's ICAO address is known from its first frame
         // but its callsign only arrives in a separate message type, so a list
         // that showed callsigns alone would leave rows blank for aircraft it
         // is tracking perfectly well.
-        const char* label = (ht.t.label[0] != '\0') ? ht.t.label : ht.t.id;
-        const bool selected = (map_->selectedId() == std::string(ht.t.id));
-        if (ImGui::Selectable(label, selected)) {
+        r.label = (ht.t.label[0] != '\0') ? ht.t.label : ht.t.id;
+        r.id = ht.t.id;
+        r.altM = ht.t.altM;
+        r.speedMps = ht.t.speedMps;
+        r.courseDeg = ht.t.courseDeg;
+        // NaN WITHOUT A RECEIVER POSITION, which is what makes the two columns
+        // print "no RX" instead of a distance from the Gulf of Guinea. It also
+        // sorts them to the bottom, which is the right place for a column that
+        // has no values at all.
+        if (rxSet_) {
+            r.distanceKm = greatCircleKm(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg);
+            r.bearingDeg = initialBearingDeg(rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg);
+        }
+        r.ageMs = ht.t.ageMs;
+        r.source = i;
+        rows.push_back(std::move(r));
+    }
+
+    // --- the table -----------------------------------------------------------
+    // Same idiom as the plugin panel tables above (Borders | RowBg | ScrollY |
+    // Resizable), plus Sortable, which is the point of the change: a list of
+    // callsigns answers "what is up there" and a sortable table answers "what
+    // is closest", "what is highest" and "what is about to disappear".
+    const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingStretchProp;
+    // THE HEIGHT IS RESERVED BEFORE THE TABLE IS DRAWN, because a ScrollY table
+    // with the default outer_size takes every pixel the pane has left and
+    // anything emitted after it lands below the fold. The "no receiver
+    // position" note under the table did exactly that: it was drawn, and it
+    // took ten wheel notches to see. One line is held back for it, and only
+    // when there is a line to hold back.
+    const float tableH = tableHeightReservingLines(ImGui::GetContentRegionAvail().y,
+                                                   ImGui::GetTextLineHeightWithSpacing(),
+                                                   rxSet_ ? 0 : 1);
+    if (!ImGui::BeginTable("##tracktable", 8, flags, ImVec2(0.0f, tableH))) { return; }
+
+    // UNITS IN THE HEADINGS, not in the cells. Repeating "km" on every row
+    // costs a column's width and tells the user nothing they did not learn from
+    // the first row; leaving it off entirely is how a bearing gets read as a
+    // distance. Feet and knots because that is what the sources report in.
+    // THE FLAGGED COLUMN AND THE REMEMBERED KEY ARE ONE FACT. ImGui reports
+    // the DefaultSort column back on the first frame the table exists and
+    // overwrites whatever the window was holding, so a member initialised to a
+    // different key is not a default at all - it is a value that never survives
+    // a frame. Pinned here rather than trusted.
+    static_assert(kTrackSortDefaultColumn == 0,
+                  "the column carrying ImGuiTableColumnFlags_DefaultSort must be the "
+                  "one kTrackSortDefaultColumn names");
+    ImGui::TableSetupColumn("Callsign", ImGuiTableColumnFlags_DefaultSort |
+                                            ImGuiTableColumnFlags_WidthStretch, 2.0f);
+    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+    ImGui::TableSetupColumn("Alt ft", ImGuiTableColumnFlags_WidthStretch, 1.3f);
+    ImGui::TableSetupColumn("Spd kt", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+    ImGui::TableSetupColumn("Crs deg", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+    ImGui::TableSetupColumn("Dist km", ImGuiTableColumnFlags_WidthStretch, 1.3f);
+    ImGui::TableSetupColumn("Brg deg", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+    ImGui::TableSetupColumn("Age s", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupScrollFreeze(0, 1);  // headings stay put while the list scrolls
+    ImGui::TableHeadersRow();
+
+    // ImGui reports the sort specs only on the frame they CHANGE, so the choice
+    // is copied into the window's own state; without that the table would fall
+    // back to arrival order the moment the user stopped clicking.
+    if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+        if (specs->SpecsCount > 0) {
+            const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
+            trackSortKey_ = trackSortKeyForColumn(s.ColumnIndex);
+            trackSortAscending_ = (s.SortDirection != ImGuiSortDirection_Descending);
+        }
+        specs->SpecsDirty = false;
+    }
+    sortTrackRows(rows, trackSortKey_, trackSortAscending_);
+
+    for (const TrackRow& r : rows) {
+        const cascade::core::HostTrack& ht = tracks[r.source];
+        const cascade::core::TrackPresentation pres =
+            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+        ImGui::TableNextRow();
+        ImGui::PushID(static_cast<int>(r.source));
+        // Going quiet is visible in the list as well as on the map, and by the
+        // same measure: a row that has faded is a target the map is about to
+        // drop, which is the warning that makes the disappearance make sense.
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * pres.alpha);
+
+        ImGui::TableNextColumn();
+        const bool selected = (map_->selectedId() == r.id);
+        // SPANNING ALL COLUMNS so the whole row is the click target. Clicking a
+        // row does exactly what clicking a row has always done - the sort
+        // reordered the rows, and r.source is what keeps each one pointing at
+        // its own target through that.
+        if (ImGui::Selectable(r.label.c_str(), selected,
+                              ImGuiSelectableFlags_SpanAllColumns)) {
             // CLICK = GO TO. One click centres the map on it; the map only
             // ever tightens the zoom, so clicking a flight while already
             // zoomed in does not throw the view back out.
@@ -4080,43 +4271,67 @@ void AppWindow::drawTrackList() {
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             map_->setFollowed(ht.t.id);
         }
-
-        // One line of detail under each: altitude where it is known, and range
-        // from the receiver where a position has been set. NaN means the
-        // decoder honestly does not know, and is shown as nothing rather than
-        // as a confident zero.
-        char detail[128];
-        detail[0] = '\0';
-        // Registration and type first, when a track-info plugin knows them -
-        // "G-EZBX A319" says more about what is overhead than any number does.
-        // Asking here is also what queues the lookup for every listed target.
+        // Who it actually is, when a track-info plugin knows - "G-EZBX A319"
+        // says more about what is overhead than any number does. It hangs on
+        // the hover rather than taking a ninth column, because it is empty for
+        // every target unless such a plugin is installed. Asking here is also
+        // what queues the lookup for every listed target.
         if (trackInfo_.active()) {
             const cascade::gui::TrackInfoCache::Info* d =
                 trackInfo_.get(ht.t.id, ht.t.kind);
             if (d != nullptr && d->known &&
-                (!d->registration.empty() || !d->typeCode.empty())) {
-                std::snprintf(detail, sizeof(detail), "%s%s%s",
-                              d->registration.c_str(),
-                              (!d->registration.empty() && !d->typeCode.empty()) ? " " : "",
-                              d->typeCode.c_str());
+                (!d->registration.empty() || !d->typeCode.empty()) &&
+                ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s%s%s", d->registration.c_str(),
+                                  (!d->registration.empty() && !d->typeCode.empty()) ? " "
+                                                                                     : "",
+                                  d->typeCode.c_str());
             }
         }
-        if (!std::isnan(ht.t.altM)) {
-            char alt[32];
-            std::snprintf(alt, sizeof(alt), "%s%.0f ft", detail[0] != '\0' ? "  " : "",
-                          ht.t.altM * 3.28084);
-            std::strncat(detail, alt, sizeof(detail) - std::strlen(detail) - 1);
-        }
-        if (map_->hasHome()) {
-            const double km = greatCircleKmForList(map_->homeLatDeg(), map_->homeLonDeg(),
-                                                   ht.t.latDeg, ht.t.lonDeg);
-            char rng[32];
-            std::snprintf(rng, sizeof(rng), "%s%.0f km", detail[0] != '\0' ? "  " : "", km);
-            std::strncat(detail, rng, sizeof(detail) - std::strlen(detail) - 1);
-        }
-        if (detail[0] != '\0') { ImGui::TextDisabled("  %s", detail); }
+
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("%s", r.id.c_str());
+
+        // Unknown values are NaN by ABI contract and print as a dash, never as
+        // a zero: "0 kt" and "no speed reported" are different facts.
+        ImGui::TableNextColumn();
+        if (std::isnan(r.altM)) { ImGui::TextDisabled("-"); }
+        else { ImGui::Text("%.0f", r.altM * 3.28084); }
+
+        ImGui::TableNextColumn();
+        if (std::isnan(r.speedMps)) { ImGui::TextDisabled("-"); }
+        else { ImGui::Text("%.0f", r.speedMps * 1.94384); }
+
+        ImGui::TableNextColumn();
+        if (std::isnan(r.courseDeg)) { ImGui::TextDisabled("-"); }
+        else { ImGui::Text("%.0f", r.courseDeg); }
+
+        // DISTANCE AND BEARING SAY WHY THEY ARE EMPTY. Without a receiver
+        // position there is nothing to measure from, and a blank cell reads as
+        // "the target did not report it" - which would be a lie about the
+        // target and would hide the one setting that fixes it.
+        ImGui::TableNextColumn();
+        if (!rxSet_) { ImGui::TextDisabled("no RX"); }
+        else if (std::isnan(r.distanceKm)) { ImGui::TextDisabled("-"); }
+        else { ImGui::Text("%.0f", r.distanceKm); }
+
+        ImGui::TableNextColumn();
+        if (!rxSet_) { ImGui::TextDisabled("no RX"); }
+        else if (std::isnan(r.bearingDeg)) { ImGui::TextDisabled("-"); }
+        else { ImGui::Text("%.0f", r.bearingDeg); }
+
+        ImGui::TableNextColumn();
+        ImGui::Text("%.0f", static_cast<double>(r.ageMs) / 1000.0);
+
         ImGui::PopStyleVar();
         ImGui::PopID();
+    }
+    ImGui::EndTable();
+
+    // The one thing the columns cannot say, said once under the table rather
+    // than in a cell per row.
+    if (!rxSet_) {
+        ImGui::TextDisabled("Distance and bearing need the RX position above.");
     }
 }
 
@@ -6454,6 +6669,22 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     mapWinX_ = cfg.mapWindowX;
     mapWinY_ = cfg.mapWindowY;
 
+    // The receiver's own position from the last session, PUSHED INTO THE MAP
+    // here rather than waiting for the user to press the button again. It is
+    // what the range rings, the hover readout and the track table's distance
+    // and bearing columns are measured from, and a position that had to be
+    // re-typed every launch is a position those columns could not rely on.
+    // The sanitizer has already discarded anything out of range, so an unset
+    // flag here means genuinely unset.
+    rxSet_ = cfg.rxPositionSet;
+    rxLat_ = cfg.rxLatDeg;
+    rxLon_ = cfg.rxLonDeg;
+    rxLatInput_ = rxLat_;
+    rxLonInput_ = rxLon_;
+    if (rxSet_ && map_) {
+        map_->setHome(rxLat_, rxLon_);
+    }
+
     // Plugin browser. Restoring the URL and the open/closed state does NOT
     // start a fetch — see AppConfig::pluginCatalogueUrl. The user still has
     // to press Browse, on this launch as on every other.
@@ -6696,6 +6927,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapWindowHeight = mapWinH_;
     cfg.mapWindowX = mapWinX_;
     cfg.mapWindowY = mapWinY_;
+    cfg.rxPositionSet = rxSet_;
+    cfg.rxLatDeg = rxLat_;
+    cfg.rxLonDeg = rxLon_;
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;

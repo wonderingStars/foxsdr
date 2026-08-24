@@ -41,14 +41,17 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_host.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -1584,6 +1587,326 @@ void testUiCapabilities() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Duplicate plugin ids: one version of a plugin runs, never two
+// ---------------------------------------------------------------------------
+//
+// WHY THIS SECTION EXISTS. A plugin file name embeds its version, so
+// installing 1.1.0 over 1.0.1 ADDS a file instead of replacing one. Both
+// modules then load, both get their own instances, and a track source reports
+// every aircraft twice - "4 targets" for two aeroplanes, with two markers,
+// because the duplicates sit on identical coordinates. The host's answer is to
+// load exactly one module per declared plugin id and leave the rest inert
+// and, by the owner's explicit ruling, TO DELETE NOTHING.
+//
+// The policy is tested through resolveDuplicatePlugins(), the pure function
+// scan() delegates to, for the same reason validatePluginDesc() is tested that
+// way: this test cannot compile a DLL, so it cannot stage two real modules
+// that declare one id. What that leaves untested is the two lines in scan()
+// that call the function and unmap the losers. The no-deletion assertion below
+// is made against the REAL scan() as well, because that is the property the
+// owner reserved and it must be pinned on the code path the product runs.
+
+// A byte whose ADDRESS stands in for a capability table living inside a
+// plugin's image. Never dereferenced; it exists so the test can prove the
+// pointer is cleared when a record is turned off.
+unsigned char g_fakeTableByte = 0;
+
+// A record shaped exactly as loadOne() leaves a successfully loaded module.
+// nativeHandle stays null - the pure function never touches it, and a fake
+// handle would be a real unmap in the one place that unmaps.
+LoadedPlugin loadedRec(const fs::path& dir, const std::string& file, const char* id,
+                       const char* version) {
+    LoadedPlugin r;
+    r.path = (dir / file).string();
+    r.name = id;
+    r.version = version;
+    r.author = "Test";
+    r.licence = "MIT";
+    r.capabilities = CASCADE_CAP_IQ_DECODER;
+    r.loaded = true;
+    r.iqDecoder = reinterpret_cast<const CascadeIqDecoderApi*>(&g_fakeTableByte);
+    return r;
+}
+
+// The contents of a directory, name and bytes, sorted. Two of these compared
+// with == is the "nothing removed, nothing rewritten, nothing truncated"
+// assertion.
+std::vector<std::pair<std::string, std::string>> snapshotDir(const fs::path& d) {
+    std::vector<std::pair<std::string, std::string>> out;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(d, ec)) {
+        std::error_code fileEc;
+        if (!e.is_regular_file(fileEc) || fileEc) { continue; }
+        std::ifstream f(e.path(), std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(f)),
+                          std::istreambuf_iterator<char>());
+        out.emplace_back(e.path().filename().string(), bytes);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// One distinguishable file per name, so a snapshot comparison tells a deletion
+// from a truncation from a rewrite.
+void stageFiles(const fs::path& d, const std::vector<std::string>& names) {
+    for (const std::string& n : names) {
+        const std::string body = "module bytes for " + n;
+        writeFile(d / n, body.data(), body.size());
+    }
+}
+
+std::size_t loadedIn(const std::vector<LoadedPlugin>& recs) {
+    std::size_t n = 0;
+    for (const LoadedPlugin& r : recs) {
+        if (r.loaded) { ++n; }
+    }
+    return n;
+}
+
+// The user's real case, and the case a string comparison gets wrong.
+void testDuplicateKeepsHigherVersion() {
+    const fs::path d = tmpDir("dup_higher");
+
+    // 1.0.1 vs 1.1.0 - exactly what the ADS-B plugin update produced. Sorted
+    // by file name the OLDER one comes first, which is how scan() presents
+    // them.
+    {
+        const std::vector<std::string> names = {mod("adsb-decoder-1.0.1-abi3-win-x64"),
+                                                mod("adsb-decoder-1.1.0-abi3-win-x64")};
+        stageFiles(d, names);
+        const auto before = snapshotDir(d);
+
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], "ADS-B", "1.0.1"),
+                                          loadedRec(d, names[1], "ADS-B", "1.1.0")};
+        const std::size_t skipped = cascade::core::resolveDuplicatePlugins(recs);
+        CHECK(skipped == 1);
+        CHECK(loadedIn(recs) == 1);
+        CHECK(!recs[0].loaded);
+        CHECK(recs[1].loaded);
+        CHECK(recs[1].error.empty());
+        // A turned-off record must not keep a pointer into an image the
+        // caller is about to unmap.
+        CHECK(recs[0].iqDecoder == nullptr);
+        CHECK(recs[1].iqDecoder != nullptr);
+
+        CHECK(snapshotDir(d) == before);
+        std::error_code ec;
+        for (const std::string& n : names) { CHECK(fs::exists(d / n, ec)); }
+    }
+
+    // 1.9.0 vs 1.10.0. As text "1.10.0" < "1.9.0", so a string comparison
+    // keeps the OLDER plugin - the exact opposite of the point. Sorted file
+    // names put the newer one FIRST here, so this also proves the answer is
+    // not simply "the last record wins".
+    {
+        std::error_code ec;
+        fs::remove_all(d, ec);
+        fs::create_directories(d, ec);
+        const std::vector<std::string> names = {mod("thing-1.10.0"), mod("thing-1.9.0")};
+        stageFiles(d, names);
+        const auto before = snapshotDir(d);
+
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], "Thing", "1.10.0"),
+                                          loadedRec(d, names[1], "Thing", "1.9.0")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(loadedIn(recs) == 1);
+        CHECK(recs[0].loaded);   // 1.10.0
+        CHECK(!recs[1].loaded);  // 1.9.0
+        CHECK(contains(recs[1].error, mod("thing-1.10.0").c_str()));
+
+        CHECK(snapshotDir(d) == before);
+    }
+
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
+// Three copies of one plugin - what two updates in a row leave behind.
+void testDuplicateThreeModules() {
+    const fs::path d = tmpDir("dup_three");
+    const std::vector<std::string> names = {mod("aprs-1.0.0"), mod("aprs-1.2.0"),
+                                            mod("aprs-1.10.0")};
+    stageFiles(d, names);
+    const auto before = snapshotDir(d);
+
+    std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], "APRS", "1.0.0"),
+                                      loadedRec(d, names[1], "APRS", "1.2.0"),
+                                      loadedRec(d, names[2], "APRS", "1.10.0")};
+    CHECK(cascade::core::resolveDuplicatePlugins(recs) == 2);
+    CHECK(loadedIn(recs) == 1);
+    CHECK(!recs[0].loaded);
+    CHECK(!recs[1].loaded);
+    CHECK(recs[2].loaded);  // 1.10.0 is the highest, not "1.2.0" by text
+
+    CHECK(snapshotDir(d) == before);
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
+// Different plugins must be left completely alone.
+void testDuplicateDifferentIdsUntouched() {
+    const fs::path d = tmpDir("dup_distinct");
+    const std::vector<std::string> names = {mod("adsb-1.1.0"), mod("aprs-1.0.0"),
+                                            mod("pocsag-2.0.0")};
+    stageFiles(d, names);
+    const auto before = snapshotDir(d);
+
+    std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], "ADS-B", "1.1.0"),
+                                      loadedRec(d, names[1], "APRS", "1.0.0"),
+                                      loadedRec(d, names[2], "POCSAG", "2.0.0")};
+    CHECK(cascade::core::resolveDuplicatePlugins(recs) == 0);
+    CHECK(loadedIn(recs) == 3);
+    for (const LoadedPlugin& r : recs) {
+        CHECK(r.loaded);
+        CHECK(r.error.empty());
+        CHECK(r.iqDecoder != nullptr);
+    }
+
+    CHECK(snapshotDir(d) == before);
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
+// The skip has to be VISIBLE. The Plugins section renders a record that did
+// not load as its file name plus this text, so both files must be
+// identifiable from the row, and the user must be told the file is inert and
+// removable with the button already beside it.
+void testDuplicateSkipIsReported() {
+    const fs::path d = tmpDir("dup_report");
+    const std::vector<std::string> names = {mod("adsb-decoder-1.0.1-abi3-win-x64"),
+                                            mod("adsb-decoder-1.1.0-abi3-win-x64")};
+    stageFiles(d, names);
+
+    std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], "ADS-B", "1.0.1"),
+                                      loadedRec(d, names[1], "ADS-B", "1.1.0")};
+    CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+
+    const std::string why = recs[0].error;
+    CHECK(!why.empty());
+    // The plugin both files claim to be.
+    CHECK(contains(why, "ADS-B"));
+    // The one that was KEPT, by file name and by version.
+    CHECK(contains(why, mod("adsb-decoder-1.1.0-abi3-win-x64").c_str()));
+    CHECK(contains(why, "1.1.0"));
+    // The one that was IGNORED, by its own version - the row already shows
+    // this file's name above the reason.
+    CHECK(contains(why, "1.0.1"));
+    // And what the user can do about it, in the words of the button that does
+    // it. Nothing was deleted, so the file sits there until they say so.
+    CHECK(contains(why, "Remove"));
+    std::printf("  duplicate skip reason: %s\n", why.c_str());
+
+    // The kept record carries no error: it is a perfectly good plugin.
+    CHECK(recs[1].error.empty());
+
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
+// Same id AND same version. Whatever is chosen must be chosen by a stated rule
+// and not by the order the filesystem happened to hand the files over: the
+// first record in scan order wins, and scan order is sorted by path, so
+// reversing the input keeps the same FILE and not merely the same index.
+void testDuplicateTieBreakIsDeterministic() {
+    const fs::path d = tmpDir("dup_tie");
+    const std::vector<std::string> names = {mod("aaa-copy"), mod("zzz-copy")};
+    stageFiles(d, names);
+    const auto before = snapshotDir(d);
+
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], "AIS", "2.0.0"),
+                                          loadedRec(d, names[1], "AIS", "2.0.0")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded);
+        CHECK(contains(recs[0].path, mod("aaa-copy").c_str()));
+        CHECK(!recs[1].loaded);
+    }
+    {
+        // Handed over the other way round. The rule is "first in the list",
+        // and the list scan() builds is sorted by path, so the same file
+        // survives a real scan however the directory was iterated.
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[1], "AIS", "2.0.0"),
+                                          loadedRec(d, names[0], "AIS", "2.0.0")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded);
+        CHECK(contains(recs[0].path, mod("zzz-copy").c_str()));
+        CHECK(!recs[1].loaded);
+    }
+
+    CHECK(snapshotDir(d) == before);
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
+// A refused candidate has no id at all - its descriptor was never read - so
+// several of them must never be collapsed into one. Two garbage files are two
+// separate problems and the user needs both reported.
+void testDuplicateIgnoresRefusedRecords() {
+    const fs::path d = tmpDir("dup_refused");
+    const std::vector<std::string> names = {mod("junk_a"), mod("junk_b")};
+    stageFiles(d, names);
+
+    std::vector<LoadedPlugin> recs;
+    for (const std::string& n : names) {
+        LoadedPlugin r;
+        r.path = (d / n).string();
+        r.error = "not a cascade plugin";
+        recs.push_back(r);
+    }
+    CHECK(cascade::core::resolveDuplicatePlugins(recs) == 0);
+    CHECK(recs.size() == 2);
+    CHECK(recs[0].error == "not a cascade plugin");
+    CHECK(recs[1].error == "not a cascade plugin");
+
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
+// THE OWNER'S RULING, pinned against the code path the product runs.
+//
+// scan() is given a directory holding a duplicate-looking pair plus unrelated
+// files, and afterwards the directory must be byte for byte what it was. The
+// application never removes a user's plugin on its own initiative: a stale
+// file stays on disk for ever, and the user removes it if and when they want
+// to, with the Remove button.
+void testScanRemovesNothingFromDisk() {
+    const fs::path d = tmpDir("dup_nodelete");
+    const std::vector<std::string> names = {mod("adsb-decoder-1.0.1-abi3-win-x64"),
+                                            mod("adsb-decoder-1.1.0-abi3-win-x64"),
+                                            mod("aprs-1.0.0")};
+    stageFiles(d, names);
+    // Not a module at all, and therefore not something a scan has any excuse
+    // to touch either.
+    const char manifest[] = "{\"plugins\":[]}";
+    writeFile(d / "installed.json", manifest, sizeof(manifest) - 1);
+
+    const auto before = snapshotDir(d);
+    CHECK(before.size() == 4);
+
+    PluginHost host;
+    host.scan(d.string());
+    host.scan(d.string());  // and a rescan, which is what the GUI does
+    host.unloadAll();
+
+    const auto after = snapshotDir(d);
+    CHECK(after.size() == 4);
+    CHECK(after == before);  // every file, byte for byte
+    std::error_code ec;
+    for (const std::string& n : names) { CHECK(fs::exists(d / n, ec)); }
+    CHECK(fs::exists(d / "installed.json", ec));
+
+    // Every candidate still produced its own record: de-duplication turns a
+    // record OFF, it never makes one disappear.
+    CHECK(host.plugins().empty());  // unloadAll() cleared them
+    host.scan(d.string());
+    CHECK(host.plugins().size() == 3);  // installed.json is not a module
+    CHECK(snapshotDir(d) == before);
+
+    host.unloadAll();
+    fs::remove_all(d, ec);
+}
+
 int main() {
     testValidation();
     testUiCapabilities();
@@ -1599,6 +1922,13 @@ int main() {
     testDefaultDirectory();
     testPluginDirChoice();
     testDirectoryWritability();
+    testDuplicateKeepsHigherVersion();
+    testDuplicateThreeModules();
+    testDuplicateDifferentIdsUntouched();
+    testDuplicateSkipIsReported();
+    testDuplicateTieBreakIsDeterministic();
+    testDuplicateIgnoresRefusedRecords();
+    testScanRemovesNothingFromDisk();
     testRealPluginDirs();
     return testSummary("test_plugin_host");
 }

@@ -51,10 +51,15 @@ are still moving. What is in the current build:
   signal generator and IQ-file playback mean it runs with no radio at all.
 - **Working with signals.** Bookmarks, a band scanner, band plans, and
   recording of both audio and raw I/Q.
-- **Map and decoders.** Aircraft, vessels and stations plotted together, with
-  optional map imagery from a basemap plugin. Decoder plugins produce text or
-  pictures (slow-scan and weather-satellite images, shown in their own windows
-  and saveable).
+- **Map and decoders.** Aircraft, vessels and stations plotted together,
+  coloured by altitude band, with optional map imagery from a basemap plugin.
+  Beside the map is a sortable table of everything being heard — callsign, id,
+  altitude, speed, course, age, and distance and bearing from your receiver.
+  Give it your antenna's position once and it also builds a **coverage map**:
+  the furthest anything has been heard in each direction, drawn over the map,
+  which is the cheapest antenna diagnostic there is. Decoder plugins produce
+  text or pictures (slow-scan and weather-satellite images, shown in their own
+  windows and saveable).
 - **Browser access.** The full interface over HTTP on your LAN, at feature
   parity with the desktop, with password authentication and live audio. Off by
   default; see [Browser access](#browser-access) for the security posture.

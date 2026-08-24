@@ -12,7 +12,14 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
+
+// For PluginRepo::compareVersions. The catalogue's version ordering is REUSED
+// here rather than reimplemented: a second comparator would eventually
+// disagree with the one the update check uses about which of two versions is
+// newer, and then the host would keep a plugin the updater calls stale.
+#include "core/plugin_repo.hpp"
 
 #if defined(_WIN32)
 #include <process.h>  // _getpid, for the write probe's temp name
@@ -758,6 +765,85 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
 // Per-plugin identity, and the set of plugins the user has stopped
 // ---------------------------------------------------------------------------
 
+std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
+    // Pass one: the winner for each declared id.
+    //
+    // Only LOADED records take part. A refused candidate never had its
+    // descriptor read, so it has no id at all, and collapsing several of them
+    // would hide one broken file behind another.
+    //
+    // A linear scan of a handful of ids is the right data structure here: a
+    // plugins directory holds a few files, and this keeps the FIRST-wins
+    // tie-break obvious rather than hiding it in a map's ordering.
+    std::vector<std::pair<std::string, std::size_t>> winners;  // id -> index
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        const LoadedPlugin& r = records[i];
+        if (!r.loaded || r.name.empty()) {
+            continue;
+        }
+        bool seen = false;
+        for (std::pair<std::string, std::size_t>& w : winners) {
+            if (w.first != r.name) {
+                continue;
+            }
+            seen = true;
+            // STRICTLY greater, so an equal version leaves the incumbent in
+            // place: the first record wins the tie, and scan() sorted its
+            // candidates by path, so that is the same file on every run.
+            if (PluginRepo::compareVersions(r.version, records[w.second].version) > 0) {
+                w.second = i;
+            }
+            break;
+        }
+        if (!seen) {
+            winners.emplace_back(r.name, i);
+        }
+    }
+
+    // Pass two: turn off every loaded record that is not its id's winner.
+    std::size_t skipped = 0;
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        LoadedPlugin& r = records[i];
+        if (!r.loaded || r.name.empty()) {
+            continue;
+        }
+        std::size_t keep = i;
+        for (const std::pair<std::string, std::size_t>& w : winners) {
+            if (w.first == r.name) {
+                keep = w.second;
+                break;
+            }
+        }
+        if (keep == i) {
+            continue;
+        }
+
+        const LoadedPlugin& kept = records[keep];
+        // SHORT AND FACTUAL, and it has to carry three things: which plugin
+        // this is, which file is running instead, and what the user may do
+        // about the file in front of them. The Plugins section prints this
+        // under the file's own name, and offers Remove on the same row.
+        r.error = "Ignored: another copy of \"" + r.name + "\" is installed. Version " +
+                  kept.version + " in " + pluginKey(kept) + " is loaded; this file is " +
+                  r.version + " and is not running. It can be deleted with Remove.";
+        r.loaded = false;
+        // Every borrowed pointer goes: they point into an image the caller is
+        // about to unmap. nativeHandle is deliberately LEFT SET - it is how
+        // the caller knows there is a module here to unmap.
+        r.decoder = nullptr;
+        r.iqDecoder = nullptr;
+        r.imageDecoder = nullptr;
+        r.trackSource = nullptr;
+        r.panel = nullptr;
+        r.hostClient = nullptr;
+        r.preset = nullptr;
+        r.basemap = nullptr;
+        r.trackInfo = nullptr;
+        ++skipped;
+    }
+    return skipped;
+}
+
 std::string pluginKey(const LoadedPlugin& p) {
     return fs::path(p.path).filename().string();
 }
@@ -969,6 +1055,21 @@ void PluginHost::scan(const std::string& dir) {
     plugins_.reserve(candidates.size());
     for (const fs::path& p : candidates) {
         plugins_.push_back(loadOne(p));
+    }
+
+    // ONE VERSION OF A PLUGIN RUNS, NEVER TWO. See resolveDuplicatePlugins in
+    // the header for the whole policy and for why this deletes nothing.
+    if (resolveDuplicatePlugins(plugins_) > 0) {
+        // Unmap what it turned off. A skipped module is exactly as unwelcome
+        // in the address space as a refused one: its DllMain has already run,
+        // but leaving it mapped would leave its static initialisers, threads
+        // and hooks alive for no benefit - and it is the older code.
+        for (LoadedPlugin& p : plugins_) {
+            if (!p.loaded && p.nativeHandle != nullptr) {
+                closeModule(static_cast<NativeModule>(p.nativeHandle));
+                p.nativeHandle = nullptr;
+            }
+        }
     }
 }
 
