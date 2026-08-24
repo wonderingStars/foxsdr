@@ -854,5 +854,225 @@ int main() {
         CHECK(r.activeCount() == 0u);
     }
 
+    // --- STOP: a stopped plugin gets no instance and is fed nothing --------
+    //
+    // The property the feature is sold on. "Stopped" has to mean the decoder
+    // is DESTROYED, not merely ignored: a decoder that keeps its handle keeps
+    // its buffers, its threads and its state, and would resume mid-message
+    // when started rather than beginning again.
+    {
+        resetFake();
+        const CascadeDecoderApi api = makeApi(0u);
+        LoadedPlugin p = makePlugin("ADS-B", &api);
+        p.path = "C:/plugins/adsb-decoder.dll";
+
+        PluginRunner r;
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        CHECK(g_fake.created == 1);
+        CHECK(r.activeCount() == 1u);
+
+        // Stopped by MODULE FILE NAME, which is the identity the tune grant
+        // uses; the display name above is deliberately something else.
+        r.setStopped({"adsb-decoder.dll"});
+        CHECK(r.isStopped("adsb-decoder.dll"));
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        // The instance that existed was destroyed, and no new one was made.
+        CHECK(g_fake.destroyed == 1);
+        CHECK(g_fake.created == 1);
+        CHECK(r.activeCount() == 0u);
+
+        // ...and nothing reaches it. Both halves matter: the sample count is
+        // the decoder's own record of what it was handed, and drainText is
+        // what the user would have seen.
+        g_fake.queued = "MESSAGE FROM A STOPPED PLUGIN\n";
+        std::vector<float> block(256, 0.25f);
+        r.processAudio(block.data(), block.size());
+        CHECK(g_fake.samples == 0u);
+        CHECK(r.drainText().empty());
+        CHECK(r.audioFramesFed() == 0u);
+
+        // START: the same rebuild path builds it again, and it decodes.
+        r.setStopped({});
+        CHECK(!r.isStopped("adsb-decoder.dll"));
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        CHECK(g_fake.created == 2);
+        CHECK(r.activeCount() == 1u);
+        r.processAudio(block.data(), block.size());
+        CHECK(g_fake.samples == 256u);
+        const std::vector<DecodedLine> out = r.drainText();
+        CHECK(out.size() == 1u);
+        CHECK(at(out, 0).text == "MESSAGE FROM A STOPPED PLUGIN");
+    }
+
+    // --- STOP applies to an I/Q decoder too, and survives a rescan ---------
+    //
+    // The rescan case is the one that would rot silently: rescanPlugins()
+    // clears the runner before unloading the modules, so a stop dropped by
+    // clear() would let the plugin come back on the very next scan - and a
+    // stop that does not survive a rescan does not survive a launch either.
+    {
+        resetIq();
+        const CascadeIqDecoderApi api = makeIqApi(kIqRate, true);
+        LoadedPlugin p = makeIqPlugin("ADS-B", &api);
+        p.path = "C:/plugins/adsb-decoder.dll";
+
+        PluginRunner r;
+        r.setStopped({"adsb-decoder.dll"});
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        CHECK(g_iq.created == 0);
+        CHECK(r.activeCount() == 0u);
+        std::vector<float> iq(512, 0.1f);  // 256 frames, interleaved
+        r.processIq(iq.data(), 256);
+        CHECK(g_iq.frames == 0u);
+        CHECK(r.iqFramesFed() == 0u);
+
+        // A STOPPED I/Q DECODER CANNOT BE RETUNED, because there is nothing to
+        // retune: retune() walks the instances, and a plugin with none cannot
+        // be handed a frequency it might act on.
+        r.retune(kCentre + 1.0e6);
+        CHECK(g_iq.retunes == 0);
+
+        // The rescan: clear() destroys everything, and the next rebuild must
+        // still refuse to start it.
+        r.clear();
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        CHECK(g_iq.created == 0);
+        CHECK(r.activeCount() == 0u);
+    }
+
+    // --- An empty stop entry stops nothing --------------------------------
+    {
+        // A record with no path yields an empty key. If "" matched, one stray
+        // entry in a hand-edited config would stop every path-less plugin at
+        // once - so an empty key must never match anything.
+        resetFake();
+        const CascadeDecoderApi api = makeApi(0u);
+        LoadedPlugin p = makePlugin("Pathless", &api);  // makePlugin sets no path
+        CHECK(p.path.empty());
+        PluginRunner r;
+        r.setStopped({""});
+        CHECK(!r.isStopped(""));
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        CHECK(g_fake.created == 1);
+        CHECK(r.activeCount() == 1u);
+    }
+
+    // --- Stopping one plugin leaves the others running --------------------
+    {
+        resetFake();
+        resetIq();
+        const CascadeDecoderApi tApi = makeApi(0u);
+        const CascadeIqDecoderApi iApi = makeIqApi(kIqRate, false);
+        LoadedPlugin a = makePlugin("Text", &tApi);
+        a.path = "C:/plugins/text-decoder.dll";
+        LoadedPlugin b = makeIqPlugin("Iq", &iApi);
+        b.path = "C:/plugins/iq-decoder.dll";
+
+        PluginRunner r;
+        r.setStopped({"iq-decoder.dll"});
+        r.rebuild({a, b}, 48000.0, kIqRate, kCentre);
+        CHECK(g_fake.created == 1);
+        CHECK(g_iq.created == 0);
+        CHECK(r.activeCount() == 1u);
+        // The survivor is still fed, which is the half a too-eager stop would
+        // break.
+        std::vector<float> block(64, 0.0f);
+        r.processAudio(block.data(), block.size());
+        CHECK(g_fake.samples == 64u);
+    }
+
+    // --- isFeeding: "not stopped" is NOT "running" ------------------------
+    //
+    // THE CASE THAT MADE THIS EXIST. The audio mute asked the stop list
+    // whether a decoder had a claim on the speakers, and the stop list cannot
+    // tell an idle plugin from a working one. Reproduced on the running
+    // application with the generator at 2 MS/s and the receiver on 162.000
+    // MHz: "audio mute: muted=1 by=AIS" printed one line above "\"AIS\" needs
+    // 192000 Hz raw I/Q and the receiver is producing 2000000 Hz, so it is not
+    // being fed." The sound was taken away on behalf of a decoder the
+    // application itself said was doing nothing.
+    //
+    // So the question is asked of the STATUS the panel draws, and the two
+    // cannot disagree: whatever the row calls idle, this calls not feeding.
+    {
+        resetIq();
+        // Wants 192 kHz; the receiver below is producing 2 MS/s.
+        const CascadeIqDecoderApi api = makeIqApi(192000.0, false);
+        LoadedPlugin p = makeIqPlugin("AIS", &api);
+        p.path = "C:/plugins/ais-decoder.dll";
+
+        PluginRunner r;
+        r.rebuild({p}, 48000.0, 2000000.0, kCentre);
+        // Nobody stopped it, and it is still not doing anything.
+        CHECK(!r.isStopped("ais-decoder.dll"));
+        CHECK(!r.isFeeding("ais-decoder.dll"));
+        CHECK(g_iq.created == 0);
+        // ...and the panel agrees, which is the point.
+        const std::vector<DecoderStatus> st = r.status();
+        CHECK(st.size() == 1u);
+        CHECK(at(st, 0).reason == DecoderIdleReason::RateMismatch);
+        CHECK(at(st, 0).key == "ais-decoder.dll");
+
+        // Give it the rate it asked for and it is feeding.
+        r.rebuild({p}, 48000.0, 192000.0, kCentre);
+        CHECK(r.isFeeding("ais-decoder.dll"));
+        CHECK(g_iq.created == 1);
+
+        // Stopping it takes the claim away again - the case the stop list DID
+        // get right, which has to keep working.
+        r.setStopped({"ais-decoder.dll"});
+        r.rebuild({p}, 48000.0, 192000.0, kCentre);
+        CHECK(!r.isFeeding("ais-decoder.dll"));
+    }
+
+    // --- isFeeding asks by IDENTITY, not by display name ------------------
+    //
+    // Two modules may carry the same descriptor name - an upgraded copy beside
+    // an older one is the ordinary way it happens - and only one of them may
+    // be fed. Keyed on the name, the idle one would inherit the working one's
+    // claim on the audio and mute the radio from a row that says "not being
+    // fed".
+    {
+        resetFake();
+        resetIq();
+        const CascadeDecoderApi audioApi = makeApi(48000u);    // matches
+        const CascadeIqDecoderApi iqApi = makeIqApi(192000.0, false);  // does not
+        LoadedPlugin good = makePlugin("AIS", &audioApi);
+        good.path = "C:/plugins/ais-decoder-2.0.0.dll";
+        LoadedPlugin idle = makeIqPlugin("AIS", &iqApi);
+        idle.path = "C:/plugins/ais-decoder-1.0.0.dll";
+
+        PluginRunner r;
+        r.rebuild({good, idle}, 48000.0, 2000000.0, kCentre);
+        CHECK(r.isFeeding("ais-decoder-2.0.0.dll"));
+        CHECK(!r.isFeeding("ais-decoder-1.0.0.dll"));
+    }
+
+    // --- Nothing to feed, and nothing to claim ----------------------------
+    {
+        resetIq();
+        // create() refused: loaded, not stopped, and producing nothing.
+        g_iq.failCreate = true;
+        const CascadeIqDecoderApi api = makeIqApi(kIqRate, false);
+        LoadedPlugin p = makeIqPlugin("Broken", &api);
+        p.path = "C:/plugins/broken-decoder.dll";
+        PluginRunner r;
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        CHECK(!r.isFeeding("broken-decoder.dll"));
+
+        // A plugin with no decoder table at all - a basemap, an aircraft-info
+        // lookup - is fed nothing by this runner and never was.
+        LoadedPlugin bare;
+        bare.loaded = true;
+        bare.name = "OpenMapTiles basemap";
+        bare.path = "C:/plugins/openmaptiles-basemap.dll";
+        PluginRunner r2;
+        r2.rebuild({bare}, 48000.0, kIqRate, kCentre);
+        CHECK(!r2.isFeeding("openmaptiles-basemap.dll"));
+
+        // An empty key answers for nobody, the same rule the stop list applies.
+        CHECK(!r2.isFeeding(""));
+    }
+
     return testSummary("test_plugin_runner");
 }

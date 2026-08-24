@@ -134,6 +134,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <span class="unit">Hz</span>
     <label class="inline">Vol <input id="vol" type="range" min="0" max="1" step="0.01"><span id="volVal" class="val"></span></label>
     <span class="spacer"></span>
+    <span id="mutedBy" class="badge warn hidden"></span>
     <span id="remote" class="badge hidden">remote access</span>
     <span id="link" class="badge warn hidden">disconnected</span>
     <button id="logout" class="hidden">Sign out</button>
@@ -1107,7 +1108,7 @@ function reflectCatalogue(s) {
 constexpr char kAppJs2c[] = R"JS(
 let lastPluginKey = '';
 function reflectPlugins(s) {
-  const key = s.plugins.map(p => p.name + p.version + p.loaded + p.error +
+  const key = s.plugins.map(p => p.name + p.version + p.loaded + p.stopped + p.error +
                                  p.tuneAllowed + (p.presets || []).length).join('|');
   if (key === lastPluginKey) return;
   lastPluginKey = key;
@@ -1128,6 +1129,21 @@ function reflectPlugins(s) {
                                 : ('refused: ' + (p.error || 'reason not reported'));
     d.appendChild(head);
     d.appendChild(meta);
+
+    // STOPPED, said plainly. Without it a plugin the user stopped in the
+    // window reads here as a normal running one, and the browser would be
+    // claiming output that cannot arrive. There is no Stop/Start BUTTON here —
+    // that stays in the window — but the preset buttons below take the same
+    // path the desktop's do, and that path starts a stopped plugin before it
+    // tunes. Hence the label: pressing a preset on a row that says this will
+    // clear it, and the page must not have implied otherwise.
+    if (p.loaded && p.stopped) {
+      const st = document.createElement('div');
+      st.className = 'meta';
+      st.style.color = '#e6c35a';
+      st.textContent = 'stopped - loaded but running nothing';
+      d.appendChild(st);
+    }
 
     // RECEIVER CONTROL. Only offered for a plugin that declares it can ask;
     // the grant is DENIED by default and this is the only way to give it, so
@@ -1629,6 +1645,15 @@ function fmtBytes(n) {
 let lastBmKey = '', lastDecodedKey = '';
 
 function reflectExtras(s) {
+  // WHY THE STREAM IS SILENT, beside the Listen button that started it. A
+  // browser hearing nothing has no other way to tell a muted radio from a
+  // dead stream, and this page has no Stop button for a plugin - that stays
+  // in the window - so the badge says who, and the window is where it is
+  // undone.
+  const mb = $('mutedBy');
+  mb.textContent = s.audioMutedBy ? ('muted by ' + s.audioMutedBy) : '';
+  mb.classList.toggle('hidden', !s.audioMutedBy);
+
   // Recorder. The buttons carry their own state, so one control both starts
   // and stops — the same shape the desktop's Record/Stop pair has.
   $('recIq').textContent = s.iqRecording ? 'Stop IQ' : 'Record IQ';
@@ -2689,6 +2714,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                                    {"licence", p.licence},
                                    {"fileName", p.fileName},
                                    {"loaded", p.loaded},
+                                   {"stopped", p.stopped},
                                    {"error", p.error},
                                    {"idleReason", p.idleReason},
                                    {"canRequestTune", p.canRequestTune},
@@ -2737,6 +2763,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             j["images"] = std::move(images);
         }
         j["iqRecording"] = s.iqRecording;
+        j["audioMutedBy"] = s.audioMutedBy;
         j["audioRecording"] = s.audioRecording;
         j["iqBytes"] = s.iqBytes;
         j["audioBytes"] = s.audioBytes;

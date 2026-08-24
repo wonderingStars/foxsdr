@@ -113,6 +113,15 @@ AppConfig junkConfig() {
     // tune permission has granted none, and a leftover here would mean a
     // plugin could move the receiver on the strength of stale memory.
     c.pluginTuneAllowed = {"junk-grant"};
+    // A stop that must never survive a load either: a config that does not
+    // mention stopped plugins has stopped none, and a leftover here would
+    // silence a decoder the user never switched off.
+    c.pluginsStopped = {"junk-stop.dll"};
+    // And an override that must not survive either: a config that says nothing
+    // about mute overrides has none, so every plugin's mute follows the rule
+    // its capabilities imply. A leftover here would silence a decoder whose
+    // author never asked for it, or un-silence one whose user did.
+    c.pluginMuteOverride = {"junk-mute.dll"};
     // P11 web server: every field away from its default, and the two that
     // matter set to the DANGEROUS value — web access on, bound to every
     // interface — so any load path that forgets to assign them is caught by a
@@ -158,6 +167,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
+    CHECK(a.pluginsStopped == b.pluginsStopped);
+    CHECK(a.pluginMuteOverride == b.pluginMuteOverride);
     CHECK(a.webEnabled == b.webEnabled);
     CHECK(a.webBindAddress == b.webBindAddress);
     CHECK(a.webPort == b.webPort);
@@ -238,6 +249,13 @@ int main() {
         // what the permission check reads, and a name silently dropped by the
         // save is a permission the user gave and did not get back.
         in.pluginTuneAllowed = {"Satellite Tracker", "ADS-B"};
+        // Stopped plugins, likewise in an order the roundtrip must preserve,
+        // and deliberately different names from the grants above so a save
+        // that crossed the two lists would show up here.
+        in.pluginsStopped = {"sstv-decoder.dll", "ais-decoder.dll"};
+        // And the mute overrides, again with names of their own, so the full
+        // round trip proves the three lists stay three lists.
+        in.pluginMuteOverride = {"pocsag-decoder.dll"};
         // P11: values distinguishable from both the defaults and junkConfig().
         in.webEnabled = true;
         in.webBindAddress = "192.168.1.20";
@@ -1022,6 +1040,146 @@ int main() {
         AppConfig back = junkConfig();
         CHECK(ConfigStore::load(rt, back, err));
         CHECK(back.pluginTuneAllowed == Names({"Satellite Tracker"}));
+    }
+
+    // --- Plugins the user has stopped ----------------------------------------
+    //
+    // The same shape of list as the grants above, sanitised by the same code,
+    // so it is asserted against the same cases: a stop that survives a launch
+    // is the whole of what persisting it buys, and a stop the file cannot
+    // express (empty) or states twice (duplicate) must not reach the runner.
+    {
+        const std::string path = p("plugin_stopped.json");
+        const AppConfig d;
+        using Names = std::vector<std::string>;
+
+        // NOTHING IS STOPPED BY DEFAULT. A fresh install, a missing field and
+        // a wrong-typed field all mean "every installed plugin runs" - the
+        // behaviour every release before this one had.
+        CHECK(d.pluginsStopped.empty());
+
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginsStopped.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"pluginsStopped\":\"adsb.dll\"}\n"));  // not an array
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginsStopped.empty());
+
+        // An ordinary list loads verbatim and in order.
+        CHECK(writeText(path, "{\"pluginsStopped\":[\"adsb.dll\",\"ais.dll\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginsStopped == Names({"adsb.dll", "ais.dll"}));
+
+        // Non-string elements are dropped, the usable ones kept.
+        CHECK(writeText(path, "{\"pluginsStopped\":[\"adsb.dll\",7,null,\"ais.dll\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginsStopped == Names({"adsb.dll", "ais.dll"}));
+
+        // Empty names match no module, and a DUPLICATE would make Start look
+        // like it failed - the second copy would still be stopping it.
+        CHECK(writeText(path,
+                        "{\"pluginsStopped\":[\"adsb.dll\",\"\",\"adsb.dll\",\"ais.dll\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginsStopped == Names({"adsb.dll", "ais.dll"}));
+
+        // The cap, for the same reason the grants have one.
+        {
+            std::string big = "{\"pluginsStopped\":[";
+            for (std::size_t i = 0; i < AppConfig::kMaxTuneGrants + 50u; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"p" + std::to_string(i) + ".dll\"";
+            }
+            big += "]}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginsStopped.size() == AppConfig::kMaxTuneGrants);
+        }
+
+        // THE ROUND TRIP, which is the property the feature is sold on: a
+        // plugin stopped in one session is still stopped in the next. The two
+        // lists are written and read independently - a stop must not become a
+        // tune grant, and revoking one must not start the other.
+        AppConfig in;
+        in.pluginsStopped = {"adsb-decoder-1.0.1-abi3-win-x64.dll"};
+        in.pluginTuneAllowed = {"tracker.dll"};
+        const std::string rt = p("plugin_stopped_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginsStopped == Names({"adsb-decoder-1.0.1-abi3-win-x64.dll"}));
+        CHECK(back.pluginTuneAllowed == Names({"tracker.dll"}));
+    }
+
+    // --- Plugins whose mute setting is not the default -----------------------
+    //
+    // The THIRD list of module file names, sanitised by the same function, and
+    // asserted here rather than assumed from the other two: the shared helper
+    // is only shared for as long as somebody keeps calling it, and a list that
+    // quietly stopped being sanitised would show up as a preference that
+    // flipped twice and therefore did nothing.
+    {
+        const std::string path = p("plugin_mute.json");
+        const AppConfig d;
+        using Names = std::vector<std::string>;
+
+        // NOBODY HAS OVERRIDDEN ANYTHING by default, which is what makes the
+        // capability-derived default the live rule for a fresh install.
+        CHECK(d.pluginMuteOverride.empty());
+
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginMuteOverride.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"pluginMuteOverride\":\"adsb.dll\"}\n"));  // not an array
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginMuteOverride.empty());
+
+        CHECK(writeText(path, "{\"pluginMuteOverride\":[\"adsb.dll\",\"sstv.dll\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginMuteOverride == Names({"adsb.dll", "sstv.dll"}));
+
+        // Empties and duplicates: a duplicated override is a setting applied
+        // twice, and "the opposite of the opposite of the default" is the
+        // default - i.e. exactly the state the user did NOT choose.
+        CHECK(writeText(
+            path,
+            "{\"pluginMuteOverride\":[\"adsb.dll\",\"\",\"adsb.dll\",7,\"sstv.dll\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginMuteOverride == Names({"adsb.dll", "sstv.dll"}));
+
+        {
+            std::string big = "{\"pluginMuteOverride\":[";
+            for (std::size_t i = 0; i < AppConfig::kMaxTuneGrants + 50u; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"p" + std::to_string(i) + ".dll\"";
+            }
+            big += "]}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginMuteOverride.size() == AppConfig::kMaxTuneGrants);
+        }
+
+        // THE ROUND TRIP, with all three lists carrying different names at
+        // once: an override must not become a stop or a grant, and none of the
+        // three may be dropped by a save that only remembered two of them.
+        AppConfig in;
+        in.pluginMuteOverride = {"sstv-decoder-1.0.0-abi3-win-x64.dll"};
+        in.pluginsStopped = {"ais-decoder-1.0.1-abi3-win-x64.dll"};
+        in.pluginTuneAllowed = {"tracker.dll"};
+        const std::string rt = p("plugin_mute_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginMuteOverride == Names({"sstv-decoder-1.0.0-abi3-win-x64.dll"}));
+        CHECK(back.pluginsStopped == Names({"ais-decoder-1.0.1-abi3-win-x64.dll"}));
+        CHECK(back.pluginTuneAllowed == Names({"tracker.dll"}));
     }
 
     // --- P11 web server settings ---------------------------------------------

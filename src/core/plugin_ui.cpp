@@ -3,6 +3,7 @@
 #include "core/plugin_ui.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -117,6 +118,87 @@ bool anyVisibleTarget(const std::vector<HostTrack>& tracks,
     return false;
 }
 
+// --- Audio mute policy (see the header) -------------------------------------
+
+bool onPreset(const MutePreset& preset, const TunePoint& tune) {
+    // A preset with no frequency is not a place, and matching it would make
+    // every plugin that fills a CascadePreset badly mute the radio wherever it
+    // happened to be pointed. The ABI already says frequencyHz must be > 0.
+    if (!(preset.frequencyHz > 0.0)) { return false; }
+    const double f = preset.deviceCentre ? tune.deviceCentreHz : tune.tunedHz;
+    // std::max would be the obvious spelling, but a plugin is free to hand us
+    // a negative bandwidth and half of it would then WIN a max against the
+    // floor only if the floor were also negative - which it is not. Written
+    // out so the guard is visible rather than inferred.
+    double tol = kPresetToleranceHz;
+    if (preset.bandwidthHz > 0.0 && 0.5 * preset.bandwidthHz > tol) {
+        tol = 0.5 * preset.bandwidthHz;
+    }
+    return std::fabs(f - preset.frequencyHz) <= tol;
+}
+
+bool muteDefaultForCaps(std::uint32_t capabilities) {
+    return (capabilities & CASCADE_CAP_IQ_DECODER) != 0u;
+}
+
+MuteDecision muteActive(const std::vector<MutePlugin>& plugins,
+                        const TunePoint& tune) {
+    MuteDecision d;
+    for (const MutePlugin& p : plugins) {
+        // Both halves are required and neither implies the other: a stopped
+        // plugin decodes nothing whatever its setting says, and a plugin the
+        // user has told not to mute stays audible however hard it is working.
+        if (!p.running || !p.mutes) { continue; }
+        bool on = false;
+        for (const MutePreset& ps : p.presets) {
+            if (onPreset(ps, tune)) {
+                on = true;
+                break;
+            }
+        }
+        if (!on) { continue; }
+        d.active = true;
+        d.names.push_back(p.name);
+        d.keys.push_back(p.key);
+    }
+    return d;
+}
+
+bool anyStillRunning(const std::vector<MutePlugin>& plugins,
+                     const std::vector<std::string>& keys) {
+    for (const std::string& k : keys) {
+        // An empty key matches nothing, the same rule PluginStopSet applies and
+        // for the same reason: a record with no path yields "", and one stray
+        // empty must not stand for every path-less plugin at once.
+        if (k.empty()) { continue; }
+        for (const MutePlugin& p : plugins) {
+            if (p.key == k && p.running && p.mutes) { return true; }
+        }
+    }
+    return false;
+}
+
+MutePopupSubject advanceMutePopup(const MutePopupSubject& prev, bool onPreset,
+                                  bool tuneAway, bool subjectRunning,
+                                  const std::vector<std::string>& names,
+                                  const std::vector<std::string>& keys) {
+    // ON A PRESET FIRST, before the edge is even looked at. The two cannot both
+    // be true today (an edge means off-preset this frame), and ordering it this
+    // way is the guarantee that no future caller can make the dialog appear
+    // while the radio is sitting on the preset of the plugin it names.
+    if (onPreset) { return MutePopupSubject{}; }
+    if (tuneAway) {
+        if (!subjectRunning) { return MutePopupSubject{}; }
+        MutePopupSubject s;
+        s.open = true;
+        s.names = names;  // COPIED, deliberately: see the header
+        s.keys = keys;
+        return s;
+    }
+    if (prev.open && !subjectRunning) { return MutePopupSubject{}; }
+    return prev;
+}
+
 // Per-plugin bridge behind CascadeHostApi::ctx. One of these exists for every
 // plugin that declares CASCADE_CAP_HOST_CLIENT, because the host has to know
 // WHICH plugin is asking - the permission is per-plugin, and a single shared
@@ -183,6 +265,11 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
 
     for (const LoadedPlugin& lp : plugins) {
         if (!lp.loaded) { continue; }
+        // STOPPED BY THE USER: no attach, no track source, no panel. Skipped
+        // before the host bridge in particular - handing a stopped plugin the
+        // host API would give it a fresh way to ask for the receiver, and the
+        // one thing a stopped plugin must not do is act.
+        if (stopped_.contains(lp)) { continue; }
 
         // Host services FIRST. The ABI says attach() runs before any other
         // capability's create(), so a tracker can read the receiver while
@@ -340,7 +427,10 @@ void PluginUi::poll() {
 }
 
 std::string PluginUi::tuneKey(const LoadedPlugin& p) {
-    return std::filesystem::path(p.path).filename().string();
+    // ONE definition of a plugin's identity, in plugin_host, because the stop
+    // list is keyed on the same string as the tune grant and two copies of
+    // "which file is this" would eventually disagree about a path.
+    return pluginKey(p);
 }
 
 bool PluginUi::tuneAllowed(const std::string& pluginKey) const {
@@ -362,6 +452,24 @@ void PluginUi::setTuneAllowed(const std::string& pluginKey, bool allowed) {
 }
 
 std::int32_t PluginUi::tuneRequestFromPlugin(const std::string& plugin, double centreHz) {
+    // A STOPPED PLUGIN IS REFUSED BEFORE ANYTHING ELSE, grant or no grant.
+    //
+    // It should not be able to get here at all - a stopped plugin is never
+    // attached, so it is never handed a bridge - but the bridges outlive the
+    // instances by design (see the header: a plugin may keep the pointer, and
+    // they are only freed at clear()), so a plugin stopped after it attached
+    // still holds a working one. Refusing here rather than trusting that no
+    // plugin keeps its pointer is the difference between "stopped" meaning
+    // something and meaning "we asked nicely".
+    //
+    // Not recorded as a requester: that list drives a permission row the user
+    // is invited to tick, and inviting them to grant the receiver to a plugin
+    // they have switched off would be an odd thing to offer.
+    if (stopped_.contains(plugin)) {
+        lastDenied_ = plugin;
+        return CASCADE_TUNE_DENIED;
+    }
+
     // Recorded whether or not it is allowed, so the GUI can offer the toggle
     // exactly for the plugins that actually want it. A tracker that is denied
     // must be discoverable, not invisible.

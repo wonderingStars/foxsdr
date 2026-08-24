@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -42,6 +43,8 @@
 #endif
 
 #include "core/pipeline.hpp"
+#include "core/plugin_runner.hpp"
+#include "core/recorder.hpp"
 #include "dsp/demod.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/iq_source.hpp"
@@ -230,6 +233,20 @@ private:
     double centerHz_ = 100000000.0;
     bool running_ = false;
 };
+
+// --- A decoder that only counts, for the mute case ---------------------------
+//
+// No DLL: LoadedPlugin holds plain table pointers (the idiom
+// tests/test_plugin_runner.cpp uses), so this is a static table and a counter
+// wired through the REAL PluginRunner and the REAL pipeline tap. What it counts
+// is therefore exactly what a plugin would be handed.
+std::size_t g_muteFakeSamples = 0;
+int g_muteFakeHandle = 0;
+
+void* muteFakeCreate(uint32_t) { return &g_muteFakeHandle; }
+void muteFakeProcess(void*, const float*, size_t n) { g_muteFakeSamples += n; }
+int32_t muteFakePoll(void*, char*, size_t) { return 0; }
+void muteFakeDestroy(void*) {}
 
 // --- Measurement helpers ------------------------------------------------------
 
@@ -700,6 +717,229 @@ int main() {
             std::remove(cleanPath.c_str());
             std::remove(nanPath.c_str());
         }
+    }
+
+    // --- Hard mute of the audio output --------------------------------------
+    //
+    // The property the mute feature is sold on, stated as one run: while it is
+    // engaged the audio OUTPUT is digital silence and the DECODER is still
+    // being fed. Both halves matter and they pull in opposite directions - a
+    // mute implemented one stage too early would silence the decoder it exists
+    // to serve, and one implemented at the sink would leave the web audio
+    // stream (pumped from this very tap) playing the hiss the speakers had
+    // just been spared.
+    //
+    // Measured through the same tap and the same counters the previous cases
+    // use, over a live chain fed by the same FM transmitter, so "silence" here
+    // is the real output of the real pipeline and not a flag read back.
+    {
+        cascade::core::Pipeline::Config mcfg;
+        mcfg.sampleRateHz = kInputRateHz;
+        mcfg.fftSize = 1024;
+        mcfg.averagingAlpha = 0.5f;
+        mcfg.audioEnabled = false;
+        cascade::core::Pipeline mp(mcfg);
+        mp.setVfoBandwidthHz(kVfoBandwidthHz);
+        mp.setSquelchDb(-120.0f);  // never gating: the only silence is the mute
+        mp.setStereoEnabled(true);
+
+        // A decoder that does nothing but count. It is wired through the real
+        // PluginRunner and the real pipeline tap, so what it counts is
+        // literally what a plugin would receive.
+        cascade::core::PluginRunner runner;
+        CascadeDecoderApi api{};
+        api.structSize = static_cast<std::uint32_t>(sizeof(CascadeDecoderApi));
+        api.requiredRateHz = static_cast<std::uint32_t>(cascade::core::Pipeline::kAudioRateHz);
+        api.create = &muteFakeCreate;
+        api.process = &muteFakeProcess;
+        api.poll_text = &muteFakePoll;
+        api.destroy = &muteFakeDestroy;
+        cascade::core::LoadedPlugin lp;
+        lp.loaded = true;
+        lp.name = "Counting decoder";
+        lp.version = "1.0.0";
+        lp.path = "C:/plugins/counting.dll";
+        lp.capabilities = CASCADE_CAP_DECODER;
+        lp.decoder = &api;
+        runner.rebuild({lp}, cascade::core::Pipeline::kAudioRateHz, kInputRateHz,
+                       100.0e6);
+        CHECK(runner.activeCount() == 1u);
+        mp.setPluginRunner(&runner);
+
+        mp.setSource(std::make_unique<FmStereoSource>(std::vector<int>{}));
+        mp.start();
+
+        constexpr std::size_t kMuteWin = 4096;
+        std::vector<float> mwin(kMuteWin, 0.0f);
+
+        // (a) UNMUTED: real audio, and the decoder is being fed. Without this
+        // every zero below would be vacuous - a chain that produced nothing at
+        // all would pass an "is it silent" test perfectly.
+        CHECK(!mp.audioMuted());
+        CHECK(waitFor([&] { return mp.audioSamplesProduced() > 3u * kMuteWin; }, 30000));
+        CHECK(mp.audioTap(mwin.data(), kMuteWin) == kMuteWin);
+        const double loudRms = rms(mwin, kMuteWin);
+        const std::size_t fedBeforeMute = runner.audioFramesFed();
+        std::printf("unmuted: rms=%.6f fed=%zu\n", loudRms, fedBeforeMute);
+        CHECK(loudRms > 0.01);
+        CHECK(fedBeforeMute > 0u);
+
+        // (b) MUTED. Waiting for a WHOLE tap window of new audio after the
+        // mute is what makes "all zeros" mean the mute and not a partly
+        // refilled buffer: the tap is 4096 frames, so once 4096 more have been
+        // produced every sample in it was produced under the mute.
+        mp.setAudioMuted(true);
+        CHECK(mp.audioMuted());
+        const std::uint64_t muteMark = mp.audioSamplesProduced();
+        const std::size_t fedAtMute = runner.audioFramesFed();
+        CHECK(waitFor([&] { return mp.audioSamplesProduced() - muteMark >= 2u * kMuteWin; },
+                      30000));
+        std::vector<float> mleft(kMuteWin, 0.0f);
+        std::vector<float> mright(kMuteWin, 0.0f);
+        CHECK(mp.audioTapStereo(mleft.data(), mright.data(), kMuteWin) == kMuteWin);
+        std::size_t nonZero = 0;
+        for (std::size_t i = 0; i < kMuteWin; ++i) {
+            if (mleft[i] != 0.0f || mright[i] != 0.0f) { ++nonZero; }
+        }
+        // BOTH channels, sample by sample, not an RMS threshold: a mute that
+        // attenuated heavily instead of silencing would pass any reasonable
+        // level test and would still be audible on a quiet night.
+        std::printf("muted: nonZero=%zu of %zu\n", nonZero, kMuteWin);
+        CHECK(nonZero == 0u);
+
+        // ...and the counter kept climbing, which is the half a naive "return
+        // early when muted" implementation would break: the web audio pump
+        // reads the DIFFERENCE between successive values of this counter to
+        // decide what to send, so a frozen counter sends a browser nothing at
+        // all rather than silence.
+        CHECK(mp.audioSamplesProduced() - muteMark >= 2u * kMuteWin);
+
+        // (c) THE DECODER IS STILL FED while the speakers are silent. This is
+        // the whole point of the feature: the plugin that caused the mute must
+        // not be starved by it.
+        const std::size_t fedWhileMuted = runner.audioFramesFed();
+        std::printf("fed: atMute=%zu whileMuted=%zu pluginSaw=%zu\n", fedAtMute,
+                    fedWhileMuted, g_muteFakeSamples);
+        CHECK(fedWhileMuted > fedAtMute);
+        CHECK(fedWhileMuted - fedAtMute >= kMuteWin);
+        // The PLUGIN's own counter, not only the runner's: the runner could
+        // count a hand-over it never made, and this is the number that says
+        // the decoder's process() ran with real samples in it.
+        CHECK(g_muteFakeSamples >= fedWhileMuted);
+
+        // (c2) THE WAV RECORDER IS SILENCED TOO, and that is a decision, not an
+        // accident: the mute sits above the mono downmix the recorder is fed
+        // from, so a take started while a decoder is muting the audio contains
+        // digital silence.
+        //
+        // MEASURED ON THE RUNNING APPLICATION before this test existed: with
+        // ADS-B muting on its own preset, a five-second audio take over the web
+        // API produced a 240673-sample WAV whose every sample was zero, while
+        // the Recorder panel counted the bytes up and said nothing about it.
+        // The behaviour is defensible - what a recording of the muted output
+        // should contain is exactly what the output contains - but it has to be
+        // SAID, so the README says it and the Recorder panel now says it while
+        // a take is running under the mute. This test is what stops the
+        // statement and the code drifting apart: move the mute below the
+        // downmix and the recording stops being silent, and this fails.
+        const std::string recDir =
+            "pipeline_mute_rec_" + std::to_string(TEST_GETPID());
+        const auto wavSamples = [](const std::string& path) {
+            std::vector<std::int16_t> out;
+            std::ifstream f(path, std::ios::binary);
+            if (!f) { return out; }
+            f.seekg(44, std::ios::beg);  // canonical 44-byte header
+            std::int16_t s = 0;
+            while (f.read(reinterpret_cast<char*>(&s), sizeof(s))) { out.push_back(s); }
+            return out;
+        };
+        std::string mutedTake;
+        {
+            cascade::core::Recorder rec;
+            std::string err;
+            CHECK(rec.start(cascade::core::RecordKind::Audio, recDir + "/muted",
+                            cascade::core::Pipeline::kAudioRateHz, err));
+            mp.setAudioRecorder(&rec);
+            const std::uint64_t recMark = mp.audioSamplesProduced();
+            CHECK(waitFor(
+                [&] { return mp.audioSamplesProduced() - recMark >= 2u * kMuteWin; },
+                30000));
+            mp.setAudioRecorder(nullptr);  // ordering per setAudioRecorder
+            rec.stop();
+            CHECK(rec.samplesWritten() > 0u);  // a take that captured nothing
+                                               // would be silent for free
+            // Found by extension in a directory of its own: the file name
+            // carries the wall clock to the second, so two takes in the same
+            // second would otherwise be the same file - which is exactly what
+            // happened the first time this was written, and it made the second
+            // take invisible rather than wrong.
+            for (const auto& e : std::filesystem::directory_iterator(recDir + "/muted")) {
+                if (e.path().extension() == ".wav") { mutedTake = e.path().string(); }
+            }
+        }
+        CHECK(!mutedTake.empty());
+        const std::vector<std::int16_t> mutedPcm = wavSamples(mutedTake);
+        std::size_t recNonZero = 0;
+        for (const std::int16_t s : mutedPcm) {
+            if (s != 0) { ++recNonZero; }
+        }
+        std::printf("recorded under mute: %zu samples, nonZero=%zu\n",
+                    mutedPcm.size(), recNonZero);
+        CHECK(mutedPcm.size() > kMuteWin);
+        CHECK(recNonZero == 0u);
+
+        // (d) RELEASE: audio is back within one tap window, at the level it
+        // had before. Compared against the measured pre-mute level rather than
+        // a constant, so a release that came back at a fraction of the volume
+        // would fail here.
+        mp.setAudioMuted(false);
+        const std::uint64_t relMark = mp.audioSamplesProduced();
+        CHECK(waitFor([&] { return mp.audioSamplesProduced() - relMark >= 2u * kMuteWin; },
+                      30000));
+        CHECK(mp.audioTap(mwin.data(), kMuteWin) == kMuteWin);
+        const double backRms = rms(mwin, kMuteWin);
+        std::printf("released: rms=%.6f (was %.6f)\n", backRms, loudRms);
+        CHECK(backRms > 0.5 * loudRms);
+
+        // (e) THE SAME TAKE, UNMUTED, IS NOT SILENT. Without this the zeros in
+        // (c2) prove nothing about the mute: a recorder that never received a
+        // sample, or a WAV reader that read past the payload, would answer "all
+        // zeros" just as convincingly.
+        {
+            cascade::core::Recorder rec;
+            std::string err;
+            CHECK(rec.start(cascade::core::RecordKind::Audio, recDir + "/loud",
+                            cascade::core::Pipeline::kAudioRateHz, err));
+            mp.setAudioRecorder(&rec);
+            const std::uint64_t recMark = mp.audioSamplesProduced();
+            CHECK(waitFor(
+                [&] { return mp.audioSamplesProduced() - recMark >= 2u * kMuteWin; },
+                30000));
+            mp.setAudioRecorder(nullptr);
+            rec.stop();
+        }
+        std::string loudTake;
+        for (const auto& e : std::filesystem::directory_iterator(recDir + "/loud")) {
+            if (e.path().extension() == ".wav") { loudTake = e.path().string(); }
+        }
+        CHECK(!loudTake.empty());
+        const std::vector<std::int16_t> loudPcm = wavSamples(loudTake);
+        std::size_t loudNonZero = 0;
+        for (const std::int16_t s : loudPcm) {
+            if (s != 0) { ++loudNonZero; }
+        }
+        std::printf("recorded unmuted: %zu samples, nonZero=%zu\n", loudPcm.size(),
+                    loudNonZero);
+        CHECK(loudPcm.size() > kMuteWin);
+        CHECK(loudNonZero > kMuteWin / 2u);
+
+        mp.stop();
+        mp.setPluginRunner(nullptr);
+        runner.clear();
+        // Removed only on the way out of a passing case; a failure leaves the
+        // takes behind for autopsy, as the recorder's own tests do.
+        std::error_code ec;
+        std::filesystem::remove_all(recDir, ec);
     }
 
     return testSummary("test_pipeline_audio");

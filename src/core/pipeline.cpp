@@ -665,6 +665,14 @@ float Pipeline::signalPowerDb() const {
     return signalDb_.load(std::memory_order_relaxed);
 }
 
+void Pipeline::setAudioMuted(bool muted) {
+    audioMuted_.store(muted, std::memory_order_relaxed);
+}
+
+bool Pipeline::audioMuted() const {
+    return audioMuted_.load(std::memory_order_relaxed);
+}
+
 cascade::sink::AudioOut& Pipeline::audio() {
     return audio_;
 }
@@ -1250,6 +1258,33 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     autoNotchHz_.store(autoNotchL_->frequencyHz(), std::memory_order_relaxed);
     nrL_->process(outL_.data(), k, outL_.data());
     nrR_->process(outR_.data(), k, outR_.data());
+
+    // --- HARD MUTE, at the one point every consumer is downstream of --------
+    //
+    // See setAudioMuted for why the mute lives in the pipeline rather than at
+    // the sink. This line is where "every consumer" is actually true: below it
+    // are the mono downmix, the rolling tap (which the web server's audio
+    // stream is pumped from), the audio recorder and the sound device, and
+    // there is no fifth. Above it are the plugin decoder feed, the spectrum,
+    // the S-meter and RDS - none of which the user asked to silence, and one
+    // of which is the whole reason the mute exists.
+    //
+    // WRITTEN RATHER THAN SKIPPED. Returning early would be cheaper and would
+    // be a bug: the tap would stop advancing, audioSamplesProduced() would
+    // freeze, and the web audio pump reads the difference between successive
+    // values of that counter to decide what to send. A frozen counter means
+    // the browser is sent nothing at all and simply stalls, which is not the
+    // same thing as being sent silence - and the audio-output watchdog reads
+    // the same counter to decide whether the chain is alive. Silence has to be
+    // produced, not withheld.
+    //
+    // Read once per block, not per sample, so a mute that arrives mid-block
+    // takes effect on the next one - at 48 kHz that is under a millisecond and
+    // it keeps the branch out of the inner loop.
+    if (audioMuted_.load(std::memory_order_relaxed)) {
+        std::fill(outL_.begin(), outL_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
+        std::fill(outR_.begin(), outR_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
+    }
 
     // Mono downmix for the test tap's readers and the recorder, which stays
     // the documented mono 16-bit WAV.

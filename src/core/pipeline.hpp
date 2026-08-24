@@ -270,6 +270,37 @@ public:
     bool autoNotchEngaged() const;
     double autoNotchFrequencyHz() const;
 
+    // --- Hard mute of the audio OUTPUT ---------------------------------------
+    // Replaces the finished 48 kHz audio with digital silence, at the last
+    // point before it fans out. Set by the GUI when a data decoder is running
+    // on its own frequency (see plugin_ui.hpp's mute policy); the pipeline
+    // itself has no opinion about when that is, and deliberately so - it knows
+    // nothing about plugins, presets or what the user last clicked.
+    //
+    // WHY HERE AND NOT AT THE SINK. The sink is one of four consumers of this
+    // signal: the local device, the rolling tap (which is what the web
+    // server's audio stream is pumped from - AppWindow::publishWebAudio), the
+    // audio recorder, and --selftest's measurement. Muting the sink alone
+    // would leave a browser listening to the very hiss the desktop had just
+    // been silenced of, which is worse than not muting at all, because the two
+    // clients would then disagree about what the radio sounds like.
+    //
+    // WHY NOT VOLUME. Volume is the user's setting and has to still be there
+    // when the mute lifts. This is a separate, temporary override that the
+    // user never has to remember to undo.
+    //
+    // WHAT IT DOES NOT TOUCH: the decoder feed. Plugins are fed further up,
+    // before the AGC and the squelch, precisely because they measure rather
+    // than listen - so silencing the speakers cannot silence the decoder that
+    // caused it. That would be a self-defeating feature, and the test for this
+    // asserts both halves in one run.
+    //
+    // Atomic because it is written from the GUI thread and read by the DSP
+    // thread once per block, and a lock for one bool on the hot path would be
+    // a mutex the audio callback could contend for.
+    void setAudioMuted(bool muted);
+    bool audioMuted() const;
+
     // The audio sink, exposed for GUI wiring: volume, device enumeration, and
     // re-open on device change. The device the constructor opens (when
     // cfg.audioEnabled) is the system default at kAudioRateHz.
@@ -541,6 +572,11 @@ private:
     std::atomic<float> pilotLevel_{0.0f};
     std::atomic<bool> stereoActive_{false};
     std::atomic<bool> autoNotchEngaged_{false};
+    // Hard mute of the finished audio; see setAudioMuted. Not under
+    // audioMutex_ on purpose - the DSP thread already holds that across the
+    // whole block, and a GUI thread that had to take it to set one bool would
+    // stall behind a block of DSP for a per-frame update.
+    std::atomic<bool> audioMuted_{false};
     std::atomic<double> autoNotchHz_{0.0};
     // Published RDS state. Its own mutex (never held together with any other)
     // so rdsSnapshot() from the GUI cannot stall behind an audio block.

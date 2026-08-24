@@ -378,6 +378,54 @@ private:
     // grants along with the instances — without this a rescan silently revoked
     // every permission the user had given.
     void applyPluginTuneGrants();
+    // Whether the user has stopped this plugin. `pluginKey` is a module file
+    // name (cascade::core::pluginKey), the same identity the tune grant uses.
+    bool pluginIsStopped(const std::string& pluginKey) const;
+    // Records a stop or a start WITHOUT rebuilding: updates the durable list
+    // and pushes it into the runner and the UI half, so the next rebuild sees
+    // it. Split from the button's action below because applyPluginPreset has
+    // to start a plugin and then rebuild ONCE, having also moved the receiver.
+    void recordPluginStopped(const std::string& pluginKey, bool stopped);
+    // The Stop/Start button's action: record it, then rebuild through the one
+    // lifecycle path everything else uses, so a stop tears the plugin's
+    // instances down and a start builds them against the CURRENT receiver.
+    void setPluginStopped(const std::string& pluginKey, bool stopped);
+
+    // --- Audio mute while a data decoder is running (see plugin_ui.hpp) -------
+    // The EFFECTIVE "mute audio while running" setting for one plugin: the
+    // default its capabilities imply, flipped if the user has overridden it.
+    bool pluginMutes(const cascade::core::LoadedPlugin& p) const;
+    // Records the user's choice as an override of the capability default, so
+    // ticking the box back to the default REMOVES the entry rather than
+    // recording a second kind of "yes". Rebuilds the mute snapshot.
+    void setPluginMutes(const cascade::core::LoadedPlugin& p, bool mutes);
+    // Rebuilds muteStates_ from the loaded plugins: identity, running state,
+    // effective setting, and the plugin's presets.
+    //
+    // A SNAPSHOT REBUILT ON CHANGE, not read per frame, because reading the
+    // presets means CALLING the plugin - count() and get() are its own code -
+    // and doing that once per plugin per frame to decide whether to be quiet
+    // would put third-party code on the frame path for no gain. Presets are a
+    // property of the plugin and not of a running instance (the ABI says so),
+    // so they cannot change without a rescan.
+    void rebuildMuteStates();
+    // Once per frame: evaluate the policy against where the receiver actually
+    // is, push the result into the pipeline, and arm the popup on the edge.
+    void updateAudioMute();
+    // The modal that offers to stop the plugins holding the audio down, and
+    // the banner that stays when the user declines.
+    void drawMutePopup();
+    void drawMuteBanner();
+    // Stops exactly the plugins named by `keys`, through the ordinary stop
+    // path, in one rebuild. The caller passes the keys its own message named -
+    // the banner passes mutedByKeys_, the popup passes what it captured - so a
+    // button can never stop something other than what the words above it said.
+    void stopMutingPlugins(const std::vector<std::string>& keys);
+    // "ADS-B decoder", or "ADS-B decoder and AIS decoder", or a comma list.
+    // One place, because the popup, the banner and the Sinks panel all have to
+    // name the same plugins the same way.
+    static std::string muteNameList(const std::vector<std::string>& names);
+    std::string muteSubjectText() const;
     // Decoder OUTPUT: what the loaded plugins are actually decoding, plus a
     // line per plugin that is loaded but not being fed and why. Drained from
     // PluginRunner every frame, because the runner's buffer is bounded and a
@@ -868,6 +916,52 @@ private:
     // instances on every rescan, so the permission has to survive somewhere
     // that a rescan does not touch.
     std::vector<std::string> pluginTuneAllowed_;
+    // AppConfig::pluginsStopped. The durable copy of "the user stopped this
+    // plugin", by module file name, held here for the same reason the grants
+    // are: PluginRunner and PluginUi are rebuilt on every source change and
+    // cleared on every rescan, so the decision has to live somewhere neither
+    // touches.
+    std::vector<std::string> pluginsStopped_;
+    // AppConfig::pluginMuteOverride. Held here for the same reason: the value
+    // is a decision about a plugin, and the objects that act on it are torn
+    // down and rebuilt underneath it.
+    std::vector<std::string> pluginMuteOverride_;
+    // What the mute policy is evaluated against, rebuilt whenever the plugin
+    // set, a stop, or an override changes (see rebuildMuteStates).
+    std::vector<cascade::core::MutePlugin> muteStates_;
+    // Display names of the plugins currently holding the audio down. Empty
+    // when nothing is. Read by the Sinks panel, the banner, the popup and the
+    // web snapshot, so all four say the same thing.
+    std::vector<std::string> mutedBy_;
+    // Their module file names, in the same order. Kept beside the names rather
+    // than looked up from them because the popup's Stop button must act on
+    // EXACTLY the plugins the sentence above it named.
+    //
+    // Measured on the running application: stopping "every running plugin that
+    // mutes" instead stopped AIS as well, which was running on a band 900 MHz
+    // away and muting nothing - a dialog that said "ADS-B" and switched off
+    // two decoders.
+    std::vector<std::string> mutedByKeys_;
+    // Was the receiver on a muting plugin's preset LAST frame. The popup fires
+    // on the true -> false edge (cascade::core::tuneAwayEdge) and re-arms only
+    // when this goes true again, which is what stops a modal reappearing on
+    // every frame of a slow tune.
+    bool mutePrevOnPreset_ = false;
+    // The user tuned away and chose "Keep it running". The audio stays muted -
+    // that is the model they were offered, sound comes back when the plugin
+    // stops - and the banner stays up until it does, or until the tune returns
+    // to a preset.
+    bool muteKeptRunning_ = false;
+    // WHAT THE POPUP IS ASKING ABOUT: the plugin names and keys captured when
+    // the edge opened it, and never re-read from the live decision afterwards.
+    // See cascade::core::advanceMutePopup for the measured failure that made
+    // this a captured value rather than a call to muteSubjectText().
+    cascade::core::MutePopupSubject mutePopup_;
+    // Set when mutePopup_ goes open, consumed by the next drawMutePopup().
+    // Deferred rather than calling ImGui::OpenPopup from the tune path because
+    // the evaluation runs before the frame's windows exist, and a popup opened
+    // against no ID stack is a popup that never appears.
+    bool mutePopupQueued_ = false;
     // Bound on how many one-click presets a single plugin may put on the
     // panel. A plugin is third-party code and a list this long is not a menu.
     static constexpr std::uint32_t kMaxPresetsPerPlugin = 16u;

@@ -755,6 +755,22 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
 }
 
 // ---------------------------------------------------------------------------
+// Per-plugin identity, and the set of plugins the user has stopped
+// ---------------------------------------------------------------------------
+
+std::string pluginKey(const LoadedPlugin& p) {
+    return fs::path(p.path).filename().string();
+}
+
+bool PluginStopSet::contains(const std::string& key) const {
+    // An empty key is what a record with no path produces, and it must never
+    // match: otherwise one stray "" in a hand-edited config would stop every
+    // path-less plugin at once.
+    if (key.empty()) { return false; }
+    return std::find(keys_.begin(), keys_.end(), key) != keys_.end();
+}
+
+// ---------------------------------------------------------------------------
 // PluginHost
 // ---------------------------------------------------------------------------
 

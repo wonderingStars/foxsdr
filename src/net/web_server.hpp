@@ -146,6 +146,14 @@ struct RadioStatus {
 
     // --- Recorder ----------------------------------------------------------
     bool iqRecording = false;
+    // WHO IS SILENCING THE AUDIO STREAM, or empty when nobody is. The mute is
+    // applied in the pipeline, before the tap this server's audio is pumped
+    // from, so a browser listening while a data decoder runs on its preset
+    // receives real silence - which without this line is indistinguishable
+    // from a broken stream. Names the plugins, exactly as the desktop's Sinks
+    // panel does, so the two clients cannot tell different stories about the
+    // same radio.
+    std::string audioMutedBy;
     bool audioRecording = false;
     std::uint64_t iqBytes = 0;
     std::uint64_t audioBytes = 0;
@@ -221,6 +229,12 @@ struct RadioStatus {
         bool loaded = false;
         std::string error;      // empty iff loaded
         std::string idleReason; // why it is loaded but not being fed, if so
+        // STOPPED BY THE USER: loaded, listed, and deliberately running
+        // nothing. Reported because the browser would otherwise show a stopped
+        // plugin exactly like a running one and claim it was working - which
+        // is the same "installed and silent with no explanation" the desktop's
+        // idle reasons exist to prevent.
+        bool stopped = false;
         // Declares CASCADE_CAP_HOST_CLIENT, i.e. it can ASK to move the
         // receiver — and whether the user has said yes.
         bool canRequestTune = false;

@@ -58,6 +58,15 @@
 //     A name that matches no installed plugin is KEPT: a grant must survive a
 //     plugin being temporarily removed or renamed aside by the retirement
 //     quarantine, or reinstalling would silently re-grant it.
+//   - pluginsStopped: the SAME rules, applied by the same code, because it is
+//     the same shape of list keyed on the same module file names. A stop the
+//     file could not express (an empty name) or states twice (a duplicate) is
+//     noise from a hand-edit, and a stopped plugin that is not installed right
+//     now must stay stopped for when it comes back.
+//   - pluginMuteOverride: the same rules again, from the same code. It lists
+//     the plugins whose "mute audio while running" setting DIFFERS from the
+//     default their capabilities imply, so a duplicate would be a preference
+//     that flipped twice and an empty name a preference for nothing.
 //
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
@@ -222,6 +231,53 @@ struct AppConfig {
     // goes through PluginUi's range checks and the receiver's own refusal.
     std::vector<std::string> pluginTuneAllowed;
 
+    // --- Plugins the user has STOPPED -----------------------------------------
+    // Module FILE NAMES — the same identity pluginTuneAllowed uses, and for the
+    // same reason: a display name is the plugin's own to choose, so keying on
+    // it would let a plugin inherit another's state by renaming itself.
+    //
+    // A stopped plugin is still installed, still loaded, and still has a row on
+    // the panel; it simply has no runtime instances, so it decodes nothing,
+    // puts nothing on the map, opens no window and cannot move the receiver.
+    //
+    // WHY IT IS PERSISTED. Stopping a plugin is what a user does about a
+    // decoder that is noisy, expensive, or wrong for the band they are on, and
+    // a stop that lasted only until the next launch — or, worse, only until the
+    // next rescan or source change — would be indistinguishable from a bug.
+    // Empty by default: nothing is stopped until somebody stops it.
+    //
+    // Sanitized on load exactly like pluginTuneAllowed (see the header note):
+    // a non-array resets to empty, empties and duplicates are dropped, and the
+    // list is capped. A name that matches no installed plugin is KEPT, so a
+    // stop survives the plugin being quarantined by the retirement policy or
+    // temporarily removed.
+    std::vector<std::string> pluginsStopped;
+
+    // --- Plugins whose MUTE setting is not the default -------------------------
+    // Module FILE NAMES again, and a list of OVERRIDES rather than of settings:
+    // an entry means "this plugin's 'mute audio while running' is the opposite
+    // of what its capabilities imply".
+    //
+    // WHY OVERRIDES AND NOT VALUES. The default is derived from the plugin's
+    // declared capabilities (muteDefaultForCaps: on for an I/Q decoder, off for
+    // everything else), and it has to be, because a plugin the user has never
+    // opened the row of must still behave correctly the first time they press
+    // its preset. Storing the effective value instead would freeze whatever
+    // default was in force the day the file was written, so a later build that
+    // improved the rule would improve it for nobody who had ever run the old
+    // one. Storing the difference means the rule stays live and only a
+    // deliberate choice is remembered.
+    //
+    // The known cost, stated rather than discovered: if a plugin's declared
+    // capabilities CHANGE across an update - an audio decoder that starts
+    // consuming I/Q - an override recorded against the old default flips
+    // meaning. That is the honest behaviour for "the opposite of the default"
+    // and it is one click on a visible checkbox to correct, whereas the frozen
+    // alternative is wrong forever and invisible.
+    //
+    // Sanitized on load exactly like the two lists above.
+    std::vector<std::string> pluginMuteOverride;
+
     // --- Web server mode (P11) ------------------------------------------------
     // Browser access to the receiver. OFF by default, and the default binding
     // is this machine only, so enabling the feature cannot by itself expose
@@ -324,7 +380,11 @@ struct AppConfig {
     // trying to close it. Cleared once sent.
     std::string telemetryPending;
 
-    // Cap for the list above; see the load-semantics note in the header comment.
+    // Cap for the three plugin-name lists above (pluginTuneAllowed,
+    // pluginsStopped, pluginMuteOverride); see the load-semantics note in the
+    // header comment. One constant, because all three hold the same kind of
+    // thing (module file names) and a second bound could only ever be a
+    // second number to keep in step.
     static constexpr std::size_t kMaxTuneGrants = 256;
 
     // A pending report is a few hundred bytes; anything beyond this is a

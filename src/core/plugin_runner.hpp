@@ -83,6 +83,12 @@ enum class DecoderStream {
 
 struct DecoderStatus {
     std::string plugin;
+    // The module file name (pluginKey), because `plugin` is a DISPLAY name and
+    // two installed modules may legitimately carry the same one - a plugin
+    // upgraded in one directory while an older copy sits in another is the
+    // ordinary case. Anything that has to act on the plugin this line is about
+    // (isFeeding, and through it the audio mute) has to ask by identity.
+    std::string key;
     DecoderIdleReason reason = DecoderIdleReason::Running;
     DecoderStream stream = DecoderStream::None;
     DecoderOutput output = DecoderOutput::Text;
@@ -107,6 +113,42 @@ public:
     // an I/Q decoder needs at create().
     void rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz,
                  double iqRateHz, double centreHz);
+
+    // The plugins the user has STOPPED, by module file name. Applied by the
+    // next rebuild(): a stopped plugin gets no instance, is fed no samples,
+    // and produces no line of text or picture, while its module stays mapped
+    // and its row stays on the panel.
+    //
+    // A SETTER RATHER THAN AN ARGUMENT to rebuild, and the set SURVIVES
+    // clear(), because a stop is a decision about a plugin and not about one
+    // set of instances. rebuild() is called on every source change, and
+    // clear() runs before every rescan; if the set travelled as an argument or
+    // were dropped by clear(), a plugin the user stopped would come back to
+    // life the first time they changed the sample rate.
+    // Takes the same lock rebuild() does: both run on the control thread
+    // today, but a set that is read under a lock and written without one is a
+    // race waiting for the first caller who forgets that.
+    void setStopped(std::vector<std::string> keys);
+    bool isStopped(const std::string& pluginKey) const;
+
+    // Whether this plugin has at least one instance the runner is ACTUALLY
+    // FEEDING - created, and matched to the rate the pipeline is delivering.
+    //
+    // WHY THIS IS NOT "IS IT STOPPED". They differ in exactly the case that
+    // matters: a plugin the user never stopped, whose required rate the
+    // receiver is not producing, is idle and says so in orange on its own row.
+    // The audio mute used the stop list alone and therefore silenced the
+    // speakers on behalf of such a plugin - reproduced on the running
+    // application with the generator at 2 MS/s and the receiver on 162.000
+    // MHz, where the Sinks panel read "Muted by AIS" while the Plugins panel
+    // read "\"AIS\" needs 192000 Hz raw I/Q and the receiver is producing
+    // 2000000 Hz, so it is not being fed". Two panels contradicting each other,
+    // and the sound taken away for a decoder the application itself said was
+    // doing nothing.
+    //
+    // Answered from the same status list the panel draws, so the two can never
+    // disagree again: whatever the row says is idle, this says is not feeding.
+    bool isFeeding(const std::string& pluginKey) const;
 
     // Destroys every instance. Must be called BEFORE the plugin host unloads
     // the modules, or the handles would outlive the code that owns them.
@@ -208,6 +250,10 @@ private:
                       std::size_t bytes);
 
     mutable std::mutex mutex_;
+    // Read only inside rebuild(), under the same lock as everything else, so
+    // a stop that arrives while the DSP thread is running cannot race the
+    // instance vectors it decides the contents of.
+    PluginStopSet stopped_;
     std::vector<Instance> instances_;
     std::vector<IqInstance> iqInstances_;
     std::vector<ImageInstance> imageInstances_;

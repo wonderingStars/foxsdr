@@ -353,6 +353,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
            a.pluginTuneAllowed == b.pluginTuneAllowed &&
+           a.pluginsStopped == b.pluginsStopped &&
+           a.pluginMuteOverride == b.pluginMuteOverride &&
            a.catEnabled == b.catEnabled && a.catBindAll == b.catBindAll &&
            a.catPort == b.catPort &&
            a.webEnabled == b.webEnabled &&
@@ -913,6 +915,15 @@ void AppWindow::drawUi() {
     publishWebAudio();
     publishWebImages();
     pumpWebTiles();
+    // Where the receiver is now decides whether the audio is silenced, and it
+    // has to be decided BEFORE anything draws: the toolbar banner, the Sinks
+    // panel line and the popup all report this frame's answer, and a decision
+    // taken after them would show the user the previous frame's.
+    //
+    // After applyWebControls for the same reason that call is where it is: a
+    // browser's tune has already landed, so the mute follows a web tune in the
+    // same frame rather than one behind it.
+    updateAudioMute();
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -947,6 +958,12 @@ void AppWindow::drawUi() {
     ImGui::EndChild();
 
     ImGui::End();
+
+    // The mute dialog LAST, and outside the root window: a modal is a
+    // top-level thing and opening it inside a borderless full-viewport window
+    // would nest it in that window's ID stack, where the dim overlay it draws
+    // would sit under the panels it is meant to block.
+    drawMutePopup();
 
     // Scanner driver, AFTER all widgets: any manual tune the user made this
     // frame (digit wheel, VFO drag, bookmark click) is already applied, so
@@ -1057,6 +1074,12 @@ void AppWindow::drawToolbar() {
     }
     ImGui::SameLine(0.0f, 24.0f);
     drawFrequencyReadout();
+    // Beside the frequency, because the banner is ABOUT the frequency: it
+    // appears when the user has tuned away from a decoder's preset and kept
+    // the decoder running, and the two things it has to be read together with
+    // are the readout that just changed and the volume control that is not
+    // the reason there is no sound.
+    drawMuteBanner();
 }
 
 void AppWindow::drawFrequencyReadout() {
@@ -1287,6 +1310,22 @@ void AppWindow::drawMenuColumn() {
         if (!audioHealthNote_.empty()) {
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "%s",
                                audioHealthNote_.c_str());
+        }
+        // WHY THERE IS NO SOUND, said where the sound settings are. This is the
+        // panel a user goes to when the speakers are silent, and finding a
+        // working device, a healthy watchdog and a volume that is not zero
+        // there - with no explanation - is exactly the dead end the 0.58.0
+        // audio investigation started from. Wrapped, because the menu column
+        // is narrow and a plugin name is the plugin's to choose.
+        if (!mutedBy_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+            ImGui::TextWrapped("Muted by %s", muteSubjectText().c_str());
+            ImGui::PopStyleColor();
+            // Said separately rather than folded into the line above, because
+            // the two halves answer different questions: what is doing it, and
+            // what makes it stop. The volume is untouched throughout, which is
+            // the one thing a user staring at this panel will assume first.
+            ImGui::TextDisabled("sound returns when the plugin stops");
         }
     }
     if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -2748,14 +2787,39 @@ void AppWindow::drawPluginsSection() {
         return;
     }
     // Removal is deferred past the loop: removeInstalledPlugin() rescans,
-    // which replaces the very vector this loop is walking.
+    // which replaces the very vector this loop is walking. The same goes for
+    // a stop or a start, which rebuilds every instance in the process.
     std::string removeFile;
+    std::string toggleStopFile;
+    bool toggleStopTo = false;
+    // The mute toggle is deferred by INDEX rather than by file name, because
+    // setPluginMutes needs the plugin's capabilities to know what the default
+    // it is overriding actually is, and only the record carries those.
+    int toggleMuteIdx = -1;
+    bool toggleMuteTo = false;
     for (std::size_t i = 0; i < list.size(); ++i) {
         const cascade::core::LoadedPlugin& p = list[i];
-        const std::string file = std::filesystem::path(p.path).filename().string();
+        const std::string file = cascade::core::pluginKey(p);
+        const bool stopped = pluginIsStopped(file);
         ImGui::PushID(static_cast<int>(i));
         if (p.loaded) {
             ImGui::Text("%s %s", p.name.c_str(), p.version.c_str());
+            // STOPPED IS SAID ON THE ROW, in the warning colour the idle
+            // reasons use, because the whole failure this feature could
+            // introduce is a plugin that produces nothing for a reason the
+            // user has forgotten they chose.
+            //
+            // WRAPPED, like the idle reasons and unlike the name above it.
+            // The menu column is narrow and the user can make it narrower;
+            // measured on the running application at 264 px, TextColored cut
+            // this sentence off mid-word at the panel edge, which is a poor
+            // way to deliver the one line that explains why a decoder is
+            // silent.
+            if (stopped) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+                ImGui::TextWrapped("Stopped - loaded, but running nothing");
+                ImGui::PopStyleColor();
+            }
             if (!p.author.empty()) { ImGui::TextDisabled("by %s", p.author.c_str()); }
             // The LICENCE is displayed, always and unconditionally. A plugin
             // is third-party code loaded into a commercially sold binary:
@@ -2784,9 +2848,66 @@ void AppWindow::drawPluginsSection() {
         } else if (ImGui::SmallButton("Remove")) {
             removeConfirmIdx_ = static_cast<int>(i);
         }
+        // STOP / START, beside Remove and in the same small-button idiom,
+        // because they answer the same question ("I do not want this plugin
+        // running") at two very different costs. Stop is instant and
+        // reversible and therefore needs no confirmation; Remove deletes a
+        // downloaded file and keeps its two-step.
+        //
+        // The LABEL IS THE ACTION, never the state: a button saying "Running"
+        // leaves the user guessing whether pressing it stops the plugin or
+        // is simply a badge. The state is the orange line above.
+        //
+        // Offered only for a plugin that actually loaded: a refused candidate
+        // has no instances to stop, and a Stop button on it would imply the
+        // reason it is silent is something the user did.
+        if (p.loaded) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(stopped ? "Start" : "Stop")) {
+                toggleStopFile = file;
+                toggleStopTo = !stopped;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(stopped ? "Create this plugin's decoders, map targets "
+                                            "and windows again"
+                                          : "Destroy this plugin's decoders, map targets "
+                                            "and windows. It stays installed, and stays "
+                                            "stopped until you start it.");
+            }
+            // MUTE AUDIO WHILE RUNNING, per plugin, defaulted from what the
+            // plugin consumes rather than from a global preference.
+            //
+            // A checkbox and not a hidden rule, because the right answer
+            // differs by plugin and only the user knows which they want. An
+            // I/Q decoder leaves behind a demodulated channel that is not the
+            // signal being decoded - hiss, at whatever the volume is set to -
+            // so it defaults ON; an audio decoder is fed the very audio the
+            // speakers get, and SSTV's warble is how people tune it by ear, so
+            // it defaults OFF. Neither default is right for everybody, which
+            // is the entire reason this is on the row.
+            //
+            // Deferred past the loop like the stop toggle: recording it
+            // rebuilds the mute snapshot, which walks the very list being
+            // iterated.
+            bool mutes = pluginMutes(p);
+            if (ImGui::Checkbox("Mute audio while running", &mutes)) {
+                toggleMuteIdx = static_cast<int>(i);
+                toggleMuteTo = mutes;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Silence the speakers and the web audio stream while "
+                                  "this plugin is actually decoding and the receiver is "
+                                  "on one of its presets. A stopped or idle plugin "
+                                  "silences nothing. The volume setting is not touched.");
+            }
+        }
         ImGui::Separator();
         ImGui::PopID();
     }
+    if (toggleMuteIdx >= 0 && static_cast<std::size_t>(toggleMuteIdx) < list.size()) {
+        setPluginMutes(list[static_cast<std::size_t>(toggleMuteIdx)], toggleMuteTo);
+    }
+    if (!toggleStopFile.empty()) { setPluginStopped(toggleStopFile, toggleStopTo); }
     if (!presetNote_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.9f, 0.55f, 1.0f));
         ImGui::TextWrapped("%s", presetNote_.c_str());
@@ -3347,11 +3468,26 @@ void AppWindow::refreshPluginRunner() {
     //
     // Rebuilding rather than retuning, because the RATE cannot be changed on a
     // live instance: the ABI passes it to create() and nothing else.
+    //
+    // THE STOP LIST GOES DOWN FIRST, before either rebuild, because it decides
+    // what those rebuilds create. Pushed on every refresh rather than only when
+    // it changes: this function runs after every rescan, and a rescan is
+    // exactly when the two halves have been cleared and could otherwise start a
+    // plugin the user stopped.
+    pluginRunner_.setStopped(pluginsStopped_);
+    pluginUi_.setStopped(pluginsStopped_);
     pipeline_.setPluginRunner(nullptr);
     pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
                           pipeline_.inputRateHz(),
                           pipeline_.activeSource().centerFrequencyHz());
     pipeline_.setPluginRunner(&pluginRunner_);
+    // AND THE MUTE SNAPSHOT AFTER THE REBUILD, not before it. It carries the
+    // running state, and running now means the runner is ACTUALLY FEEDING the
+    // plugin (see rebuildMuteStates) - a question only the rebuild above can
+    // answer, because it is the rebuild that decides which decoders the
+    // receiver's current rate can drive. Built first, this would answer it
+    // from the receiver the user has just left.
+    rebuildMuteStates();
 
     // The GUI-side capabilities are rebuilt HERE too, and for the same reason:
     // a track source created against one receiver state should not survive a
@@ -3390,9 +3526,16 @@ void AppWindow::refreshPluginRunner() {
     // silently by load order is more predictable than picking by some quality
     // the user cannot see. Detached first so a rescan that removed the plugin
     // takes its tiles - and its textures - with it.
+    //
+    // A STOPPED plugin is skipped here too, and that is the whole of what
+    // "stopped" means for a basemap: the map falls back to its built-in
+    // coastlines rather than keeping tiles from a plugin the user has switched
+    // off. Skipping it in the runner and the UI half but not here would leave
+    // the stopped plugin drawing the entire map background.
     const CascadeBasemapApi* wantBasemap = nullptr;
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-        if (lp.loaded && lp.basemap != nullptr) {
+        if (lp.loaded && lp.basemap != nullptr &&
+            !pluginIsStopped(cascade::core::pluginKey(lp))) {
             wantBasemap = lp.basemap;
             break;
         }
@@ -3401,7 +3544,8 @@ void AppWindow::refreshPluginRunner() {
     // Track enrichment, by the same first-wins rule and for the same reason.
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-        if (lp.loaded && lp.trackInfo != nullptr) {
+        if (lp.loaded && lp.trackInfo != nullptr &&
+            !pluginIsStopped(cascade::core::pluginKey(lp))) {
             wantTrackInfo = lp.trackInfo;
             break;
         }
@@ -4014,6 +4158,17 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
 
 void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
                                   const CascadePreset& ps) {
+    // A PRESET ON A STOPPED PLUGIN STARTS IT. Pressing "ADS-B 1090 MHz" is an
+    // unambiguous "I want this plugin now", and the alternative is the worst
+    // outcome this feature can produce: the radio dutifully retunes to 1090 MHz
+    // in the mode the plugin asked for, and then nothing decodes, because the
+    // plugin the user just pressed a button on is switched off. Only recorded
+    // here — the rebuild at the end of this function is the one that creates
+    // the instances, and it has to happen after the receiver has moved anyway.
+    //
+    // The row keeps its Stop button, so this is undone with one click.
+    recordPluginStopped(cascade::core::pluginKey(p), false);
+
     // MODE FIRST, because the mode's default bandwidth would otherwise
     // overwrite the one the preset asked for.
     if (ps.demodMode != CASCADE_DEMOD_UNCHANGED && ps.demodMode <= CASCADE_DEMOD_RAW) {
@@ -4107,6 +4262,324 @@ void AppWindow::setPluginTuneAllowed(const std::string& pluginKey, bool allowed)
         pluginTuneAllowed_.push_back(pluginKey);
     } else if (!allowed && it != pluginTuneAllowed_.end()) {
         pluginTuneAllowed_.erase(it);
+    }
+}
+
+bool AppWindow::pluginIsStopped(const std::string& pluginKey) const {
+    // An empty key is what a record with no path produces; it must never
+    // match, or one stray entry would stop every path-less plugin at once.
+    if (pluginKey.empty()) { return false; }
+    return std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey) !=
+           pluginsStopped_.end();
+}
+
+void AppWindow::recordPluginStopped(const std::string& pluginKey, bool stopped) {
+    if (pluginKey.empty()) { return; }
+    const auto it = std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey);
+    if (stopped && it == pluginsStopped_.end()) {
+        pluginsStopped_.push_back(pluginKey);
+    } else if (!stopped && it != pluginsStopped_.end()) {
+        pluginsStopped_.erase(it);
+    }
+    // Down into both halves immediately. refreshPluginRunner pushes them again
+    // before every rebuild, but a caller that only records (the preset path
+    // does) still leaves the live objects agreeing with the durable list.
+    pluginRunner_.setStopped(pluginsStopped_);
+    pluginUi_.setStopped(pluginsStopped_);
+    // The mute snapshot holds the same running state and is read every frame,
+    // so it has to follow here too, not only at the next rebuild.
+    rebuildMuteStates();
+}
+
+void AppWindow::setPluginStopped(const std::string& pluginKey, bool stopped) {
+    // THE SAME LIFECYCLE PATH AS EVERYTHING ELSE, deliberately. Stopping could
+    // have destroyed one plugin's instances in place, and that is precisely
+    // the second lifecycle this avoids: the retune grant, the basemap, the
+    // track-info client and the panel windows are all wired up in
+    // refreshPluginRunner, so a bespoke teardown would have to repeat every one
+    // of them and would drift from the original the first time one changed.
+    // Rebuilding costs the other plugins one create()/destroy() pair on a user
+    // action that happens seconds apart at worst.
+    recordPluginStopped(pluginKey, stopped);
+    refreshPluginRunner();
+}
+
+// --- Audio mute while a data decoder is running -------------------------------
+
+bool AppWindow::pluginMutes(const cascade::core::LoadedPlugin& p) const {
+    const bool def = cascade::core::muteDefaultForCaps(p.capabilities);
+    const std::string key = cascade::core::pluginKey(p);
+    if (key.empty()) { return def; }
+    const bool overridden = std::find(pluginMuteOverride_.begin(),
+                                      pluginMuteOverride_.end(),
+                                      key) != pluginMuteOverride_.end();
+    return overridden ? !def : def;
+}
+
+void AppWindow::setPluginMutes(const cascade::core::LoadedPlugin& p, bool mutes) {
+    const std::string key = cascade::core::pluginKey(p);
+    if (key.empty()) { return; }
+    // Stored as a DIFFERENCE from the capability default (see the AppConfig
+    // note): choosing the default removes the entry, so a config never carries
+    // a redundant override that a later improvement to the default rule could
+    // not reach.
+    const bool wantOverride = (mutes != cascade::core::muteDefaultForCaps(p.capabilities));
+    const auto it = std::find(pluginMuteOverride_.begin(), pluginMuteOverride_.end(), key);
+    if (wantOverride && it == pluginMuteOverride_.end()) {
+        pluginMuteOverride_.push_back(key);
+    } else if (!wantOverride && it != pluginMuteOverride_.end()) {
+        pluginMuteOverride_.erase(it);
+    }
+    rebuildMuteStates();
+}
+
+void AppWindow::rebuildMuteStates() {
+    muteStates_.clear();
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        cascade::core::MutePlugin m;
+        m.key = cascade::core::pluginKey(p);
+        m.name = p.name;
+        // RUNNING MEANS ACTUALLY DECODING, and both halves are needed.
+        //
+        // isFeeding alone would be right but LATE: the stop list is pushed
+        // down before the runner is rebuilt (see recordPluginStopped, which
+        // records without rebuilding at all on the preset path), so a plugin
+        // stopped a moment ago still has its instances and would keep the
+        // audio muted until the next rebuild - the exact opposite of what
+        // stopping it was for.
+        //
+        // pluginIsStopped alone is what the audio mute used to ask, and it
+        // cannot tell an idle plugin from a working one: with the generator at
+        // 2 MS/s and the receiver on 162.000 MHz the Sinks panel read "Muted by
+        // AIS" while the Plugins panel read that AIS needs 192 kHz raw I/Q and
+        // was not being fed. Silence on behalf of a decoder the application
+        // itself says is doing nothing is silence for a reason that is not a
+        // reason.
+        m.running = !pluginIsStopped(m.key) && pluginRunner_.isFeeding(m.key);
+        m.mutes = pluginMutes(p);
+        if (p.preset != nullptr) {
+            uint32_t n = p.preset->count();
+            // The same cap the preset BUTTONS get, for the same reason: this
+            // walks third-party code and a plugin claiming thousands of
+            // presets must not turn a frequency comparison into an unbounded
+            // loop.
+            if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
+            for (uint32_t i = 0; i < n; ++i) {
+                CascadePreset ps{};
+                ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+                if (p.preset->get(i, &ps) != 1) { continue; }
+                // The same sanity test applyPluginPreset applies before
+                // commanding a radio, and written the same way (positive, so
+                // NaN is refused rather than accepted by a negation).
+                if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
+                cascade::core::MutePreset mp;
+                mp.frequencyHz = ps.frequencyHz;
+                mp.bandwidthHz = (ps.bandwidthHz > 0.0 && ps.bandwidthHz < 1e12)
+                                     ? ps.bandwidthHz
+                                     : 0.0;
+                mp.deviceCentre = (ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u;
+                m.presets.push_back(mp);
+            }
+        }
+        muteStates_.push_back(std::move(m));
+    }
+}
+
+std::string AppWindow::muteNameList(const std::vector<std::string>& names) {
+    if (names.empty()) { return std::string(); }
+    if (names.size() == 1) { return names[0]; }
+    // "A and B" for two, "A, B and C" beyond. Several data decoders running at
+    // once is an ordinary thing to do - ADS-B and AIS share no band but a user
+    // watching both has both running - and a message that named only the first
+    // would send them to stop a plugin that was not the whole reason.
+    std::string s;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) { s += (i + 1 == names.size()) ? " and " : ", "; }
+        s += names[i];
+    }
+    return s;
+}
+
+std::string AppWindow::muteSubjectText() const {
+    return muteNameList(mutedBy_);
+}
+
+void AppWindow::updateAudioMute() {
+    cascade::core::TunePoint tune;
+    tune.deviceCentreHz = pipeline_.activeSource().centerFrequencyHz();
+    tune.tunedHz = tune.deviceCentreHz + pipeline_.vfoOffsetHz();
+
+    const cascade::core::MuteDecision d =
+        cascade::core::muteActive(muteStates_, tune);
+
+    // ARE THE PLUGINS THAT WERE MUTING STILL RUNNING? This is what separates
+    // "the user tuned away" from "the user stopped the plugin" - both end the
+    // mute, and only the first is worth a dialog. Asked about the specific
+    // plugins named in mutedByKeys_ rather than about muting plugins in
+    // general; see the note on cascade::core::anyStillRunning for the case
+    // that proved the difference on the real application.
+    const bool stillRunning =
+        cascade::core::anyStillRunning(muteStates_, mutedByKeys_);
+
+    // THE EDGE, evaluated before anything is changed.
+    const bool edge = cascade::core::tuneAwayEdge(mutePrevOnPreset_, d.active);
+    if (edge && stillRunning) {
+        muteKeptRunning_ = true;  // the audio stays down until they answer
+    }
+    // WHAT THE DIALOG IS ABOUT is decided here, once, from the names that were
+    // muting on the frame the user left the preset - and is withdrawn here too
+    // when arriving on a preset makes the question moot, or when the plugins it
+    // named stop. mutedBy_/mutedByKeys_ still hold the latched names at this
+    // point (they are only recomputed below, and only while ON a preset), so
+    // the edge captures the plugins the user actually tuned away from.
+    const bool wasOpen = mutePopup_.open;
+    mutePopup_ = cascade::core::advanceMutePopup(mutePopup_, d.active, edge,
+                                                 stillRunning, mutedBy_, mutedByKeys_);
+    if (mutePopup_.open && !wasOpen) {
+        mutePopupQueued_ = true;
+    } else if (!mutePopup_.open) {
+        // A withdrawal has to cancel a queue as well as an open window: the
+        // queue is one frame long, and opening a dialog the frame after the
+        // radio arrived on a preset would ask the question in the one place it
+        // must never be asked.
+        mutePopupQueued_ = false;
+    }
+    mutePrevOnPreset_ = d.active;
+
+    // Coming BACK to a preset clears the latch, which is what re-arms the
+    // popup: the user has to leave again to be asked again. So does the last
+    // of those plugins stopping - there is then nothing to keep quiet for, and
+    // a banner offering to stop a plugin that is not running would be a button
+    // that does nothing.
+    if (d.active || !stillRunning) { muteKeptRunning_ = false; }
+
+    const bool muted = d.active || muteKeptRunning_;
+    if (d.active) {
+        mutedBy_ = d.names;
+        mutedByKeys_ = d.keys;
+    } else if (!muted) {
+        mutedBy_.clear();
+        mutedByKeys_.clear();
+    }
+    // ...and when the latch is holding, mutedBy_ deliberately KEEPS the names
+    // from the frame the user tuned away on. They are the plugins the banner
+    // is about, and recomputing them off-preset would empty the list and leave
+    // a banner that could not say what was muting anything.
+
+    pipeline_.setAudioMuted(muted);
+}
+
+void AppWindow::stopMutingPlugins(const std::vector<std::string>& keys) {
+    // EXACTLY THE PLUGINS THE MESSAGE NAMED, which is why the keys are an
+    // ARGUMENT and not "every running plugin that mutes". Measured on the
+    // running application: the wider rule also stopped AIS, which was running
+    // 900 MHz away from its own preset and therefore muting nothing, from a
+    // dialog whose sentence said "ADS-B". A button must do what the words above
+    // it say - so the popup passes what it captured when it opened, and the
+    // banner passes what it is displaying.
+    //
+    // COPIED FIRST because every caller's vector is one of the members cleared
+    // below; iterating the caller's own storage while emptying it would be a
+    // use-after-clear on the second plugin.
+    //
+    // All of them in one pass, with a SINGLE rebuild at the end: stopping one
+    // at a time would rebuild every other plugin's instances once per plugin
+    // stopped, and would leave the audio still muted after the first of what
+    // the user read as one decision.
+    const std::vector<std::string> copy = keys;
+    for (const std::string& k : copy) { recordPluginStopped(k, true); }
+    muteKeptRunning_ = false;
+    mutedBy_.clear();
+    mutedByKeys_.clear();
+    mutePopup_ = cascade::core::MutePopupSubject{};
+    mutePopupQueued_ = false;
+    mutePrevOnPreset_ = false;
+    refreshPluginRunner();
+}
+
+void AppWindow::drawMutePopup() {
+    // Opened here rather than at the edge: ImGui wants OpenPopup and
+    // BeginPopupModal in the same ID stack, and the edge is detected before
+    // this frame's windows exist.
+    if (mutePopupQueued_) {
+        ImGui::OpenPopup("Sound is muted##mute_popup");
+        mutePopupQueued_ = false;
+    }
+    // Centred on the main window, because it is asking about something the
+    // user just did to the whole radio and a dialog in the corner of a
+    // 5120-wide desktop would be missed.
+    //
+    // ALWAYS, not Appearing, and NoMove with it. Appearing places the window
+    // on the one frame where an auto-resizing popup does not yet know its own
+    // size, so the pivot has nothing to subtract and the dialog lands high and
+    // off centre - measured on the running application, top edge 375 px above
+    // where it belonged. Re-centring every frame costs nothing for a
+    // two-button dialog and makes the placement the same every time; NoMove is
+    // the honest consequence, since a window that re-centres itself would drag
+    // straight back anyway.
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Sound is muted##mute_popup", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize |
+                                    ImGuiWindowFlags_NoMove)) {
+        return;
+    }
+    // THE CAPTURED NAMES, not the live decision. A dialog that re-read
+    // muteSubjectText() every frame re-labelled itself mid-question when the
+    // receiver moved on to a second decoder's preset - see advanceMutePopup for
+    // the measurement.
+    const std::string who = muteNameList(mutePopup_.names);
+    // Withdrawn while the window was open - the radio arrived on a preset, or
+    // the plugins it named were stopped from somewhere else. Closing beats
+    // asking a question whose answer no longer applies.
+    if (!mutePopup_.open || who.empty()) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::TextWrapped("%s is still running and is muting the audio.", who.c_str());
+    ImGui::TextWrapped("Stop it so sound resumes?");
+    ImGui::Spacing();
+    char stopLabel[256];
+    std::snprintf(stopLabel, sizeof(stopLabel), "Stop %s and resume sound", who.c_str());
+    if (ImGui::Button(stopLabel)) {
+        stopMutingPlugins(mutePopup_.keys);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Keep it running")) {
+        // KEEPS THE MUTE, deliberately, because that is the model the sentence
+        // above offered: sound resumes when the plugin stops. Releasing the
+        // audio here would make "keep it running" mean "and also undo the
+        // muting", which is a different answer to a question nobody asked.
+        // The banner is what stops that being a silent state.
+        muteKeptRunning_ = true;
+        // The question has been answered, so it is no longer pending: clearing
+        // the subject is what makes the NEXT one a fresh capture rather than a
+        // second showing of this one.
+        mutePopup_ = cascade::core::MutePopupSubject{};
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void AppWindow::drawMuteBanner() {
+    // Only while the LATCH is holding: on a preset the mute is explained by
+    // where the radio is pointed, and the Sinks panel says so. Off the preset
+    // it is explained by nothing at all unless this is here, which is the
+    // whole of the "silent with no reason" failure this product's idle
+    // reasons already exist to prevent.
+    if (!muteKeptRunning_) { return; }
+    const std::string who = muteSubjectText();
+    if (who.empty()) { return; }
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+    ImGui::Text("Sound muted by %s", who.c_str());
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Stop plugin##mute_banner")) {
+        stopMutingPlugins(mutedByKeys_);
     }
 }
 
@@ -4400,6 +4873,32 @@ void AppWindow::reportPluginStatus() {
                     t.plugin.c_str(), t.t.id, t.t.label, t.t.latDeg, t.t.lonDeg, t.t.kind);
     }
 
+    // WHICH PLUGINS ARE STOPPED, printed even when the list is empty (as
+    // "stopped=0"), because "no line" and "nothing stopped" have to be
+    // distinguishable in a bounded run's output - the same rule the counts
+    // above follow.
+    std::printf("plugin stopped: count=%d\n", static_cast<int>(pluginsStopped_.size()));
+    for (const std::string& k : pluginsStopped_) {
+        std::printf("plugin stopped: file=%s\n", k.c_str());
+    }
+    // THE SNAPSHOT THE MUTE DECISION IS TAKEN FROM, one line per loaded
+    // plugin. `mutes` is the setting the checkbox shows - the capability
+    // default with the user's override applied - and `running` is whether the
+    // plugin has any claim on the audio at all, which is where "not stopped"
+    // was once wrongly good enough. Printed because the alternative way to
+    // find out which plugins mute by default is to read five checkboxes off a
+    // screenshot, and a README written from a screenshot is how the shipped
+    // documentation came to name two plugins that do not consume I/Q.
+    for (const cascade::core::MutePlugin& m : muteStates_) {
+        std::printf("plugin mute: file=%s name=%s running=%d mutes=%d presets=%d\n",
+                    m.key.c_str(), m.name.c_str(), m.running ? 1 : 0, m.mutes ? 1 : 0,
+                    static_cast<int>(m.presets.size()));
+    }
+    // THE MUTE, printed every run including "not muted", for the same reason
+    // the counts above are: in a bounded run "no line" and "nothing is muting"
+    // must not look the same.
+    std::printf("audio mute: muted=%d by=%s\n",
+                pipeline_.audioMuted() ? 1 : 0, muteSubjectText().c_str());
     std::printf("plugin runner: active=%d lines=%d audioFed=%llu iqFed=%llu\n",
                 static_cast<int>(pluginRunner_.activeCount()),
                 static_cast<int>(decoderLog_.size()),
@@ -4573,6 +5072,27 @@ void AppWindow::drawRecorderSection() {
                     ImGui::GetTime() - audioRecordStartS_,
                     static_cast<unsigned long long>(audioRecorder_.samplesWritten()),
                     static_cast<double>(audioRecorder_.bytesWritten()) / 1.0e6);
+        // THE TAKE IS SILENT, and this is the only place that can say so while
+        // it still matters. The mute sits above the mono downmix the recorder
+        // is fed from (Pipeline::processAudioBlock), deliberately - a recording
+        // of the output should contain what the output contains - but the
+        // counters above climb exactly as they do for a real capture, so
+        // without this line a user recording a station while a decoder happens
+        // to sit on its preset gets a WAV of digital silence and no hint until
+        // they play it back. Measured on the running application: 240673
+        // samples, every one of them zero, and the panel said nothing.
+        //
+        // Only for the AUDIO take. The IQ recorder is fed from the raw tap,
+        // above everything the mute touches, so an IQ take is unaffected and
+        // saying otherwise here would send someone looking for a fault in a
+        // file that is fine.
+        const std::string mutedWho = muteSubjectText();
+        if (pipeline_.audioMuted() && !mutedWho.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+            ImGui::TextWrapped("Muted by %s - this take is silent",
+                               mutedWho.c_str());
+            ImGui::PopStyleColor();
+        }
     }
 
     // Recording is allowed while stopped (the file just stays empty until
@@ -5017,6 +5537,9 @@ void AppWindow::publishWebSnapshot() {
     }
 
     s.iqRecording = iqRecorder_.recording();
+    // The same names the Sinks panel shows, from the same source, so the two
+    // clients cannot disagree about why the radio is quiet.
+    s.audioMutedBy = muteSubjectText();
     s.audioRecording = audioRecorder_.recording();
     s.iqBytes = iqRecorder_.bytesWritten();
     s.audioBytes = audioRecorder_.bytesWritten();
@@ -5096,6 +5619,10 @@ void AppWindow::publishWebSnapshot() {
         // it so the two can never drift: the browser echoes this string back
         // to toggle the permission.
         w.fileName = cascade::core::PluginUi::tuneKey(p);
+        // Keyed on the same file name, and read from the same durable list the
+        // desktop row reads, so the browser cannot claim a stopped plugin is
+        // running.
+        w.stopped = pluginIsStopped(w.fileName);
         w.canRequestTune = (p.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u;
         // Keyed on the module file (w.fileName), never on the display name:
         // the browser sends that same key back to toggle the grant, and a name
@@ -5942,6 +6469,21 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // would have re-applied them.
     pluginTuneAllowed_ = cfg.pluginTuneAllowed;
     applyPluginTuneGrants();
+    // STOPS ARE APPLIED, not merely stored, for a stronger version of the same
+    // reason: the scan in the constructor has already built every plugin's
+    // instances against the default source, so a plugin the user stopped last
+    // session is running right now. refreshPluginRunner tears that set down and
+    // rebuilds it without the stopped ones, which is also what the restored
+    // source needs; doing it here means a stopped plugin never survives a
+    // launch even for a frame.
+    pluginsStopped_ = cfg.pluginsStopped;
+    // BEFORE the rebuild, because refreshPluginRunner is what rebuilds the
+    // mute snapshot the overrides are baked into. Restored after the stops for
+    // the same reason they are restored at all: a decoder the user silenced
+    // last session must not come back audible for the seconds it takes them to
+    // find the checkbox again.
+    pluginMuteOverride_ = cfg.pluginMuteOverride;
+    refreshPluginRunner();
 
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
@@ -6158,6 +6700,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
+    cfg.pluginsStopped = pluginsStopped_;
+    cfg.pluginMuteOverride = pluginMuteOverride_;
     cfg.catEnabled = catEnabled_;
     cfg.catBindAll = catBindAll_;
     cfg.catPort = catPortMirror_;

@@ -92,6 +92,24 @@ void getStringArray(const json& j, const char* key, std::vector<std::string>& ds
     dst = std::move(v);
 }
 
+// The shared rule for the three lists of plugin module file names the config
+// carries (pluginTuneAllowed, pluginsStopped, pluginMuteOverride): drop
+// empties, drop duplicates, cap the length. One function rather than three
+// loops, because the lists are the same shape and a rule that applied to only
+// some of them would be a rule nobody could rely on. Name every caller here
+// when a fourth list arrives — an enumeration that stops being exhaustive is
+// worse than none.
+std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in) {
+    std::vector<std::string> out;
+    for (const std::string& n : in) {
+        if (n.empty()) { continue; }
+        if (std::find(out.begin(), out.end(), n) != out.end()) { continue; }
+        out.push_back(n);
+        if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
+    }
+    return out;
+}
+
 float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
@@ -204,6 +222,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
     getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
+    getStringArray(j, "pluginsStopped", out.pluginsStopped);
+    getStringArray(j, "pluginMuteOverride", out.pluginMuteOverride);
     getBool(j, "webEnabled", out.webEnabled);
     getString(j, "webBindAddress", out.webBindAddress);
     getInt(j, "webPort", out.webPort);
@@ -319,16 +339,17 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // make revoking the permission look like it did not work — the second copy
     // would still be there — and an empty name could never match a plugin, so
     // both are noise a hand-edit or an older build could leave behind.
-    {
-        std::vector<std::string> grants;
-        for (const std::string& g : out.pluginTuneAllowed) {
-            if (g.empty()) { continue; }
-            if (std::find(grants.begin(), grants.end(), g) != grants.end()) { continue; }
-            grants.push_back(g);
-            if (grants.size() >= AppConfig::kMaxTuneGrants) { break; }
-        }
-        out.pluginTuneAllowed = std::move(grants);
-    }
+    //
+    // THE STOP LIST GETS THE SAME TREATMENT FROM THE SAME CODE, because it is
+    // the same kind of list — module file names the user ticked — and the same
+    // failure mode: a duplicate would make Start look like it did nothing,
+    // since the second copy would still be stopping the plugin.
+    out.pluginTuneAllowed = sanitisePluginNames(out.pluginTuneAllowed);
+    out.pluginsStopped = sanitisePluginNames(out.pluginsStopped);
+    // And the mute overrides, for the third time from the same function. A
+    // duplicate here would be a preference that flipped twice - which is the
+    // same as not being there at all, but only if something removes it.
+    out.pluginMuteOverride = sanitisePluginNames(out.pluginMuteOverride);
     return true;
 }
 
@@ -382,6 +403,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
     j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
+    j["pluginsStopped"] = cfg.pluginsStopped;
+    j["pluginMuteOverride"] = cfg.pluginMuteOverride;
     j["webEnabled"] = cfg.webEnabled;
     j["webBindAddress"] = cfg.webBindAddress;
     j["webPort"] = cfg.webPort;

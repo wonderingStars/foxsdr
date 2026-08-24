@@ -178,6 +178,46 @@ struct LoadedPlugin {
     void* nativeHandle = nullptr;
 };
 
+// The plugin's MODULE FILE NAME, which is the identity every per-plugin
+// decision in this product is keyed on: the tune grant, and now the stop.
+//
+// NOT the display name. The display name comes out of the plugin's own
+// descriptor, so keying on it lets any plugin inherit another's setting simply
+// by claiming its name; the file name it cannot change without replacing the
+// granted file itself, which needs write access to the plugins directory and
+// is already game over. A scan produces one record per file in one directory,
+// so the file name is unique across a scan.
+//
+// Empty when the record has no path — and an empty key must never match
+// anything, or every path-less record would share one entry.
+std::string pluginKey(const LoadedPlugin& p);
+
+// The set of plugins the user has STOPPED: loaded, listed, and deliberately
+// given no runtime instances at all.
+//
+// ONE implementation, shared by the two halves of the plugin system
+// (PluginRunner owns the decoders, PluginUi owns the map and panel
+// capabilities). Two copies of "is this plugin stopped" would eventually
+// disagree, and a disagreement here means a plugin the user stopped is still
+// half-running — still on the map, or still holding the receiver.
+//
+// Keyed on pluginKey(), for the reason stated there.
+class PluginStopSet {
+public:
+    // Replaces the whole set. The caller (the GUI) owns the durable copy and
+    // pushes it down; nothing here reads or writes a config.
+    void set(std::vector<std::string> keys) { keys_ = std::move(keys); }
+
+    const std::vector<std::string>& keys() const { return keys_; }
+
+    bool contains(const std::string& key) const;
+    // Convenience for the rebuild loops, which have the record and not the key.
+    bool contains(const LoadedPlugin& p) const { return contains(pluginKey(p)); }
+
+private:
+    std::vector<std::string> keys_;
+};
+
 class PluginHost {
 public:
     PluginHost() = default;

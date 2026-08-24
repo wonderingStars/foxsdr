@@ -166,6 +166,54 @@ either text lines or **images** (slow-scan and weather-satellite pictures,
 shown in their own window and saveable as BMP). A plugin may also put targets
 and tracks on the map, and declare a window of its own.
 
+**Stop and start.** Every loaded plugin's row has a **Stop** button, and a
+stopped one has **Start**. Stopping destroys everything that plugin had
+running — its decoders, its map targets and trails, its window, its basemap
+tiles — while leaving the module loaded and the row where it was, so a stopped
+plugin decodes nothing, draws nothing, and cannot move the receiver. The row
+says "Stopped" in orange, because a plugin that produces nothing for a reason
+you have forgotten choosing is exactly what this must not become. It is
+remembered between sessions and across a rescan. Pressing one of the plugin's
+own preset buttons starts it first: pressing "ADS-B 1090 MHz" is an unambiguous
+request for that plugin, and tuning there with the decoder still switched off
+would be worse than useless.
+
+**Mute audio while running.** A decoder that consumes raw I/Q is handed the
+whole receiver band and tunes inside it, so the channel your speakers are fed
+is not the signal being decoded: on ADS-B at 1090 MHz it is hiss, at whatever
+the volume happens to be. Every loaded plugin's row therefore has a **Mute
+audio while running** checkbox, ticked by default for exactly the plugins that
+declare they consume raw I/Q and clear for every other. The checkbox on the row
+is the answer for any given plugin, because that is read from the plugin
+itself — a list printed here would be a list of whatever happened to be
+installed the day it was written. Decoders that work on the demodulated audio
+are the ones left clear, and deliberately: that audio is the very thing they
+are decoding, SSTV's warble and RTTY's diddle are how people tune them by ear,
+and silencing them would take away a diagnostic. While a plugin with the box
+ticked is running **and** the receiver is on one of that plugin's presets, the
+audio output is silenced — the speakers, the browser's audio stream and an
+**audio recording** alike, since all three are
+fed from the same point, so a WAV taken while a decoder is muting contains
+digital silence and the Recorder panel says so while the take runs. (An I/Q
+recording is untouched: it is taken before any of this.) The volume setting is
+not touched, the decoders keep receiving samples throughout, and **Sinks** says
+"Muted by *plugin*" so the silence is never unexplained. Your choice per plugin
+is remembered between sessions.
+
+"Running" here means actually decoding, not merely loaded. A plugin you have
+stopped mutes nothing, and neither does one sitting idle because the receiver
+is not producing the sample rate it asked for — the Plugins panel already says
+so on its row, in orange, and taking the sound away on behalf of a decoder the
+program itself says is not being fed would be silence for no benefit.
+
+**Tuning away.** Leave a running decoder's preset and FoxSDR asks once whether
+to stop it so the sound comes back, with a button that does exactly that.
+Decline and the plugin keeps running, the audio stays muted — sound returns
+when the plugin stops, which is what the question said — and a small
+**Sound muted by *plugin*** banner sits beside the frequency readout, with its
+own Stop button, until the plugin is stopped or you tune back. It asks again
+only after you have returned to a preset and left it again.
+
 **Tune permission.** A plugin that can move the receiver can also take it away
 from you, so a plugin may only retune the radio if you tick it under
 "Plugins" -> "Receiver control". It is off by default and off for every newly
@@ -226,6 +274,17 @@ Read the security posture before exposing it:
 The browser client does everything the desktop does, with two deliberate
 exceptions: it cannot name an I/Q file or a recording directory, because those
 are host filesystem paths rather than settings.
+
+It has no Stop/Start button of its own — that lives in the window — but it does
+SAY which plugins are stopped, so it never claims output from one that is
+switched off, and pressing a stopped plugin's **preset** there starts it, just
+as pressing it in the window does. A preset press is the same unambiguous "I
+want this plugin now" wherever it comes from, and the alternative — retuning
+the receiver for a decoder that is switched off, or silently doing nothing —
+would be worse from a page that cannot explain itself. It has no mute checkbox
+either, for the same reason, but when a decoder is silencing the audio the
+toolbar carries a **muted by *plugin*** badge — a browser hearing nothing has
+no other way to tell a muted radio from a dead stream.
 
 ## Privacy
 

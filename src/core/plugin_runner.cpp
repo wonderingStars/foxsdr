@@ -28,6 +28,16 @@ std::string rateSentence(const std::string& name, double want, double have,
 
 PluginRunner::~PluginRunner() { clear(); }
 
+void PluginRunner::setStopped(std::vector<std::string> keys) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stopped_.set(std::move(keys));
+}
+
+bool PluginRunner::isStopped(const std::string& pluginKey) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stopped_.contains(pluginKey);
+}
+
 void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz,
                            double iqRateHz, double centreHz) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -39,6 +49,21 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
 
     for (const LoadedPlugin& lp : plugins) {
         if (!lp.loaded) { continue; }
+        // STOPPED BY THE USER: no instance, and therefore no samples, no text
+        // and no picture. Skipped BEFORE any create() and before any status
+        // line, because a stopped plugin is not idle for a reason the user
+        // needs explaining - the row they stopped it from says so already, and
+        // an orange "not being fed" warning for a deliberate choice would
+        // train them to ignore the ones that matter.
+        if (stopped_.contains(lp)) { continue; }
+
+        // STAMPED ON EVERY LINE THIS PLUGIN PRODUCES, at the end of the loop
+        // body rather than at each of the eight places a DecoderStatus is
+        // built. One assignment cannot be forgotten by the ninth; eight can,
+        // and the one that was forgotten would be a plugin isFeeding could
+        // never see.
+        const std::string key = pluginKey(lp);
+        const std::size_t statusBegin = status_.size();
 
         // A plugin may declare both. Each declared capability gets its own
         // instance and its own stream, which is why this is two independent
@@ -183,7 +208,23 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
             st.detail = "\"" + lp.name + "\" provides no decoder this build can drive.";
             status_.push_back(std::move(st));
         }
+
+        for (std::size_t i = statusBegin; i < status_.size(); ++i) {
+            status_[i].key = key;
+        }
     }
+}
+
+bool PluginRunner::isFeeding(const std::string& pluginKey) const {
+    // An empty key matches nothing, the same rule PluginStopSet applies: a
+    // record with no path yields "", and one path-less plugin must not answer
+    // for every other.
+    if (pluginKey.empty()) { return false; }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const DecoderStatus& s : status_) {
+        if (s.key == pluginKey && s.reason == DecoderIdleReason::Running) { return true; }
+    }
+    return false;
 }
 
 void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
