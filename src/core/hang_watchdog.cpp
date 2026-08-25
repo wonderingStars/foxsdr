@@ -400,6 +400,39 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "threads: " << stacks.size() << "\n";
     out << "--- context ---\n";
     out << diagContextBlock();
+
+    // THE MODULE TABLE, and it was missing - which made every freeze report
+    // this product writes permanently unreadable.
+    //
+    // A stack is module+offset, and an offset is unreadable hex forever unless
+    // the PDB from THAT EXACT LINK can be found again. The build id is the only
+    // key that finds it. crash_handler.cpp has written this block since phase
+    // one and PRIVACY.md has described freeze reports as carrying it, but the
+    // writer here never did: every stack below named a module and nothing said
+    // which build of it. Since every fault this product has actually shipped
+    // was a hang rather than a crash, that was the whole feature missing from
+    // the half that matters most.
+    //
+    // Written BEFORE the unwind for the same reason the header is: a report
+    // that stops here is still a report, and one that names the build is worth
+    // more than one that does not. The line format is byte-identical to
+    // crash_handler.cpp's so ONE parser reads both - two spellings of one table
+    // is how a reader silently stops resolving one of the two kinds.
+    out << "--- modules ---\n";
+    {
+        const int mods = moduleCount();
+        for (int i = 0; i < mods; ++i) {
+            DiagModule m;
+            if (!moduleAt(i, m)) { continue; }
+            char line[256];
+            std::snprintf(line, sizeof(line), "  %s base=0x%016llX size=0x%llX pdb=%s build=%s\n",
+                          m.name, static_cast<unsigned long long>(m.base),
+                          static_cast<unsigned long long>(m.size),
+                          m.pdb[0] != '\0' ? m.pdb : "(none)",
+                          m.buildId[0] != '\0' ? m.buildId : "(none)");
+            out << line;
+        }
+    }
     out.flush();
 
     {

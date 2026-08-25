@@ -317,9 +317,13 @@ the plugin catalogue, and only when you press **Browse**.
 
 ## When it crashes or freezes
 
-FoxSDR records faults **on your machine** and uploads **nothing** — not
-automatically, not in the background, not at all in this version. You choose
-what to send, and when.
+FoxSDR records faults **on your machine**, and — with Diagnostics on — sends the
+report's *text* the **next** time you open it. Never from inside the crash: a
+program that has just failed cannot safely use the network, so the file waits on
+disk until there is a healthy process to send it. **A memory dump is never sent,
+under any setting**, and the switch that stops the writing stops the sending too.
+[PRIVACY.md](PRIVACY.md) lists the payload field by field, and an automated test
+holds the request, the code and that document to each other in both directions.
 
 - A crash writes a report to `%LOCALAPPDATA%\FoxSDR\crashes\` naming the fault,
   the faulting module and offset, the loaded modules, and the last 256 log
@@ -330,6 +334,10 @@ what to send, and when.
   captures the stack of **every** thread — a deadlock is only legible as a pair
   — and then lets the application carry on if it recovers.
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`.
+- Each report that has been sent — or could not be — carries a small `.upload`
+  file beside it saying which, in plain words. At most five reports a day leave
+  one machine, and the same fault only once a day, so a machine stuck in a crash
+  loop stops sending on its own.
 - **Settings → Diagnostics** shows both paths, has the on/off switch, and has
   **Copy diagnostics**: one click that puts the version, commit, operating
   system, loaded plugins with versions, source and device state and the recent

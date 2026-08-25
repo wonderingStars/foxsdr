@@ -832,6 +832,11 @@ int AppWindow::run(int frames) {
     applyDiagnosticsEnabled(diagnosticsEnabled_);
     refreshDiagContext();
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // ...and, on the same healthy path, anything the LAST run left on disk.
+    // Started here rather than in telemetryStartup because it needs the answer
+    // to "may this run touch the disk at all", which is diagCrashDir_ and is
+    // only settled by main() after the constructor.
+    crashUploadStart();
     cascade::core::diagLogf("frame loop starting (%s)",
                             frames >= 0 ? "bounded" : "interactive");
 
@@ -964,6 +969,12 @@ int AppWindow::run(int frames) {
     // fired (e.g. a change made less than 2 s before closing the window).
     // Runs before pipeline_.stop() so the snapshot reads live state.
     telemetryCleanExit_ = true;  // reached only on the normal shutdown path
+    // BEFORE the save, so the sweep's dedup and rate-limit memory reaches the
+    // file - and before anything else on this path, so a transfer in flight is
+    // cancelled rather than waited out. This is the line that makes "a hanging
+    // endpoint does not delay shutdown" true; it is measured against the real
+    // binary in tests/test_crash_upload.cpp.
+    crashUploadFinish();
     if (!configPath_.empty()) { saveConfigNow(); }
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
@@ -7055,23 +7066,39 @@ void AppWindow::drawDiagnosticsSection() {
     telemetryNotePanel("diagnostics");
 
     ImGui::TextWrapped(
-        "If FoxSDR crashes or freezes, it writes a report on THIS machine and "
-        "nothing else. Nothing is uploaded, ever - not automatically and not "
-        "in the background. You choose what to send, and when.");
+        "If FoxSDR crashes or freezes, it writes a report on THIS machine. With "
+        "this switch on, that report is also sent to us the NEXT time you open "
+        "FoxSDR - never from inside the crash itself, because a program that has "
+        "just failed cannot safely use the network.");
     ImGui::Spacing();
 
     bool on = diagnosticsEnabled_;
-    if (ImGui::Checkbox("Record crashes, freezes and a rotating log", &on)) {
+    if (ImGui::Checkbox("Record crashes and freezes, and send the report next time", &on)) {
         applyDiagnosticsEnabled(on);
     }
+    // WHAT IS SENT AND WHAT IS NOT, at the switch itself. A privacy notice
+    // somebody has to go and find is not a disclosure; this is the moment the
+    // decision is being made.
+    ImGui::TextDisabled(
+        "Sent: the version and build, what failed and where (as a file name and\n"
+        "an offset), every thread's stack in the same form, the recent log lines,\n"
+        "and what the receiver was doing - mode, source, sample rate, radio model\n"
+        "with the serial removed, and the plugins that were loaded.\n"
+        "NEVER sent: a frequency you tuned to, anything decoded, your position,\n"
+        "your name, your machine's name, or the name of any file you opened.\n"
+        "At most five a day, and the same fault only once a day.\n"
+        "Off means off: no report is written and nothing is sent.");
+    ImGui::Spacing();
+
     bool dump = diagnosticsMinidump_;
     if (ImGui::Checkbox("Also write a full memory dump beside a crash report", &dump)) {
         diagnosticsMinidump_ = dump;
         cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
     }
     ImGui::TextDisabled(
-        "A memory dump can contain file names and received signal data.\n"
-        "It is written locally and never sent unless you send it yourself.");
+        "A memory dump can contain file names, window titles and received signal\n"
+        "data. It is written LOCALLY ONLY and is NEVER uploaded under any\n"
+        "setting - if it is ever useful you will be asked for it, and you decide.");
 
     ImGui::Spacing();
     const std::string logPath = cascade::core::DiagLog::instance().filePath();
@@ -7119,10 +7146,37 @@ void AppWindow::drawDiagnosticsOffer() {
     if (ImGui::Begin("FoxSDR did not close normally last time", &diagOfferOpen_,
                      ImGuiWindowFlags_AlwaysAutoResize)) {
         telemetryNotePanel("diagnostics offer");
+        // WHY THE SENDING IS DESCRIBED CONDITIONALLY. The sweep running on this
+        // start does not always send. It declines a signature already sent
+        // inside the dedup window, a machine that has used up its per-window
+        // allowance, a server backoff left by an earlier 429, a report that
+        // will not parse, and one still too large after trimming. Every one of
+        // those is ordinary on a machine that has just failed twice in a row -
+        // which is precisely the machine this dialog appears on - so a sentence
+        // asserting that the text of the report is on its way right now would
+        // be untrue most of the times it is read. The old wording erred in the
+        // safe direction (it promised more transmission than happens, never
+        // less), but it was still a claim the product could not keep.
+        //
+        // THE LIVE OUTCOME IS DELIBERATELY NOT CONSULTED. crashUploader_
+        // .outcome() is written by the sweep thread and is only safe to read
+        // after stop(), which happens at shutdown; reading it from the frame
+        // loop to make this sentence more specific would trade a copy defect
+        // for a data race.
+        // SO THE SENTENCE STATES THE ATTEMPT, NOT THE OUTCOME. "is sent
+        // unless X or Y" still asserts, by construction, that it IS sent when
+        // neither exception applies - and the commonest reason of all is
+        // missing from that list: the machine cannot reach the site. A laptop
+        // that crashed on a train is the ordinary case, not the exotic one.
         ImGui::TextWrapped(
             "The previous session ended without shutting down. If a report was "
-            "written it is on this machine only - nothing has been sent, and "
-            "nothing will be unless you send it.");
+            "written, it is on this machine. On this start we TRY to send its "
+            "text - the version, what failed and where, the thread stacks and "
+            "the recent log lines. It is not sent if it repeats one already "
+            "sent, if this machine is over its send limit, or if foxsdr.com "
+            "cannot be reached. Either way the report stays in the reports "
+            "folder below. No memory dump is sent, ever. Settings > "
+            "Diagnostics lists exactly what goes and turns it off.");
         ImGui::Spacing();
         if (ImGui::Button("Copy diagnostics")) { copyDiagnosticsBundle(); }
         ImGui::SameLine();
@@ -7443,6 +7497,12 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     // the user anything, because by then there is no user interface left.
     lastRunUnclean_ = !cfg.telemetryCleanExit;
     diagOfferOpen_ = lastRunUnclean_ && cfg.diagnosticsEnabled;
+    // The crash-loop limiter's memory, VALIDATED rather than trusted: it is
+    // user-editable text on disk, and the one thing it controls is how much
+    // this machine is allowed to send.
+    crashUploadState_ = cascade::core::decodePolicyState(
+        cfg.crashUploadRecent, cfg.crashUploadWindowStart, cfg.crashUploadWindowCount,
+        cfg.crashUploadBlockedUntil);
     telemetrySessionStart_ = glfwGetTime();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
     // Last session's report goes now, on a thread, while the window is coming
@@ -7450,6 +7510,46 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     if (telemetryEnabled_ && !telemetryInstallId_.empty() &&
         !cfg.telemetryPending.empty()) {
         telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
+    }
+}
+
+void AppWindow::crashUploadStart() {
+    // OFF MEANS OFF FOR UPLOADING TOO. Both halves are required: the user's
+    // switch, and "may this run write to the machine at all" - a bounded CI run
+    // has an empty diagCrashDir_ and must not start sending whatever the config
+    // says.
+    if (!diagnosticsEnabled_ || diagCrashDir_.empty()) { return; }
+
+    cascade::core::SweepParams p;
+    p.crashDir = diagCrashDir_;
+    p.url = cascade::core::crashUploadEndpoint();
+    // The SAME anonymous id the usage report uses, and empty when usage
+    // reporting is off - because then it does not exist. A crash report must
+    // not be what mints an identifier the user switched off. See PRIVACY.md.
+    p.installId = telemetryEnabled_ ? telemetryInstallId_ : std::string();
+    p.enabled = true;
+    p.state = crashUploadState_;
+    crashUploader_.start(p);
+    crashUploadSwept_ = true;
+}
+
+void AppWindow::crashUploadFinish() {
+    // Cancels first, then joins. The cancel closes the live request handle, so
+    // a transfer blocked on a server that never answers returns immediately
+    // instead of sitting out its receive timeout.
+    crashUploader_.stop();
+    if (!crashUploadSwept_) { return; }
+    const cascade::core::SweepOutcome out = crashUploader_.outcome();
+    crashUploadState_ = out.state;
+    if (out.considered > 0) {
+        cascade::core::diagLogf(
+            "crash upload: %d considered, %d sent, %d duplicate, %d held, %d failed, "
+            "%d abandoned, %d refused",
+            out.considered, out.sent, out.duplicate, out.limited, out.failed, out.abandoned,
+            out.refused);
+        for (const std::string& n : out.notes) {
+            cascade::core::diagLogf("crash upload: %s", n.c_str());
+        }
     }
 }
 
@@ -7463,6 +7563,10 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     // written back, so the diagnostics switches ride along here too.
     cfg.diagnosticsEnabled = diagnosticsEnabled_;
     cfg.diagnosticsMinidump = diagnosticsMinidump_;
+    cfg.crashUploadRecent = cascade::core::encodePolicyRecent(crashUploadState_);
+    cfg.crashUploadWindowStart = crashUploadState_.windowStart;
+    cfg.crashUploadWindowCount = crashUploadState_.windowCount;
+    cfg.crashUploadBlockedUntil = crashUploadState_.blockedUntil;
 
     cfg.telemetryEnabled = telemetryEnabled_;
     cfg.telemetryInstallId = telemetryInstallId_;

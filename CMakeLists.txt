@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.61.0 LANGUAGES C CXX)
+project(cascade VERSION 0.62.0 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -321,6 +321,23 @@ else()
     add_executable(cascade src/main.cpp)
 endif()
 target_link_libraries(cascade PRIVATE cascade_lib)
+
+# ---------------------------------------------------------------------------
+# foxsdr-reports - the reader that makes an uploaded report readable
+# ---------------------------------------------------------------------------
+#
+# A crash report arrives as module+offset, and an offset is unreadable hex
+# forever unless the PDB from THAT EXACT LINK can be found. This tool resolves
+# them against symbols/ - here, never on the server: the PDBs are the complete
+# private debug information for every shipped build, they are tens of megabytes
+# each, and uploading them to save a step is not a trade worth making. See
+# src/core/report_reader.hpp.
+#
+# Built by the normal build so it cannot rot: a tool that only compiles when
+# somebody remembers to compile it is a tool that will not compile on the day a
+# report matters.
+add_executable(foxsdr-reports tools/report-reader/main.cpp)
+target_link_libraries(foxsdr-reports PRIVATE cascade_lib)
 
 # Delay-load SoapySDR so a missing or broken hardware runtime cannot stop the
 # app from starting. Without this the Windows loader kills the process before

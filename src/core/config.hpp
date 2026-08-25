@@ -429,6 +429,21 @@ struct AppConfig {
     // and offered for manual sending; it is never uploaded by the application.
     bool diagnosticsMinidump = false;
 
+    // --- Sending a captured report (see PRIVACY.md, core/crash_upload.hpp) --
+    //
+    // The client-side rate limit and duplicate memory, persisted because a
+    // crash loop IS a sequence of runs: a limit that lived only in memory would
+    // reset on every restart and limit nothing. None of this is transmitted -
+    // it is the state that decides whether anything is.
+    //
+    // `crashUploadRecent` holds "<signature> <epoch seconds>" entries, bounded
+    // and validated on load (core::decodePolicyState); `crashUploadBlockedUntil`
+    // is set when the server answers 429 and is the honouring of it.
+    std::vector<std::string> crashUploadRecent;
+    std::uint64_t crashUploadWindowStart = 0;
+    std::uint32_t crashUploadWindowCount = 0;
+    std::uint64_t crashUploadBlockedUntil = 0;
+
     // Cap for the three plugin-name lists above (pluginTuneAllowed,
     // pluginsStopped, pluginMuteOverride); see the load-semantics note in the
     // header comment. One constant, because all three hold the same kind of
