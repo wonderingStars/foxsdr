@@ -27,11 +27,25 @@
 # installer (installer/README-installer.md explicitly contemplates one) never
 # goes near that script and was covered by nothing.
 #
-# `git status --porcelain` and not `git diff --quiet`, deliberately: an
-# UNTRACKED source file is exactly as absent from the checked-out tree as a
-# modified one, and in the measurement above most of the feature was untracked.
-# .gitignore still applies, so build outputs and symbols/ do not mark a tree
-# dirty.
+# UNTRACKED FILES COUNT, BUT ONLY WHERE THEY CAN REACH THE BUILD. An untracked
+# source file is exactly as absent from the checked-out tree as a modified one -
+# in the measurement that prompted this, most of the diagnostics feature was
+# untracked while the binary reported a clean SHA - so ignoring untracked files
+# entirely would miss the very case this exists to catch.
+#
+# But counting EVERY untracked path is just as useless, in the other direction.
+# This repository permanently carries untracked files that are nobody's mistake:
+# docs/LICENSING.md and third_party/tweetnacl/ are deliberately not committed
+# yet. With a blanket `git status --porcelain`, EVERY build from a spotless
+# release commit was marked "-dirty" - and a marker that is always on carries no
+# information at all, which is worse than not having one, because a reader who
+# sees it on every report learns to ignore it on the one report where it matters.
+#
+# So: any modified, staged or deleted TRACKED file marks the tree, always; and
+# an UNTRACKED file marks it only under the directories a build actually
+# compiles from. A stray note in docs/ does not change the binary; a stray .cpp
+# in src/ does. .gitignore still applies to both, so build outputs and symbols/
+# never mark a tree dirty.
 #
 # Invoked as:
 #   cmake -DGIT=<git> -DTREE=<source dir> -DOUT=<header path> -P git-commit.cmake
@@ -53,12 +67,22 @@ if(GIT AND EXISTS "${GIT}")
         # A modified or untracked-source tree is NOT the commit it names. The
         # marker goes on the commit, because the commit is the line a reader is
         # told to check out.
-        execute_process(COMMAND "${GIT}" status --porcelain
+        # Half one: any tracked file that differs from HEAD.
+        execute_process(COMMAND "${GIT}" status --porcelain --untracked-files=no
                         WORKING_DIRECTORY "${TREE}"
-                        OUTPUT_VARIABLE _status
+                        OUTPUT_VARIABLE _tracked
                         OUTPUT_STRIP_TRAILING_WHITESPACE
-                        ERROR_QUIET RESULT_VARIABLE _src)
-        if(_src EQUAL 0 AND NOT _status STREQUAL "")
+                        ERROR_QUIET RESULT_VARIABLE _rc_tracked)
+        # Half two: untracked files, but only where a build compiles from.
+        # --exclude-standard so .gitignore keeps build outputs and symbols/ out.
+        execute_process(COMMAND "${GIT}" ls-files --others --exclude-standard --
+                                src tests cmake CMakeLists.txt
+                        WORKING_DIRECTORY "${TREE}"
+                        OUTPUT_VARIABLE _untracked
+                        OUTPUT_STRIP_TRAILING_WHITESPACE
+                        ERROR_QUIET RESULT_VARIABLE _rc_untracked)
+        if((_rc_tracked EQUAL 0 AND NOT _tracked STREQUAL "") OR
+           (_rc_untracked EQUAL 0 AND NOT _untracked STREQUAL ""))
             set(CASCADE_GIT_COMMIT "${_sha}-dirty")
         endif()
     endif()
