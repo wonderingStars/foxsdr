@@ -21,6 +21,20 @@ self-contained Inno Setup 6 installer for FoxSDR.
    `C:\Windows`. If your VS version directory differs from the default pinned
    in the `.iss`, override it on the command line (see below).
 
+> **Before you ship anything built this way, read the symbols note below.** An
+> installer compiled by hand carries a binary whose PDB exists on exactly one
+> disk. `tools/build-nightly.ps1` mirrors symbols off-machine as part of the
+> same step; `ISCC` on its own does not.
+
+> **Check the tree is clean first.** `build-nightly.ps1` appends `.dirty` to
+> the version string when the tree has uncommitted changes; a hand-run `ISCC`
+> does not, so the version on the installer is indistinguishable from a
+> released one. The binary's own `commit:` field does carry the marker — every
+> build from a modified tree reports `<sha>-dirty` (see
+> `docs/DIAGNOSTICS.md`), so a crash report from it can at least be recognised
+> as coming from a tree nobody can check out. That is a way to notice the
+> mistake afterwards, not a licence to ship one: commit first.
+
 ## Build
 
 From the repo root:
@@ -52,6 +66,23 @@ in `CMakeLists.txt`; the output filename follows automatically.
   for scripted installs).
 * Uninstall: `unins000.exe /VERYSILENT` from the install dir (or Apps &
   Features).
+
+## Symbols — the step this file cannot do for you
+
+The moment an installer exists, so does a binary that can reach a user, and
+every crash report that binary will ever produce is unreadable without the PDB
+from **that exact link**. A PDB cannot be regenerated: rebuilding the same
+source produces a different CodeView GUID and different offsets.
+
+The CMake build already archives each link into `symbols\`, keyed by build id
+(`tools/archive-symbols.ps1`). That directory is gitignored and lives on one
+disk. The durable copy is pushed to `nas:/volume1/foxsdr-symbols` by
+`tools/build-nightly.ps1`, **in the same step that compiles the installer** —
+which is exactly why a hand-run `ISCC` is not equivalent.
+
+So: build shippable installers with `tools/build-nightly.ps1`, or mirror the
+symbols yourself before the binary leaves the machine. Detail and the reading
+procedure are in [../docs/DIAGNOSTICS.md](../docs/DIAGNOSTICS.md).
 
 ## What is deliberately NOT bundled
 

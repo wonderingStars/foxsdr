@@ -16,3 +16,17 @@ telemetry-worker/.wrangler/
 # the file was also scrubbed from history before the repo went public.
 HANDOVER.md
 installer/generated-version.iss
+
+# The symbol archive. PDBs are tens of megabytes of binary PER LINK and would
+# make the source repository unusable within a fortnight, so they are never
+# committed — but they must also survive forever, because a crash report filed
+# against a shipped build is unreadable hex without the PDB from that exact
+# link, and PDBs are not shipped to users.
+#
+# THIS IS NOT "LOCAL ONLY". The durable copy lives on the NAS at
+# nas:/volume1/foxsdr-symbols (the same host and key as the git mirror), and
+# tools/build-nightly.ps1 pushes it there in the SAME step that produces the
+# installer — deliberately not as a separate step somebody has to remember.
+# symbols/ here is the working copy that post-build populates on every build.
+# See docs/DIAGNOSTICS.md and tools/archive-symbols.ps1.
+symbols/

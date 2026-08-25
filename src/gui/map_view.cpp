@@ -8,6 +8,7 @@
 
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
+#include "gui/track_detail_view.hpp"
 #include "gui/track_info_cache.hpp"
 #include "imgui.h"
 
@@ -699,73 +700,17 @@ void MapView::draw(float width, float height,
 
     if (best != nullptr) {
         hoveredId_ = best->t.id;
+        // THE SHARED BLOCK. This tooltip used to spell the whole thing out
+        // here, and the flight list spelled a second, shorter copy out for
+        // itself; the copies drifted within the week. Both now draw what
+        // buildTrackDetailLines says, so a change to the units or to the
+        // registry fields reaches every place a target is described.
+        //
+        // Asking the info cache is non-blocking and cached, so hovering is
+        // also what starts the lookup for a target the per-frame sweep has not
+        // reached yet - which happens inside makeTrackDetailInput.
         ImGui::BeginTooltip();
-        ImGui::Text("%s", best->t.label[0] != '\0' ? best->t.label : best->t.id);
-        ImGui::Separator();
-        // Who this actually is, when a track-info plugin knows. Asking is
-        // non-blocking and cached, so hovering is also what starts the lookup
-        // for a target the per-frame sweep has not reached yet.
-        if (info != nullptr && info->active()) {
-            const TrackInfoCache::Info* d = info->get(best->t.id, best->t.kind);
-            if (d != nullptr && d->known) {
-                if (!d->registration.empty()) {
-                    ImGui::Text("reg     %s", d->registration.c_str());
-                }
-                const std::string& type =
-                    !d->typeName.empty() ? d->typeName : d->typeCode;
-                if (!type.empty()) { ImGui::Text("type    %s", type.c_str()); }
-                if (!d->operatorName.empty()) {
-                    ImGui::Text("oper    %s", d->operatorName.c_str());
-                }
-                if (!d->country.empty()) {
-                    ImGui::Text("reg'd   %s", d->country.c_str());
-                }
-                ImGui::Separator();
-            } else if (d == nullptr) {
-                ImGui::TextDisabled("looking up...");
-                ImGui::Separator();
-            }
-        }
-        ImGui::Text("id      %s", best->t.id);
-        ImGui::Text("from    %s", best->plugin.c_str());
-        ImGui::Text("pos     %.5f, %.5f", best->t.latDeg, best->t.lonDeg);
-        // Unknown values are NaN by ABI contract, and are shown as unknown
-        // rather than as zero - "0 kt" and "no speed reported" are different
-        // facts and must not look the same.
-        if (!std::isnan(best->t.altM)) {
-            // The band is named as well as the number, so the colour on the map
-            // and the figure in the tooltip can be tied together without
-            // counting swatches in the legend.
-            ImGui::Text("alt     %.0f m (%.0f ft, %s)", best->t.altM,
-                        best->t.altM * 3.28084,
-                        altBandStyle(altitudeBandIndex(best->t.altM)).label);
-        } else {
-            ImGui::TextDisabled("alt     unknown");
-        }
-        if (!std::isnan(best->t.speedMps)) {
-            ImGui::Text("speed   %.0f kt", best->t.speedMps * 1.94384);
-        } else {
-            ImGui::TextDisabled("speed   unknown");
-        }
-        if (!std::isnan(best->t.courseDeg)) {
-            ImGui::Text("course  %.0f deg", best->t.courseDeg);
-        } else {
-            ImGui::TextDisabled("course  unknown");
-        }
-        if (hasHome_) {
-            const double km =
-                greatCircleKm(homeLat_, homeLon_, best->t.latDeg, best->t.lonDeg);
-            const double brg =
-                initialBearingDeg(homeLat_, homeLon_, best->t.latDeg, best->t.lonDeg);
-            // A target at the receiver's own coordinates has no bearing from
-            // it, and printing "nan deg" would be worse than saying so.
-            if (std::isnan(brg)) {
-                ImGui::Text("range   %.1f km, bearing undefined", km);
-            } else {
-                ImGui::Text("range   %.1f km at %.0f deg", km, brg);
-            }
-        }
-        ImGui::Text("age     %.1f s", static_cast<double>(best->t.ageMs) / 1000.0);
+        drawTrackDetail(*best, info, hasHome_, homeLat_, homeLon_);
         ImGui::EndTooltip();
     }
 

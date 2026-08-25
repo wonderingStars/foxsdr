@@ -242,6 +242,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getUint64(j, "telemetryCrashes", out.telemetryCrashes);
     getBool(j, "telemetryCleanExit", out.telemetryCleanExit);
     getString(j, "telemetryPending", out.telemetryPending);
+    getBool(j, "diagnosticsEnabled", out.diagnosticsEnabled);
+    getBool(j, "diagnosticsMinidump", out.diagnosticsMinidump);
 
     // THE INSTALL ID IS VALIDATED, NOT TRUSTED. It is the one telemetry field
     // that leaves the machine as free text, so a config that put something
@@ -445,6 +447,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["telemetryCrashes"] = cfg.telemetryCrashes;
     j["telemetryCleanExit"] = cfg.telemetryCleanExit;
     j["telemetryPending"] = cfg.telemetryPending;
+    j["diagnosticsEnabled"] = cfg.diagnosticsEnabled;
+    j["diagnosticsMinidump"] = cfg.diagnosticsMinidump;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the

@@ -53,8 +53,15 @@ are still moving. What is in the current build:
   recording of both audio and raw I/Q.
 - **Map and decoders.** Aircraft, vessels and stations plotted together,
   coloured by altitude band, with optional map imagery from a basemap plugin.
-  Beside the map is a sortable table of everything being heard — callsign, id,
-  altitude, speed, course, age, and distance and bearing from your receiver.
+  Beside the map is a list of everything being heard: callsign, id, and a
+  details button per row. The button opens the full block for that target —
+  registration, type, operator and country where a track-info plugin can supply
+  them, then position, altitude, speed, course, age, and distance and bearing
+  from your receiver. A **Sort** control above the list orders it by any of
+  those eight — callsign, id, altitude (ft), speed (kt), course (deg), distance
+  (km), bearing (deg) or age (s) — ascending or descending, so "what is nearest
+  me" is one menu pick away. Clicking a row takes the map to that target;
+  double-clicking follows it.
   Give it your antenna's position once and it also builds a **coverage map**:
   the furthest anything has been heard in each direction, drawn over the map,
   which is the cheapest antenna diagnostic there is. Decoder plugins produce
@@ -308,6 +315,39 @@ the receiving endpoint's source is in [telemetry-worker/](telemetry-worker/).
 Apart from that, the application makes exactly one network request: fetching
 the plugin catalogue, and only when you press **Browse**.
 
+## When it crashes or freezes
+
+FoxSDR records faults **on your machine** and uploads **nothing** — not
+automatically, not in the background, not at all in this version. You choose
+what to send, and when.
+
+- A crash writes a report to `%LOCALAPPDATA%\FoxSDR\crashes\` naming the fault,
+  the faulting module and offset, the loaded modules, and the last 256 log
+  lines.
+- A **freeze** does too, which matters more: every fault this product has
+  actually shipped was a hang rather than a crash, and a crash handler catches
+  none of those. If the window stops responding for five seconds, a watchdog
+  captures the stack of **every** thread — a deadlock is only legible as a pair
+  — and then lets the application carry on if it recovers.
+- A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`.
+- **Settings → Diagnostics** shows both paths, has the on/off switch, and has
+  **Copy diagnostics**: one click that puts the version, commit, operating
+  system, loaded plugins with versions, source and device state and the recent
+  log on your clipboard, so you can read it before you send it to anybody. Off
+  means off — no directory, no file, and off from the first instruction the
+  application runs rather than from its first frame: the switch is read before
+  anything is armed or created.
+
+What a report contains is listed field by field in [PRIVACY.md](PRIVACY.md) and
+held to that list by an automated test. It never contains a frequency, anything
+decoded, or your position. A full memory dump is off by default, written locally
+if you switch it on, and never sent by the application.
+
+The engineering side — how a handler writes a report from a broken process,
+how the five-second threshold is derived and measured, and where the symbols
+that make a report readable are kept — is in
+[docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).
+
 ## Installing
 
 Download `foxsdr-setup-<version>.exe` from the releases page and run it. It
@@ -360,6 +400,35 @@ called itself by the release version would produce bug reports naming a build
 that does not exist. `cascade --version` prints it, `ctest` pins the format,
 and the nightly script refuses to package a build whose binary disagrees with
 the name it is about to be given — or one whose tests fail.
+
+### Symbols, and why the archive is not in this repository
+
+A crash report from the field is a list of `module+offset` pairs. Turning one
+back into a function and a line needs the PDB produced by **that link** — not a
+rebuild of the same source, not the same version built on another machine. PDBs
+are not shipped to users, so a PDB not kept at build time does not exist
+anywhere afterwards, and every report ever filed against that build is
+unreadable hex forever. There is no repairing that later.
+
+So every build archives its own PDB, keyed by the **PE build id** (the CodeView
+GUID and age the linker stamps into the binary — the only key that tells a
+release from the nightly heading towards it, or one rebuild from the next).
+That happens in a CMake `POST_BUILD` step, `tools/archive-symbols.ps1`, so it is
+part of the build rather than something to remember.
+
+**`symbols/` is gitignored**, because a PDB is tens of megabytes of binary per
+link and committing one per build would make this repository unusable inside a
+fortnight. **It is not local-only either**: `tools/build-nightly.ps1` mirrors
+each shippable build's symbols to `nas:/volume1/foxsdr-symbols` over SSH, in the
+*same step* that compiles the installer, and a mirror failure fails the nightly.
+Local-only would mean one disk failure permanently destroying the ability to
+read every crash report against every build already in users' hands, and that is
+not a risk worth accepting for a product that is sold. `-SkipSymbolMirror`
+exists for a deliberately offline build and says plainly what it is risking.
+
+`tests/test_diagnostics.cpp` asserts that *this* build's PDB really is in the
+archive under the build id a report would quote. Full detail:
+[docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).
 
 ## License
 

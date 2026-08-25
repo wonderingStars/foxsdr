@@ -31,6 +31,7 @@
 // keeps app_window.hpp usable from the tests (see the note below).
 #include "gui/track_metrics.hpp"
 #include "core/telemetry.hpp"
+#include "core/hang_watchdog.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
 // web_server.hpp forward-declares it.
@@ -258,6 +259,18 @@ public:
     // ImGui backends fail to initialize (the reason is printed to stderr).
     int run(int frames = -1);
 
+    // Where hang reports go, and whether the frame loop should stage a
+    // deliberate stall. Both are decided in main(), because only main() knows
+    // whether this is a real session or a bounded CI run - and a bounded run
+    // must leave nothing on the machine it ran on.
+    void setDiagnosticsDir(std::string crashDir);
+    void setDiagStallMs(int ms);
+    // --diag-toggle on|off: +1, -1, or 0 for "leave it alone". Flips the
+    // Settings > Diagnostics switch on frame 30, through the same function the
+    // checkbox calls, so the mid-session behaviour of that switch can be
+    // proved against the real application.
+    void setDiagToggle(int mode);
+
 private:
     void drawUi();
     void drawToolbar();
@@ -358,11 +371,28 @@ private:
     // yes — which made a satellite tracker's Doppler correction unreachable.
     // The one-click rows under an installed plugin: "ADS-B 1090 MHz" and the
     // like, declared by the plugin itself through CASCADE_CAP_PRESET.
-    // The list of decoded targets down the side of the Map window: callsign
-    // or id, altitude and range, with click-to-go-to and double-click to
+    // The list of decoded targets down the side of the Map window: callsign,
+    // id and a details button per row, with click-to-go-to and double-click to
     // follow. A map answers "where is everything"; this answers "what am I
     // hearing", and clicking answers "take me to that one".
+    //
+    // THREE THINGS, NOT EIGHT. It was an eight-column sortable table, and in
+    // the width the list actually gets every heading was truncated - a table
+    // sorted by columns nobody can read is worse than the plain list it
+    // replaced. The other six values moved into the details window below, and
+    // the eight sort keys into one labelled menu above the table, so nothing
+    // that could be asked before has stopped being answerable.
     void drawTrackList();
+    // The compact sort control above the list: which key, and which way. It is
+    // the ONLY way the list is ordered - the table itself is no longer
+    // ImGui-sortable, because ImGui offers no public way to write the header's
+    // sort arrow back, so a menu and a clickable header would sooner or later
+    // have shown a "Callsign" arrow over rows ordered by distance.
+    void drawTrackSortControl();
+    // "Target details": the full block for the one target whose row button was
+    // pressed, in a window of its own. See the implementation for why it is a
+    // window rather than a popup or a panel under the list.
+    void drawTargetDetailsWindow();
     void drawPluginPresets(const cascade::core::LoadedPlugin& p);
     // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
     // rebuilds the decoders against the new receiver state, and opens what
@@ -808,6 +838,53 @@ private:
     void drawUsageReportingSection();
     bool privacyNoticeOpen_ = false;
 
+    // -----------------------------------------------------------------------
+    // Diagnostics (see core/crash_handler.hpp, core/hang_watchdog.hpp)
+    // -----------------------------------------------------------------------
+    //
+    // The watchdog is fed once per rendered frame from run(). It is the only
+    // thing in this application that can see a hang - and every fault this
+    // product has actually shipped was a hang, not a crash.
+    cascade::core::HangWatchdog watchdog_;
+    // Where reports go, decided in main() so that a bounded CI run leaves
+    // nothing on the machine. Empty means the watchdog still runs (a recovered
+    // stall is still logged) but writes no file.
+    std::string diagCrashDir_;
+    // --diag-stall N: wedge the frame loop for N ms, once, on frame 60. The
+    // only way to prove the shipped threshold fires against the real loop.
+    int diagStallMs_ = 0;
+    // --diag-toggle on|off: flip the diagnostics switch on frame 30. See
+    // setDiagToggle().
+    int diagToggle_ = 0;
+    // The whole diagnostics switch - crash handler, log AND watchdog - in one
+    // place. The checkbox, the arming path in run() and the test hook all go
+    // through it; they used to disagree about the watchdog.
+    void applyDiagnosticsEnabled(bool on);
+    // Set for the ONE heartbeat after a deliberate stall, so a stall the test
+    // asked for cannot become "the worst frame gap this build measured".
+    bool diagSkipNextGap_ = false;
+    // Rebuilds the report context out of state the application already has -
+    // mode, source, rate, radio model, loaded plugins with versions. Nothing
+    // here is re-derived.
+    void refreshDiagContext();
+    std::size_t diagPluginCount_ = static_cast<std::size_t>(-1);
+    // The previous session did not reach its clean-exit save. Reuses
+    // telemetryCleanExit, which already detects exactly this, and is the
+    // trigger for offering a report on this start.
+    bool lastRunUnclean_ = false;
+    bool diagOfferOpen_ = false;
+    // "Diagnostics" settings section: where the log is, what a report carries,
+    // and the one-click bundle.
+    void drawDiagnosticsSection();
+    // Shown once, at the start of the run AFTER an unclean exit. A crash
+    // handler can write a report but it cannot ask anything - by the time it
+    // runs there is no user interface left to ask with. This is the ask.
+    void drawDiagnosticsOffer();
+    void copyDiagnosticsBundle();
+    std::string diagBundleStatus_;
+    bool diagnosticsEnabled_ = true;
+    bool diagnosticsMinidump_ = false;
+
     // Who each map target actually is, answered by a track-info plugin
     // (registration, type, operator). Inactive when none is installed.
     TrackInfoCache trackInfo_;
@@ -858,13 +935,22 @@ private:
     // Session-scoped by design; see CoverageMap.
     CoverageMap coverage_;
     bool coverageShow_ = false;
-    // Sort state for the track table, remembered across frames because ImGui's
-    // table sort specs are only reported on the frame the user clicks. SEEDED
-    // FROM THE SAME CONSTANT the table's DefaultSort column is pinned to, so
-    // the opening order the code states is the one the screen shows - written
-    // separately, the two disagreed and the constant here was simply dead.
-    TrackSortKey trackSortKey_ = trackSortKeyForColumn(kTrackSortDefaultColumn);
+    // Sort state for the track list, held here because the sort menu above the
+    // table is the only thing that sets it and the table below has to be
+    // ordered by it every frame. SEEDED FROM THE SAME CONSTANT the menu opens
+    // on, so the opening order the code states is the one the screen shows -
+    // written separately, the two disagreed and the constant here was dead.
+    TrackSortKey trackSortKey_ = trackSortKeyForMenuIndex(kTrackSortDefaultIndex);
     bool trackSortAscending_ = true;
+    // THE TARGET THE DETAILS WINDOW IS SHOWING, by id, empty when it is shut.
+    // An id rather than a pointer or an index because the host's track vector
+    // is rebuilt on every poll: an index would point at a different aircraft a
+    // frame later, and a pointer would dangle. An id that is no longer in the
+    // vector is a target that has gone, which the window says rather than
+    // silently closing - a detail view that vanishes on its own looks like a
+    // crash.
+    std::string detailsTrackId_;
+    bool detailsOpen_ = false;
     // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
     // rather than by the runner because it is written only when a decoder
     // produces a new picture: keeping the GUI's copy out of the runner is what

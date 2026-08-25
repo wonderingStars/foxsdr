@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.60.0 LANGUAGES C CXX)
+project(cascade VERSION 0.61.0 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -55,9 +55,64 @@ file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/installer/generated-version.iss"
      "#define AppVersion \"${PROJECT_VERSION}\"
 ")
 
+# The commit this binary was built from.
+#
+# A version alone does not identify a build. "0.61.0" is the release, the
+# nightly heading towards it, and every rebuild in between; a crash report that
+# names only the version cannot be matched to a source tree. The short SHA
+# costs nothing and makes the report reproducible.
+#
+# GENERATED ON EVERY BUILD, not baked in at configure time. This was an
+# execute_process here, and it was silently wrong: CMake re-configures when
+# CMakeLists.txt changes, not when HEAD moves, so every build after the next
+# commit stamped the PREVIOUS commit into the binary and into every report it
+# wrote. See cmake/git-commit.cmake, which is run by the cascade_git_commit
+# target below and rewrites the header only when the SHA actually changes.
+find_package(Git QUIET)
+set(CASCADE_COMMIT_HEADER_DIR "${CMAKE_BINARY_DIR}/generated")
+set(CASCADE_COMMIT_HEADER "${CASCADE_COMMIT_HEADER_DIR}/cascade_git_commit.h")
+file(MAKE_DIRECTORY "${CASCADE_COMMIT_HEADER_DIR}")
+# Once at configure time as well, so the header exists before the first build
+# of anything that includes it.
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DGIT=${GIT_EXECUTABLE}"
+                        "-DTREE=${CMAKE_CURRENT_SOURCE_DIR}"
+                        "-DOUT=${CASCADE_COMMIT_HEADER}"
+                        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/git-commit.cmake")
+add_custom_target(cascade_git_commit ALL
+    COMMAND "${CMAKE_COMMAND}" "-DGIT=${GIT_EXECUTABLE}"
+            "-DTREE=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DOUT=${CASCADE_COMMIT_HEADER}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/git-commit.cmake"
+    COMMENT "Reading HEAD for the commit stamped into this build"
+    VERBATIM)
+
+# Where the symbols for every build of this tree are kept. See
+# tools/archive-symbols.ps1 and docs/DIAGNOSTICS.md - without the PDB that
+# matches a shipped binary, every crash report against it is unreadable hex
+# forever, and PDBs are not shipped to users.
+set(CASCADE_SYMBOL_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/symbols")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# RELEASE BUILDS MUST PRODUCE PDBs. Without /Zi and /DEBUG the linker writes no
+# PDB and no CodeView record, and a crash report from the field can never be
+# read - that is the one failure in this whole diagnostics feature that cannot
+# be repaired after the fact.
+#
+# /Zi is a debug-INFORMATION switch, not an optimisation switch: the generated
+# code is byte-for-byte what /O2 produced without it. /DEBUG on its own would
+# disable the linker's own optimisations, so /OPT:REF and /OPT:ICF are restored
+# explicitly - this is exactly what CMake's own RelWithDebInfo does, applied to
+# Release so that the configuration we actually ship is the one carrying
+# symbols.
+if(MSVC)
+    string(APPEND CMAKE_C_FLAGS_RELEASE " /Zi")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " /Zi")
+    string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
+endif()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -205,10 +260,28 @@ add_library(cascade_lib STATIC
     ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK}
     ${CASCADE_NET})
 
-target_include_directories(cascade_lib PUBLIC src)
+target_include_directories(cascade_lib PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
 # See src/core/version.cpp: the reported version is injected, never written in.
 target_compile_definitions(cascade_lib PRIVATE
     CASCADE_VERSION_STRING="${CASCADE_VERSION_STRING}")
+# The commit comes from the generated header instead, so it is re-read on every
+# build rather than frozen at configure time.
+add_dependencies(cascade_lib cascade_git_commit)
+# PUBLIC, and only these two: the test binaries need to find the application
+# binary and the symbol archive in order to assert that this build's PDB was
+# actually archived under the build id a report would quote. Nothing in the
+# library itself reads them.
+target_compile_definitions(cascade_lib PUBLIC
+    CASCADE_APP_BINDIR="$<TARGET_FILE_DIR:cascade>"
+    CASCADE_SYMBOL_ARCHIVE_DIR="${CASCADE_SYMBOL_ARCHIVE}"
+    # ...and these three so tests/test_diagnostics.cpp can hold the commit a
+    # report quotes to what git says HEAD is RIGHT NOW, and can run the commit
+    # generator against a scratch repository whose HEAD moves under it. Paths
+    # rather than a PATH lookup: a test that silently found a different git (or
+    # none) would pass by not testing anything.
+    CASCADE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    CASCADE_GIT_EXECUTABLE="${GIT_EXECUTABLE}"
+    CASCADE_CMAKE_COMMAND="${CMAKE_COMMAND}")
 # Vendored targets are listed BEFORE SoapySDR so third_party/ include dirs
 # always precede vcpkg's shared installed-include root (which still contains
 # same-named headers for other consumers of that vcpkg tree).
@@ -275,6 +348,34 @@ if(WIN32 AND TARGET SoapySDR)
     add_custom_command(TARGET cascade POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:cascade>)
+endif()
+
+# ARCHIVE THE SYMBOLS, in the same action that produced the binary.
+#
+# This is deliberately a POST_BUILD step on the application rather than a line
+# in the release or nightly script. Both of those build through CMake, so this
+# covers them; and a step that only runs when someone remembers to run it is a
+# step that will eventually be missed - at which point the shipped binary
+# exists, its PDB does not, and every crash report against that build is
+# unreadable hex forever. There is no repairing that afterwards.
+#
+# The script never fails the build (a missing PDB is a warning). The assertion
+# that this build's symbols really are in the archive, under the build id a
+# report would quote, lives in tests/test_diagnostics.cpp.
+if(WIN32)
+    add_custom_command(TARGET cascade POST_BUILD
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/archive-symbols.ps1"
+                -Binary "$<TARGET_FILE:cascade>"
+                -ArchiveRoot "${CASCADE_SYMBOL_ARCHIVE}"
+                -Version "${CASCADE_VERSION_STRING}"
+                # The header, not a variable: it is regenerated every build, so
+                # the commit in the index is the commit in the binary. A CMake
+                # variable here would be the configure-time SHA, which is what
+                # left nine different build ids in symbols\index.txt all
+                # stamped with the same commit.
+                -CommitHeader "${CASCADE_COMMIT_HEADER}"
+        VERBATIM)
 endif()
 
 # ---------------------------------------------------------------------------
