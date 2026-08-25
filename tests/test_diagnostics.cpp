@@ -149,15 +149,30 @@ std::string gitHeadShort(const std::string& tree) {
 // not, which is the whole point of the dirty marker: an engineer told to
 // "check out this commit" gets a tree that does not contain the code the
 // offsets came from. Same question the generator asks, asked the same way.
-bool gitTreeDirty(const std::string& tree) {
+std::string gitRead(const std::string& tree, const std::string& args) {
     const std::string cmd = "\"\"" + std::string(CASCADE_GIT_EXECUTABLE) + "\" -C \"" + tree +
-                            "\" status --porcelain 2>nul\"";
+                            "\" " + args + " 2>nul\"";
     std::string out;
     FILE* p = _popen(cmd.c_str(), "r");
     char buf[512];
     while (p != nullptr && std::fgets(buf, sizeof(buf), p) != nullptr) { out += buf; }
     if (p != nullptr) { _pclose(p); }
-    return !out.empty();
+    return out;
+}
+
+// THE SAME TWO-HALF RULE cmake/git-commit.cmake applies, deliberately spelled
+// out here rather than shelling out to the generator: a test that asked the
+// implementation what it thinks would agree with it however wrong it was.
+//
+// Half one is any modified tracked file. Half two is untracked files, but ONLY
+// under the paths a build compiles from - because this repository permanently
+// carries untracked files that are nobody's mistake (docs/LICENSING.md,
+// third_party/tweetnacl/), and counting those marked EVERY build from a
+// spotless release commit as dirty. A marker that is always on says nothing.
+bool gitTreeDirty(const std::string& tree) {
+    if (!gitRead(tree, "status --porcelain --untracked-files=no").empty()) { return true; }
+    return !gitRead(tree, "ls-files --others --exclude-standard -- src tests cmake CMakeLists.txt")
+                .empty();
 }
 
 int runQuiet(const std::string& cmd) {
@@ -696,26 +711,57 @@ int main() {
         // checked-out tree as a modified one, and on this project most of the
         // diagnostics feature was untracked at the moment the binary was
         // reporting a bare SHA - so `git diff --quiet` would have missed it.
+        // It must sit where a build COMPILES FROM. That is the whole rule: an
+        // untracked .cpp under src/ enters the binary, so the SHA no longer
+        // describes what was built.
         const fs::path out3 = outDir / "three.h";
+        fs::create_directories(repo / "src" / "core");
         {
-            std::ofstream extra(repo / "extra.cpp", std::ios::binary | std::ios::trunc);
+            std::ofstream extra(repo / "src" / "core" / "extra.cpp",
+                                std::ios::binary | std::ios::trunc);
             extra << "// not committed\n";
         }
         CHECK(runQuiet(gen + "\"" + out3.string() + "\" -P \"" + script + "\"") == 0);
         const std::string text3 = readFile(out3);
-        std::printf("untracked file present, generator says: %s", text3.c_str());
+        std::printf("untracked source present, generator says: %s", text3.c_str());
         CHECK(text3.find(second + "-dirty") != std::string::npos);
+
+        // ...AND THE OTHER HALF OF THAT RULE, which is the one a spotless
+        // release build depends on: an untracked file OUTSIDE those paths must
+        // NOT mark the tree. This repository permanently carries
+        // docs/LICENSING.md and third_party/tweetnacl/, and when every
+        // untracked path counted, every release build recorded "-dirty" - a
+        // marker that is always on, which a reader correctly learns to ignore.
+        const fs::path out3b = outDir / "three_b.h";
+        fs::remove(repo / "src" / "core" / "extra.cpp");
+        fs::create_directories(repo / "docs");
+        {
+            std::ofstream note(repo / "docs" / "NOTE.md", std::ios::binary | std::ios::trunc);
+            note << "not committed, and not compiled\n";
+        }
+        CHECK(runQuiet(gen + "\"" + out3b.string() + "\" -P \"" + script + "\"") == 0);
+        const std::string text3b = readFile(out3b);
+        std::printf("untracked NON-source present, generator says: %s", text3b.c_str());
+        CHECK(text3b.find("-dirty") == std::string::npos);
+        CHECK(text3b.find(second) != std::string::npos);
+        fs::remove(repo / "docs" / "NOTE.md");
+        {
+            std::ofstream extra(repo / "src" / "core" / "extra.cpp",
+                                std::ios::binary | std::ios::trunc);
+            extra << "// not committed\n";
+        }
 
         // ...and a TRACKED modification, once that file is committed. HEAD
         // moves again here, so the SHA is re-read as well.
         const fs::path out4 = outDir / "four.h";
-        CHECK(runQuiet(git + " -C " + q + id + "add extra.cpp") == 0);
+        CHECK(runQuiet(git + " -C " + q + id + "add src/core/extra.cpp") == 0);
         CHECK(runQuiet(git + " -C " + q + id + "commit -q -m three") == 0);
         const std::string third = gitHeadShort(repo.string());
         CHECK(!third.empty());
         CHECK(third != second);
         {
-            std::ofstream extra(repo / "extra.cpp", std::ios::binary | std::ios::trunc);
+            std::ofstream extra(repo / "src" / "core" / "extra.cpp",
+                                std::ios::binary | std::ios::trunc);
             extra << "// committed, then edited\n";
         }
         CHECK(runQuiet(gen + "\"" + out4.string() + "\" -P \"" + script + "\"") == 0);
