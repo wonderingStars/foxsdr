@@ -126,6 +126,267 @@ std::pair<double, double> destVectorForm(double latDeg, double lonDeg, double be
     return {std::asin(Q[2]) * 180.0 / kPi, std::atan2(Q[1], Q[0]) * 180.0 / kPi};
 }
 
+// --- the target detail block --------------------------------------------------
+//
+// WHY IT IS TESTED AT ALL. The block used to be two hand-written runs of
+// ImGui::Text - one in the map's hover tooltip, one in the flight list - and
+// they had already drifted: the altitude band, the units and the registry
+// fields each changed in one copy and not the other. Nothing about that was
+// reachable from a test, because the strings only existed inside the drawing
+// call. buildTrackDetailLines produces them as data, which is what makes the
+// wording and the units - the two things a user actually complains about -
+// assertable.
+
+using cascade::gui::buildTrackDetailLines;
+using cascade::gui::TrackDetailInput;
+using cascade::gui::TrackDetailLine;
+
+std::vector<std::string> detailTexts(const std::vector<TrackDetailLine>& lines) {
+    std::vector<std::string> out;
+    out.reserve(lines.size());
+    for (const TrackDetailLine& l : lines) { out.push_back(l.text); }
+    return out;
+}
+
+// How many lines are followed by a rule. A rule with nothing above it is the
+// failure mode the registry block has: a plugin that answers "not in my data"
+// emits no lines, and the separator must go with them.
+std::size_t detailSeparatorCount(const std::vector<TrackDetailLine>& lines) {
+    std::size_t n = 0;
+    for (const TrackDetailLine& l : lines) {
+        if (l.separatorAfter) { ++n; }
+    }
+    return n;
+}
+
+bool detailHasText(const std::vector<TrackDetailLine>& lines, const std::string& text) {
+    const std::vector<std::string> t = detailTexts(lines);
+    return std::find(t.begin(), t.end(), text) != t.end();
+}
+
+// True when any line STARTS with `prefix` - for asserting a whole class of line
+// is absent ("no range line at all"), which a whole-string compare cannot do.
+bool detailHasPrefix(const std::vector<TrackDetailLine>& lines, const std::string& prefix) {
+    for (const TrackDetailLine& l : lines) {
+        if (l.text.compare(0, prefix.size(), prefix) == 0) { return true; }
+    }
+    return false;
+}
+
+// The aircraft from the owner's screenshot of the block, which is the
+// specification this reproduces line for line.
+TrackDetailInput exampleAircraft() {
+    TrackDetailInput in;
+    in.label = "EXS72SD";
+    in.id = "406CAB";
+    in.source = "ADS-B";
+    in.latDeg = 53.71039;
+    in.lonDeg = -2.12262;
+    // 7848.6 m prints as 7849 m and as 25750 ft, which is the pair on the
+    // screenshot - the two figures come from ONE value and one conversion, so
+    // a changed conversion factor moves both and cannot pass.
+    in.altM = 7848.6;
+    in.speedMps = 370.0 / 1.94384;  // 370 kt
+    in.courseDeg = 20.0;
+    in.ageMs = 14100u;
+    in.infoActive = true;
+    in.infoKnown = true;
+    in.registration = "G-JZHA";
+    in.typeCode = "B738";
+    in.typeName = "737NG 8K5/W";
+    in.operatorName = "Jet2";
+    in.country = "United Kingdom";
+    return in;
+}
+
+void testTrackDetailLines() {
+    // --- the owner's example, line for line ----------------------------------
+    // THE WHOLE VECTOR IS COMPARED, not a line at a time inside a size guard.
+    // A per-line check nested in "if the size is right" SKIPS silently when the
+    // size is wrong, which is the one case there was something to report.
+    {
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(exampleAircraft());
+        const std::vector<std::string> want = {
+            "EXS72SD",
+            "reg     G-JZHA",
+            "type    737NG 8K5/W",
+            "oper    Jet2",
+            "reg'd   United Kingdom",
+            "id      406CAB",
+            "from    ADS-B",
+            "pos     53.71039, -2.12262",
+            "alt     7849 m (25750 ft, 20-30 kft)",
+            "speed   370 kt",
+            "course  20 deg",
+            "age     14.1 s",
+        };
+        CHECK(detailTexts(lines) == want);
+        // The callsign is the heading and nothing else is.
+        std::size_t headings = 0;
+        for (const TrackDetailLine& l : lines) {
+            if (l.heading) { ++headings; }
+        }
+        CHECK(headings == 1u);
+        CHECK(!lines.empty() && lines.front().heading);
+        // Two rules: under the callsign, and under the registry block.
+        CHECK(detailSeparatorCount(lines) == 2u);
+        // Every line here is a known value; none is dimmed.
+        std::size_t unknowns = 0;
+        for (const TrackDetailLine& l : lines) {
+            if (!l.known) { ++unknowns; }
+        }
+        CHECK(unknowns == 0u);
+    }
+
+    // --- the spelled-out type wins over the code -----------------------------
+    // "737NG 8K5/W" tells a user what is overhead and "B738" does not; the code
+    // is the fallback, not the choice.
+    {
+        TrackDetailInput in = exampleAircraft();
+        in.typeName.clear();
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(detailHasText(lines, "type    B738"));
+        CHECK(!detailHasText(lines, "type    737NG 8K5/W"));
+    }
+
+    // --- no track-info plugin: the registry lines are ABSENT, not empty ------
+    // An empty "reg" line would be a claim about the aircraft. "No plugin
+    // installed" is a fact about the host and shows as nothing at all.
+    {
+        TrackDetailInput in = exampleAircraft();
+        in.infoActive = false;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(!detailHasPrefix(lines, "reg "));
+        CHECK(!detailHasPrefix(lines, "reg'd"));
+        CHECK(!detailHasPrefix(lines, "type"));
+        CHECK(!detailHasPrefix(lines, "oper"));
+        CHECK(!detailHasText(lines, "looking up..."));
+        // Only the rule under the callsign is left - no rule with nothing
+        // above it.
+        CHECK(detailSeparatorCount(lines) == 1u);
+        // What the radio heard is untouched by the registry being absent.
+        CHECK(detailHasText(lines, "id      406CAB"));
+        CHECK(detailHasText(lines, "age     14.1 s"));
+    }
+
+    // --- asked, nothing back yet ---------------------------------------------
+    {
+        TrackDetailInput in = exampleAircraft();
+        in.infoKnown = false;
+        in.infoPending = true;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(detailHasText(lines, "looking up..."));
+        CHECK(!detailHasPrefix(lines, "reg "));
+        CHECK(detailSeparatorCount(lines) == 2u);
+        // Dimmed: it is a state, not a value.
+        std::size_t dimmedLookups = 0;
+        for (const TrackDetailLine& l : lines) {
+            if (l.text == "looking up..." && !l.known) { ++dimmedLookups; }
+        }
+        CHECK(dimmedLookups == 1u);
+    }
+
+    // --- answered "not in my data" -------------------------------------------
+    // No lines, and therefore NO RULE either: a separator belonging to a block
+    // that emitted nothing would float with nothing above it.
+    {
+        TrackDetailInput in = exampleAircraft();
+        in.infoKnown = false;
+        in.infoPending = false;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(!detailHasText(lines, "looking up..."));
+        CHECK(!detailHasPrefix(lines, "reg "));
+        CHECK(detailSeparatorCount(lines) == 1u);
+    }
+
+    // --- unknowns say so, and are dimmed -------------------------------------
+    // "0 kt" and "no speed reported" are different facts and must not look the
+    // same. The ABI reports the second as NaN.
+    {
+        TrackDetailInput in = exampleAircraft();
+        in.altM = kNaN;
+        in.speedMps = kNaN;
+        in.courseDeg = kNaN;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(detailHasText(lines, "alt     unknown"));
+        CHECK(detailHasText(lines, "speed   unknown"));
+        CHECK(detailHasText(lines, "course  unknown"));
+        // None of them printed as a zero.
+        CHECK(!detailHasPrefix(lines, "alt     0"));
+        CHECK(!detailHasText(lines, "speed   0 kt"));
+        CHECK(!detailHasText(lines, "course  0 deg"));
+        std::size_t dimmed = 0;
+        for (const TrackDetailLine& l : lines) {
+            if (!l.known) { ++dimmed; }
+        }
+        CHECK(dimmed == 3u);
+    }
+
+    // --- RANGE AND BEARING, the pair the three-column list has no room for ---
+    // They were added in 0.60.0 to answer "what is nearest me" and the list
+    // dropping to three columns must not take them with it. This is where they
+    // live now, so this is where they are pinned.
+    {
+        // No receiver position: no range line at all, rather than a distance
+        // measured from the Gulf of Guinea.
+        TrackDetailInput in = exampleAircraft();
+        in.hasHome = false;
+        CHECK(!detailHasPrefix(buildTrackDetailLines(in), "range"));
+    }
+    {
+        // ONE DEGREE OF LONGITUDE ALONG THE EQUATOR, whose distance and
+        // bearing are both analytic: 6371 km times pi/180, and exactly due
+        // east. Chosen so the assertion is against arithmetic rather than
+        // against a number produced by the same call it is checking.
+        TrackDetailInput in = exampleAircraft();
+        in.latDeg = 0.0;
+        in.lonDeg = 1.0;
+        in.hasHome = true;
+        in.homeLatDeg = 0.0;
+        in.homeLonDeg = 0.0;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(detailHasText(lines, "range   111.2 km at 90 deg"));
+        // And it sits between the course and the age, which is where a reader
+        // scanning the block expects it.
+        const std::vector<std::string> t = detailTexts(lines);
+        const std::size_t iRange = static_cast<std::size_t>(
+            std::find(t.begin(), t.end(), "range   111.2 km at 90 deg") - t.begin());
+        const std::size_t iCourse = static_cast<std::size_t>(
+            std::find(t.begin(), t.end(), "course  20 deg") - t.begin());
+        const std::size_t iAge = static_cast<std::size_t>(
+            std::find(t.begin(), t.end(), "age     14.1 s") - t.begin());
+        CHECK(iCourse < iRange);
+        CHECK(iRange < iAge);
+        CHECK(iAge < t.size());
+    }
+    {
+        // A TARGET ON TOP OF THE RECEIVER has no bearing from it, and "nan deg"
+        // or a fabricated "000 deg" would both be worse than saying so.
+        TrackDetailInput in = exampleAircraft();
+        in.latDeg = 53.5;
+        in.lonDeg = -2.0;
+        in.hasHome = true;
+        in.homeLatDeg = 53.5;
+        in.homeLonDeg = -2.0;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(detailHasText(lines, "range   0.0 km, bearing undefined"));
+        CHECK(!detailHasPrefix(lines, "range   0.0 km at"));
+    }
+
+    // --- a target with no callsign yet ---------------------------------------
+    // An aircraft's ICAO address is known from its first frame and its callsign
+    // arrives in a separate message, so the heading falls back to the id - the
+    // host does that before this is called, and an EMPTY heading would leave
+    // the block untitled.
+    {
+        TrackDetailInput in = exampleAircraft();
+        in.label = in.id;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(!lines.empty() && lines.front().text == "406CAB");
+        CHECK(!lines.empty() && lines.front().heading);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -897,32 +1158,220 @@ int main() {
         CHECK(tableHeightReservingLines(200.0f, 0.0f, 1) > 0.0f);
     }
 
-    // --- the column-to-sort-key mapping and the opening order ----------------
+    // --- the three columns fit their own headings ----------------------------
+    //
+    // THE MEASUREMENTS ARE FROM THE RUNNING APP, not invented: at a 620 px map
+    // window the list's table gets 173 px for its columns, the heading
+    // "Callsign" measures 51 px, a six-character ICAO identifier measures 42 px
+    // and the "Details" button measures 58 px. With ImGui's default four
+    // pixels of cell padding those numbers do not fit, and the heading was
+    // rendering as "Callsi..." - which is the complaint that started this whole
+    // change, reappearing in a three-column table. The pixel figures are what
+    // make these cases a regression test rather than an exercise.
     {
-        using cascade::gui::kTrackSortDefaultColumn;
-        using cascade::gui::trackSortKeyForColumn;
-        // The eight columns, in the order the table declares them.
-        CHECK(trackSortKeyForColumn(0) == TrackSortKey::Label);
-        CHECK(trackSortKeyForColumn(1) == TrackSortKey::Id);
-        CHECK(trackSortKeyForColumn(2) == TrackSortKey::Altitude);
-        CHECK(trackSortKeyForColumn(3) == TrackSortKey::Speed);
-        CHECK(trackSortKeyForColumn(4) == TrackSortKey::Course);
-        CHECK(trackSortKeyForColumn(5) == TrackSortKey::Distance);
-        CHECK(trackSortKeyForColumn(6) == TrackSortKey::Bearing);
-        CHECK(trackSortKeyForColumn(7) == TrackSortKey::Age);
+        using cascade::gui::trackListFit;
+        using cascade::gui::TrackListFit;
+
+        const float kAvail620 = 173.0f;
+        const float kCallsign = 51.0f;
+        const float kId = 42.0f;
+        const float kButton = 58.0f;
+
+        // THE DEFECT, stated as a measurement: four pixels of padding per side
+        // does not fit at the width the list actually gets.
+        const TrackListFit tight = trackListFit(kAvail620, kCallsign, kId, kButton, 4.0f);
+        CHECK(!tight.headingsFit);
+        // ...and two pixels does. This is the assertion the fix has to keep
+        // true; it is the whole reason the padding was narrowed.
+        const TrackListFit ok = trackListFit(kAvail620, kCallsign, kId, kButton, 2.0f);
+        CHECK(ok.headingsFit);
+        CHECK(ok.callsignW >= kCallsign);
+        CHECK(ok.idW >= kId);
+        // The button never gives up width - a details button squeezed to
+        // nothing is a details button that cannot be pressed.
+        CHECK_NEAR(ok.detailsW, kButton, 1e-4);
+
+        // AND WHEN IT STILL DOES NOT FIT, spending less on the button is what
+        // buys the room back. This is exactly what the list does at widths
+        // below about 600 px: the same call with a compact button fits where
+        // the full-width one did not.
+        const TrackListFit narrow = trackListFit(150.0f, kCallsign, kId, kButton, 2.0f);
+        CHECK(!narrow.headingsFit);
+        const TrackListFit narrowCompact = trackListFit(150.0f, kCallsign, kId, 26.0f, 2.0f);
+        CHECK(narrowCompact.headingsFit);
+
+        // --- the arithmetic itself ------------------------------------------
+        // A WIDE LIST: everything fits, the surplus is split in proportion to
+        // what each column needs, and the three widths plus the three columns'
+        // padding account for every pixel available. The last of those is what
+        // stops the table either overflowing its pane or leaving a gap at the
+        // right.
+        const TrackListFit wide = trackListFit(400.0f, 50.0f, 25.0f, 60.0f, 4.0f);
+        CHECK(wide.headingsFit);
+        CHECK_NEAR(wide.detailsW, 60.0f, 1e-4);
+        // 400 - 60 of button - 24 of padding leaves 316; the needs are 50 and
+        // 25, so 241 of surplus goes out 50:75 and 25:75.
+        CHECK_NEAR(wide.callsignW, 50.0f + 241.0f * (50.0f / 75.0f), 1e-3);
+        CHECK_NEAR(wide.idW, 25.0f + 241.0f * (25.0f / 75.0f), 1e-3);
+        CHECK_NEAR(wide.callsignW + wide.idW + wide.detailsW + 24.0f, 400.0f, 1e-3);
+        // The wider need gets the bigger share, which is the point of splitting
+        // by need at all.
+        CHECK(wide.callsignW > wide.idW);
+        // AND THE TWO STAY IN THE RATIO OF THEIR TEXT whatever the surplus.
+        // That is not decoration: these two numbers are handed to ImGui as
+        // stretch WEIGHTS, so only their ratio survives, and a surplus split
+        // any other way would mean the tested widths and the drawn ones differ.
+        CHECK_NEAR(wide.callsignW / wide.idW, 50.0f / 25.0f, 1e-4);
+
+        // EXACTLY ENOUGH: no surplus, no shortfall, and still reported as
+        // fitting - the boundary has to land on the fitting side or the list
+        // would swap to a compact button one pixel early forever.
+        const TrackListFit exact = trackListFit(60.0f + 24.0f + 75.0f, 50.0f, 25.0f, 60.0f, 4.0f);
+        CHECK(exact.headingsFit);
+        CHECK_NEAR(exact.callsignW, 50.0f, 1e-4);
+        CHECK_NEAR(exact.idW, 25.0f, 1e-4);
+
+        // ONE PIXEL SHORT: reported as not fitting, and the shortfall is shared
+        // rather than taken out of one column.
+        const TrackListFit short1 = trackListFit(60.0f + 24.0f + 75.0f - 1.0f, 50.0f, 25.0f,
+                                                 60.0f, 4.0f);
+        CHECK(!short1.headingsFit);
+        CHECK(short1.callsignW < 50.0f);
+        CHECK(short1.idW < 25.0f);
+        CHECK_NEAR(short1.callsignW + short1.idW + short1.detailsW + 24.0f,
+                   60.0f + 24.0f + 75.0f - 1.0f, 1e-3);
+
+        // DEGENERATE WIDTHS PRODUCE NO NEGATIVE COLUMN. These numbers become
+        // ImGui stretch weights and a negative one lays a table out inside out,
+        // so every one of them is checked rather than assumed.
+        const TrackListFit tiny = trackListFit(10.0f, 50.0f, 25.0f, 60.0f, 4.0f);
+        CHECK(!tiny.headingsFit);
+        CHECK(tiny.callsignW >= 0.0f);
+        CHECK(tiny.idW >= 0.0f);
+        CHECK(tiny.detailsW > 0.0f);
+        const TrackListFit zero = trackListFit(0.0f, 50.0f, 25.0f, 60.0f, 4.0f);
+        CHECK(zero.callsignW >= 0.0f);
+        CHECK(zero.idW >= 0.0f);
+        const TrackListFit negAvail = trackListFit(-200.0f, 50.0f, 25.0f, 60.0f, 4.0f);
+        CHECK(negAvail.callsignW >= 0.0f);
+        CHECK(negAvail.idW >= 0.0f);
+        CHECK(!negAvail.headingsFit);
+        const TrackListFit negText = trackListFit(400.0f, -50.0f, -25.0f, -60.0f, -4.0f);
+        CHECK(negText.callsignW >= 0.0f);
+        CHECK(negText.idW >= 0.0f);
+        CHECK(negText.detailsW >= 0.0f);
+        // NO TEXT AT ALL still divides the width instead of dividing by zero.
+        const TrackListFit noText = trackListFit(300.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        CHECK(noText.callsignW >= 0.0f);
+        CHECK(noText.idW >= 0.0f);
+        CHECK_NEAR(noText.callsignW + noText.idW + noText.detailsW, 300.0f, 1e-3);
+
+        // NaN IN IS NOT NaN OUT. The available width comes from ImGui's layout
+        // and the text widths from a font measurement; a NaN reaching a column
+        // weight would corrupt the table silently rather than loudly.
+        const float qnan = std::numeric_limits<float>::quiet_NaN();
+        const TrackListFit nanAvail = trackListFit(qnan, 50.0f, 25.0f, 60.0f, 4.0f);
+        CHECK(std::isfinite(nanAvail.callsignW));
+        CHECK(std::isfinite(nanAvail.idW));
+        CHECK(std::isfinite(nanAvail.detailsW));
+        CHECK(nanAvail.callsignW >= 0.0f);
+        CHECK(nanAvail.idW >= 0.0f);
+        CHECK(!nanAvail.headingsFit);
+    }
+
+    // --- the menu-to-sort-key mapping and the opening order ------------------
+    //
+    // It was trackSortKeyForColumn, one key per column of an eight-column
+    // table. The table is three things now - callsign, id and a details button
+    // - and the eight keys live in a menu above it, because eight headings in
+    // the width the list gets were truncated past reading. THE MAPPING IS THE
+    // SAME EIGHT KEYS IN THE SAME ORDER, which is the point: the columns went,
+    // the questions they could answer did not.
+    {
+        using cascade::gui::kTrackSortDefaultIndex;
+        using cascade::gui::kTrackSortKeyCount;
+        using cascade::gui::trackSortKeyForMenuIndex;
+        // The eight keys, in the order the menu lists them.
+        CHECK(trackSortKeyForMenuIndex(0) == TrackSortKey::Label);
+        CHECK(trackSortKeyForMenuIndex(1) == TrackSortKey::Id);
+        CHECK(trackSortKeyForMenuIndex(2) == TrackSortKey::Altitude);
+        CHECK(trackSortKeyForMenuIndex(3) == TrackSortKey::Speed);
+        CHECK(trackSortKeyForMenuIndex(4) == TrackSortKey::Course);
+        CHECK(trackSortKeyForMenuIndex(5) == TrackSortKey::Distance);
+        CHECK(trackSortKeyForMenuIndex(6) == TrackSortKey::Bearing);
+        CHECK(trackSortKeyForMenuIndex(7) == TrackSortKey::Age);
         // Out of range answers with the default rather than with whatever the
         // last case happened to be.
-        CHECK(trackSortKeyForColumn(-1) == TrackSortKey::Label);
-        CHECK(trackSortKeyForColumn(99) == TrackSortKey::Label);
+        CHECK(trackSortKeyForMenuIndex(-1) == TrackSortKey::Label);
+        CHECK(trackSortKeyForMenuIndex(99) == TrackSortKey::Label);
 
-        // THE TABLE OPENS SORTED BY CALLSIGN. The window's remembered sort key
-        // was initialised to Distance while the CALLSIGN column carried
-        // ImGuiTableColumnFlags_DefaultSort, so ImGui reported Label on the
-        // first frame and overwrote it: the code said one thing and the screen
-        // did another. The two halves are now one constant - this one, and a
-        // static_assert next to the flagged column in app_window.cpp.
-        CHECK(trackSortKeyForColumn(kTrackSortDefaultColumn) == TrackSortKey::Label);
+        // THE COUNT IS THE MENU'S BOUND, and the loop that builds the menu runs
+        // to it. If it disagreed with the mapping the menu would silently list
+        // fewer keys than exist - which is how "sort by distance" would
+        // disappear without a line of code saying so.
+        // A compile-time check rather than a CHECK: both halves are constants,
+        // so a runtime comparison of them is a conditional the compiler folds
+        // away and warns about, and this fails louder and earlier anyway.
+        static_assert(kTrackSortKeyCount == 8,
+                      "the sort menu carries every key the eight columns did");
+        // EVERY INDEX BELOW THE COUNT REACHES A DISTINCT KEY. Two menu entries
+        // answering the same key, or one key unreachable, are both invisible on
+        // screen and both mean a question can no longer be asked.
+        {
+            std::vector<TrackSortKey> seen;
+            for (int i = 0; i < kTrackSortKeyCount; ++i) {
+                const TrackSortKey k = trackSortKeyForMenuIndex(i);
+                CHECK(std::find(seen.begin(), seen.end(), k) == seen.end());
+                seen.push_back(k);
+            }
+            CHECK(seen.size() == static_cast<std::size_t>(kTrackSortKeyCount));
+            // DISTANCE AND BEARING SURVIVED THE COLUMNS BEING CUT. Named
+            // explicitly rather than left to the count, because they are the
+            // two the owner added to answer "what is nearest me" and the two a
+            // three-column list would otherwise have quietly dropped.
+            CHECK(std::find(seen.begin(), seen.end(), TrackSortKey::Distance) !=
+                  seen.end());
+            CHECK(std::find(seen.begin(), seen.end(), TrackSortKey::Bearing) !=
+                  seen.end());
+        }
+
+        // EVERY KEY HAS ITS OWN NAME. The menu shows one key at a time, so the
+        // name is the only thing distinguishing them; an empty one or a repeat
+        // makes the control unusable in a way nothing else would catch.
+        {
+            std::vector<std::string> names;
+            for (int i = 0; i < kTrackSortKeyCount; ++i) {
+                const char* n = cascade::gui::trackSortKeyName(trackSortKeyForMenuIndex(i));
+                CHECK(n != nullptr);
+                const std::string s = (n != nullptr) ? std::string(n) : std::string();
+                CHECK(!s.empty());
+                CHECK(std::find(names.begin(), names.end(), s) == names.end());
+                names.push_back(s);
+            }
+            CHECK(names.size() == static_cast<std::size_t>(kTrackSortKeyCount));
+            // UNITS IN THE NAME. The columns that carried "Alt ft" and
+            // "Dist km" are gone, so the menu is the only place the unit is
+            // written down; a bearing read as a distance is exactly the
+            // mistake the old headings existed to prevent.
+            CHECK(std::string(cascade::gui::trackSortKeyName(TrackSortKey::Distance)) ==
+                  "Distance (km)");
+            CHECK(std::string(cascade::gui::trackSortKeyName(TrackSortKey::Bearing)) ==
+                  "Bearing (deg)");
+            CHECK(std::string(cascade::gui::trackSortKeyName(TrackSortKey::Altitude)) ==
+                  "Altitude (ft)");
+        }
+
+        // THE LIST OPENS SORTED BY CALLSIGN. The window's remembered sort key
+        // was once initialised to Distance while the table's DefaultSort column
+        // was the callsign, so ImGui reported Label on the first frame and
+        // overwrote it: the code said one thing and the screen did another. The
+        // two halves are now one constant, and the window seeds itself through
+        // this exact call.
+        CHECK(trackSortKeyForMenuIndex(kTrackSortDefaultIndex) == TrackSortKey::Label);
     }
+
+    // --- the target detail block ---------------------------------------------
+    testTrackDetailLines();
 
     return testSummary("test_track_metrics");
 }

@@ -26,6 +26,9 @@
 #include <GLFW/glfw3.h>
 
 #include "core/version.hpp"
+#include "core/crash_handler.hpp"
+#include "core/diag_log.hpp"
+#include "core/diag_report.hpp"
 // Generated window-icon pixels. Reached by a path relative to this file
 // because resources/ is deliberately not on any target's include path — the
 // icon is an asset, not a source root, and adding an include directory for one
@@ -34,6 +37,7 @@
 #include "core/image_write.hpp"
 #include "gui/map_view.hpp"
 #include "gui/spectrum_view.hpp"
+#include "gui/track_detail_view.hpp"
 #include "gui/waterfall_view.hpp"
 #include "source/iq_file_source.hpp"
 
@@ -371,7 +375,13 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.telemetryEnabled == b.telemetryEnabled &&
            a.telemetryInstallId == b.telemetryInstallId &&
            a.telemetryLaunches == b.telemetryLaunches &&
-           a.telemetryCrashes == b.telemetryCrashes;
+           a.telemetryCrashes == b.telemetryCrashes &&
+           // Diagnostics: both are user switches that change only on a click,
+           // so they belong here - without them, turning capture off would
+           // not survive a restart unless something else happened to trigger
+           // a save.
+           a.diagnosticsEnabled == b.diagnosticsEnabled &&
+           a.diagnosticsMinidump == b.diagnosticsMinidump;
 }
 
 // --- Plugin browser helpers (P9) ---------------------------------------------
@@ -593,6 +603,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             // AFTER applyConfig, so the crash count and the pending report are
             // read from the file rather than from freshly defaulted members.
             // Sends nothing unless the user previously opted in.
+            diagnosticsEnabled_ = cfg.diagnosticsEnabled;
+            diagnosticsMinidump_ = cfg.diagnosticsMinidump;
             telemetryStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
         } else {
@@ -806,12 +818,52 @@ int AppWindow::run(int frames) {
     // to say. The same rule the catalogue and config hooks already follow.
     if (frames < 0) { startUpdateCheck(); }
 
+    // DIAGNOSTICS, armed here rather than in the constructor: the context has
+    // to describe a window that exists, and the watchdog measures the frame
+    // loop, so it starts when the frame loop does. Anything slow before this
+    // point (GL context, backend init) is start-up, not a hang, and is
+    // deliberately outside what the watchdog watches.
+    // The user's stored switches, applied HERE rather than in the constructor:
+    // main() decides whether this run may touch the disk at all, and it does
+    // that after the constructor has run. A bounded CI run therefore keeps its
+    // empty diagCrashDir_ and writes nothing, whatever the config says.
+    // The same one call the Settings checkbox makes, so the arming path and
+    // the mid-session toggle cannot drift apart again.
+    applyDiagnosticsEnabled(diagnosticsEnabled_);
+    refreshDiagContext();
+    watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    cascade::core::diagLogf("frame loop starting (%s)",
+                            frames >= 0 ? "bounded" : "interactive");
+
+    // THE UNCLEAN-EXIT MARKER, FORCED TO DISK ONCE, HERE.
+    //
+    // telemetryCleanExit=false on disk is what tells the NEXT start that this
+    // run never shut down - it is the crash counter and, now, the trigger for
+    // offering a report. It only reaches the file when the config is saved,
+    // and the save is debounced behind a CHANGE. The launch counter was meant
+    // to supply that first change, but the debounce baseline (savedCfg_) is
+    // taken after the counter has already been incremented, so the two agree
+    // and nothing is written. A session that crashed before the user touched
+    // anything therefore looked, on the next start, exactly like a clean exit.
+    //
+    // Found on the running application: launched it, killed it, read the
+    // config back and it still said true. One save at the top of the frame
+    // loop closes the window; the file is written once per launch either way,
+    // at exit, so this costs a write that was already going to happen.
+    if (!configPath_.empty()) { saveConfigNow(); }
+
     int rendered = 0;
     frameCounter_ = 0;
     while (!glfwWindowShouldClose(window) && !closeRequested_) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
         if (frames >= 0 && rendered >= frames) { break; }
+
+        // The heartbeat. One relaxed store; the whole hang-detection scheme is
+        // "did this line run recently", so it must stay cheap enough that
+        // nobody is ever tempted to call it less often than every frame.
+        watchdog_.heartbeat(!diagSkipNextGap_);
+        diagSkipNextGap_ = false;
 
         glfwPollEvents();
         ImGui_ImplOpenGL3_NewFrame();
@@ -862,6 +914,38 @@ int AppWindow::run(int frames) {
 
         glfwSwapBuffers(window);
         ++rendered;
+
+        // The context follows the session rather than being frozen at
+        // start-up: a report filed after the user switched to the B200 must
+        // say so. Once a second at 60 Hz, out of state that already exists.
+        if ((rendered % 60) == 0) { refreshDiagContext(); }
+
+        // --diag-toggle: flip the Settings > Diagnostics switch mid-session,
+        // through the SAME function the checkbox calls, on frame 30 - before
+        // the --diag-stall wedge on frame 60. There is no way to click a
+        // checkbox from ctest, and the defect this exists for lived precisely
+        // in the difference between what the checkbox governed and what it
+        // did not, so a unit test of the watchdog cannot see it.
+        if (diagToggle_ != 0 && rendered == 30) {
+            const bool want = diagToggle_ > 0;
+            diagToggle_ = 0;
+            std::printf("cascade: --diag-toggle diagnostics %s\n", want ? "on" : "off");
+            std::fflush(stdout);
+            applyDiagnosticsEnabled(want);
+        }
+
+        // --diag-stall: the deliberate wedge, once, well clear of start-up.
+        // This is the only way to hold the SHIPPED threshold against the REAL
+        // frame loop; a unit test of the watchdog proves the class and not the
+        // product.
+        if (diagStallMs_ > 0 && rendered == 60) {
+            const int ms = diagStallMs_;
+            diagStallMs_ = 0;
+            std::printf("cascade: --diag-stall wedging the frame loop for %d ms\n", ms);
+            std::fflush(stdout);
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            diagSkipNextGap_ = true;
+        }
     }
 
     // Closing the window mid-take finalizes both recordings cleanly (same
@@ -881,6 +965,7 @@ int AppWindow::run(int frames) {
     // Runs before pipeline_.stop() so the snapshot reads live state.
     telemetryCleanExit_ = true;  // reached only on the normal shutdown path
     if (!configPath_.empty()) { saveConfigNow(); }
+    cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
     // Closing the window while receiving must not leave DSP threads pacing a
     // dead display; stop before teardown so the join happens while the object
@@ -898,12 +983,73 @@ int AppWindow::run(int frames) {
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();
+
+    // THE WATCHDOG IS STOPPED LAST, ON PURPOSE. Everything above - the config
+    // save, the pipeline join, the GL teardown - runs with no heartbeat, so a
+    // shutdown that wedges is reported like any other hang. That is not an
+    // oversight to be tidied away: the worst freeze this product ever shipped
+    // was 120 s inside a CAT client shutdown, and stopping the watchdog before
+    // the teardown would make that exact bug invisible again. A normal
+    // teardown is far under the threshold, so a report from here means
+    // something really did take five seconds to close.
+    watchdog_.stop();
+
     // Printed on every clean exit: this is what makes the exact-count half of
     // the --frames contract externally observable — app_smoke matches
     // "rendered 3 frames" via PASS_REGULAR_EXPRESSION, so an off-by-one in the
     // frame bound goes red instead of shipping silently.
     std::printf("cascade: rendered %d frames\n", rendered);
+    // The measurement the hang threshold is justified against, printed rather
+    // than asserted in a comment: tests/test_diag_hang.cpp reads this line back
+    // and requires it to be under half the shipped threshold, so a change that
+    // makes a frame legitimately slow goes red here instead of arriving as a
+    // false hang report on somebody's machine.
+    std::printf("cascade: worst frame gap %.1f ms\n", watchdog_.worstGapMs());
+    // And how many times the application took a WatchdogPause, for the same
+    // reason: a false-positive mitigation that no shipped call site uses is a
+    // sentence in a header, not a protection. tests/test_diag_hang.cpp reads
+    // this line back and requires at least one — the plugin scan.
+    std::printf("cascade: watchdog pauses %u\n", watchdog_.pausesTaken());
     return 0;
+}
+
+void AppWindow::setDiagnosticsDir(std::string crashDir) {
+    diagCrashDir_ = std::move(crashDir);
+}
+
+void AppWindow::setDiagStallMs(int ms) { diagStallMs_ = (ms > 0) ? ms : 0; }
+
+void AppWindow::setDiagToggle(int mode) { diagToggle_ = (mode > 0) ? 1 : ((mode < 0) ? -1 : 0); }
+
+void AppWindow::refreshDiagContext() {
+    cascade::core::DiagContext ctx;
+    ctx.version = cascade::versionString();
+    ctx.commit = cascade::gitCommit();
+    ctx.os = cascade::core::osDescription();
+    ctx.arch = cascade::core::archDescription();
+    ctx.mode = kModeNames[modeIndex_];
+    ctx.sourceKind = sourceKind_;
+    ctx.sampleRateHz = pipeline_.activeSource().sampleRateHz();
+    ctx.deviceOpen = (sourceKind_ == "soapy");
+    // MODEL ONLY - sanitiseDevice strips the serial, exactly as the usage
+    // report does. A report is a support artefact, not a hardware fingerprint.
+    ctx.sdrModel = cascade::core::sanitiseDevice(soapyArgs_);
+    std::size_t loaded = 0;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        ++loaded;
+        if (ctx.plugins.size() < 32) { ctx.plugins.push_back(p.name + " " + p.version); }
+    }
+    cascade::core::setDiagContext(ctx);
+
+    // The module table only has to be rebuilt when something LOADED CODE, and
+    // a plugin load is the only thing that does so after start-up here. Doing
+    // it every frame would mean walking the loader's module list 60 times a
+    // second for a table that changes twice a session.
+    if (loaded != diagPluginCount_) {
+        diagPluginCount_ = loaded;
+        cascade::core::refreshModuleTable();
+    }
 }
 
 void AppWindow::drawUi() {
@@ -970,6 +1116,11 @@ void AppWindow::drawUi() {
     // would nest it in that window's ID stack, where the dim overlay it draws
     // would sit under the panels it is meant to block.
     drawMutePopup();
+
+    // ...and the unclean-exit offer beside it, for the same reason: a
+    // top-level thing belongs at the top level, not nested in the borderless
+    // root window's ID stack.
+    drawDiagnosticsOffer();
 
     // Scanner driver, AFTER all widgets: any manual tune the user made this
     // frame (digit wheel, VFO drag, bookmark click) is already applied, so
@@ -1241,6 +1392,11 @@ void AppWindow::drawMenuColumn() {
                 bandwidthIndex_ = kModeDefaultBw[i];
                 vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
                 pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+                // The MODE and its bandwidth - a demodulator change, not a
+                // tuning change. No frequency reaches the log, here or
+                // anywhere else.
+                cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[i],
+                                        vfoBandwidthHz_);
             }
             if (selected) { ImGui::PopStyleColor(); }
         }
@@ -1381,6 +1537,7 @@ void AppWindow::drawMenuColumn() {
     drawWebSection();
     drawCatSection();
     drawUpdatesSection();
+    drawDiagnosticsSection();
     drawUsageReportingSection();
     ImGui::EndChild();
 
@@ -1731,6 +1888,10 @@ void AppWindow::drawSourceSection() {
                 sourceKind_ = "file";
                 iqOpenPath_ = iqPath_;
                 followInputRate();  // DSP chain + frequency axis track the file's rate
+                // The RATE, never the path: a file name is the user's own data
+                // and a report is a support artefact, not a listening record.
+                cascade::core::diagLogf("source: opened an I/Q file at %.0f S/s",
+                                        pipeline_.activeSource().sampleRateHz());
             }
         }
     }
@@ -2000,6 +2161,13 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     pipeline_.setSource(std::move(r.dev));
     sourceKind_ = "soapy";
     sourceSel_ = r.row;
+    // SERIAL STRIPPED, exactly as everywhere else this string is recorded.
+    // "which radio, at what rate" is the single most useful line in the run-up
+    // to a fault, because vendor SDR modules are third-party code running
+    // in-process and the rate decides whether the chain keeps up.
+    cascade::core::diagLogf("source: opened %s at %.0f S/s",
+                            cascade::core::sanitiseDevice(soapyArgs_).c_str(),
+                            pipeline_.activeSource().sampleRateHz());
 
     // CARRY THE FREQUENCY ACROSS, which is the whole difference between
     // changing radio and losing what you were listening to.
@@ -2042,6 +2210,7 @@ void AppWindow::selectSource(int idx) {
         sourceKind_ = "siggen";
         sourceSel_ = 0;
         followInputRate();  // back to the generator's fixed 2 MS/s
+        cascade::core::diagLogf("source: switched to the built-in generator");
         return;
     }
     if (idx == 1) {
@@ -2654,6 +2823,18 @@ void AppWindow::detachAndUnloadPlugins() {
 }
 
 void AppWindow::rescanPlugins() {
+    // BLOCKING WORK THE APPLICATION ENTERS KNOWINGLY, and the one such path
+    // this application actually has on its GUI thread: unloading and then
+    // LoadLibrary-ing every installed plugin, off a disk that may be cold, a
+    // network profile, or a drive that is spinning up. Twelve modules is a
+    // normal count. That is a legitimate multi-second gap in the frame loop
+    // and it is not a hang, so the watchdog is paused across it — which is
+    // also what keeps the watchdog from suspending a thread that is inside the
+    // loader (see the phase-1 note in hang_watchdog.cpp).
+    //
+    // Scope guard, because there is a `return` in the middle of this function.
+    cascade::core::WatchdogPause holdWatchdog(watchdog_);
+
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
     // nothing here reports a failure.
@@ -2698,6 +2879,27 @@ void AppWindow::rescanPlugins() {
     }
 
     pluginHost_.scan(pluginDir_);
+
+    // WHICH PLUGINS ARE MAPPED, one line each, because plugins are
+    // third-party code running in this process and "which one was loaded" has
+    // already been the answer to real faults here. A load that FAILS is worth
+    // more than one that succeeds, so both are recorded.
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (p.loaded) {
+            cascade::core::diagLogf("plugin: loaded %s %s", p.name.c_str(),
+                                    p.version.c_str());
+        } else {
+            // A refused plugin has no descriptor, so name and version are
+            // empty - the FILE is the only thing that identifies it.
+            const std::string leaf =
+                std::filesystem::path(p.path).filename().string();
+            cascade::core::diagWarnf("plugin: NOT loaded %s (%s)", leaf.c_str(),
+                                     p.error.empty() ? "no reason given" : p.error.c_str());
+        }
+    }
+    // The module table has just changed - new code is mapped, and a fault
+    // inside it would otherwise resolve to "?" with a bare address.
+    cascade::core::refreshModuleTable();
 
     // Instances are created only after the scan has settled, and the pipeline
     // is only pointed at the runner once they exist — so the DSP thread never
@@ -3899,13 +4101,14 @@ void AppWindow::drawPluginWindows() {
             // clicked, "take me to that one" - which is the question a
             // callsign actually prompts.
             //
-            // WIDE ENOUGH TO BE A TABLE. It was 190 px and held one label per
-            // target; it now holds eight sortable columns, and a table squeezed
-            // narrower than its headings sorts by columns nobody can read.
-            // Capped at a share of the window as well as at a constant, so a
-            // map dragged small still leaves a map.
+            // NARROWED AGAIN, because it no longer has eight columns to fit.
+            // It went to 480 px to hold them and still could not show their
+            // headings; with callsign, id and a button it needs about 300, and
+            // every pixel not spent here is map. Capped at a share of the
+            // window as well as at a constant, so a map dragged small still
+            // leaves a map.
             const ImVec2 mapAvail = ImGui::GetContentRegionAvail();
-            const float listWidth = std::min(480.0f, std::max(190.0f, mapAvail.x * 0.5f));
+            const float listWidth = std::min(300.0f, std::max(190.0f, mapAvail.x * 0.36f));
             ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
             drawTrackList();
             ImGui::EndChild();
@@ -3934,6 +4137,13 @@ void AppWindow::drawPluginWindows() {
         }
         ImGui::End();
     }
+
+    // OUTSIDE the Map window on purpose, so it is a sibling of the map rather
+    // than something drawn inside it: the map window can be small, and a detail
+    // view that ate the list would have traded one complaint for another.
+    // Drawn whether or not the map window is open - a details window the user
+    // has dragged to a second screen must not vanish because the map was shut.
+    drawTargetDetailsWindow();
 
     // --- image windows ----------------------------------------------------
     // The pictures come from the RUNNER, because that is what feeds the image
@@ -4184,14 +4394,34 @@ void AppWindow::drawTrackList() {
         rows.push_back(std::move(r));
     }
 
+    // --- how it is ordered ---------------------------------------------------
+    // ABOVE THE TABLE, and spelled out. The eight sort keys used to be eight
+    // column headings, and in the width this list gets they were truncated to
+    // the point of uselessness. One named key at a time is readable at any
+    // width the list can be given, and none of the eight has been dropped.
+    drawTrackSortControl();
+
     // --- the table -----------------------------------------------------------
-    // Same idiom as the plugin panel tables above (Borders | RowBg | ScrollY |
-    // Resizable), plus Sortable, which is the point of the change: a list of
-    // callsigns answers "what is up there" and a sortable table answers "what
-    // is closest", "what is highest" and "what is about to disappear".
+    // Same idiom as the plugin panel tables above (Borders | RowBg | ScrollY),
+    // but NOT Sortable. The sort lives in the control above: ImGui has no
+    // public call to set a table's sort arrow, so a menu and clickable headings
+    // could not be kept in agreement, and a heading arrow reading "Callsign"
+    // over rows ordered by distance is the same unreadable-UI failure in a new
+    // form.
+    //
+    // AND NOT RESIZABLE, WHICH IS DELIBERATE AND COSTS SOMETHING. A resizable
+    // ImGui table puts an invisible drag handle over every inner border,
+    // TABLE_RESIZE_SEPARATOR_HALF_THICKNESS (4 px) either side of it, and that
+    // handle is submitted before the rows are - so it takes the click and the
+    // row-spanning Selectable underneath never sees it. The result was an
+    // eight-pixel band in every row, right beside the details button, where
+    // clicking a row to fly the map to that aircraft did nothing at all.
+    // Silent misses on the list's primary gesture are worse than not being able
+    // to drag the callsign/id split, especially now the split is computed from
+    // what the text actually measures rather than from two guessed weights.
     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
-                                  ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingStretchProp;
+                                  ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_SizingStretchProp;
     // THE HEIGHT IS RESERVED BEFORE THE TABLE IS DRAWN, because a ScrollY table
     // with the default outer_size takes every pixel the pane has left and
     // anything emitted after it lands below the fold. The "no receiver
@@ -4201,43 +4431,82 @@ void AppWindow::drawTrackList() {
     const float tableH = tableHeightReservingLines(ImGui::GetContentRegionAvail().y,
                                                    ImGui::GetTextLineHeightWithSpacing(),
                                                    rxSet_ ? 0 : 1);
-    if (!ImGui::BeginTable("##tracktable", 8, flags, ImVec2(0.0f, tableH))) { return; }
 
-    // UNITS IN THE HEADINGS, not in the cells. Repeating "km" on every row
-    // costs a column's width and tells the user nothing they did not learn from
-    // the first row; leaving it off entirely is how a bearing gets read as a
-    // distance. Feet and knots because that is what the sources report in.
-    // THE FLAGGED COLUMN AND THE REMEMBERED KEY ARE ONE FACT. ImGui reports
-    // the DefaultSort column back on the first frame the table exists and
-    // overwrites whatever the window was holding, so a member initialised to a
-    // different key is not a default at all - it is a value that never survives
-    // a frame. Pinned here rather than trusted.
-    static_assert(kTrackSortDefaultColumn == 0,
-                  "the column carrying ImGuiTableColumnFlags_DefaultSort must be the "
-                  "one kTrackSortDefaultColumn names");
-    ImGui::TableSetupColumn("Callsign", ImGuiTableColumnFlags_DefaultSort |
-                                            ImGuiTableColumnFlags_WidthStretch, 2.0f);
-    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch, 1.6f);
-    ImGui::TableSetupColumn("Alt ft", ImGuiTableColumnFlags_WidthStretch, 1.3f);
-    ImGui::TableSetupColumn("Spd kt", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-    ImGui::TableSetupColumn("Crs deg", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-    ImGui::TableSetupColumn("Dist km", ImGuiTableColumnFlags_WidthStretch, 1.3f);
-    ImGui::TableSetupColumn("Brg deg", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-    ImGui::TableSetupColumn("Age s", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    // --- how wide the three columns come out ---------------------------------
+    // THE HEADINGS ARE MEASURED, NOT GUESSED. Two weights picked by eye (2.0
+    // and 1.6) were what left "Callsign" rendering as "Callsi..." in a 620 px
+    // map window - a three-pixel shortfall, and the same unreadable heading the
+    // eight-column table was replaced for. cascade::gui::trackListFit takes the
+    // real font measurements and answers with the widths and with whether they
+    // fit; the arithmetic is pure and tested against those exact pixel figures.
+    //
+    // TIGHTER CELL PADDING IS PART OF THE FIX. ImGui's default four pixels per
+    // side spends twenty-four pixels of a two-hundred-pixel list on empty
+    // margins, which is most of what was missing. Two is still a clear gap
+    // between text and border.
+    const float cellPadX = 2.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
+                        ImVec2(cellPadX, ImGui::GetStyle().CellPadding.y));
+
+    // The width the columns will actually share. The scrollbar and the four
+    // borders are ImGui's and are not part of it; this is an estimate and is
+    // only ever used to CHOOSE A LABEL, never to set a width, so being a pixel
+    // out picks the compact button a pixel early and nothing worse.
+    const float availW = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize -
+                         4.0f;
+    // The widest thing each column must show without truncating. For the
+    // callsign that is the heading itself - callsigns are shorter than the word
+    // - and for the id it is a six-character ICAO address, which is longer than
+    // the heading "ID".
+    const float callsignTextW = ImGui::CalcTextSize("Callsign").x;
+    const float idTextW =
+        (std::max)(ImGui::CalcTextSize("ID").x, ImGui::CalcTextSize("000000").x);
+    const float framePadX2 = ImGui::GetStyle().FramePadding.x * 2.0f;
+
+    // A NARROWER BUTTON IS WHERE THE LAST PIXELS COME FROM. Below about 600 px
+    // of map window the two headings cannot both fit beside a "Details" button;
+    // they can beside an "Info" one. The label is the only thing that changes -
+    // same button, same row, same window - and it is chosen from the tested
+    // fit rather than from a width threshold somebody picked.
+    const char* detailsLabel = "Details";
+    cascade::gui::TrackListFit fit = cascade::gui::trackListFit(
+        availW, callsignTextW, idTextW, ImGui::CalcTextSize(detailsLabel).x + framePadX2,
+        cellPadX);
+    if (!fit.headingsFit) {
+        const char* compact = "Info";
+        const cascade::gui::TrackListFit compactFit = cascade::gui::trackListFit(
+            availW, callsignTextW, idTextW, ImGui::CalcTextSize(compact).x + framePadX2,
+            cellPadX);
+        if (compactFit.headingsFit) {
+            detailsLabel = compact;
+            fit = compactFit;
+        }
+    }
+
+    if (!ImGui::BeginTable("##tracktable", 3, flags, ImVec2(0.0f, tableH))) {
+        ImGui::PopStyleVar();
+        return;
+    }
+
+    // THREE COLUMNS, AND THE THIRD IS A BUTTON. The details column's heading is
+    // deliberately blank: "Details" over a column of buttons that all say
+    // "Details" is a word printed twice.
+    //
+    // The two text columns are stretch columns weighted by the widths
+    // trackListFit returned. Weights are used rather than the widths
+    // themselves because ImGui knows the true available width and this code
+    // only estimates it - the RATIO is what the fit decided, and stretch
+    // applies it to whatever room there really is. The button column is
+    // WidthFixed, so it cannot be squeezed to nothing however narrow the pane
+    // gets: a button too small to press is worse than a truncated word.
+    ImGui::TableSetupColumn("Callsign", ImGuiTableColumnFlags_WidthStretch, fit.callsignW);
+    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthStretch, fit.idW);
+    ImGui::TableSetupColumn("##details", ImGuiTableColumnFlags_WidthFixed |
+                                             ImGuiTableColumnFlags_NoResize,
+                            fit.detailsW);
     ImGui::TableSetupScrollFreeze(0, 1);  // headings stay put while the list scrolls
     ImGui::TableHeadersRow();
 
-    // ImGui reports the sort specs only on the frame they CHANGE, so the choice
-    // is copied into the window's own state; without that the table would fall
-    // back to arrival order the moment the user stopped clicking.
-    if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
-        if (specs->SpecsCount > 0) {
-            const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
-            trackSortKey_ = trackSortKeyForColumn(s.ColumnIndex);
-            trackSortAscending_ = (s.SortDirection != ImGuiSortDirection_Descending);
-        }
-        specs->SpecsDirty = false;
-    }
     sortTrackRows(rows, trackSortKey_, trackSortAscending_);
 
     for (const TrackRow& r : rows) {
@@ -4257,8 +4526,16 @@ void AppWindow::drawTrackList() {
         // row does exactly what clicking a row has always done - the sort
         // reordered the rows, and r.source is what keeps each one pointing at
         // its own target through that.
+        //
+        // ALLOWOVERLAP is what keeps the details button from being swallowed by
+        // the row underneath it. Without it the Selectable, submitted first and
+        // covering the whole row, takes the click and the button never fires -
+        // and with the button taking the click but the row not knowing, a press
+        // on it would ALSO fly the map somewhere. Exactly one of the two must
+        // react to any given press, and this is the flag that arranges it.
         if (ImGui::Selectable(r.label.c_str(), selected,
-                              ImGuiSelectableFlags_SpanAllColumns)) {
+                              ImGuiSelectableFlags_SpanAllColumns |
+                                  ImGuiSelectableFlags_AllowOverlap)) {
             // CLICK = GO TO. One click centres the map on it; the map only
             // ever tightens the zoom, so clicking a flight while already
             // zoomed in does not throw the view back out.
@@ -4271,68 +4548,181 @@ void AppWindow::drawTrackList() {
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             map_->setFollowed(ht.t.id);
         }
-        // Who it actually is, when a track-info plugin knows - "G-EZBX A319"
-        // says more about what is overhead than any number does. It hangs on
-        // the hover rather than taking a ninth column, because it is empty for
-        // every target unless such a plugin is installed. Asking here is also
-        // what queues the lookup for every listed target.
-        if (trackInfo_.active()) {
-            const cascade::gui::TrackInfoCache::Info* d =
-                trackInfo_.get(ht.t.id, ht.t.kind);
-            if (d != nullptr && d->known &&
-                (!d->registration.empty() || !d->typeCode.empty()) &&
-                ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s%s%s", d->registration.c_str(),
-                                  (!d->registration.empty() && !d->typeCode.empty()) ? " "
-                                                                                     : "",
-                                  d->typeCode.c_str());
-            }
+        // THE WHOLE BLOCK ON HOVER, the same one the map shows and the same one
+        // the details button opens - so the six values the columns used to
+        // carry are one hover away, not one click. It replaces a tooltip that
+        // showed only the registration and type code and only when a
+        // track-info plugin was installed; this one always has something to
+        // say, because the position, altitude, speed, course, range, bearing
+        // and age come from the track itself. Asking here is also what queues
+        // the registry lookup for every listed target.
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            cascade::gui::drawTrackDetail(ht, &trackInfo_, rxSet_, rxLat_, rxLon_);
+            ImGui::EndTooltip();
         }
 
         ImGui::TableNextColumn();
         ImGui::TextDisabled("%s", r.id.c_str());
 
-        // Unknown values are NaN by ABI contract and print as a dash, never as
-        // a zero: "0 kt" and "no speed reported" are different facts.
+        // --- the details button ----------------------------------------------
+        // Everything the six deleted columns said, on demand, in a window that
+        // has room to spell it out. The button is drawn AFTER the row-spanning
+        // Selectable and the Selectable allows overlap, so a press here opens
+        // the details and does NOT also fly the map: clicking a row to follow
+        // an aircraft and getting a dialog instead would be the regression this
+        // change most has to avoid.
         ImGui::TableNextColumn();
-        if (std::isnan(r.altM)) { ImGui::TextDisabled("-"); }
-        else { ImGui::Text("%.0f", r.altM * 3.28084); }
-
-        ImGui::TableNextColumn();
-        if (std::isnan(r.speedMps)) { ImGui::TextDisabled("-"); }
-        else { ImGui::Text("%.0f", r.speedMps * 1.94384); }
-
-        ImGui::TableNextColumn();
-        if (std::isnan(r.courseDeg)) { ImGui::TextDisabled("-"); }
-        else { ImGui::Text("%.0f", r.courseDeg); }
-
-        // DISTANCE AND BEARING SAY WHY THEY ARE EMPTY. Without a receiver
-        // position there is nothing to measure from, and a blank cell reads as
-        // "the target did not report it" - which would be a lie about the
-        // target and would hide the one setting that fixes it.
-        ImGui::TableNextColumn();
-        if (!rxSet_) { ImGui::TextDisabled("no RX"); }
-        else if (std::isnan(r.distanceKm)) { ImGui::TextDisabled("-"); }
-        else { ImGui::Text("%.0f", r.distanceKm); }
-
-        ImGui::TableNextColumn();
-        if (!rxSet_) { ImGui::TextDisabled("no RX"); }
-        else if (std::isnan(r.bearingDeg)) { ImGui::TextDisabled("-"); }
-        else { ImGui::Text("%.0f", r.bearingDeg); }
-
-        ImGui::TableNextColumn();
-        ImGui::Text("%.0f", static_cast<double>(r.ageMs) / 1000.0);
+        if (ImGui::SmallButton(detailsLabel)) {
+            detailsTrackId_ = r.id;
+            detailsOpen_ = true;
+        }
 
         ImGui::PopStyleVar();
         ImGui::PopID();
     }
     ImGui::EndTable();
+    ImGui::PopStyleVar();  // CellPadding
 
-    // The one thing the columns cannot say, said once under the table rather
-    // than in a cell per row.
+    // The one thing the list cannot say, said once under the table rather than
+    // in a cell per row. It matters MORE now than when there were distance and
+    // bearing columns to sit blank: sorting by distance with no receiver
+    // position produces an order that looks arbitrary, and this is the line
+    // that explains it.
     if (!rxSet_) {
         ImGui::TextDisabled("Distance and bearing need the RX position above.");
     }
+}
+
+void AppWindow::drawTrackSortControl() {
+    // ONE KEY, NAMED IN FULL. This is what replaced eight sortable headings:
+    // the headings had to share the list's width between them and were
+    // truncated to "Cal.. ID A.. S.. C.. D.. B.. A..", while a combo shows one
+    // key at a time and can spell out both the quantity and its unit.
+    ImGui::TextDisabled("Sort");
+    ImGui::SameLine();
+
+    // The direction button is a fixed square; the combo takes what is left, so
+    // the control fits whatever width the list is dragged to instead of
+    // overflowing it.
+    const float dirW = ImGui::GetFrameHeight();
+    float comboW = ImGui::GetContentRegionAvail().x - dirW - ImGui::GetStyle().ItemSpacing.x;
+    if (comboW < 60.0f) { comboW = 60.0f; }
+    ImGui::SetNextItemWidth(comboW);
+    if (ImGui::BeginCombo("##tracksort", trackSortKeyName(trackSortKey_))) {
+        // EVERY KEY THE COLUMNS COULD SORT BY, still here. kTrackSortKeyCount
+        // is what stops this loop quietly listing fewer of them than exist:
+        // dropping one from the menu is dropping the ability to ask its
+        // question, and "what is nearest me" is the question the distance key
+        // was added for.
+        for (int i = 0; i < cascade::gui::kTrackSortKeyCount; ++i) {
+            const TrackSortKey k = trackSortKeyForMenuIndex(i);
+            const bool sel = (k == trackSortKey_);
+            if (ImGui::Selectable(trackSortKeyName(k), sel)) { trackSortKey_ = k; }
+            if (sel) { ImGui::SetItemDefaultFocus(); }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Order the list. Distance and bearing are measured from the RX position;\n"
+            "the value itself is in the target's details and on the map's hover.");
+    }
+    ImGui::SameLine();
+    // An ARROW rather than a caret character, because the arrow is drawn by
+    // ImGui and cannot come out as a missing glyph in a font that lacks it.
+    if (ImGui::ArrowButton("##tracksortdir",
+                           trackSortAscending_ ? ImGuiDir_Up : ImGuiDir_Down)) {
+        trackSortAscending_ = !trackSortAscending_;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(trackSortAscending_ ? "Smallest first - click to reverse"
+                                              : "Largest first - click to reverse");
+    }
+}
+
+void AppWindow::drawTargetDetailsWindow() {
+    if (!detailsOpen_ || detailsTrackId_.empty()) { return; }
+
+    // A WINDOW, NOT A POPUP AND NOT A PANEL UNDER THE LIST.
+    //
+    // A popup would be dismissed by the next click anywhere else - including
+    // the click on the map to pan it, and the click on the row to follow the
+    // aircraft - so the one thing a user does immediately after reading the
+    // details would close them. A panel under the list would take the list's
+    // own height inside a map window that is often small, which is trading the
+    // complaint that started this for a different one.
+    //
+    // A window can be moved off the map entirely (this application runs ImGui
+    // with viewports, so it becomes a real operating-system window), it stays
+    // put while the map is used, and it carries a title bar with a close box -
+    // plus the Close button below, because a control that is obvious is worth
+    // one line.
+    // IT RESIZES TO EVERY TARGET, NOT TO THE FIRST ONE. A one-off
+    // SetNextWindowSize with a height of zero auto-fits on first use and then
+    // never again, so the window kept whatever height the first aircraft
+    // needed: open the details for a target the info plugin has no entry for
+    // (seven lines), then for one with a registration, type, operator and
+    // country, and the extra four lines went behind a scrollbar - taking the
+    // age line and all three buttons below the fold. AlwaysAutoResize refits
+    // every frame, which is what a block whose line count depends on the target
+    // requires; the minimum width stops the "no longer being heard" state,
+    // which is two short lines, from collapsing to a sliver.
+    ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+    if (ImGui::Begin("Target details", &detailsOpen_, ImGuiWindowFlags_AlwaysAutoResize)) {
+        // FOUND BY ID EVERY FRAME. The host's track vector is rebuilt on every
+        // poll, so a stored index or pointer would be describing a different
+        // aircraft - or freed memory - within a frame or two.
+        const std::vector<cascade::core::HostTrack>& tracks = pluginUi_.tracks();
+        const cascade::core::HostTrack* found = nullptr;
+        for (const cascade::core::HostTrack& ht : tracks) {
+            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                continue;
+            }
+            if (detailsTrackId_ == ht.t.id) {
+                found = &ht;
+                break;
+            }
+        }
+
+        if (found == nullptr) {
+            // SAID, NOT SILENTLY CLOSED. A target goes quiet and is dropped by
+            // the same staleness rule the map and the list use; a window that
+            // shut itself at that moment would look like a crash, and one that
+            // kept showing the last values would be lying about a live aircraft.
+            ImGui::TextUnformatted(detailsTrackId_.c_str());
+            ImGui::Separator();
+            ImGui::TextDisabled("No longer being heard.");
+        } else {
+            cascade::gui::drawTrackDetail(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
+            ImGui::Separator();
+            // The same two gestures the row offers, as named buttons: the
+            // details window is reachable from a row, and a user who got here
+            // should not have to go back to the row to act on what they read.
+            if (ImGui::Button("Go to on map")) {
+                map_->setSelected(found->t.id);
+                map_->goTo(found->t.latDeg, found->t.lonDeg);
+                mapOpen_ = true;
+            }
+            ImGui::SameLine();
+            const bool following = (map_->followedId() == found->t.id);
+            if (ImGui::Button(following ? "Stop following" : "Follow")) {
+                if (following) {
+                    map_->clearFollow();
+                } else {
+                    map_->setSelected(found->t.id);
+                    map_->setFollowed(found->t.id);
+                    mapOpen_ = true;
+                }
+            }
+        }
+        ImGui::Separator();
+        if (ImGui::Button("Close")) { detailsOpen_ = false; }
+    }
+    ImGui::End();
+    // Cleared only once the window is actually shut, so the id survives being
+    // closed by the title bar's own box as well as by the button.
+    if (!detailsOpen_) { detailsTrackId_.clear(); }
 }
 
 void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
@@ -6303,7 +6693,15 @@ void AppWindow::refreshCatServer() {
         // held by something else, which the user fixes and retries. Silently
         // turning the setting off would hide that.
         catStatus_ = error;
+        cascade::core::diagWarnf("cat: listener refused on port %d (%s)", catPortMirror_,
+                                 error.c_str());
+        return;
     }
+    // The 120 s freeze that started this whole feature was a CAT client being
+    // shut down. Whether one was connected at all is the first question a hang
+    // report from that path has to answer.
+    cascade::core::diagLogf("cat: listening on port %d (%s)", catPortMirror_,
+                            catBindAll_ ? "all interfaces" : "loopback");
 }
 
 void AppWindow::applyWebSettings() {
@@ -6322,8 +6720,12 @@ void AppWindow::applyWebSettings() {
         // failure's is too. Which of the two it was is available from
         // decision(), but the user only needs the sentence.
         webError_ = error;
+        cascade::core::diagWarnf("web: server refused to start (%s)", error.c_str());
         return;
     }
+    // The PORT and the SCOPE, never the password record and never the bind
+    // address's provenance: this line goes in a file the user may send us.
+    cascade::core::diagLogf("web: serving on port %d", webServer_.boundPort());
 
     const cascade::net::BindDecision d = webServer_.decision();
     const int port = webServer_.boundPort();
@@ -6626,6 +7028,171 @@ void AppWindow::drawUsageReportingSection() {
     }
 }
 
+void AppWindow::applyDiagnosticsEnabled(bool on) {
+    // THE WHOLE SWITCH, IN ONE PLACE, because it was not. The checkbox used to
+    // arm and disarm the crash handler and the log inline and never mention
+    // the watchdog, so a session that started with diagnostics on and had the
+    // box unticked kept a live watchdog writing hang reports - against a
+    // promise made in PRIVACY.md, README.md and docs/DIAGNOSTICS.md - and a
+    // session switched on mid-flight got everything except the component that
+    // catches the fault this product actually ships. Both directions are now
+    // one call, and tests/test_diag_hang.cpp drives the real application
+    // through THIS function in both of them.
+    diagnosticsEnabled_ = on;
+    cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+    // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
+    // never allowed to write (a bounded CI run) must not start writing because
+    // a switch was flipped.
+    if (!diagCrashDir_.empty()) {
+        cascade::core::DiagLog::instance().configure(cascade::core::diagLogDir(),
+                                                     diagnosticsEnabled_);
+    }
+    watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+}
+
+void AppWindow::drawDiagnosticsSection() {
+    if (!ImGui::CollapsingHeader("Diagnostics")) { return; }
+    telemetryNotePanel("diagnostics");
+
+    ImGui::TextWrapped(
+        "If FoxSDR crashes or freezes, it writes a report on THIS machine and "
+        "nothing else. Nothing is uploaded, ever - not automatically and not "
+        "in the background. You choose what to send, and when.");
+    ImGui::Spacing();
+
+    bool on = diagnosticsEnabled_;
+    if (ImGui::Checkbox("Record crashes, freezes and a rotating log", &on)) {
+        applyDiagnosticsEnabled(on);
+    }
+    bool dump = diagnosticsMinidump_;
+    if (ImGui::Checkbox("Also write a full memory dump beside a crash report", &dump)) {
+        diagnosticsMinidump_ = dump;
+        cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+    }
+    ImGui::TextDisabled(
+        "A memory dump can contain file names and received signal data.\n"
+        "It is written locally and never sent unless you send it yourself.");
+
+    ImGui::Spacing();
+    const std::string logPath = cascade::core::DiagLog::instance().filePath();
+    if (logPath.empty()) {
+        ImGui::TextDisabled("Log: off (nothing is being written).");
+    } else {
+        ImGui::TextDisabled("Log: %s", logPath.c_str());
+    }
+    const std::string crashDir = cascade::core::diagCrashDir();
+    ImGui::TextDisabled("Reports: %s", crashDir.empty() ? "(unavailable)" : crashDir.c_str());
+
+    ImGui::Spacing();
+    if (ImGui::Button("Copy diagnostics")) { copyDiagnosticsBundle(); }
+    ImGui::SameLine();
+    if (ImGui::Button("Open reports folder")) {
+#if defined(_WIN32)
+        if (!crashDir.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(std::filesystem::path(crashDir), ec);
+            ::ShellExecuteA(nullptr, "open", crashDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+#endif
+    }
+    if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
+
+    if (ImGui::SmallButton("What exactly is in a report?")) {
+        privacyNoticeOpen_ = !privacyNoticeOpen_;
+    }
+    if (privacyNoticeOpen_) {
+        ImGui::Indent();
+        ImGui::TextDisabled(
+            "version  commit  os  arch  mode  source  sample rate\n"
+            "device open  sdr model (serial stripped)  loaded plugins\n"
+            "faulting stack as module+offset, and every thread on a freeze\n"
+            "the loaded module list with build ids, and the last 256 log lines\n"
+            "NEVER a frequency, never anything decoded, never your position.\n"
+            "See PRIVACY.md for the complete list and what is excluded.");
+        ImGui::Unindent();
+    }
+}
+
+void AppWindow::drawDiagnosticsOffer() {
+    if (!diagOfferOpen_) { return; }
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+    if (ImGui::Begin("FoxSDR did not close normally last time", &diagOfferOpen_,
+                     ImGuiWindowFlags_AlwaysAutoResize)) {
+        telemetryNotePanel("diagnostics offer");
+        ImGui::TextWrapped(
+            "The previous session ended without shutting down. If a report was "
+            "written it is on this machine only - nothing has been sent, and "
+            "nothing will be unless you send it.");
+        ImGui::Spacing();
+        if (ImGui::Button("Copy diagnostics")) { copyDiagnosticsBundle(); }
+        ImGui::SameLine();
+        if (ImGui::Button("Open reports folder")) {
+#if defined(_WIN32)
+            const std::string dir = cascade::core::diagCrashDir();
+            if (!dir.empty()) {
+                std::error_code ec;
+                std::filesystem::create_directories(std::filesystem::path(dir), ec);
+                ::ShellExecuteA(nullptr, "open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+#endif
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Not now")) { diagOfferOpen_ = false; }
+        if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
+    }
+    ImGui::End();
+}
+
+void AppWindow::copyDiagnosticsBundle() {
+    // EVERY FIELD HERE ALREADY EXISTS somewhere in this window. A bundle that
+    // re-derived the version, the plugin list or the radio model would be a
+    // second source of truth for exactly the facts a support conversation
+    // turns on, and the two would eventually disagree.
+    refreshDiagContext();
+
+    cascade::core::DiagBundleInput in;
+    in.context.version = cascade::versionString();
+    in.context.commit = cascade::gitCommit();
+    in.context.os = cascade::core::osDescription();
+    in.context.arch = cascade::core::archDescription();
+    in.context.mode = kModeNames[modeIndex_];
+    in.context.sourceKind = sourceKind_;
+    in.context.sampleRateHz = pipeline_.activeSource().sampleRateHz();
+    in.context.deviceOpen = (sourceKind_ == "soapy");
+    in.context.sdrModel = cascade::core::sanitiseDevice(soapyArgs_);
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (p.loaded && in.context.plugins.size() < 32) {
+            in.context.plugins.push_back(p.name + " " + p.version);
+        }
+    }
+    in.logLines = cascade::core::DiagLog::instance().ringSnapshot();
+    in.logLinesTotal = cascade::core::DiagLog::instance().linesWritten();
+    in.logPath = cascade::core::DiagLog::instance().filePath();
+    in.crashDir = cascade::core::diagCrashDir();
+    in.lastRunUnclean = lastRunUnclean_;
+    in.launches = telemetryLaunches_;
+    in.crashes = telemetryCrashes_;
+
+    const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
+    ImGui::SetClipboardText(bundle.c_str());
+
+    // ...and on disk as well as on the clipboard, because a clipboard does not
+    // survive the next copy and a support thread can take days.
+    diagBundleStatus_ = "Copied to the clipboard.";
+    if (!in.crashDir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(in.crashDir), ec);
+        const std::string path = in.crashDir + "/diagnostics.txt";
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (out) {
+            out << bundle;
+            out.close();
+            diagBundleStatus_ = "Copied to the clipboard, and saved as " + path;
+        }
+    }
+    cascade::core::diagLogf("diagnostics bundle produced (%zu bytes)", bundle.size());
+}
+
 void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // Panel mirrors + always-safe DSP settings first (none of these can
     // fail; load() already range-sanitized volume/split/db*).
@@ -6742,8 +7309,18 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
             sourceKind_ = "file";
             sourceSel_ = 1;
             followInputRate();
+            cascade::core::diagLogf("source: restored an I/Q file at %.0f S/s",
+                                    pipeline_.activeSource().sampleRateHz());
         } else {
             sourceError_ = file->lastError();
+            // THE FACT, NEVER THE PATH - and the reason is five lines up in the
+            // Open handler: a file name is the user's own data. The source's
+            // error string is "cannot open file: <full absolute path>", and
+            // this line goes to the ring, which means it goes into every crash
+            // report, every hang report and the Copy diagnostics bundle. The
+            // full text stays in sourceError_, which is shown on screen to the
+            // person who already knows what they opened.
+            cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
         }
     } else if (cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) {
         // Seeded BEFORE the open, because openSoapy applies it as part of
@@ -6767,8 +7344,19 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
                 }
             }
             followInputRate();
+            cascade::core::diagLogf("source: restored %s at %.0f S/s",
+                                    cascade::core::sanitiseDevice(soapyArgs_).c_str(),
+                                    pipeline_.activeSource().sampleRateHz());
+        } else {
+            // openSoapy already set sourceError_. A radio that was there last
+            // session and is not there now is the single most common support
+            // question this product gets - but the driver's own message quotes
+            // the device ARGUMENTS back, and those carry the serial number.
+            // Same rule as the line above and as every other place these
+            // strings are recorded: the sanitised model, never the raw args.
+            cascade::core::diagWarnf("source: the saved radio (%s) did not reopen",
+                                     cascade::core::sanitiseDevice(cfg.soapyArgs).c_str());
         }
-        // openSoapy already set sourceError_ on failure.
     }
     if (sourceKind_ == "siggen") {
         // Generator kept (or fallen back to): carry the saved center so the
@@ -6849,6 +7437,12 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     // no minidump, nothing uploaded from the failure itself - just the
     // observation that last time the marker was never set.
     if (!cfg.telemetryCleanExit) { ++telemetryCrashes_; }
+    // THE SAME MARKER, REUSED AS THE TRIGGER TO OFFER A REPORT. It already
+    // detects exactly "the last run did not end normally", which is precisely
+    // the moment to ask - a crash handler can write a report but it cannot ask
+    // the user anything, because by then there is no user interface left.
+    lastRunUnclean_ = !cfg.telemetryCleanExit;
+    diagOfferOpen_ = lastRunUnclean_ && cfg.diagnosticsEnabled;
     telemetrySessionStart_ = glfwGetTime();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
     // Last session's report goes now, on a thread, while the window is coming
@@ -6864,6 +7458,11 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     // GUI's copy of the config is written back before the file is saved. It
     // has nothing to do with telemetry and shares no state with it.
     cfg.updateCheckEnabled = updateCheckEnabled_;
+
+    // Same rationale: this is the one place the GUI's copy of the config is
+    // written back, so the diagnostics switches ride along here too.
+    cfg.diagnosticsEnabled = diagnosticsEnabled_;
+    cfg.diagnosticsMinidump = diagnosticsMinidump_;
 
     cfg.telemetryEnabled = telemetryEnabled_;
     cfg.telemetryInstallId = telemetryInstallId_;

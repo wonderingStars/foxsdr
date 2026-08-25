@@ -33,7 +33,15 @@ param(
     # configure fails on "Could not find SoapySDR".
     [string]$Toolchain = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
     [string]$Triplet = "x64-windows",
-    [switch]$Publish
+    [switch]$Publish,
+    # Where the PDBs for every shippable build are kept so they outlive this
+    # machine. Same host and key as the git mirror (see ~/.ssh/config "nas").
+    [string]$SymbolMirror = "nas:/volume1/foxsdr-symbols",
+    # Deliberate escape hatch for building with the NAS unreachable. It is a
+    # switch and not a silent fallback on purpose: skipping this leaves the
+    # only copy of these symbols on one disk, and if that disk dies every crash
+    # report ever filed against this build becomes unreadable hex forever.
+    [switch]$SkipSymbolMirror
 )
 
 $ErrorActionPreference = "Stop"
@@ -123,6 +131,92 @@ $setup = Join-Path $repo "installer\Output\foxsdr-setup-$version.exe"
 if (-not (Test-Path $setup)) { throw "no installer produced at $setup" }
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
 $size = (Get-Item $setup).Length
+
+# --- Durable symbols --------------------------------------------------------
+#
+# THIS IS IN THE SAME STEP AS THE INSTALLER, AND THAT IS THE POINT. The moment
+# an installer exists, a binary exists that can reach a user, and every crash
+# report that binary will ever produce is unreadable without the PDB from this
+# exact link. A PDB cannot be regenerated: rebuilding the same source produces
+# a different CodeView GUID and different offsets. So the only safe moment to
+# copy it somewhere that outlives this machine is now, automatically, as part
+# of the action that made the risk - not as a line in a checklist.
+#
+# The CMake POST_BUILD step has already put this build into $repo\symbols\,
+# keyed by build id (tools/archive-symbols.ps1). This pushes that archive to
+# the NAS, which is the same box and the same SSH key the git mirror uses.
+#
+# A failure here is FATAL rather than a warning. A warning at the end of a long
+# build is a warning nobody reads, and the thing being risked is unrecoverable.
+$symbolsDir = Join-Path $repo "symbols"
+
+# Re-run the archiver against THIS binary to learn which entries belong to it.
+# It is idempotent (it copies only when the file differs), so this is a no-op
+# on top of the POST_BUILD run and costs nothing; what it buys is the exact
+# list of archive paths for this build, so the mirror carries this nightly and
+# not every incremental relink that happens to share the archive root.
+$archived = @(& (Join-Path $repo "tools\archive-symbols.ps1") -Binary $exe `
+    -ArchiveRoot $symbolsDir -Version $version -Commit $sha -EmitPaths)
+if ($archived.Count -lt 3) {
+    throw "the symbol archiver produced nothing for $exe - this build has no symbols anywhere, and a crash report against it could never be read"
+}
+
+if ($SkipSymbolMirror) {
+    Write-Warning "symbol mirror SKIPPED - the only copy of this build's PDBs is $symbolsDir. If this disk is lost, every crash report against $version becomes unreadable, permanently."
+} else {
+    $mirrorHost, $mirrorPath = $SymbolMirror -split ":", 2
+    if (-not $mirrorPath) { throw "SymbolMirror must be <sshhost>:<path>, got '$SymbolMirror'" }
+    Write-Host "Mirroring symbols to $SymbolMirror" -ForegroundColor Cyan
+    foreach ($rel in $archived) {
+        $src = Join-Path $symbolsDir $rel
+        if (-not (Test-Path -LiteralPath $src)) { throw "archiver named $rel but it is not on disk" }
+        # POSIX separators on the far side; the archive layout is the symbol
+        # server one and a debugger looks it up by that exact shape.
+        $relPosix = $rel -replace '\\', '/'
+        $destDir = "$mirrorPath/" + (Split-Path -Parent $relPosix -ErrorAction SilentlyContinue)
+        if (-not (Split-Path -Parent $relPosix)) { $destDir = $mirrorPath }
+        $destDir = $destDir -replace '\\', '/'
+        & ssh -o BatchMode=yes $mirrorHost "mkdir -p '$destDir'"
+        if ($LASTEXITCODE -ne 0) { throw "could not reach the symbol mirror at $SymbolMirror (use -SkipSymbolMirror only if you accept losing these symbols)" }
+        # -O forces the LEGACY SCP protocol. Modern OpenSSH scp speaks SFTP by
+        # default and this DSM box exposes no SFTP subsystem for this account,
+        # so without -O every transfer dies with a bare "Connection closed"
+        # that reads like a network fault and is not one. Measured, 2026-08-25.
+        & scp -O -q -B "$src" "${mirrorHost}:$destDir/"
+        if ($LASTEXITCODE -ne 0) { throw "symbol mirror copy of $rel failed - refusing to call this nightly finished" }
+    }
+    # PROOF IT ARRIVED, not merely that scp exited 0. A negative result needs
+    # evidence the operation actually ran, so the PDB is read back by size.
+    $pdbRel = ($archived[0] -replace '\\', '/')
+    $remoteSize = (& ssh -o BatchMode=yes $mirrorHost "stat -c %s '$mirrorPath/$pdbRel' 2>/dev/null || echo 0" | Out-String).Trim()
+    $localSize = (Get-Item -LiteralPath (Join-Path $symbolsDir $archived[0])).Length
+    if ("$remoteSize" -ne "$localSize") {
+        throw "symbol mirror verification failed: $pdbRel is $remoteSize bytes on the mirror, $localSize here"
+    }
+    Write-Host "  verified $pdbRel ($localSize bytes) on $SymbolMirror" -ForegroundColor Green
+
+    # AND THE INDEX IS READABLE ON THE COPY THAT HAS TO OUTLIVE THIS MACHINE.
+    # index.txt is mirrored wholesale in the loop above, so the local file
+    # simply overwrites the remote one - but that only helps while the local
+    # file is good, and the failure this guards against is silent by
+    # construction. The mirror sat for a day with a UTF-8 BOM on row 1 (written
+    # by the `Add-Content -Encoding utf8` this script's archiver used to use)
+    # after the local copy had been repaired: `grep -c '^2026'` returned 9 of
+    # 10 rows there and 10 of 10 here, and nothing anywhere noticed. A BOM is
+    # invisible in every editor, so the only thing that can catch it is a byte
+    # read, and the only place worth reading is the remote file itself.
+    #
+    # od rather than `head -c1`, because a raw 0xEF byte through the SSH
+    # pipeline is not something to trust to text handling on either side.
+    $indexFirst = (& ssh -o BatchMode=yes $mirrorHost "head -c 1 '$mirrorPath/index.txt' 2>/dev/null | od -An -tx1 | tr -d ' \n'" | Out-String).Trim()
+    if ($indexFirst -eq "") {
+        throw "symbol mirror verification failed: $mirrorPath/index.txt is missing or empty on $mirrorHost - the build id of this nightly cannot be mapped to a release on the durable copy"
+    }
+    if ($indexFirst -eq "ef") {
+        throw "symbol mirror verification failed: $mirrorPath/index.txt on $mirrorHost begins 0xEF (a UTF-8 BOM), so an anchored parse silently drops its oldest row - re-mirror the repaired index before shipping this nightly"
+    }
+    Write-Host "  verified index.txt on $SymbolMirror starts 0x$indexFirst (no BOM)" -ForegroundColor Green
+}
 
 Write-Host ""
 Write-Host "Nightly built:" -ForegroundColor Green

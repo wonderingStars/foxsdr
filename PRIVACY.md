@@ -41,6 +41,10 @@ exactly as many.
   anonymous counts listed below and nothing else. Switching it off stops all
   reporting and deletes the identifier described below.
 - **No personal data is collected**, and no IP address or location is recorded.
+- **Crash and freeze reports are written to your machine and uploaded nowhere.**
+  This version has no upload path for them at all. You choose what to send, and
+  when. A full memory dump is off by default and is never sent by the
+  application under any setting.
 - **Nothing about what you listen to is ever collected** — no frequencies, no
   positions, no decoded messages. Not when reporting is on, not ever.
 - **The update check is ON by default, and you can turn it off.** Once per
@@ -73,6 +77,99 @@ That is the complete list. The payload is asserted field-by-field by an
 automated test (`tests/test_telemetry.cpp`), so a new field cannot be added
 without that test failing and this document being updated with it.
 
+## Crash and freeze reports — what they contain, and where they stay
+
+**Nothing here is uploaded.** Not automatically, not in the background, not at
+all in this version. If FoxSDR crashes or freezes it writes a file on your
+machine, and the file stays there until you decide to send it.
+
+Reports live in `%LOCALAPPDATA%\FoxSDR\crashes\`, and the rotating application
+log in `%LOCALAPPDATA%\FoxSDR\logs\`. **Settings → Diagnostics** shows both
+paths, turns the whole thing off, and has a **Copy diagnostics** button that
+puts exactly the contents below on your clipboard so you can read it before you
+send it to anyone.
+
+A report contains these fields and no others:
+
+| Field | Example | Why |
+|---|---|---|
+| `generated` | `2026-08-25 14:02:11` | When the bundle was made. |
+| `version` | `0.61.0` | Which release. |
+| `commit` | `5ba13f6d0c86`, or `5ba13f6d0c86-dirty` | Which build. A version names a release; only the commit names a build, and the offsets in a report are meaningless against the wrong one. The `-dirty` suffix means the tree had uncommitted changes, so that commit is the nearest tree rather than the exact one. |
+| `os` | `Windows 10.0.22631` | Whether a fault is specific to a Windows version. |
+| `arch` | `x64` | As above. |
+| `mode` | `WFM` | What the receiver was doing. |
+| `source` | `soapy` | Generator, I/Q file, or a real radio. |
+| `sample-rate` | `2400000` | Faults that only appear at high rates. **This is the sample rate, not a tuned frequency** — see below. |
+| `device-open` | `yes` | Whether a radio was in use. |
+| `sdr-model` | `uhd b200` | Which radio. **Serial numbers are stripped**, exactly as in the usage report. |
+| `plugin` | `ADS-B 1.1.0` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |
+| `log-path`, `crash-dir` | paths under `%LOCALAPPDATA%` | So you know where the rest of it is. |
+| `last-run-unclean` | `yes` | Whether the previous session ended without shutting down. |
+| `launches`, `crashes` | `12`, `1` | The same two counters the usage report already keeps. |
+| `log-lines-total` | `4011` | How much of the log the report is *not* carrying. |
+| the log | the last 256 lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. When an I/Q file fails to reopen the log records that it did not reopen; the file name stays on screen, where you already know it. |
+
+A crash or freeze report written by the application itself carries the same
+context block as the table above — the same bytes, so the two cannot drift —
+and adds a header of its own. **A crash report:**
+
+| Field | Example | Why |
+|---|---|---|
+| `kind` | `crash` | Which of the two documents this is. |
+| `reason` | `access violation` | What went wrong, in words. |
+| `code` | `0xC0000005` | The same thing as a number, because the words are a lookup table and the number is not. |
+| `address` | `0x00007FF6…` | Where it faulted. An address inside program code. |
+| `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug together. Derived from the fault kind, the faulting module and the offset inside it — never from the time and never from anything about you. |
+| `thread` | `24180` | Which thread faulted. An operating-system thread number, meaningless outside that dead process. |
+
+**A freeze report:**
+
+| Field | Example | Why |
+|---|---|---|
+| `kind` | `hang` | As above. |
+| `stalled-ms` | `7213` | How long the interface had been unresponsive. |
+| `threshold-ms` | `5000` | What it was measured against, so the number above can be judged. |
+| `signature` | `7C04…` | As above. |
+| `threads` | `9` | How many stacks follow. |
+
+After that header both add the call stacks — every thread for a freeze, the
+faulting one for a crash — and the list of loaded modules with their build
+identifiers. Those are addresses inside program code and identifiers of
+compiled files. They describe FoxSDR, not you.
+
+Every one of those three lists — the bundle, the crash header and the freeze
+header — is asserted field-by-field by an automated test, in **both**
+directions: a field added to a report fails the test just as loudly as a field
+this document claims and the report stopped emitting. The bundle is held by
+`tests/test_diagnostics.cpp`; the crash header by `tests/test_crash_capture.cpp`,
+against a report from a real fault in a real child process; the freeze header by
+`tests/test_diag_hang.cpp`, against a report from a real stall. The first of
+those also asserts the absence of the things below.
+
+**A full memory dump is off by default.** If you switch it on
+(Settings → Diagnostics) a `.dmp` file is written *beside* the text report. A
+memory dump is a copy of the program's memory and can contain file names and
+received signal data, so it is written **locally only** and is never sent by the
+application under any setting. If it is ever useful, you will be asked for it
+and you can decide.
+
+### What phase 2 will send, when it exists
+
+There is no upload in this version. When one is added it will follow the rule
+already decided:
+
+- **Automatic:** a *minimal* report only — version, commit, operating system,
+  fault kind, the faulting module and offset, and the grouping signature. Enough
+  to tell "three bugs" from "four hundred reports", and nothing else.
+- **Explicit consent, per report:** anything richer — the log lines, the plugin
+  list, the source and device state, the full thread stacks.
+- **Never uploaded:** the memory dump. It is written locally and offered for you
+  to send manually, or not.
+
+This document and its test will be updated in the same change that adds the
+upload, not afterwards.
+
 ## What is never sent
 
 These are design constraints, not current policy:
@@ -80,7 +177,18 @@ These are design constraints, not current policy:
 - **Frequencies you tune to.** What somebody listens to is the most sensitive
   thing this software knows. In the United Kingdom, intercepting a message you
   are not authorised to receive, or disclosing its contents, is an offence
-  under section 48 of the Wireless Telegraphy Act 2006.
+  under section 48 of the Wireless Telegraphy Act 2006. This applies to crash
+  and freeze reports as strictly as it does to usage reports: no tuned
+  frequency, no bookmark and no centre frequency appears in one, which
+  `tests/test_diagnostics.cpp` asserts by searching for them.
+- **The names of files you open.** A recording's file name is your own data —
+  it can name a service, a place, or a frequency. `tests/test_diagnostics.cpp`
+  checks this against the **real** log written by the **real** application,
+  not against log lines the test supplied itself: it starts FoxSDR with a saved
+  I/Q file that is no longer there, which is the most ordinary way to reach
+  that path, and requires no part of the name to appear. That test exists
+  because the failure message used to be logged verbatim, and it contained the
+  full path.
 - **Anything decoded** — pager messages, satellite traffic, aircraft, vessels.
 - **Your position**, or the position of anything you receive.
 - **Your IP address or any location derived from it.** A network request

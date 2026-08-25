@@ -415,6 +415,20 @@ struct AppConfig {
     // trying to close it. Cleared once sent.
     std::string telemetryPending;
 
+    // --- Local fault capture (see PRIVACY.md and docs/DIAGNOSTICS.md) -------
+    //
+    // ON by default, and that needs no consent argument the usage report does:
+    // NOTHING IS UPLOADED. A crash report, a hang report and the rotating log
+    // are written under %LOCALAPPDATA%\FoxSDR and stay there until the user
+    // chooses to send one. Off means off - no directory, no file.
+    bool diagnosticsEnabled = true;
+
+    // A full minidump beside the text report. OFF by default and never
+    // automatic: a minidump is process memory, which on this application can
+    // include file paths and captured I/Q. Written LOCALLY when switched on,
+    // and offered for manual sending; it is never uploaded by the application.
+    bool diagnosticsMinidump = false;
+
     // Cap for the three plugin-name lists above (pluginTuneAllowed,
     // pluginsStopped, pluginMuteOverride); see the load-semantics note in the
     // header comment. One constant, because all three hold the same kind of

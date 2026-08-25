@@ -23,8 +23,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <string>
 #include <vector>
@@ -230,22 +232,79 @@ struct TrackRow {
     std::size_t source = 0;
 };
 
-// The key a table column sorts by. ONE mapping, so the column order and the
-// window's remembered sort state cannot drift apart; an index outside the
-// table's columns answers with the default rather than with whatever the last
-// case happened to be.
-TrackSortKey trackSortKeyForColumn(int columnIndex);
+// How many keys there are. Pinned so the sort menu cannot list a subset of
+// them by accident - dropping a key from that menu is dropping the ability to
+// ask its question, which is exactly what happened when the table lost six of
+// its eight columns.
+inline constexpr int kTrackSortKeyCount = 8;
 
-// The column the table opens sorted by. It is the CALLSIGN column on purpose:
-// distance is the more useful order but it is empty until a receiver position
-// has been set, so a table that opened on it would open sorted by nothing at
-// all for every new user. This constant is the single statement of that
-// choice - the window seeds its remembered sort key through
-// trackSortKeyForColumn(kTrackSortDefaultColumn), and a static_assert beside
-// the column that carries ImGuiTableColumnFlags_DefaultSort pins the other
-// half, because when the two were written independently they disagreed and the
-// table silently opened in an order the code said it would not.
-inline constexpr int kTrackSortDefaultColumn = 0;
+// The key at position `index` of the sort menu. ONE mapping, so the menu's
+// order and the window's remembered sort state cannot drift apart; an index
+// outside the menu answers with the default rather than with whatever the last
+// case happened to be.
+//
+// IT USED TO BE trackSortKeyForColumn, one key per table column, back when the
+// list was an eight-column sortable table. Eight columns do not fit the width
+// the list actually gets and their headings were unreadable, so the table is
+// now three things - callsign, id and a details button - and the eight keys
+// live in a labelled menu above it instead. The mapping itself is unchanged:
+// the menu lists them in exactly the order the columns did.
+TrackSortKey trackSortKeyForMenuIndex(int index);
+
+// The menu's own label for a key, which is the whole reason the menu can carry
+// eight keys where the headings could not: one spelled-out word at a time.
+// Never empty and never shared between two keys - a menu with two entries
+// reading the same thing is a menu that cannot be used.
+const char* trackSortKeyName(TrackSortKey key);
+
+// The key the list opens sorted by. It is the CALLSIGN on purpose: distance is
+// the more useful order but it is empty until a receiver position has been
+// set, so a list that opened on it would open sorted by nothing at all for
+// every new user. This constant is the single statement of that choice - the
+// window seeds its remembered sort key through
+// trackSortKeyForMenuIndex(kTrackSortDefaultIndex).
+inline constexpr int kTrackSortDefaultIndex = 0;
+
+// --- how wide the three columns come out --------------------------------------
+//
+// WHY THIS IS A FUNCTION AND NOT TWO MAGIC WEIGHTS. The three-column list
+// replaced eight truncated headings, and it was still truncating one of its
+// own: at a 620 px map window the list gets about 173 px of table, "Callsign"
+// wants 51 px of that and a six-character ID wants 42 px, and with four pixels
+// of cell padding on every side of every cell the two of them were three
+// pixels short. The heading came out "Callsi..." - a smaller version of the
+// complaint that started the change.
+//
+// So the widths are DERIVED FROM WHAT THE TEXT ACTUALLY MEASURES, and the
+// question "do the headings fit" has an answer the caller can act on rather
+// than a look. Everything is passed in, so this is pure and testable; the
+// caller measures with ImGui and does the drawing.
+// The three widths are CONTENT widths, excluding cell padding, which is
+// ImGui's own convention for a column width ("specify 100 and the column covers
+// 100 + padding * 2"). Keeping the same convention is what lets these go
+// straight into TableSetupColumn without a correction term nobody would
+// remember to keep in step.
+struct TrackListFit {
+    float callsignW = 0.0f;
+    float idW = 0.0f;
+    float detailsW = 0.0f;
+    // True when callsignW and idW are at least what their text needs. False is
+    // not a failure to render - the columns are still laid out, just scaled
+    // down - it is the caller's cue to spend less width on something else.
+    bool headingsFit = false;
+};
+
+// `availW`     total width the table's columns have to share, cell padding
+//              included (excluding scrollbar and borders).
+// `callsignTextW` width of the WIDEST thing the callsign column must show
+//              without truncating, which is the heading "Callsign" itself.
+// `idTextW`    likewise for the ID column, which is the heading or a sample
+//              identifier, whichever is wider.
+// `detailsButtonW` width of the details button, which never shrinks: a button
+//              squeezed to nothing cannot be pressed.
+// `cellPadX`   ImGui's per-side cell padding.
+TrackListFit trackListFit(float availW, float callsignTextW, float idTextW,
+                          float detailsButtonW, float cellPadX);
 
 // Height to give a scrolling table so that a line of text drawn AFTER it is
 // still on screen.
@@ -269,6 +328,72 @@ float tableHeightReservingLines(float availY, float lineHeight, int reservedLine
 // a sort, and reversing it to escape them would only move the same useless
 // block to the other end.
 void sortTrackRows(std::vector<TrackRow>& rows, TrackSortKey key, bool ascending);
+
+// --- the target detail block --------------------------------------------------
+//
+// ONE BLOCK, THREE PLACES. The map's hover tooltip, the list row's hover
+// tooltip and the details window all show the same thing about a target, and
+// they showed it from two hand-written copies until the altitude band, the
+// units and the registry fields each changed in one copy and not the other.
+// The text is BUILT HERE, as data, and drawn by one renderer; nothing that
+// decides what a line says lives in a drawing function any more.
+//
+// The strings are built rather than drawn so the block is testable at all:
+// what a user complains about is the wording and the units, and neither is
+// reachable from a test once it has gone into ImGui.
+
+// One line of the block. `text` is the whole line, label and value together,
+// because the label is padded to a fixed width to make a column and splitting
+// it would let the two halves disagree about that width.
+struct TrackDetailLine {
+    std::string text;
+    // false = the source does not know this, drawn dimmed. "0 kt" and "no
+    // speed reported" are different facts and must not look the same.
+    bool known = true;
+    bool separatorAfter = false;
+    // The callsign at the top, drawn without a label.
+    bool heading = false;
+};
+
+// Everything the block can say about one target, already extracted from the
+// host's track and from the track-info cache. A struct rather than fourteen
+// parameters, and plain values rather than pointers into either, so the
+// builder has nothing to dereference and a test can state a case in one
+// initialiser.
+struct TrackDetailInput {
+    std::string label;   // callsign where one is decoded, id otherwise
+    std::string id;
+    std::string source;  // the plugin that reported it
+    double latDeg = 0.0;
+    double lonDeg = 0.0;
+    // NaN means the source does not know, exactly as the ABI says.
+    double altM = std::numeric_limits<double>::quiet_NaN();
+    double speedMps = std::numeric_limits<double>::quiet_NaN();
+    double courseDeg = std::numeric_limits<double>::quiet_NaN();
+    std::uint64_t ageMs = 0;
+
+    // The receiver's own position, which is what range and bearing are
+    // measured from and which the host may simply not have.
+    bool hasHome = false;
+    double homeLatDeg = 0.0;
+    double homeLonDeg = 0.0;
+
+    // The track-info plugin's answer. `infoActive` is whether such a plugin is
+    // installed at all - with none, the registry lines are absent rather than
+    // empty, because "no plugin" and "plugin says unknown" are different facts.
+    bool infoActive = false;
+    bool infoPending = false;  // asked, nothing back yet
+    bool infoKnown = false;    // answered, and it had an entry
+    std::string registration;
+    std::string typeCode;
+    std::string typeName;
+    std::string operatorName;
+    std::string country;
+};
+
+// The block, in the order it is read: who, then what the registry knows, then
+// what the radio heard.
+std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput& in);
 
 // ============================================================================
 // Implementation. Header-only because every piece of it is a handful of lines
@@ -438,8 +563,8 @@ inline float altLegendWidth(MeasureTextWidth&& measureTextWidth) {
     return kAltLegendPad + kAltLegendSwatch + kAltLegendPad + longest + kAltLegendPad;
 }
 
-inline TrackSortKey trackSortKeyForColumn(int columnIndex) {
-    switch (columnIndex) {
+inline TrackSortKey trackSortKeyForMenuIndex(int index) {
+    switch (index) {
         case 0: return TrackSortKey::Label;
         case 1: return TrackSortKey::Id;
         case 2: return TrackSortKey::Altitude;
@@ -450,6 +575,73 @@ inline TrackSortKey trackSortKeyForColumn(int columnIndex) {
         case 7: return TrackSortKey::Age;
         default: return TrackSortKey::Label;
     }
+}
+
+inline const char* trackSortKeyName(TrackSortKey key) {
+    switch (key) {
+        case TrackSortKey::Label: return "Callsign";
+        case TrackSortKey::Id: return "ID";
+        // UNITS IN THE NAME, because the menu is now the only place they are
+        // written down: the columns that carried "Alt ft" and "Dist km" are
+        // gone, and a distance a user cannot name the unit of is not a
+        // distance.
+        case TrackSortKey::Altitude: return "Altitude (ft)";
+        case TrackSortKey::Speed: return "Speed (kt)";
+        case TrackSortKey::Course: return "Course (deg)";
+        case TrackSortKey::Distance: return "Distance (km)";
+        case TrackSortKey::Bearing: return "Bearing (deg)";
+        case TrackSortKey::Age: return "Age (s)";
+    }
+    return "Callsign";
+}
+
+inline TrackListFit trackListFit(float availW, float callsignTextW, float idTextW,
+                                 float detailsButtonW, float cellPadX) {
+    TrackListFit f;
+    // Nothing here may produce a negative width or a NaN: these numbers become
+    // ImGui column widths and weights, and a negative weight lays the table out
+    // inside out. Every input is clamped at the door rather than trusted.
+    const float pad = 2.0f * (cellPadX > 0.0f ? cellPadX : 0.0f);
+    const float needC = (callsignTextW > 0.0f ? callsignTextW : 0.0f);
+    const float needI = (idTextW > 0.0f ? idTextW : 0.0f);
+    f.detailsW = (detailsButtonW > 0.0f ? detailsButtonW : 0.0f);
+
+    // ALL THREE COLUMNS PAY THE PADDING, which is why it is subtracted three
+    // times and not once. Twenty-four pixels of a two-hundred-pixel list at
+    // ImGui's default four per side is most of the width the headings were
+    // missing.
+    float rest = availW - f.detailsW - 3.0f * pad;
+    if (!(rest > 0.0f)) { rest = 0.0f; }  // written positively so NaN lands here
+
+    const float needTotal = needC + needI;
+    if (!(needTotal > 0.0f)) {
+        // No text to fit. Split what is left rather than dividing by zero.
+        f.callsignW = rest * 0.5f;
+        f.idW = rest - f.callsignW;
+        f.headingsFit = false;
+        return f;
+    }
+    if (rest >= needTotal) {
+        // SURPLUS GOES OUT IN PROPORTION TO NEED, not in equal shares: a wide
+        // list should spend its extra pixels on the column whose contents are
+        // long, which is the callsign. Splitting evenly would leave a six
+        // character ID column as wide as a name. It also means the two widths
+        // are always in the ratio of their text, whatever the surplus - which
+        // is exactly what makes them usable as ImGui stretch weights.
+        const float surplus = rest - needTotal;
+        f.callsignW = needC + surplus * (needC / needTotal);
+        f.idW = needI + surplus * (needI / needTotal);
+        f.headingsFit = true;
+    } else {
+        // GENUINELY TOO NARROW. Both are scaled by the same factor so the two
+        // headings degrade together instead of one column eating the other,
+        // and the caller is told so it can free width elsewhere.
+        const float k = rest / needTotal;
+        f.callsignW = needC * k;
+        f.idW = needI * k;
+        f.headingsFit = false;
+    }
+    return f;
 }
 
 inline float tableHeightReservingLines(float availY, float lineHeight, int reservedLines) {
@@ -545,6 +737,128 @@ inline void sortTrackRows(std::vector<TrackRow>& rows, TrackSortKey key, bool as
                          if (!ka) { return false; }
                          return ascending ? (va < vb) : (vb < va);
                      });
+}
+
+namespace detail {
+
+// One formatted line. Bounded: every string reaching it is either a fixed
+// literal or a field the info cache has already capped at 128 bytes, and
+// snprintf truncates rather than trusting that.
+inline std::string detailPrintf(const char* fmt, ...) {
+    char buf[320];
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (n < 0) { return std::string(); }
+    buf[sizeof buf - 1] = '\0';
+    return std::string(buf);
+}
+
+}  // namespace detail
+
+inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput& in) {
+    std::vector<TrackDetailLine> out;
+    out.reserve(16);
+
+    TrackDetailLine head;
+    head.text = in.label;
+    head.heading = true;
+    head.separatorAfter = true;
+    out.push_back(std::move(head));
+
+    // --- what the registry knows ---------------------------------------------
+    // Absent entirely when no track-info plugin is installed. An empty "reg"
+    // line would say the aircraft has no registration, which is a claim about
+    // the aircraft rather than about the host.
+    if (in.infoActive) {
+        const std::size_t before = out.size();
+        if (in.infoKnown) {
+            if (!in.registration.empty()) {
+                out.push_back({detail::detailPrintf("reg     %s", in.registration.c_str()),
+                               true, false, false});
+            }
+            // The spelled-out type where the source has one, the code
+            // otherwise: "737NG 8K5/W" tells a user what is overhead and
+            // "B738" does not.
+            const std::string& type = !in.typeName.empty() ? in.typeName : in.typeCode;
+            if (!type.empty()) {
+                out.push_back(
+                    {detail::detailPrintf("type    %s", type.c_str()), true, false, false});
+            }
+            if (!in.operatorName.empty()) {
+                out.push_back({detail::detailPrintf("oper    %s", in.operatorName.c_str()),
+                               true, false, false});
+            }
+            if (!in.country.empty()) {
+                out.push_back({detail::detailPrintf("reg'd   %s", in.country.c_str()), true,
+                               false, false});
+            }
+        } else if (in.infoPending) {
+            out.push_back({"looking up...", false, false, false});
+        }
+        // The separator belongs to the block, so a plugin that answered "not in
+        // my data" - which emits no lines at all - does not leave a rule
+        // floating with nothing above it.
+        if (out.size() > before) { out.back().separatorAfter = true; }
+    }
+
+    // --- what the radio heard -------------------------------------------------
+    out.push_back({detail::detailPrintf("id      %s", in.id.c_str()), true, false, false});
+    out.push_back(
+        {detail::detailPrintf("from    %s", in.source.c_str()), true, false, false});
+    out.push_back({detail::detailPrintf("pos     %.5f, %.5f", in.latDeg, in.lonDeg), true,
+                   false, false});
+
+    if (!std::isnan(in.altM)) {
+        // The band is NAMED as well as measured, so the colour on the map and
+        // the figure here can be tied together without counting swatches in
+        // the legend.
+        out.push_back({detail::detailPrintf("alt     %.0f m (%.0f ft, %s)", in.altM,
+                                            in.altM * 3.28084,
+                                            altBandStyle(altitudeBandIndex(in.altM)).label),
+                       true, false, false});
+    } else {
+        out.push_back({"alt     unknown", false, false, false});
+    }
+
+    if (!std::isnan(in.speedMps)) {
+        out.push_back({detail::detailPrintf("speed   %.0f kt", in.speedMps * 1.94384), true,
+                       false, false});
+    } else {
+        out.push_back({"speed   unknown", false, false, false});
+    }
+
+    if (!std::isnan(in.courseDeg)) {
+        out.push_back(
+            {detail::detailPrintf("course  %.0f deg", in.courseDeg), true, false, false});
+    } else {
+        out.push_back({"course  unknown", false, false, false});
+    }
+
+    // RANGE AND BEARING SURVIVED THE COLUMNS BEING CUT, and this is where they
+    // live now: the list has no room for them, so every place that shows a
+    // target in detail shows them.
+    if (in.hasHome) {
+        const double km =
+            greatCircleKm(in.homeLatDeg, in.homeLonDeg, in.latDeg, in.lonDeg);
+        const double brg =
+            initialBearingDeg(in.homeLatDeg, in.homeLonDeg, in.latDeg, in.lonDeg);
+        // A target at the receiver's own coordinates has no bearing from it,
+        // and printing "nan deg" would be worse than saying so.
+        if (std::isnan(brg)) {
+            out.push_back({detail::detailPrintf("range   %.1f km, bearing undefined", km),
+                           true, false, false});
+        } else {
+            out.push_back({detail::detailPrintf("range   %.1f km at %.0f deg", km, brg),
+                           true, false, false});
+        }
+    }
+
+    out.push_back({detail::detailPrintf("age     %.1f s",
+                                        static_cast<double>(in.ageMs) / 1000.0),
+                   true, false, false});
+    return out;
 }
 
 }  // namespace cascade::gui

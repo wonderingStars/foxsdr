@@ -35,74 +35,91 @@
 #include "source/iq_file_source.hpp"
 #include "source/soapy_source.hpp"
 
+#include "core/crash_handler.hpp"
+#include "core/diag_log.hpp"
+#include "core/diag_report.hpp"
+
 // ---------------------------------------------------------------------------
-// Minimal fatal-crash attribution (kept from the P6a crash investigation,
-// 2026-08-15). One line to stderr naming the exception code and the faulting
-// address as module+offset — this is exactly how the intermittent 0xC0000005
-// inside libusb-1.0.dll (SoapyUHD USB discovery) was pinned, and it costs
-// nothing at runtime. Vendor SDR modules are runtime-loaded third-party code;
-// when one faults in the field, this line is the difference between a report
-// that says "crashed" and one that names the module.
+// Fatal-fault capture.
+//
+// This used to be forty lines of SEH filter inline in this file (kept from the
+// P6a crash investigation, 2026-08-15, where one stderr line naming
+// libusb-1.0.dll inside SoapyUHD was the whole diagnosis). That line still
+// exists - it is now written by core/crash_handler.cpp, along with a report an
+// engineer who was not there can act on. See core/crash_handler.hpp for which
+// four registrations are made and why one filter was never enough.
 // ---------------------------------------------------------------------------
-#ifdef _WIN32
-#include <windows.h>
-
-#include <psapi.h>
-
-#include <cinttypes>
-#pragma comment(lib, "psapi.lib")
-
 namespace {
 
-// Resolve an address to "module.dll+0xOFFSET" and report on stderr. Stack
-// buffer + WriteFile (not fprintf): the filter may run on a corrupted heap,
-// so the report path must not allocate.
-LONG WINAPI crashSehFilter(EXCEPTION_POINTERS* ep) {
-    const DWORD code = ep->ExceptionRecord->ExceptionCode;
-    void* addr = ep->ExceptionRecord->ExceptionAddress;
-    char modName[MAX_PATH] = "?";
-    std::uintptr_t offset = 0;
-    HMODULE mods[1024];
-    DWORD needed = 0;
-    if (EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed)) {
-        const std::size_t n = needed / sizeof(HMODULE);
-        for (std::size_t i = 0; i < n && i < 1024; ++i) {
-            MODULEINFO mi{};
-            if (!GetModuleInformation(GetCurrentProcess(), mods[i], &mi,
-                                      sizeof(mi))) {
-                continue;
-            }
-            const auto base = reinterpret_cast<std::uintptr_t>(mi.lpBaseOfDll);
-            const auto a = reinterpret_cast<std::uintptr_t>(addr);
-            if (a >= base && a < base + mi.SizeOfImage) {
-                GetModuleFileNameA(mods[i], modName, sizeof(modName));
-                offset = a - base;
-                break;
-            }
-        }
-    }
-    char buf[MAX_PATH + 128];
-    const int len = std::snprintf(
-        buf, sizeof(buf), "cascade: fatal exception 0x%08lX at %s+0x%" PRIxPTR "\n",
-        static_cast<unsigned long>(code), modName, offset);
-    if (len > 0) {
-        DWORD written = 0;
-        WriteFile(GetStdHandle(STD_ERROR_HANDLE), buf, static_cast<DWORD>(len),
-                  &written, nullptr);
-    }
-    return EXCEPTION_CONTINUE_SEARCH;  // die with the original exit code
+// WHEN DIAGNOSTICS TOUCH THE DISK, and it is deliberately narrow.
+//
+// A plain `cascade` with no arguments is a real session on a real user's
+// machine: it logs, it captures, it offers a report. EVERY flagged invocation
+// is a tool or a test - app_smoke, app_selftest, app_version, --update-check,
+// the bench checks - and those must leave nothing behind on the machine that
+// ran them, exactly as the config already stays hermetic under --frames.
+//
+// FOXSDR_DIAG_DIR overrides both halves: it redirects the whole tree into a
+// caller-owned directory AND turns capture on, which is how
+// tests/test_diag_hang.cpp exercises the real application without going
+// anywhere near the user's %LOCALAPPDATA%\FoxSDR.
+bool diagnosticsOnDisk(int argc) {
+    const char* over = std::getenv("FOXSDR_DIAG_DIR");
+    if (over != nullptr && *over != '\0') { return true; }
+    return argc == 1;
 }
 
-void installCrashReporter() {
-    SetUnhandledExceptionFilter(&crashSehFilter);
+// The config THIS run will use, resolved before the argument parse so the
+// user's stored switch can be honoured before anything touches the disk. Same
+// rules as the config wiring at the bottom of main(), and deliberately so: a
+// bare `cascade` uses the real per-user config; a bounded --frames run uses
+// CASCADE_CONFIG_TEST when it is set and no config at all otherwise. Empty
+// means "this run has no stored preference".
+std::string startupConfigPath(int argc, char** argv) {
+    bool bounded = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--frames") == 0) { bounded = true; }
+    }
+    if (bounded) {
+        const char* hook = std::getenv("CASCADE_CONFIG_TEST");
+        return (hook != nullptr && *hook != '\0') ? std::string(hook) : std::string();
+    }
+    if (argc == 1) { return cascade::core::ConfigStore::defaultPath(); }
+    return std::string();
+}
+
+// DOES THE USER WANT THIS AT ALL, read from the config BEFORE a directory is
+// created or a handler is armed.
+//
+// This is the second half of "off means off", and the half that was wrong.
+// diagnosticsOnDisk() above answers "is this run allowed to write" - a real
+// session rather than a tool. It does NOT answer "did the user ask for it",
+// and reading that only once AppWindow::run() is reached is far too late: by
+// then the log file exists, the crashes directory exists, and the crash
+// handler has been armed across the config load, the GL context and the
+// LoadLibrary of every third-party plugin - which is the most fault-prone part
+// of start-up and precisely where a user who opted out would get a report.
+//
+// Reproduced on the shipped application before this was written: a config
+// saying "diagnosticsEnabled": false produced a 14-line foxsdr.log and a
+// crashes directory. Held there now by tests/test_diagnostics.cpp, which
+// launches the real binary with that config and requires the tree not to exist.
+//
+// The cost is one small JSON read at the top of main() that AppWindow will do
+// again a moment later. That is the correct trade: the alternative is arming
+// the disk before consent is known.
+bool storedDiagnosticsEnabled(int argc, char** argv) {
+    const std::string path = startupConfigPath(argc, argv);
+    if (path.empty()) { return cascade::core::AppConfig{}.diagnosticsEnabled; }
+    cascade::core::AppConfig cfg;
+    std::string err;
+    // Missing or corrupt file: ConfigStore::load leaves the defaults in place,
+    // which is on. A user who has never chosen has not opted out.
+    cascade::core::ConfigStore::load(path, cfg, err);
+    return cfg.diagnosticsEnabled;
 }
 
 }  // namespace
-#else
-namespace {
-void installCrashReporter() {}
-}  // namespace
-#endif
 
 namespace {
 
@@ -855,8 +872,41 @@ int runRecordCheck() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    installCrashReporter();
+    // FIRST, before anything that could fault has had the chance. The four
+    // registrations are made unconditionally so the stderr attribution is
+    // always available; only the on-disk half is conditional.
+    //
+    // TWO SEPARATE QUESTIONS, and conflating them was a bug. `mayWrite` is
+    // "is this a real session rather than a tool"; `wanted` is "did the user
+    // ask for diagnostics", read from the config right here rather than a
+    // constructor and a window later. The directory is still handed over when
+    // the run may write, so turning diagnostics on in Settings mid-session has
+    // somewhere to go - but nothing is created until it is switched on.
+    const bool mayWrite = diagnosticsOnDisk(argc);
+    cascade::core::CrashHandlerConfig crashCfg;
+    if (mayWrite) { crashCfg.crashDir = cascade::core::diagCrashDir(); }
+    // REGISTRATIONS FIRST, ON-DISK CAPTURE SECOND, and in that order for two
+    // reasons. The switch cannot be known without reading the config, and
+    // reading the config is itself something that can fault - so the filters go
+    // on now, writing nothing, and the read below happens under them. Nothing
+    // reaches the disk until the line after it.
+    crashCfg.enabled = false;
+    cascade::core::installCrashHandlers(crashCfg);
+
+    const bool wanted = mayWrite && storedDiagnosticsEnabled(argc, argv);
+    // Creates the crashes directory if and only if `wanted`; see
+    // crash_handler.cpp. The minidump switch stays off until AppWindow::run()
+    // applies the user's - a dump is process memory and is never armed on a
+    // guess.
+    cascade::core::setCrashCaptureEnabled(wanted, false);
+    cascade::core::DiagLog::instance().configure(
+        wanted ? cascade::core::diagLogDir() : std::string(), wanted);
+    cascade::core::diagLogf("FoxSDR %s (%s) starting", cascade::versionString(),
+                            cascade::gitCommit());
+
     int frames = -1;  // negative: run until the window is closed
+    int diagStallMs = 0;
+    int diagToggle = 0;
     bool selftest = false;
     bool soapyCheck = false;
     bool recordCheck = false;
@@ -956,6 +1006,44 @@ int main(int argc, char** argv) {
                 return 1;
             }
             ++i;
+        } else if (std::strcmp(argv[i], "--diag-stall") == 0) {
+            // Hidden diagnostic: wedge the frame loop once, N ms into the run,
+            // so the SHIPPED hang threshold can be proved against the REAL
+            // frame loop rather than against a unit test of the watchdog
+            // class. Kept out of the usage string because deliberately
+            // freezing the application is not a user-facing feature.
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "cascade: --diag-stall requires a duration in ms\n");
+                return 1;
+            }
+            char* end = nullptr;
+            const long value = std::strtol(argv[i + 1], &end, 10);
+            if (end == argv[i + 1] || *end != '\0' || value <= 0 || value > 600000L) {
+                std::fprintf(stderr, "cascade: invalid --diag-stall value '%s'\n", argv[i + 1]);
+                return 1;
+            }
+            diagStallMs = static_cast<int>(value);
+            ++i;
+        } else if (std::strcmp(argv[i], "--diag-toggle") == 0) {
+            // Hidden diagnostic: flip Settings > Diagnostics mid-session, on
+            // frame 30, through the same function the checkbox calls. The
+            // switch's mid-session behaviour is a privacy promise made in
+            // three documents, and it was broken for the watchdog precisely
+            // because nothing could exercise the checkbox from a test. Kept
+            // out of the usage string for the same reason --diag-stall is.
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "cascade: --diag-toggle requires 'on' or 'off'\n");
+                return 1;
+            }
+            if (std::strcmp(argv[i + 1], "on") == 0) {
+                diagToggle = 1;
+            } else if (std::strcmp(argv[i + 1], "off") == 0) {
+                diagToggle = -1;
+            } else {
+                std::fprintf(stderr, "cascade: invalid --diag-toggle value '%s'\n", argv[i + 1]);
+                return 1;
+            }
+            ++i;
         } else if (std::strcmp(argv[i], "--tone-check") == 0) {
             // Hidden bench diagnostic (see runToneCheck): plays audible sound,
             // so it is a human-in-the-loop tool, never a ctest entry.
@@ -999,5 +1087,14 @@ int main(int argc, char** argv) {
     }
 
     cascade::gui::AppWindow app(configPath, announceConfig);
+    // Empty unless this run is ALLOWED to write - which is not the same as
+    // whether the user wants it. run() gates the writing on the stored switch;
+    // handing over the directory regardless is what lets the Settings toggle
+    // work in a session that started with diagnostics off. The watchdog still
+    // runs and still logs a recovered stall to the ring either way, but it puts
+    // no file on a machine that only asked for a smoke test.
+    app.setDiagnosticsDir(mayWrite ? cascade::core::diagCrashDir() : std::string());
+    app.setDiagStallMs(diagStallMs);
+    app.setDiagToggle(diagToggle);
     return app.run(frames);
 }
