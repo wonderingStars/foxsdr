@@ -244,6 +244,18 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "telemetryPending", out.telemetryPending);
     getBool(j, "diagnosticsEnabled", out.diagnosticsEnabled);
     getBool(j, "diagnosticsMinidump", out.diagnosticsMinidump);
+    getStringArray(j, "crashUploadRecent", out.crashUploadRecent);
+    getUint64(j, "crashUploadWindowStart", out.crashUploadWindowStart);
+    {
+        // Stored as a uint64 like its neighbours and narrowed here, because the
+        // count is a small number and a config that put 2^40 in it must not
+        // wrap into a value the limiter reads as "nothing sent yet".
+        std::uint64_t count = out.crashUploadWindowCount;
+        getUint64(j, "crashUploadWindowCount", count);
+        out.crashUploadWindowCount =
+            (count > 1000ull) ? 1000u : static_cast<std::uint32_t>(count);
+    }
+    getUint64(j, "crashUploadBlockedUntil", out.crashUploadBlockedUntil);
 
     // THE INSTALL ID IS VALIDATED, NOT TRUSTED. It is the one telemetry field
     // that leaves the machine as free text, so a config that put something
@@ -449,6 +461,10 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["telemetryPending"] = cfg.telemetryPending;
     j["diagnosticsEnabled"] = cfg.diagnosticsEnabled;
     j["diagnosticsMinidump"] = cfg.diagnosticsMinidump;
+    j["crashUploadRecent"] = cfg.crashUploadRecent;
+    j["crashUploadWindowStart"] = cfg.crashUploadWindowStart;
+    j["crashUploadWindowCount"] = static_cast<std::uint64_t>(cfg.crashUploadWindowCount);
+    j["crashUploadBlockedUntil"] = cfg.crashUploadBlockedUntil;
     const std::string text = j.dump(4) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the

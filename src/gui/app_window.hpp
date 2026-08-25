@@ -31,6 +31,7 @@
 // keeps app_window.hpp usable from the tests (see the note below).
 #include "gui/track_metrics.hpp"
 #include "core/telemetry.hpp"
+#include "core/crash_upload.hpp"
 #include "core/hang_watchdog.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
@@ -873,6 +874,27 @@ private:
     // trigger for offering a report on this start.
     bool lastRunUnclean_ = false;
     bool diagOfferOpen_ = false;
+
+    // --- Sending a captured report (see core/crash_upload.hpp) -------------
+    //
+    // ON THE NEXT START, NEVER FROM THE FAULT HANDLER. The process that faulted
+    // could not safely open a socket; this one can. The sweep runs on a
+    // background thread the moment the frame loop is armed, and is cancelled
+    // and joined before the clean-exit save - which is what keeps a server that
+    // accepts and never answers from delaying shutdown by so much as a frame.
+    cascade::core::CrashUploader crashUploader_;
+    // Dedup and rate-limit memory, read from the config at start and written
+    // back after the sweep. Persisted because a crash loop IS a sequence of
+    // runs: a limit held only in memory would reset on every restart.
+    cascade::core::UploadPolicyState crashUploadState_;
+    // False unless a sweep was actually started on this run. Without it, a run
+    // in which the sweep never ran (diagnostics off) would journal a DEFAULT
+    // state back over the user's real one and quietly reset the crash-loop
+    // limiter - so switching diagnostics off for one session would re-arm the
+    // sender for the next.
+    bool crashUploadSwept_ = false;
+    void crashUploadStart();
+    void crashUploadFinish();
     // "Diagnostics" settings section: where the log is, what a report carries,
     // and the one-click bundle.
     void drawDiagnosticsSection();

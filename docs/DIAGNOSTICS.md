@@ -262,7 +262,9 @@ the generated code is byte-for-byte what `/O2` produced without it.
    **If the faulting module is a plugin, it will not be there unless the plugin
    repository archived it — see the section above.**
 3. Point a debugger at the archive as a symbol path and resolve the
-   `module+offset` frames.
+   `module+offset` frames — or, for reports that came in over the network, run
+   `foxsdr-reports --archive symbols\`, which does exactly this for a whole feed
+   at once and groups it by signature. See *Phase 2* below.
 4. `commit:` in the report names the tree to check out — exactly, unless it ends
    in `-dirty`, which says the build was made from a tree with uncommitted
    changes and that commit is only the nearest one.
@@ -382,8 +384,86 @@ redirects the whole tree into a caller-owned directory *and* turns capture on,
 which is how the tests exercise the real application without going near a user's
 `%LOCALAPPDATA%\FoxSDR`.
 
-## What phase 2 will send
+## Phase 2 — sending a report, and reading it back (0.62.0)
 
-See PRIVACY.md. In short: a minimal report automatically, richer detail only on
-explicit consent, and a minidump never — it is written locally and offered for
-manual sending.
+### The upload
+
+`src/core/crash_upload.{hpp,cpp}`. Four rules outrank the feature, and each of
+them is why the code is shaped the way it is:
+
+1. **Never from inside the fault handler.** That process has already failed
+   once; it cannot safely allocate, lock, or open a socket, and `WinHttpOpen`
+   does all three. Phase 1 writes to disk from the handler *on purpose*. The
+   send happens on the **next start**, from a healthy process — which is also
+   the only moment there is a user to ask.
+2. **Never block or delay the application, including shutdown.** The sweep runs
+   on a background thread armed with the frame loop; the live WinHTTP request
+   handle is published to an atomic, and `AppWindow::crashUploadFinish()` closes
+   it before the clean-exit save, so a blocked `WinHttpReceiveResponse` returns
+   with `ERROR_WINHTTP_OPERATION_CANCELLED` instead of sitting out its timeout.
+   Measured against the real binary in `tests/test_crash_upload.cpp`: a server
+   that accepts and never answers costs **nothing** (1.9 s against a 1.9 s
+   control), and with the cancel deliberately removed the same run took **9.5 s**.
+   That 7.6-second gap is the whole reason the handle is published at all.
+3. **Rate-limit and deduplicate on the client.** The same signature goes at most
+   once per 24 h, and at most 5 reports per 24 h whatever their signatures. Both
+   counters live in the config, because a crash loop *is* a sequence of runs and
+   a limit held in memory would reset on every restart. A 429 that arrives
+   anyway is honoured, `Retry-After` clamped into a sane range.
+4. **Nothing silently lost, nothing retried for ever.** Every swept report gets a
+   `<report>.upload` sidecar in plain words — `sent`, `duplicate`, `backoff`,
+   `failed`, `abandoned`, `too-large`, `expired` — with an attempt count. Three
+   failures, or fourteen days, and it is abandoned with the report itself
+   untouched, so "Open reports folder" and "Copy diagnostics" still work.
+
+The wire contract is in `crash_upload.hpp` and in PRIVACY.md, and the payload is
+asserted against **both** the code inventory and PRIVACY.md's own table, in both
+directions. `POST https://foxsdr.com/api/crash`, no authentication: reports are
+anonymous by design, so the defence is size caps and rate limiting rather than a
+secret compiled into every shipped binary, which is not a secret.
+
+Off means off for sending too. With the Settings switch off the sweep is never
+started, no sidecar is written and no socket is opened — asserted against the
+shipped binary with a socket listening that must never be connected to.
+
+### The reader
+
+`tools/report-reader` (built as `foxsdr-reports`) and
+`src/core/report_reader.{hpp,cpp}`:
+
+    foxsdr-reports --archive <path to symbols\> [--file feed.json] [--json]
+
+It pulls from `GET https://foxsdr.com/api/crash/reports` with
+`Authorization: Bearer $FOXSDR_REPORTS_TOKEN` — never a token compiled in, never
+a token in a query string — or reads a saved feed, groups by signature with
+counts, first/last seen and affected versions, and **symbolises here, not on the
+server**. The PDBs stay in `symbols\` and on the NAS; uploading them to save a
+step would put the complete private debug information for every shipped build on
+a reachable machine.
+
+What it refuses to do is as important as what it does: a report whose build id
+is not in the archive prints exactly that, **naming the id**, and the human
+output never prints a raw offset at all. `cascade.exe+0x1A2B` looks like
+information and is not — the same offset in a different link is a different
+function, and printing it invites somebody to look it up in whatever build they
+have to hand and believe the answer. Offsets are in the `--json` output, where a
+machine can use them and nobody can misread them. The same applies frame by
+frame: a stack that crosses into a plugin whose symbols were never archived
+shows the application's frames resolved and names the build id it would need for
+the rest.
+
+Verified end to end against the real archive: an offset in the shipped
+`cascade.exe` resolved to `cascade::net::CatServer::serveClient` at
+`src/net/cat_server.cpp:446`, with the plugin frame beside it named as
+unarchived.
+
+### A freeze report now carries the module table
+
+`hang_watchdog.cpp` wrote thread stacks and no `--- modules ---` block, so every
+freeze report this product had ever written was permanently unreadable: the
+stacks named modules and nothing said which *build* of them. PRIVACY.md and this
+document both described the block as present. It is written now, before the
+unwind and byte-identically to `crash_handler.cpp`'s, and
+`tests/test_diag_hang.cpp` asserts it against a report from a real stall. Since
+every fault this product has actually shipped was a hang rather than a crash,
+this was the readable half missing from the half that matters most.

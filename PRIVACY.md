@@ -41,10 +41,13 @@ exactly as many.
   anonymous counts listed below and nothing else. Switching it off stops all
   reporting and deletes the identifier described below.
 - **No personal data is collected**, and no IP address or location is recorded.
-- **Crash and freeze reports are written to your machine and uploaded nowhere.**
-  This version has no upload path for them at all. You choose what to send, and
-  when. A full memory dump is off by default and is never sent by the
-  application under any setting.
+- **Crash and freeze reports are written to your machine, and — if you leave
+  Diagnostics on — the report *text* is sent on the next start.** Not from
+  inside the crash: the program that just failed cannot safely open a network
+  connection, so the report waits on disk until the next time you open FoxSDR.
+  Exactly what it contains is listed field by field below. **A full memory dump
+  is never sent, under any setting**, and switching Diagnostics off stops the
+  sending as completely as it stops the writing.
 - **Nothing about what you listen to is ever collected** — no frequencies, no
   positions, no decoded messages. Not when reporting is on, not ever.
 - **The update check is ON by default, and you can turn it off.** Once per
@@ -77,11 +80,13 @@ That is the complete list. The payload is asserted field-by-field by an
 automated test (`tests/test_telemetry.cpp`), so a new field cannot be added
 without that test failing and this document being updated with it.
 
-## Crash and freeze reports — what they contain, and where they stay
+## Crash and freeze reports — what they contain
 
-**Nothing here is uploaded.** Not automatically, not in the background, not at
-all in this version. If FoxSDR crashes or freezes it writes a file on your
-machine, and the file stays there until you decide to send it.
+If FoxSDR crashes or freezes it writes a file on your machine. With Diagnostics
+switched on, the contents of that file are also sent to us on the **next**
+start — never from inside the failure itself. The complete list of what is sent
+is in *What is sent when a report is uploaded*, further down; the memory dump is
+not in it and never will be.
 
 Reports live in `%LOCALAPPDATA%\FoxSDR\crashes\`, and the rotating application
 log in `%LOCALAPPDATA%\FoxSDR\logs\`. **Settings → Diagnostics** shows both
@@ -149,26 +154,66 @@ those also asserts the absence of the things below.
 
 **A full memory dump is off by default.** If you switch it on
 (Settings → Diagnostics) a `.dmp` file is written *beside* the text report. A
-memory dump is a copy of the program's memory and can contain file names and
-received signal data, so it is written **locally only** and is never sent by the
-application under any setting. If it is ever useful, you will be asked for it
-and you can decide.
+memory dump is a copy of the program's memory and can contain file names, window
+titles and received signal data, so it is written **locally only** and is never
+sent by the application under any setting. If it is ever useful, you will be
+asked for it and you can decide. The uploader opens files named `crash-*.txt`
+and `hang-*.txt` and nothing else, which `tests/test_crash_upload.cpp` asserts by
+putting a `.dmp` full of recognisable bytes beside a report and requiring that
+none of them appear in any request.
 
-### What phase 2 will send, when it exists
+## What is sent when a report is uploaded
 
-There is no upload in this version. When one is added it will follow the rule
-already decided:
+One request per report, on the **next** start after the failure, to
+`https://foxsdr.com/api/crash`. It is the report text above, as JSON:
 
-- **Automatic:** a *minimal* report only — version, commit, operating system,
-  fault kind, the faulting module and offset, and the grouping signature. Enough
-  to tell "three bugs" from "four hundred reports", and nothing else.
-- **Explicit consent, per report:** anything richer — the log lines, the plugin
-  list, the source and device state, the full thread stacks.
-- **Never uploaded:** the memory dump. It is written locally and offered for you
-  to send manually, or not.
+| Field | Example | Why |
+|---|---|---|
+| `schema` | `1` | Which version of this list the request follows. |
+| `kind` | `crash` or `hang` | Which of the two documents it is. |
+| `version` | `0.62.0` | Which release. |
+| `commit` | `98a9d7d617a7` | Which build. Only the commit names a build; the offsets below are meaningless against the wrong one. |
+| `buildId` | `651FD5EB…C528` | Which *link*. Two builds of one version have different code at the same offsets. This identifies the compiled file, not you or your machine. |
+| `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. |
+| `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug. Derived from the fault kind, the faulting module and the offset — never from the time and never from anything about you. |
+| `os`, `arch` | `Windows 10.0.22631`, `x64` | Whether a fault is specific to a Windows version. |
+| `installId` | `4f9c…`, **or empty** | The same anonymous identifier the usage report uses, so the receiving end can stop one machine flooding it. **If usage reporting is off there is no identifier and this is sent empty** — a crash report never creates one. |
+| `plugins` | `[{name, version, buildId}]` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |
+| `context` | `mode`, `source`, `sampleRate`, `deviceOpen`, `sdrModel` | What the receiver was doing. **`sampleRate` is the sample rate, not a tuned frequency.** Serial numbers are stripped from `sdrModel`, exactly as in the usage report. |
+| `log` | the last log lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. |
+| `threads` | `[{id, frames:[{module, buildId, offset}]}]` | The call stacks, as file names and offsets. Addresses inside program code; they describe FoxSDR, not you. |
 
-This document and its test will be updated in the same change that adds the
-upload, not afterwards.
+That is the complete list. It is asserted **in both directions** by
+`tests/test_crash_upload.cpp`: a field added to the request fails the test just
+as loudly as a field this table claims and the request stopped sending. The same
+test also reads **this document** and requires the two lists to match, so a field
+cannot be added to the code and the table without the sentence explaining it, or
+removed from the code and left in the table.
+
+**What is never in it:** the memory dump, any frequency you tuned to, anything
+decoded, your position, your IP address, your name, your machine name, or any
+file path.
+
+**What happens if it cannot be sent.** Nothing is lost and nothing is retried
+for ever. Each report gets a small `.upload` file beside it saying what happened
+in plain words — `sent`, `duplicate`, `backoff`, `failed`, `abandoned`. A report
+that fails is retried on later starts up to three times and then left alone,
+with the report itself untouched so you can still read it or send it yourself.
+
+**How often.** At most five reports a day from one machine, and the same fault
+only once a day however many times it happens — so a machine stuck in a crash
+loop stops sending on its own rather than being told to. If the server does ask
+us to wait, we wait.
+
+**Switching Diagnostics off stops all of it**: no report is written, no
+directory is created, no `.upload` file appears, and no connection is made.
+
+### Reading the reports back
+
+The reports are stored as the module names and offsets above. Turning an offset
+into a function and a line needs the debug database from that exact build, which
+is kept on our own machines and **is never uploaded anywhere** — the resolution
+happens locally, in `tools/report-reader`, not on the server.
 
 ## What is never sent
 

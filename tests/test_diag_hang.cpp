@@ -230,6 +230,28 @@ int main() {
         // of five stacks is the one that stopped.
         CHECK(text.find("(gui, stalled)") != std::string::npos);
 
+        // ...AND THE MODULE TABLE, which is what makes those stacks readable
+        // by anyone who was not there. A stack of module+offset with nothing
+        // saying WHICH BUILD of that module is unreadable hex forever: the
+        // same offset in a different link is a different function. This block
+        // was absent from the freeze writer for a whole release while
+        // PRIVACY.md described it as present, so it is asserted here against a
+        // report from a REAL stall rather than trusted.
+        CHECK(text.find("--- modules ---") != std::string::npos);
+        {
+            const std::size_t at = text.find("--- modules ---");
+            const std::string mods =
+                (at == std::string::npos) ? std::string() : text.substr(at);
+            CHECK(mods.find("cascade") != std::string::npos ||
+                  mods.find("test_diag_hang") != std::string::npos);
+            // A build id, not the literal "(none)" for the module that
+            // matters - a report whose own binary has no CodeView record is a
+            // build that should never have shipped.
+            CHECK(mods.find(" build=") != std::string::npos);
+            const std::size_t b = mods.find(" build=");
+            CHECK(b != std::string::npos && mods.compare(b, 13, " build=(none)") != 0);
+        }
+
         // Recovery: the app carries on, and the watchdog re-arms rather than
         // going quiet for the rest of the session.
         beatFor(w, 1600);
