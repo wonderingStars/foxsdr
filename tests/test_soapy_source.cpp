@@ -3,7 +3,15 @@
 // This machine may have the SoapySDR core library with ZERO vendor modules
 // installed (vcpkg ships only the core), and no SDR attached even if a
 // module were present. Every check below therefore targets behavior that
-// must hold with nothing plugged in:
+// must hold with nothing plugged in.
+//
+// ENUMERATION RUNS IN A CHILD PROCESS as of 0.62.1, and this file has to point
+// at the helper explicitly - see the first block of main() for why, and for
+// what the second-scan assertion had to become once a scan could legitimately
+// come back empty. Everything else here (open, teardown, the no-device
+// surface, the non-finite device) is still in-process and unchanged.
+//
+// The checks:
 //   - enumerate() completes and is well-formed (any count, including 0);
 //   - a bogus open() fails GRACEFULLY: false, nonempty lastError, no
 //     half-open device state left behind;
@@ -20,6 +28,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/soapy_source.hpp"
 
+#include "source/soapy_enum_proc.hpp"
+
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Formats.h>
 #include <SoapySDR/Registry.hpp>
@@ -29,10 +39,17 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <string>
+#include <system_error>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "test_check.hpp"
 
@@ -40,6 +57,36 @@ using cascade::source::SoapyDeviceInfo;
 using cascade::source::SoapySource;
 
 namespace {
+
+// The application binary, which is NOT beside the test binaries: tests build
+// into build/tests/Release, cascade.exe into build/Release. Empty if neither
+// candidate exists, which the caller asserts against.
+std::string findCascadeExe() {
+#ifdef _WIN32
+    std::wstring buf(1024, L'\0');
+    const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+    if (n == 0 || n >= buf.size()) { return std::string(); }
+    buf.resize(n);
+    const std::filesystem::path dir = std::filesystem::path(buf).parent_path();
+    const std::filesystem::path candidates[] = {
+        dir / "cascade.exe",
+        dir.parent_path().parent_path() / "Release" / "cascade.exe",
+    };
+    std::error_code ec;
+    for (const auto& c : candidates) {
+        if (std::filesystem::exists(c, ec)) { return c.string(); }
+    }
+#endif
+    return std::string();
+}
+
+void setEnumHelper(const std::string& path) {
+#ifdef _WIN32
+    ::_putenv_s("CASCADE_ENUM_HELPER", path.c_str());
+#else
+    ::setenv("CASCADE_ENUM_HELPER", path.c_str(), 1);
+#endif
+}
 
 // --- A registered SoapySDR device that hands back non-finite samples ---------
 //
@@ -122,6 +169,25 @@ SoapySDR::Device* makeNonFinite(const SoapySDR::Kwargs&) {
 
 int main() {
     // --- enumerate(): completes, well-formed, repeatable ---------------------
+    //
+    // POINTED AT THE REAL HELPER FIRST, and that is what stops this block
+    // killing its own process.
+    //
+    // SoapySource::enumerate() now walks the bus in a child (see
+    // source/soapy_enum_proc.hpp), and this machine's libusb fault - 0xC0000005
+    // about one enumeration in twenty with a B200 attached - used to land in
+    // THIS process: test_soapy_source.exe died outright in 1 run of 40. The
+    // helper it would resolve by default is cascade.exe beside the running
+    // executable, and test binaries build into build/tests/Release while
+    // cascade.exe builds into build/Release, so without this the call would
+    // fall back to walking the bus in-process and inherit the fault again.
+    // Asserted rather than skipped: a build tree that has moved must fail here
+    // loudly, not quietly revert to the crashy path.
+    {
+        const std::string helper = findCascadeExe();
+        CHECK(!helper.empty());
+        setEnumHelper(helper);
+    }
     {
         const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerate();
         std::printf("soapy devices: %zu\n", devices.size());
@@ -134,10 +200,30 @@ int main() {
             CHECK(!d.label.empty());
             CHECK(!d.args.empty());
         }
-        // A second scan must not crash or throw either (menu refresh path),
-        // and on a static machine the population is stable within one run.
-        const std::vector<SoapyDeviceInfo> again = SoapySource::enumerate();
-        CHECK(again.size() == devices.size());
+        // A second scan must not crash or throw either (the menu Refresh
+        // path), and it must reach the helper rather than failing to start it.
+        //
+        // WHAT THIS NO LONGER ASSERTS, and why removing it is a fix rather
+        // than a weakening: it used to require again.size() == devices.size().
+        // That is an assertion about the hardware's mood, not about this code.
+        // UHD's device discovery runs over UDP and this bench logs
+        // "Device discovery error: receive_from ... forcibly closed" on most
+        // runs, so two scans seconds apart can legitimately see different
+        // populations within one process - and now that a scan runs in a
+        // child, one of the two can also come back empty because its child hit
+        // the libusb fault, which is the fix working exactly as designed. What
+        // is asserted instead is everything that IS about this code: the
+        // helper was startable, its answer parsed, and every row is usable.
+        const cascade::source::EnumResult again = cascade::source::enumerateIsolated();
+        std::printf("soapy rescan: outcome=%s devices=%zu\n",
+                    cascade::source::enumOutcomeName(again.outcome), again.devices.size());
+        CHECK(again.outcome != cascade::source::EnumOutcome::SpawnFailed);
+        CHECK(again.outcome != cascade::source::EnumOutcome::Malformed);
+        CHECK(!again.fellBackInProcess);
+        for (const SoapyDeviceInfo& d : again.devices) {
+            CHECK(!d.label.empty());
+            CHECK(!d.args.empty());
+        }
     }
 
     // --- entire surface is safe before open (documented no-op returns) ------

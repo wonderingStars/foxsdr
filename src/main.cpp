@@ -33,6 +33,7 @@
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
 #include "source/iq_file_source.hpp"
+#include "source/soapy_enum_proc.hpp"
 #include "source/soapy_source.hpp"
 
 #include "core/crash_handler.hpp"
@@ -872,6 +873,42 @@ int runRecordCheck() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // THE ENUMERATION HELPER, decided before anything else in this function.
+    //
+    // `cascade --enumerate-json` is not a user-facing mode: it is the child
+    // process AppWindow's device scan spawns so that a vendor driver faulting
+    // mid-probe kills a throwaway process instead of the session. See
+    // source/soapy_enum_proc.hpp for why nothing short of a process boundary
+    // contains that fault.
+    //
+    // It returns HERE, above the config read, because a helper must touch
+    // nothing else: no config file, no window, no telemetry marker. It does
+    // NOT inherit the parent's diagnostics environment either - FOXSDR_DIAG_DIR
+    // is set in some sessions and would otherwise arm capture on nothing more
+    // than an inherited variable.
+    //
+    // The ONE thing it accepts is the parent's crash directory, passed
+    // explicitly and only when the parent's own capture is armed. Without it
+    // the walk - the most crash-prone path in this product - would run in a
+    // process with no handler at all, turning a symbolised fault stack into an
+    // exit code; see CRASH CAPTURE IN THE CHILD in source/soapy_enum_proc.hpp.
+    //
+    // The accepted forms are enumerated exhaustively, and argv[1] must be the
+    // flag itself, so no combination of arguments to a real session can turn
+    // it into a helper.
+    constexpr const char* kCrashDirFlag = "--crash-dir=";
+    if (argc >= 2 && std::strcmp(argv[1], "--enumerate-json") == 0) {
+        const char* crashDir = nullptr;
+        if (argc == 3 && std::strncmp(argv[2], kCrashDirFlag, std::strlen(kCrashDirFlag)) == 0) {
+            crashDir = argv[2] + std::strlen(kCrashDirFlag);
+        } else if (argc != 2) {
+            std::fprintf(stderr, "cascade: --enumerate-json takes at most one %s argument\n",
+                         kCrashDirFlag);
+            return 2;
+        }
+        return cascade::source::runEnumerateHelper(crashDir);
+    }
+
     // FIRST, before anything that could fault has had the chance. The four
     // registrations are made unconditionally so the stderr attribution is
     // always available; only the on-disk half is conditional.

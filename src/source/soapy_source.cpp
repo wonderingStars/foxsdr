@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/soapy_source.hpp"
 
+#include "core/diag_log.hpp"
+#include "source/soapy_enum_proc.hpp"
 #include "source/soapy_modules.hpp"
+#include "source/vendor_guard.hpp"
 
 #include <SoapySDR/Constants.h>
 #include <SoapySDR/Device.hpp>
@@ -176,31 +179,77 @@ std::vector<VendorRoot> SoapySource::vendorInstalls() {
 }
 
 std::vector<SoapyDeviceInfo> SoapySource::enumerate() {
+    // THE WALK HAPPENS SOMEWHERE ELSE. See source/soapy_enum_proc.hpp: the
+    // fault this path actually reproduces lands on a thread UHD spawned for
+    // itself, and the only containment for that is a process boundary. The
+    // outcome is deliberately discarded here - this signature promises a list
+    // and nothing more - and every one of the four failure modes has already
+    // written its own reason to the diagnostics log by the time this returns.
+    return enumerateIsolated().devices;
+}
+
+std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
     std::vector<SoapyDeviceInfo> out;
     if (!runtimeAvailable()) { return out; }  // no runtime: no devices, no crash
-    try {
-        for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate()) {
-            SoapyDeviceInfo info;
-            // Modules put a display string under "label"; fall back to the
-            // driver key so the menu never shows a blank row.
-            const auto label = kw.find("label");
-            if (label != kw.end() && !label->second.empty()) {
-                info.label = label->second;
-            } else {
-                const auto driver = kw.find("driver");
-                info.label = (driver != kw.end() && !driver->second.empty())
-                                 ? driver->second
-                                 : "unknown device";
+
+    // THE ENTIRE VENDOR WALK RUNS INSIDE THE STRUCTURED-EXCEPTION GUARD.
+    //
+    // SoapySDR::Device::enumerate() loads every vendor module on the machine
+    // and calls its find function, each of which scans the USB bus through
+    // its own libusb. The catch (...) below is still here and still needed -
+    // a module that THROWS is a real case - but under /EHsc it is blind to a
+    // module that FAULTS.
+    //
+    // READ source/vendor_guard.hpp BEFORE TRUSTING THIS. The guard covers a
+    // fault raised on THIS thread, inside this call. It does not cover the
+    // libusb access violation this machine actually reproduces, which lands
+    // on a discovery thread UHD spawned for itself - which is why this
+    // function is the CHILD's job and not the application's.
+    struct Walk {
+        std::vector<SoapyDeviceInfo>* out;
+    } walk{&out};
+
+    const bool completed = callGuardingVendorFaults(
+        [](void* p) noexcept {
+            auto* w = static_cast<Walk*>(p);
+            try {
+                for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate()) {
+                    SoapyDeviceInfo info;
+                    // Modules put a display string under "label"; fall back to
+                    // the driver key so the menu never shows a blank row.
+                    const auto label = kw.find("label");
+                    if (label != kw.end() && !label->second.empty()) {
+                        info.label = label->second;
+                    } else {
+                        const auto driver = kw.find("driver");
+                        info.label = (driver != kw.end() && !driver->second.empty())
+                                         ? driver->second
+                                         : "unknown device";
+                    }
+                    // The FULL kwargs, not just the driver key: serial/index
+                    // keys are what pick the same physical unit out of several
+                    // identical ones.
+                    info.args = SoapySDR::KwargsToString(kw);
+                    w->out->push_back(std::move(info));
+                }
+            } catch (...) {
+                // "Never throws; empty on none/no modules": a probe failure in
+                // some broken vendor module must not take the Source menu down
+                // with it.
+                w->out->clear();
             }
-            // The FULL kwargs, not just the driver key: serial/index keys are
-            // what pick the same physical unit out of several identical ones.
-            info.args = SoapySDR::KwargsToString(kw);
-            out.push_back(std::move(info));
-        }
-    } catch (...) {
-        // "Never throws; empty on none/no modules": a probe failure in some
-        // broken vendor module must not take the Source menu down with it.
+        },
+        &walk);
+
+    if (!completed) {
+        // Partial results from a walk that faulted mid-list are not offered to
+        // the user: a row built from half-written kwargs is a device that
+        // cannot be opened. Empty plus a logged reason is the honest answer.
         out.clear();
+        core::diagWarnf(
+            "soapy: enumerate faulted inside a vendor module (code 0x%08X) - "
+            "no devices listed; a driver install on this machine is faulty",
+            static_cast<unsigned>(vendorGuardLastFaultCode()));
     }
     return out;
 }

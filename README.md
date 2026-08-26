@@ -381,6 +381,15 @@ Zadig must be used to bind WinUSB to "Bulk-In, Interface (Interface 0)" instead.
 `cascade.exe --soapy-check` prints the search paths, the loaded modules and
 either the device it opened or the reason there was none.
 
+**The hardware search runs in a separate short-lived process.** Looking for
+radios means loading every SDR driver installed on the machine and letting each
+one scan the USB bus, and a driver that falls over while doing that used to
+take the whole application with it. It now takes only that small process, and
+the session carries on with an empty device list. If a scan finds nothing, the
+diagnostics log distinguishes "no devices" from "the search crashed" and from
+"a device stopped answering and the search was cut off" — three answers that
+used to look identical.
+
 ## Building the installer
 
 A Windows installer (Inno Setup 6) lives under `installer/` — it packages

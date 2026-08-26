@@ -633,6 +633,41 @@ std::string lastCrashReportPath() {
 #endif
 }
 
+std::string activeCrashDir() {
+#if defined(_WIN32)
+    // BOTH questions in one answer, on purpose - see the header. An armed
+    // directory is a directory AND the switch being on; either half alone is
+    // not consent to write there.
+    if (!g_enabled) { return std::string(); }
+    return std::string(g_crashDir);
+#else
+    return std::string();
+#endif
+}
+
+void reportAbsorbedFault(const char* reason, unsigned long code, const void* faultAddress,
+                         void* exceptionPointers) {
+#if defined(_WIN32)
+    // A SEPARATE latch from g_inHandler, and that is not tidiness. g_inHandler
+    // means "a FATAL handler is running"; sehFilter reads a set g_inHandler as
+    // proof it has faulted inside itself and answers by killing the process.
+    // Borrowing it here would turn a real crash that happened to land while
+    // this absorbed report was being written into a silent TerminateProcess
+    // with no report at all.
+    static long inAbsorbed = 0;
+    if (::InterlockedCompareExchange(&inAbsorbed, 1, 0) != 0) { return; }
+    writeReport(reason != nullptr ? reason : "absorbed fault", code,
+                reinterpret_cast<std::uintptr_t>(faultAddress),
+                static_cast<EXCEPTION_POINTERS*>(exceptionPointers));
+    ::InterlockedExchange(&inAbsorbed, 0);
+#else
+    (void)reason;
+    (void)code;
+    (void)faultAddress;
+    (void)exceptionPointers;
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // The test hook. Four real faults, one per registration.
 // ---------------------------------------------------------------------------

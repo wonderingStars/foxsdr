@@ -34,6 +34,39 @@ the in-memory ring, the application context (mode, source, sample rate, radio
 model with the serial stripped, loaded plugins with versions), and a **stable
 signature** for grouping.
 
+### The device-enumeration reports
+
+The "Afterwards" row above says the process dies, and for a fatal fault it
+does. The device search is the exception, because it is the one place where the
+alternative is that the most reproducible fault this product has ever had stays
+invisible. It produces three reports, all of `kind: crash`:
+
+| Reason line begins | Raised by | Written by | Stack |
+|---|---|---|---|
+| `fault in a third-party SDR module, absorbed…` | a vendor driver faulting on our own calling thread | `src/source/vendor_guard.cpp`, from its `__except` **filter** — `EXCEPTION_POINTERS` are dead by the time the handler body runs | the fault's |
+| `access violation` (or any ordinary fatal reason) | the helper process faulting in **cascade's own** code, which the guard deliberately refuses to absorb | the helper's own crash handler, installed by `armEnumerateHelperProcess` into the directory the parent passed down | the fault's |
+| `SDR device enumeration child process died…` | the helper process dying by any route the parent can only see from outside — the libusb fault on a UHD thread, or the timeout kill | `src/source/soapy_enum_proc.cpp`, in the parent, with the child's exit code as `code` | the parent's, which is not the fault's |
+
+They are filed as `kind: crash` rather than a new kind on purpose:
+`src/core/crash_upload.cpp` forwards `crash` and `hang` and **refuses anything
+else**, so a new spelling would be a report nobody ever receives.
+
+**The third one is written at every death, not only when the whole scan
+fails.** The common shape of the libusb fault is "first helper died, the retry
+worked": on this bench, at roughly one child in forty, some forty of every
+forty-one occurrences end that way. Filing only when *every* attempt died would
+report about one in forty-one of them, and the other forty would exist as a
+line in `foxsdr.log` — which is never uploaded on its own. The success of the
+containment is exactly what would have made the fault invisible.
+
+Its `address` is `0`: the fault was in another process and this one has no
+address to offer, so it groups by reason and code rather than by module and
+offset, and the useful half is the `code`. The middle row exists so that a
+fault in *our* code on that path is not reduced to an exit code — the helper
+runs above `installCrashHandlers` in `main()` and would otherwise have no
+handler at all. When diagnostics are switched off the helper installs nothing
+and dies in microseconds, writing nowhere: off means off in the child too.
+
 A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the
 CAT server's mutex while the CAT thread waits inside a socket close" is the bug,

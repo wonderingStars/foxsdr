@@ -112,6 +112,49 @@ void setCrashCaptureEnabled(bool enabled, bool minidump);
 // a caught fault in a child process is safe.
 std::string lastCrashReportPath();
 
+// WHERE THIS PROCESS WOULD WRITE A REPORT RIGHT NOW, or empty when it would
+// write none. One call answers both halves - "is there a directory" and "did
+// the user consent" - because the two are only ever useful together and
+// answering them separately is how a caller ends up writing into a directory
+// the user asked never to be created.
+//
+// It exists so that capture can be HANDED TO A CHILD PROCESS. Since 0.62.1
+// the SDR device walk runs in `cascade --enumerate-json`, a process that is
+// expected to die occasionally by design - and a child that installed no
+// handler would turn the most crash-prone path in the product from a
+// symbolised report into an exit code. source/soapy_enum_proc.cpp passes this
+// string on the child's command line, and passes nothing when it is empty, so
+// the child's capture is exactly the parent's consent and never more.
+std::string activeCrashDir();
+
+// A fault that was ABSORBED rather than fatal, filed so that it is still
+// visible to the report reader and the uploader.
+//
+// WHY THIS EXISTS. source/vendor_guard.cpp can swallow an access violation
+// raised inside a third-party SDR module so that the Source menu answers "no
+// devices" instead of the receiver dying mid-session. Everything above still
+// runs, which is the point - but it also means SetUnhandledExceptionFilter
+// never sees that fault, so without this the ONLY trace is one local
+// diagnostics line: no report, no upload, nothing to symbolise. A guard that
+// silently deletes the evidence for the crash reporting shipped in 0.62.0 is
+// not an improvement over crashing.
+//
+// The report is written by the SAME allocation-free writer the fatal path
+// uses, into the SAME crash-<stamp>.txt naming, with the SAME field set - so
+// tools/report-reader resolves it and core/crash_upload.cpp forwards it,
+// neither of which needed a new code path. `reason` is what distinguishes it:
+// it says the fault was absorbed and the process continued. The `kind: crash`
+// line is unchanged and deliberately so - the uploader refuses any other kind
+// (crash_upload.cpp), and an unforwardable report would defeat the purpose.
+//
+// MUST BE CALLED FROM THE __except FILTER, not the handler body:
+// EXCEPTION_POINTERS are only valid while the faulting frame is still live.
+// `exceptionPointers` is an EXCEPTION_POINTERS* (void* so this header stays
+// free of <windows.h>); nullptr is accepted and costs only the faulting
+// thread's stack instead of the faulting one. No-op when capture is disabled.
+void reportAbsorbedFault(const char* reason, unsigned long code, const void* faultAddress,
+                         void* exceptionPointers);
+
 // TEST HOOK. Raises a real fault of the requested kind so a child process can
 // prove the handler catches it and writes a readable report. A crash handler
 // that has never caught a crash is a hypothesis; this is how it stops being
