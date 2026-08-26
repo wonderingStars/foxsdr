@@ -86,17 +86,51 @@
 //      fault was absorbed and the process continued. Absorbing a fault costs
 //      the process's death; it must not also cost the evidence.
 //
+// WHAT IS ROUTED THROUGH THIS GUARD, as of 0.62.3: EVERY CALL SOAPYSOURCE
+// MAKES THAT CROSSES INTO SOAPYSDR, not just the enumeration walk it was
+// written for. Device::make and the whole device interrogation in open(),
+// start (activateStream), stop (deactivateStream), teardown (closeStream and
+// unmake), setSampleRateHz, setCenterFrequencyHz, setGainDb, setAutoGain,
+// listGainNames, listAntennas, setAntenna, antenna, and the module/search-path
+// queries. See source/soapy_source.cpp; the audit is per call site.
+//
+// That widening was forced by measurement, not tidiness. Five crash reports
+// came back from the shipped 0.62.0 in 24 hours - at least two people, two
+// RTL-SDR models, two Windows 11 builds - in three signatures: the user pressed
+// Play (SoapySource::start), the user changed frequency
+// (SoapySource::setCenterFrequencyHz, three of the five), the user switched
+// source (SoapySource::teardown). Every stack ran cascade -> SoapySDR.dll ->
+// rtlsdrSupport.dll -> rtlsdr.dll -> libusb-1.0.dll -> ntdll.dll, and every one
+// of them is on OUR OWN CALL FRAME - unlike the B200 enumeration fault above,
+// which is why these three are catchable here and that one is not.
+//
+// EXACTLY ONE VENDOR CALL IS DELIBERATELY LEFT UNGUARDED: readStream, in
+// SoapySource::read. See the next paragraph for why that is the line.
+//
 // WHY SWALLOWING AN IN-CALL FAULT IS THE RIGHT ANSWER, AND WHERE IT ENDS.
-// Enumeration is a QUERY made on the user's behalf - the Source dropdown
-// opening, or Refresh being pressed. Answering "no devices" plus a diagnostic
-// line is a bad answer; taking the whole receiver down mid-session, losing an
-// open recording and every plugin's state, is a far worse one. Be honest
-// about the cost: a module that faulted may have left its own locks held and
-// its own memory torn, so the process continues in a state that vendor module
-// no longer guarantees. That is a deliberate trade for a query path, and it
-// is NOT a licence to wrap the streaming path the same way - a fault in a
-// running stream means the device is gone, and the pipeline has a real fault
-// path for it.
+// These are all CONTROL calls made on the user's behalf - the Source dropdown
+// opening, Refresh being pressed, Play, a retune, a gain change. Answering "no
+// devices" or "that tune failed" plus a diagnostic line is a bad answer; taking
+// the whole receiver down mid-session, losing an open recording and every
+// plugin's state, is a far worse one. Be honest about the cost: a module that
+// faulted may have left its own locks held and its own memory torn, so the
+// process continues in a state that vendor module no longer guarantees. That
+// is a deliberate trade for the control path, and it is NOT a licence to wrap
+// the STREAMING path the same way - a fault in a running stream means the
+// device is gone, and the pipeline has a real fault path for it. read() runs
+// ten times a second forever, so absorbing there would mean calling back into a
+// torn module in a hot loop, and rule 2 below would turn one faulting stream
+// into a storm of uploaded reports rather than one.
+//
+// THE COROLLARY THE CALL SITES OWE THIS FILE. Because the process continues in
+// a state the vendor no longer guarantees, SoapySource marks a device that has
+// faulted DEAD and never calls it again: every setter refuses, and teardown
+// drops the handle without closeStream or unmake, leaking it deliberately for
+// the life of the process. That is the honest cost of the trade being taken
+// here, and the argument is in soapy_source.cpp above teardown(): this guard
+// can absorb a second fault, but it cannot absorb a HANG, and a call into a
+// module still holding the lock its faulting thread died under is exactly how
+// a hang happens.
 //
 // The filter is deliberately NARROW: only the codes a hardware probe
 // realistically raises are handled. Stack overflow in particular is NOT
@@ -135,8 +169,10 @@ bool callGuardingVendorFaults(void (*fn)(void*) noexcept, void* ctx) noexcept;
 //
 // This is the observable that lets a test assert a given call site actually
 // goes through the guard, without needing a vendor module to fault on cue.
-// Deleting the guard from enumerate() is then a test failure rather than a
-// silent return to the unguarded behaviour.
+// Deleting the guard from a call site is then a test failure rather than a
+// silent return to the unguarded behaviour - see tests/test_soapy_vendor_guard.cpp,
+// which counts the control path's crossings, and tests/test_soapy_enum_proc.cpp
+// for the enumeration walk's.
 std::uint64_t vendorGuardCallCount() noexcept;
 
 // Faults absorbed since process start, and the exception code of the most

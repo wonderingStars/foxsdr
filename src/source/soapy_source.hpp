@@ -8,23 +8,43 @@
 // returns an empty list and open() fails gracefully with a reason. Nothing
 // in this class treats "no hardware" as an error to crash over.
 //
-// Threading: matches the IqSource contract — open/closeDevice/start/stop and
-// every setter are control-thread calls; read() runs only on the pipeline's
-// source thread. Callers must stop the source thread before closeDevice()
-// (Pipeline already sequences it that way); members are therefore plain, not
-// atomic, on purpose.
+// Threading: ONE THREAD IN THE VENDOR STACK, EVER. Every call that enters the
+// driver — open/closeDevice, start/stop, read(), every setter and query —
+// takes devMutex_ for the duration of the driver call, so a GUI-thread retune
+// can never run concurrently with the source thread parked inside
+// readStream(), and teardown can never overlap either. This replaced the old
+// contract ("setters are control-thread calls; read() runs on the source
+// thread; members plain, not atomic, on purpose"), which sent two threads
+// into the vendor module at once by design: SoapySDR makes no cross-thread
+// guarantee for a device (its own setupStream doc: "The returned stream is
+// not required to have internal locking, and may not be used concurrently
+// from multiple threads"), UHD merely happened to survive it, and the three
+// 0.62.0 field crashes were adjudicated to a libusb-state use-after-free
+// consumed by exactly these unserialised control calls.
 //
-// The ERROR SLOT is the one exception, and it has to be: read() records
-// failures from the source thread at the same time as the GUI reads
-// lastError() and the source loop polls faulted() — a std::string written on
-// one thread and read on another is UB, not a stale value. Those four members
-// (lastError_, faulted_, consecutiveErrors_) live under errorMutex_ and are
-// reached only through setError/clearError/lastError/faulted; nothing else in
-// the class changed, because nothing else is touched concurrently.
+// What that costs: a control call can wait behind one bounded readStream(),
+// so the read timeout is 20 ms (kReadTimeoutUs) — a setter waits at most one
+// read quantum. stop() no longer interrupts a parked read cross-thread (the
+// SoapySDR stream contract forbids that concurrent use anyway); it waits the
+// same bounded quantum, then deactivates with the stream unowned.
+//
+// Lock-free mirrors: running_/sampleRateHz_/centerFrequencyHz_ are atomics
+// and isOpen() reads an atomic mirror, so the per-frame GUI readouts never
+// block behind a read in flight. Lock order is devMutex_ -> errorMutex_,
+// never the reverse; no lock is ever taken inside a structured-exception
+// guarded body (a fault would abandon it).
+//
+// The ERROR SLOT keeps its own lock: read() records failures from the source
+// thread at the same time as the GUI reads lastError() and the source loop
+// polls faulted() — a std::string written on one thread and read on another
+// is UB, not a stale value. Those members (lastError_, faulted_, deviceDead_,
+// consecutiveErrors_, and now name_) live under errorMutex_ and are reached
+// only through setError/clearError/lastError/faulted/deviceDead/name.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <complex>
 #include <cstddef>
 #include <mutex>
@@ -53,7 +73,7 @@ struct SoapyDeviceInfo {
 };
 
 // Self-paced hardware source (selfPaced() == true): samples arrive at the
-// device's own rate, so read() blocks up to ~100 ms and returns 0 as the
+// device's own rate, so read() blocks up to ~20 ms and returns 0 as the
 // "nothing yet, retry" signal the IqSource contract defines.
 class SoapySource : public IqSource {
 public:
@@ -119,7 +139,17 @@ public:
     // untouched so a failure reason survives the cleanup that follows it.
     void closeDevice();
 
-    bool isOpen() const { return dev_ != nullptr; }
+    // Atomic mirror of "dev_ != nullptr", so per-frame GUI checks never block
+    // behind a driver call holding devMutex_.
+    bool isOpen() const { return openMirror_.load(std::memory_order_relaxed); }
+
+    // True while ANY SoapySource in this process holds an open device. The
+    // in-process enumeration fallback checks this and refuses to run: walking
+    // vendor find() routines opens and closes the very dongle a stream may be
+    // using, through the same in-process libusb whose corrupted lock state the
+    // 0.62.0 field crashes fingerprinted. The child-process scan is unaffected
+    // (a fresh process never has a device open).
+    static bool anyDeviceOpen();
 
     // --- gain hooks for the Source panel (GUI wires these later) ----------
     // All are safe with no device open: empty list / false, never a throw.
@@ -166,7 +196,7 @@ public:
     // device stay set up, so start() again is cheap (no retune glitch).
     void stop() override;
 
-    bool running() const override { return running_; }
+    bool running() const override { return running_.load(std::memory_order_relaxed); }
 
     // Hardware delivers on its own clock; the pipeline loop must not pace
     // this source (IqSource pacing contract).
@@ -176,7 +206,7 @@ public:
     // driver may coerce a requested rate, and the DSP chain must run at the
     // rate the hardware really uses, not the one that was asked for.
     // 0.0 until a device is open.
-    double sampleRateHz() const override { return sampleRateHz_; }
+    double sampleRateHz() const override { return sampleRateHz_.load(std::memory_order_relaxed); }
 
     // Forwards to the device, then re-reads the ACTUAL rate into
     // sampleRateHz(). False (with lastError) if there is no device, the
@@ -184,14 +214,17 @@ public:
     bool setSampleRateHz(double hz) override;
 
     // Same actual-readback scheme as the sample rate. 0.0 until open.
-    double centerFrequencyHz() const override { return centerFrequencyHz_; }
+    double centerFrequencyHz() const override {
+        return centerFrequencyHz_.load(std::memory_order_relaxed);
+    }
     bool setCenterFrequencyHz(double hz) override;
 
-    // readStream with a 100 ms timeout. Returns the sample count delivered;
-    // 0 on timeout — the contract-compliant "retry" signal for a self-paced
-    // source — and 0 immediately (no block) when no stream is open, so a
-    // pipeline pointed at an unopened source spins safely instead of
-    // crashing.
+    // readStream with a 20 ms timeout (kReadTimeoutUs — short so a control
+    // call waiting on devMutex_ behind a parked read never stalls the GUI
+    // noticeably). Returns the sample count delivered; 0 on timeout — the
+    // contract-compliant "retry" signal for a self-paced source — and 0
+    // immediately (no block) when no stream is open, so a pipeline pointed at
+    // an unopened source spins safely instead of crashing.
     //
     // Errors are CLASSIFIED rather than uniformly retried, because "retry
     // forever" is the wrong recovery for half of them:
@@ -218,13 +251,22 @@ public:
     // start(), and by teardown — a fault describes a live stream, and after a
     // reopen there is a new one. Safe from any thread.
     //
+    // ALSO set by an absorbed VENDOR FAULT on any control call — start, stop,
+    // a retune, a gain or antenna change, the open itself. Those used to kill
+    // the process outright (three signatures uploaded from shipped 0.62.0);
+    // they now come back here, which is what turns a driver access violation
+    // into the same visible "Device stopped: ..." the user already gets when a
+    // radio is unplugged, instead of the application vanishing.
+    //
     // The pipeline's source loop polls this and stops with the message, which
     // is what turns a pulled radio into "Device stopped: ..." instead of a
     // frozen spectrum that looks like a hang.
     bool faulted() const override;
 
     // "SoapySDR: <label>" once open, "SoapySDR: (no device)" otherwise.
-    const char* name() const override { return name_.c_str(); }
+    // Snapshot-backed like lastError(): open() on a worker thread rewrites
+    // name_ while the GUI draws it, so the pointer must not alias the member.
+    const char* name() const override;
 
     // The pointer is backed by a per-THREAD snapshot taken under errorMutex_,
     // so it stays valid until the calling thread asks again — long enough for
@@ -233,30 +275,84 @@ public:
     // source thread rewrites.
     const char* lastError() const override;
 
+    // True once a vendor call has raised a structured exception that the guard
+    // absorbed (see the DEAD DEVICE POLICY note in the .cpp). The device is
+    // then never called again: every setter refuses, and teardown releases the
+    // handles WITHOUT calling back into the driver. Exposed so the GUI and the
+    // tests can tell "this driver crashed" from "the driver said no".
+    bool deviceDead() const;
+
 private:
+    // The *Locked helpers assume devMutex_ is HELD by the caller — they exist
+    // so open()/closeDevice() can run stop-then-teardown under one lock
+    // without recursing into it. Public entry points take the lock, privates
+    // never do.
+    void stopLocked();
+
     // Releases whatever half-built state exists, swallowing every Soapy
     // exception: teardown runs inside catch blocks and destructors, where a
     // second throw would terminate the process.
-    void teardown() noexcept;
+    //
+    // Every call it makes into the driver is guarded, and it makes NONE at all
+    // once deviceDead() - the handles are dropped and the driver is left
+    // alone. Whatever happens, the object lands in the same closed state:
+    // dev_ and stream_ null, not running, rate and frequency zero, name back
+    // to "(no device)". lastError() survives; the fault latches do not.
+    void teardownLocked() noexcept;
+
+    // Drops the device and stream handles WITHOUT calling into the driver.
+    // The abandonment half of the dead-device policy, used by teardown and by
+    // an open() that faulted with a half-built device on its hands.
+    void abandonDeviceLocked() noexcept;
+
+    // Resets the mirrors and the open-device count on any path that lets go
+    // of dev_ — the one place the bookkeeping lives so teardown and
+    // abandonment cannot disagree about it.
+    void clearDeviceStateLocked() noexcept;
+
+    // Records an absorbed vendor fault: the message the GUI shows, the fault
+    // latch the pipeline's source loop polls, and the dead-device latch.
+    // noexcept because teardown and the destructor call it.
+    void noteVendorFault(const char* what) noexcept;
 
     // The only writers of the error slot. Every failure path goes through
     // setError so no site can forget the lock; clearError also resets the
     // fault state, which is why open()/start() call it on success.
+    //
+    // clearError deliberately does NOT clear the dead-device latch: only
+    // teardown does, because only teardown has actually let go of the handle.
     void setError(std::string msg);
     void clearError();
 
+    // Serialises every entry into the vendor driver — see the file header.
+    // Touched only by public entry points; held across the driver call.
+    mutable std::mutex devMutex_;
+
+    // dev_ and stream_ are read and written ONLY under devMutex_.
     SoapySDR::Device* dev_ = nullptr;
     SoapySDR::Stream* stream_ = nullptr;
-    bool running_ = false;
-    double sampleRateHz_ = 0.0;
-    double centerFrequencyHz_ = 0.0;
-    std::string name_ = "SoapySDR: (no device)";
+
+    // Lock-free mirrors for the per-frame GUI readouts (see the file header).
+    // Written under devMutex_ at the points the driver state actually changed.
+    std::atomic<bool> openMirror_{false};
+    std::atomic<bool> running_{false};
+    std::atomic<double> sampleRateHz_{0.0};
+    std::atomic<double> centerFrequencyHz_{0.0};
+
+    // Whether THIS source is counted in the process-wide open-device count —
+    // set exactly at the successful-open commit, cleared exactly once on the
+    // release paths, so a half-made device that gets abandoned mid-open can
+    // never unbalance the count.
+    bool counted_ = false;
 
     // See the error-slot note in the file header: everything below is written
-    // from the source thread and read from the control thread.
+    // from the source thread and read from the control thread. name_ moved in
+    // here because open() now runs on a worker thread while the GUI draws it.
     mutable std::mutex errorMutex_;
+    std::string name_ = "SoapySDR: (no device)";
     std::string lastError_;
     bool faulted_ = false;
+    bool deviceDead_ = false;
     int consecutiveErrors_ = 0;
 };
 

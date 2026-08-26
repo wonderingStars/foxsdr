@@ -111,8 +111,8 @@ int vendorFaultFilter(EXCEPTION_POINTERS* ep) noexcept {
     // reason names the CLASS of fault rather than guessing at which of the
     // eight absorbable codes this was.
     core::reportAbsorbedFault(
-        "fault in a third-party SDR module, absorbed by the device enumeration "
-        "guard (the process continued; the device list was empty)",
+        "fault in a third-party SDR module, absorbed by the vendor-call guard "
+        "(the process continued; the call reported failure to its caller)",
         static_cast<unsigned long>(code), addr, ep);
     return EXCEPTION_EXECUTE_HANDLER;
 }

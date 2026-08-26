@@ -970,11 +970,18 @@ int main(int argc, char** argv) {
                         r.elapsedMs);
             CHECK(r.outcome == EnumOutcome::Ok);
             CHECK(rowsWellFormed(r));
-            // EXACTLY ONE guarded call when the SoapySDR runtime is present,
-            // and exactly none when it is absent and the walk is correctly
+            // EXACTLY TWO guarded calls when the SoapySDR runtime is present,
+            // and exactly none when it is absent and both are correctly
             // skipped. Written as one expression rather than an `if`, so
             // neither branch can vanish into a case that was never checked.
-            CHECK(r.guardedCalls == (r.childRuntimeAvailable ? 1ull : 0ull));
+            //
+            // WAS ONE until 0.62.3, and this is a correction rather than a
+            // loosening: the walk used to be the only crossing into SoapySDR
+            // that went through the guard. It is now the SECOND of two, because
+            // runtimeAvailable() guards the one-off module search-path fix
+            // (SoapySDR::getABIVersion) that runs before it. Both still have to
+            // be there - delete either guard and this drops to 1 and fails.
+            CHECK(r.guardedCalls == (r.childRuntimeAvailable ? 2ull : 0ull));
             // The REAL helper reports capture it actually armed, not capture
             // it was merely told about.
             CHECK(r.childCaptureArmed);

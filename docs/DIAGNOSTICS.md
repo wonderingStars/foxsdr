@@ -67,6 +67,56 @@ runs above `installCrashHandlers` in `main()` and would otherwise have no
 handler at all. When diagnostics are switched off the helper installs nothing
 and dies in microseconds, writing nowhere: off means off in the child too.
 
+### The device CONTROL-path reports (0.62.3)
+
+Enumeration is no longer the only guarded crossing. Five reports uploaded from
+the shipped 0.62.0 in 24 hours — at least two people, two RTL-SDR models, two
+Windows 11 builds — grouped into three signatures that are all the same fault
+family, and all of them are ordinary things to do with a radio:
+
+| Signature | The user did | Faulted in |
+|---|---|---|
+| `B63B14A9BA45C175` | pressed **Play** | `SoapySource::start` → `activateStream` |
+| `235E46B5D39DED8D` (×3) | **changed frequency** | `SoapySource::setCenterFrequencyHz` → `setFrequency` |
+| `7496A711C2D58EE2` | **switched source** | `SoapySource::teardown` → `closeStream` |
+
+Above our frame in every one: `SoapySDR.dll` → `rtlsdrSupport.dll` →
+`rtlsdr.dll` → `libusb-1.0.dll` → `ntdll.dll`.
+
+**These are catchable, and the B200 enumeration fault is not, for one reason:**
+they are raised on cascade's *own call frame*. A structured exception is
+delivered on the thread that raised it, so `__try`/`__except` around the call
+sees them. The B200 fault is on a thread UHD spawns for itself, which is why
+that one needed a whole child process instead.
+
+So **every call that crosses into SoapySDR now runs inside
+`callGuardingVendorFaults`** — `Device::make` and the whole device
+interrogation in `open()`, `start`, `stop`, `teardown`, the sample rate, the
+centre frequency, the gains, the gain mode, the antenna list/set/read, and the
+module/search-path queries. The one deliberate exception is **`readStream`**:
+`vendor_guard.hpp` states the limit of the trade in terms — absorbing is right
+for a control call made on the user's behalf and is *not* a licence to wrap the
+streaming path — and that path already has a real fault route, runs ten times a
+second, and would turn one faulting stream into a storm of reports.
+
+Each absorbed control fault produces the same `fault in a third-party SDR
+module, absorbed…` report as the enumeration guard, and then:
+
+- `SoapySource::faulted()` goes true and `lastError()` carries the code, so the
+  Source panel shows **“Device stopped: …”** — the path a user already gets for
+  an unplugged radio — instead of the application vanishing;
+- the failing call returns **false**, and no cached readback is advanced: a
+  retune that faulted leaves `centerFrequencyHz()` on the last value the
+  hardware actually confirmed, so the readout never advertises a frequency the
+  radio is not on;
+- **the device is marked dead and is never called again.** `teardown()` then
+  releases it *without* `closeStream` or `unmake`. That leaks the handle and
+  the USB claim for the life of the process — the message says to restart —
+  and it is the deliberate choice, because a module that has just raised an
+  access violation may still hold its own locks, and a second call into it can
+  **block forever**. The guard can absorb a second fault; it cannot absorb a
+  hang, and a hung GUI thread is worse than a crash.
+
 A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the
 CAT server's mutex while the CAT thread waits inside a socket close" is the bug,
