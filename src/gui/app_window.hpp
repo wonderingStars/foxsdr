@@ -395,6 +395,16 @@ private:
     // pressed, in a window of its own. See the implementation for why it is a
     // window rather than a popup or a panel under the list.
     void drawTargetDetailsWindow();
+    // The same block as a section in the MAIN window's menu column, so the
+    // craft being watched is readable without the Map window arrangement —
+    // the map is often on another monitor, or closed. Shows the target whose
+    // Details button was pressed, else the followed one, else the selected
+    // one.
+    void drawTargetDetailsSection();
+    // The by-id lookup both of those share: the host's track vector is rebuilt
+    // every poll, so a stored pointer or index would go stale within a frame —
+    // find it fresh, and only among tracks the staleness rule still shows.
+    const cascade::core::HostTrack* findVisibleTrack(const std::string& id) const;
     void drawPluginPresets(const cascade::core::LoadedPlugin& p);
     // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
     // rebuilds the decoders against the new receiver state, and opens what

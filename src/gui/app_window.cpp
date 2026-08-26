@@ -1548,6 +1548,8 @@ void AppWindow::drawMenuColumn() {
     // drawn first for pluginBrowserDrawnThisFrame_ to mean anything below.
     drawPluginStoreSection();
     drawPluginsSection();
+    // After the plugins on purpose: the targets it describes come from them.
+    drawTargetDetailsSection();
     drawWebSection();
     drawCatSection();
     drawUpdatesSection();
@@ -4192,6 +4194,38 @@ void AppWindow::drawPluginWindows() {
                 ImGui::TextDisabled("%s", basemap_.attribution().c_str());
             }
             basemap_.endFrame();
+
+            // THE FOLLOW-INTERRUPT ASK. A drag on the map while a target is
+            // followed no longer pans (MapView latches the attempt instead —
+            // see the drag handler's comment for why panning there was a tug
+            // of war the user always lost); it opens this prompt. Modal on
+            // purpose: the answer changes what the very next drag does, so
+            // nothing else should happen until it is given.
+            if (map_->followInterruptRequested()) {
+                map_->clearFollowInterruptRequest();
+                ImGui::OpenPopup("Stop following?");
+            }
+            if (ImGui::BeginPopupModal("Stop following?", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
+                if (map_->followedId().empty()) {
+                    // The follow ended some other way (list button, details
+                    // window) while the prompt was up: the question no longer
+                    // exists, so it must not linger waiting for an answer.
+                    ImGui::CloseCurrentPopup();
+                } else {
+                    ImGui::Text("The map is following %s.", map_->followedId().c_str());
+                    ImGui::TextUnformatted(
+                        "Stop following it so the map can be moved freely?");
+                    ImGui::Separator();
+                    if (ImGui::Button("Stop following")) {
+                        map_->clearFollow();
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Keep following")) { ImGui::CloseCurrentPopup(); }
+                }
+                ImGui::EndPopup();
+            }
         }
         ImGui::End();
     }
@@ -4699,6 +4733,74 @@ void AppWindow::drawTrackSortControl() {
     }
 }
 
+const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& id) const {
+    // FOUND BY ID EVERY FRAME. The host's track vector is rebuilt on every
+    // poll, so a stored index or pointer would be describing a different
+    // aircraft - or freed memory - within a frame or two. Only tracks the
+    // staleness rule still shows count: a dropped target must read as "no
+    // longer being heard", not as its last stale values.
+    for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            continue;
+        }
+        if (id == ht.t.id) { return &ht; }
+    }
+    return nullptr;
+}
+
+void AppWindow::drawTargetDetailsSection() {
+    if (!ImGui::CollapsingHeader("Target details")) { return; }
+
+    // WHICH TARGET: the one whose Details button was pressed wins (it is the
+    // explicit ask), then the one being followed (the map is already glued to
+    // it, so it is what the user is watching), then the last one clicked in
+    // the list. The precedence means this section tracks whatever the user
+    // most recently singled out, with no control of its own to manage.
+    std::string id = detailsTrackId_;
+    if (id.empty()) { id = map_->followedId(); }
+    if (id.empty()) { id = map_->selectedId(); }
+    if (id.empty()) {
+        // Wrapped, not line-broken by hand: the menu column is narrower than a
+        // comfortable sentence and hard-broken lines clipped at its edge.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(
+            "No target chosen. Click a target in the map's list, press its "
+            "Details button, or follow one - it will be shown here.");
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    const cascade::core::HostTrack* found = findVisibleTrack(id);
+    if (found == nullptr) {
+        // Same honesty as the details window: said, not silently blanked.
+        ImGui::TextUnformatted(id.c_str());
+        ImGui::TextDisabled("No longer being heard.");
+        return;
+    }
+
+    cascade::gui::drawTrackDetail(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
+    ImGui::Separator();
+    // The same two gestures the details window offers, so acting on what was
+    // just read never requires finding the row it came from.
+    if (ImGui::SmallButton("Go to on map")) {
+        map_->setSelected(found->t.id);
+        map_->goTo(found->t.latDeg, found->t.lonDeg);
+        mapOpen_ = true;
+    }
+    ImGui::SameLine();
+    const bool following = (map_->followedId() == found->t.id);
+    if (ImGui::SmallButton(following ? "Stop following" : "Follow")) {
+        if (following) {
+            map_->clearFollow();
+        } else {
+            map_->setSelected(found->t.id);
+            map_->setFollowed(found->t.id);
+            mapOpen_ = true;
+        }
+    }
+}
+
 void AppWindow::drawTargetDetailsWindow() {
     if (!detailsOpen_ || detailsTrackId_.empty()) { return; }
 
@@ -4728,20 +4830,7 @@ void AppWindow::drawTargetDetailsWindow() {
     // which is two short lines, from collapsing to a sliver.
     ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
     if (ImGui::Begin("Target details", &detailsOpen_, ImGuiWindowFlags_AlwaysAutoResize)) {
-        // FOUND BY ID EVERY FRAME. The host's track vector is rebuilt on every
-        // poll, so a stored index or pointer would be describing a different
-        // aircraft - or freed memory - within a frame or two.
-        const std::vector<cascade::core::HostTrack>& tracks = pluginUi_.tracks();
-        const cascade::core::HostTrack* found = nullptr;
-        for (const cascade::core::HostTrack& ht : tracks) {
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
-                continue;
-            }
-            if (detailsTrackId_ == ht.t.id) {
-                found = &ht;
-                break;
-            }
-        }
+        const cascade::core::HostTrack* found = findVisibleTrack(detailsTrackId_);
 
         if (found == nullptr) {
             // SAID, NOT SILENTLY CLOSED. A target goes quiet and is dropped by
