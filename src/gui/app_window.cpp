@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1143,6 +1144,8 @@ void AppWindow::drawUi() {
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
     pollSoapyAsync();
+    // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
+    pollPendingRetune();
     // Same contract for the catalogue fetch / plugin download.
     pollPluginAsync();
     pollUpdateAsync();
@@ -2139,10 +2142,16 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     // choose would read as a fault in that source.
     if (!asyncOpenStillWanted(soapyOpenReqGen_, sourceGen_)) { return; }
 
-    // Failure: the combo was never moved, so it still shows the previous
-    // source; the reason lands in red under the control.
+    // Failure: the reason lands in red under the control. The combo settles
+    // on what is actually installed — since the close-first ordering in
+    // selectSource, a failed device open leaves the GENERATOR running (the
+    // old radio was closed before the attempt), so a selection still pointing
+    // at a device row would be a readout disagreeing with the hardware.
     if (!r.dev) {
         sourceError_ = r.error.empty() ? "device open failed" : r.error;
+        if (soapy_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1) {
+            sourceSel_ = 0;
+        }
         return;
     }
     // A non-fatal rate refusal still carries its reason.
@@ -2190,7 +2199,11 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     // audio stopped: it reads as "changing device breaks the sound" rather
     // than "your radio is now tuned somewhere else".
     if (r.keepCenterHz > 0.0) {
-        retuneSourceHz(r.keepCenterHz);
+        // A tune the coalescer was still holding was aimed at the OLD source;
+        // the carry-across below supersedes it. Applied unpaced, because the
+        // readback two lines down must be valid on return.
+        retuneCoalescer_.clearPending();
+        applyRetuneNow(r.keepCenterHz);
         // Not every radio covers every band, so say so rather than leaving
         // the user on a frequency they did not choose. The readback is the
         // authority - a device may clamp to its range or land on a nearby
@@ -2210,6 +2223,15 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
 
 void AppWindow::selectSource(int idx) {
     if (idx == sourceSel_) { return; }  // re-click on the current row: no-op
+
+    // BUSY CHECK ON EVERY ROW, not just the device rows (adjudicated fix #4
+    // for the 0.62.0 field crashes: selectSource(0) and the web route lacked
+    // the check the idx>=2 path had). While a device open is resolving on its
+    // worker, no source switch of any kind is accepted — switching to the
+    // generator mid-open used to strand the resolving device for a stale-drop
+    // teardown, and the combo's busy label already tells the user why the
+    // click did nothing.
+    if (soapyOpenPending_) { return; }
     sourceError_.clear();
 
     if (idx == 0) {
@@ -2233,18 +2255,43 @@ void AppWindow::selectSource(int idx) {
 
     const std::size_t d = static_cast<std::size_t>(idx - 2);
     if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
-    if (soapyOpenPending_ || soapyScanPending_) { return; }  // one at a time
+    if (soapyScanPending_) { return; }  // one at a time (open is checked above)
 
     // The open runs on a worker: Device::make() is the multi-second, USB-bus
     // -walking call that used to freeze the GUI here. sourceSel_ is left
-    // alone until it resolves, which preserves the revert-the-combo contract
-    // for free — a failure never moved the selection in the first place.
+    // alone until it resolves; on failure finishSoapyOpen settles the combo
+    // on whatever is actually installed.
     const std::string args = soapyDevices_[d].args;
     const double rate = kSoapyRateHz[kSoapyRateDefaultIndex];
-    // Read the tuned frequency NOW: the old source is destroyed when the new
-    // one is installed, and a device that has never been opened reports 0,
-    // which finishSoapyOpen treats as "nothing to carry".
+    // Read the tuned frequency NOW: the old source is closed below, and a
+    // device that has never been opened reports 0, which finishSoapyOpen
+    // treats as "nothing to carry".
     const double keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
+
+    // CLOSE THE OLD RADIO BEFORE OPENING THE NEW ONE (adjudicated fix #3 for
+    // the 0.62.0 field crashes). The previous flow opened the new device on
+    // the worker while the old one was still open and streaming, then unmade
+    // the old one afterwards — two device lifetimes overlapping in one
+    // process's libusb, which is the lifecycle overlap fingerprinted as the
+    // corrupting event. Now: quiesce and destroy the old device HERE, on this
+    // thread, with the source thread joined (setSource does both), and only
+    // then let the worker call Device::make. The cost is honest: if the new
+    // device fails to open, the receiver is on the generator with the reason
+    // shown, not silently back on a radio it had to close to try.
+    if (soapy_ != nullptr) {
+        cascade::core::diagLogf(
+            "source: closing %s before opening another device",
+            cascade::core::sanitiseDevice(soapyArgs_).c_str());
+        soapy_ = nullptr;
+        soapyArgs_.clear();
+        ++sourceGen_;
+        pipeline_.setSource(nullptr);
+        sourceKind_ = "siggen";
+        // The DSP chain must follow the source that is actually installed —
+        // if the open below fails, the generator would otherwise keep running
+        // at the closed radio's rate.
+        followInputRate();
+    }
     soapyBusyLabel_ = soapyDevices_[d].label;
     soapyOpenPending_ = true;
     // Stamp the request with the selection it belongs to. Nothing is installed
@@ -5842,7 +5889,43 @@ void AppWindow::tuneAbsoluteHz(double absHz) {
     retuneSourceHz(absHz - pipeline_.vfoOffsetHz());
 }
 
+namespace {
+// Monotonic milliseconds for the retune coalescer — steady_clock, because a
+// wall-clock step (NTP, DST) must never stall or flood the tune pacing.
+double steadyNowMs() {
+    using namespace std::chrono;
+    return duration<double, std::milli>(steady_clock::now().time_since_epoch())
+        .count();
+}
+}  // namespace
+
 void AppWindow::retuneSourceHz(double centerHz) {
+    // Hardware tunes are PACED (see the header declaration): a burst becomes
+    // one device call per interval with the latest value. Everything without
+    // a USB control path underneath applies immediately.
+    //
+    // The SCANNER also bypasses the pacing: tickScanner() reads the frequency
+    // back synchronously after every commanded tune to set its user-wins
+    // baseline, and a tune held by the coalescer would make that readback
+    // stale — the scanner would then see its own deferred retune land a frame
+    // later and stop itself, misreading it as the user's hand. The scanner is
+    // a control loop paced by its own dwell, not a human gesture burst.
+    if (soapy_ == nullptr || scanner_.active()) {
+        applyRetuneNow(centerHz);
+        return;
+    }
+    if (retuneCoalescer_.request(centerHz, steadyNowMs())) {
+        applyRetuneNow(centerHz);
+    }
+}
+
+void AppWindow::pollPendingRetune() {
+    if (const std::optional<double> hz = retuneCoalescer_.due(steadyNowMs())) {
+        applyRetuneNow(*hz);
+    }
+}
+
+void AppWindow::applyRetuneNow(double centerHz) {
     // ONE place where the source centre moves. The pipeline cannot observe a
     // device retune (the source owns the tuner), so the RDS/stereo decoders
     // have to be told explicitly — otherwise the previous station's PS name
@@ -5852,6 +5935,9 @@ void AppWindow::retuneSourceHz(double centerHz) {
     cascade::source::IqSource& src = pipeline_.activeSource();
     if (src.centerFrequencyHz() == centerHz) { return; }
     src.setCenterFrequencyHz(centerHz);
+    // Out-of-band applies (a device open's carry-across) pace the next burst
+    // off this moment too, so the coalescer's clock never lags an apply.
+    retuneCoalescer_.noteApplied(steadyNowMs());
     pipeline_.resetRds();
     // I/Q decoders are told for the same reason: they work on the raw band and
     // several of them (ADS-B, AIS) report when the receiver is nowhere near

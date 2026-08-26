@@ -23,6 +23,7 @@
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
 #include "core/recorder.hpp"
+#include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
 #include "gui/track_info_cache.hpp"
@@ -508,7 +509,21 @@ private:
     void rescanPlugins();
     // Every tune that moves the SOURCE centre has to tell the pipeline, which
     // cannot see it: the RDS/stereo decoders must forget the old station.
+    //
+    // For a hardware (Soapy) source this is a REQUEST, paced through
+    // retuneCoalescer_: bursts (one wheel notch per frame is 60-144 tunes a
+    // second) collapse to at most one device call per ~50 ms, latest value
+    // winning — the gesture that produced the most frequent 0.62.0 field
+    // crash. A single tune still applies immediately. The generator and IQ
+    // file sources apply immediately always (no USB to pace).
     void retuneSourceHz(double centerHz);
+    // The unpaced apply: setCenterFrequencyHz + decoder resets + readback.
+    // Call directly only where the readback must be valid on return (the
+    // carry-across on a fresh device open); everything else goes through
+    // retuneSourceHz.
+    void applyRetuneNow(double centerHz);
+    // Frame-loop poll releasing a held retune once its interval has passed.
+    void pollPendingRetune();
 
     // Uninstalls the matching pipeline tap, THEN stops the recorder — the
     // order the Recorder contract requires (see Pipeline::set*Recorder).
@@ -667,6 +682,10 @@ private:
     bool soapyScanPending_ = false;
     bool soapyOpenPending_ = false;
     std::string soapyBusyLabel_;  // device name shown while an open is in flight
+
+    // Paces hardware retunes — see retuneSourceHz. 50 ms: invisible against
+    // the wheel gesture, one apply per notch burst instead of one per frame.
+    cascade::core::RetuneCoalescer retuneCoalescer_{50.0};
 
     // Source-selection sequence number, incremented by EVERY install of a
     // source into the pipeline (generator, IQ file, or a resolved device).

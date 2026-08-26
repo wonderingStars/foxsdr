@@ -36,6 +36,7 @@
 #include <SoapySDR/Types.hpp>
 #include <SoapySDR/Version.hpp>
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -45,6 +46,7 @@
 #include <limits>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -126,7 +128,17 @@ public:
         return 0;
     }
     double getSampleRate(const int, const size_t) const override { return 2.4e6; }
-    double getFrequency(const int, const size_t) const override { return 100.0e6; }
+    // Tunable, so the serialisation block below can hammer retunes against
+    // concurrent reads. Starts where the old fixed readback sat, so every
+    // earlier block sees exactly the behaviour it always did. Deliberately a
+    // PLAIN double touched by both the setter and readStream's caller:
+    // SoapySource::devMutex_ is what makes that safe, which is the contract
+    // under test.
+    void setFrequency(const int, const size_t, const double frequency,
+                      const SoapySDR::Kwargs&) override {
+        freq_ = frequency;
+    }
+    double getFrequency(const int, const size_t) const override { return freq_; }
 
     int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
                    int&, long long&, const long) override {
@@ -150,6 +162,7 @@ public:
 
 private:
     unsigned block_ = 0;
+    double freq_ = 100.0e6;
 };
 
 SoapySDR::KwargsList findNonFinite(const SoapySDR::Kwargs& args) {
@@ -419,6 +432,155 @@ int main() {
             src.stop();
             src.closeDevice();
             CHECK(!src.isOpen());
+        }
+    }
+
+    // --- Serialisation: one thread in the vendor stack, ever -----------------
+    //
+    // The three 0.62.0 field crashes were adjudicated to unserialised entry
+    // into the vendor driver: a GUI-thread retune concurrent with the source
+    // thread inside readStream(), plus in-process enumeration touching the
+    // open dongle. This block drives exactly those pairs against the fake
+    // driver: a reader thread hammers read() while this thread hammers
+    // retunes, queries and readouts. A regression to unserialised access is a
+    // data race on the fake's plain `freq_`/`block_` members; a lock bug is a
+    // deadlock, which the suite's 120 s timeout converts into a failure.
+    {
+        SoapySDR::Registry reg("fakenonfinite", &findNonFinite, &makeNonFinite,
+                               SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        CHECK(!SoapySource::anyDeviceOpen());
+        CHECK(src.open("driver=fakenonfinite"));
+        CHECK(SoapySource::anyDeviceOpen());
+
+        // THE ENUMERATION GATE, while the device is open: the in-process walk
+        // would list the fake driver registered just above (it does, two
+        // dozen lines down) — an empty answer here can only mean the gate
+        // refused the walk, which is adjudicated fix #1: never enumerate
+        // in-process while a radio is open.
+        CHECK(SoapySource::enumerateInProcess().empty());
+
+        CHECK(src.start());
+        std::atomic<bool> stopFlag{false};
+        std::atomic<std::size_t> reads{0};
+        std::thread reader([&src, &stopFlag, &reads]() {
+            std::vector<std::complex<float>> buf(256);
+            while (!stopFlag.load(std::memory_order_relaxed)) {
+                if (src.read(buf.data(), buf.size()) > 0) {
+                    reads.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+        // The fake's readStream returns instantly, so 300 control calls can
+        // finish inside the reader thread's own startup latency — wait for
+        // the first read so the two loops genuinely overlap. A read() that
+        // never returns (a lock bug) parks this spin until the suite's 120 s
+        // timeout converts it into a failure, which is the liveness check.
+        while (reads.load(std::memory_order_relaxed) == 0u) {
+            std::this_thread::yield();
+        }
+        for (int i = 0; i < 300; ++i) {
+            CHECK(src.setCenterFrequencyHz(100.0e6 + i * 1.0e3));
+            (void)src.listGainNames();
+            (void)src.centerFrequencyHz();  // lock-free mirror: must not block
+            (void)src.name();
+        }
+        // The reader must still make progress after the control burst — a
+        // starved or wedged read side would sit at whatever count it reached.
+        const std::size_t before = reads.load(std::memory_order_relaxed);
+        while (reads.load(std::memory_order_relaxed) <= before) {
+            std::this_thread::yield();
+        }
+        stopFlag.store(true, std::memory_order_relaxed);
+        reader.join();
+        std::printf("serialisation: %zu reads alongside 300 retunes\n",
+                    reads.load());
+        CHECK(reads.load() > before);
+        CHECK(!src.faulted());
+        CHECK(src.running());
+        // The retune landed: the mirror follows the device readback.
+        CHECK_NEAR(src.centerFrequencyHz(), 100.0e6 + 299 * 1.0e3, 1.0);
+
+        // stop() now waits out at most one bounded read instead of
+        // interrupting it cross-thread (the SoapySDR stream contract forbids
+        // concurrent stream use) — this must return, not deadlock.
+        src.stop();
+        CHECK(!src.running());
+        src.closeDevice();
+        CHECK(!src.isOpen());
+        CHECK(!SoapySource::anyDeviceOpen());
+
+        // Gate released with the device: the same walk now lists the fake.
+        const std::vector<SoapyDeviceInfo> after = SoapySource::enumerateInProcess();
+        bool sawFake = false;
+        for (const SoapyDeviceInfo& d : after) {
+            if (d.args.find("fakenonfinite") != std::string::npos) { sawFake = true; }
+        }
+        CHECK(sawFake);
+    }
+
+    // --- OPT-IN REAL-HARDWARE SOAK: CASCADE_TEST_B200_SOAK=1 -----------------
+    //
+    // The adjudicated experiment for the 0.62.0 field crashes, adapted to the
+    // fixed architecture: stream a real B200 while the control thread retunes
+    // continuously AND device scans run — the exact overlap that shipped
+    // builds performed unserialised. Needs a B200 attached and SoapyUHD
+    // installed, so it is opt-in by environment variable like the live blocks
+    // in test_plugin_repo/test_plugin_host, and skipped silently otherwise.
+    if (const char* soak = std::getenv("CASCADE_TEST_B200_SOAK");
+        soak != nullptr && soak[0] == '1') {
+        std::printf("B200 soak: starting (opt-in)\n");
+        SoapySource src;
+        const bool opened = src.open("driver=uhd");
+        std::printf("B200 soak: open=%s (%s)\n", opened ? "true" : "false",
+                    src.lastError());
+        CHECK(opened);
+        if (opened) {
+            CHECK(src.setSampleRateHz(2.0e6));
+            CHECK(src.start());
+            std::atomic<bool> stopFlag{false};
+            std::atomic<std::size_t> reads{0};
+            std::thread reader([&src, &stopFlag, &reads]() {
+                std::vector<std::complex<float>> buf(8192);
+                while (!stopFlag.load(std::memory_order_relaxed)) {
+                    if (src.read(buf.data(), buf.size()) > 0) {
+                        reads.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            });
+            // 30 seconds of retune bursts + scans against the live stream.
+            // The scans take the normal enumerate() path (child process); the
+            // in-process walk is gated and must answer empty while open.
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            int tunes = 0;
+            int scans = 0;
+            while (std::chrono::steady_clock::now() < deadline) {
+                for (int i = 0; i < 25; ++i) {
+                    const double hz = 88.0e6 + (tunes % 400) * 50.0e3;
+                    if (!src.setCenterFrequencyHz(hz)) { break; }
+                    ++tunes;
+                }
+                CHECK(SoapySource::enumerateInProcess().empty());  // gate holds
+                (void)SoapySource::enumerate();  // child-process scan
+                ++scans;
+                if (src.faulted()) { break; }
+            }
+            stopFlag.store(true, std::memory_order_relaxed);
+            reader.join();
+            std::printf(
+                "B200 soak: %d tunes, %d scans, %zu reads, faulted=%s "
+                "lastError=\"%s\"\n",
+                tunes, scans, reads.load(), src.faulted() ? "true" : "false",
+                src.lastError());
+            CHECK(!src.faulted());
+            CHECK(reads.load() > 0u);
+            // The child-process scans dominate the wall clock (~5 s each), so
+            // the bound is on "many tunes happened against a live stream",
+            // not on throughput: 2 full outer loops is the floor.
+            CHECK(tunes >= 50);
+            src.stop();
+            src.closeDevice();
         }
     }
 

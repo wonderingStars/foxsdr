@@ -145,13 +145,16 @@ struct EnumResult {
     unsigned long elapsedMs = 0;
 
     // Reported BY THE CHILD, and load-bearing rather than decorative.
-    // `guardedCalls` is how many times the child's own vendor walk went
-    // through callGuardingVendorFaults - exactly 1 for a completed
-    // enumeration on a machine that has the SoapySDR runtime, 0 when the
-    // runtime is missing and the walk is correctly skipped. It is what lets a
-    // test assert that the REAL enumeration in the REAL binary is still
-    // guarded, without the test having to touch the radio itself. Both are 0
-    // on any outcome other than Ok.
+    // `guardedCalls` is how many times the child crossed into SoapySDR through
+    // callGuardingVendorFaults - exactly 2 for a completed enumeration on a
+    // machine that has the SoapySDR runtime (the one-off module search-path fix
+    // in runtimeAvailable(), then the vendor walk itself), 0 when the runtime
+    // is missing and both are correctly skipped. It was 1 before 0.62.3, when
+    // the walk was the only guarded crossing in the process; see
+    // source/vendor_guard.hpp for what widened and why. It is what lets a test
+    // assert that the REAL enumeration in the REAL binary is still guarded,
+    // without the test having to touch the radio itself. Both are 0 on any
+    // outcome other than Ok.
     unsigned long long guardedCalls = 0;
     bool childRuntimeAvailable = false;
 

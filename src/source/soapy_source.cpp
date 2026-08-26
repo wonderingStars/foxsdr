@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 #ifdef _WIN32
@@ -34,12 +35,21 @@ namespace {
 // Multi-channel devices (B210 etc.) still work — they just expose one chain.
 constexpr std::size_t kChannel = 0;
 
-// read() blocking bound, per the IqSource self-paced contract ("<= ~100 ms"):
-// long enough that a healthy device always has samples within it, short
-// enough that stop requests never wait noticeably on a dead stream.
-constexpr long kReadTimeoutUs = 100000;
+// read() blocking bound. Was 100 ms; 20 ms since devMutex_ serialised the
+// vendor stack: a control call (a retune from the GUI, a stop) now waits
+// behind at most one bounded readStream(), so this bound IS the worst-case
+// control latency. 20 ms is still far above what a healthy device needs to
+// have samples ready (the pipeline reads 10 ms chunks; measured B200 read
+// p50 is ~4 ms per 8192 samples) and comfortably inside the IqSource
+// self-paced contract's "<= ~100 ms".
+constexpr long kReadTimeoutUs = 20000;
 
 const char* const kNoDeviceName = "SoapySDR: (no device)";
+
+// Process-wide count of open SoapySource devices, for the in-process
+// enumeration gate (see anyDeviceOpen() in the header). Maintained solely by
+// clearDeviceStateLocked()/open() via the per-instance counted_ flag.
+std::atomic<int> s_openDevices{0};
 
 // A stream error the device can plausibly come back from unaided. Overflow is
 // the everyday one — the host fell behind, samples were dropped, the next read
@@ -111,6 +121,29 @@ std::string describe(const std::exception& e, const char* context) {
     return std::string(context) + ": " + msg;
 }
 
+// EVERY CALL THAT CROSSES INTO A VENDOR MODULE GOES THROUGH HERE.
+//
+// callGuardingVendorFaults takes a plain noexcept function pointer on purpose
+// (see source/vendor_guard.hpp: its own frame must hold nothing that needs C++
+// unwinding, or MSVC rejects the __try with C2712). That makes it awkward to
+// call directly from a method that has locals, so this trampoline packs a
+// stateless lambda's address into the ctx pointer and hands over a captureless
+// forwarder. The body still runs on the CALLING thread, inside the __try, which
+// is the whole point - a structured exception is delivered on the thread that
+// raised it.
+//
+// The body must not throw: the forwarder is noexcept, so an escaping C++
+// exception is a terminate(). Every body below therefore keeps the try/catch
+// that was already there INSIDE itself and reports through captured state.
+// Message building (which allocates) is deliberately left OUTSIDE the guarded
+// body wherever it can be, so a fault path does the least work possible.
+template <class Body>
+bool guardedVendorCall(const Body& body) noexcept {
+    return callGuardingVendorFaults(
+        [](void* p) noexcept { (*static_cast<const Body*>(p))(); },
+        const_cast<void*>(static_cast<const void*>(&body)));
+}
+
 }  // namespace
 
 SoapySource::~SoapySource() {
@@ -139,7 +172,23 @@ bool SoapySource::runtimeAvailable() {
         // when the first enumeration triggers loading). See soapy_modules.hpp
         // for what was wrong and why the application found no hardware at all
         // when installed.
-        ensureVendorModulesVisible(SoapySDR::getABIVersion());
+        //
+        // Guarded like every other crossing. A fault here still answers TRUE:
+        // SoapySDR.dll did load, so the runtime IS available - only the search
+        // path may be incomplete, and that presents as "no devices found" with
+        // a diagnostic, not as a missing runtime.
+        const bool completed = guardedVendorCall([]() noexcept {
+            try {
+                ensureVendorModulesVisible(SoapySDR::getABIVersion());
+            } catch (...) {
+            }
+        });
+        if (!completed) {
+            core::diagWarnf(
+                "soapy: fixing the vendor module search path faulted (code "
+                "0x%08X) - hardware may not be found",
+                static_cast<unsigned>(vendorGuardLastFaultCode()));
+        }
         return true;
     }();
     return available;
@@ -157,25 +206,60 @@ bool SoapySource::runtimeAvailable() {
 
 std::vector<std::string> SoapySource::moduleSearchPaths() {
     if (!runtimeAvailable()) { return {}; }
-    try {
-        return SoapySDR::listSearchPaths();
-    } catch (...) {
-        return {};
+    std::vector<std::string> out;
+    const bool completed = guardedVendorCall([&out]() noexcept {
+        try {
+            out = SoapySDR::listSearchPaths();
+        } catch (...) {
+            out.clear();
+        }
+    });
+    if (!completed) {
+        out.clear();
+        core::diagWarnf("soapy: listSearchPaths faulted (code 0x%08X)",
+                        static_cast<unsigned>(vendorGuardLastFaultCode()));
     }
+    return out;
 }
 
 std::vector<std::string> SoapySource::loadedModules() {
     if (!runtimeAvailable()) { return {}; }
-    try {
-        return SoapySDR::listModules();
-    } catch (...) {
-        return {};
+    std::vector<std::string> out;
+    const bool completed = guardedVendorCall([&out]() noexcept {
+        try {
+            out = SoapySDR::listModules();
+        } catch (...) {
+            out.clear();
+        }
+    });
+    if (!completed) {
+        out.clear();
+        core::diagWarnf("soapy: listModules faulted (code 0x%08X)",
+                        static_cast<unsigned>(vendorGuardLastFaultCode()));
     }
+    return out;
 }
 
 std::vector<VendorRoot> SoapySource::vendorInstalls() {
     if (!runtimeAvailable()) { return {}; }
-    return ensureVendorModulesVisible(SoapySDR::getABIVersion());
+    // getABIVersion() is the only part of this that crosses into SoapySDR.dll;
+    // ensureVendorModulesVisible is our own code, and the guard's module-scoped
+    // filter declines a fault raised there on purpose (vendor_guard.hpp rule 1)
+    // - so wrapping the pair costs nothing and still covers the crossing.
+    std::vector<VendorRoot> out;
+    const bool completed = guardedVendorCall([&out]() noexcept {
+        try {
+            out = ensureVendorModulesVisible(SoapySDR::getABIVersion());
+        } catch (...) {
+            out.clear();
+        }
+    });
+    if (!completed) {
+        out.clear();
+        core::diagWarnf("soapy: vendor install scan faulted (code 0x%08X)",
+                        static_cast<unsigned>(vendorGuardLastFaultCode()));
+    }
+    return out;
 }
 
 std::vector<SoapyDeviceInfo> SoapySource::enumerate() {
@@ -188,9 +272,28 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerate() {
     return enumerateIsolated().devices;
 }
 
+bool SoapySource::anyDeviceOpen() {
+    return s_openDevices.load(std::memory_order_relaxed) > 0;
+}
+
 std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
     std::vector<SoapyDeviceInfo> out;
     if (!runtimeAvailable()) { return out; }  // no runtime: no devices, no crash
+
+    // NEVER WHILE A RADIO IS OPEN (adjudicated fix #1 for the 0.62.0 field
+    // crashes). The vendor walk opens and closes the very dongle a stream may
+    // be using, through this process's libusb — the exact lifecycle overlap
+    // fingerprinted as the corrupting event behind the freed-and-reused-lock
+    // faults. The child-process scan never reaches this gate (a fresh process
+    // has no device open); only the in-parent fallback does, and an empty
+    // list with a logged reason is a far better answer there than a scan that
+    // can corrupt the streaming device's driver state.
+    if (anyDeviceOpen()) {
+        core::diagWarnf(
+            "soapy: in-process device scan refused while a radio is open - "
+            "close the source and rescan");
+        return out;
+    }
 
     // THE ENTIRE VENDOR WALK RUNS INSIDE THE STRUCTURED-EXCEPTION GUARD.
     //
@@ -255,100 +358,258 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
 }
 
 bool SoapySource::open(const std::string& args) {
+    // One lock for the whole open, including the release of whatever was open
+    // before — no other thread may be inside the driver while a device is
+    // being made or unmade.
+    std::lock_guard<std::mutex> devLk(devMutex_);
     // Reopen semantics: whatever was open before must be fully released
     // first, or the old device handle (and its USB claim) would leak.
-    closeDevice();
+    stopLocked();
+    teardownLocked();
     if (!runtimeAvailable()) {
         setError(
             "SoapySDR runtime not found (SoapySDR.dll). Reinstall, or use the "
             "signal generator / IQ file sources, which need no hardware.");
         return false;
     }
-    try {
-        dev_ = SoapySDR::Device::make(args);
-        if (dev_ == nullptr) {
-            // make() normally throws on failure, but a null return is legal
-            // API-wise and must not turn into a null deref at setupStream.
-            setError("SoapySDR::Device::make returned no device for args: " + args);
-            return false;
-        }
-        if (dev_->getNumChannels(SOAPY_SDR_RX) < 1) {
-            setError("device has no RX channels (args: " + args + ")");
-            teardown();
-            return false;
-        }
-        // CF32 everywhere: the DSP chain is complex<float>, and every Soapy
-        // module provides CF32 via the built-in converter registry even when
-        // the wire format is CS16/CS8, so no per-driver format logic here.
-        stream_ = dev_->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32,
-                                    std::vector<std::size_t>{kChannel});
-        if (stream_ == nullptr) {
-            setError("setupStream(RX, CF32) returned no stream (args: " + args + ")");
-            teardown();
-            return false;
-        }
-        // Cache the device's ACTUAL state, not assumptions: a fresh device
-        // boots at whatever rate/frequency its driver defaults to, and the
-        // display must agree with the hardware from the first frame.
-        sampleRateHz_ = dev_->getSampleRate(SOAPY_SDR_RX, kChannel);
-        centerFrequencyHz_ = dev_->getFrequency(SOAPY_SDR_RX, kChannel);
+    // THE WHOLE DEVICE INTERROGATION IS ONE GUARDED CALL, not just
+    // Device::make. Every line of it is a call into the vendor module - make,
+    // getNumChannels, setupStream, the rate/frequency readback and the two key
+    // strings - and every one of them reaches the same libusb surface that
+    // faults. Guarding make alone would leave six unguarded crossings behind
+    // it, which is the shape of defect this whole change exists to end.
+    //
+    // Outcome, not exception, crosses the boundary: the body records what
+    // happened into `o` and the message is BUILT OUT HERE, where allocating is
+    // safe and where a fault has already been ruled out.
+    struct Open {
+        SoapySource* self;
+        const std::string* args;
+        enum class Result { Ok, NullDevice, NoRxChannel, NullStream, Threw } result = Result::Ok;
+        std::string threw;
+        // Readbacks land here, not in the members: the mirrors are atomics
+        // and name_ needs errorMutex_, and no lock may be taken inside the
+        // structured-exception-guarded body (a fault would abandon it).
+        // Committed after the guard returns, on the Ok path only.
+        double rateHz = 0.0;
+        double freqHz = 0.0;
+        std::string label;
+    } o{this, &args};
 
-        std::string label = dev_->getHardwareKey();
-        if (label.empty()) {
-            label = dev_->getDriverKey();
+    const bool completed = guardedVendorCall([&o]() noexcept {
+        SoapySource* s = o.self;
+        try {
+            s->dev_ = SoapySDR::Device::make(*o.args);
+            if (s->dev_ == nullptr) {
+                // make() normally throws on failure, but a null return is
+                // legal API-wise and must not turn into a null deref at
+                // setupStream.
+                o.result = Open::Result::NullDevice;
+                return;
+            }
+            if (s->dev_->getNumChannels(SOAPY_SDR_RX) < 1) {
+                o.result = Open::Result::NoRxChannel;
+                return;
+            }
+            // CF32 everywhere: the DSP chain is complex<float>, and every Soapy
+            // module provides CF32 via the built-in converter registry even
+            // when the wire format is CS16/CS8, so no per-driver format logic.
+            s->stream_ = s->dev_->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32,
+                                              std::vector<std::size_t>{kChannel});
+            if (s->stream_ == nullptr) {
+                o.result = Open::Result::NullStream;
+                return;
+            }
+            // Cache the device's ACTUAL state, not assumptions: a fresh device
+            // boots at whatever rate/frequency its driver defaults to, and the
+            // display must agree with the hardware from the first frame.
+            o.rateHz = s->dev_->getSampleRate(SOAPY_SDR_RX, kChannel);
+            o.freqHz = s->dev_->getFrequency(SOAPY_SDR_RX, kChannel);
+
+            o.label = s->dev_->getHardwareKey();
+            if (o.label.empty()) {
+                o.label = s->dev_->getDriverKey();
+            }
+            if (o.label.empty()) {
+                o.label = "device";
+            }
+            o.result = Open::Result::Ok;
+        } catch (const std::exception& e) {
+            o.result = Open::Result::Threw;
+            o.threw = describe(e, "open failed");
+        } catch (...) {
+            o.result = Open::Result::Threw;
+            o.threw = "open failed: non-standard exception";
         }
-        if (label.empty()) {
-            label = "device";
-        }
-        name_ = "SoapySDR: " + label;
-        clearError();
-        return true;
-    } catch (const std::exception& e) {
-        setError(describe(e, "open failed"));
-        teardown();
+    });
+
+    if (!completed) {
+        // A FAULT MID-OPEN. dev_ may hold a half-made handle and stream_ a
+        // half-made stream, both belonging to a module that just raised an
+        // access violation. They are ABANDONED rather than unmade - see the
+        // dead-device policy above teardown() - and open() fails, which the
+        // Source panel already renders from lastError().
+        noteVendorFault("opening the device");
+        abandonDeviceLocked();
         return false;
-    } catch (...) {
-        setError("open failed: non-standard exception (args: " + args + ")");
-        teardown();
-        return false;
+    }
+    switch (o.result) {
+        case Open::Result::Ok:
+            // Commit the readbacks the guarded body parked in `o` — here,
+            // where taking errorMutex_ for name_ is safe.
+            sampleRateHz_.store(o.rateHz, std::memory_order_relaxed);
+            centerFrequencyHz_.store(o.freqHz, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lk(errorMutex_);
+                name_ = "SoapySDR: " + o.label;
+            }
+            openMirror_.store(true, std::memory_order_relaxed);
+            counted_ = true;
+            s_openDevices.fetch_add(1, std::memory_order_relaxed);
+            clearError();
+            return true;
+        case Open::Result::NullDevice:
+            setError("SoapySDR::Device::make returned no device for args: " + args);
+            teardownLocked();
+            return false;
+        case Open::Result::NoRxChannel:
+            setError("device has no RX channels (args: " + args + ")");
+            teardownLocked();
+            return false;
+        case Open::Result::NullStream:
+            setError("setupStream(RX, CF32) returned no stream (args: " + args + ")");
+            teardownLocked();
+            return false;
+        case Open::Result::Threw:
+        default:
+            setError(o.threw + " (args: " + args + ")");
+            teardownLocked();
+            return false;
     }
 }
 
 void SoapySource::closeDevice() {
-    stop();      // deactivate first; harmless no-op when not running
-    teardown();  // then release stream + device
+    std::lock_guard<std::mutex> devLk(devMutex_);
+    stopLocked();      // deactivate first; harmless no-op when not running
+    teardownLocked();  // then release stream + device
     // lastError_ is deliberately NOT cleared: closeDevice() runs right after
     // failures, and the reason must still be readable afterwards.
 }
 
-void SoapySource::teardown() noexcept {
-    if (dev_ != nullptr) {
-        if (stream_ != nullptr) {
-            try {
-                dev_->closeStream(stream_);
-            } catch (...) {
-                // Teardown must complete regardless; the handle is dead
-                // either way and unmake below still releases the device.
-            }
-        }
-        try {
-            SoapySDR::Device::unmake(dev_);
-        } catch (...) {
-        }
+bool SoapySource::deviceDead() const {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    return deviceDead_;
+}
+
+void SoapySource::noteVendorFault(const char* what) noexcept {
+    const unsigned code = static_cast<unsigned>(vendorGuardLastFaultCode());
+    core::diagWarnf(
+        "soapy: %s faulted inside the device driver (code 0x%08X) - absorbed, "
+        "the device is now abandoned and will not be called again",
+        what, code);
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    // The LATCHES first, because they allocate nothing and they are what the
+    // pipeline and every later call actually act on. A message we could not
+    // build must not turn a survived fault back into a dead process.
+    faulted_ = true;
+    deviceDead_ = true;
+    try {
+        char buf[320];
+        std::snprintf(buf, sizeof(buf),
+                      "%s faulted inside the device driver (code 0x%08X). The "
+                      "radio has been released without further driver calls; "
+                      "reconnect it and pick the source again, or restart "
+                      "FoxSDR.",
+                      what, code);
+        lastError_ = buf;
+    } catch (...) {
+    }
+}
+
+void SoapySource::clearDeviceStateLocked() noexcept {
+    if (counted_) {
+        s_openDevices.fetch_sub(1, std::memory_order_relaxed);
+        counted_ = false;
     }
     dev_ = nullptr;
     stream_ = nullptr;
-    running_ = false;
-    sampleRateHz_ = 0.0;
-    centerFrequencyHz_ = 0.0;
-    name_ = kNoDeviceName;
+    openMirror_.store(false, std::memory_order_relaxed);
+    running_.store(false, std::memory_order_relaxed);
+    sampleRateHz_.store(0.0, std::memory_order_relaxed);
+    centerFrequencyHz_.store(0.0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lk(errorMutex_);
+        name_ = kNoDeviceName;
+    }
+}
+
+void SoapySource::abandonDeviceLocked() noexcept {
+    // No driver call of any kind. The fault latches and lastError_ are left
+    // exactly as they are: they are the only record of why this happened.
+    clearDeviceStateLocked();
+}
+
+// THE DEAD-DEVICE POLICY, which is the one genuinely contestable decision in
+// this change, so here is the argument.
+//
+// Once a vendor call has raised an access violation, that module is in a state
+// it no longer guarantees: it may hold its own locks and its own allocator may
+// be torn (vendor_guard.hpp says exactly this about the enumeration trade).
+// Calling BACK into it has three possible outcomes - it works, it faults again,
+// or it BLOCKS FOREVER on a lock the faulting thread was holding. The guard
+// covers the second. It cannot cover the third, and a hang on the GUI thread is
+// strictly worse than a crash, because the user cannot even restart from it.
+//
+// So a device that has faulted once is never called again. teardown() drops the
+// handle without closeStream and without unmake. That LEAKS the device object
+// and its USB claim for the lifetime of the process, and the message says so:
+// the radio is unusable until FoxSDR is restarted. That is the honest cost, and
+// it buys the two things that matter more - the session survives (recordings,
+// plugins, every other window), and switching to another source still works.
+//
+// The alternative, one more guarded unmake, was rejected on the hang: crash [3]
+// of the three uploaded from 0.62.0 is a fault raised INSIDE teardown, so this
+// is exactly the path where the module is provably mid-collapse.
+void SoapySource::teardownLocked() noexcept {
+    if (dev_ != nullptr) {
+        if (deviceDead()) {
+            core::diagWarnf(
+                "soapy: releasing a device whose driver already faulted - the "
+                "handle is abandoned deliberately, no closeStream/unmake");
+        } else {
+            if (stream_ != nullptr) {
+                const bool completed = guardedVendorCall([this]() noexcept {
+                    try {
+                        dev_->closeStream(stream_);
+                    } catch (...) {
+                        // Teardown must complete regardless; the handle is dead
+                        // either way and unmake below still releases the device.
+                    }
+                });
+                if (!completed) { noteVendorFault("closing the device stream"); }
+            }
+            // Re-checked, not cached: closeStream may have just killed it.
+            if (!deviceDead()) {
+                const bool completed = guardedVendorCall([this]() noexcept {
+                    try {
+                        SoapySDR::Device::unmake(dev_);
+                    } catch (...) {
+                    }
+                });
+                if (!completed) { noteVendorFault("releasing the device"); }
+            }
+        }
+    }
+    clearDeviceStateLocked();
     // The FAULT state goes with the stream that raised it — there is nothing
     // left to be faulted about. lastError_ deliberately does NOT: teardown
     // runs immediately after the failures whose reason the GUI still shows
-    // (see closeDevice), and clearing it here would erase every one of them.
+    // (see closeDevice), and clearing it here would erase every one of them —
+    // including the vendor-fault message noteVendorFault just wrote.
     {
         std::lock_guard<std::mutex> lk(errorMutex_);
         faulted_ = false;
+        deviceDead_ = false;
         consecutiveErrors_ = 0;
     }
 }
@@ -367,7 +628,11 @@ void SoapySource::clearError() {
 
 bool SoapySource::faulted() const {
     std::lock_guard<std::mutex> lk(errorMutex_);
-    return faulted_;
+    // deviceDead_ is ORed in rather than relied on to have set faulted_,
+    // because clearError() clears faulted_ and does not clear the dead latch.
+    // A dead device that reported itself healthy for one poll would let the
+    // pipeline keep reading a handle nobody is allowed to touch.
+    return faulted_ || deviceDead_;
 }
 
 const char* SoapySource::lastError() const {
@@ -382,60 +647,142 @@ const char* SoapySource::lastError() const {
     return snapshot.c_str();
 }
 
+const char* SoapySource::name() const {
+    // Same snapshot scheme as lastError(): open() rewrites name_ on whatever
+    // thread it runs on (a worker, for the Source menu path), and the GUI
+    // draws the previous name in the same instant. A pointer into name_
+    // itself would dangle mid-frame.
+    static thread_local std::string snapshot;
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    snapshot = name_;
+    return snapshot.c_str();
+}
+
 bool SoapySource::start() {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr || stream_ == nullptr) {
         // Documented before-open behavior: refuse with a reason, no crash.
         setError("start() called with no device open");
         return false;
     }
-    if (running_) {
+    if (running_.load(std::memory_order_relaxed)) {
         return true;  // idempotent per the IqSource contract
     }
-    try {
-        const int ret = dev_->activateStream(stream_);
-        if (ret != 0) {
-            setError(std::string("activateStream failed: ") + SoapySDR::errToStr(ret));
-            return false;
-        }
-        running_ = true;
-        // Clears the fault too: a stream that just activated is a new one, and
-        // leaving the previous stream's fault latched would have the pipeline
-        // stop the moment it started.
-        clearError();
-        return true;
-    } catch (const std::exception& e) {
-        setError(describe(e, "activateStream failed"));
-        return false;
-    } catch (...) {
-        setError("activateStream failed: non-standard exception");
+    if (deviceDead()) {
+        // lastError() already carries the fault's own message, which is far
+        // more use than "the device is dead" written over the top of it.
         return false;
     }
+
+    // CRASH [1] OF THE THREE UPLOADED FROM 0.62.0 lands here: the user pressed
+    // Play and activateStream faulted through SoapySDR -> rtlsdrSupport ->
+    // rtlsdr -> libusb. On our own call frame, so the guard sees it.
+    struct Activate {
+        SoapySource* self;
+        int ret = 0;
+        bool threw = false;
+        std::string message;
+    } a{this};
+
+    const bool completed = guardedVendorCall([&a]() noexcept {
+        try {
+            a.ret = a.self->dev_->activateStream(a.self->stream_);
+        } catch (const std::exception& e) {
+            a.threw = true;
+            a.message = describe(e, "activateStream failed");
+        } catch (...) {
+            a.threw = true;
+            a.message = "activateStream failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        // FALSE, and faulted() is now true. Pipeline::start ignores this return
+        // by design ("a failed start is not fatal to the pipeline") and spawns
+        // the source thread anyway; that thread's first read() returns 0 on the
+        // fault latch and its faulted() poll turns this into the pipeline fault
+        // the Source panel already renders as "Device stopped: ...". So the
+        // user sees the driver crash instead of the application disappearing,
+        // through the path that already existed for an unplugged radio.
+        noteVendorFault("starting the stream");
+        return false;
+    }
+    if (a.threw) {
+        setError(std::move(a.message));
+        return false;
+    }
+    if (a.ret != 0) {
+        // errToStr is a pure code->string lookup: no device handle, no
+        // hardware, nothing a vendor module can reach. Deliberately outside
+        // the guarded body, where allocating a message is safe.
+        setError(std::string("activateStream failed: ") + SoapySDR::errToStr(a.ret));
+        return false;
+    }
+    running_.store(true, std::memory_order_relaxed);
+    // Clears the fault too: a stream that just activated is a new one, and
+    // leaving the previous stream's fault latched would have the pipeline
+    // stop the moment it started.
+    clearError();
+    return true;
 }
 
 void SoapySource::stop() {
-    if (!running_) {
+    // Serialised like every driver entry: a stop no longer interrupts a
+    // parked read cross-thread (the SoapySDR stream contract forbids that
+    // concurrent use) — it waits out at most one kReadTimeoutUs read quantum,
+    // then deactivates with the stream unowned.
+    std::lock_guard<std::mutex> devLk(devMutex_);
+    stopLocked();
+}
+
+void SoapySource::stopLocked() {
+    if (!running_.load(std::memory_order_relaxed)) {
         return;  // idempotent, and a safe no-op before open
     }
     // Mark stopped before touching the device: even if deactivation faults,
-    // this object's state machine must land in "stopped".
-    running_ = false;
-    try {
-        const int ret = dev_->deactivateStream(stream_);
-        if (ret != 0) {
-            // stop() is void, so the only reporting channel is lastError().
-            setError(std::string("deactivateStream failed: ") + SoapySDR::errToStr(ret));
+    // this object's state machine must land in "stopped". That ordering is
+    // what makes a fault below safe — running_ is already correct when it
+    // arrives, so nothing has to be repaired on the way out.
+    running_.store(false, std::memory_order_relaxed);
+    if (deviceDead()) {
+        return;  // never call a driver that has already faulted
+    }
+    struct Deactivate {
+        SoapySource* self;
+        int ret = 0;
+        bool threw = false;
+        std::string message;
+    } d{this};
+
+    const bool completed = guardedVendorCall([&d]() noexcept {
+        try {
+            d.ret = d.self->dev_->deactivateStream(d.self->stream_);
+        } catch (const std::exception& e) {
+            d.threw = true;
+            d.message = describe(e, "deactivateStream failed");
+        } catch (...) {
+            d.threw = true;
+            d.message = "deactivateStream failed: non-standard exception";
         }
-    } catch (const std::exception& e) {
-        setError(describe(e, "deactivateStream failed"));
-    } catch (...) {
-        setError("deactivateStream failed: non-standard exception");
+    });
+    if (!completed) {
+        // stop() is void, so the only reporting channel is lastError() — and
+        // now also faulted(), which the pipeline polls. The teardown that
+        // usually follows will see deviceDead() and let the handle go without
+        // touching the driver again.
+        noteVendorFault("stopping the stream");
+        return;
+    }
+    if (d.threw) {
+        setError(std::move(d.message));
+        return;
+    }
+    if (d.ret != 0) {
+        setError(std::string("deactivateStream failed: ") + SoapySDR::errToStr(d.ret));
     }
 }
 
 std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
-    if (dev_ == nullptr || stream_ == nullptr || dst == nullptr || n == 0) {
-        // Before open there is nothing to wait on: return the retry signal
-        // immediately rather than burning the 100 ms timeout on nothing.
+    if (dst == nullptr || n == 0) {
         return 0;
     }
     {
@@ -443,9 +790,31 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // for the full timeout on every call against a handle whose device
         // has gone, which would make the pipeline's shutdown crawl. The source
         // loop polls faulted() and leaves; this is the belt to that braces.
+        // Checked BEFORE devMutex_ so a faulted spin never contends the lock.
         std::lock_guard<std::mutex> lk(errorMutex_);
         if (faulted_) { return 0; }
     }
+    // The lock is held across the bounded readStream — that is the whole
+    // serialisation contract (see the header): while samples are being read,
+    // no control call can enter the driver, and while a control call is in
+    // the driver, this thread waits here instead of entering beside it.
+    std::lock_guard<std::mutex> devLk(devMutex_);
+    if (dev_ == nullptr || stream_ == nullptr) {
+        // Before open (or after a teardown that won the lock first) there is
+        // nothing to wait on: return the retry signal immediately.
+        return 0;
+    }
+    // NOT ROUTED THROUGH THE VENDOR GUARD, and that is a decision rather than
+    // an omission. vendor_guard.hpp states the limit of the trade in terms:
+    // absorbing a fault is right for a QUERY made on the user's behalf, and it
+    // "is NOT a licence to wrap the streaming path the same way - a fault in a
+    // running stream means the device is gone, and the pipeline has a real
+    // fault path for it". Three further reasons hold here specifically:
+    // readStream runs ~10 times a second forever, so absorbing would mean
+    // calling back into a torn module in a hot loop; every absorbed fault
+    // writes a crash report (guard rule 2), so a faulting stream would produce
+    // a report storm rather than one report; and none of the three signatures
+    // uploaded from 0.62.0 is in this path - all three are control calls.
     void* buffs[1] = {dst};
     int flags = 0;
     long long timeNs = 0;
@@ -504,6 +873,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
 }
 
 bool SoapySource::setSampleRateHz(double hz) {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         setError("setSampleRateHz() called with no device open");
         return false;
@@ -512,146 +882,330 @@ bool SoapySource::setSampleRateHz(double hz) {
         setError("setSampleRateHz() requires a positive rate");
         return false;
     }
-    try {
-        dev_->setSampleRate(SOAPY_SDR_RX, kChannel, hz);
-        // Readback, not echo: drivers coerce to the nearest supported rate
-        // and the DSP chain must follow the hardware's real clock.
-        sampleRateHz_ = dev_->getSampleRate(SOAPY_SDR_RX, kChannel);
-        return true;
-    } catch (const std::exception& e) {
-        setError(describe(e, "setSampleRate failed"));
-        return false;
-    } catch (...) {
-        setError("setSampleRate failed: non-standard exception");
+    if (deviceDead()) { return false; }
+
+    struct Rate {
+        SoapySource* self;
+        double want;
+        double got = 0.0;
+        bool threw = false;
+        std::string message;
+    } r{this, hz};
+
+    const bool completed = guardedVendorCall([&r]() noexcept {
+        try {
+            r.self->dev_->setSampleRate(SOAPY_SDR_RX, kChannel, r.want);
+            // Readback, not echo: drivers coerce to the nearest supported rate
+            // and the DSP chain must follow the hardware's real clock.
+            r.got = r.self->dev_->getSampleRate(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) {
+            r.threw = true;
+            r.message = describe(e, "setSampleRate failed");
+        } catch (...) {
+            r.threw = true;
+            r.message = "setSampleRate failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        // sampleRateHz_ is NOT updated. Same reasoning as the retune below: a
+        // rate we never read back is a rate we do not know, and the DSP chain
+        // running at a number the hardware may not be using is worse than it
+        // running at the last one that was actually confirmed.
+        noteVendorFault("setting the sample rate");
         return false;
     }
+    if (r.threw) {
+        setError(std::move(r.message));
+        return false;
+    }
+    sampleRateHz_.store(r.got, std::memory_order_relaxed);
+    return true;
 }
 
 bool SoapySource::setCenterFrequencyHz(double hz) {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         setError("setCenterFrequencyHz() called with no device open");
         return false;
     }
-    try {
-        dev_->setFrequency(SOAPY_SDR_RX, kChannel, hz);
-        // Same readback rationale as the sample rate: the synthesizer lands
-        // where its step size allows, and the display tracks the hardware.
-        centerFrequencyHz_ = dev_->getFrequency(SOAPY_SDR_RX, kChannel);
-        return true;
-    } catch (const std::exception& e) {
-        setError(describe(e, "setFrequency failed"));
-        return false;
-    } catch (...) {
-        setError("setFrequency failed: non-standard exception");
+    if (deviceDead()) { return false; }
+
+    // CRASH [2] OF THE THREE, and the most frequent of them: three reports from
+    // one user, RTL-SDR Blog V4, who simply changed frequency.
+    struct Tune {
+        SoapySource* self;
+        double want;
+        double got = 0.0;
+        bool threw = false;
+        std::string message;
+    } t{this, hz};
+
+    const bool completed = guardedVendorCall([&t]() noexcept {
+        try {
+            t.self->dev_->setFrequency(SOAPY_SDR_RX, kChannel, t.want);
+            // Same readback rationale as the sample rate: the synthesizer lands
+            // where its step size allows, and the display tracks the hardware.
+            t.got = t.self->dev_->getFrequency(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) {
+            t.threw = true;
+            t.message = describe(e, "setFrequency failed");
+        } catch (...) {
+            t.threw = true;
+            t.message = "setFrequency failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        // centerFrequencyHz_ IS DELIBERATELY LEFT ALONE. The requested value is
+        // not written in, and neither is a readback that never completed: after
+        // a fault the synthesiser's real state is unknown, and the least wrong
+        // number to show is the last one the hardware actually confirmed.
+        // AppWindow::retuneSourceHz already reads back from the source rather
+        // than trusting what it asked for (it feeds pluginRunner_.retune from
+        // centerFrequencyHz()), so the whole UI keeps agreeing with itself, and
+        // faulted() puts "Device stopped: ..." on screen next to it - which is
+        // what stops the readout being quietly wrong.
+        noteVendorFault("retuning the device");
         return false;
     }
+    if (t.threw) {
+        setError(std::move(t.message));
+        return false;
+    }
+    centerFrequencyHz_.store(t.got, std::memory_order_relaxed);
+    return true;
 }
 
 std::vector<std::string> SoapySource::listGainNames() {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         return {};  // no device, no gain stages — not an error
     }
-    try {
-        return dev_->listGains(SOAPY_SDR_RX, kChannel);
-    } catch (...) {
-        return {};
+    if (deviceDead()) { return {}; }
+    std::vector<std::string> out;
+    const bool completed = guardedVendorCall([this, &out]() noexcept {
+        try {
+            out = dev_->listGains(SOAPY_SDR_RX, kChannel);
+        } catch (...) {
+            out.clear();
+        }
+    });
+    if (!completed) {
+        out.clear();
+        noteVendorFault("listing the gain stages");
     }
+    return out;
 }
 
 bool SoapySource::setGainDb(const std::string& name, double db) {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         setError("setGainDb() called with no device open");
         return false;
     }
-    try {
-        dev_->setGain(SOAPY_SDR_RX, kChannel, name, db);
-        return true;
-    } catch (const std::exception& e) {
-        setError(describe(e, "setGain failed"));
-        return false;
-    } catch (...) {
-        setError("setGain failed: non-standard exception");
+    if (deviceDead()) { return false; }
+
+    struct Gain {
+        SoapySource* self;
+        const std::string* name;
+        double db;
+        bool threw = false;
+        std::string message;
+    } g{this, &name, db};
+
+    const bool completed = guardedVendorCall([&g]() noexcept {
+        try {
+            g.self->dev_->setGain(SOAPY_SDR_RX, kChannel, *g.name, g.db);
+        } catch (const std::exception& e) {
+            g.threw = true;
+            g.message = describe(e, "setGain failed");
+        } catch (...) {
+            g.threw = true;
+            g.message = "setGain failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        // False, and the Source panel's gain slider stops agreeing with a
+        // device it can no longer reach — which is the truth.
+        noteVendorFault("setting the gain");
         return false;
     }
+    if (g.threw) {
+        setError(std::move(g.message));
+        return false;
+    }
+    return true;
 }
 
 bool SoapySource::setAutoGain(bool on) {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         setError("setAutoGain() called with no device open");
         return false;
     }
-    try {
-        if (!dev_->hasGainMode(SOAPY_SDR_RX, kChannel)) {
-            // Distinct from a driver fault: the hardware simply has no AGC,
-            // and the GUI uses this to grey out the checkbox.
-            setError("device has no automatic gain mode");
-            return false;
+    if (deviceDead()) { return false; }
+
+    struct Agc {
+        SoapySource* self;
+        bool on;
+        bool hasMode = true;
+        bool threw = false;
+        std::string message;
+    } a{this, on};
+
+    const bool completed = guardedVendorCall([&a]() noexcept {
+        try {
+            if (!a.self->dev_->hasGainMode(SOAPY_SDR_RX, kChannel)) {
+                a.hasMode = false;
+                return;
+            }
+            a.self->dev_->setGainMode(SOAPY_SDR_RX, kChannel, a.on);
+        } catch (const std::exception& e) {
+            a.threw = true;
+            a.message = describe(e, "setGainMode failed");
+        } catch (...) {
+            a.threw = true;
+            a.message = "setGainMode failed: non-standard exception";
         }
-        dev_->setGainMode(SOAPY_SDR_RX, kChannel, on);
-        return true;
-    } catch (const std::exception& e) {
-        setError(describe(e, "setGainMode failed"));
-        return false;
-    } catch (...) {
-        setError("setGainMode failed: non-standard exception");
+    });
+    if (!completed) {
+        noteVendorFault("setting the gain mode");
         return false;
     }
+    if (a.threw) {
+        setError(std::move(a.message));
+        return false;
+    }
+    if (!a.hasMode) {
+        // Distinct from a driver fault: the hardware simply has no AGC, and
+        // the GUI uses this to grey out the checkbox.
+        setError("device has no automatic gain mode");
+        return false;
+    }
+    return true;
 }
 
 std::vector<std::string> SoapySource::listAntennas() {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         return {};  // no device, no ports — not an error
     }
-    try {
-        return dev_->listAntennas(SOAPY_SDR_RX, kChannel);
-    } catch (const std::exception& e) {
-        setError(describe(e, "listAntennas failed"));
-        return {};
-    } catch (...) {
-        setError("listAntennas failed: non-standard exception");
+    if (deviceDead()) { return {}; }
+
+    struct Ports {
+        SoapySource* self;
+        std::vector<std::string> out;
+        bool threw = false;
+        std::string message;
+    } p{this};
+
+    const bool completed = guardedVendorCall([&p]() noexcept {
+        try {
+            p.out = p.self->dev_->listAntennas(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) {
+            p.threw = true;
+            p.message = describe(e, "listAntennas failed");
+        } catch (...) {
+            p.threw = true;
+            p.message = "listAntennas failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        noteVendorFault("listing the antenna ports");
         return {};
     }
+    if (p.threw) {
+        setError(std::move(p.message));
+        return {};
+    }
+    return std::move(p.out);
 }
 
 bool SoapySource::setAntenna(const std::string& name) {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         setError("setAntenna() called with no device open");
         return false;
     }
-    try {
-        // Checked against the driver's own list first. Soapy drivers vary in
-        // what they do with an unknown antenna name - some throw, some ignore
-        // it silently - and a silently ignored port change is precisely the
-        // failure this whole method exists to end.
-        const std::vector<std::string> avail = dev_->listAntennas(SOAPY_SDR_RX, kChannel);
-        if (std::find(avail.begin(), avail.end(), name) == avail.end()) {
-            setError("device has no RX antenna called \"" + name + "\"");
-            return false;
+    if (deviceDead()) { return false; }
+
+    struct Port {
+        SoapySource* self;
+        const std::string* name;
+        bool known = false;
+        bool threw = false;
+        std::string message;
+    } p{this, &name};
+
+    const bool completed = guardedVendorCall([&p]() noexcept {
+        try {
+            // Checked against the driver's own list first. Soapy drivers vary
+            // in what they do with an unknown antenna name - some throw, some
+            // ignore it silently - and a silently ignored port change is
+            // precisely the failure this whole method exists to end.
+            const std::vector<std::string> avail =
+                p.self->dev_->listAntennas(SOAPY_SDR_RX, kChannel);
+            if (std::find(avail.begin(), avail.end(), *p.name) == avail.end()) {
+                return;  // known stays false
+            }
+            p.known = true;
+            p.self->dev_->setAntenna(SOAPY_SDR_RX, kChannel, *p.name);
+        } catch (const std::exception& e) {
+            p.threw = true;
+            p.message = describe(e, "setAntenna failed");
+        } catch (...) {
+            p.threw = true;
+            p.message = "setAntenna failed: non-standard exception";
         }
-        dev_->setAntenna(SOAPY_SDR_RX, kChannel, name);
-        return true;
-    } catch (const std::exception& e) {
-        setError(describe(e, "setAntenna failed"));
-        return false;
-    } catch (...) {
-        setError("setAntenna failed: non-standard exception");
+    });
+    if (!completed) {
+        noteVendorFault("selecting the antenna port");
         return false;
     }
+    if (p.threw) {
+        setError(std::move(p.message));
+        return false;
+    }
+    if (!p.known) {
+        setError("device has no RX antenna called \"" + name + "\"");
+        return false;
+    }
+    return true;
 }
 
 std::string SoapySource::antenna() {
+    std::lock_guard<std::mutex> devLk(devMutex_);
     if (dev_ == nullptr) {
         return {};
     }
-    try {
-        return dev_->getAntenna(SOAPY_SDR_RX, kChannel);
-    } catch (const std::exception& e) {
-        setError(describe(e, "getAntenna failed"));
-        return {};
-    } catch (...) {
-        setError("getAntenna failed: non-standard exception");
+    if (deviceDead()) { return {}; }
+
+    struct Which {
+        SoapySource* self;
+        std::string out;
+        bool threw = false;
+        std::string message;
+    } w{this};
+
+    const bool completed = guardedVendorCall([&w]() noexcept {
+        try {
+            w.out = w.self->dev_->getAntenna(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) {
+            w.threw = true;
+            w.message = describe(e, "getAntenna failed");
+        } catch (...) {
+            w.threw = true;
+            w.message = "getAntenna failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        noteVendorFault("reading the antenna port");
         return {};
     }
+    if (w.threw) {
+        setError(std::move(w.message));
+        return {};
+    }
+    return std::move(w.out);
 }
 
 }  // namespace cascade::source
