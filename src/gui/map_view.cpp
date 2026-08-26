@@ -327,15 +327,27 @@ void MapView::draw(float width, float height,
         }
     }
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        const ImVec2 d = ImGui::GetIO().MouseDelta;
-        centreLon_ -= static_cast<double>(d.x) / width * lonSpan;
-        // Same projection rule as the zoom: under tiles a degree of latitude
-        // is not a constant number of pixels, and the linear version left the
-        // map sliding slower than the cursor vertically.
-        if (mercator) {
-            centreLat_ = mercLat(mercY(centreLat_) - static_cast<double>(d.y) / pixPerWorld);
+        if (!followId_.empty()) {
+            // FOLLOWING WINS THE FRAME, THE USER GETS ASKED. Applying the drag
+            // here used to move the centre for one frame and the follow above
+            // snapped it straight back on the next — the map visibly fought
+            // the hand and the user could not look around. The drag is
+            // therefore not applied at all while a target is followed; the
+            // attempt is latched, and the caller shows a "stop following?"
+            // prompt so the choice is the user's rather than a tug of war.
+            followInterrupt_ = true;
         } else {
-            centreLat_ += static_cast<double>(d.y) / height * latSpan;
+            const ImVec2 d = ImGui::GetIO().MouseDelta;
+            centreLon_ -= static_cast<double>(d.x) / width * lonSpan;
+            // Same projection rule as the zoom: under tiles a degree of
+            // latitude is not a constant number of pixels, and the linear
+            // version left the map sliding slower than the cursor vertically.
+            if (mercator) {
+                centreLat_ =
+                    mercLat(mercY(centreLat_) - static_cast<double>(d.y) / pixPerWorld);
+            } else {
+                centreLat_ += static_cast<double>(d.y) / height * latSpan;
+            }
         }
     }
     centreLat_ = std::clamp(centreLat_, -89.0, 89.0);
@@ -610,15 +622,30 @@ void MapView::draw(float width, float height,
         }
         const ImU32 col =
             fadedColour((base & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT), pres.alpha);
-        for (std::size_t i = 1; i < p.points.size(); ++i) {
-            const double lonA = p.points[i - 1].lonDeg;
-            const double lonB = p.points[i].lonDeg;
+        // THE PATH'S FLAGS, honoured at last: both were declared in the ABI
+        // from the start and the first plugin to set them (the satellite
+        // tracker's predicted ground track) found the host ignoring them.
+        // DASHED draws alternating segments - a predicted line should not
+        // read with the same certainty as a recorded trail, which is the
+        // entire reason the flag exists. CLOSED joins the last vertex back to
+        // the first (a footprint circle), through the same antimeridian rule
+        // as every other segment.
+        const bool dashed = (p.flags & CASCADE_PATH_FLAG_DASHED) != 0u;
+        const bool closed = (p.flags & CASCADE_PATH_FLAG_CLOSED) != 0u;
+        const std::size_t n = p.points.size();
+        const std::size_t segs = closed ? n : (n - 1);
+        for (std::size_t s = 1; s <= segs; ++s) {
+            if (dashed && (s % 2u == 0u)) { continue; }
+            const std::size_t ia = s - 1;
+            const std::size_t ib = (s == n) ? 0 : s;
+            const double lonA = p.points[ia].lonDeg;
+            const double lonB = p.points[ib].lonDeg;
             // Do not draw the segment that wraps the antimeridian: joining
             // +179 to -179 would streak a line straight across the map, which
             // is what a naive ground-track plot always gets wrong.
             if (std::fabs(lonB - lonA) > 180.0) { continue; }
-            dl->AddLine(toScreen(p.points[i - 1].latDeg, lonA),
-                        toScreen(p.points[i].latDeg, lonB), col, 1.5f);
+            dl->AddLine(toScreen(p.points[ia].latDeg, lonA),
+                        toScreen(p.points[ib].latDeg, lonB), col, 1.5f);
         }
     }
 

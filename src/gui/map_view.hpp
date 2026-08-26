@@ -106,6 +106,15 @@ public:
     void setSelected(const std::string& id) { selectedId_ = id; }
     const std::string& selectedId() const { return selectedId_; }
 
+    // Latched when the user tried to DRAG the map while a target was being
+    // followed. Follow re-centres every frame, so applying the drag just made
+    // the view fight the hand and snap back; the drag is now IGNORED while
+    // following and the attempt recorded here instead, so the caller can ask
+    // "stop following?" once per gesture rather than letting the map stutter.
+    // The caller clears it after acting (it is not cleared by draw()).
+    bool followInterruptRequested() const { return followInterrupt_; }
+    void clearFollowInterruptRequest() { followInterrupt_ = false; }
+
     // Degrees of longitude across the viewport; smaller is more zoomed in.
     double spanDeg() const { return spanDeg_; }
 
@@ -130,6 +139,7 @@ private:
     std::string hoveredId_;
     std::string followId_;
     std::string selectedId_;
+    bool followInterrupt_ = false;
 };
 
 }  // namespace cascade::gui
