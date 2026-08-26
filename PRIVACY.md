@@ -128,6 +128,21 @@ and adds a header of its own. **A crash report:**
 | `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug together. Derived from the fault kind, the faulting module and the offset inside it — never from the time and never from anything about you. |
 | `thread` | `24180` | Which thread faulted. An operating-system thread number, meaningless outside that dead process. |
 
+**Crash reports are also written by a session that did not die**, and they
+carry exactly the fields above and nothing extra. The `reason` line says which.
+The first is a fault raised inside a third-party radio driver while the
+application was looking for hardware, which is caught and turned into "no
+devices found" instead of a crash. The second is the device search itself,
+which runs in a small separate process so that a driver falling over cannot
+take the session with it — when that process dies, the session records what
+happened to it, including when the search then succeeded on a second try. That
+small process can also write a report of its own, into the same folder and with
+the same fields, and only when diagnostics are switched on: it is handed the
+folder by the session that started it and is told nothing at all when the
+setting is off. These used to be either a dead application or nothing at all;
+none of them adds a field, and all are governed by the same switch in
+**Settings → Diagnostics** as every other report on this page.
+
 **A freeze report:**
 
 | Field | Example | Why |

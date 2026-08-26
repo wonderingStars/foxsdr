@@ -69,7 +69,26 @@ public:
     // throws: with no modules (or a module that fails to probe) the result
     // is simply empty — that is the normal moduleless-machine answer, not
     // an error.
+    //
+    // RUNS IN A CHILD PROCESS. The vendor walk loads every SDR driver on the
+    // machine and lets each one scan the USB bus, and on this bench that
+    // faults about once in twenty scans (0xC0000005 inside libusb, on a
+    // thread UHD spawns for itself — which no in-process guard can catch;
+    // proved, see source/vendor_guard.hpp). Isolating it is the only thing
+    // that works: the child dies, the parent reads an empty list and logs the
+    // exit code, and the session survives. source/soapy_enum_proc.hpp has the
+    // outcomes, the timeout and the retry; call enumerateIsolated() directly
+    // if you need to tell "no devices" from "the probe died".
     static std::vector<SoapyDeviceInfo> enumerate();
+
+    // The walk itself, in THIS process, under the structured-exception guard
+    // (source/vendor_guard.hpp). This is what the child process runs, and what
+    // enumerate() falls back to when no child can be started at all.
+    //
+    // Not for general use: it carries the crash exposure described above. It
+    // is public because the child helper is a separate translation unit, and
+    // named so that a call site reads as the deliberate choice it has to be.
+    static std::vector<SoapyDeviceInfo> enumerateInProcess();
 
     // False when SoapySDR.dll cannot be loaded (missing or broken install).
     // The DLL is delay-loaded, so the app runs fine without it — only
