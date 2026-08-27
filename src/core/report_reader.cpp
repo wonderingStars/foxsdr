@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -237,6 +239,195 @@ std::string SymbolArchive::pdbPath(const std::string& moduleName,
     return std::string();
 }
 
+bool isElfBuildId(const std::string& buildId) {
+    // 40 hex = SHA-1 GNU build id, 32 hex = MD5. A PDB key is GUID+age = 33.
+    // Lengths decide it; the hex check keeps garbage from picking a resolver.
+    if (buildId.size() != 40 && buildId.size() != 32) { return false; }
+    for (char c : buildId) {
+        const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                         (c >= 'A' && c <= 'F');
+        if (!hex) { return false; }
+    }
+    return true;
+}
+
+std::string SymbolArchive::elfSymbolPath(const std::string& moduleName,
+                                         const std::string& buildId) const {
+    if (buildId.empty() || !exists()) { return std::string(); }
+    std::error_code ec;
+    if (!moduleName.empty()) {
+        // The split DWARF first - it is the file with the line tables. The
+        // module itself second: its .symtab still names functions.
+        const fs::path debug =
+            fs::path(root_) / (moduleName + ".debug") / buildId / (moduleName + ".debug");
+        if (fs::is_regular_file(debug, ec)) { return debug.string(); }
+        const fs::path module = fs::path(root_) / moduleName / buildId / moduleName;
+        if (fs::is_regular_file(module, ec)) { return module.string(); }
+    }
+    // The by-id scan, as pdbPath does - the id directory is the actual key.
+    // .debug entries win over plain modules for the same reason as above.
+    std::string fallback;
+    for (const fs::directory_entry& e : fs::directory_iterator(fs::path(root_), ec)) {
+        if (ec) { break; }
+        if (!e.is_directory(ec)) { continue; }
+        const fs::path byId = e.path() / buildId;
+        if (!fs::is_directory(byId, ec)) { continue; }
+        for (const fs::directory_entry& f : fs::directory_iterator(byId, ec)) {
+            if (ec) { break; }
+            if (!f.is_regular_file(ec)) { continue; }
+            const std::string p = f.path().string();
+            if (p.size() > 6 && p.compare(p.size() - 6, 6, ".debug") == 0) { return p; }
+            if (fallback.empty()) { fallback = p; }
+        }
+    }
+    return fallback;
+}
+
+bool SymbolArchive::parseAddr2lineOutput(const std::string& text, SymbolResult& out) {
+    // Two lines: the function, then "file:line". "??" is addr2line's spelling
+    // for an offset outside every function; "??:0" / "??:?" for missing line
+    // info. A "(discriminator N)" suffix on the location is dropped - it
+    // distinguishes basic blocks, not lines, and nobody debugging a report
+    // wants it.
+    std::string fn;
+    std::string loc;
+    std::size_t nl = text.find('\n');
+    if (nl == std::string::npos) { return false; }
+    fn = text.substr(0, nl);
+    std::size_t nl2 = text.find('\n', nl + 1);
+    loc = text.substr(nl + 1, (nl2 == std::string::npos ? text.size() : nl2) - nl - 1);
+    while (!fn.empty() && (fn.back() == '\r' || fn.back() == ' ')) { fn.pop_back(); }
+    while (!loc.empty() && (loc.back() == '\r' || loc.back() == ' ')) { loc.pop_back(); }
+    const std::size_t disc = loc.find(" (discriminator");
+    if (disc != std::string::npos) { loc.resize(disc); }
+    if (fn.empty() || fn == "??") { return false; }
+    out.resolved = true;
+    out.function = fn;
+    // file:line splits on the LAST colon: Windows paths carry one after the
+    // drive letter.
+    const std::size_t colon = loc.rfind(':');
+    if (colon != std::string::npos && colon > 0) {
+        const std::string file = loc.substr(0, colon);
+        const std::string lineText = loc.substr(colon + 1);
+        if (file != "??" && !lineText.empty() && lineText != "0" && lineText != "?") {
+            out.file = file;
+            out.line = std::atoi(lineText.c_str());
+        }
+    }
+    return true;
+}
+
+namespace {
+
+// C:\foo\bar -> /mnt/c/foo/bar, for handing a Windows path to a tool that
+// runs inside WSL. Only used for the `wsl addr2line` candidate.
+std::string wslPath(const std::string& winPath) {
+    if (winPath.size() < 2 || winPath[1] != ':') { return winPath; }
+    std::string out = "/mnt/";
+    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(winPath[0]))));
+    for (std::size_t i = 2; i < winPath.size(); ++i) {
+        out.push_back(winPath[i] == '\\' ? '/' : winPath[i]);
+    }
+    return out;
+}
+
+// Runs a command line, captures stdout, true when it exited 0. The command is
+// built by us from probed tool names and archive paths - nothing from a
+// report reaches it, so this is not an injection surface.
+bool runCapture(const std::string& cmd, std::string& out) {
+    out.clear();
+#if defined(_WIN32)
+    // _popen hands the line to cmd.exe, which strips an outer quote pair -
+    // the standard workaround is to supply one to be stripped.
+    const std::string wrapped = "\"" + cmd + "\" 2>nul";
+    FILE* p = _popen(wrapped.c_str(), "r");
+#else
+    const std::string wrapped = cmd + " 2>/dev/null";
+    FILE* p = popen(wrapped.c_str(), "r");
+#endif
+    if (p == nullptr) { return false; }
+    char buf[512];
+    while (std::fgets(buf, sizeof(buf), p) != nullptr) { out += buf; }
+#if defined(_WIN32)
+    const int rc = _pclose(p);
+#else
+    const int rc = pclose(p);
+#endif
+    return rc == 0;
+}
+
+}  // namespace
+
+const std::string& SymbolArchive::addr2lineTool() const {
+    if (addr2lineProbed_) { return addr2line_; }
+    addr2lineProbed_ = true;
+    std::vector<std::string> candidates;
+    if (const char* env = std::getenv("FOXSDR_ADDR2LINE")) {
+        if (*env != '\0') { candidates.push_back(env); }
+    }
+    candidates.push_back("addr2line");
+#if defined(_WIN32)
+    candidates.push_back("wsl addr2line");
+#endif
+    for (const std::string& c : candidates) {
+        std::string ignored;
+        if (runCapture(c + " --version", ignored)) {
+            addr2line_ = c;
+            break;
+        }
+    }
+    return addr2line_;
+}
+
+SymbolResult SymbolArchive::resolveElf(const std::string& moduleName,
+                                       const std::string& buildId,
+                                       std::uint64_t offset) const {
+    SymbolResult out;
+    const std::string mod = moduleName.empty() ? std::string("(unknown module)") : moduleName;
+
+    const auto cached = missing_.find(buildId);
+    if (cached != missing_.end()) {
+        out.note = cached->second;
+        return out;
+    }
+
+    const std::string sym = elfSymbolPath(mod, buildId);
+    if (sym.empty()) {
+        out.note = "no symbols archived for build id " + buildId + " (" + mod +
+                   ") - look in " + root_ + " or nas:/volume1/foxsdr-symbols";
+        missing_[buildId] = out.note;
+        return out;
+    }
+
+    const std::string& tool = addr2lineTool();
+    if (tool.empty()) {
+        out.note = "build id " + buildId + " (" + mod +
+                   ") is archived at " + sym +
+                   ", but no addr2line is available to read it - install binutils, or "
+                   "set FOXSDR_ADDR2LINE to one (WSL's is found automatically)";
+        return out;
+    }
+
+    const bool viaWsl = tool.compare(0, 4, "wsl ") == 0;
+    const std::string symArg = viaWsl ? wslPath(sym) : sym;
+    char addr[32];
+    std::snprintf(addr, sizeof(addr), "0x%llx", static_cast<unsigned long long>(offset));
+    const std::string cmd = tool + " -f -C -e \"" + symArg + "\" " + addr;
+    std::string text;
+    if (!runCapture(cmd, text) || text.empty()) {
+        out.note = "addr2line could not read the archived symbols for build id " + buildId +
+                   " (" + mod + ") at " + sym;
+        return out;
+    }
+    if (!parseAddr2lineOutput(text, out)) {
+        out.note = "build id " + buildId + " (" + mod +
+                   ") is archived, but the offset falls outside every function in it - the "
+                   "report and the symbols may not describe the same binary";
+        return out;
+    }
+    return out;
+}
+
 SymbolResult SymbolArchive::resolve(const std::string& moduleName, const std::string& buildId,
                                     std::uint64_t offset) const {
     SymbolResult out;
@@ -257,6 +448,13 @@ SymbolResult SymbolArchive::resolve(const std::string& moduleName, const std::st
                    ", so build id " + buildId + " (" + mod + ") cannot be resolved";
         return out;
     }
+
+    // The id's own spelling picks the resolver: a GNU build id (40 or 32 hex)
+    // goes to addr2line against the archived .debug, on any platform; the
+    // 33-hex CodeView key continues to dbghelp below. Before this branch a
+    // Linux plugin frame answered "could not be loaded" from a resolver that
+    // could never have read it.
+    if (isElfBuildId(buildId)) { return resolveElf(mod, buildId, offset); }
 
 #if defined(_WIN32)
     if (!symReady_) {
