@@ -131,9 +131,20 @@ struct SymbolResult {
     std::string note;
 };
 
-// The symbol-server layout tools/archive-symbols.ps1 writes:
+// TWO BUILD-ID SPELLINGS, ONE ARCHIVE, and the spelling picks the resolver.
+// A Windows PDB key is the CodeView GUID plus age - 33 hex digits, rendered
+// uppercase. An ELF key is the NT_GNU_BUILD_ID note - 40 (SHA-1) or 32 (MD5)
+// hex digits, rendered lowercase, the way readelf prints it. The two cannot
+// collide on length-33, so the id itself says whether a frame wants dbghelp
+// on a PDB or addr2line on a split .debug file. Exposed as a free function
+// because the tests pin the classification directly.
+bool isElfBuildId(const std::string& buildId);
+
+// The symbol-server layout the archivers write:
 //
-//     <root>\<pdb name>\<GUID><AGE>\<pdb name>
+//     <root>\<pdb name>\<GUID><AGE>\<pdb name>            (Windows)
+//     <root>/<module>.debug/<gnu id>/<module>.debug       (Linux, split DWARF)
+//     <root>/<module>/<gnu id>/<module>                   (Linux, the module)
 //
 // The module name in a report is the BINARY's ("cascade.exe", "adsb.dll"), so
 // the PDB name is derived by replacing the extension - which is what MSVC
@@ -141,6 +152,14 @@ struct SymbolResult {
 // directory named by the build id, so a PDB with an unconventional name is
 // still found. Nothing is guessed: a build id that is not there is reported as
 // not there.
+//
+// ELF frames resolve through addr2line rather than a private DWARF parser: a
+// DWARF line-table reader is a project of its own, and addr2line is the tool
+// whose answers everyone already trusts. The binary is found in this order -
+// the FOXSDR_ADDR2LINE environment variable, `addr2line` on PATH, and (on
+// Windows) `wsl addr2line`, with Windows paths translated to /mnt/<drive>
+// form for that last case. No candidate working is reported per frame, in
+// words, not silently.
 class SymbolArchive {
 public:
     explicit SymbolArchive(std::string root);
@@ -155,6 +174,16 @@ public:
     // The archived PDB for this module and build id, or empty.
     std::string pdbPath(const std::string& moduleName, const std::string& buildId) const;
 
+    // The archived ELF symbol file for this module and GNU build id, or
+    // empty. Prefers the split .debug (full DWARF); falls back to the
+    // archived module itself (symbol table only), then to the by-id scan.
+    std::string elfSymbolPath(const std::string& moduleName, const std::string& buildId) const;
+
+    // addr2line's two-line answer (-f -C) parsed into a result: function,
+    // then "file:line" - "??" and "??:0" are its spellings for "unknown".
+    // Pure and public because the tests pin the parse directly.
+    static bool parseAddr2lineOutput(const std::string& text, SymbolResult& out);
+
     // Resolve one frame. Never throws, never asserts, and never returns a
     // half-answer: either a function (and a line, when the PDB has one) or a
     // note saying what is missing.
@@ -162,12 +191,21 @@ public:
                          std::uint64_t offset) const;
 
 private:
+    // The ELF half of resolve(); see the class comment for the tool search.
+    SymbolResult resolveElf(const std::string& moduleName, const std::string& buildId,
+                            std::uint64_t offset) const;
+    // The addr2line invocation prefix ("addr2line", "wsl addr2line", or the
+    // FOXSDR_ADDR2LINE override), probed once; empty when nothing works.
+    const std::string& addr2lineTool() const;
+
     std::string root_;
     // dbghelp keeps its state per "process handle", which for a symbol-only
     // session is just a key. A unique fake one per archive keeps this from
     // colliding with anything else in the process that uses dbghelp.
     void* symHandle_ = nullptr;
     bool symReady_ = false;
+    mutable std::string addr2line_;
+    mutable bool addr2lineProbed_ = false;
     // buildId -> loaded module base, so a stack of forty frames in one module
     // loads its PDB once rather than forty times.
     mutable std::map<std::string, std::uint64_t> loaded_;

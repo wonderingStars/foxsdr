@@ -421,5 +421,104 @@ int main() {
     }
 #endif  // _WIN32
 
+    // --- The ELF half of the archive (platform-independent) -----------------
+    //
+    // A Linux plugin frame carries a GNU build id, not a CodeView GUID, and
+    // used to fall into the PDB loader, which answered "could not be loaded"
+    // from a resolver that could never have read it. These pin the pieces the
+    // ELF path is made of; the end-to-end resolution needs a real addr2line
+    // and a real archived .debug, so it is opt-in below.
+
+    // The id's spelling picks the resolver.
+    {
+        using cascade::core::isElfBuildId;
+        CHECK(isElfBuildId("434d32df6e6af1881ac79b867e83abd94cb4b191"));  // SHA-1
+        CHECK(isElfBuildId("0123456789abcdef0123456789abcdef"));          // MD5
+        CHECK(!isElfBuildId("651FD5EB776649E7B91461B1EB1EB8C54F"));       // GUID+age, 33
+        CHECK(!isElfBuildId(""));
+        CHECK(!isElfBuildId("434d32df6e6af1881ac79b867e83abd94cb4b19z"));  // not hex
+        CHECK(!isElfBuildId("shortid"));
+    }
+
+    // addr2line's answer, parsed - including its "unknown" spellings and the
+    // discriminator suffix that must not leak into a file name.
+    {
+        using cascade::core::SymbolArchive;
+        cascade::core::SymbolResult r;
+        CHECK(SymbolArchive::parseAddr2lineOutput(
+            "cascade_plugin_query\n/src/satellite_plugin.cpp:971\n", r));
+        CHECK(r.resolved);
+        CHECK(r.function == "cascade_plugin_query");
+        CHECK(r.file == "/src/satellite_plugin.cpp");
+        CHECK(r.line == 971);
+
+        cascade::core::SymbolResult noLine;
+        CHECK(SymbolArchive::parseAddr2lineOutput("someFunction\n??:0\n", noLine));
+        CHECK(noLine.resolved);
+        CHECK(noLine.function == "someFunction");
+        CHECK(noLine.file.empty());  // symtab-only: function without a line
+
+        cascade::core::SymbolResult disc;
+        CHECK(SymbolArchive::parseAddr2lineOutput(
+            "f()\n/a/b.cpp:12 (discriminator 3)\n", disc));
+        CHECK(disc.file == "/a/b.cpp");
+        CHECK(disc.line == 12);
+
+        cascade::core::SymbolResult unknown;
+        CHECK(!SymbolArchive::parseAddr2lineOutput("??\n??:0\n", unknown));
+        CHECK(!unknown.resolved);
+    }
+
+    // The archive layout: the split .debug wins over the plain module, and
+    // the by-id scan still finds an unconventionally named entry.
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "foxsdr-elf-archive-test";
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        const char* id = "aabbccddeeff00112233445566778899aabbccdd";
+        fs::create_directories(root / "plug.so.debug" / id, ec);
+        fs::create_directories(root / "plug.so" / id, ec);
+        {
+            std::ofstream((root / "plug.so.debug" / id / "plug.so.debug").string())
+                << "dwarf";
+            std::ofstream((root / "plug.so" / id / "plug.so").string()) << "elf";
+        }
+        cascade::core::SymbolArchive archive(root.string());
+        const std::string got = archive.elfSymbolPath("plug.so", id);
+        CHECK(!got.empty());
+        CHECK(got.find(".debug") != std::string::npos);  // DWARF preferred
+        // Unconventional name: only the by-id scan can find it.
+        const char* id2 = "00112233445566778899aabbccddeeff00112233";
+        fs::create_directories(root / "oddname" / id2, ec);
+        { std::ofstream((root / "oddname" / id2 / "odd.debug").string()) << "d"; }
+        CHECK(!archive.elfSymbolPath("plug.so", id2).empty());
+        fs::remove_all(root, ec);
+    }
+
+    // OPT-IN, END TO END: CASCADE_TEST_ELF_RESOLVE=1 resolves a real offset
+    // out of the real symbol archive through a real addr2line (found via
+    // FOXSDR_ADDR2LINE, PATH, or WSL). Needs the satellites plugin's archived
+    // .debug from this tree, so it cannot run on a bare CI box - same opt-in
+    // pattern as the live blocks elsewhere in this suite.
+    if (const char* live = std::getenv("CASCADE_TEST_ELF_RESOLVE");
+        live != nullptr && live[0] == '1') {
+        const char* rootEnv = std::getenv("CASCADE_TEST_ELF_ARCHIVE");
+        const char* idEnv = std::getenv("CASCADE_TEST_ELF_ID");
+        const char* modEnv = std::getenv("CASCADE_TEST_ELF_MODULE");
+        const char* offEnv = std::getenv("CASCADE_TEST_ELF_OFFSET");
+        CHECK(rootEnv && idEnv && modEnv && offEnv);
+        if (rootEnv && idEnv && modEnv && offEnv) {
+            cascade::core::SymbolArchive archive(rootEnv);
+            const std::uint64_t off = std::strtoull(offEnv, nullptr, 0);
+            const cascade::core::SymbolResult s = archive.resolve(modEnv, idEnv, off);
+            std::printf("elf resolve: fn=%s file=%s line=%d note=%s\n",
+                        s.function.c_str(), s.file.c_str(), s.line, s.note.c_str());
+            CHECK(s.resolved);
+            CHECK(s.line > 0);
+            CHECK(s.file.find(".cpp") != std::string::npos);
+        }
+    }
+
     return testSummary("test_report_reader");
 }
