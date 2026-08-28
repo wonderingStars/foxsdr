@@ -843,6 +843,9 @@ private:
     // and sent at the NEXT start-up. Nothing here is transmitted unless the
     // user has turned reporting on.
     cascade::core::TelemetryReporter telemetryReporter_;
+    // "Running now" beats: a minimal ping every five minutes while the app is
+    // open, only while reporting is on. See HeartbeatSender in telemetry.hpp.
+    cascade::core::HeartbeatSender telemetryHeartbeat_;
     bool telemetryEnabled_ = false;
     std::string telemetryInstallId_;
     std::uint64_t telemetryLaunches_ = 0;

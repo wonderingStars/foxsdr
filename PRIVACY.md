@@ -40,6 +40,10 @@ exactly as many.
 - **Usage reporting is ON by default, and you can turn it off.** It sends the
   anonymous counts listed below and nothing else. Switching it off stops all
   reporting and deletes the identifier described below.
+- **While the application is open it also sends a small "still running" beat
+  every five minutes** — the install identifier, the version, and nothing
+  else — so we can count how many copies are running at a given moment.
+  It is governed by the same switch: reporting off means no beats, ever.
 - **No personal data is collected**, and no IP address or location is recorded.
 - **Crash and freeze reports are written to your machine, and — if you leave
   Diagnostics on — the report *text* is sent on the next start.** Not from
@@ -79,6 +83,25 @@ One report per launch, describing the session that just finished:
 That is the complete list. The payload is asserted field-by-field by an
 automated test (`tests/test_telemetry.cpp`), so a new field cannot be added
 without that test failing and this document being updated with it.
+
+### The "still running" beat
+
+While the application is open, and only while usage reporting is on, it sends
+one very small message every five minutes:
+
+| Field | Example | Why |
+|---|---|---|
+| Install identifier | `4f9c…` (the same one as above) | So five beats from one copy count as one running copy, not five. |
+| Application version | `0.65.0` | So "running now" can be split by version. |
+| Beat marker | `1` | Tells the receiving end this is a beat, not a session report. |
+
+Nothing from the session rides along: no modes, no panels, no radio model, no
+durations. The launch report above exists because it cannot say who still has
+the application open — a report is written when the application *starts* — and
+the beat exists solely to answer that one question honestly. Beats are stored
+apart from the session reports, so none of the usage figures change meaning.
+This payload is held to exactly these three fields by the same automated test
+as the launch report, and the same switch stops it: reporting off, no beats.
 
 ## Crash and freeze reports — what they contain
 

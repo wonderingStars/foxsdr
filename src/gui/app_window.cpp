@@ -1152,6 +1152,9 @@ void AppWindow::drawUi() {
     // And the sink: everything above this line can be working perfectly while
     // the user hears nothing.
     pollAudioHealth();
+    // "Still running" beat, five-minute cadence. A no-op when reporting is
+    // off, and never blocks - see HeartbeatSender::poll.
+    telemetryHeartbeat_.poll(ImGui::GetTime());
 }
 
 void AppWindow::pollAudioHealth() {
@@ -7191,7 +7194,10 @@ void AppWindow::drawUsageReportingSection() {
             telemetryEnabled_ = false;
             telemetryInstallId_.clear();
         }
-
+        // The heartbeat follows the switch in the same click: off disarms it
+        // (configure refuses the now-empty id), on arms it with the new id.
+        telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
+                                      telemetryInstallId_, cascade::versionString());
     }
 
     if (telemetryEnabled_) {
@@ -7686,6 +7692,10 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
         !cfg.telemetryPending.empty()) {
         telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
     }
+    // Heartbeats only exist while reporting is on. configure() refuses an
+    // empty id, so an opted-out run arms nothing here.
+    telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
+                                  cascade::versionString());
 }
 
 void AppWindow::crashUploadStart() {

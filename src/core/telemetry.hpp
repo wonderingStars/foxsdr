@@ -46,6 +46,7 @@
 #ifndef CASCADE_CORE_TELEMETRY_HPP
 #define CASCADE_CORE_TELEMETRY_HPP
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -165,6 +166,62 @@ public:
 
 private:
     std::thread thread_;
+};
+
+// "Still running" heartbeats - the one question the startup report cannot
+// answer. A report arrives when the app STARTS, describing the session that
+// already ended, so the dataset knows who launched and never who still has
+// the application open. A minimal beat every few minutes while it runs makes
+// "instances running right now" a measurement instead of a model.
+//
+// The payload is the smallest thing that can be counted - the install id,
+// the app version, and a beat marker - and NOTHING from the session: no
+// modes, no panels, no radio, no durations. See PRIVACY.md.
+//
+// Beats land in their OWN dataset on the Worker (foxsdr_heartbeat), never in
+// foxsdr_usage: every existing reader treats one usage row as one launch, and
+// a beat every five minutes would multiply launches, stability and daily
+// actives by ~12 per running hour.
+class HeartbeatSender {
+public:
+    HeartbeatSender() = default;
+    ~HeartbeatSender();  // joins the in-flight beat, same rule as the reporter
+
+    HeartbeatSender(const HeartbeatSender&) = delete;
+    HeartbeatSender& operator=(const HeartbeatSender&) = delete;
+
+    // Arms (or re-arms) the sender. Refuses an empty url and an id that is
+    // not exactly newInstallId()'s shape, so an opt-out run - which clears
+    // the id - can call this and be certain nothing will ever beat.
+    void configure(const std::string& url, const std::string& installId,
+                   const std::string& appVersion, std::uint64_t intervalSec = 300);
+
+    // Call often (once per frame is fine) with a monotonic seconds clock.
+    // Fires a beat when one is due and never blocks: a beat still in flight
+    // when the next is due - a network that black-holes for minutes - SKIPS
+    // that beat rather than queueing threads behind a dead socket. The first
+    // beat goes on the first poll after configure(), so a session shorter
+    // than the interval still counts as running.
+    void poll(double now);
+
+    // True when poll(now) would fire. The schedule, testable without a
+    // network or a thread.
+    bool due(double now) const;
+
+    // Exactly what goes on the wire, exposed so the payload test can hold
+    // the privacy promise to it.
+    static std::string beatJson(const std::string& id, const std::string& v);
+
+private:
+    std::string url_;
+    std::string id_;
+    std::string v_;
+    std::uint64_t interval_ = 300;
+    bool configured_ = false;
+    bool firstSent_ = false;
+    double nextAt_ = 0.0;
+    std::thread thread_;
+    std::atomic<bool> done_{false};
 };
 
 }  // namespace cascade::core
