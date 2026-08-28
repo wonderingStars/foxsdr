@@ -817,7 +817,18 @@ int AppWindow::run(int frames) {
     // tests use, and a build that reached the network during them would make
     // the suite depend on a server being up and on what that server happened
     // to say. The same rule the catalogue and config hooks already follow.
-    if (frames < 0) { startUpdateCheck(); }
+    if (frames < 0) {
+        startUpdateCheck();
+        // Heartbeats are interactive-only for the same reason - and this is
+        // measured, not hypothetical: 0.65.0 armed them in telemetryStartup,
+        // so every app-level ctest run minted a fresh isolated config (whose
+        // default is reporting on), got a brand-new install id, and fired its
+        // first-poll beat at the LIVE endpoint. One machine running one copy
+        // read as four "running right now". configure() still refuses an
+        // empty id, so an opted-out interactive run arms nothing here either.
+        telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
+                                      telemetryInstallId_, cascade::versionString());
+    }
 
     // DIAGNOSTICS, armed here rather than in the constructor: the context has
     // to describe a window that exists, and the watchdog measures the frame
@@ -7692,10 +7703,10 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
         !cfg.telemetryPending.empty()) {
         telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
     }
-    // Heartbeats only exist while reporting is on. configure() refuses an
-    // empty id, so an opted-out run arms nothing here.
-    telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
-                                  cascade::versionString());
+    // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
+    // and arming them for those put ctest's throwaway install ids on the live
+    // endpoint. run() arms them, interactive runs only, beside the update
+    // check that follows the same rule.
 }
 
 void AppWindow::crashUploadStart() {
