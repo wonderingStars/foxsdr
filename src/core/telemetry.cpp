@@ -297,4 +297,71 @@ void TelemetryReporter::send(const std::string& url, const std::string& json) {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Heartbeats
+// ---------------------------------------------------------------------------
+
+HeartbeatSender::~HeartbeatSender() {
+    if (thread_.joinable()) { thread_.join(); }
+}
+
+void HeartbeatSender::configure(const std::string& url, const std::string& installId,
+                                const std::string& appVersion, std::uint64_t intervalSec) {
+    url_ = url;
+    id_ = installId;
+    v_ = appVersion;
+    interval_ = intervalSec == 0 ? 1 : intervalSec;
+    // validInstallId, not just non-empty: an opt-out clears the id, and this
+    // refusing anything but a real id is what makes "off means off" hold for
+    // beats without a separate flag to keep in sync.
+    configured_ = !url_.empty() && validInstallId(id_);
+    firstSent_ = false;
+    nextAt_ = 0.0;
+}
+
+std::string HeartbeatSender::beatJson(const std::string& id, const std::string& v) {
+    nlohmann::json j;
+    j["id"] = id;
+    j["v"] = v;
+    j["beat"] = 1;
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+bool HeartbeatSender::due(double now) const {
+    if (!configured_) { return false; }
+    if (!firstSent_) { return true; }
+    return now >= nextAt_;
+}
+
+void HeartbeatSender::poll(double now) {
+    if (!due(now)) {
+        // Reap a finished beat thread between beats, so the next one can
+        // start without the join landing on the beat that is due.
+        if (thread_.joinable() && done_.load()) { thread_.join(); }
+        return;
+    }
+    // The schedule advances whether or not this beat can be sent: a network
+    // that black-holes produces MISSING beats, never a backlog of threads.
+    firstSent_ = true;
+    nextAt_ = now + static_cast<double>(interval_);
+    if (thread_.joinable()) {
+        if (!done_.load()) { return; }  // previous beat still in flight: skip
+        thread_.join();
+    }
+#if defined(_WIN32)
+    done_.store(false);
+    const std::string url = url_;
+    const std::string json = beatJson(id_, v_);
+    std::atomic<bool>* done = &done_;
+    thread_ = std::thread([url, json, done]() {
+        try {
+            postJson(url, json);
+        } catch (...) {
+            // Silent by design, same as the reporter.
+        }
+        done->store(true);
+    });
+#endif
+}
+
 }  // namespace cascade::core

@@ -717,6 +717,11 @@ int main(int argc, char** argv) {
     // the middle one must take the child with it, which is what the job object
     // in runOneChild buys. All three are this same executable, so one count by
     // image name covers the lot.
+    // Win32-only from here to the armed-fault block: job objects, handle
+    // inheritance and TerminateProcess have no Linux counterpart in this
+    // design (the POSIX child is process-group + SIGKILL, covered above), and
+    // the helpers these blocks use are themselves defined under _WIN32.
+#ifdef _WIN32
     {
         setMode("hang");
         const int before = selfProcessCount();
@@ -751,6 +756,7 @@ int main(int argc, char** argv) {
                     before, peak, now);
         CHECK(now == before);
     }
+#endif  // _WIN32
 
     // --- THE CHILD GETS THREE HANDLES, AND NOTHING ELSE ---------------------
     //
@@ -765,6 +771,7 @@ int main(int argc, char** argv) {
     // must not have and asks whether it has it. The parent's own check on the
     // same handle is the positive control: without it, a probe that could
     // never say "inherited" would pass this test by being broken.
+#ifdef _WIN32
     {
         std::error_code ec;
         const std::filesystem::path probeFile =
@@ -806,6 +813,7 @@ int main(int argc, char** argv) {
         setEnvVar(kHandleNameVar, "");
         std::filesystem::remove(probeFile, ec);
     }
+#endif  // _WIN32
 
     // --- A HELPER THAT FAULTS IN CASCADE'S OWN CODE STILL FILES A REPORT ----
     //
@@ -823,6 +831,7 @@ int main(int argc, char** argv) {
     //                      unchanged.
     //   given nothing      the fast quiet death, and NO report - because
     //                      diagnostics off means off in the child too.
+#ifdef _WIN32
     {
         std::error_code ec;
         const std::filesystem::path dir =
@@ -859,6 +868,7 @@ int main(int argc, char** argv) {
 
         std::filesystem::remove_all(dir, ec);
     }
+#endif  // _WIN32
 
     // --- CAPTURE IS HANDED DOWN, AND A CONTAINED FAULT IS VISIBLE -----------
     //

@@ -209,6 +209,68 @@ void testOsAndArchSayNothingIdentifying() {
     CHECK(arch == "x64" || arch == "arm64" || arch == "x86" || arch == "unknown");
 }
 
+void testBeatPayloadContainsOnlyTheAgreedFields() {
+    // THE FIELD INVENTORY FOR BEATS. A heartbeat exists to say "running right
+    // now" and nothing else - if a session field ever creeps in, this fails
+    // and the privacy notice has to change in the same edit.
+    const std::string id = newInstallId();
+    const std::string out = HeartbeatSender::beatJson(id, "0.65.0");
+    const nlohmann::json j = nlohmann::json::parse(out);
+
+    const std::set<std::string> allowed = {"id", "v", "beat"};
+    std::set<std::string> actual;
+    for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
+    CHECK(actual == allowed);
+
+    CHECK(j["id"] == id);
+    CHECK(j["v"] == "0.65.0");
+    CHECK(j["beat"] == 1);
+}
+
+void testBeatScheduleFiresImmediatelyThenAtInterval() {
+    // The url is http:// on purpose: postJson refuses non-https before any
+    // network I/O, so the schedule can be driven for real - threads and all -
+    // without a request ever leaving the machine.
+    HeartbeatSender h;
+    h.configure("http://beat.invalid/", newInstallId(), "0.65.0", 300);
+
+    // First beat is due immediately, so a session shorter than the interval
+    // still counts as running.
+    CHECK(h.due(1000.0));
+    h.poll(1000.0);
+    // ...and not again until the interval has passed.
+    CHECK(!h.due(1000.5));
+    CHECK(!h.due(1299.0));
+    CHECK(h.due(1300.0));
+    h.poll(1300.0);
+    CHECK(!h.due(1301.0));
+
+    // Re-arming resets the schedule: the first beat after configure() is
+    // immediate again.
+    h.configure("http://beat.invalid/", newInstallId(), "0.65.0", 300);
+    CHECK(h.due(1301.0));
+}
+
+void testBeatRefusesToArmWithoutARealId() {
+    // Opt-out clears the install id; configure() refusing anything that is
+    // not exactly newInstallId()'s shape is what makes "off means off" hold
+    // for beats. An unconfigured sender is never due and poll() is a no-op.
+    HeartbeatSender h;
+    h.configure("http://beat.invalid/", "", "0.65.0", 300);
+    CHECK(!h.due(0.0));
+    h.poll(0.0);
+    CHECK(!h.due(1e9));
+
+    HeartbeatSender h2;
+    h2.configure("http://beat.invalid/", "not-an-id", "0.65.0", 300);
+    CHECK(!h2.due(0.0));
+
+    // And no url means nowhere to send, which also refuses to arm.
+    HeartbeatSender h3;
+    h3.configure("", newInstallId(), "0.65.0", 300);
+    CHECK(!h3.due(0.0));
+}
+
 }  // namespace
 
 int main() {
@@ -219,5 +281,8 @@ int main() {
     testModeSecondsAccrueAcrossFrames();
     testPanelsReachThePayload();
     testOsAndArchSayNothingIdentifying();
+    testBeatPayloadContainsOnlyTheAgreedFields();
+    testBeatScheduleFiresImmediatelyThenAtInterval();
+    testBeatRefusesToArmWithoutARealId();
     return testSummary("test_telemetry");
 }

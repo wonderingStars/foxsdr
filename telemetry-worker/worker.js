@@ -64,6 +64,25 @@ export default {
       return new Response('bad id', { status: 400 });
     }
 
+    // A heartbeat: "this install is running right now". Counted in its OWN
+    // dataset, never in foxsdr_usage - every reader of the usage dataset
+    // treats one row as one launch, and a beat every five minutes would
+    // multiply launches, stability and daily actives by ~12 per running
+    // hour. Nothing but the id, the version and the marker is accepted: a
+    // beat must not be able to grow into a second session report.
+    // "Running now" is then read with
+    //   SELECT count(DISTINCT index1) FROM foxsdr_heartbeat
+    //   WHERE timestamp > NOW() - INTERVAL '10' MINUTE
+    if (body.beat === 1) {
+      if (env.HEARTBEAT) {
+        env.HEARTBEAT.writeDataPoint({
+          indexes: [id],
+          blobs: [clamp(body.v, 48)],
+        });
+      }
+      return new Response(null, { status: 204 });
+    }
+
     // The modes map is flattened to the single most-used mode plus its
     // seconds. Storing the whole map would need a blob per mode, and the
     // question it answers ("which demodulator do people actually use") is

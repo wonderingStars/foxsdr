@@ -10,6 +10,15 @@ compatibility_date = "2026-08-18"
 binding = "USAGE"
 dataset = "foxsdr_usage"
 
+# Heartbeats live apart from usage ON PURPOSE: one usage row means one
+# launch to every reader (the widget, usage.ps1), and a beat every five
+# minutes would multiply launches, stability and daily actives by ~12 per
+# running hour. "Running now" = count(DISTINCT index1) over the last ten
+# minutes of this dataset.
+[[analytics_engine_datasets]]
+binding = "HEARTBEAT"
+dataset = "foxsdr_heartbeat"
+
 # Deliberately NOT set: no KV, no D1, no R2, no logpush. There is nowhere
 # for this Worker to persist a request even if a future edit tried to.
 
