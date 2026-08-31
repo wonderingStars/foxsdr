@@ -365,9 +365,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // bookkeeping, so comparing either would make the config
            // permanently "changed" and write the file every two seconds for
            // as long as the application is open. They ride along on whatever
-           // save the fields below trigger, and on the unconditional save at
-           // exit — which is the one that matters, because it is where the
-           // finished report and the clean-exit marker are written.
+           // save the fields below trigger, and on the two unconditional
+           // saves at exit — the pre-join one that carries the finished
+           // report, and the post-join one that writes the clean-exit marker
+           // only once the pipeline has actually shut down.
            //
            // telemetryLaunches changing at start-up is load-bearing: it is
            // what makes the first debounced save happen, and that save is
@@ -976,11 +977,17 @@ int AppWindow::run(int frames) {
     // fetch during the run brought into force.
     if (pluginStatusHook_) { reportPluginStatus(); }
 
-    // Clean-exit save, unconditional: cheap, and it guarantees the on-disk
+    // Final-state save, unconditional: cheap, and it guarantees the on-disk
     // config matches the final session state even when the debounce never
     // fired (e.g. a change made less than 2 s before closing the window).
     // Runs before pipeline_.stop() so the snapshot reads live state.
-    telemetryCleanExit_ = true;  // reached only on the normal shutdown path
+    //
+    // telemetryCleanExit_ is deliberately still FALSE here. The clean-exit
+    // marker is written by a second save AFTER pipeline_.stop() below —
+    // because a death during the pipeline join is a death. Setting it before
+    // the join, as this path did until 0.66.0, made the field's worst shipped
+    // freeze class (a shutdown that wedges in that join) count as a clean
+    // exit and offer no report.
     // BEFORE the save, so the sweep's dedup and rate-limit memory reaches the
     // file - and before anything else on this path, so a transfer in flight is
     // cancelled rather than waited out. This is the line that makes "a hanging
@@ -994,6 +1001,35 @@ int AppWindow::run(int frames) {
     // dead display; stop before teardown so the join happens while the object
     // graph is still fully alive.
     pipeline_.stop();
+
+    // THE CLEAN-EXIT MARKER, after the pipeline join. The join above — DSP
+    // threads, the CAT server, the USB device stack — is where the worst
+    // shipped shutdown freeze lived, so the marker must not be on disk before
+    // it completes; a death in there now leaves telemetryCleanExit=false and
+    // is counted, where until 0.66.0 it read as a clean exit.
+    //
+    // It rewrites THE SNAPSHOT THE SAVE ABOVE JUST WROTE with one field
+    // changed, rather than calling saveConfigNow() again, and that shape is
+    // the point. A second currentConfig() would re-derive every value at a
+    // moment when the session is half torn down: it rebuilds the pending
+    // usage report through telemetryJournal, whose clock is glfwGetTime()
+    // (0.0 once GLFW is terminated — every session would then report zero
+    // seconds), and it re-reads live source state through a pipeline that has
+    // just been stopped. Neither can happen to a snapshot taken while
+    // everything was still alive. Residual, stated plainly: a death in the
+    // GL/GLFW teardown below still counts as a clean exit — the watchdog,
+    // stopped last as ever, is what covers that stretch.
+    telemetryCleanExit_ = true;
+    if (!configPath_.empty()) {
+        cascade::core::AppConfig marked = savedCfg_;
+        marked.telemetryCleanExit = true;
+        std::string err;
+        if (cascade::core::ConfigStore::save(configPath_, marked, err)) {
+            savedCfg_ = marked;
+        } else {
+            std::fprintf(stderr, "cascade: %s\n", err.c_str());
+        }
+    }
 
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys

@@ -434,6 +434,19 @@ int main() {
         std::error_code exeSizeEc;
         const std::uintmax_t exeArchivedSize = fs::file_size(archived, exeSizeEc);
         CHECK(!exeSizeEc && exeArchivedSize > 0);
+
+        // ...and the RVA->name map beside it, which is what the crash
+        // dashboard's symbolic grouping runs on. A build whose PDB is
+        // archived but whose map is not produces reports the server can only
+        // group by raw offset - the exact instability (Windows updates moving
+        // ntdll, unrelated faults colliding) the map exists to end. The
+        // archive script warns-and-continues on export failure, so THIS is
+        // where that regression goes red.
+        const fs::path symmap = fs::path(CASCADE_SYMBOL_ARCHIVE_DIR) / pdb / id / "symmap.json.gz";
+        std::printf("symbol map lookup: %s\n", symmap.string().c_str());
+        std::error_code mapSizeEc;
+        const std::uintmax_t mapSize = fs::file_size(symmap, mapSizeEc);
+        CHECK(!mapSizeEc && mapSize > 0);
     }
 
 #if defined(_WIN32)
@@ -483,6 +496,15 @@ int main() {
         std::error_code sizeEc;
         const std::uintmax_t archivedSize = fs::file_size(archived, sizeEc);
         CHECK(!sizeEc && archivedSize > 0);
+
+        // The exporter must work for a module that is not cascade.exe too -
+        // a faulting PLUGIN frame is exactly as much in need of a name as one
+        // of ours. Same non-throwing pattern: a missing map is the regression
+        // this red check names.
+        const fs::path symmap = root / pdb / id / "symmap.json.gz";
+        std::error_code mapEc;
+        const std::uintmax_t mapSize = fs::file_size(symmap, mapEc);
+        CHECK(!mapEc && mapSize > 0);
 
         // THE INDEX, BYTE BY BYTE AT THE FRONT. A BOM here is invisible in
         // every editor and fatal to `grep "^2026"`.

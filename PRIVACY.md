@@ -215,6 +215,8 @@ One request per report, on the **next** start after the failure, to
 | `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. |
 | `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug. Derived from the fault kind, the faulting module and the offset — never from the time and never from anything about you. |
 | `os`, `arch` | `Windows 10.0.22631`, `x64` | Whether a fault is specific to a Windows version. |
+| `reason` | `access violation`, or `fault in a third-party SDR module, absorbed…` | The report's own reason line, verbatim. This is what separates a fault the application **survived** (a driver fault absorbed by the vendor-call guard) from one that killed it — without it the two are indistinguishable rows. Empty for a freeze report, which has no such line. |
+| `code` | `0xC0000005` | The Windows exception code, verbatim from the report. A code, not content. Empty for a freeze report. |
 | `installId` | `4f9c…`, **or empty** | The same anonymous identifier the usage report uses, so the receiving end can stop one machine flooding it. **If usage reporting is off there is no identifier and this is sent empty** — a crash report never creates one. |
 | `plugins` | `[{name, version, buildId}]` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |
 | `context` | `mode`, `source`, `sampleRate`, `deviceOpen`, `sdrModel` | What the receiver was doing. **`sampleRate` is the sample rate, not a tuned frequency.** Serial numbers are stripped from `sdrModel`, exactly as in the usage report. |

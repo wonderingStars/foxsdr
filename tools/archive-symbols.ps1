@@ -277,6 +277,46 @@ foreach ($pair in @(@($pdbPath, $pdbDest), @($Binary, $binDest))) {
     if ($need) { Copy-Item -LiteralPath $pair[0] -Destination $pair[1] -Force }
 }
 
+# THE RVA->NAME MAP, exported beside the archived PDB. This is what the crash
+# dashboard's symbolic grouping runs on (foxsdrWebsite crash.go): the report
+# quotes module+offset per frame, the server looks the offset up in the map
+# for that build id and groups faults by the nearest OUR-CODE function name -
+# stable across Windows updates, vendor driver installs and our own releases,
+# where raw offsets are none of those. ~90 KB of gzip JSON per build, so the
+# durable mirror carries it at no real cost. Deploying one to the dashboard is
+# copying it to the server's data/symbols/<BUILDID>.json.gz.
+#
+# Same failure contract as the rest of this script: a build must never fail
+# because symbol tooling hiccuped, so every path out of here is Warn + carry
+# on. tests/test_diagnostics.cpp asserts the map exists for the build it
+# archives, which is where a silent regression goes red.
+$mapDest = Join-Path (Split-Path -Parent $pdbDest) "symmap.json.gz"
+if (-not (Test-Path -LiteralPath $mapDest)) {
+    $exporter = Join-Path $PSScriptRoot "export-symbol-map.py"
+    if (Test-Path -LiteralPath $exporter) {
+        # NO 2>&1, and ErrorActionPreference dropped to Continue for the
+        # native call: this script runs under EAP=Stop, where PS 5.1 wraps any
+        # native stderr line reached through a redirect in an ErrorRecord and
+        # THROWS - a py warning would abort the export that was otherwise
+        # succeeding. Success is judged by the file existing, not by streams.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & py -3.14 $exporter --pdb $pdbPath --module $exeName --build-id $buildId --out $mapDest |
+                ForEach-Object { Write-Host "archive-symbols: $_" }
+            if (-not (Test-Path -LiteralPath $mapDest)) {
+                Warn "symbol-map export produced no file for $buildId - symbolic grouping will fall back to raw offsets for this build"
+            }
+        } catch {
+            Warn "symbol-map export failed for ${buildId}: $($_.Exception.Message)"
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
+    } else {
+        Warn "export-symbol-map.py not found beside this script; no symbol map for $buildId"
+    }
+}
+
 # The human index. The archive is keyed for machines; this is the file a
 # future session greps when it has a version and wants a build id, or a build
 # id and wants to know which release it belongs to.
@@ -312,6 +352,9 @@ if ($EmitPaths) {
     # own and an absolute Windows path would be meaningless there.
     Write-Output (Join-Path (Join-Path $pdbName $buildId) $pdbName)
     Write-Output (Join-Path (Join-Path $exeName $binKey) $exeName)
+    if (Test-Path -LiteralPath $mapDest) {
+        Write-Output (Join-Path (Join-Path $pdbName $buildId) "symmap.json.gz")
+    }
     Write-Output "index.txt"
 }
 exit 0

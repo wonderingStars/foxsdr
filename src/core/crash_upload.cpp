@@ -220,11 +220,21 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                     out.signature = v;
                 } else if (k == "address") {
                     addressText = v;
+                } else if (k == "reason") {
+                    // Carried since 0.66.0: the reason is what tells the
+                    // dashboard an ABSORBED vendor fault (the guard filed
+                    // this report and the process continued) from a process
+                    // death at the same address. Dropping it made the two
+                    // identical rows, and a survived teardown fault reopened
+                    // a fixed signature because nobody could tell.
+                    out.reason = v;
+                } else if (k == "code") {
+                    // The exception code, e.g. 0xC0000005, verbatim.
+                    out.code = v;
                 }
-                // reason, code, thread, stalled-ms, threshold-ms and threads
-                // are deliberately not carried: `kind` and `signature` say
-                // what happened and group it, and the rest is either in the
-                // stack or meaningless outside the dead process.
+                // thread, stalled-ms, threshold-ms and threads are
+                // deliberately not carried: the rest is either in the stack
+                // or meaningless outside the dead process.
                 continue;
             }
             if (k == "version") {
@@ -345,6 +355,12 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     j["signature"] = r.signature;
     j["os"] = r.os;
     j["arch"] = r.arch;
+    // Verbatim from the report file; empty for a hang report, whose writer
+    // has no such lines. Always present rather than omitted-when-empty — the
+    // inventory below is exact both ways, and an optional key would let a
+    // future writer stop sending them without any test noticing.
+    j["reason"] = r.reason;
+    j["code"] = r.code;
     // Empty when usage reporting is off, because then it does not exist. A
     // crash report must not be the thing that mints an identifier the user
     // switched off. See crash_upload.hpp.
@@ -459,8 +475,8 @@ const std::vector<std::string>& uploadFieldNames() {
     // emits IN BOTH DIRECTIONS.
     static const std::vector<std::string> names = {
         "schema",  "kind",    "version", "commit",  "buildId", "module",
-        "offset",  "signature", "os",    "arch",    "installId", "plugins",
-        "context", "log",     "threads"};
+        "offset",  "signature", "os",    "arch",    "reason",  "code",
+        "installId", "plugins", "context", "log",   "threads"};
     return names;
 }
 
