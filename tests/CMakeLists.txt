@@ -1,5 +1,7 @@
 # One executable per test_*.cpp, discovered by glob. Agents add test files
-# only; this file itself never needs editing for a new test.
+# only; this file itself almost never needs editing for a new test — the one
+# exception is a test that needs a command-line argument, handled below by
+# name for test_json_dump_policy.
 file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
 foreach(src ${CASCADE_TESTS})
     get_filename_component(name "${src}" NAME_WE)
@@ -24,7 +26,19 @@ foreach(src ${CASCADE_TESTS})
                     $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:${name}>)
     endif()
 
-    add_test(NAME ${name} COMMAND ${name})
+    if(name STREQUAL "test_json_dump_policy")
+        # The only test in this loop that takes an argument: it scans src/
+        # for nlohmann `.dump(` sites missing the error_handler_t::replace
+        # guard (see tests/test_json_dump_policy.cpp), so it needs the
+        # absolute src/ directory on its command line. This branch touches
+        # only this one test's registration — every other name still gets
+        # the plain `add_test(NAME ${name} COMMAND ${name})` below unchanged,
+        # so adding this cannot register any test's NAME twice (CMake treats
+        # that as a hard configure error, not a warning).
+        add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}/src")
+    else()
+        add_test(NAME ${name} COMMAND ${name})
+    endif()
     # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
     # it forever — ctest's default per-test timeout is 1500 s.
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)

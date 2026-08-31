@@ -294,6 +294,22 @@ void armEnumerateHelperProcess(const char* crashDir);
 // information than a corpse.
 int runEnumerateHelper(const char* crashDir = nullptr);
 
+// The child's ONE serialisation step, as a named function: everything between
+// "the walk produced these devices" and "this is the line on stdout". It
+// exists so the invalid-UTF-8 regression (field crash 6477BA87 - a vendor
+// label that made dump() throw and killed the child) is testable WITHOUT
+// running runEnumerateHelper in a test process. Calling the helper in-process
+// arms the child's own quiet-death exception filter and performs a REAL
+// vendor enumeration - the full USB walk, in the test - and on a bench with a
+// B200 attached that combination killed the test binary about one run in
+// twenty with no named failure (the known UHD discovery fault, terminated by
+// the very filter the helper had just installed). This function is the
+// genuine production code the helper calls, not a copy of it.
+std::string enumerationReportJson(bool runtimeAvailable,
+                                  unsigned long long guardedCalls,
+                                  bool captureArmed,
+                                  const std::vector<SoapyDeviceInfo>& devices);
+
 }  // namespace cascade::source
 
 #endif  // CASCADE_SOURCE_SOAPY_ENUM_PROC_HPP

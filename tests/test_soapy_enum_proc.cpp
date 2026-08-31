@@ -50,11 +50,18 @@
 
 #include "core/crash_handler.hpp"
 
+#include <SoapySDR/Device.hpp>
+#include <SoapySDR/Registry.hpp>
+#include <SoapySDR/Types.hpp>
+#include <SoapySDR/Version.hpp>
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -66,6 +73,9 @@
 #ifdef _WIN32
 #include <windows.h>
 
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
 #include <tlhelp32.h>
 #endif
 
@@ -384,6 +394,51 @@ std::string readAll(const std::filesystem::path& p) {
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
+#ifdef _WIN32
+// Redirects fd 1 (stdout) to `path` for the duration of `fn`, restores it
+// unconditionally - even when `fn` throws - and returns what landed in the
+// file.
+//
+// This is the dup2-to-a-temp-file fallback the lane brief asked for: nothing
+// in this file already captures an IN-PROCESS stdout write. Every other block
+// that reads a child's answer does it through the CreatePipe/drain machinery
+// inside soapy_enum_proc.cpp itself, which only exists for a SPAWNED child -
+// runEnumerateHelper() called directly, in THIS process (see the invalid-UTF-8
+// block below for why that is the real seam and not a workaround), writes
+// straight to this process's own stdout with fwrite/fflush, so something has
+// to intercept fd 1 before that reaches the console or gets lost.
+template <typename Fn>
+std::string captureStdout(const std::filesystem::path& path, Fn&& fn) {
+    std::fflush(stdout);
+    const int fd = ::_fileno(stdout);
+    const int savedFd = ::_dup(fd);
+    const int fileFd = ::_open(path.string().c_str(),
+                               _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY,
+                               _S_IREAD | _S_IWRITE);
+    if (fileFd != -1) {
+        ::_dup2(fileFd, fd);
+        ::_close(fileFd);
+    }
+    // The exception is rethrown only AFTER fd 1 is restored, so a throwing
+    // `fn` (the exact failure mode 6477BA87 was) cannot leave every later
+    // std::printf in this suite writing into a temp file nobody reads.
+    std::exception_ptr pending;
+    try {
+        fn();
+    } catch (...) {
+        pending = std::current_exception();
+    }
+    std::fflush(stdout);
+    if (savedFd != -1) {
+        ::_dup2(savedFd, fd);
+        ::_close(savedFd);
+    }
+    if (pending) { std::rethrow_exception(pending); }
+    return readAll(path);
+}
+
+#endif  // _WIN32
+
 // Every crash-*.txt in `dir`, oldest first by name (the writer's sequence
 // number is in the name, so lexical order is write order).
 std::vector<std::filesystem::path> crashReports(const std::filesystem::path& dir) {
@@ -532,6 +587,99 @@ int main(int argc, char** argv) {
         // Capture off in this process, so the parent passes no crash
         // directory and the child says so.
         CHECK(!r.childCaptureArmed);
+    }
+
+    // --- INVALID UTF-8 IN A VENDOR LABEL DOES NOT KILL THE CHILD ------------
+    //
+    // Field crash 6477BA87: the child serialises vendor device labels/args
+    // with j.dump(), and dump() VALIDATES UTF-8 by default. A vendor find()
+    // function that hands back one byte that is not valid UTF-8 - which is
+    // third-party text, entirely outside this program's control - made dump()
+    // throw nlohmann::json::type_error.316, uncaught, and the child died with
+    // 0xE06D7363 (a C++ exception surfacing as a Windows exit code). The
+    // parent then misfiled that exit as "the known libusb fault, contained":
+    // an ordinary encoding bug in our own serialiser, reported as somebody
+    // else's memory corruption. The fix is error_handler_t::replace at the
+    // dump() call in soapy_enum_proc.cpp's runEnumerateHelper().
+    //
+    // THIS DRIVES enumerationReportJson() - the child's real serialisation
+    // step, extracted as a named seam for exactly this test (see its
+    // declaration). The first version of this block called
+    // runEnumerateHelper() in-process instead, reasoning that it was "the
+    // narrowest reach that is still the genuine production function". It was
+    // also, measured on this bench, a ~5%-per-run suite killer: the helper's
+    // first act is arming the child's quiet-death exception filter, and its
+    // second is a REAL vendor enumeration - the full USB walk, radioconda's
+    // modules and all - so the B200's known discovery fault terminated the
+    // whole test binary with no named failure about one run in twenty. The
+    // seam keeps the assertion honest (it is the code the child runs, not a
+    // copy) without either side effect.
+    {
+        std::vector<cascade::source::SoapyDeviceInfo> devices(2);
+        // 0xC3 opens a two-byte UTF-8 sequence; 0x28 ('(') is not a valid
+        // continuation byte (those run 0x80-0xBF) - malformed exactly the way
+        // the field label was. The args string carries a lone 0xFF, invalid
+        // anywhere in UTF-8, so BOTH serialised fields are exercised.
+        devices[0].label = std::string("bad \xC3\x28 label");
+        devices[0].args = std::string("driver=fake,serial=\xFF");
+        devices[1].label = "clean device";
+        devices[1].args = "driver=clean";
+
+        // 1. A caught exception here IS the bug this test exists to catch:
+        // this is exactly the type_error.316 that used to reach nobody's
+        // catch block and kill the child outright.
+        int threw = 0;
+        std::string line;
+        try {
+            line = cascade::source::enumerationReportJson(true, 1, false, devices);
+        } catch (const std::exception& e) {
+            std::printf("bad-utf8 serialisation threw: %s\n", e.what());
+            ++threw;
+        } catch (...) {
+            std::printf("bad-utf8 serialisation threw a non-std exception\n");
+            ++threw;
+        }
+        CHECK(threw == 0);
+        CHECK(!line.empty());
+
+        // 2. The emitted JSON parses back - REPLACE means the byte sequence
+        // was rewritten into something valid, not merely that nothing crashed.
+        const nlohmann::json parsed = nlohmann::json::parse(line, nullptr, false);
+        CHECK(!parsed.is_discarded());
+        CHECK(parsed.is_object());
+
+        // 3. The damage is a replacement character, not a dropped device or a
+        // truncated label - and the CLEAN device is untouched, proving replace
+        // is a per-byte repair rather than a blanket rewrite.
+        bool sawReplacementLabel = false;
+        bool sawReplacementArgs = false;
+        bool cleanIntact = false;
+        if (parsed.contains("devices") && parsed["devices"].is_array()) {
+            for (const auto& d : parsed["devices"]) {
+                if (!d.is_object() || !d.contains("label")) { continue; }
+                const std::string label = d["label"].get<std::string>();
+                const std::string args =
+                    d.contains("args") ? d["args"].get<std::string>() : std::string();
+                if (label.rfind("bad ", 0) == 0 &&
+                    label.find("\xEF\xBF\xBD") != std::string::npos &&
+                    label.find("label") != std::string::npos) {
+                    sawReplacementLabel = true;
+                    if (args.find("\xEF\xBF\xBD") != std::string::npos) {
+                        sawReplacementArgs = true;
+                    }
+                }
+                if (label == "clean device" && args == "driver=clean") {
+                    cleanIntact = true;
+                }
+            }
+        }
+        std::printf("bad-utf8 label repaired: %s, args repaired: %s, clean intact: %s\n",
+                    sawReplacementLabel ? "true" : "false",
+                    sawReplacementArgs ? "true" : "false",
+                    cleanIntact ? "true" : "false");
+        CHECK(sawReplacementLabel);
+        CHECK(sawReplacementArgs);
+        CHECK(cleanIntact);
     }
 
     // --- "no devices" is an ANSWER, not a failure ---------------------------

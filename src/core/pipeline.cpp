@@ -13,7 +13,7 @@
 //
 // For SELF-PACED sources (hardware) the DEVICE is the clock: read() blocks
 // (bounded) until samples exist, so the loop just reads and writes the ring
-// with no pacing sleep at all — any sleep of our own would let a real-time
+// with no pacing sleep at all â€” any sleep of our own would let a real-time
 // device's samples pile up and be lost. Zero returns (a bounded block that
 // timed out empty) are retried immediately; the bound on read() is also what
 // lets stop()/setSource() quiesce the thread promptly (see setSource).
@@ -21,6 +21,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/pipeline.hpp"
 
+#include "core/diag_log.hpp"
 #include "core/plugin_runner.hpp"
 
 #include <algorithm>
@@ -52,7 +53,7 @@ std::size_t ringCapacityFor(const Pipeline::Config& cfg) {
 
 // Target channel rate: the VFO decimation is chosen as round(rate / 200 kHz)
 // (clamped >= 1) so the channel lands as close to 200 kHz as an integer
-// decimation allows — wide enough for WFM (+/-75 kHz deviation plus guard)
+// decimation allows â€” wide enough for WFM (+/-75 kHz deviation plus guard)
 // while cutting the demod/AGC/squelch work to a small fraction of the input
 // rate. For any input rate >= 300 kHz this puts the channel in
 // [150 kHz, 250 kHz]; below 300 kHz the decimation is 1 and the channel IS
@@ -67,7 +68,7 @@ unsigned decimationForInputRate(double rateHz) {
 
 // Input-rate acceptance for setInputRateHz (documented in the header):
 // [8 kHz, 61.44 MHz] AND an integer channel rate, because RationalResampler
-// needs an exact integer L/M ratio for channelRate -> 48 kHz — a fractional
+// needs an exact integer L/M ratio for channelRate -> 48 kHz â€” a fractional
 // channel rate could only be approximated, silently detuning all audio.
 // A NaN rate fails the range test (every comparison with NaN is false).
 constexpr double kMinInputRateHz = 8000.0;
@@ -136,8 +137,8 @@ constexpr double kFmDeviationHz = 75000.0;
 //
 // The AGC now sees the INTERLEAVED two-channel stream (see the header), i.e.
 // two samples per channel-rate instant, so the rates are halved to keep those
-// same real-time constants. For mono content — every non-WFM mode, where the
-// two channels are identical — the halved rate applied twice per sample
+// same real-time constants. For mono content â€” every non-WFM mode, where the
+// two channels are identical â€” the halved rate applied twice per sample
 // reproduces the original single update to first order, so the audio level
 // behaviour is unchanged from the mono-only build.
 constexpr float kAgcTarget = 0.5f;
@@ -161,6 +162,16 @@ constexpr float kMeterAlpha = 0.0005f;
 // Rolling audio tap depth (test support): 4096 samples = 85 ms at 48 kHz,
 // exactly the DFT window --selftest analyzes.
 constexpr std::size_t kAudioTapSize = 4096;
+
+// How long Pipeline::stop() waits for the source thread to actually exit
+// after asking it to, before giving up and abandoning it (see stop()'s own
+// comment and field report 4214EAE4). Generous relative to every legitimate
+// exit path â€” SoapySource::stop() bounds its own driver-lock wait to 1.5 s
+// (kControlLockWait in soapy_source.cpp) before this wait even starts, and a
+// free-running source notices the cleared flags within one 10 ms chunk â€” so
+// hitting this bound at all means the driver's read() genuinely never
+// returned, not that the thread was merely slow.
+constexpr std::chrono::seconds kSourceJoinWait{3};
 
 }  // namespace
 
@@ -238,7 +249,7 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     // Both decoders bake the composite rate into their filter designs, so a
     // rate change replaces them outright. Settings that are user choices
     // (de-emphasis, force-mono) are re-applied; decoded CONTENT is not
-    // carried over — a rate change is a stream discontinuity, and a PS name
+    // carried over â€” a rate change is a stream discontinuity, and a PS name
     // that survived one would be exactly the stale readout resetRds() exists
     // to prevent.
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
@@ -289,6 +300,24 @@ bool Pipeline::openAudioDevice(int deviceIndex) {
 
 Pipeline::~Pipeline() {
     stop();
+    // Defense in depth for the same zombie-safety policy setSource() enforces
+    // (see there and stop()): if stop() just abandoned the source thread and
+    // no setSource() has run since to release it, external_ still nominally
+    // owns the object that thread may be parked inside, and the member
+    // destructors that run right after this constructor body would free it
+    // out from under a thread this process no longer controls. release()
+    // leaks it instead, for the identical reason setSource() does.
+    //
+    // Pipeline's one caller (AppWindow) holds it for the entire process
+    // lifetime, so this path is not reachable today â€” a detached thread that
+    // outlives process teardown never gets to run further instructions on
+    // either platform this ships for. The fix costs nothing, and a future
+    // caller with a shorter-lived Pipeline must not have to rediscover this
+    // the hard way.
+    if (zombieSource_) {
+        static_cast<void>(external_.release());
+        zombieSource_ = false;
+    }
 }
 
 cascade::source::SigGen& Pipeline::sigGen() {
@@ -310,7 +339,7 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     // cannot join anything, so after a DSP-thread fault run_ is false while
     // the source thread is still alive and, for a self-paced source, still
     // parked inside read() waiting on the device. Skipping the handshake then
-    // destroyed the outgoing source underneath that read — a use-after-free
+    // destroyed the outgoing source underneath that read â€” a use-after-free
     // reached by nothing more exotic than "the radio stopped, pick another
     // one". joinable() answers the question that actually matters, and is
     // false exactly when a previous stop()/setSource already joined, so the
@@ -318,18 +347,38 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     //
     // The handshake itself is unchanged and its order still matters: flag the
     // source loop down, abort any in-flight bounded read via the source's own
-    // stop() — a read that returns after the flag flips must see srcRun_
-    // false — then join. After the join no thread can touch the outgoing
+    // stop() â€” a read that returns after the flag flips must see srcRun_
+    // false â€” then join. After the join no thread can touch the outgoing
     // source. active_->stop() is idempotent per the IqSource contract, so
     // running it for an already-exited thread costs nothing.
-    if (srcThread_.joinable()) {
-        srcRun_.store(false, std::memory_order_relaxed);
-        active_->stop();
-        srcThread_.join();
+    // The SAME bounded quiesce as stop() - this is the very path the field
+    // hang took ("the user switched sources twice"), and it carried a plain
+    // unbounded join long after stop() was bounded. See
+    // quiesceSourceThreadLocked() for the policy; if it had to abandon the
+    // thread, zombieSource_ is now set and the release below handles the
+    // outgoing object.
+    quiesceSourceThreadLocked();
+    // ZOMBIE-SAFETY: a PRIOR stop() may have already given up on this exact
+    // thread and detached it instead of joining (see stop()'s abandonment
+    // policy) â€” in which case the block above found nothing joinable and did
+    // nothing, but the detached thread can still be parked inside the
+    // OUTGOING source's read(), or about to write one more block through it
+    // before it next tests its own generation's stop token (sourceThreadBody
+    // below). Destroying that object here would be a use-after-free reached
+    // by nothing more exotic than "the radio hung, pick another one" â€” so it
+    // is released (deliberately leaked) instead, the same trade
+    // soapy_source.cpp's dead-device policy makes for the identical reason.
+    // Once released it is no longer this swap's problem: clear the flag so a
+    // later stop()/setSource() does not leak a second, perfectly healthy
+    // source it never needed to.
+    if (zombieSource_) {
+        static_cast<void>(external_.release());
+        zombieSource_ = false;
     }
-    // Swap. Destroying the outgoing external source here is race-free: the
-    // source thread is joined (or never existed), and it was the only other
-    // toucher.
+    // Swap. Destroying the outgoing external source here is race-free on
+    // every path but the one just handled above: the source thread is
+    // joined, never existed, or (zombieSource_) was already released, so
+    // there is nothing left for external_ to own.
     if (s) {
         external_ = std::move(s);
         active_ = external_.get();
@@ -350,9 +399,10 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
         active_->start();
         srcRun_.store(true, std::memory_order_relaxed);
         // cfg_.sampleRateHz is read HERE, under controlMutex_, and handed to
-        // the thread; see sourceThreadMain's declaration.
-        srcThread_ =
-            std::thread(&Pipeline::sourceThreadMain, this, cfg_.sampleRateHz);
+        // the thread; see sourceThreadMain's declaration. spawnSourceThread
+        // also mints this generation's stop token/exit latch â€” zombie-safety
+        // for whatever stop() eventually ends this session (see stop()).
+        spawnSourceThread(cfg_.sampleRateHz);
     }
 }
 
@@ -383,30 +433,44 @@ void Pipeline::start() {
     // pipeline has already joined both threads), and a DSP-thread fault leaves
     // the SOURCE thread alive and, for a self-paced source, parked inside
     // read() waiting on the device. Joining it without the abort meant Start
-    // could not return until that read timed out on its own — a device timeout
+    // could not return until that read timed out on its own â€” a device timeout
     // is commonly a second or more, and controlMutex_ is held throughout, so
     // pressing Start after the radio dropped froze the application for the
     // whole of it. active_->stop() is idempotent per the IqSource contract,
     // and srcRun_ is already false on the fault path; both are set here anyway
     // so the handshake reads the same as the other two call sites.
-    if (srcThread_.joinable()) {
-        srcRun_.store(false, std::memory_order_relaxed);
-        active_->stop();
-        srcThread_.join();
-    }
+    // Bounded like the other two call sites (see quiesceSourceThreadLocked):
+    // this join is reached after a fault, and a DSP fault leaves the source
+    // thread alive - possibly parked in the very driver read that caused it.
+    // Play must not become the freeze Stop was cured of.
+    quiesceSourceThreadLocked();
     if (dspThread_.joinable()) { dspThread_.join(); }
+
+    // A quiesce that had to ABANDON the thread leaves the current source with
+    // a parked driver thread still inside it. Restarting that same source
+    // would put a second thread into a driver that has not returned from the
+    // first - the exact two-threads-in-one-driver corruption 0.63.0 ended.
+    // Refuse, in words the toolbar shows; the user's way forward is picking
+    // another source (setSource leaks the zombie safely) or restarting.
+    if (zombieSource_) {
+        noteThreadFault("source thread",
+                        "the radio's driver is holding an abandoned thread and "
+                        "this source cannot restart; pick another source or "
+                        "restart FoxSDR");
+        return;
+    }
 
     // A restart is a fresh acquisition: re-prime the average and discard
     // samples left in the ring from the previous run, so the first frames
     // reflect the current generator settings rather than stale history.
-    // Draining here is safe — both threads are joined at this point.
+    // Draining here is safe â€” both threads are joined at this point.
     estimator_.reset();
     std::complex<float> scratch[256];
     while (ring_.read(scratch, 256) != 0) {}
 
     // Same fresh-acquisition treatment for the audio chain: clear filter
     // histories, oscillator phases, AGC gain, resampler state, and the meter.
-    // Squelch has no reset by design — its gate/hysteresis state re-converges
+    // Squelch has no reset by design â€” its gate/hysteresis state re-converges
     // within milliseconds and carrying it over cannot corrupt audio. Tuning
     // (mode, offset, bandwidth, threshold) survives the restart.
     {
@@ -442,8 +506,100 @@ void Pipeline::start() {
     srcRun_.store(true, std::memory_order_relaxed);
     dspRun_.store(true, std::memory_order_relaxed);
     // Same snapshot-under-controlMutex_ as the setSource respawn above.
-    srcThread_ = std::thread(&Pipeline::sourceThreadMain, this, cfg_.sampleRateHz);
+    // spawnSourceThread also mints this generation's stop token/exit latch
+    // (zombie-safety for stop(); see there).
+    spawnSourceThread(cfg_.sampleRateHz);
     dspThread_ = std::thread(&Pipeline::dspThreadMain, this);
+}
+
+// THE ONE QUIESCE POLICY, shared by every caller that must get the source
+// thread out of the way: stop(), setSource() and start(). It exists as a
+// single function because the first version of this policy was applied to
+// stop() alone - and the field hang it was written for (4214EAE4) arrives
+// through setSource() at least as often: the user does not press Stop when a
+// radio wedges, they pick another source, and that path still carried the
+// old unbounded join. One helper is what makes "which call sites are safe"
+// a non-question.
+//
+// Caller holds controlMutex_. On return the source thread is either joined
+// or abandoned (detached, zombieSource_ set, counted); either way no join on
+// srcThread_ can block after this returns.
+void Pipeline::quiesceSourceThreadLocked() {
+    // NOTHING TO QUIESCE, NOTHING TOUCHED - and the guard is load-bearing,
+    // not an optimisation. The first draft of this helper ran its abort
+    // unconditionally, which changed start()'s first-ever call from "spawn
+    // the thread" to "call active_->stop() on a source that has never read":
+    // for a stateful test double (and for any real source whose stop() latches
+    // a release), that pre-emptively opened its abort gate, and the FIRST
+    // genuine read then fell straight through it. Two long-standing suites
+    // caught it within minutes. joinable() is false exactly when there is no
+    // thread - never spawned, already joined, or already abandoned - and in
+    // every one of those states the source must not be told to abort.
+    if (!srcThread_.joinable()) { return; }
+    // This generation's dead-man switch first, so even a thread that never
+    // sees the flags below (parked in a driver) is condemned before anything
+    // waits on it. An abandoned earlier generation holds its OWN token copy;
+    // this store cannot reach it.
+    if (srcStopToken_) { srcStopToken_->store(false, std::memory_order_relaxed); }
+    srcRun_.store(false, std::memory_order_relaxed);
+    // Abort an in-flight bounded read BEFORE joining: a self-paced source
+    // may be parked inside read() waiting for samples, and its stop() is the
+    // contract's abort path (IqSource requires bounded/abortable reads for
+    // exactly this shutdown). Idempotent per contract, so calling it on a
+    // never-started or already-stopped source is harmless.
+    active_->stop();
+    if (srcThread_.joinable()) {
+        // BOUNDED â€” "joinable" only promises the thread has not yet been
+        // joined or detached, never that it will ever finish. A vendor
+        // driver's read() can ignore active_->stop() entirely and simply
+        // never return from readStream (field report 4214EAE4: a Mirics
+        // device that outlived its own 20 ms timeout parameter).
+        // SoapySource::stop() bounds ITS OWN wait for the driver lock
+        // (kControlLockWait in soapy_source.cpp), but that lock is exactly
+        // what the parked read already holds, so bounding it there cannot
+        // make the read itself return. Before this fix the unconditional
+        // srcThread_.join() that used to sit here waited for that read
+        // forever, on whatever thread called Pipeline::stop() â€” the GUI
+        // thread, straight out of the toolbar's Stop button.
+        //
+        // srcExitFuture_ is fulfilled with set_value_at_thread_exit from
+        // inside the thread's own lambda (spawnSourceThread), which is what
+        // makes "the future is ready" mean "the OS thread is genuinely
+        // finished, join() below will return immediately" rather than merely
+        // "sourceThreadMain returned" (the two can differ by thread-local
+        // teardown time). The wait exists so the join that follows it is
+        // provably fast, never so the wait replaces the join.
+        const bool exited =
+            srcExitFuture_.valid() &&
+            srcExitFuture_.wait_for(kSourceJoinWait) == std::future_status::ready;
+        if (exited) {
+            srcThread_.join();
+        } else {
+            // ABANDONMENT â€” the same policy soapy_source.cpp's dead-device
+            // latch already established one level down, extended here to
+            // the thread itself: the interface must survive a driver that
+            // will not answer, even at the cost of a leaked thread and
+            // (until the next setSource()/~Pipeline() lets it go â€” see
+            // there) the source object it may still be parked inside.
+            // zombieSource_ is what turns that leak into a documented,
+            // DELIBERATE one instead of a later use-after-free.
+            srcThread_.detach();
+            zombieSource_ = true;
+            // Counted for tests and diagnostics: "how many driver
+            // threads has this process abandoned" is the number that
+            // proves a healthy stop() took the join path - a timing
+            // assertion alone cannot tell a fast join from an instant
+            // abandonment (found by mutating kSourceJoinWait to 0:
+            // every test still passed).
+            srcThreadsAbandoned_.fetch_add(1, std::memory_order_relaxed);
+            core::diagWarnf(
+                "pipeline: source thread did not exit within %lld s of "
+                "stop() - the driver's read() never returned; abandoning "
+                "the thread rather than freezing the interface (field-hang "
+                "class 4214EAE4)",
+                static_cast<long long>(kSourceJoinWait.count()));
+        }
+    }
 }
 
 void Pipeline::stop() {
@@ -451,15 +607,13 @@ void Pipeline::stop() {
     run_.store(false, std::memory_order_relaxed);
     srcRun_.store(false, std::memory_order_relaxed);
     dspRun_.store(false, std::memory_order_relaxed);
-    // Abort an in-flight bounded read BEFORE joining: a self-paced source
-    // may be parked inside read() waiting for samples, and its stop() is the
-    // contract's abort path (IqSource requires bounded/abortable reads for
-    // exactly this shutdown). Idempotent per contract, so calling it on a
-    // never-started or already-stopped source is harmless. Free-running
-    // threads instead notice the flags within one sleep quantum (<= ~10 ms
-    // source, ~1 ms DSP); joinable() makes a second stop() a no-op.
-    active_->stop();
-    if (srcThread_.joinable()) { srcThread_.join(); }
+    // This generation's dead-man switch, cleared alongside the flags above â€”
+    // see spawnSourceThread and the header's zombie-safety addendum on
+    // setSource(). A thread that ends up abandoned a few lines down keeps
+    // its OWN copy of the shared_ptr (captured by value at spawn), so this
+    // store can only ever reach the CURRENT generation; an already-abandoned
+    // earlier one holds a token this line never touches.
+    quiesceSourceThreadLocked();
     if (dspThread_.joinable()) { dspThread_.join(); }
 }
 
@@ -505,7 +659,7 @@ void Pipeline::setStereoEnabled(bool on) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     stereoEnabled_ = on;
     // Through StereoFm's own ramped gate, so the toggle fades between mono
-    // and stereo instead of stepping — a step in the difference channel is an
+    // and stereo instead of stepping â€” a step in the difference channel is an
     // audible click in both speakers.
     stereo_->setForceMono(!on);
 }
@@ -637,7 +791,7 @@ void Pipeline::setVfoOffsetHz(double offsetHz) {
     vfo_.setOffsetHz(offsetHz);
     // A retune is a different station: the RDS content and the pilot lock
     // that belonged to the old one must not survive it. (The SOURCE centre
-    // moving is invisible from here — that caller has to call resetRds().)
+    // moving is invisible from here â€” that caller has to call resetRds().)
     resetDecodersLocked();
 }
 
@@ -684,7 +838,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
     std::lock_guard<std::mutex> lk(controlMutex_);
 
     // Cheap no-op: the chain already follows this exact rate. Checked before
-    // validation on purpose — "keep doing what you are doing" can never fail.
+    // validation on purpose â€” "keep doing what you are doing" can never fail.
     if (rateHz == cfg_.sampleRateHz) { return true; }
 
     unsigned decim = 1;
@@ -711,19 +865,19 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // Unlike setSource, gating the quiesce on run_ here was never a
     // use-after-free: setInputRateHz rebuilds only DSP-side blocks, every one
     // of them under audioMutex_, which processAudioBlock holds for its entire
-    // body — so the rebuild was already mutually excluded from a
+    // body â€” so the rebuild was already mutually excluded from a
     // dying-but-still-live DSP thread, and it never touches the source, which
     // is what setSource's bug destroyed underneath a parked read. That was
     // tested rather than assumed (14400 rate changes across 240 pipelines
     // faulted from both threads: no tear, no hang, no leak). This is a
     // consistency fix, not a bug fix, and joinable() is false exactly when a
     // previous stop()/setInputRateHz already joined and true exactly while a
-    // spawned thread has not been — so on every healthy path (never started,
+    // spawned thread has not been â€” so on every healthy path (never started,
     // stopped, running) it agrees with `live` and nothing changes.
     //
     // It is still worth making on two counts: it reaps the corpse a fault
     // leaves behind instead of carrying it to the next start(), and it closes
-    // the one route by which this function could have killed the process —
+    // the one route by which this function could have killed the process â€”
     // with the quiesce skipped, the respawn below is a single loosened gate
     // away from assigning a std::thread onto a joinable one, which is an
     // immediate std::terminate. The RESUME deliberately stays on `live`: a
@@ -737,18 +891,18 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // DSP loop has already left, so joining the corpse changes nothing a caller
     // can see (start() would otherwise join it, stop() and ~Pipeline too). The
     // post-fault rate change IS pinned by test_pipeline.cpp's last block, but
-    // that block passes with either spelling by construction — this line is a
+    // that block passes with either spelling by construction â€” this line is a
     // consistency and robustness choice, not a defect fix, and no regression
     // test can guard it without exposing thread identity the class does not
     // publish.
     //
-    // The handshake itself is unchanged — clear the DSP loop's private gate,
+    // The handshake itself is unchanged â€” clear the DSP loop's private gate,
     // then join. run_ stays set (on the live path) so the source thread keeps
     // feeding the ring throughout (a full ring drops overflow by design, never
     // blocks the source); the DSP loop's 1 ms idle sleep bounds the join
     // latency. After the join NO thread touches the estimator or the audio
     // chain, so the rebuild below is race-free by construction. The partial
-    // FFT block the thread was accumulating is discarded — a rate switch is a
+    // FFT block the thread was accumulating is discarded â€” a rate switch is a
     // stream discontinuity anyway, so mixing old-rate and new-rate samples in
     // one FFT would be worse than dropping less than one frame.
     if (dspThread_.joinable()) {
@@ -780,7 +934,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         demod_.setMode(mode);
         // A rebuilt demodulator starts at the library default de-emphasis;
         // WFM's belongs to StereoFm (see the header), so switch it off again
-        // — leaving it on would put a second 50 us pole in the audio and
+        // â€” leaving it on would put a second 50 us pole in the audio and
         // gut the 57 kHz subcarrier RDS needs.
         demod_.setDeemphasisUs(0.0);
 
@@ -791,7 +945,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
 
         // Squelch: reconstructed so its ~5 ms ramp and hold time stay real
         // time at the new channel rate; the requested threshold survives.
-        // Gate state restarts closed — a rate switch is a stream restart.
+        // Gate state restarts closed â€” a rate switch is a stream restart.
         // 2x, because it gates the interleaved two-channel stream.
         squelch_ = cascade::dsp::Squelch(2.0 * chanRate);
         squelch_.setThresholdDb(squelchDb_);
@@ -799,7 +953,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // Resampler ratio arithmetic: chanRate is proven integral by
         // acceptedInputRate and is < 300 kHz for every accepted rate, so the
         // unsigned casts are exact; RationalResampler reduces L/M by gcd
-        // internally, making channelRate -> 48 kHz exact — e.g. 150000 ->
+        // internally, making channelRate -> 48 kHz exact â€” e.g. 150000 ->
         // 8/25, 187500 -> 32/125, 200000 -> 6/25.
         resampler_ = cascade::dsp::RationalResampler(
             static_cast<unsigned>(kAudioRateHz + 0.5),
@@ -822,7 +976,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // New rate regime: relearn the gain and the S-meter from neutral.
         // (Their per-sample time constants stay tuned for ~200 kHz channels,
         // which every accepted rate >= 300 kHz lands near; below that the
-        // ballistics merely slow proportionally — an accepted tradeoff.)
+        // ballistics merely slow proportionally â€” an accepted tradeoff.)
         agc_.reset();
         meter_.reset();
 
@@ -859,7 +1013,7 @@ std::uint64_t Pipeline::audioSamplesProduced() const {
 
 void Pipeline::setIqRecorder(Recorder* r) {
     // audioMutex_ (not a new lock): the DSP thread holds it across every
-    // writeIq call, so this assignment cannot interleave with a write — the
+    // writeIq call, so this assignment cannot interleave with a write â€” the
     // serialization guarantee the header documents for record toggles.
     std::lock_guard<std::mutex> lk(audioMutex_);
     iqRecorder_ = r;
@@ -905,8 +1059,8 @@ void Pipeline::noteThreadFault(const char* where, const char* what) {
         faultMsg_ = std::string(where) + ": " + (what != nullptr ? what : "unknown");
     }
     faulted_.store(true, std::memory_order_relaxed);
-    // Bring the rest of the pipeline down with it. A half-running pipeline —
-    // source dead, DSP still spinning on an empty ring — presents as "running"
+    // Bring the rest of the pipeline down with it. A half-running pipeline â€”
+    // source dead, DSP still spinning on an empty ring â€” presents as "running"
     // in the UI while producing nothing, which is worse than a clean stop.
     srcRun_.store(false, std::memory_order_relaxed);
     dspRun_.store(false, std::memory_order_relaxed);
@@ -920,14 +1074,40 @@ std::string Pipeline::faultMessage() const {
     return faultMsg_;
 }
 
+// Mints a fresh stop token + exit latch for one generation of the source
+// thread and spawns it against them. See the header (srcStopToken_ /
+// srcExitFuture_) and stop() below for the full zombie-safety contract this
+// exists to serve; start() and the setSource() resume path both call this
+// rather than constructing std::thread directly, so the two spawn sites
+// cannot drift apart on it.
+void Pipeline::spawnSourceThread(double chainRateHz) {
+    auto token = std::make_shared<std::atomic<bool>>(true);
+    srcStopToken_ = token;
+    auto exitPromise = std::make_shared<std::promise<void>>();
+    srcExitFuture_ = exitPromise->get_future();
+    // token and exitPromise are captured BY VALUE (shared_ptr copies), which
+    // is what makes this generation's identity independent of whatever
+    // srcStopToken_/srcExitFuture_ hold by the time this thread actually
+    // runs â€” a later spawn overwrites both members with a DIFFERENT pair,
+    // and this closure never sees that change.
+    srcThread_ = std::thread([this, chainRateHz, token, exitPromise]() {
+        sourceThreadMain(chainRateHz, token);
+        // Fulfilled from INSIDE the thread, after sourceThreadMain has fully
+        // returned, so "the future is ready" means "this OS thread is done
+        // and join() will return immediately" â€” see stop()'s use of it.
+        exitPromise->set_value_at_thread_exit();
+    });
+}
+
 // Both worker bodies run inside a catch-all. An exception that escapes a
 // std::thread is an immediate std::terminate (Windows reports it as
 // 0xC0000409 fail-fast in ucrtbase), and vendor drivers genuinely do throw
-// from deep inside a stream read when the USB device is pulled mid-capture —
+// from deep inside a stream read when the USB device is pulled mid-capture â€”
 // that is precisely how unplugging the SDR used to kill the whole app.
-void Pipeline::sourceThreadMain(double chainRateHz) {
+void Pipeline::sourceThreadMain(double chainRateHz,
+                                std::shared_ptr<std::atomic<bool>> stopToken) {
     try {
-        sourceThreadBody(chainRateHz);
+        sourceThreadBody(chainRateHz, *stopToken);
     } catch (const std::exception& e) {
         noteThreadFault("source thread", e.what());
     } catch (...) {
@@ -945,7 +1125,8 @@ void Pipeline::dspThreadMain() {
     }
 }
 
-void Pipeline::sourceThreadBody(double chainRateHz) {
+void Pipeline::sourceThreadBody(double chainRateHz,
+                                const std::atomic<bool>& stopToken) {
     using clock = std::chrono::steady_clock;
 
     // Stable for this thread's entire lifetime: setSource only changes
@@ -959,10 +1140,10 @@ void Pipeline::sourceThreadBody(double chainRateHz) {
     // rate, not the DSP chain's: setInputRateHz deliberately never touches
     // the source side, and a caller-installed source may legitimately run at
     // a different rate than the pipeline was constructed with. Read once at
-    // thread entry — sources that can change rate are re-read on the next
+    // thread entry â€” sources that can change rate are re-read on the next
     // (re)spawn, and rate changes on a live free-running source are refused
     // by the sources themselves (SigGenSource/file are fixed-rate). Fall back
-    // to the chain's rate if a source reports a nonsense rate — as a SNAPSHOT
+    // to the chain's rate if a source reports a nonsense rate â€” as a SNAPSHOT
     // handed over at spawn (see the header), never a read of cfg_ from here:
     // setInputRateHz writes that field under controlMutex_ without ever
     // joining this thread, so reading it here would be a data race on the one
@@ -975,18 +1156,42 @@ void Pipeline::sourceThreadBody(double chainRateHz) {
 
     if (src.selfPaced()) {
         // The device paces: read() blocks (bounded) until samples arrive, so
-        // there is NO clock of our own — a pacing sleep on the DELIVERING
+        // there is NO clock of our own â€” a pacing sleep on the DELIVERING
         // path would let a real-time device's samples back up and be lost. A
         // zero return (bounded block timed out with nothing available) is
         // retried, and the source's abortable stop() is what lets stop() and
-        // setSource() get this thread out of read() promptly.
-        while (run_.load(std::memory_order_relaxed) &&
+        // setSource() get this thread out of read() promptly â€” WHEN the
+        // driver honours that abort at all. stopToken is the fallback for
+        // when it does not: it is THIS generation's own dead-man switch
+        // (see the header and Pipeline::stop()), so a thread that stop()
+        // eventually gives up on and abandons still wakes into a token that
+        // reads false forever, even if a brand new session's run_/srcRun_
+        // have since gone back to true â€” without it, an abandoned thread
+        // that finally returns from a stuck read would resume looping and
+        // start writing into ring_ beside whatever NEW source thread is now
+        // running, which is exactly the two-threads-in-one-driver class of
+        // corruption 0.63.0 existed to end, just one level up (the ring
+        // instead of the vendor stack).
+        // TOKEN FIRST in the condition, and re-tested IMMEDIATELY after the
+        // read returns, before anything else. Both orderings are load-bearing
+        // for the abandoned case: a zombie waking from a stuck read must not
+        // touch ONE member of a Pipeline that has moved on - not the ring
+        // (dual-producer corruption beside the new session's thread), not
+        // noteThreadFault (it would kill the new session with the old
+        // source's message), not even the run_ flags in the loop condition
+        // (a shorter-lived Pipeline may be destroyed under it). The token and
+        // the leaked source are the only memory an abandoned thread may still
+        // read - the token because its shared_ptr is captured by value, the
+        // source because setSource()/~Pipeline deliberately leak it.
+        while (stopToken.load(std::memory_order_relaxed) &&
+               run_.load(std::memory_order_relaxed) &&
                srcRun_.load(std::memory_order_relaxed)) {
             const std::size_t got = src.read(buf.data(), chunk);
+            if (!stopToken.load(std::memory_order_relaxed)) { return; }
             if (got != 0) {
                 // Same overflow policy as the free-running path: if the DSP
                 // side stalled and the ring is full, the excess is dropped
-                // (write() accepts what fits) — never block a live device.
+                // (write() accepts what fits) â€” never block a live device.
                 ring_.write(buf.data(), got);
             }
             // Device loss does NOT arrive here as an exception: a source that
@@ -994,7 +1199,7 @@ void Pipeline::sourceThreadBody(double chainRateHz) {
             // SoapySource catches it and reports through faulted() instead.
             // Which means the catch-all in sourceThreadMain never fires for
             // the commonest hardware failure there is, and without this poll
-            // the loop simply kept reading a dead handle — the spectrum
+            // the loop simply kept reading a dead handle â€” the spectrum
             // froze, the app still called itself running, and the user saw a
             // silently dead radio. Route it into the same fault path.
             if (src.faulted()) {
@@ -1005,8 +1210,8 @@ void Pipeline::sourceThreadBody(double chainRateHz) {
                 // Retry, but not instantly. The comment above used to claim
                 // the source's own block bound paced this loop; that holds
                 // only while the source still blocks. One that returns 0
-                // without blocking — a closed or dead handle, a driver whose
-                // readStream fails fast — turned the retry into a hot spin
+                // without blocking â€” a closed or dead handle, a driver whose
+                // readStream fails fast â€” turned the retry into a hot spin
                 // measured at 44 million reads in 200 ms, i.e. a whole core
                 // burned to produce nothing. The backoff runs ONLY when there
                 // were no samples, so a healthy device never reaches it and
@@ -1021,14 +1226,25 @@ void Pipeline::sourceThreadBody(double chainRateHz) {
 
     // Free-running source: read() always fills the chunk immediately, so
     // this loop supplies the real-time pacing (absolute deadlines, catch-up
-    // and stall-resync — see the file header comment).
+    // and stall-resync â€” see the file header comment).
     const auto period = std::chrono::duration_cast<clock::duration>(
         std::chrono::duration<double>(kChunkSec));
     auto next = clock::now() + period;
 
-    while (run_.load(std::memory_order_relaxed) &&
+    // stopToken alongside the pre-existing flags for the same reason as the
+    // self-paced branch above: it is what keeps an abandoned generation of
+    // this thread from ever mistaking a later session's run_/srcRun_ for
+    // permission to resume. Free-running sources cannot actually stall
+    // read() (it always fills the chunk immediately by contract), so this
+    // branch never triggers stop()'s abandonment path in practice â€” the
+    // check costs one atomic load and keeps the two loops' shutdown
+    // semantics identical rather than silently diverging.
+    while (stopToken.load(std::memory_order_relaxed) &&
+           run_.load(std::memory_order_relaxed) &&
            srcRun_.load(std::memory_order_relaxed)) {
         const std::size_t got = src.read(buf.data(), chunk);
+        // Same post-read token test as the self-paced loop, same reasons.
+        if (!stopToken.load(std::memory_order_relaxed)) { return; }
         // A real-time source must not block: if the DSP side stalled and the
         // ring is full, the overflow is dropped (write() accepts what fits).
         ring_.write(buf.data(), got);
@@ -1071,7 +1287,7 @@ void Pipeline::dspThreadBody() {
         }
 
         // Duplicate the same drained block into the audio path (the spectrum
-        // path above is untouched — both consume identical samples).
+        // path above is untouched â€” both consume identical samples).
         processAudioBlock(acc.data(), n);
     }
 }
@@ -1080,7 +1296,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     std::lock_guard<std::mutex> lk(audioMutex_);
 
     // IQ recorder tap (P6): the drained block RAW, before any channel
-    // processing — "record baseband at the input rate" is exactly the ring's
+    // processing â€” "record baseband at the input rate" is exactly the ring's
     // samples. Every sample the DSP thread consumes passes through here, so
     // the recording has no gaps while the pipeline runs. writeIq itself
     // ignores stopped/wrong-kind recorders (its contract), so the hot path
@@ -1111,7 +1327,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     signalDb_.store(meter_.powerDb(), std::memory_order_relaxed);
 
     // Demodulate 1:1 at the channel rate. In WFM this is the COMPOSITE (MPX)
-    // with no de-emphasis applied — see the ownership note in the header.
+    // with no de-emphasis applied â€” see the ownership note in the header.
     audioBuf_.resize(m);
     demod_.process(chanBuf_.data(), m, audioBuf_.data());
 
@@ -1119,7 +1335,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     const bool wfm = (mode == cascade::dsp::DemodMode::WFM);
 
     // RDS gets the RAW discriminator output: no de-emphasis, no scaling, no
-    // AGC, no squelch — bit-for-bit the signal the --rds-check bench path
+    // AGC, no squelch â€” bit-for-bit the signal the --rds-check bench path
     // feeds the same decoder, which is the only configuration proven off air.
     // (Scale is irrelevant to it anyway: both its loops normalise by the
     // running mean power.)
@@ -1295,7 +1511,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
 
     // Test tap + counter BEFORE the sink, so --selftest sees the chain output
     // even with no device open; then the non-blocking push to the sink (a
-    // full ring drops the overflow — the device, not this thread, is behind).
+    // full ring drops the overflow â€” the device, not this thread, is behind).
     const std::size_t tapFrames = tapBuf_.size() / 2;
     for (std::size_t i = 0; i < k; ++i) {
         tapBuf_[2 * tapWrite_] = outL_[i];
@@ -1306,7 +1522,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Counted in FRAMES, unchanged in meaning: one per 48 kHz instant.
     audioSamples_.fetch_add(k, std::memory_order_relaxed);
     // Audio recorder tap (P6): the same post-chain 48 kHz samples the test
-    // tap above just captured — post-squelch, pre-AudioOut, so the recording
+    // tap above just captured â€” post-squelch, pre-AudioOut, so the recording
     // is independent of the output device and its volume.
     if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(monoOut_.data(), k); }
     if (audioChannels_ == 2) {

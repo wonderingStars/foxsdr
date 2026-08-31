@@ -234,6 +234,114 @@ private:
     FakeState& st_;
 };
 
+// --- Zombie-safety fixtures (Pipeline::stop()'s bounded source-thread join)
+// ---------------------------------------------------------------------------
+//
+// LatchSource above tests the CORRECT-teardown side of the setSource()
+// use-after-free fix: its stop() releases the gate, so every read it parks
+// in is abortable and every join in the product completes. This pair tests
+// the opposite case Pipeline::stop() now has to survive on its own: a source
+// whose read() does not honour stop() at all, standing in for a vendor
+// driver that ignores its own timeout and never returns from readStream
+// (field report 4214EAE4, a Mirics device). Pipeline::stop() must not wait
+// for that read forever — it must give up within its own bound and abandon
+// the thread instead.
+class HungReadSource final : public IqSource {
+public:
+    // Published state a test polls instead of sleeping blindly (this file's
+    // convention — see waitUntil above): `entered` proves the source thread
+    // has actually reached the blocking read() before the test calls stop(),
+    // so the abandonment path is genuinely exercised rather than raced past;
+    // `returned` proves the block has finished unwinding, which the test
+    // needs before it is safe to let the owning Pipeline be destroyed (see
+    // the block comment in main()).
+    std::atomic<bool> entered{false};
+    std::atomic<bool> returned{false};
+
+    bool start() override { running_.store(true); return true; }
+    // Deliberately does NOT touch the block in read() below. A vendor
+    // driver's readStream() ignoring its own timeout parameter is exactly
+    // the failure this fake exists to reproduce, and a stop() that could
+    // still abort it would not be testing that failure mode at all.
+    void stop() override { running_.store(false); }
+    bool running() const override { return running_.load(); }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 1000000.0; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return 0.0; }
+    bool setCenterFrequencyHz(double) override { return true; }
+
+    std::size_t read(std::complex<float>*, std::size_t) override {
+        entered.store(true);
+        // Blocks for a FIXED ~8 s, ignoring stop(), unless releaseForTest()
+        // is called first. The fixed bound is what makes this a reproduction
+        // rather than a hang: it is finite ON PURPOSE, so a regression in
+        // Pipeline::stop()'s own bound (currently 3 s) shows up as a FAILED
+        // elapsed-time CHECK — read() eventually returns by itself and the
+        // suite moves on — rather than a suite that never completes and
+        // relies on ctest's 120 s per-test timeout to say so.
+        //
+        // releaseForTest() is a TEST-ONLY shortcut with no equivalent in the
+        // product (it is not wired through stop()): main() only calls it
+        // AFTER already asserting Pipeline::stop() returned inside its own
+        // 5 s bound, i.e. after the abandonment this class exists to trigger
+        // has already happened, purely so the suite is not stuck waiting out
+        // the remainder of the 8 s on every run.
+        std::unique_lock<std::mutex> lk(m_);
+        cv_.wait_for(lk, std::chrono::seconds(8), [this] { return release_.load(); });
+        lk.unlock();
+        returned.store(true);
+        return 0;
+    }
+
+    void releaseForTest() {
+        { std::lock_guard<std::mutex> lk(m_); release_.store(true); }
+        cv_.notify_all();
+    }
+
+    const char* name() const override { return "hung-read fake"; }
+    const char* lastError() const override { return ""; }
+
+private:
+    std::atomic<bool> running_{false};
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::atomic<bool> release_{false};
+};
+
+// A self-paced fake that behaves like a healthy device: delivers a filled
+// chunk immediately on every read() and honours stop() the way the IqSource
+// contract requires — the contrast HungReadSource above exists to draw. Used
+// (rather than reverting to the built-in generator via setSource(nullptr))
+// specifically to exercise setSource()'s non-null swap path with a genuinely
+// different external source object, which is the realistic case: picking a
+// different radio after one hangs, not merely giving up on hardware.
+class HealthySource final : public IqSource {
+public:
+    bool start() override { running_.store(true); return true; }
+    void stop() override { running_.store(false); }
+    bool running() const override { return running_.load(); }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 1000000.0; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return 0.0; }
+    bool setCenterFrequencyHz(double) override { return true; }
+
+    std::size_t read(std::complex<float>* dst, std::size_t n) override {
+        if (!running_.load() || dst == nullptr || n == 0) { return 0; }
+        for (std::size_t i = 0; i < n; ++i) {
+            dst[i] = std::complex<float>(0.1f, 0.0f);
+        }
+        return n;
+    }
+
+    const char* name() const override { return "healthy fake"; }
+    const char* lastError() const override { return ""; }
+
+private:
+    std::atomic<bool> running_{false};
+};
+
 // A plugin that throws, to fault the DSP thread on demand.
 //
 // The DSP-thread fault is not reachable from a fake SOURCE: a source that
@@ -578,6 +686,148 @@ int main() {
             p.setPluginRunner(nullptr);
         }
         g_iqDecoder.st = nullptr;
+    }
+
+    // --- Pipeline::stop() bounds the source-thread join (field 4214EAE4) -----
+    //
+    // Reproduces a vendor driver whose read() never returns and never honours
+    // stop(): Pipeline::stop() must give up within its own bound (currently
+    // 3 s, plus whatever active_->stop() itself costs) rather than wait for
+    // that read forever on the calling thread, exactly as the GUI thread did
+    // in the field report. It must then leave the pipeline genuinely usable —
+    // a different source can be installed and streamed, and stopping THAT
+    // session must not inherit any of the abandoned one's delay.
+    {
+        Pipeline::Config hungCfg = cfg;
+        hungCfg.audioEnabled = false;  // no device needed; only the source side matters here
+
+        Pipeline p(hungCfg);
+        auto hungSrc = std::make_unique<HungReadSource>();
+        HungReadSource* hung = hungSrc.get();  // raw pointer: object outlives this
+                                               // scope once abandoned/leaked below
+        p.setSource(std::move(hungSrc));
+        p.start();
+        CHECK(p.running() == true);
+
+        // Rendezvous, not a sleep: only call stop() once the source thread is
+        // demonstrably parked inside the blocking read(), so the abandonment
+        // path below is genuinely exercised rather than raced past.
+        CHECK(waitUntil([&] { return hung->entered.load(); }));
+
+        const auto t0 = steady_clock::now();
+        p.stop();
+        const double stopMs =
+            std::chrono::duration<double, std::milli>(steady_clock::now() - t0).count();
+        std::printf("Pipeline::stop() against a hung source: %.1f ms\n", stopMs);
+        CHECK(p.running() == false);
+        CHECK(stopMs < 5000.0);
+        // The counter, not the clock, is what proves ABANDONMENT happened
+        // here and JOINING happened for the healthy session below: mutate
+        // kSourceJoinWait to zero and every timing assertion in this block
+        // still passes (an instant abandonment is fast too) - only these
+        // two counts tell the paths apart.
+        CHECK(p.abandonedSourceThreads() == 1);  // the load-bearing assertion: see the class
+                                 // comment on HungReadSource for why a
+                                 // regression fails THIS, not the suite
+
+        // Not laundered into a driver fault: abandonment is a deliberate
+        // shutdown outcome, not a worker-thread exception.
+        CHECK(p.faulted() == false);
+
+        // The pipeline survives: a genuinely different source can be
+        // installed and streamed, proving setSource()'s zombie-safety
+        // (release-not-destroy of the outgoing hung source) did not corrupt
+        // anything reachable from here.
+        p.setSource(std::make_unique<HealthySource>());
+        p.start();
+        CHECK(p.running() == true);
+        SpectrumFrame f;
+        CHECK(waitForNewFrame(p, f));
+        CHECK(f.seq > 0);
+
+        // stop() of THIS session must join promptly — no zombie inheritance
+        // from the abandoned generation's token/exit-latch bookkeeping. A
+        // tight bound (well under kSourceJoinWait) is what actually
+        // distinguishes "joined normally" from "also had to wait out the
+        // abandonment bound again".
+        const auto t1 = steady_clock::now();
+        p.stop();
+        const double stop2Ms =
+            std::chrono::duration<double, std::milli>(steady_clock::now() - t1).count();
+        std::printf("Pipeline::stop() of the following healthy session: %.1f ms\n",
+                    stop2Ms);
+        CHECK(p.running() == false);
+        CHECK(stop2Ms < 1000.0);
+        CHECK(p.abandonedSourceThreads() == 1);  // healthy stop JOINED: no new abandonment
+
+        // Let HungReadSource's own read() finish unwinding before p (and
+        // with it, the Pipeline members its thread's loop still touches once
+        // more after read() returns — see sourceThreadBody) goes out of
+        // scope below. This is a TEST-HARNESS-ONLY requirement: the shipped
+        // app's one Pipeline owner (AppWindow) holds it for the entire
+        // process lifetime, so an abandoned thread there only ever wakes (if
+        // it wakes at all) against a Pipeline that still exists, or is
+        // itself killed by process teardown before it runs another
+        // instruction — neither of which this short-lived test scope can
+        // promise on its own.
+        hung->releaseForTest();
+        CHECK(waitUntil([&] { return hung->returned.load(); }));
+        std::this_thread::sleep_for(milliseconds(250));  // margin past `returned`
+                                                          // for the loop's own
+                                                          // final flag re-check
+    }
+
+
+    // --- setSource() WITHOUT stop(): the exact path of field hang 4214EAE4 --
+    //
+    // The user in the field never pressed Stop - the log shows them switching
+    // sources twice while the driver was wedged, which reaches
+    // Pipeline::setSource() on the GUI thread with the source thread still
+    // parked in read(). The first bounded-join fix covered stop() alone, and
+    // an adversarial review proved this path still carried the old unbounded
+    // join; the shared quiesce helper is the fix, and this block is what keeps
+    // it shared.
+    {
+        Pipeline::Config hungCfg = cfg;
+        hungCfg.audioEnabled = false;
+
+        Pipeline p(hungCfg);
+        auto hungSrc = std::make_unique<HungReadSource>();
+        HungReadSource* hung = hungSrc.get();  // outlives the swap: leaked below
+        p.setSource(std::move(hungSrc));
+        p.start();
+        CHECK(p.running() == true);
+        CHECK(p.abandonedSourceThreads() == 0);
+        CHECK(waitUntil([&] { return hung->entered.load(); }));
+
+        const auto t0 = steady_clock::now();
+        p.setSource(std::make_unique<HealthySource>());
+        const double swapMs =
+            std::chrono::duration<double, std::milli>(steady_clock::now() - t0).count();
+        std::printf("setSource() against a hung source (no stop): %.1f ms\n", swapMs);
+        CHECK(swapMs < 6000.0);
+        CHECK(p.abandonedSourceThreads() == 1);
+
+        // run_ was never cleared (nobody called stop()), so setSource resumed
+        // the NEW source itself - the swap must leave a live, streaming
+        // pipeline, not a stopped one.
+        CHECK(p.running() == true);
+        SpectrumFrame f;
+        CHECK(waitForNewFrame(p, f));
+
+        const auto t1 = steady_clock::now();
+        p.stop();
+        const double stopMs2 =
+            std::chrono::duration<double, std::milli>(steady_clock::now() - t1).count();
+        CHECK(p.running() == false);
+        CHECK(stopMs2 < 1000.0);
+        CHECK(p.abandonedSourceThreads() == 1);  // the healthy session joined
+
+        // Same harness-only unwind as the block above: the leaked source and
+        // this stack frame must outlive the zombie's final instructions.
+        hung->releaseForTest();
+        CHECK(waitUntil([&] { return hung->returned.load(); }));
+        std::this_thread::sleep_for(milliseconds(250));
     }
 
     (void)lastSeqSeen;

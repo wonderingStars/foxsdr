@@ -366,9 +366,20 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
 
 bool SoapySource::open(const std::string& args) {
     // One lock for the whole open, including the release of whatever was open
-    // before â€” no other thread may be inside the driver while a device is
-    // being made or unmade.
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // before - no other thread may be inside the driver while a device is
+    // being made or unmade. Bounded like every other entry: a PREVIOUS
+    // device's driver can legitimately hold this lock for seconds (a UHD
+    // interrogation on the worker thread, or another thread's own slow
+    // open()), so a timeout here means "busy", not "broken" - the failure is
+    // reported and nothing about the previous device's state is touched,
+    // because this call never got far enough to touch any of it.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError(
+            "the previous device's driver is busy or not answering; try "
+            "again");
+        return false;
+    }
     // Reopen semantics: whatever was open before must be fully released
     // first, or the old device handle (and its USB claim) would leak.
     stopLocked();
@@ -470,6 +481,29 @@ bool SoapySource::open(const std::string& args) {
                 std::lock_guard<std::mutex> lk(errorMutex_);
                 name_ = "SoapySDR: " + o.label;
             }
+            // CONDEMNED MID-OPEN? stop()/closeDevice() time out against
+            // devMutex_ - which this open has held throughout - and latch
+            // the dead flags without it. That is the user pressing Stop
+            // during a slow, HEALTHY interrogation. Returning true here
+            // would hand back a device that faulted() already reports
+            // dead, with clearError() (now latch-aware) leaving the state
+            // contradictory forever. The driver just answered a full
+            // interrogation, so it is provably not stalled: lift the
+            // latch, release the device properly, and fail the open in
+            // words that say what happened.
+            if (deviceDead()) {
+                {
+                    std::lock_guard<std::mutex> lk(errorMutex_);
+                    deviceDead_ = false;
+                    faulted_ = false;
+                }
+                stopLocked();
+                teardownLocked();
+                setError(
+                    "the device was closed while it was still opening; "
+                    "pick the source again to reopen it");
+                return false;
+            }
             openMirror_.store(true, std::memory_order_relaxed);
             counted_ = true;
             s_openDevices.fetch_add(1, std::memory_order_relaxed);
@@ -496,7 +530,35 @@ bool SoapySource::open(const std::string& args) {
 }
 
 void SoapySource::closeDevice() {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Same bounded wait, and the same escape-path verdict, as stop() below -
+    // see the rationale there. On a timeout dev_/stream_ are left completely
+    // alone rather than cleared: they are writable ONLY under devMutex_, the
+    // parked holder is inside the driver dereferencing them right now, and
+    // clearing them here without the lock would be a data race on a live
+    // handle. This deliberately LEAKS the device - the same documented
+    // dead-device policy teardownLocked() applies below when a vendor call
+    // itself faults - and the message says so, matching stop()'s wording so
+    // the user sees one consistent abandonment reason regardless of which
+    // control path gave up.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        running_.store(false, std::memory_order_relaxed);
+        core::diagWarnf(
+            "soapy: the device driver did not answer within %lld ms of a "
+            "close - abandoning it rather than freezing the interface; "
+            "restart FoxSDR to use this radio again",
+            static_cast<long long>(kControlLockWait.count()));
+        std::lock_guard<std::mutex> lk(errorMutex_);
+        deviceDead_ = true;
+        faulted_ = true;
+        try {
+            lastError_ =
+                "the radio's driver stopped responding and has been abandoned. "
+                "Restart FoxSDR to use it again.";
+        } catch (...) {
+        }
+        return;
+    }
     stopLocked();      // deactivate first; harmless no-op when not running
     teardownLocked();  // then release stream + device
     // lastError_ is deliberately NOT cleared: closeDevice() runs right after
@@ -628,6 +690,16 @@ void SoapySource::setError(std::string msg) {
 
 void SoapySource::clearError() {
     std::lock_guard<std::mutex> lk(errorMutex_);
+    // A CONDEMNED DEVICE STAYS CONDEMNED. The escape paths (stop() /
+    // closeDevice() on a driver-lock timeout) latch deviceDead_ WITHOUT
+    // holding devMutex_, so they can fire while a healthy open() or
+    // start() is mid-flight - and that call's success path lands here.
+    // Clearing faulted_ then made faulted() read false for exactly the
+    // window until something re-checked the dead latch, and erasing
+    // lastError_ deleted the one message that tells the user why their
+    // radio is gone. Only teardownLocked(), under the device lock, may
+    // lift the latch.
+    if (deviceDead_) { return; }
     lastError_.clear();
     faulted_ = false;
     consecutiveErrors_ = 0;
@@ -666,7 +738,19 @@ const char* SoapySource::name() const {
 }
 
 bool SoapySource::start() {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded like every setter/query below: a timeout here can mean nothing
+    // worse than contention against a HEALTHY slow open() running on another
+    // thread (a UHD interrogation takes seconds), and killing the device for
+    // that would be a worse bug than the hang this whole change exists to
+    // fix. So this returns the failure value and explains why, but does NOT
+    // mark the device dead - only the user's own escape paths (stop(),
+    // closeDevice()) may condemn it. Every setter/query in this file below
+    // shares this exact reasoning; later ones do not repeat it.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
     if (dev_ == nullptr || stream_ == nullptr) {
         // Documented before-open behavior: refuse with a reason, no crash.
         setError("start() called with no device open");
@@ -722,6 +806,24 @@ bool SoapySource::start() {
         // hardware, nothing a vendor module can reach. Deliberately outside
         // the guarded body, where allocating a message is safe.
         setError(std::string("activateStream failed: ") + SoapySDR::errToStr(a.ret));
+        return false;
+    }
+    // CONDEMNED MID-START? The same race as open()'s commit: an escape
+    // path timed out against the lock this call holds and latched the
+    // dead flags. The verdict stands here - unlike open(), the user's
+    // Stop raced a stream COMING UP, and honouring the stop is the only
+    // reading that cannot leave a stream running that faulted() reports
+    // dead. Deactivate what was just activated (guarded, driver is
+    // answering) and refuse; the abandonment message survives because
+    // clearError() is latch-aware.
+    if (deviceDead()) {
+        const bool undone = guardedVendorCall([this]() noexcept {
+            try {
+                dev_->deactivateStream(stream_);
+            } catch (...) {
+            }
+        });
+        if (!undone) { noteVendorFault("deactivating a condemned stream"); }
         return false;
     }
     running_.store(true, std::memory_order_relaxed);
@@ -837,13 +939,29 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // loop polls faulted() and leaves; this is the belt to that braces.
         // Checked BEFORE devMutex_ so a faulted spin never contends the lock.
         std::lock_guard<std::mutex> lk(errorMutex_);
-        if (faulted_) { return 0; }
+        // BOTH latches, not just faulted_. clearError() (a successful
+        // start()/open() commit) clears faulted_ and deliberately cannot
+        // clear deviceDead_ - so after a stop()-timeout condemned the
+        // device while a healthy activate was mid-flight, faulted_ alone
+        // reads false here and this gate was the one place that let the
+        // "never called again" promise be broken.
+        if (faulted_ || deviceDead_) { return 0; }
     }
     // The lock is held across the bounded readStream â€” that is the whole
     // serialisation contract (see the header): while samples are being read,
     // no control call can enter the driver, and while a control call is in
     // the driver, this thread waits here instead of entering beside it.
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded like every other entry point, but with the read contract's OWN
+    // classification: contention this long means a control call (a retune, a
+    // stop) is the one inside the driver right now, which is not this
+    // device's fault and not an error at all - the timed-out read just
+    // becomes a slightly later "nothing yet, retry" than usual. Nothing is
+    // recorded and the device is not marked dead; that verdict belongs only
+    // to the user's own escape paths (stop()/closeDevice()).
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        return 0;
+    }
     if (dev_ == nullptr || stream_ == nullptr) {
         // Before open (or after a teardown that won the lock first) there is
         // nothing to wait on: return the retry signal immediately.
@@ -918,7 +1036,12 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
 }
 
 bool SoapySource::setSampleRateHz(double hz) {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
     if (dev_ == nullptr) {
         setError("setSampleRateHz() called with no device open");
         return false;
@@ -968,7 +1091,12 @@ bool SoapySource::setSampleRateHz(double hz) {
 }
 
 bool SoapySource::setCenterFrequencyHz(double hz) {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
     if (dev_ == nullptr) {
         setError("setCenterFrequencyHz() called with no device open");
         return false;
@@ -1021,9 +1149,14 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
 }
 
 std::vector<std::string> SoapySource::listGainNames() {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return {};
+    }
     if (dev_ == nullptr) {
-        return {};  // no device, no gain stages â€” not an error
+        return {};  // no device, no gain stages - not an error
     }
     if (deviceDead()) { return {}; }
     std::vector<std::string> out;
@@ -1042,7 +1175,12 @@ std::vector<std::string> SoapySource::listGainNames() {
 }
 
 bool SoapySource::setGainDb(const std::string& name, double db) {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
     if (dev_ == nullptr) {
         setError("setGainDb() called with no device open");
         return false;
@@ -1082,7 +1220,12 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
 }
 
 bool SoapySource::setAutoGain(bool on) {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
     if (dev_ == nullptr) {
         setError("setAutoGain() called with no device open");
         return false;
@@ -1130,9 +1273,14 @@ bool SoapySource::setAutoGain(bool on) {
 }
 
 std::vector<std::string> SoapySource::listAntennas() {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return {};
+    }
     if (dev_ == nullptr) {
-        return {};  // no device, no ports â€” not an error
+        return {};  // no device, no ports - not an error
     }
     if (deviceDead()) { return {}; }
 
@@ -1166,7 +1314,12 @@ std::vector<std::string> SoapySource::listAntennas() {
 }
 
 bool SoapySource::setAntenna(const std::string& name) {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
     if (dev_ == nullptr) {
         setError("setAntenna() called with no device open");
         return false;
@@ -1218,7 +1371,12 @@ bool SoapySource::setAntenna(const std::string& name) {
 }
 
 std::string SoapySource::antenna() {
-    std::lock_guard<std::timed_mutex> devLk(devMutex_);
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return {};
+    }
     if (dev_ == nullptr) {
         return {};
     }
