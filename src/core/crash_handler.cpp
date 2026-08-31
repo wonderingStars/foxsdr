@@ -345,6 +345,56 @@ void writeMinidump(EXCEPTION_POINTERS* ep, const char* txtPath) {
     ::CloseHandle(h);
 }
 
+// THE STACK WALK IS BEST EFFORT, AND MUST NEVER BE ABLE TO KILL THE PROCESS
+// IT IS DOCUMENTING. That is not a general principle applied for neatness; it
+// is a fix for a crash observed in the field (B9D41A8D, 0.64.0).
+//
+// The faulting instruction was the CALL to RtlCaptureStackBackTrace itself,
+// at crash_handler.cpp:402 - the branch reached only when there is no
+// exception context, which is exactly how reportAbsorbedFault arrives when
+// soapy_enum_proc reports an enumeration child dying. A call instruction
+// faults while PUSHING ITS RETURN ADDRESS, so the stack it was about to walk
+// had no room left: this path runs on a PPL worker thread owned by the
+// std::async device scan, not on the main thread or a thread this code
+// created, and it is the one caller that reaches here with a nearly spent
+// stack.
+//
+// The report is deliberately written INCREMENTALLY, most valuable first - the
+// header, the signature and the application context are already on disk by
+// the time this runs. So the correct answer to a fault here is a stack
+// section that says it could not be taken, not a dead process and no report
+// at all. The irony of the crash reporter being the thing that crashed is
+// worth one guard.
+int captureFramesGuarded(EXCEPTION_POINTERS* ep) {
+    __try {
+        int n = 0;
+#if defined(_M_X64)
+        if (ep != nullptr && ep->ContextRecord != nullptr) {
+            // The FAULTING stack, not the handler's: unwound from the context
+            // Windows captured at the moment of the fault.
+            std::memcpy(&g_walkContext, ep->ContextRecord, sizeof(CONTEXT));
+            n = walkFromContext(&g_walkContext, g_frames, kMaxFrames);
+        }
+#else
+        (void)ep;
+#endif
+        if (n == 0) {
+            // No exception context (terminate, purecall, invalid parameter):
+            // the handler runs on the offending thread, so its own stack IS
+            // the answer.
+            n = static_cast<int>(
+                ::RtlCaptureStackBackTrace(0, static_cast<ULONG>(kMaxFrames),
+                                           reinterpret_cast<PVOID*>(g_frames), nullptr));
+        }
+        return n;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Includes EXCEPTION_STACK_OVERFLOW, which is why this is __except and
+        // not catch(...): a stack overflow is a structured exception and no
+        // C++ handler would ever see it.
+        return 0;
+    }
+}
+
 // The whole report, written incrementally so a deadlock in the unwinder still
 // leaves the identifying half on disk. See the file header.
 void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAddr,
@@ -387,21 +437,13 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     e.str("--- stack (thread ");
     e.dec(::GetCurrentThreadId());
     e.str(") ---\n");
-    int nFrames = 0;
-#if defined(_M_X64)
-    if (ep != nullptr && ep->ContextRecord != nullptr) {
-        // The FAULTING stack, not the handler's: unwound from the context
-        // Windows captured at the moment of the fault.
-        std::memcpy(&g_walkContext, ep->ContextRecord, sizeof(CONTEXT));
-        nFrames = walkFromContext(&g_walkContext, g_frames, kMaxFrames);
-    }
-#endif
+    const int nFrames = captureFramesGuarded(ep);
     if (nFrames == 0) {
-        // No exception context (terminate, purecall, invalid parameter): the
-        // handler runs on the offending thread, so its own stack IS the answer.
-        nFrames = static_cast<int>(
-            ::RtlCaptureStackBackTrace(0, static_cast<ULONG>(kMaxFrames),
-                                       reinterpret_cast<PVOID*>(g_frames), nullptr));
+        // SAID, not left as an empty section. A stack section with no frames
+        // and no explanation reads as "this fault had no stack", which is
+        // never true; it means the walk could not be taken, and a reader needs
+        // to know which of the two they are looking at.
+        e.str("  (no frames: the stack could not be walked)\n");
     }
     for (int i = 0; i < nFrames; ++i) {
         e.str("  ");

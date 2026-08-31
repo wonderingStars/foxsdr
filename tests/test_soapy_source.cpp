@@ -165,6 +165,71 @@ private:
     double freq_ = 100.0e6;
 };
 
+// ---------------------------------------------------------------------------
+// A DRIVER THAT IGNORES ITS READ TIMEOUT, which is the whole of field report
+// 4214EAE4 (0.64.0, a Mirics device) reduced to something reproducible.
+//
+// SoapySource holds devMutex_ across readStream on purpose: with a bounded
+// read, that bound IS the worst-case latency of a control call queued behind
+// it. The bound belongs to the DRIVER, though, not to this code - readStream
+// is handed 20 ms and a vendor module is free to ignore it. When one does, a
+// GUI-thread stop() waiting on that mutex waits for ever, and the interface
+// freezes with no way out but the task manager.
+//
+// This device sleeps far past its timeout so stop() must give up rather than
+// wait. Red-green: with the bounded acquisition removed, stop() blocks for the
+// whole sleep and the elapsed-time assertion below fails.
+// ---------------------------------------------------------------------------
+class StallingDevice : public SoapySDR::Device {
+public:
+    std::string getDriverKey() const override { return "fakestall"; }
+    std::string getHardwareKey() const override { return "fake stalling source"; }
+    size_t getNumChannels(const int) const override { return 1; }
+    SoapySDR::Stream* setupStream(const int, const std::string&,
+                                  const std::vector<size_t>&,
+                                  const SoapySDR::Kwargs&) override {
+        return reinterpret_cast<SoapySDR::Stream*>(this);
+    }
+    void closeStream(SoapySDR::Stream*) override {}
+    int activateStream(SoapySDR::Stream*, const int, const long long,
+                       const size_t) override {
+        return 0;
+    }
+    int deactivateStream(SoapySDR::Stream*, const int, const long long) override {
+        return 0;
+    }
+    double getSampleRate(const int, const size_t) const override { return 2.4e6; }
+    void setFrequency(const int, const size_t, const double f,
+                      const SoapySDR::Kwargs&) override {
+        freq_ = f;
+    }
+    double getFrequency(const int, const size_t) const override { return freq_; }
+
+    int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
+                   int&, long long&, const long) override {
+        // The timeout argument is deliberately ignored - that is the fault
+        // being imitated.
+        std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+        float* p = static_cast<float*>(buffs[0]);
+        for (size_t i = 0; i < 2 * numElems; ++i) { p[i] = 0.0f; }
+        return static_cast<int>(numElems);
+    }
+
+private:
+    double freq_ = 100.0e6;
+};
+
+SoapySDR::KwargsList findStall(const SoapySDR::Kwargs& args) {
+    const auto driver = args.find("driver");
+    if (driver != args.end() && driver->second != "fakestall") { return {}; }
+    SoapySDR::Kwargs k;
+    k["driver"] = "fakestall";
+    k["label"] = "fake stalling source";
+    return SoapySDR::KwargsList{k};
+}
+
+SoapySDR::Device* makeStall(const SoapySDR::Kwargs&) { return new StallingDevice(); }
+
 SoapySDR::KwargsList findNonFinite(const SoapySDR::Kwargs& args) {
     const auto driver = args.find("driver");
     if (driver != args.end() && driver->second != "fakenonfinite") { return {}; }
@@ -580,6 +645,48 @@ int main() {
             // not on throughput: 2 full outer loops is the floor.
             CHECK(tunes >= 50);
             src.stop();
+            src.closeDevice();
+        }
+    }
+
+
+    // --- a driver that will not return must not freeze the interface -------
+    {
+        std::printf("--- stalling driver: stop() must give up, not hang ---\n");
+        SoapySDR::Registry reg("fakestall", &findStall, &makeStall,
+                               SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        if (!src.open("driver=fakestall")) {
+            std::printf("  (fake stalling device would not open: %s)\n", src.lastError());
+        } else {
+            CHECK(src.start());
+            // A reader thread parked inside the stalling readStream, holding
+            // devMutex_ - which is exactly the state the field hang was in.
+            std::atomic<bool> reading{false};
+            std::thread reader([&] {
+                std::vector<std::complex<float>> buf(4096);
+                reading.store(true, std::memory_order_relaxed);
+                (void)src.read(buf.data(), buf.size());
+            });
+            while (!reading.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+            const auto t0 = std::chrono::steady_clock::now();
+            src.stop();
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0);
+            std::printf("  stop() returned after %lld ms\n",
+                        static_cast<long long>(elapsed.count()));
+            // The driver sleeps 6 s. Anything near that means stop() waited it
+            // out, which is the freeze this guards against.
+            CHECK(elapsed < std::chrono::milliseconds(4000));
+            // And it must SAY so rather than pretending the stop worked.
+            CHECK(src.faulted());
+            CHECK(src.deviceDead());
+            CHECK(std::strlen(src.lastError()) > 0);
+            reader.join();
             src.closeDevice();
         }
     }

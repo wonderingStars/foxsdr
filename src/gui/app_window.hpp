@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -1005,6 +1006,20 @@ private:
     // crash.
     std::string detailsTrackId_;
     bool detailsOpen_ = false;
+
+    // WINDOWS THE USER HAS CLOSED, by ImGui id. The decoded-image windows and
+    // the plugin-declared panels are opened BY their content arriving rather
+    // than by a menu, so they had no close state at all and were drawn with a
+    // null p_open. That was survivable while torn-off viewports were
+    // undecorated - there was no close button to press. Once they carry the
+    // operating system's own frame (see ConfigViewportsNoDecoration in
+    // run()), a null p_open means a real X that silently does nothing, which
+    // is worse than no X at all.
+    //
+    // Closing one keeps it closed for the session; a plugin rescan clears the
+    // set, because that is the point at which the whole set of panels and
+    // decoders is rebuilt and "closed" no longer refers to the same thing.
+    std::set<std::string> closedWindows_;
     // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
     // rather than by the runner because it is written only when a decoder
     // produces a new picture: keeping the GUI's copy out of the runner is what

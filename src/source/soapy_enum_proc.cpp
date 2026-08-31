@@ -586,7 +586,24 @@ int runEnumerateHelper(const char* crashDir) {
         e[kKeyArgs] = d.args;
         j[kKeyDevices].push_back(std::move(e));
     }
-    const std::string line = j.dump();
+    // REPLACE, NEVER THROW, and this is not defensive decoration: it is the
+    // fix for a crash that was misdiagnosed for weeks.
+    //
+    // dump() validates UTF-8 and throws type_error.316 on a byte sequence it
+    // cannot encode. Everything in this object is THIRD-PARTY TEXT - a device
+    // label, driver name and argument string handed over by a vendor SoapySDR
+    // module - so a radio whose descriptor carries one non-UTF-8 byte made
+    // this throw, and nothing in the child catches it. The child then died
+    // with 0xE06D7363, and the parent logged that exit as "this is the known
+    // libusb fault, contained", which is what hid it: an ordinary encoding
+    // fault in our own serialiser, reported as somebody else's memory bug.
+    //
+    // The rest of this application already learned this. telemetry.cpp and
+    // web_server.cpp both pass error_handler_t::replace, the latter because
+    // an unserialisable plugin name once took the whole browser UI down. This
+    // was the third site and the only one still throwing.
+    const std::string line = j.dump(-1, ' ', false,
+                                    nlohmann::json::error_handler_t::replace);
     std::fwrite(line.data(), 1, line.size(), stdout);
     std::fputc('\n', stdout);
     std::fflush(stdout);
