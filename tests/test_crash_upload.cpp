@@ -500,6 +500,16 @@ int main() {
         CHECK(!r.deviceOpen);
         // "plugin: (none)" is not a plugin.
         CHECK(r.plugins.empty());
+        // A hang writer emits no reason/code lines, and the payload says so
+        // honestly: empty strings, not invented values. The keys are still
+        // present — the inventory is exact both ways, and an optional field
+        // would let a future writer drop them silently.
+        CHECK(r.reason.empty());
+        CHECK(r.code.empty());
+        const nlohmann::json hj = parseOrEmpty(uploadJson(r, std::string()));
+        CHECK(hj.contains("reason"));
+        CHECK(hj.value("reason", std::string("x")).empty());
+        CHECK(hj.value("code", std::string("x")).empty());
     }
 
     // --- Rubbish is refused rather than posted ------------------------------
@@ -559,6 +569,13 @@ int main() {
         CHECK(j.value("signature", std::string()) == "0123456789ABCDEF");
         CHECK(j.value("os", std::string()) == "Windows 10.0.22631");
         CHECK(j.value("arch", std::string()) == "x64");
+        // The reason and code lines the report file has carried since 0.62.0,
+        // now forwarded instead of dropped: they are what lets the dashboard
+        // tell an ABSORBED vendor fault (the guard filed evidence and the
+        // process continued) from a process death at the same address —
+        // without them the two are the same row. Verbatim from the file.
+        CHECK(j.value("reason", std::string()) == "access violation");
+        CHECK(j.value("code", std::string()) == "0xC0000005");
         CHECK(j.value("installId", std::string()) == "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5");
         CHECK(arrayAt(j, "plugins").size() == 2);
         CHECK(jsonStr(arrayAt(j, "plugins"), 0, "name") == "ADS-B");

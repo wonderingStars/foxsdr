@@ -34,6 +34,28 @@ the in-memory ring, the application context (mode, source, sample rate, radio
 model with the serial stripped, loaded plugins with versions), and a **stable
 signature** for grouping.
 
+Since 0.66.0 the upload also forwards the report's own `reason` and `code`
+lines verbatim (empty for a hang, whose writer has no such lines). The reason
+is what lets the dashboard tell an **absorbed** vendor fault — the guard filed
+the evidence and the process carried on — from a process death at the same
+address: without it the two were identical rows, and a survived teardown fault
+measurably reopened a fixed signature. And the client signature is no longer
+what the dashboard *groups* by when it can do better: it is hashed from the
+faulting module + offset, and one release cycle of field data showed both
+failure modes of that key — the same teardown fault split into two signatures
+by a Windows update moving ntdll's offsets, and two unrelated faults from two
+users merged into one because `RtlpWaitOnCriticalSection` sat at the same RVA
+in both their ntdll builds. Offsets into code we did not ship identify the
+victim's patch level, not the bug. The server therefore re-groups reports by
+the nearest frame in **our own** code, by *name*, using the per-build
+RVA→function maps `tools/export-symbol-map.py` emits into the symbol archive
+(see *The reader* below for what is and is not uploaded). Having a map is what
+marks a frame as ours — which is why the same step matters for **plugins**: a
+plugin frame with a map is named by the plugin's own function, and without one
+every distinct bug inside that plugin collapses into a single group, since
+every plugin stack passes through the same host dispatch on its way down. The client signature
+stays in the payload as transport identity and the client-side dedup key.
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it
@@ -523,6 +545,14 @@ counts, first/last seen and affected versions, and **symbolises here, not on the
 server**. The PDBs stay in `symbols\` and on the NAS; uploading them to save a
 step would put the complete private debug information for every shipped build on
 a reachable machine.
+
+One precisely-bounded exception, since 0.66.0: the server holds the
+**function-name table alone** — `symmap.json.gz`, the `[rva, size, name]`
+triples for our own code, ~90 KB per build — because symbolic grouping cannot
+work without names. That is the same information a linker `.map` file shows.
+What stays off the server is everything else a PDB carries and the reader
+depends on it for: types, locals, line numbers, source paths, and every
+module we did not build. Full symbolisation still happens here.
 
 What it refuses to do is as important as what it does: a report whose build id
 is not in the archive prints exactly that, **naming the id**, and the human

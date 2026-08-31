@@ -119,6 +119,14 @@ struct ReportThread {
 struct ParsedReport {
     std::string kind;  // "crash" | "hang"; anything else is refused
     std::string signature;
+    // The report's own `reason:` and `code:` lines, verbatim. These are what
+    // separate an ABSORBED vendor fault (the guard filed the report and the
+    // process continued — reason says so) from a process death at the same
+    // address; dropping them made the two identical on the dashboard, which
+    // is how a survived teardown fault reopened a fixed signature. Hang
+    // reports have neither line, so both stay empty for a hang.
+    std::string reason;
+    std::string code;
     std::string version;
     std::string commit;
     std::string os;

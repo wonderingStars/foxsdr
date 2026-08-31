@@ -638,6 +638,95 @@ int main() {
 
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
     }
+
+    // --- ...and the CLEAN-exit marker reaches disk only after the join ------
+    //
+    // Since 0.66.0 telemetryCleanExit=true is written by a second save AFTER
+    // pipeline_.stop() — because a death during that join (DSP threads, CAT,
+    // the USB stack: where the worst shipped shutdown freeze lived) is a
+    // death, and the old order (marker set before the join) counted it as a
+    // clean exit. The save sits BEFORE the GL/GLFW teardown on purpose: it
+    // rebuilds the pending usage report through glfwGetTime(), which returns
+    // 0.0 after glfwTerminate() and would zero every session's length. This
+    // block is the half that keeps the second save existing at all: without
+    // it, every exit would leave false on disk and every next start would
+    // count a phantom crash. The ordering half is comment-guarded at the call
+    // site; the block above staying green pins the other side (false while
+    // the process is alive).
+    {
+        const fs::path dir = scratchDir("cleanexit");
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        const fs::path cfgPath = dir / "config.json";
+        ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", cfgPath.string().c_str());
+
+        const std::string exe = std::string(CASCADE_APP_BINDIR) + "\\cascade.exe";
+        std::string cmd = "\"" + exe + "\" --frames 3";
+        std::vector<char> mutableCmd(cmd.begin(), cmd.end());
+        mutableCmd.push_back('\0');
+        STARTUPINFOA si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        const BOOL started = ::CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr,
+                                              FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si,
+                                              &pi);
+        ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", nullptr);
+        CHECK(started != 0);
+        if (started != 0) {
+            // A 3-frame run exits by itself; 30 s is a generous ceiling.
+            CHECK(::WaitForSingleObject(pi.hProcess, 30000) == WAIT_OBJECT_0);
+            DWORD exitCode = 1;
+            ::GetExitCodeProcess(pi.hProcess, &exitCode);
+            CHECK(exitCode == 0);
+            ::CloseHandle(pi.hThread);
+            ::CloseHandle(pi.hProcess);
+        }
+
+        const std::string after = readFile(cfgPath);
+        CHECK(fs::exists(cfgPath));
+        CHECK(after.find("\"telemetryCleanExit\": true") != std::string::npos);
+
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // --- ...and the ORDER, which the two blocks above cannot see -----------
+    //
+    // The blocks above prove the marker is false mid-session and true after a
+    // clean run. Both stay green whichever side of pipeline_.stop() the write
+    // sits on — so on their own they do NOT pin the property this change
+    // exists for: that a death during the pipeline join counts as UNCLEAN.
+    // Proving that dynamically would mean killing the process inside a join
+    // that a bounded run completes in milliseconds, with no seam to hold it
+    // open. So the ordering is pinned STATICALLY, against the source that
+    // ships — crude, but it is exactly what a revert would touch, and it goes
+    // red the moment the marker moves back above the join. (Reading a source
+    // file to hold a promise is the same device tests/test_crash_upload.cpp
+    // uses against PRIVACY.md.)
+    {
+        const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
+        const std::string text = readFile(src);
+        CHECK(!text.empty());
+
+        const std::size_t marker = text.find("telemetryCleanExit_ = true;");
+        const std::size_t join = text.find("pipeline_.stop();");
+        // The GL teardown, which must come AFTER the marker write: a save
+        // performed past glfwTerminate() re-derives the pending usage report
+        // with glfwGetTime() == 0.0 and reports a zero-second session.
+        const std::size_t glTeardown = text.find("ImGui_ImplOpenGL3_Shutdown();");
+        std::printf("clean-exit ordering: join@%zu marker@%zu glTeardown@%zu\n", join, marker,
+                    glTeardown);
+        CHECK(marker != std::string::npos);
+        CHECK(join != std::string::npos);
+        CHECK(glTeardown != std::string::npos);
+        // Bounds-safe by construction: each index is checked against npos
+        // above, and a comparison of two npos values would otherwise read as
+        // a passing ordering.
+        const bool haveAll = marker != std::string::npos && join != std::string::npos &&
+                             glTeardown != std::string::npos;
+        CHECK(haveAll && join < marker);
+        CHECK(haveAll && marker < glTeardown);
+    }
 #endif
 
     return testSummary("test_diag_hang");
