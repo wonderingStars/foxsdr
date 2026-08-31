@@ -556,24 +556,14 @@ void armEnumerateHelperProcess(const char* crashDir) {
 #endif
 }
 
-int runEnumerateHelper(const char* crashDir) {
-    armEnumerateHelperProcess(crashDir);
-    const bool captureArmed = !core::activeCrashDir().empty();
-#ifdef _WIN32
-    // Binary stdout: the one line below must reach the parent byte for byte,
-    // with no CRLF translation between a writer and a reader that both count
-    // on exactly what was written.
-    ::_setmode(::_fileno(stdout), _O_BINARY);
-#endif
-
-    const std::uint64_t before = vendorGuardCallCount();
-    const bool runtime = SoapySource::runtimeAvailable();
-    const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerateInProcess();
-
+std::string enumerationReportJson(bool runtimeAvailable,
+                                  unsigned long long guardedCalls,
+                                  bool captureArmed,
+                                  const std::vector<SoapyDeviceInfo>& devices) {
     nlohmann::json j;
     j[kKeySchema] = kSchema;
-    j[kKeyRuntime] = runtime;
-    j[kKeyGuarded] = static_cast<unsigned long long>(vendorGuardCallCount() - before);
+    j[kKeyRuntime] = runtimeAvailable;
+    j[kKeyGuarded] = guardedCalls;
     // REPORTED, not assumed. "The parent passed a directory" and "the child is
     // actually able to write a report into it" are different claims - the
     // second one is what a test has to be able to check, and a directory that
@@ -604,6 +594,26 @@ int runEnumerateHelper(const char* crashDir) {
     // was the third site and the only one still throwing.
     const std::string line = j.dump(-1, ' ', false,
                                     nlohmann::json::error_handler_t::replace);
+    return line;
+}
+
+int runEnumerateHelper(const char* crashDir) {
+    armEnumerateHelperProcess(crashDir);
+    const bool captureArmed = !core::activeCrashDir().empty();
+#ifdef _WIN32
+    // Binary stdout: the one line below must reach the parent byte for byte,
+    // with no CRLF translation between a writer and a reader that both count
+    // on exactly what was written.
+    ::_setmode(::_fileno(stdout), _O_BINARY);
+#endif
+
+    const std::uint64_t before = vendorGuardCallCount();
+    const bool runtime = SoapySource::runtimeAvailable();
+    const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerateInProcess();
+
+    const std::string line = enumerationReportJson(
+        runtime, static_cast<unsigned long long>(vendorGuardCallCount() - before),
+        captureArmed, devices);
     std::fwrite(line.data(), 1, line.size(), stdout);
     std::fputc('\n', stdout);
     std::fflush(stdout);

@@ -1537,7 +1537,12 @@ std::string PluginRepo::serialiseManifest(const std::vector<InstalledPlugin>& pl
         pols.push_back(std::move(e));
     }
     j["policies"] = std::move(pols);
-    return j.dump(4) + "\n";
+    // error_handler_t::replace, like every dump() in this tree: this text
+    // includes user-entered or remote strings, and a byte that is not valid
+    // UTF-8 must cost one replacement character, never a throw out of a save
+    // path. tests/test_json_dump_policy.cpp holds every site to this.
+    return j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) +
+           "\n";
 }
 
 bool PluginRepo::saveManifest(const std::string& pluginsDir,

@@ -180,6 +180,10 @@ private:
 // wait. Red-green: with the bounded acquisition removed, stop() blocks for the
 // whole sleep and the elapsed-time assertion below fails.
 // ---------------------------------------------------------------------------
+// See StallingDevice::readStream: true exactly while a caller is inside the
+// stalled driver call (and therefore holding SoapySource's devMutex_).
+std::atomic<bool> g_stallInRead{false};
+
 class StallingDevice : public SoapySDR::Device {
 public:
     std::string getDriverKey() const override { return "fakestall"; }
@@ -207,6 +211,15 @@ public:
 
     int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
                    int&, long long&, const long) override {
+        // The rendezvous flag the TEST waits on. "The reader thread has
+        // started" is not the fact the test needs - it needs "the reader
+        // is inside the driver holding devMutex_", and only this function
+        // can attest to that. A flag set on the thread's first line plus a
+        // fixed sleep was the first version, and it loses to a single
+        // >250 ms preemption in the gap before read() takes the lock: the
+        // setter under test then acquires a FREE mutex, succeeds, and the
+        // test fails red on perfectly correct code.
+        g_stallInRead.store(true, std::memory_order_release);
         // The timeout argument is deliberately ignored - that is the fault
         // being imitated.
         std::this_thread::sleep_for(std::chrono::milliseconds(6000));
@@ -662,17 +675,51 @@ int main() {
             CHECK(src.start());
             // A reader thread parked inside the stalling readStream, holding
             // devMutex_ - which is exactly the state the field hang was in.
-            std::atomic<bool> reading{false};
+            g_stallInRead.store(false, std::memory_order_relaxed);
             std::thread reader([&] {
                 std::vector<std::complex<float>> buf(4096);
-                reading.store(true, std::memory_order_relaxed);
                 (void)src.read(buf.data(), buf.size());
             });
-            while (!reading.load(std::memory_order_relaxed)) {
+            // Rendezvous on the DRIVER, not the thread: g_stallInRead is
+            // set from inside readStream itself, so when it reads true the
+            // reader provably holds devMutex_ and every timing assertion
+            // below starts from the contended state it claims to measure.
+            const auto parkStart = std::chrono::steady_clock::now();
+            while (!g_stallInRead.load(std::memory_order_acquire)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                if (std::chrono::steady_clock::now() - parkStart >
+                    std::chrono::seconds(5)) {
+                    break;  // let the CHECKs below name the failure
+                }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            CHECK(g_stallInRead.load(std::memory_order_acquire));
 
+            // A SETTER against the same parked reader first: a SOFT failure,
+            // not an escape path. This is the case the lane design turns on -
+            // a setter can time out against a perfectly healthy slow call
+            // too (this stall, or a real UHD open() taking seconds on another
+            // thread), so it must report the failure and give up the lock
+            // wait, but it must NOT condemn a device it has no evidence is
+            // actually broken. Only stop()/closeDevice() get to do that.
+            const auto tuneStart = std::chrono::steady_clock::now();
+            const bool tuned = src.setCenterFrequencyHz(200.0e6);
+            const auto tuneElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - tuneStart);
+            std::printf("  setCenterFrequencyHz() returned %s after %lld ms\n",
+                        tuned ? "true" : "false",
+                        static_cast<long long>(tuneElapsed.count()));
+            // The driver is still 6 s from returning, so this must be the
+            // bounded give-up, not a lucky fast path.
+            CHECK(!tuned);
+            CHECK(tuneElapsed < std::chrono::milliseconds(4000));
+            CHECK(!src.faulted());     // soft failure: NOT condemned
+            CHECK(!src.deviceDead());
+            CHECK(std::strlen(src.lastError()) > 0);
+
+            // NOW the escape path, against the SAME still-parked reader (it
+            // has ~4.25 s left of its 6 s sleep at this point): stop() must
+            // also give up rather than hang, and THIS timeout is the one
+            // permitted to mark the device dead.
             const auto t0 = std::chrono::steady_clock::now();
             src.stop();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

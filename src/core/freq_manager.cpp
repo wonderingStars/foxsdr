@@ -172,7 +172,12 @@ bool FreqManager::save(const std::string& path, std::string& error) const {
     json j;
     j["schemaVersion"] = 1;
     j["bookmarks"] = std::move(arr);
-    const std::string text = j.dump(4) + "\n";
+    // error_handler_t::replace, like every dump() in this tree: this text
+    // includes user-entered or remote strings, and a byte that is not valid
+    // UTF-8 must cost one replacement character, never a throw out of a save
+    // path. tests/test_json_dump_policy.cpp holds every site to this.
+    const std::string text =
+        j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 
     // ATOMIC WRITE — the ConfigStore approach verbatim. The temp file lives
     // in the target's own directory so the final rename is a same-volume

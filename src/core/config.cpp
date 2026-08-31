@@ -465,7 +465,12 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["crashUploadWindowStart"] = cfg.crashUploadWindowStart;
     j["crashUploadWindowCount"] = static_cast<std::uint64_t>(cfg.crashUploadWindowCount);
     j["crashUploadBlockedUntil"] = cfg.crashUploadBlockedUntil;
-    const std::string text = j.dump(4) + "\n";
+    // error_handler_t::replace, like every dump() in this tree: this text
+    // includes user-entered or remote strings, and a byte that is not valid
+    // UTF-8 must cost one replacement character, never a throw out of a save
+    // path. tests/test_json_dump_policy.cpp holds every site to this.
+    const std::string text =
+        j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the
     // final rename is a same-volume move — cross-volume "renames" degrade to

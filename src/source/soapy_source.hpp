@@ -23,10 +23,26 @@
 // consumed by exactly these unserialised control calls.
 //
 // What that costs: a control call can wait behind one bounded readStream(),
-// so the read timeout is 20 ms (kReadTimeoutUs) — a setter waits at most one
-// read quantum. stop() no longer interrupts a parked read cross-thread (the
-// SoapySDR stream contract forbids that concurrent use anyway); it waits the
-// same bounded quantum, then deactivates with the stream unowned.
+// so the read timeout is 20 ms (kReadTimeoutUs) — under a healthy driver a
+// setter waits at most one read quantum. stop() no longer interrupts a
+// parked read cross-thread (the SoapySDR stream contract forbids that
+// concurrent use anyway); it waits the same bounded quantum, then
+// deactivates with the stream unowned.
+//
+// EVERY devMutex_ ACQUISITION IS ITSELF BOUNDED (kControlLockWait, 1.5 s),
+// not only stop()'s. kReadTimeoutUs is the bound the DRIVER promises, not one
+// this code can enforce — field report 4214EAE4 proved a vendor readStream
+// can simply ignore it and freeze every waiter forever, and a hang on the GUI
+// thread is worse than a crash, because the user cannot even restart from it.
+// The verdict on losing that race differs by what the call is FOR, not just
+// by whether it timed out: read() treats it as an ordinary retry (the source
+// thread is not the injured party), a setter/query reports a soft failure
+// without touching the device's health (it can lose this race against a
+// perfectly healthy slow open()), and only the user's own escape paths —
+// stop() and closeDevice() — condemn the device as dead. See the .cpp for the
+// per-site reasoning; open()'s own timeout is the odd one out, since there it
+// is the PREVIOUS device's driver holding the lock and this call never
+// touched anything of its own to clean up.
 //
 // Lock-free mirrors: running_/sampleRateHz_/centerFrequencyHz_ are atomics
 // and isOpen() reads an atomic mirror, so the per-frame GUI readouts never
@@ -225,7 +241,11 @@ public:
     // noticeably). Returns the sample count delivered; 0 on timeout — the
     // contract-compliant "retry" signal for a self-paced source — and 0
     // immediately (no block) when no stream is open, so a pipeline pointed at
-    // an unopened source spins safely instead of crashing.
+    // an unopened source spins safely instead of crashing. Also 0, after
+    // waiting up to kControlLockWait, if devMutex_ itself cannot be acquired
+    // (a control call is the one inside the driver right now) — the same
+    // retry signal, not an error, because the source thread is not who is
+    // blocking whom here.
     //
     // Errors are CLASSIFIED rather than uniformly retried, because "retry
     // forever" is the wrong recovery for half of them:
@@ -326,12 +346,14 @@ private:
     void clearError();
 
     // Serialises every entry into the vendor driver — see the file header.
-    // Touched only by public entry points; held across the driver call.
-    // A TIMED mutex, so that a control call made on the GUI thread can give
-    // up rather than freeze the interface. See stop() in the .cpp: the whole
-    // design depends on readStream honouring its 20 ms timeout, and a vendor
-    // driver that simply never returns turns every waiter into a permanent
-    // hang. Field report 4214EAE4 is exactly that, on a Mirics device.
+    // Touched only by public entry points; held across the driver call. A
+    // TIMED mutex, so EVERY entry point — not only stop() — can give up
+    // rather than freeze the interface. The whole design depends on
+    // readStream honouring its 20 ms timeout, and a vendor driver that simply
+    // never returns turns every waiter into a permanent hang; field report
+    // 4214EAE4 is exactly that, on a Mirics device. Every acquisition in the
+    // .cpp uses the shared kControlLockWait bound; what happens on a lost
+    // race differs by call site, and is explained there.
     mutable std::timed_mutex devMutex_;
 
     // dev_ and stream_ are read and written ONLY under devMutex_.
