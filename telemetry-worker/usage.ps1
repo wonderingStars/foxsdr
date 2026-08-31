@@ -32,7 +32,28 @@ param(
     [int]$Days = 30,
     [string]$AccountId = $env:CLOUDFLARE_ACCOUNT_ID,
     [string]$Token = $env:CLOUDFLARE_API_TOKEN,
-    [string]$Raw
+    [string]$Raw,
+    # INSTALL IDS THAT ARE NOT USERS. Every number this script prints is meant
+    # to answer "how many people use this", and the development machine is not
+    # one of them - it launches the app dozens of times a day, most of them for
+    # thirty seconds to check a build.
+    #
+    # This is not hypothetical tidiness. On 2026-08-31 a testing session ran a
+    # dev build interactively with the owner's own config, and put thirteen
+    # reports into the dataset under this id - six of them tagged 0.66.0 and one
+    # 0.65.2, versions that were never released to anyone - along with a crash
+    # count inflated from 1 to 6, because every kill of a test instance is an
+    # unclean exit and an unclean exit IS how this product counts crashes.
+    # Analytics Engine is append-only, so those rows cannot be deleted; the only
+    # way to make the numbers honest again is to leave this install out when
+    # reading them, which is what this does.
+    #
+    # Filtering by VERSION would not have worked: four of the thirteen are
+    # tagged 0.64.0 and are indistinguishable from real use of the shipped
+    # build by anything except the id.
+    #
+    # Pass -ExcludeInstalls @() to see the unfiltered dataset.
+    [string[]]$ExcludeInstalls = @('397c600669cd9fa2dfb4b7d911edb70c')
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,7 +99,19 @@ function Invoke-Sql([string]$sql) {
 # The dataset only exists once something has been written to it. Querying an
 # absent table is an error, not an empty result, so say which case this is
 # rather than letting a raw API error stand.
-$window = "timestamp > NOW() - INTERVAL '$Days' DAY"
+# Sanitised to hex before it reaches a query: these ids arrive from a command
+# line and are pasted straight into SQL.
+$exclude = ""
+if ($ExcludeInstalls) {
+    $clean = @($ExcludeInstalls |
+        ForEach-Object { ($_ -replace '[^0-9a-fA-F]', '').ToLower() } |
+        Where-Object { $_.Length -gt 0 })
+    if ($clean.Count -gt 0) {
+        $exclude = " AND index1 NOT IN (" + (($clean | ForEach-Object { "'$_'" }) -join ", ") + ")"
+    }
+}
+
+$window = "timestamp > NOW() - INTERVAL '$Days' DAY$exclude"
 
 if ($Raw) {
     Invoke-Sql $Raw | ConvertTo-Json -Depth 6
@@ -88,6 +121,15 @@ if ($Raw) {
 Write-Host ""
 Write-Host "FoxSDR usage - last $Days days" -ForegroundColor Cyan
 Write-Host ("=" * 40)
+# SAID OUT LOUD, EVERY RUN. A number that quietly leaves rows out is worse than
+# one that does not, because the reader cannot tell which they are looking at -
+# so the exclusion is printed whenever it is in force, and its absence is
+# printed too.
+if ($exclude) {
+    Write-Host ("Excluding $($clean.Count) development install(s) - these are not users." ) -ForegroundColor DarkGray
+} else {
+    Write-Host "No installs excluded: development machines are counted as users." -ForegroundColor Yellow
+}
 
 # THE headline number. count(DISTINCT index1), never uniq(): uniq() is
 # approximate and reads LOW on small samples, which is exactly the sample size
@@ -105,7 +147,7 @@ Write-Host ("reports (launches): {0}" -f $i.reports)
 
 # The two figures people actually mean by "how many users".
 foreach ($d in 1, 7) {
-    $r = Invoke-Sql "SELECT count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE timestamp > NOW() - INTERVAL '$d' DAY"
+    $r = Invoke-Sql "SELECT count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE timestamp > NOW() - INTERVAL '$d' DAY$exclude"
     if ($r) {
         $label = if ($d -eq 1) { "active today" } else { "active in 7 days" }
         Write-Host ("{0,-18}: {1}" -f $label, $r[0].installs)

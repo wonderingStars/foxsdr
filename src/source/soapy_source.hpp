@@ -47,6 +47,7 @@
 #include <atomic>
 #include <complex>
 #include <cstddef>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -326,7 +327,12 @@ private:
 
     // Serialises every entry into the vendor driver — see the file header.
     // Touched only by public entry points; held across the driver call.
-    mutable std::mutex devMutex_;
+    // A TIMED mutex, so that a control call made on the GUI thread can give
+    // up rather than freeze the interface. See stop() in the .cpp: the whole
+    // design depends on readStream honouring its 20 ms timeout, and a vendor
+    // driver that simply never returns turns every waiter into a permanent
+    // hang. Field report 4214EAE4 is exactly that, on a Mirics device.
+    mutable std::timed_mutex devMutex_;
 
     // dev_ and stream_ are read and written ONLY under devMutex_.
     SoapySDR::Device* dev_ = nullptr;

@@ -731,6 +731,14 @@ int AppWindow::run(int frames) {
     // back.
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // TORN-OFF WINDOWS GET THE OPERATING SYSTEM'S OWN FRAME. ImGui's viewport
+    // default is a bare undecorated rectangle whose only resize affordances
+    // are its own thin edge zones and corner grip - which on a real desktop
+    // reads as "this window cannot be resized" (reported by a user trying to
+    // grow the Map, 2026-08-30). A native frame gives the map and every
+    // decoded-image window the resize borders, title bar, and
+    // minimise/maximise behaviour every other window on the desktop has.
+    ImGui::GetIO().ConfigViewportsNoDecoration = false;
     ImGui::StyleColorsDark();
     // A window that has been torn off is a real window and should look like
     // one: square corners and an opaque background, not the translucent
@@ -2945,6 +2953,12 @@ void AppWindow::rescanPlugins() {
     // Scope guard, because there is a `return` in the middle of this function.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
 
+    // Every panel and image window is about to be rebuilt from a fresh set of
+    // plugins, so a window the user closed before the rescan no longer refers
+    // to anything that still exists. Forgetting the closures here is what
+    // makes a rescan the way to get them all back.
+    closedWindows_.clear();
+
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
     // nothing here reports a failure.
@@ -4333,7 +4347,12 @@ void AppWindow::drawPluginWindows() {
         // producing pictures do not land exactly on top of each other.
         placeAsSeparateWindow(static_cast<int>(i) + 1);
         const std::string id = im.plugin + " image###image_" + im.plugin;
-        if (ImGui::Begin(id.c_str())) {
+        // A REAL p_open, so the frame's close button is not a lie. See
+        // closedWindows_ in the header for why this became necessary the
+        // moment torn-off windows gained the OS's own title bar.
+        if (closedWindows_.count(id) != 0u) { continue; }
+        bool imageOpen = true;
+        if (ImGui::Begin(id.c_str(), &imageOpen)) {
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("Waiting for the first image...");
             } else {
@@ -4413,6 +4432,7 @@ void AppWindow::drawPluginWindows() {
             if (!imageSaveNote_.empty()) { ImGui::TextDisabled("%s", imageSaveNote_.c_str()); }
         }
         ImGui::End();
+        if (!imageOpen) { closedWindows_.insert(id); }
     }
 
     drawDecoderWindow();
@@ -4425,7 +4445,9 @@ void AppWindow::drawPluginWindows() {
         // plugins may legitimately call their window the same thing, and
         // colliding ids would merge them into one window.
         const std::string id = p.title + "###panel_" + p.plugin;
-        if (ImGui::Begin(id.c_str())) {
+        if (closedWindows_.count(id) != 0u) { continue; }
+        bool panelOpen = true;
+        if (ImGui::Begin(id.c_str(), &panelOpen)) {
             const int cols = static_cast<int>(p.headings.size());
             if (cols > 0 &&
                 ImGui::BeginTable("##rows", cols,
@@ -4472,6 +4494,7 @@ void AppWindow::drawPluginWindows() {
             if (p.rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
         }
         ImGui::End();
+        if (!panelOpen) { closedWindows_.insert(id); }
     }
 }
 

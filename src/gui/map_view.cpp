@@ -142,6 +142,11 @@ void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, Im
 // bearing also answered 000 for a target directly overhead, where the tested
 // one says explicitly that there is no such direction.
 
+// The span a fit falls back to when there is exactly one target, which has
+// no extent of its own to fit. Wide enough to place a marker in a country
+// rather than in blank blue.
+constexpr double kLoneTargetSpanDeg = 24.0;
+
 // Graticule step that keeps roughly 4-10 lines across the view at any zoom.
 double graticuleStep(double spanDeg) {
     static const double steps[] = {0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 45};
@@ -218,8 +223,38 @@ void MapView::draw(float width, float height,
         if (any) {
             centreLat_ = 0.5 * (minLat + maxLat);
             centreLon_ = 0.5 * (minLon + maxLon);
-            const double need = std::max(maxLon - minLon, (maxLat - minLat) * 2.0);
-            spanDeg_ = std::clamp(need * 1.6, 0.5, 360.0);
+
+            // What the content needs across, and what it needs DOWN expressed
+            // as the longitude span that would show it. Two things were wrong
+            // here and both are corrected:
+            //
+            //  - the vertical requirement used a hard-coded factor of two,
+            //    which is the right answer only for a window exactly twice as
+            //    wide as it is tall. Every other shape either cropped targets
+            //    off the top and bottom or zoomed out further than it needed.
+            //
+            //  - it compared DEGREES of latitude against degrees of longitude
+            //    even under tiles, where the vertical scale is Mercator. Those
+            //    are not interchangeable anywhere but the equator, and the
+            //    error grows without bound towards the poles - which is
+            //    exactly where polar-orbiting satellites spend their time.
+            const double aspect =
+                static_cast<double>(width) / static_cast<double>(height);
+            const double needFromLat =
+                mercator ? (mercY(minLat) - mercY(maxLat)) * 360.0 * aspect
+                         : (maxLat - minLat) * aspect;
+            double need = std::max(maxLon - minLon, needFromLat);
+
+            // A SINGLE TARGET HAS NO EXTENT, and the old arithmetic turned
+            // that into need = 0 and a half-degree span: the map slammed to
+            // roughly fifty kilometres across, showing one marker adrift in
+            // blank tiles with no way to tell where on earth it was. One
+            // target is the FIRST thing a fresh install sees, so this was the
+            // common case, not the corner one. Give it a view with enough
+            // context to recognise, and let the user zoom.
+            if (need < 1.0e-6) { need = kLoneTargetSpanDeg; }
+
+            spanDeg_ = std::clamp(need * 1.25, 0.5, 360.0);
             fitRequested_ = false;
             fittedOnce_ = true;
         }
@@ -280,6 +315,35 @@ void MapView::draw(float width, float height,
                              : (centreLat_ - lat) / latSpan * height + height * 0.5;
         return ImVec2(origin.x + static_cast<float>(x), origin.y + static_cast<float>(y));
     };
+    // TILE EDGES ARE PLACED FROM A CONTINUOUS LONGITUDE, NEVER THE WRAPPED
+    // ONE, and this is not a tidy-up - it is the fix for a map that rendered
+    // MIRRORED.
+    //
+    // toScreen's "short way round" correction is right for a POINT: a target
+    // at +179 seen from -179 is two degrees away, not three hundred and
+    // fifty-eight. It is wrong for a RECTANGLE, because the two edges are
+    // wrapped independently. A tile running from +178 to +182 has its west
+    // edge left at +178 and its east edge folded to -178, so east lands to the
+    // LEFT of west, ImDrawList::AddImage is handed p_min.x > p_max.x, and it
+    // dutifully draws the texture back to front - continents and all their
+    // labels in mirror writing.
+    //
+    // It only bites once the view is wide enough for a visible tile to sit
+    // more than 180 degrees from the centre, which is why it hid until
+    // something zoomed the map out near the whole globe: eight satellites
+    // scattered around the planet do exactly that (reported 2026-08-30).
+    // The tile loop already works in an unwrapped, continuous longitude - the
+    // one toWorld returns and txRaw preserves - so the only thing needed is to
+    // stop re-wrapping it on the way back out.
+    const auto tileX = [&](double lon) {
+        return origin.x +
+               static_cast<float>((lon - centreLon_) / lonSpan * width + width * 0.5);
+    };
+    const auto tileY = [&](double lat) {
+        return origin.y +
+               static_cast<float>((mercY(lat) - centreMercY) * pixPerWorld + height * 0.5);
+    };
+
     const auto toWorld = [&](const ImVec2& p) {
         const double lon =
             (static_cast<double>(p.x - origin.x) - width * 0.5) / width * lonSpan + centreLon_;
@@ -412,8 +476,11 @@ void MapView::draw(float width, float height,
                 const double east = static_cast<double>(txRaw + 1) / n * 360.0 - 180.0;
                 const double north = mercLat(static_cast<double>(ty) / n);
                 const double south = mercLat(static_cast<double>(ty + 1) / n);
-                const ImVec2 a = toScreen(north, west);
-                const ImVec2 b = toScreen(south, east);
+                const ImVec2 a(tileX(west), tileY(north));
+                const ImVec2 b(tileX(east), tileY(south));
+                // a is the top-left and b the bottom-right BY CONSTRUCTION now
+                // (east > west, north > south), which is what AddImage's
+                // implicit 0,0-1,1 texture coordinates require.
                 dl->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)), a,
                              b);
                 haveTiles = true;
