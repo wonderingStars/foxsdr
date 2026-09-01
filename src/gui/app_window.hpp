@@ -275,6 +275,10 @@ public:
     void setDiagToggle(int mode);
 
 private:
+    // One plugin's map page — declared ahead of the drawing methods that take
+    // it, defined in full beside the map state below.
+    struct MapPage;
+
     void drawUi();
     void drawToolbar();
     void drawFrequencyReadout();
@@ -385,7 +389,12 @@ private:
     // replaced. The other six values moved into the details window below, and
     // the eight sort keys into one labelled menu above the table, so nothing
     // that could be asked before has stopped being answerable.
-    void drawTrackList();
+    //
+    // Per page now: `tracks` is the page's plugin's tracks only, already
+    // filtered by the caller, and every selection/follow gesture lands on that
+    // page's own MapView.
+    void drawTrackList(MapPage& page,
+                       const std::vector<cascade::core::HostTrack>& tracks);
     // The compact sort control above the list: which key, and which way. It is
     // the ONLY way the list is ordered - the table itself is no longer
     // ImGui-sortable, because ImGui offers no public way to write the header's
@@ -490,11 +499,23 @@ private:
     // centre frequency. Called after any source change, because both are
     // passed to a decoder's create() and cannot be changed afterwards.
     void refreshPluginRunner();
-    // The map window and every plugin-declared panel window. Drawn as their
+    // The map pages and every plugin-declared panel window. Drawn as their
     // own top-level windows rather than inside the menu column: a map squeezed
     // into a 300 px sidebar is not a map, and a plugin's window should be
     // movable and resizable like any other.
     void drawPluginWindows();
+    // The page for a plugin, by the display name every HostTrack carries.
+    // find returns null for a plugin with no page yet; ensure creates one
+    // lazily — its own MapView, the receiver position applied, and geometry
+    // seeded from the saved entry or from the legacy single-window rectangle
+    // staggered by page index.
+    MapPage* findMapPage(const std::string& plugin);
+    MapPage& ensureMapPage(const std::string& plugin);
+    // Folds every live page's rectangle and open flag into mapPagesSaved_,
+    // which is what currentConfig() writes out. Entries for plugins with no
+    // page this session ride through untouched, so a geometry saved for a
+    // plugin that is temporarily uninstalled is not erased by unrelated saves.
+    void syncMapPagesToSaved();
     // Starting position and size for a window that should be its OWN operating
     // system window rather than a panel inside the main one. `slot` staggers
     // several of them. See the definition for why the position is what decides
@@ -838,7 +859,56 @@ private:
     // services. Declared after pluginHost_ for the same destruction-order
     // reason as pluginRunner_.
     cascade::core::PluginUi pluginUi_;
-    std::unique_ptr<MapView> map_;
+
+    // --- Per-plugin map pages ---------------------------------------------
+    // ONE MAP PAGE PER PLUGIN THAT HAS A TRACK INSTANCE, replacing the single
+    // "Map" window that drew every plugin's targets merged — which is why
+    // switching from the Satellites plugin to ADS-B still showed "the
+    // satellite map". Capability decides the page set, not content: an ADS-B
+    // page with no aircraft decoded yet still exists, because "the page is
+    // there but empty" answers the user's question and "the page is missing"
+    // does not.
+    //
+    // Each page owns its own MapView, so view centre, zoom, follow and
+    // selection are all per-page — that separation is the point of the
+    // feature. Pages are created lazily the first frame their plugin appears
+    // and never destroyed while the app runs; rescanPlugins() clears them the
+    // way it clears closedWindows_, and they rebuild from mapPagesSaved_ on
+    // the next frame.
+    struct MapPage {
+        std::string plugin;  // display name, as HostTrack::plugin carries it
+        std::unique_ptr<MapView> view;
+        bool open = false;
+        // The page has self-opened once already this session. The first
+        // visible track opens the page exactly once; this flag is what stops
+        // it re-opening after the user closes it.
+        // The self-open EDGE's memory (see core/plugin_ui.hpp's
+        // mapSelfOpens): whether this plugin had a visible target last
+        // frame. Never persisted - a restart is a quiet gap by
+        // definition, so a session opens on its first arrival exactly
+        // the way the single map always did.
+        bool hadVisible = false;
+        // The window's rectangle: seeded at creation from the saved entry (or
+        // the legacy single-window rectangle), read back from ImGui every
+        // frame the window is drawn, and written to AppConfig::mapPages.
+        // Zero width/height means nothing saved — default placement.
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+    };
+    // Creation order, which is the plugins' load order — that is what keeps
+    // the default cascade of fresh pages stable across launches.
+    std::vector<MapPage> mapPages_;
+    // AppConfig::mapPages as loaded, re-synced from the live pages by
+    // syncMapPagesToSaved(). Kept separately from mapPages_ so an entry for a
+    // plugin that is not installed this session survives the session's saves.
+    std::vector<cascade::core::AppConfig::MapPage> mapPagesSaved_;
+    // Scratch for one page's filtered tracks and paths, reused across pages
+    // so the per-frame filter allocates nothing in the steady state. The
+    // per-plugin caps in PluginUi bound what lands here.
+    std::vector<cascade::core::HostTrack> pageTracks_;
+    std::vector<cascade::core::HostPath> pagePaths_;
     // --- Anonymous usage reporting (opt-in; see PRIVACY.md) ----------------
     // Counters for the session in progress, journalled to the config at exit
     // and sent at the NEXT start-up. Nothing here is transmitted unless the
@@ -948,23 +1018,14 @@ private:
     // is the shipped configuration. Declared after pluginHost_ so it detaches
     // before the modules it borrows tiles from are unmapped.
     BasemapCache basemap_;
-    bool mapOpen_ = false;
-    // What anyVisibleTarget() said LAST frame, which is the other half of the
-    // self-open rule (cascade::core::mapSelfOpens). Without it the window is
-    // demanded on every frame a target is visible, and a receiver that keeps
-    // hearing its targets - the ordinary case - makes the close button
-    // impossible to use. Starts false so the first target of a session still
-    // brings the map up.
-    bool mapHadVisibleTarget_ = false;
-    // The map window's geometry: seeded from AppConfig at start-up, read back
-    // from ImGui every frame the window is drawn, and written to AppConfig.
-    // ImGui's own .ini persistence is off in this application, so without
-    // these the window reverted to its opening size on every launch however
-    // the user had dragged it. All zero means nothing was ever saved (or the
-    // config sanitizer rejected what was), which is what selects the
-    // monitor-derived default size instead. A session in which the map is
-    // never opened writes back exactly what it read, so closing the map does
-    // not erase the size the user chose.
+    // The LEGACY single-window rectangle, seeded from AppConfig at start-up
+    // and never changed after: it is only the default rectangle for a page
+    // with no saved mapPages entry of its own (staggered per page index so
+    // pages do not stack exactly). Kept so an install upgrading from the
+    // one-window map reopens its pages where that window used to sit. The
+    // legacy config keys are read but no longer written — see AppConfig.
+    // All zero means nothing was ever saved (or the config sanitizer rejected
+    // what was), which is what selects the monitor-derived default instead.
     int mapWinW_ = 0;
     int mapWinH_ = 0;
     int mapWinX_ = 0;

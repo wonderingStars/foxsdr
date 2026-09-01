@@ -214,10 +214,48 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "notchQ", out.notchQ);
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
+    // LEGACY KEYS, READ AND NEVER WRITTEN. A file saved before the map became
+    // one page per plugin carries its single window's rectangle here; it is
+    // read so that rectangle can seed the pages' default placement, and save()
+    // below deliberately does not emit these four keys — mapPages is the
+    // rectangle store now.
     getInt(j, "mapWindowWidth", out.mapWindowWidth);
     getInt(j, "mapWindowHeight", out.mapWindowHeight);
     getInt(j, "mapWindowX", out.mapWindowX);
     getInt(j, "mapWindowY", out.mapWindowY);
+    // Per-plugin map pages. Element-wise tolerant like getStringArray: an
+    // entry that is not an object is a hand-edit and is skipped, the usable
+    // entries survive. Rectangle sanitization happens with the legacy
+    // rectangle's below, so the two can never apply different rules.
+    {
+        const auto it = j.find("mapPages");
+        if (it != j.end() && it->is_array()) {
+            std::vector<AppConfig::MapPage> pages;
+            for (const auto& e : *it) {
+                if (!e.is_object()) { continue; }
+                AppConfig::MapPage pg;
+                getString(e, "plugin", pg.plugin);
+                getInt(e, "x", pg.x);
+                getInt(e, "y", pg.y);
+                getInt(e, "width", pg.width);
+                getInt(e, "height", pg.height);
+                getBool(e, "open", pg.open);
+                // An empty name can never match a plugin, and a duplicate
+                // would make one page's geometry restore depend on which
+                // entry happened to be read last — first one wins.
+                if (pg.plugin.empty()) { continue; }
+                const bool dup =
+                    std::any_of(pages.begin(), pages.end(),
+                                [&pg](const AppConfig::MapPage& q) {
+                                    return q.plugin == pg.plugin;
+                                });
+                if (dup) { continue; }
+                pages.push_back(std::move(pg));
+                if (pages.size() >= AppConfig::kMaxMapPages) { break; }
+            }
+            out.mapPages = std::move(pages);
+        }
+    }
     getBool(j, "rxPositionSet", out.rxPositionSet);
     getDouble(j, "rxLatDeg", out.rxLatDeg);
     getDouble(j, "rxLonDeg", out.rxLonDeg);
@@ -302,20 +340,37 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // See the header for why zero width is the "nothing saved" sentinel and
     // why the position rides with the size.
     {
-        const bool sized = out.mapWindowWidth != 0 || out.mapWindowHeight != 0;
-        const bool sizeOk = out.mapWindowWidth >= AppConfig::kMapWindowMinPx &&
-                            out.mapWindowWidth <= AppConfig::kMapWindowMaxPx &&
-                            out.mapWindowHeight >= AppConfig::kMapWindowMinPx &&
-                            out.mapWindowHeight <= AppConfig::kMapWindowMaxPx;
-        const bool posOk = out.mapWindowX >= -AppConfig::kMapWindowMaxPx &&
-                           out.mapWindowX <= AppConfig::kMapWindowMaxPx &&
-                           out.mapWindowY >= -AppConfig::kMapWindowMaxPx &&
-                           out.mapWindowY <= AppConfig::kMapWindowMaxPx;
-        if (!sized || !sizeOk || !posOk) {
+        // ONE rule for both stores, written once. A per-page rectangle failing
+        // it zeroes only that entry's rectangle — the entry itself, with its
+        // plugin name and open flag, survives and falls back to default
+        // placement, because "where the window sat" and "whether it was open"
+        // are separate decisions and only one of them went bad.
+        const auto rectOk = [](int x, int y, int w, int h) {
+            const bool sized = w != 0 || h != 0;
+            const bool sizeOk = w >= AppConfig::kMapWindowMinPx &&
+                                w <= AppConfig::kMapWindowMaxPx &&
+                                h >= AppConfig::kMapWindowMinPx &&
+                                h <= AppConfig::kMapWindowMaxPx;
+            const bool posOk = x >= -AppConfig::kMapWindowMaxPx &&
+                               x <= AppConfig::kMapWindowMaxPx &&
+                               y >= -AppConfig::kMapWindowMaxPx &&
+                               y <= AppConfig::kMapWindowMaxPx;
+            return sized && sizeOk && posOk;
+        };
+        if (!rectOk(out.mapWindowX, out.mapWindowY, out.mapWindowWidth,
+                    out.mapWindowHeight)) {
             out.mapWindowWidth = 0;
             out.mapWindowHeight = 0;
             out.mapWindowX = 0;
             out.mapWindowY = 0;
+        }
+        for (AppConfig::MapPage& pg : out.mapPages) {
+            if (!rectOk(pg.x, pg.y, pg.width, pg.height)) {
+                pg.x = 0;
+                pg.y = 0;
+                pg.width = 0;
+                pg.height = 0;
+            }
         }
     }
     // The receiver's position is validated as ONE position, for the same reason
@@ -431,10 +486,39 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["notchQ"] = cfg.notchQ;
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
-    j["mapWindowWidth"] = cfg.mapWindowWidth;
-    j["mapWindowHeight"] = cfg.mapWindowHeight;
-    j["mapWindowX"] = cfg.mapWindowX;
-    j["mapWindowY"] = cfg.mapWindowY;
+    // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
+    // deliberately NOT written: the map is one page per plugin now, and
+    // mapPages below is the rectangle store. The keys are still read (see
+    // load) so an older file's rectangle seeds the pages' default placement.
+    {
+        json pages = json::array();
+        for (const AppConfig::MapPage& pg : cfg.mapPages) {
+            json e;
+            e["plugin"] = pg.plugin;
+            e["x"] = pg.x;
+            e["y"] = pg.y;
+            e["width"] = pg.width;
+            e["height"] = pg.height;
+            e["open"] = pg.open;
+            pages.push_back(std::move(e));
+        }
+    // THE LEGACY SEED SURVIVES UNTIL IT HAS BEEN SPENT. mapPages replaced the
+    // four mapWindow* keys, which are read as the default rectangle for a
+    // page with no saved entry and are normally not written back. But
+    // migration happens only when a track-capable plugin actually creates a
+    // page - and a launch with no such plugin would otherwise save an empty
+    // mapPages AND drop the legacy keys, destroying the user's old map
+    // rectangle one plugin-less session before it could ever be inherited.
+    // So while mapPages is still empty, the legacy keys are written through
+    // verbatim; the first real page entry retires them.
+    if (cfg.mapPages.empty() && cfg.mapWindowWidth > 0 && cfg.mapWindowHeight > 0) {
+        j["mapWindowWidth"] = cfg.mapWindowWidth;
+        j["mapWindowHeight"] = cfg.mapWindowHeight;
+        j["mapWindowX"] = cfg.mapWindowX;
+        j["mapWindowY"] = cfg.mapWindowY;
+    }
+        j["mapPages"] = std::move(pages);
+    }
     j["rxPositionSet"] = cfg.rxPositionSet;
     j["rxLatDeg"] = cfg.rxLatDeg;
     j["rxLonDeg"] = cfg.rxLonDeg;
