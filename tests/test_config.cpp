@@ -103,6 +103,10 @@ AppConfig junkConfig() {
     c.mapWindowHeight = 999999;
     c.mapWindowX = -999999;
     c.mapWindowY = 999999;
+    // A map page that must never survive a load: a config that does not
+    // mention pages has none, and a leftover here would restore a window
+    // rectangle nobody saved.
+    c.mapPages = {{"junk-page", -5, 999999, -5, 999999, true}};
     // A receiver position that must never survive a load: a config that does
     // not mention one has none, and a leftover here would put every distance
     // and bearing on the map - and the whole coverage overlay - at a place the
@@ -171,6 +175,11 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mapWindowHeight == b.mapWindowHeight);
     CHECK(a.mapWindowX == b.mapWindowX);
     CHECK(a.mapWindowY == b.mapWindowY);
+    // One whole-container compare, the same way the three plugin-name lists
+    // are checked below: indexing into a possibly-shorter vector inside a
+    // record-and-continue harness is an out-of-bounds read in exactly the run
+    // that has something to report.
+    CHECK(a.mapPages == b.mapPages);
     CHECK(a.rxPositionSet == b.rxPositionSet);
     CHECK(a.rxLatDeg == b.rxLatDeg);
     CHECK(a.rxLonDeg == b.rxLonDeg);
@@ -241,14 +250,17 @@ int main() {
         in.notchQ = 42.25;
         in.autoNotch = true;
         in.bandPlanOverlay = false;
-        // Map window geometry: a rectangle nobody would arrive at by accident,
-        // and a NEGATIVE x, because a second monitor to the left of the
-        // primary one is the ordinary case that a naive "must be positive"
-        // rule would silently throw away.
-        in.mapWindowWidth = 1234;
-        in.mapWindowHeight = 987;
-        in.mapWindowX = -1600;
-        in.mapWindowY = 42;
+        // Map pages: two, in an order the roundtrip must preserve, each with a
+        // rectangle nobody would arrive at by accident and one with a NEGATIVE
+        // x, because a second monitor to the left of the primary one is the
+        // ordinary case that a naive "must be positive" rule would silently
+        // throw away. Opposite open flags, so a save that hard-coded either
+        // value is caught. The LEGACY mapWindow* fields stay at their default
+        // here on purpose: save() no longer writes those keys — the dedicated
+        // map-window block below proves that — so non-default values could
+        // never roundtrip and do not belong in a roundtrip fixture.
+        in.mapPages = {{"ADS-B", -1600, 42, 1234, 987, true},
+                       {"Satellite Tracker", 64, 128, 800, 600, false}};
         // The receiver's position: a real place with a NEGATIVE longitude and
         // fractional minutes, so a load path that rounded it, dropped the sign
         // or forgot the field entirely is caught. This is the field the
@@ -590,14 +602,24 @@ int main() {
             CHECK(out.mapWindowY == 0);
         }
 
-        // And a saved rectangle survives a full save/load roundtrip, which is
-        // the actual promise: a resize the user made must outlive the process.
+        // These four keys are LEGACY, and their write rule was REFINED after
+        // review (the earlier expectation here — "never written" — was
+        // provably wrong): migration into a mapPages entry happens only when
+        // a track-capable plugin creates a page, so a plugin-less launch that
+        // saved without these keys destroyed the user's old map rectangle one
+        // session before it could ever be inherited. The contract now: the
+        // legacy keys are WRITTEN THROUGH while mapPages is still empty, and
+        // the first real page entry retires them. Both halves are asserted,
+        // because either alone can rot: keep-while-unspent is what the review
+        // demanded, drop-once-spent is what stops the keys living for ever.
         AppConfig in;
         in.schemaVersion = 1;
         in.mapWindowWidth = 1570;
         in.mapWindowHeight = 1020;
         in.mapWindowX = 1226;
         in.mapWindowY = 169;
+
+        // Unspent seed (no pages): the rectangle must survive a roundtrip.
         const std::string rt = p("map_window_roundtrip.json");
         CHECK(ConfigStore::save(rt, in, err));
         out = junkConfig();
@@ -606,6 +628,105 @@ int main() {
         CHECK(out.mapWindowHeight == 1020);
         CHECK(out.mapWindowX == 1226);
         CHECK(out.mapWindowY == 169);
+
+        // Spent seed (a page exists): the legacy keys are retired. The
+        // raw-text check is the half a load alone cannot prove — absent keys
+        // and present-but-zero keys load identically.
+        in.mapPages = {{"ADS-B", 1, 2, 300, 200, true}};
+        const std::string rt2 = p("map_window_retired.json");
+        CHECK(ConfigStore::save(rt2, in, err));
+        CHECK(readAll(rt2).find("mapWindowWidth") == std::string::npos);
+        CHECK(readAll(rt2).find("mapWindowHeight") == std::string::npos);
+        CHECK(readAll(rt2).find("mapWindowX") == std::string::npos);
+        CHECK(readAll(rt2).find("mapWindowY") == std::string::npos);
+        out = junkConfig();
+        CHECK(ConfigStore::load(rt2, out, err));
+        CHECK(out.mapWindowWidth == 0);
+        CHECK(out.mapWindowHeight == 0);
+    }
+
+    // --- per-plugin map pages (documented in config.hpp) ----------------------
+    {
+        const std::string path = p("map_pages.json");
+        AppConfig out;
+        std::string err;
+
+        // No pages is the default: a first run has no windows to restore.
+        CHECK(AppConfig{}.mapPages.empty());
+
+        // A plausible list survives untouched — order, rectangles (negative x
+        // included) and both values of the open flag.
+        CHECK(writeText(
+            path,
+            "{\"mapPages\":[{\"plugin\":\"ADS-B\",\"x\":-1600,\"y\":42,"
+            "\"width\":1234,\"height\":987,\"open\":true},"
+            "{\"plugin\":\"Satellite Tracker\",\"x\":64,\"y\":128,"
+            "\"width\":800,\"height\":600,\"open\":false}]}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        const std::vector<AppConfig::MapPage> expectPlausible = {
+            {"ADS-B", -1600, 42, 1234, 987, true},
+            {"Satellite Tracker", 64, 128, 800, 600, false}};
+        CHECK(out.mapPages == expectPlausible);
+
+        // Hygiene, all in one file: a bad rectangle zeroes ONLY that entry's
+        // rectangle — the entry itself, with its plugin name and open flag,
+        // survives and falls back to default placement; an entry with an
+        // empty plugin name is dropped (it can never match a plugin); a
+        // duplicate keeps the first, so which entry restores a page's
+        // geometry cannot depend on file order luck; and a non-object
+        // element is skipped rather than taking the list with it.
+        CHECK(writeText(
+            path,
+            "{\"mapPages\":[{\"plugin\":\"ADS-B\",\"x\":10,\"y\":10,"
+            "\"width\":319,\"height\":600,\"open\":true},"
+            "{\"plugin\":\"\",\"x\":10,\"y\":10,\"width\":900,\"height\":600},"
+            "{\"plugin\":\"ADS-B\",\"x\":5,\"y\":5,\"width\":800,"
+            "\"height\":500,\"open\":false},"
+            "7,"
+            "{\"plugin\":\"AIS\",\"x\":20,\"y\":30,\"width\":900,"
+            "\"height\":700,\"open\":false}]}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        const std::vector<AppConfig::MapPage> expectHygiene = {
+            {"ADS-B", 0, 0, 0, 0, true}, {"AIS", 20, 30, 900, 700, false}};
+        CHECK(out.mapPages == expectHygiene);
+
+        // And the full roundtrip, which is the actual promise: a rectangle
+        // the user dragged a page to must outlive the process.
+        AppConfig in;
+        in.schemaVersion = 1;
+        in.mapPages = {{"POCSAG", 1226, 169, 1570, 1020, true}};
+        const std::string rt = p("map_pages_roundtrip.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        out = junkConfig();
+        CHECK(ConfigStore::load(rt, out, err));
+        CHECK(out.mapPages == in.mapPages);
+
+        // THE CAP IS REAL, NOT DECORATIVE. kMaxMapPages bounds what a config
+        // file can make the loader hold; until this block, no input in the
+        // suite ever exceeded it, so deleting the cap was behaviourally
+        // invisible to every test - the definition of a guard that is not
+        // guarded. 80 entries in, exactly kMaxMapPages survive, in file
+        // order, and the last kept one is the boundary entry.
+        {
+            std::string big = "{\"mapPages\":[";
+            for (int pageNo = 0; pageNo < 80; ++pageNo) {
+                if (pageNo != 0) { big += ","; }
+                big += "{\"plugin\":\"P" + std::to_string(pageNo) +
+                       "\",\"x\":1,\"y\":2,\"width\":300,\"height\":200,"
+                       "\"open\":true}";
+            }
+            big += "]}\n";
+            const std::string capPath = p("map_pages_cap.json");
+            CHECK(writeText(capPath, big));
+            out = junkConfig();
+            CHECK(ConfigStore::load(capPath, out, err));
+            CHECK(out.mapPages.size() == AppConfig::kMaxMapPages);
+            CHECK(out.mapPages.front().plugin == "P0");
+            CHECK(out.mapPages.back().plugin ==
+                  "P" + std::to_string(AppConfig::kMaxMapPages - 1));
+        }
     }
 
     // --- the receiver's own position (documented in config.hpp) ---------------

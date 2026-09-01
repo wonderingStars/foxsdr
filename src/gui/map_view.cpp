@@ -128,9 +128,21 @@ void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, Im
     for (int i = kPlaneHalfCount - 2; i >= 1; --i) {
         put(-kPlaneHalf[i][0], kPlaneHalf[i][1]);
     }
+    // A BLACK RIM ON EVERY PLANE, fading with the marker. Requested after use
+    // over real basemap tiles: a small red silhouette over urban tile colours
+    // or another aircraft's trail loses its edge, and the rim is what keeps it
+    // reading as a shape rather than a smudge. The rim takes its alpha FROM
+    // the fill colour so an ageing target fades as one thing - a solid black
+    // outline around a ghost would read as a different, newer object.
+    const ImU32 rim = IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu);
     if (filled) {
         dl->AddConcavePolyFilled(pts, n, col);
+        dl->AddPolyline(pts, n, rim, ImDrawFlags_Closed, 1.5f);
     } else {
+        // The hollow variant is a CUE (no reported altitude - see above), so
+        // the black cannot replace the coloured outline; it goes UNDER it,
+        // wider, as a halo. The cue survives, the contrast arrives.
+        dl->AddPolyline(pts, n, rim, ImDrawFlags_Closed, 3.25f);
         dl->AddPolyline(pts, n, col, ImDrawFlags_Closed, 1.5f);
     }
 }
@@ -757,11 +769,17 @@ void MapView::draw(float width, float height,
 
         if (ht.t.kind == CASCADE_TRACK_AIRCRAFT) {
             // The silhouette IS the heading indicator, so no tick.
+            // 9.45/8.4/13.65: the 9/8/13 set grown 5% together, requested
+            // after field use - the silhouettes read slightly small against
+            // the new rims, and growing all three keeps the selected
+            // knockout's margins exactly as designed.
             if (picked) {
-                dl->AddCircleFilled(s, 13.0f, col);
-                addPlane(dl, s, ht.t.courseDeg, 8.0f, IM_COL32(16, 20, 26, 255));
+                dl->AddCircleFilled(s, 13.65f, col);
+                dl->AddCircle(s, 13.65f, IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu),
+                              0, 1.5f);
+                addPlane(dl, s, ht.t.courseDeg, 8.4f, IM_COL32(16, 20, 26, 255));
             } else {
-                addPlane(dl, s, ht.t.courseDeg, 9.0f, col, altKnown);
+                addPlane(dl, s, ht.t.courseDeg, 9.45f, col, altKnown);
             }
         } else {
             // A course, where known, is drawn as a heading tick. It is the

@@ -157,10 +157,41 @@ struct AppConfig {
     //   width/height  kMapWindowMinPx .. kMapWindowMaxPx, or 0 for unset
     //   x/y           -kMapWindowMaxPx .. kMapWindowMaxPx (a second monitor
     //                 may legitimately sit at a negative coordinate)
+    //
+    // LEGACY, READ-ONLY. Since the map became one page per plugin (mapPages
+    // below), these four are still READ so a rectangle saved by an older
+    // build seeds the first pages' default placement — but they are never
+    // written back. A config saved by this build carries mapPages only.
     int mapWindowWidth = 0;
     int mapWindowHeight = 0;
     int mapWindowX = 0;
     int mapWindowY = 0;
+
+    // --- Per-plugin map pages -------------------------------------------------
+    // One entry per plugin map page: which plugin, where its window sits, and
+    // whether it was open. The map used to be ONE window fed every plugin's
+    // targets at once, which is why switching from Satellites to ADS-B still
+    // showed "the satellite map"; each track-capable plugin now gets a page of
+    // its own, and each page's rectangle has to survive a restart for exactly
+    // the reason the single window's did.
+    //
+    // The rectangle follows the legacy fields' rules verbatim — zero width
+    // means "nothing saved", and an out-of-range component discards the whole
+    // rectangle (but only THIS entry's; the entry itself survives with its
+    // open flag, falling back to default placement). An entry with an empty
+    // plugin name is dropped, duplicates keep the first, and the list is
+    // capped — the same hygiene the plugin-name lists get, for the same
+    // hand-edit reasons.
+    struct MapPage {
+        std::string plugin;  // the plugin's display name, as HostTrack::plugin
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+        bool open = false;
+        bool operator==(const MapPage&) const = default;
+    };
+    std::vector<MapPage> mapPages;
 
     // --- The receiver's own position ------------------------------------------
     // Where the antenna is, in degrees. It is the origin of every
@@ -462,6 +493,11 @@ struct AppConfig {
     // cannot ask the window manager for a rectangle it has to fight.
     static constexpr int kMapWindowMinPx = 320;
     static constexpr int kMapWindowMaxPx = 16384;
+
+    // Cap for mapPages. Far more pages than plugins anyone installs, and small
+    // enough that a hand-edited file cannot make the GUI iterate an unbounded
+    // list every frame.
+    static constexpr std::size_t kMaxMapPages = 64;
 };
 
 class ConfigStore {

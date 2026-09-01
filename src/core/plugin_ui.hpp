@@ -438,6 +438,16 @@ public:
     const std::vector<HostPath>& paths() const { return paths_; }
     const std::vector<HostPanel>& panels() const { return panels_; }
 
+    // The plugins that currently HAVE a track instance, by display name (the
+    // same name every HostTrack::plugin carries), in load order. This is what
+    // gives each track-capable plugin a map page of its own: CAPABILITY, not
+    // content — an ADS-B page with no aircraft decoded yet still exists,
+    // because "the page is there but empty" answers "where is my map" and
+    // "the page is missing" does not.
+    const std::vector<std::string>& trackPluginNames() const {
+        return trackPluginNames_;
+    }
+
     // --- Tune permission -------------------------------------------------
     // WHAT A GRANT IS KEYED ON: the plugin's MODULE FILE NAME, which the host
     // reads off disk, and NOT its display name. The display name comes out of
@@ -502,6 +512,9 @@ private:
 
     std::vector<TrackInstance> trackInstances_;
     std::vector<PanelInstance> panelInstances_;
+    // Mirror of trackInstances_'s names, kept so trackPluginNames() can hand
+    // out a reference every frame instead of building a vector per call.
+    std::vector<std::string> trackPluginNames_;
     std::vector<HostTrack> tracks_;
     std::vector<HostPath> paths_;
     std::vector<HostPanel> panels_;

@@ -340,9 +340,13 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
-           // Map geometry takes part, which is what makes a resize save at all.
-           // The debounce restarts on every change, so a drag writes once when
-           // it stops rather than once per frame while it is happening.
+           // Map page geometry takes part, which is what makes a resize save
+           // at all. The debounce restarts on every change, so a drag writes
+           // once when it stops rather than once per frame while it is
+           // happening. The legacy single-window fields ride along too: they
+           // are constant after start-up, so comparing them costs nothing and
+           // keeps the very first frame from reporting a phantom change.
+           a.mapPages == b.mapPages &&
            a.mapWindowWidth == b.mapWindowWidth &&
            a.mapWindowHeight == b.mapWindowHeight &&
            a.mapWindowX == b.mapWindowX && a.mapWindowY == b.mapWindowY &&
@@ -772,19 +776,11 @@ int AppWindow::run(int frames) {
         waterfall_ = std::make_unique<WaterfallView>(static_cast<int>(kFftSize),
                                                      kWaterfallHistory);
     }
-    if (!map_) {
-        map_ = std::make_unique<MapView>();
-        // SEEDED HERE AS WELL AS IN applyConfig, because the view does not
-        // exist yet when the config is applied: applyConfig runs from the
-        // constructor and this runs from run(). Without this the restored
-        // receiver position reached the track table (which reads the window's
-        // own fields) but not the map, so a relaunch came back with a populated
-        // distance column and no range rings, no RX marker and no coverage
-        // overlay - found on the running application, which is the only place
-        // an ordering bug between a constructor and a lazily-created view can
-        // be seen at all.
-        if (rxSet_) { map_->setHome(rxLat_, rxLon_); }
-    }
+    // No map view is created here any more: each plugin's map page creates
+    // its own MapView lazily in ensureMapPage(), which also applies the
+    // restored receiver position at that moment — so the ordering bug the old
+    // single view had here (config applied before the view existed) cannot
+    // recur by construction.
 
     // Interactive runs start receiving immediately. A radio that opens with
     // dead black panels and no hint that a button must be pressed reads as
@@ -2959,6 +2955,18 @@ void AppWindow::rescanPlugins() {
     // makes a rescan the way to get them all back.
     closedWindows_.clear();
 
+    // The map pages are NOT cleared. The first version cleared them here,
+    // and an adversarial review measured the cost: every MapView died, so a
+    // rescan — which also fires from the plugin store's async catalogue fetch
+    // and from installs, seconds after an unrelated click — silently reset
+    // zoom, centre, selection and an active follow. Geometry is folded into
+    // the saved store as a belt (a page whose plugin vanishes is pruned in
+    // drawPluginWindows, and that prune re-syncs first), and the page
+    // objects, their views and their self-open edge state all ride through
+    // the rescan untouched. A plugin that reappears finds its page exactly
+    // where it was.
+    syncMapPagesToSaved();
+
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
     // nothing here reports a failure.
@@ -3997,6 +4005,80 @@ void AppWindow::mapDefaultSize(float& widthPx, float& heightPx) {
     heightPx = want_h;
 }
 
+AppWindow::MapPage* AppWindow::findMapPage(const std::string& plugin) {
+    for (MapPage& pg : mapPages_) {
+        if (pg.plugin == plugin) { return &pg; }
+    }
+    return nullptr;
+}
+
+AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
+    if (MapPage* existing = findMapPage(plugin)) { return *existing; }
+
+    MapPage page;
+    page.plugin = plugin;
+    page.view = std::make_unique<MapView>();
+    // Receiver-wide facts reach every page at birth. Applying the position
+    // here — at the one place a view is created — is what makes the old
+    // "config applied before the view existed" ordering bug impossible now.
+    if (rxSet_) { page.view->setHome(rxLat_, rxLon_); }
+
+    // Geometry and open state: the page's own saved entry wins; failing that,
+    // the LEGACY single-window rectangle (read from the old config keys, no
+    // longer written) staggered by page index, so an upgrading install's
+    // pages open where its one map used to sit without stacking exactly. The
+    // 34 px step matches separateWindowAnchor's stagger. No legacy rectangle
+    // either leaves all four zero, which selects the monitor-derived default
+    // at draw time.
+    const auto it = std::find_if(
+        mapPagesSaved_.begin(), mapPagesSaved_.end(),
+        [&plugin](const cascade::core::AppConfig::MapPage& e) {
+            return e.plugin == plugin;
+        });
+    if (it != mapPagesSaved_.end()) {
+        page.x = it->x;
+        page.y = it->y;
+        page.w = it->width;
+        page.h = it->height;
+        page.open = it->open;
+    } else if (mapWinW_ > 0 && mapWinH_ > 0) {
+        const int stagger = 34 * static_cast<int>(mapPages_.size());
+        page.x = mapWinX_ + stagger;
+        page.y = mapWinY_ + stagger;
+        page.w = mapWinW_;
+        page.h = mapWinH_;
+    }
+
+    mapPages_.push_back(std::move(page));
+    return mapPages_.back();
+}
+
+void AppWindow::syncMapPagesToSaved() {
+    for (const MapPage& pg : mapPages_) {
+        cascade::core::AppConfig::MapPage e;
+        e.plugin = pg.plugin;
+        e.x = pg.x;
+        e.y = pg.y;
+        e.width = pg.w;
+        e.height = pg.h;
+        e.open = pg.open;
+        const auto it = std::find_if(
+            mapPagesSaved_.begin(), mapPagesSaved_.end(),
+            [&pg](const cascade::core::AppConfig::MapPage& s) {
+                return s.plugin == pg.plugin;
+            });
+        if (it != mapPagesSaved_.end()) {
+            *it = std::move(e);
+        } else if (mapPagesSaved_.size() < cascade::core::AppConfig::kMaxMapPages) {
+            // Appended, so saved order stays stable and a diff of the config
+            // file across sessions reads as growth, not reshuffling. The cap
+            // matches the loader's: entries past it would be dropped on the
+            // next load anyway, so writing them would only feign persistence.
+            mapPagesSaved_.push_back(std::move(e));
+        }
+    }
+}
+
 void AppWindow::drawPluginWindows() {
     // One poll per frame feeds both the map and every panel: the plugins are
     // asked once and the answer is shared, so a plugin cannot be charged twice
@@ -4024,22 +4106,81 @@ void AppWindow::drawPluginWindows() {
         }
     }
 
-    // Opens itself the first time there is something to show - counted the way
-    // it is DRAWN, and only on the FRAME THE PICTURE CHANGES. The raw lists
-    // were the wrong question (a source that never evicts keeps reporting
-    // targets the staleness rule has dropped, so the window was demanded over
-    // a map showing "0 targets"), but asking the right question every frame
-    // was still wrong in the ordinary case: a receiver that keeps hearing its
-    // targets answers yes for ever, so the close button was cleared and set
-    // straight back. See mapSelfOpens.
-    const bool haveVisible =
-        cascade::core::anyVisibleTarget(pluginUi_.tracks(), pluginUi_.paths());
-    if (cascade::core::mapSelfOpens(mapHadVisibleTarget_, haveVisible)) {
-        mapOpen_ = true;
+    // --- the map pages ------------------------------------------------------
+    // ONE PAGE PER PLUGIN THAT HAS A TRACK INSTANCE. The single "Map" window
+    // this replaces drew every plugin's targets merged, so switching from the
+    // Satellites plugin to ADS-B still showed "the satellite map". The page
+    // set is decided by CAPABILITY, not content: an ADS-B page with no
+    // aircraft decoded yet still exists, because "the page is there but
+    // empty" answers the user's question and "the page is missing" does not.
+    // Pages are created lazily here and never destroyed while the app runs;
+    // rescanPlugins() clears them alongside closedWindows_.
+    for (const std::string& name : pluginUi_.trackPluginNames()) {
+        ensureMapPage(name);
     }
-    mapHadVisibleTarget_ = haveVisible;
+    // A page whose plugin is GONE (removed, or a rescan came back without it)
+    // is pruned — geometry folded into the saved store first, so it comes
+    // back where it was if the plugin returns. Erasing dead pages here rather
+    // than in rescanPlugins is what lets live pages survive a rescan with
+    // their view state intact (see there).
+    {
+        const std::vector<std::string>& live = pluginUi_.trackPluginNames();
+        bool anyDead = false;
+        for (const MapPage& pg : mapPages_) {
+            if (std::find(live.begin(), live.end(), pg.plugin) == live.end()) {
+                anyDead = true;
+                break;
+            }
+        }
+        if (anyDead) {
+            syncMapPagesToSaved();
+            mapPages_.erase(
+                std::remove_if(mapPages_.begin(), mapPages_.end(),
+                               [&live](const MapPage& pg) {
+                                   return std::find(live.begin(), live.end(),
+                                                    pg.plugin) == live.end();
+                               }),
+                mapPages_.end());
+        }
+    }
 
-    if (mapOpen_) {
+    // Whether any open page actually asked the basemap for tiles this frame,
+    // for the single endFrame() call after the loop — see the note there.
+    bool anyMapDrewTiles = false;
+
+    for (std::size_t pageIndex = 0; pageIndex < mapPages_.size(); ++pageIndex) {
+        MapPage& page = mapPages_[pageIndex];
+
+
+        // THIS PAGE'S TRACKS AND PATHS ONLY, filtered by the plugin tag each
+        // HostTrack carries. Copies into reused scratch, bounded by the
+        // per-plugin caps in PluginUi — a few dozen structs per frame, which
+        // is why nothing here is measured or cached across frames.
+        pageTracks_.clear();
+        pagePaths_.clear();
+        for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+            if (ht.plugin == page.plugin) { pageTracks_.push_back(ht); }
+        }
+        for (const cascade::core::HostPath& hp : pluginUi_.paths()) {
+            if (hp.plugin == page.plugin) { pagePaths_.push_back(hp); }
+        }
+
+        // SELF-OPEN IS AN EDGE, NOT A ONE-SHOT — the same mapSelfOpens
+        // contract the single map lived by, now per page: nothing -> something
+        // opens the page; a user's close then HOLDS until this plugin's air
+        // genuinely goes quiet and something new arrives. The first version
+        // here was a once-per-session latch, and an adversarial review proved
+        // it stranded a closed page for the whole session — every reopen
+        // affordance lived inside the closed window. The filter above runs
+        // even for closed pages precisely so this edge has its input; a few
+        // dozen struct copies a frame is the price of a close button that
+        // stays honest, and it was measured as nothing.
+        const bool visNow = cascade::core::anyVisibleTarget(pageTracks_, pagePaths_);
+        if (!page.open && cascade::core::mapSelfOpens(page.hadVisible, visNow)) {
+            page.open = true;
+        }
+        page.hadVisible = visNow;
+        if (!page.open) { continue; }
         telemetryNotePanel("map");
         // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
         // what makes ImGui give it a real operating system window rather than
@@ -4084,8 +4225,8 @@ void AppWindow::drawPluginWindows() {
             workAreas.push_back(
                 ScreenRect{mv->WorkPos.x, mv->WorkPos.y, mv->WorkSize.x, mv->WorkSize.y});
         }
-        if (mapWinW_ > 0 && mapWinH_ > 0 &&
-            mapGeometryOnScreen(mapWinX_, mapWinY_, mapWinW_, mapWinH_, workAreas)) {
+        if (page.w > 0 && page.h > 0 &&
+            mapGeometryOnScreen(page.x, page.y, page.w, page.h, workAreas)) {
             // ...AND NO BIGGER THAN WHAT FITS WHERE IT SITS. A rectangle saved
             // on a taller display is reachable by its title bar and still too
             // tall here, which puts the resize grip off the bottom: the window
@@ -4093,14 +4234,15 @@ void AppWindow::drawPluginWindows() {
             // written back to the config every frame. Only that overhang is
             // taken off it - a rectangle that fits is the user's own and is
             // restored untouched.
-            mapClampRestoredSize(mapWinX_, mapWinY_, mapWinW_, mapWinH_, workAreas);
-            // The user's own rectangle, from the config. FirstUseEver, so it
-            // is where the window OPENS and never fights a later drag.
+            mapClampRestoredSize(page.x, page.y, page.w, page.h, workAreas);
+            // The page's own rectangle, from the config (or the staggered
+            // legacy seed ensureMapPage gave it). FirstUseEver, so it is where
+            // the window OPENS and never fights a later drag.
             ImGui::SetNextWindowPos(
-                ImVec2(static_cast<float>(mapWinX_), static_cast<float>(mapWinY_)),
+                ImVec2(static_cast<float>(page.x), static_cast<float>(page.y)),
                 ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(
-                ImVec2(static_cast<float>(mapWinW_), static_cast<float>(mapWinH_)),
+                ImVec2(static_cast<float>(page.w), static_cast<float>(page.h)),
                 ImGuiCond_FirstUseEver);
         } else {
             // THE DEFAULT RECTANGLE, POSITION INCLUDED. The anchor overhangs
@@ -4112,7 +4254,9 @@ void AppWindow::drawPluginWindows() {
             // 1392 px work area. See mapPlaceDefaultRect.
             float dx = 0.0f;
             float dy = 0.0f;
-            separateWindowAnchor(0, dx, dy);
+            // The page's index is the anchor slot, so several fresh pages
+            // cascade instead of stacking exactly on top of one another.
+            separateWindowAnchor(static_cast<int>(pageIndex), dx, dy);
             float dw = 0.0f;
             float dh = 0.0f;
             mapDefaultSize(dw, dh);
@@ -4120,7 +4264,35 @@ void AppWindow::drawPluginWindows() {
             ImGui::SetNextWindowPos(ImVec2(dx, dy), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(ImVec2(dw, dh), ImGuiCond_FirstUseEver);
         }
-        if (ImGui::Begin("Map", &mapOpen_)) {
+        // The ### suffix is the STABLE ImGui identity: the visible half of the
+        // title carries the plugin's display name, and a future rename of that
+        // display text would not orphan the window's drag or dock state.
+        // The identity half must not contain '#': ImGui hashes the text
+        // after the LAST "###", so a plugin display name carrying "###"
+        // (third-party text — validated only as non-empty) could collide two
+        // pages onto one window id. '#' becomes '_' in both halves; every
+        // sane name is unchanged.
+        std::string pageIdent = page.plugin;
+        for (char& idc : pageIdent) {
+            if (idc == '#') { idc = '_'; }
+        }
+        const std::string pageTitle = pageIdent + " Map###mapPage:" + pageIdent;
+        const bool pageDrawn = ImGui::Begin(pageTitle.c_str(), &page.open);
+        if (!pageDrawn) {
+            // COLLAPSED, NOT GONE. Begin() answers false for a collapsed
+            // window, but the window still exists and can still be DRAGGED —
+            // and this read-back is the application's only geometry
+            // persistence (ImGui's .ini is off). Freezing it here meant a
+            // move made while collapsed was lost if the app exited before the
+            // window was ever expanded again. Position is read regardless;
+            // the SIZE is not, because a collapsed window reports its
+            // title-bar-only height and persisting that would corrupt the
+            // real one.
+            const ImVec2 wpos = ImGui::GetWindowPos();
+            page.x = static_cast<int>(wpos.x);
+            page.y = static_cast<int>(wpos.y);
+        }
+        if (pageDrawn) {
             // READ BACK EVERY FRAME, which is the whole of the persistence:
             // ImGui's own .ini is switched off in this application, so unless
             // the size is copied out here and into AppConfig it exists only
@@ -4128,11 +4300,11 @@ void AppWindow::drawPluginWindows() {
             // what a window manager deals in and what the config stores.
             const ImVec2 wpos = ImGui::GetWindowPos();
             const ImVec2 wsize = ImGui::GetWindowSize();
-            mapWinX_ = static_cast<int>(wpos.x);
-            mapWinY_ = static_cast<int>(wpos.y);
-            mapWinW_ = static_cast<int>(wsize.x);
-            mapWinH_ = static_cast<int>(wsize.y);
-            if (ImGui::SmallButton("Fit")) { map_->requestFitToTracks(); }
+            page.x = static_cast<int>(wpos.x);
+            page.y = static_cast<int>(wpos.y);
+            page.w = static_cast<int>(wsize.x);
+            page.h = static_cast<int>(wsize.y);
+            if (ImGui::SmallButton("Fit")) { page.view->requestFitToTracks(); }
             ImGui::SameLine();
             // The receiver's own position is asked for, never guessed. It is
             // what range and bearing are measured from, and inferring it from
@@ -4167,7 +4339,13 @@ void AppWindow::drawPluginWindows() {
                 rxLat_ = rxLatInput_;
                 rxLon_ = rxLonInput_;
                 rxSet_ = true;
-                map_->setHome(rxLat_, rxLon_);
+                // EVERY page, not just the one whose button was pressed: the
+                // receiver's position is a fact about the antenna, and two
+                // pages disagreeing about where home is would put the range
+                // rings in two different places at once.
+                for (MapPage& other : mapPages_) {
+                    other.view->setHome(rxLat_, rxLon_);
+                }
                 // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it
                 // was measured from somewhere else, and keeping them would draw
                 // one antenna's pattern around another antenna's position.
@@ -4178,12 +4356,14 @@ void AppWindow::drawPluginWindows() {
                 ImGui::SetTooltip("Latitude must be -90..90 and longitude -180..180");
             }
             ImGui::SameLine();
-            // COUNTED THE WAY THEY ARE DRAWN. A plugin that never evicts keeps
-            // reporting targets the staleness rule has dropped, and a count of
+            // COUNTED THE WAY THEY ARE DRAWN, and counted for THIS page: the
+            // number beside an ADS-B map must be its aircraft, not the whole
+            // receiver's targets. A plugin that never evicts keeps reporting
+            // targets the staleness rule has dropped, and a count of
             // everything reported over a map showing only what is live is a
             // number that contradicts the picture beside it.
             const std::size_t shown =
-                cascade::core::visibleTrackCount(pluginUi_.tracks());
+                cascade::core::visibleTrackCount(pageTracks_);
             ImGui::TextDisabled("%d target%s", static_cast<int>(shown),
                                 shown == 1 ? "" : "s");
 
@@ -4234,7 +4414,7 @@ void AppWindow::drawPluginWindows() {
             const ImVec2 mapAvail = ImGui::GetContentRegionAvail();
             const float listWidth = std::min(300.0f, std::max(190.0f, mapAvail.x * 0.36f));
             ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
-            drawTrackList();
+            drawTrackList(page, pageTracks_);
             ImGui::EndChild();
             ImGui::SameLine();
 
@@ -4251,13 +4431,17 @@ void AppWindow::drawPluginWindows() {
             // Borrowed for the frame, and null when the overlay is switched off
             // - which is how the map is told to skip it without growing another
             // boolean parameter. The accumulator keeps filling either way.
-            map_->setCoverage(coverageShow_ ? &coverage_ : nullptr);
-            map_->draw(avail.x, avail.y, pluginUi_.tracks(), pluginUi_.paths(),
-                       &basemap_, &trackInfo_);
+            page.view->setCoverage(coverageShow_ ? &coverage_ : nullptr);
+            page.view->draw(avail.x, avail.y, pageTracks_, pagePaths_,
+                            &basemap_, &trackInfo_);
             if (credit) {
                 ImGui::TextDisabled("%s", basemap_.attribution().c_str());
             }
-            basemap_.endFrame();
+            // endFrame() is NOT called here: its eviction drops every tile
+            // nothing asked for this frame, so calling it inside one page's
+            // draw would let it evict a second open page's tiles mid-frame.
+            // The one call per frame happens after the page loop.
+            anyMapDrewTiles = true;
 
             // THE FOLLOW-INTERRUPT ASK. A drag on the map while a target is
             // followed no longer pans (MapView latches the attempt instead —
@@ -4265,24 +4449,27 @@ void AppWindow::drawPluginWindows() {
             // of war the user always lost); it opens this prompt. Modal on
             // purpose: the answer changes what the very next drag does, so
             // nothing else should happen until it is given.
-            if (map_->followInterruptRequested()) {
-                map_->clearFollowInterruptRequest();
+            if (page.view->followInterruptRequested()) {
+                page.view->clearFollowInterruptRequest();
+                // Opened in THIS page's ID stack, so two pages each carry
+                // their own copy of the question about their own follow.
                 ImGui::OpenPopup("Stop following?");
             }
             if (ImGui::BeginPopupModal("Stop following?", nullptr,
                                        ImGuiWindowFlags_AlwaysAutoResize)) {
-                if (map_->followedId().empty()) {
+                if (page.view->followedId().empty()) {
                     // The follow ended some other way (list button, details
                     // window) while the prompt was up: the question no longer
                     // exists, so it must not linger waiting for an answer.
                     ImGui::CloseCurrentPopup();
                 } else {
-                    ImGui::Text("The map is following %s.", map_->followedId().c_str());
+                    ImGui::Text("The map is following %s.",
+                                page.view->followedId().c_str());
                     ImGui::TextUnformatted(
                         "Stop following it so the map can be moved freely?");
                     ImGui::Separator();
                     if (ImGui::Button("Stop following")) {
-                        map_->clearFollow();
+                        page.view->clearFollow();
                         ImGui::CloseCurrentPopup();
                     }
                     ImGui::SameLine();
@@ -4294,11 +4481,16 @@ void AppWindow::drawPluginWindows() {
         ImGui::End();
     }
 
-    // OUTSIDE the Map window on purpose, so it is a sibling of the map rather
-    // than something drawn inside it: the map window can be small, and a detail
+    // ONE endFrame() for however many pages drew, and only when one did: the
+    // old single window called it only while open, and an eviction pass with
+    // no open map would age the whole tile set for nothing.
+    if (anyMapDrewTiles) { basemap_.endFrame(); }
+
+    // OUTSIDE the map pages on purpose, so it is a sibling of them rather
+    // than something drawn inside one: a map window can be small, and a detail
     // view that ate the list would have traded one complaint for another.
-    // Drawn whether or not the map window is open - a details window the user
-    // has dragged to a second screen must not vanish because the map was shut.
+    // Drawn whether or not any map page is open - a details window the user
+    // has dragged to a second screen must not vanish because a map was shut.
     drawTargetDetailsWindow();
 
     // --- image windows ----------------------------------------------------
@@ -4498,8 +4690,11 @@ void AppWindow::drawPluginWindows() {
     }
 }
 
-void AppWindow::drawTrackList() {
-    const std::vector<cascade::core::HostTrack>& tracks = pluginUi_.tracks();
+void AppWindow::drawTrackList(MapPage& page,
+                              const std::vector<cascade::core::HostTrack>& tracks) {
+    // `tracks` is this page's plugin's tracks only — the caller filtered them
+    // by the tag each HostTrack carries — so every row here belongs to the
+    // page it is drawn in, and a click can only ever land on this page's map.
     // THE SAME RULE THE MAP USES, applied here too. A target the map has
     // dropped must not still be occupying a row: the list is what makes the
     // window need a scrollbar, and a decoder that never evicts - the shipped
@@ -4515,12 +4710,12 @@ void AppWindow::drawTrackList() {
     // FOLLOW is a toggle rather than a mode buried in a menu, because its
     // effect - the map moving on its own - is confusing if you cannot see at a
     // glance that you asked for it.
-    const bool following = !map_->followedId().empty();
+    const bool following = !page.view->followedId().empty();
     if (following) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
-        ImGui::TextWrapped("following %s", map_->followedId().c_str());
+        ImGui::TextWrapped("following %s", page.view->followedId().c_str());
         ImGui::PopStyleColor();
-        if (ImGui::SmallButton("Stop following")) { map_->clearFollow(); }
+        if (ImGui::SmallButton("Stop following")) { page.view->clearFollow(); }
     }
     ImGui::Separator();
 
@@ -4686,7 +4881,7 @@ void AppWindow::drawTrackList() {
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * pres.alpha);
 
         ImGui::TableNextColumn();
-        const bool selected = (map_->selectedId() == r.id);
+        const bool selected = (page.view->selectedId() == r.id);
         // SPANNING ALL COLUMNS so the whole row is the click target. Clicking a
         // row does exactly what clicking a row has always done - the sort
         // reordered the rows, and r.source is what keeps each one pointing at
@@ -4701,17 +4896,18 @@ void AppWindow::drawTrackList() {
         if (ImGui::Selectable(r.label.c_str(), selected,
                               ImGuiSelectableFlags_SpanAllColumns |
                                   ImGuiSelectableFlags_AllowOverlap)) {
-            // CLICK = GO TO. One click centres the map on it; the map only
-            // ever tightens the zoom, so clicking a flight while already
-            // zoomed in does not throw the view back out.
-            map_->setSelected(ht.t.id);
-            map_->goTo(ht.t.latDeg, ht.t.lonDeg);
-            mapOpen_ = true;
+            // CLICK = GO TO, on THIS page's map — the row and the map it
+            // commands live in the same window, which is already open or this
+            // code would not be running. One click centres the map on it; the
+            // map only ever tightens the zoom, so clicking a flight while
+            // already zoomed in does not throw the view back out.
+            page.view->setSelected(ht.t.id);
+            page.view->goTo(ht.t.latDeg, ht.t.lonDeg);
         }
         // Double click starts following, which is the natural escalation of
         // "take me there" and needs no extra control.
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-            map_->setFollowed(ht.t.id);
+            page.view->setFollowed(ht.t.id);
         }
         // THE WHOLE BLOCK ON HOVER, the same one the map shows and the same one
         // the details button opens - so the six values the columns used to
@@ -4829,9 +5025,33 @@ void AppWindow::drawTargetDetailsSection() {
     // it, so it is what the user is watching), then the last one clicked in
     // the list. The precedence means this section tracks whatever the user
     // most recently singled out, with no control of its own to manage.
+    //
+    // With one map page per plugin there can be several follows and
+    // selections alive at once; the first page in load order that has one
+    // answers, which is at least a stable choice the user can predict.
     std::string id = detailsTrackId_;
-    if (id.empty()) { id = map_->followedId(); }
-    if (id.empty()) { id = map_->selectedId(); }
+    // OPEN pages only, in both loops. A follow or selection living in a page
+    // the user has CLOSED is a leftover, not an intent — an adversarial
+    // review showed a stale follow on a closed ADS-B page outranking the AIS
+    // vessel the user had just clicked, with the closed page's state
+    // unreachable and uncancellable. What the user can see is what may speak
+    // here.
+    if (id.empty()) {
+        for (const MapPage& pg : mapPages_) {
+            if (pg.open && !pg.view->followedId().empty()) {
+                id = pg.view->followedId();
+                break;
+            }
+        }
+    }
+    if (id.empty()) {
+        for (const MapPage& pg : mapPages_) {
+            if (pg.open && !pg.view->selectedId().empty()) {
+                id = pg.view->selectedId();
+                break;
+            }
+        }
+    }
     if (id.empty()) {
         // Wrapped, not line-broken by hand: the menu column is narrower than a
         // comfortable sentence and hard-broken lines clipped at its edge.
@@ -4855,21 +5075,28 @@ void AppWindow::drawTargetDetailsSection() {
     cascade::gui::drawTrackDetail(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
     ImGui::Separator();
     // The same two gestures the details window offers, so acting on what was
-    // just read never requires finding the row it came from.
+    // just read never requires finding the row it came from. Both land on the
+    // page of the plugin that decoded THIS target — the track carries its
+    // plugin's name — and open that page, because "go to on map" from here
+    // is the one route to a page whose window is currently shut.
     if (ImGui::SmallButton("Go to on map")) {
-        map_->setSelected(found->t.id);
-        map_->goTo(found->t.latDeg, found->t.lonDeg);
-        mapOpen_ = true;
+        MapPage& pg = ensureMapPage(found->plugin);
+        pg.view->setSelected(found->t.id);
+        pg.view->goTo(found->t.latDeg, found->t.lonDeg);
+        pg.open = true;
     }
     ImGui::SameLine();
-    const bool following = (map_->followedId() == found->t.id);
+    MapPage* owner = findMapPage(found->plugin);
+    const bool following =
+        owner != nullptr && owner->view->followedId() == found->t.id;
     if (ImGui::SmallButton(following ? "Stop following" : "Follow")) {
         if (following) {
-            map_->clearFollow();
+            owner->view->clearFollow();
         } else {
-            map_->setSelected(found->t.id);
-            map_->setFollowed(found->t.id);
-            mapOpen_ = true;
+            MapPage& pg = ensureMapPage(found->plugin);
+            pg.view->setSelected(found->t.id);
+            pg.view->setFollowed(found->t.id);
+            pg.open = true;
         }
     }
 }
@@ -4919,20 +5146,27 @@ void AppWindow::drawTargetDetailsWindow() {
             // The same two gestures the row offers, as named buttons: the
             // details window is reachable from a row, and a user who got here
             // should not have to go back to the row to act on what they read.
+            // Routed to the page of the plugin that decoded this target, and
+            // that page is opened — the details window outlives its map page
+            // being closed, so the gesture must be able to bring it back.
             if (ImGui::Button("Go to on map")) {
-                map_->setSelected(found->t.id);
-                map_->goTo(found->t.latDeg, found->t.lonDeg);
-                mapOpen_ = true;
+                MapPage& pg = ensureMapPage(found->plugin);
+                pg.view->setSelected(found->t.id);
+                pg.view->goTo(found->t.latDeg, found->t.lonDeg);
+                pg.open = true;
             }
             ImGui::SameLine();
-            const bool following = (map_->followedId() == found->t.id);
+            MapPage* owner = findMapPage(found->plugin);
+            const bool following =
+                owner != nullptr && owner->view->followedId() == found->t.id;
             if (ImGui::Button(following ? "Stop following" : "Follow")) {
                 if (following) {
-                    map_->clearFollow();
+                    owner->view->clearFollow();
                 } else {
-                    map_->setSelected(found->t.id);
-                    map_->setFollowed(found->t.id);
-                    mapOpen_ = true;
+                    MapPage& pg = ensureMapPage(found->plugin);
+                    pg.view->setSelected(found->t.id);
+                    pg.view->setFollowed(found->t.id);
+                    pg.open = true;
                 }
             }
         }
@@ -5059,11 +5293,20 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // be configured for wherever the radio used to be.
     refreshPluginRunner();
 
-    // ...and show what it produces. A tune with nothing on screen is the same
-    // "did that work?" the button exists to answer. The map opens only for a
-    // plugin that actually puts things on it; panels and image windows are
-    // opened by their own capabilities being present.
-    if (p.trackSource != nullptr) { mapOpen_ = true; }
+    // THE PRESET BUTTON OPENS THE MAP PAGE, EXPLICITLY. The self-open edge
+    // covers the first arrival, but a user who closed the page mid-traffic
+    // gets no edge until the air goes quiet — and pressing this button is the
+    // one unambiguous "show me this plugin" gesture the product offers (its
+    // tooltip promises as much). An adversarial review proved that without
+    // this line a closed page could be unreachable for a whole busy session.
+    // Guarded to track-capable plugins so a preset on a plain decoder does
+    // not conjure an empty map window it never asked for.
+    {
+        const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
+        if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
+            ensureMapPage(p.name).open = true;
+        }
+    }
 
     char note[192];
     std::snprintf(note, sizeof(note), "Tuned to %.4f MHz for %s", ps.frequencyHz / 1.0e6,
@@ -7530,12 +7773,16 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
 
-    // The map window's rectangle from the last session. Seeded here rather
-    // than read at draw time so the very first Begin("Map") already has it —
-    // ImGui's FirstUseEver only fires once, and a value that arrived a frame
-    // late would be ignored for the whole session. All four are zero when
-    // nothing was saved or the sanitizer rejected it, which is what selects
-    // the monitor-derived default in drawPluginWindows.
+    // The map pages' rectangles from the last session, seeded here rather
+    // than read at draw time so the very first Begin of each page already has
+    // them — ImGui's FirstUseEver only fires once, and a value that arrived a
+    // frame late would be ignored for the whole session. ensureMapPage
+    // consumes these as pages appear.
+    mapPagesSaved_ = cfg.mapPages;
+    // The LEGACY single-window rectangle, kept only as the default for a page
+    // with no saved entry of its own — an install upgrading from the
+    // one-window map reopens its pages where that window used to sit. Read
+    // here, never written back; see AppConfig for the migration note.
     mapWinW_ = cfg.mapWindowWidth;
     mapWinH_ = cfg.mapWindowHeight;
     mapWinX_ = cfg.mapWindowX;
@@ -7553,8 +7800,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     rxLon_ = cfg.rxLonDeg;
     rxLatInput_ = rxLat_;
     rxLonInput_ = rxLon_;
-    if (rxSet_ && map_) {
-        map_->setHome(rxLat_, rxLon_);
+    if (rxSet_) {
+        // Every existing page; a page created later gets the position in
+        // ensureMapPage. At construction this loop is empty and harmless.
+        for (MapPage& pg : mapPages_) {
+            pg.view->setHome(rxLat_, rxLon_);
+        }
     }
 
     // Plugin browser. Restoring the URL and the open/closed state does NOT
@@ -7881,6 +8132,12 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.notchQ = static_cast<double>(notchQ_);
     cfg.autoNotch = autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
+    // The pages' rectangles and open flags, via the saved store so an entry
+    // for a plugin with no page this session rides through untouched. The
+    // legacy fields are copied back purely so the first configsEqual against
+    // the loaded config stays quiet — save() never writes them.
+    syncMapPagesToSaved();
+    cfg.mapPages = mapPagesSaved_;
     cfg.mapWindowWidth = mapWinW_;
     cfg.mapWindowHeight = mapWinH_;
     cfg.mapWindowX = mapWinX_;

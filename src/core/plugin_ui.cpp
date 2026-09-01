@@ -299,6 +299,9 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
                 ti.api = lp.trackSource;
                 ti.handle = h;
                 ti.name = lp.name;
+                // The name mirror rides with the instance, so the two can
+                // never disagree about which plugins have a track source.
+                trackPluginNames_.push_back(ti.name);
                 trackInstances_.push_back(std::move(ti));
             }
         }
@@ -352,6 +355,7 @@ void PluginUi::destroyInstances() {
         if (t.api != nullptr && t.handle != nullptr) { t.api->destroy(t.handle); }
     }
     trackInstances_.clear();
+    trackPluginNames_.clear();
     for (PanelInstance& p : panelInstances_) {
         if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
     }
