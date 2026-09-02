@@ -340,6 +340,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
+           a.mapTrails == b.mapTrails &&
+           a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
+           a.mapTrailStyle == b.mapTrailStyle &&
            // Map page geometry takes part, which is what makes a resize save
            // at all. The debounce restarts on every change, so a drag writes
            // once when it stops rather than once per frame while it is
@@ -4022,6 +4025,17 @@ AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
     // here — at the one place a view is created — is what makes the old
     // "config applied before the view existed" ordering bug impossible now.
     if (rxSet_) { page.view->setHome(rxLat_, rxLon_); }
+    // WHAT ALTITUDE THIS AIRCRAFT HAD WHERE ITS TRAIL RUNS, answered by the
+    // observations PluginUi records as it polls (see altitudeNear). Installed
+    // ONCE, here, for the same reason the receiver position is: this is the
+    // one place a view is created, and a std::function rebound every frame
+    // would be a per-frame allocation to say something that never changes.
+    // The capture is `this`, which outlives every page - the pages are members
+    // and are cleared, never detached.
+    page.view->setAltitudeLookup([this](const std::string& plugin, const std::string& id,
+                                        double latDeg, double lonDeg, double& outAltM) {
+        return pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
+    });
 
     // Geometry and open state: the page's own saved entry wins; failing that,
     // the LEGACY single-window rectangle (read from the old config keys, no
@@ -4378,6 +4392,54 @@ void AppWindow::drawPluginWindows() {
                     "Measured from the receiver position, this session only.");
             }
             ImGui::SameLine();
+            // THE TRAIL SWITCHES, on this row because they answer the same
+            // kind of question the coverage one does - what else the map draws
+            // besides the targets themselves - and because a control the user
+            // has to open a menu to find is a control they will not find.
+            // Applied to EVERY page below, not just this one: how a trail is
+            // drawn is a preference, and two pages disagreeing about it would
+            // be two answers to one question.
+            ImGui::Checkbox("Trails", &mapTrails_);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Draw the lines plugins publish: flight trails, predicted\n"
+                    "ground tracks and footprints. Off draws targets only.");
+            }
+            ImGui::SameLine();
+            // DISABLED WHEN THERE ARE NO TRAILS, because a colour control for
+            // a hidden thing is a lie: ticking it would change nothing on
+            // screen and the user would be left wondering which of the two
+            // settings was broken. The value itself is untouched, so turning
+            // trails back on restores the colouring choice that was made.
+            ImGui::BeginDisabled(!mapTrails_);
+            ImGui::Checkbox("Altitude colours", &mapTrailAltColours_);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip(
+                    mapTrails_
+                        ? "Colour each part of a trail by the altitude observed\n"
+                          "there, using the same bands as the markers. Off draws\n"
+                          "each trail in its target's single colour."
+                        : "Turn Trails on to colour them by altitude.");
+            }
+            ImGui::SameLine();
+            // A LIST, NOT MORE CHECKBOXES. The styles are alternatives, and a
+            // control that cannot express "line and ribbon at once" is the
+            // one that cannot be put into a state the renderer has no meaning
+            // for. It also makes a third style a one-line change here.
+            ImGui::BeginDisabled(!mapTrails_);
+            ImGui::SetNextItemWidth(110.0f);
+            const char* kTrailStyles[] = {"Line", "Ribbon"};
+            if (mapTrailStyle_ < 0 || mapTrailStyle_ > 1) { mapTrailStyle_ = 0; }
+            ImGui::Combo("##trailstyle", &mapTrailStyle_, kTrailStyles, 2);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip(
+                    "Line draws a thin trail. Ribbon draws a wider translucent\n"
+                    "band, easier to follow over a detailed map, at the cost of\n"
+                    "covering more of what is underneath.");
+            }
+            ImGui::SameLine();
             // RESET IS NOT OPTIONAL. A single spurious decode at an impossible
             // range - and a noisy band produces them - would otherwise stretch
             // one wedge to the horizon for the rest of the session and make the
@@ -4432,6 +4494,10 @@ void AppWindow::drawPluginWindows() {
             // - which is how the map is told to skip it without growing another
             // boolean parameter. The accumulator keeps filling either way.
             page.view->setCoverage(coverageShow_ ? &coverage_ : nullptr);
+            // Pushed every frame, like the coverage pointer beside it, so a
+            // checkbox on ANY page reaches every page's map on the next one.
+            page.view->setTrailOptions(mapTrails_, mapTrailAltColours_);
+            page.view->setTrailStyle(mapTrailStyle_);
             page.view->draw(avail.x, avail.y, pageTracks_, pagePaths_,
                             &basemap_, &trackInfo_);
             if (credit) {
@@ -7772,6 +7838,13 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     autoNotch_ = cfg.autoNotch;
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
+    // The trail switches. Not pushed into any MapView here: a page may not
+    // exist yet (they are created as track-capable plugins appear), and the
+    // page loop hands both to every view it draws anyway - which is also what
+    // makes a mid-session change take effect on the very next frame.
+    mapTrails_ = cfg.mapTrails;
+    mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
+    mapTrailStyle_ = cfg.mapTrailStyle;
 
     // The map pages' rectangles from the last session, seeded here rather
     // than read at draw time so the very first Begin of each page already has
@@ -8132,6 +8205,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.notchQ = static_cast<double>(notchQ_);
     cfg.autoNotch = autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
+    cfg.mapTrails = mapTrails_;
+    cfg.mapTrailAltitudeColours = mapTrailAltColours_;
+    cfg.mapTrailStyle = mapTrailStyle_;
     // The pages' rectangles and open flags, via the saved store so an entry
     // for a plugin with no page this session rides through untouched. The
     // legacy fields are copied back purely so the first configsEqual against

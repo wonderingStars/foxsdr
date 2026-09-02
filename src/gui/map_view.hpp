@@ -33,6 +33,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,39 @@ public:
     // set: every wedge in it is a distance FROM somewhere, and without that
     // somewhere there is nothing to centre it on.
     void setCoverage(const CoverageMap* coverage) { coverage_ = coverage; }
+
+    // HOW A TRAIL VERTEX GETS AN ALTITUDE. The arguments are the owning
+    // plugin, the track id, and the vertex's position; the answer is true with
+    // the altitude in metres filled in, or false for "nothing was observed
+    // here" - which is a real answer and must be drawn as unknown rather than
+    // guessed at (see cascade::core::PluginUi::altitudeNear, which is what the
+    // application installs here).
+    //
+    // A FUNCTION AND NOT A POINTER TO THE HOST, so this view keeps knowing
+    // nothing about who is answering: the map draws what it is told and does
+    // not acquire an opinion about the plugin system to do it. Unset by
+    // default, which is exactly the state a test or a caller with no store
+    // needs - every trail then falls back to its owner's single colour.
+    using AltitudeAt = std::function<bool(const std::string& plugin, const std::string& id,
+                                          double latDeg, double lonDeg, double& outAltM)>;
+    void setAltitudeLookup(AltitudeAt fn) { altitudeAt_ = std::move(fn); }
+
+    // THE TWO TRAIL SWITCHES, and they are two because the request behind them
+    // was ambiguous and both readings deserve an answer: some users do not
+    // want the colouring, and some do not want trails at all. `drawTrails`
+    // false draws none of the path layer; `altitudeColours` false keeps the
+    // trails and gives each its owner's single colour, exactly as they were
+    // drawn before this existed. Persisted by the caller (AppConfig::mapTrails
+    // and AppConfig::mapTrailAltitudeColours); defaulted ON here so a view
+    // nobody configures behaves the way the application does.
+    // 0 = line, 1 = ribbon. See AppConfig::mapTrailStyle.
+    void setTrailStyle(int style) { trailStyle_ = style; }
+
+    void setTrailOptions(bool drawTrails, bool altitudeColours) {
+        drawTrails_ = drawTrails;
+        trailAltitudeColours_ = altitudeColours;
+    }
+
     bool hasHome() const { return hasHome_; }
     double homeLatDeg() const { return homeLat_; }
     double homeLonDeg() const { return homeLon_; }
@@ -133,6 +167,23 @@ private:
     double homeLon_ = 0.0;
     const CoverageMap* coverage_ = nullptr;  // borrowed, may be null
 
+    AltitudeAt altitudeAt_;  // empty until the host installs one
+    bool drawTrails_ = true;
+    bool trailAltitudeColours_ = true;
+    // One trail's per-vertex altitudes, NaN where nothing was observed. A
+    // MEMBER because the path layer runs every frame for every path, and the
+    // coverage polygon's fixed-size array is not an option here - a path's
+    // length is the plugin's choice, up to PluginUi::kMaxPathPoints. Reused
+    // rather than reallocated, so the steady state allocates nothing; assign()
+    // keeps the capacity a previous frame grew.
+    std::vector<double> trailAltScratch_;
+
+    // Set by the path loop when it draws a banded trail, read by the target
+    // loop when it decides whether the altitude legend is information or
+    // clutter. A frame member rather than a local because the two loops are
+    // far apart and the path one runs first.
+    int trailStyle_ = 0;
+    bool anyBandedTrail_ = false;
     bool fitRequested_ = true;  // fit once, the first time there is anything
     bool fittedOnce_ = false;
 

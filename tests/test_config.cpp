@@ -97,6 +97,10 @@ AppConfig junkConfig() {
     c.notchQ = 1e9;
     c.autoNotch = true;
     c.bandPlanOverlay = false;
+    // Both trail switches default ON, so false is the away-from-default value
+    // a load path that forgets to assign them would have to overwrite.
+    c.mapTrails = false;
+    c.mapTrailAltitudeColours = false;
     // Map geometry, away from the "nothing saved" default and out of range, so
     // a load path that forgets to assign it is caught.
     c.mapWindowWidth = -5;
@@ -171,6 +175,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.notchQ == b.notchQ);
     CHECK(a.autoNotch == b.autoNotch);
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
+    CHECK(a.mapTrails == b.mapTrails);
+    CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
     CHECK(a.mapWindowWidth == b.mapWindowWidth);
     CHECK(a.mapWindowHeight == b.mapWindowHeight);
     CHECK(a.mapWindowX == b.mapWindowX);
@@ -250,6 +256,19 @@ int main() {
         in.notchQ = 42.25;
         in.autoNotch = true;
         in.bandPlanOverlay = false;
+        // The two trail switches. A bool has only one value that is not its
+        // default, so these necessarily match junkConfig()'s - the same
+        // position bandPlanOverlay is in above. What proves the SAVE half is
+        // that load() resets to defaults first: a save that never wrote the
+        // key brings back true, and true != false fails here.
+        // ASYMMETRIC ON PURPOSE. Both false could be satisfied by a save()
+        // that wrote one key twice, or wrote the wrong field into each - the
+        // values are indistinguishable. Different values make each key prove
+        // it carries its own field. (A reviewer found the both-false version
+        // could not tell those apart.)
+        in.mapTrails = false;
+        in.mapTrailAltitudeColours = true;
+        in.mapTrailStyle = 1;  // Ribbon, which is not the default
         // Map pages: two, in an order the roundtrip must preserve, each with a
         // rectangle nobody would arrive at by accident and one with a NEGATIVE
         // x, because a second monitor to the left of the primary one is the
@@ -527,6 +546,52 @@ int main() {
         CHECK(d.deemphasisIndex == 0);
         CHECK(d.stereoEnabled);
         CHECK(d.bandPlanOverlay);
+    }
+
+    // --- the two map trail switches (documented in config.hpp) ---------------
+    {
+        const std::string path = p("map_trails.json");
+        AppConfig out;
+        std::string err;
+
+        // BOTH DEFAULT ON. The feature they control was asked for; an install
+        // that has never heard of these keys should get it, and only a user
+        // who says otherwise should lose it.
+        const AppConfig d;
+        CHECK(d.mapTrails);
+        CHECK(d.mapTrailAltitudeColours);
+
+        // READ FROM THE FILE, which for a bool defaulting true can only be
+        // proved by writing false: load() assigns defaults before it parses,
+        // so a missing getBool would leave true here. RED WHEN either getBool
+        // is dropped.
+        CHECK(writeText(path, "{\"mapTrails\":false,"
+                              "\"mapTrailAltitudeColours\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(!out.mapTrails);
+        CHECK(!out.mapTrailAltitudeColours);
+
+        // INDEPENDENT of one another, which is the whole reason there are two
+        // of them: "draw no trails" and "draw them in one colour" are
+        // different answers to the tester's request and neither implies the
+        // other. RED WHEN one key is wired to both fields.
+        CHECK(writeText(path, "{\"mapTrails\":true,"
+                              "\"mapTrailAltitudeColours\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mapTrails);
+        CHECK(!out.mapTrailAltitudeColours);
+        CHECK(writeText(path, "{\"mapTrails\":false,"
+                              "\"mapTrailAltitudeColours\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.mapTrails);
+        CHECK(out.mapTrailAltitudeColours);
+
+        // A file that predates them - the ordinary upgrade - gets both.
+        CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mapTrails);
+        CHECK(out.mapTrailAltitudeColours);
     }
 
     // --- map window geometry (documented in config.hpp) -----------------------

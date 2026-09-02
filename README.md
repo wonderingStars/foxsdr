@@ -53,6 +53,13 @@ are still moving. What is in the current build:
   recording of both audio and raw I/Q.
 - **Map and decoders.** Aircraft, vessels and stations plotted together,
   coloured by altitude band, with optional map imagery from a basemap plugin.
+  A target's **trail is coloured along its length** by the same bands, so a
+  climb-out and a cruise read differently at a glance — from the altitudes the
+  host watched the aircraft report as it flew the line, not from anything
+  inferred, so a stretch it never saw stays in the target's plain colour rather
+  than being given a number. **Trails** and **Altitude colours** are separate
+  checkboxes on every map page: some people do not want the colouring and some
+  do not want the lines, and both are one tick away.
   Beside the map is a list of everything being heard: callsign, id, and a
   details button per row. The button opens the full block for that target —
   registration, type, operator and country where a track-info plugin can supply
