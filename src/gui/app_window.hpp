@@ -1051,6 +1051,15 @@ private:
     // Session-scoped by design; see CoverageMap.
     CoverageMap coverage_;
     bool coverageShow_ = false;
+    // The two trail switches, pushed into every page's MapView each frame and
+    // persisted (AppConfig::mapTrails, AppConfig::mapTrailAltitudeColours).
+    // They live here rather than in a MapPage because they are a statement
+    // about how this user wants trails drawn, not about one plugin's window:
+    // two map pages disagreeing about whether a trail is coloured by altitude
+    // would be two answers to one question.
+    bool mapTrails_ = true;
+    bool mapTrailAltColours_ = true;
+    int mapTrailStyle_ = 0;  // 0 line, 1 ribbon - see AppConfig::mapTrailStyle
     // Sort state for the track list, held here because the sort menu above the
     // table is the only thing that sets it and the table below has to be
     // ordered by it every frame. SEEDED FROM THE SAME CONSTANT the menu opens

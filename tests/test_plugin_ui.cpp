@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,48 @@ CascadeTrack track(const char* id, double lat, double lon) {
     t.speedMps = std::nan("");
     t.kind = CASCADE_TRACK_AIRCRAFT;
     return t;
+}
+
+// The same, with an altitude actually reported. The helper above deliberately
+// reports none (NaN, the ABI's "not reported"), and the altitude observation
+// store's entire input is a position with an altitude beside it.
+CascadeTrack trackAlt(const char* id, double lat, double lon, double altM) {
+    CascadeTrack t = track(id, lat, lon);
+    t.altM = altM;
+    return t;
+}
+
+// --- a SECOND fake track source -------------------------------------------
+//
+// Needed for one case only: two plugins publishing the SAME track id. The
+// source above ignores its handle and answers out of one global, so two
+// instances of it would report identical positions and identical altitudes -
+// which is exactly the collision the case has to be able to see.
+
+struct FakeTrack2 {
+    std::vector<CascadeTrack> emit;
+};
+FakeTrack2 g_tr2;
+
+void* tr2Create() { return &g_tr2; }
+void tr2Destroy(void*) {}
+
+int32_t tr2Poll(void*, CascadeTrack* out, uint32_t cap) {
+    const uint32_t n = static_cast<uint32_t>(g_tr2.emit.size()) < cap
+                           ? static_cast<uint32_t>(g_tr2.emit.size())
+                           : cap;
+    for (uint32_t i = 0; i < n; ++i) { out[i] = g_tr2.emit[i]; }
+    return static_cast<int32_t>(n);
+}
+
+CascadeTrackSourceApi makeTrackApi2() {
+    CascadeTrackSourceApi a{};
+    a.structSize = static_cast<uint32_t>(sizeof(CascadeTrackSourceApi));
+    a.create = &tr2Create;
+    a.poll_tracks = &tr2Poll;
+    a.poll_paths = nullptr;
+    a.destroy = &tr2Destroy;
+    return a;
 }
 
 // --- fake panel -----------------------------------------------------------
@@ -175,6 +218,7 @@ LoadedPlugin plugAt(const char* name, const char* path) {
 
 void resetAll() {
     g_tr = FakeTrack{};
+    g_tr2 = FakeTrack2{};
     g_pn = FakePanel{};
     g_hc = FakeHostClient{};
     g_orderCounter = 0;
@@ -267,6 +311,351 @@ int main() {
         ui.poll();
         CHECK(ui.tracks().size() == 1u);
         CHECK(ui.paths().empty());
+    }
+
+    // --- observed altitudes: the nearest observation answers -------------
+    {
+        // The store exists so a trail can be coloured ALONG its length
+        // without inventing anything: a CascadePathPoint carries a latitude
+        // and a longitude only, but poll() sees the altitude beside the
+        // position on every frame, so the host can be asked what it saw.
+        //
+        // RED WHEN: nothing is recorded in poll(), or the tolerance is
+        // widened past the 200 m minimum spacing of a trail vertex (the 200 m
+        // query below would start answering).
+        //
+        // NOT red when the lookup returns the first observation within
+        // tolerance rather than the nearest: with these three observations,
+        // spaced 1.1 km, only one is ever inside the tolerance at a time, so
+        // the two rules give the same answer. The claim that this covered
+        // nearest-wins was wrong and is replaced by the N1 pair further down,
+        // which places a query inside the tolerance of TWO observations.
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+
+        // Three positions about 1.1 km apart, climbing. One poll each, which
+        // is how the real thing sees them.
+        g_tr.emit = {trackAlt("A1", 51.50, -0.10, 300.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("A1", 51.51, -0.10, 900.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("A1", 51.52, -0.10, 2400.0)};
+        ui.poll();
+
+        double alt = -1.0;
+        CHECK(ui.altitudeNear("ADS-B", "A1", 51.50, -0.10, alt));
+        CHECK(alt == 300.0);
+        CHECK(ui.altitudeNear("ADS-B", "A1", 51.51, -0.10, alt));
+        CHECK(alt == 900.0);
+        CHECK(ui.altitudeNear("ADS-B", "A1", 51.52, -0.10, alt));
+        CHECK(alt == 2400.0);
+
+        // 55 m from the first observation and a kilometre from the second:
+        // inside the tolerance, and the NEAREST is the one that answers.
+        CHECK(ui.altitudeNear("ADS-B", "A1", 51.5005, -0.10, alt));
+        CHECK(alt == 300.0);
+
+        // NEAREST-WINS, PROVED WHERE IT CAN ACTUALLY FAIL. Every query above
+        // has only ONE observation inside the tolerance, so first-found and
+        // nearest give the same answer and neither rule can be told from the
+        // other - a comment here once claimed otherwise, which is how a rule
+        // ends up with a test that cannot fail for it.
+        //
+        // These two are 100 m apart, so a query between them is inside the
+        // 80 m tolerance of BOTH and the two rules disagree: scan order would
+        // answer with N1 every time.
+        //
+        // RED WHEN: the loop takes the first observation within tolerance
+        // instead of keeping the closest.
+        g_tr.emit = {trackAlt("N1", 51.60, -0.10, 500.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("N1", 51.600898, -0.10, 1500.0)};  // ~100 m north
+        ui.poll();
+
+        // 40 m north of the first: nearer to it than to the second (60 m).
+        CHECK(ui.altitudeNear("ADS-B", "N1", 51.600359, -0.10, alt));
+        CHECK(alt == 500.0);
+        // 60 m north of the first, so 40 m from the second - the answer must
+        // move with the query, not stay on whichever was recorded first.
+        CHECK(ui.altitudeNear("ADS-B", "N1", 51.600539, -0.10, alt));
+        CHECK(alt == 1500.0);
+
+        // A NON-FINITE QUERY IS REFUSED, never answered with the last thing in
+        // the ring. A path vertex is third-party data: a plugin may publish a
+        // NaN or an infinity, and metresSqBetween then returns NaN for the
+        // distance. Written as `d2 >= bestSq ? skip : take` the comparison is
+        // FALSE for NaN, so every observation in turn became "the new best"
+        // and the function returned the last one as though it had been
+        // measured - a reviewer compiled this file and got a confident answer
+        // 2.4 km from the query. Both the guard and the positive distance test
+        // exist for this.
+        //
+        // RED WHEN: the isfinite guard at the top of altitudeNear goes.
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        // AGAINST N1, WHICH IS STILL LIVE, and that detail is the test. Asked
+        // about "A1" here it would answer false because poll() has since
+        // evicted A1 - eviction working correctly - and the check would pass
+        // without the NaN path ever running. Verified by mutation: with both
+        // guards removed the A1 version stayed green and this one goes red.
+        alt = -1.0;
+        CHECK(!ui.altitudeNear("ADS-B", "N1", nan, -0.10, alt));
+        CHECK(!ui.altitudeNear("ADS-B", "N1", 51.60, nan, alt));
+        CHECK(!ui.altitudeNear("ADS-B", "N1", inf, -0.10, alt));
+        CHECK(!ui.altitudeNear("ADS-B", "N1", 51.60, -inf, alt));
+        // and it did not scribble on the caller's variable on the way out
+        CHECK(alt == -1.0);
+
+        // 200 m out is past the tolerance, and 200 m is the minimum spacing
+        // between trail vertices - so a vertex can never be handed its
+        // neighbour's altitude, which for a climbing aircraft would draw a
+        // band boundary in the wrong place.
+        alt = 12345.0;
+        CHECK(!ui.altitudeNear("ADS-B", "A1", 51.5218, -0.10, alt));
+        // 9 km away: nothing here, and nothing invented.
+        CHECK(!ui.altitudeNear("ADS-B", "A1", 51.60, -0.10, alt));
+        // A false answer leaves the caller's value alone rather than
+        // scribbling a zero into it - "no altitude here" is not "sea level".
+        CHECK(alt == 12345.0);
+        // An id this host has never seen, and a plugin it has never seen.
+        CHECK(!ui.altitudeNear("ADS-B", "NOPE", 51.50, -0.10, alt));
+        CHECK(!ui.altitudeNear("Nobody", "A1", 51.50, -0.10, alt));
+
+        // NEAREST, NOT FIRST INSIDE THE TOLERANCE, and this is the case that
+        // can tell the two apart: three observations 67 m apart - which the
+        // 50 m movement guard allows, and a source that reports positions
+        // that close will produce - put THREE of them within 100 m of one
+        // query. The query sits 6 m from the middle one and 72 m from the
+        // first, so returning the first found would answer 100 where the
+        // aircraft was at 200. RED WHEN the scan stops at the first match
+        // instead of keeping the closest.
+        g_tr.emit = {trackAlt("A2", 51.5000, -0.10, 100.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("A2", 51.5006, -0.10, 200.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("A2", 51.5012, -0.10, 300.0)};
+        ui.poll();
+        CHECK(ui.altitudeNear("ADS-B", "A2", 51.50065, -0.10, alt));
+        CHECK(alt == 200.0);
+    }
+
+    // --- a NaN altitude is never recorded as one -------------------------
+    {
+        // NaN means "not reported" per the ABI. Recording it - or recording
+        // the position with a zero in place of it - would be inventing the
+        // one number the store exists to avoid inventing.
+        //
+        // RED WHEN: the isfinite guard goes, in which case the first lookup
+        // finds an observation (NaN or 0.0) where there was never a reading;
+        // or the guard is moved ABOVE the seen-this-frame mark, in which case
+        // the NaN frame evicts the history the second half checks for.
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+
+        g_tr.emit = {trackAlt("N1", 51.50, -0.10, std::nan(""))};
+        ui.poll();
+        double alt = 7.0;
+        CHECK(!ui.altitudeNear("ADS-B", "N1", 51.50, -0.10, alt));
+        CHECK(alt == 7.0);
+
+        // A track WITH history that reports one frame without an altitude
+        // keeps everything behind it: it is still a live aircraft, and its
+        // trail is still on screen.
+        g_tr.emit = {trackAlt("N2", 51.50, -0.10, 500.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("N2", 51.51, -0.10, std::nan(""))};
+        ui.poll();
+        CHECK(ui.altitudeNear("ADS-B", "N2", 51.50, -0.10, alt));
+        CHECK(alt == 500.0);
+        CHECK(!ui.altitudeNear("ADS-B", "N2", 51.51, -0.10, alt));
+    }
+
+    // --- the ring is bounded --------------------------------------------
+    {
+        // 600 moves into a 256-entry ring. The newest 256 survive and
+        // everything older is gone, which is what makes a target heard all
+        // day cost a fixed 6 KB instead of growing without limit.
+        //
+        // RED WHEN: the cap is removed or raised - the 257th-from-newest
+        // check below starts answering. Written as a pair (the 256th answers,
+        // the 257th does not) so the bound is pinned exactly rather than
+        // merely "some things were dropped".
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+
+        const int kMoves = 600;
+        for (int i = 0; i < kMoves; ++i) {
+            // 0.01 deg of latitude is about 1.1 km, so every step is a real
+            // move and no two observations can be confused for each other.
+            g_tr.emit = {trackAlt("R1", 51.0 + 0.01 * static_cast<double>(i), -0.10,
+                                  100.0 + static_cast<double>(i))};
+            ui.poll();
+        }
+        const auto latAt = [](int i) { return 51.0 + 0.01 * static_cast<double>(i); };
+        double alt = -1.0;
+        // Newest.
+        CHECK(ui.altitudeNear("ADS-B", "R1", latAt(kMoves - 1), -0.10, alt));
+        CHECK(alt == 100.0 + static_cast<double>(kMoves - 1));
+        // 256th from the newest: the oldest entry the ring may still hold.
+        CHECK(ui.altitudeNear("ADS-B", "R1", latAt(kMoves - 256), -0.10, alt));
+        CHECK(alt == 100.0 + static_cast<double>(kMoves - 256));
+        // 257th: one too many, and gone.
+        CHECK(!ui.altitudeNear("ADS-B", "R1", latAt(kMoves - 257), -0.10, alt));
+        // ...and so is the very first.
+        CHECK(!ui.altitudeNear("ADS-B", "R1", latAt(0), -0.10, alt));
+    }
+
+    // --- a parked track cannot churn the ring ----------------------------
+    {
+        // The movement guard. Without it a stationary or slowly-updating
+        // aircraft pushes an identical observation every frame and flushes
+        // every real position out of a 256-entry ring in a few seconds - so a
+        // trail with genuine history would answer "no altitude here" along
+        // all of it.
+        //
+        // RED WHEN: the 50 m guard goes. The 400 parked polls then fill the
+        // ring and the first position stops answering; and the 22 m nudge
+        // below starts answering with the altitude that came with it.
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+
+        g_tr.emit = {trackAlt("P1", 51.50, -0.10, 100.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("P1", 51.51, -0.10, 200.0)};
+        ui.poll();
+        g_tr.emit = {trackAlt("P1", 51.52, -0.10, 300.0)};
+        ui.poll();
+        for (int i = 0; i < 400; ++i) {
+            g_tr.emit = {trackAlt("P1", 51.52, -0.10, 300.0)};
+            ui.poll();
+        }
+        double alt = -1.0;
+        CHECK(ui.altitudeNear("ADS-B", "P1", 51.50, -0.10, alt));
+        CHECK(alt == 100.0);
+
+        // A 22 m nudge AT THE SAME ALTITUDE is below the guard, so nothing is
+        // recorded and the position still answers with what WAS observed near
+        // it. This is the churn case the guard exists for: a source
+        // re-reporting a parked aircraft must not flush the ring.
+        g_tr.emit = {trackAlt("P1", 51.5202, -0.10, 300.0)};
+        ui.poll();
+        CHECK(ui.altitudeNear("ADS-B", "P1", 51.5202, -0.10, alt));
+        CHECK(alt == 300.0);
+
+        // BUT THE SAME NUDGE WITH A REAL CLIMB IS RECORDED, and this half was
+        // missing: judging movement horizontally alone froze a helicopter
+        // climbing over a pad, or an aircraft holding while it descended, at
+        // one altitude for the entire session - the store would answer with a
+        // stale altitude for every vertex of a trail that was genuinely
+        // changing height. A reviewer found it; kAltObservationMinClimbM is
+        // the fix and this is what pins it.
+        //
+        // RED WHEN: the climb term goes from noteAltitude's guard - the answer
+        // stays at 300 for ever.
+        g_tr.emit = {trackAlt("P1", 51.5204, -0.10, 999.0)};
+        ui.poll();
+        CHECK(ui.altitudeNear("ADS-B", "P1", 51.5204, -0.10, alt));
+        CHECK(alt == 999.0);
+    }
+
+    // --- a track that disappears is evicted ------------------------------
+    {
+        // Memory is bounded by LIVE tracks, not by everything ever heard. A
+        // trail whose owner has stopped reporting is not drawn at all (see
+        // pathPresentation), so its observations can never be asked for
+        // again.
+        //
+        // RED WHEN: the seen-this-poll sweep goes - the lookup after the
+        // track stops being reported keeps answering - OR the sweep clears a
+        // vanished track's ring but leaves its entry standing, which leaks a
+        // little memory for every track ever heard and which a lookup test
+        // alone cannot see. altitudeTrackCount() is what distinguishes them,
+        // and a reviewer proved the lookup-only version passes that mutant.
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+
+        g_tr.emit = {trackAlt("G1", 51.50, -0.10, 400.0),
+                     trackAlt("G2", 52.50, -0.10, 800.0)};
+        ui.poll();
+        double alt = -1.0;
+        CHECK(ui.altitudeNear("ADS-B", "G1", 51.50, -0.10, alt));
+        CHECK(ui.altitudeNear("ADS-B", "G2", 52.50, -0.10, alt));
+
+        // G1 goes quiet; G2 is still being reported and must be untouched.
+        g_tr.emit = {trackAlt("G2", 52.50, -0.10, 800.0)};
+        ui.poll();
+        CHECK(!ui.altitudeNear("ADS-B", "G1", 51.50, -0.10, alt));
+        CHECK(ui.altitudeNear("ADS-B", "G2", 52.50, -0.10, alt));
+        CHECK(alt == 800.0);
+        // THE ENTRY IS GONE, not merely emptied: two tracks were stored, one
+        // stopped being reported, so exactly one ring may remain.
+        CHECK(ui.altitudeTrackCount() == 1u);
+
+        // And a rebuild takes the whole store with the instances that
+        // produced it: the keys name a plugin and an id that, after this,
+        // belong to different instances - possibly a different version of the
+        // module. RED WHEN destroyInstances() stops clearing it.
+        ui.rebuild({p});
+        CHECK(!ui.altitudeNear("ADS-B", "G2", 52.50, -0.10, alt));
+        CHECK(ui.altitudeTrackCount() == 0u);
+    }
+
+    // --- two plugins publishing the SAME id do not collide ---------------
+    {
+        // The store is keyed on (plugin, track id) for the reason
+        // pathPresentation is: two sources may key on the same ICAO address
+        // or MMSI, and one of them must not answer for the other. Both are
+        // put at the SAME position with different altitudes, which is the
+        // sharpest form of the collision - an id-only key would hand both of
+        // them whichever was recorded first.
+        //
+        // RED WHEN: the plugin half of the key is dropped.
+        resetAll();
+        const CascadeTrackSourceApi api1 = makeTrackApi(false);
+        const CascadeTrackSourceApi api2 = makeTrackApi2();
+        LoadedPlugin p1 = plug("ADS-B");
+        p1.trackSource = &api1;
+        LoadedPlugin p2 = plug("Other");
+        p2.trackSource = &api2;
+        PluginUi ui;
+        ui.rebuild({p1, p2});
+
+        g_tr.emit = {trackAlt("SAME", 51.50, -0.10, 500.0)};
+        g_tr2.emit = {trackAlt("SAME", 51.50, -0.10, 9000.0)};
+        ui.poll();
+
+        double alt = -1.0;
+        CHECK(ui.altitudeNear("ADS-B", "SAME", 51.50, -0.10, alt));
+        CHECK(alt == 500.0);
+        CHECK(ui.altitudeNear("Other", "SAME", 51.50, -0.10, alt));
+        CHECK(alt == 9000.0);
+
+        // One of them going quiet evicts only its own entry.
+        g_tr.emit.clear();
+        ui.poll();
+        CHECK(!ui.altitudeNear("ADS-B", "SAME", 51.50, -0.10, alt));
+        CHECK(ui.altitudeNear("Other", "SAME", 51.50, -0.10, alt));
+        CHECK(alt == 9000.0);
     }
 
     // --- panel: columns read once, rows refreshed every poll -------------

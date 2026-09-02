@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
@@ -89,6 +90,11 @@ ImU32 fadedColour(ImU32 c, float alpha) {
 // the nose); the left half is the mirror walked backwards, which keeps the
 // two sides identical by construction. The shape is concave, hence
 // AddConcavePolyFilled.
+// Half-width of a ribbon trail, in screen pixels. Wide enough to read as a
+// band rather than a fat line, narrow enough that several aircraft converging
+// on an approach do not merge into one shape.
+constexpr float kTrailRibbonHalfPx = 3.0f;
+
 constexpr float kPlaneHalf[][2] = {
     {0.00f, -1.00f},  // nose
     {0.13f, -0.70f},  // cockpit taper
@@ -668,63 +674,180 @@ void MapView::draw(float width, float height,
                         ImDrawFlags_Closed, 1.5f);
     }
 
+    // Reset per frame: the path loop below sets it, the target loop reads it.
+    anyBandedTrail_ = false;
+
     // --- paths, under the targets ----------------------------------------
-    for (const auto& p : paths) {
-        if (p.points.size() < 2) { continue; }
-        // THE TRAIL OBEYS THE SAME RULE AS ITS OWNER. A path carries no age of
-        // its own, so the host looks the owner up; without this the marker
-        // disappeared on schedule and the line under it did not, leaving a
-        // trail that starts where the missing marker would have been and runs
-        // off into empty space - a drawing that says "something is here" about
-        // the one target the host has just decided is not.
-        const cascade::core::TrackPresentation pres =
-            cascade::core::pathPresentation(p, tracks);
-        if (!pres.visible) { continue; }
-        // THE TRAIL TAKES ITS OWNER'S COLOUR, altitude included, so a climbing
-        // aircraft's trail is the same colour as its marker instead of the
-        // generic per-kind line that used to sit under a banded marker.
-        //
-        // ONE COLOUR FOR THE WHOLE TRAIL, not a gradient along it: a
-        // CascadePathPoint carries a latitude and a longitude and nothing else
-        // (see the ABI), so the altitude at each vertex is simply not in the
-        // data. Colouring per segment would mean inventing it.
-        //
-        // An UNOWNED path - a footprint circle, a predicted track, anything not
-        // reporting as a target - has no altitude to take, and falls back to
-        // the path's own kind colour exactly as before.
-        ImU32 base = colourFor(p.kind);
-        for (const auto& ht : tracks) {
-            if (ht.plugin == p.plugin && p.id == ht.t.id) {
-                base = colourForTrack(ht.t);
-                break;
+    //
+    // THE WHOLE LAYER IS OPTIONAL, and that is one of the two switches the
+    // trail request asked for: a user watching a busy approach with fifty
+    // aircraft on screen may want the markers and not the fifty lines behind
+    // them. It hides every path, not only the trails behind targets - a
+    // footprint circle and a predicted ground track are drawn by this loop
+    // too, and a checkbox that hid two of the three kinds of line on the map
+    // would be a checkbox nobody could predict.
+    if (drawTrails_) {
+        for (const auto& p : paths) {
+            if (p.points.size() < 2) { continue; }
+            // THE TRAIL OBEYS THE SAME RULE AS ITS OWNER. A path carries no age
+            // of its own, so the host looks the owner up; without this the
+            // marker disappeared on schedule and the line under it did not,
+            // leaving a trail that starts where the missing marker would have
+            // been and runs off into empty space - a drawing that says
+            // "something is here" about the one target the host has just
+            // decided is not.
+            const cascade::core::TrackPresentation pres =
+                cascade::core::pathPresentation(p, tracks);
+            if (!pres.visible) { continue; }
+            // THE TRAIL TAKES ITS OWNER'S COLOUR, altitude included, so a
+            // climbing aircraft's trail is the same colour as its marker
+            // instead of the generic per-kind line that used to sit under a
+            // banded marker.
+            //
+            // An UNOWNED path - a footprint circle, a predicted track, anything
+            // not reporting as a target - has no altitude to take, and falls
+            // back to the path's own kind colour exactly as before.
+            ImU32 base = colourFor(p.kind);
+            bool owned = false;
+            bool emergency = false;
+            for (const auto& ht : tracks) {
+                if (ht.plugin == p.plugin && p.id == ht.t.id) {
+                    base = colourForTrack(ht.t);
+                    owned = true;
+                    emergency = (ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u;
+                    break;
+                }
             }
-        }
-        const ImU32 col =
-            fadedColour((base & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT), pres.alpha);
-        // THE PATH'S FLAGS, honoured at last: both were declared in the ABI
-        // from the start and the first plugin to set them (the satellite
-        // tracker's predicted ground track) found the host ignoring them.
-        // DASHED draws alternating segments - a predicted line should not
-        // read with the same certainty as a recorded trail, which is the
-        // entire reason the flag exists. CLOSED joins the last vertex back to
-        // the first (a footprint circle), through the same antimeridian rule
-        // as every other segment.
-        const bool dashed = (p.flags & CASCADE_PATH_FLAG_DASHED) != 0u;
-        const bool closed = (p.flags & CASCADE_PATH_FLAG_CLOSED) != 0u;
-        const std::size_t n = p.points.size();
-        const std::size_t segs = closed ? n : (n - 1);
-        for (std::size_t s = 1; s <= segs; ++s) {
-            if (dashed && (s % 2u == 0u)) { continue; }
-            const std::size_t ia = s - 1;
-            const std::size_t ib = (s == n) ? 0 : s;
-            const double lonA = p.points[ia].lonDeg;
-            const double lonB = p.points[ib].lonDeg;
-            // Do not draw the segment that wraps the antimeridian: joining
-            // +179 to -179 would streak a line straight across the map, which
-            // is what a naive ground-track plot always gets wrong.
-            if (std::fabs(lonB - lonA) > 180.0) { continue; }
-            dl->AddLine(toScreen(p.points[ia].latDeg, lonA),
-                        toScreen(p.points[ib].latDeg, lonB), col, 1.5f);
+            const ImU32 col =
+                fadedColour((base & 0x00FFFFFFu) | (120u << IM_COL32_A_SHIFT), pres.alpha);
+
+            // COLOURED ALONG ITS LENGTH, which the comment that stood here
+            // said was impossible - and it was, from the path alone. A
+            // CascadePathPoint carries a latitude and a longitude and nothing
+            // else (see the ABI, which does not change for this), so the
+            // altitude at a vertex is not in what the plugin hands over. What
+            // changed is that the host no longer has to INVENT it: it watches
+            // every track's altitude beside its position on every poll, so it
+            // can be ASKED what this aircraft's altitude was when it was here.
+            // That is recorded observation, and a vertex the host never
+            // observed answers "no altitude here" rather than inheriting a
+            // neighbour's - see PluginUi::altitudeNear.
+            //
+            // AN EMERGENCY IS NOT OVERRULED BY IT. colourForTrack puts a 7500/
+            // 7600/7700 squawk above the altitude palette precisely because it
+            // must never be mistaken for anything else, and banding the trail
+            // of an aircraft in trouble would take that back for the longest
+            // mark it draws on the map.
+            const bool banded =
+                trailAltitudeColours_ && owned && !emergency && altitudeAt_;
+            // A BANDED TRAIL IS BANDED COLOUR ON SCREEN, so it has to count
+            // towards the legend exactly as a banded marker does. The legend
+            // was gated on markers alone, which left the one case where the
+            // colours most need explaining - a trail still drawn under a
+            // marker that has just faded out, or scrolled off - painting six
+            // hues with nothing on screen to say what they mean.
+            if (banded) { anyBandedTrail_ = true; }
+            // The six band colours, once per path rather than once per segment:
+            // they depend only on this trail's fade, and a segment loop that
+            // rebuilt them would do the same arithmetic a hundred times over.
+            ImU32 bandCol[kAltBandCount] = {};
+            const std::size_t n = p.points.size();
+            if (banded) {
+                for (int b = 0; b < kAltBandCount; ++b) {
+                    const AltBandStyle& bs = altBandStyle(b);
+                    bandCol[b] = fadedColour(IM_COL32(bs.r, bs.g, bs.b, 120), pres.alpha);
+                }
+                // PER VERTEX, not per segment endpoint: adjacent segments share
+                // a vertex, so asking once per vertex halves the lookups. NaN
+                // is "not observed", which is the same thing altM means when a
+                // source does not report it.
+                trailAltScratch_.assign(n, std::numeric_limits<double>::quiet_NaN());
+                for (std::size_t i = 0; i < n; ++i) {
+                    double a = 0.0;
+                    if (altitudeAt_(p.plugin, p.id, p.points[i].latDeg, p.points[i].lonDeg,
+                                    a)) {
+                        trailAltScratch_[i] = a;
+                    }
+                }
+            }
+
+            // THE PATH'S FLAGS, honoured at last: both were declared in the ABI
+            // from the start and the first plugin to set them (the satellite
+            // tracker's predicted ground track) found the host ignoring them.
+            // DASHED draws alternating segments - a predicted line should not
+            // read with the same certainty as a recorded trail, which is the
+            // entire reason the flag exists. CLOSED joins the last vertex back
+            // to the first (a footprint circle), through the same antimeridian
+            // rule as every other segment.
+            const bool dashed = (p.flags & CASCADE_PATH_FLAG_DASHED) != 0u;
+            const bool closed = (p.flags & CASCADE_PATH_FLAG_CLOSED) != 0u;
+            const std::size_t segs = closed ? n : (n - 1);
+            for (std::size_t s = 1; s <= segs; ++s) {
+                if (dashed && (s % 2u == 0u)) { continue; }
+                const std::size_t ia = s - 1;
+                const std::size_t ib = (s == n) ? 0 : s;
+                const double lonA = p.points[ia].lonDeg;
+                const double lonB = p.points[ib].lonDeg;
+                // Do not draw the segment that wraps the antimeridian: joining
+                // +179 to -179 would streak a line straight across the map,
+                // which is what a naive ground-track plot always gets wrong.
+                if (std::fabs(lonB - lonA) > 180.0) { continue; }
+                // THE SEGMENT'S OWN COLOUR, and the fade goes on every one of
+                // them: a stale trail still has to fade as ONE thing, or the
+                // altitude bands would read as six lines of different ages.
+                //
+                // BOTH ENDS MUST BE OBSERVED. The band comes from the mean of
+                // the two altitudes, which is the altitude at the middle of the
+                // segment under exactly the assumption the straight line
+                // already makes - that the aircraft went directly from one
+                // observation to the other. With one end unobserved there is no
+                // such pair, and the segment takes the owner's single colour
+                // rather than half an answer.
+                ImU32 segCol = col;
+                if (banded) {
+                    const double altA = trailAltScratch_[ia];
+                    const double altB = trailAltScratch_[ib];
+                    if (std::isfinite(altA) && std::isfinite(altB)) {
+                        const int band = altitudeBandIndex(0.5 * (altA + altB));
+                        if (band >= 0) { segCol = bandCol[band]; }
+                    }
+                }
+                const ImVec2 a = toScreen(p.points[ia].latDeg, lonA);
+                const ImVec2 b = toScreen(p.points[ib].latDeg, lonB);
+                if (trailStyle_ != 1) {
+                    dl->AddLine(a, b, segCol, 1.5f);
+                    continue;
+                }
+                // THE RIBBON. The same segment and the same colour, given
+                // width and a translucent fill so a trail reads at a glance on
+                // a busy basemap - which is what it is FOR, and a 1.5 px line
+                // over street detail is exactly what it is not.
+                //
+                // WIDTH IN PIXELS, NEVER IN DEGREES. A ribbon sized in degrees
+                // would swell into a blob at world zoom - the view this map
+                // reaches by itself when a plugin scatters targets around the
+                // planet - and shrink to nothing when zoomed in. Constant
+                // screen width is legible at every scale.
+                const float dx = b.x - a.x;
+                const float dy = b.y - a.y;
+                const float len = std::sqrt(dx * dx + dy * dy);
+                // A degenerate segment has no direction to be perpendicular
+                // to; normalising it would divide by zero and scatter NaN
+                // vertices through the draw list.
+                if (!(len > 0.001f)) { continue; }
+                const float nx = -dy / len * kTrailRibbonHalfPx;
+                const float ny = dx / len * kTrailRibbonHalfPx;
+                const ImVec2 quad[4] = {ImVec2(a.x + nx, a.y + ny),
+                                        ImVec2(b.x + nx, b.y + ny),
+                                        ImVec2(b.x - nx, b.y - ny),
+                                        ImVec2(a.x - nx, a.y - ny)};
+                dl->AddConvexPolyFilled(quad, 4, segCol);
+                // A ROUND JOIN AT THE SHARED VERTEX. Two quads meeting at an
+                // angle leave a wedge of gap on the outside of every turn, and
+                // a trail is mostly turns; a disc of the same radius fills it
+                // without needing to solve the mitre.
+                dl->AddCircleFilled(b, kTrailRibbonHalfPx, segCol, 8);
+            }
         }
     }
 
@@ -732,7 +855,7 @@ void MapView::draw(float width, float height,
     hoveredId_.clear();
     // Whether anything actually drawn has a reported altitude, which is what
     // decides whether the altitude legend below is information or clutter.
-    bool anyBanded = false;
+    bool anyBanded = anyBandedTrail_;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     float bestDist = 14.0f;  // hit radius in pixels
     const cascade::core::HostTrack* best = nullptr;

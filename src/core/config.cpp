@@ -214,6 +214,16 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "notchQ", out.notchQ);
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
+    // Both default true, so an older config that has never heard of them
+    // arrives with trails drawn and coloured - see AppConfig for why the two
+    // are separate switches. Neither has a range to clamp: a bool read by
+    // getBool is either the value in the file or the default.
+    getBool(j, "mapTrails", out.mapTrails);
+    getBool(j, "mapTrailAltitudeColours", out.mapTrailAltitudeColours);
+    getInt(j, "mapTrailStyle", out.mapTrailStyle);
+    // CLAMPED ON LOAD, not trusted. The file is user-editable and an unknown
+    // style would otherwise reach the draw loop and select nothing at all.
+    if (out.mapTrailStyle < 0 || out.mapTrailStyle > 1) { out.mapTrailStyle = 0; }
     // LEGACY KEYS, READ AND NEVER WRITTEN. A file saved before the map became
     // one page per plugin carries its single window's rectangle here; it is
     // read so that rectangle can seed the pages' default placement, and save()
@@ -486,6 +496,9 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["notchQ"] = cfg.notchQ;
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
+    j["mapTrails"] = cfg.mapTrails;
+    j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
+    j["mapTrailStyle"] = cfg.mapTrailStyle;
     // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
     // deliberately NOT written: the map is one page per plugin now, and
     // mapPages below is the rectangle store. The keys are still read (see

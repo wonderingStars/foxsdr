@@ -132,6 +132,44 @@ struct AppConfig {
     bool autoNotch = false;
     bool bandPlanOverlay = true;
 
+    // --- Map trails -----------------------------------------------------------
+    // TWO SWITCHES, because the request behind them was ambiguous and both
+    // readings deserve an answer. A beta tester asked for the flight trail to
+    // be coloured by altitude the way the aircraft already is, and added that
+    // "some people may not want this, so make it a toggle" - which leaves
+    // "does not want the colouring" and "does not want the trails" both live
+    // readings of one sentence. One switch would have picked for them.
+    //
+    //   mapTrails               draw the path layer at all. Off hides every
+    //                           line a plugin publishes - a flight trail, a
+    //                           predicted ground track, a footprint circle -
+    //                           because a control that hid two of the three
+    //                           kinds of line on the map would be one nobody
+    //                           could predict.
+    //   mapTrailAltitudeColours colour ALONG a trail, each segment taking the
+    //                           band colour of the altitude the host observed
+    //                           there. Off leaves the trails drawn in their
+    //                           owner's single colour, exactly as they were
+    //                           before this existed.
+    //
+    // BOTH DEFAULT ON, which is the same rule the two display aids above
+    // follow: their "off" state would be a missing feature rather than a
+    // preserved behaviour, and an install that has never heard of these keys
+    // should get the feature that was asked for.
+    bool mapTrails = true;
+    bool mapTrailAltitudeColours = true;
+
+    // HOW a trail is drawn, not whether: 0 = line, 1 = ribbon. An integer with
+    // named values rather than a bool, because a third style costs one entry
+    // here instead of a second flag that can contradict the first - two bools
+    // can express "line and ribbon at once", which is not a thing.
+    //
+    // Line is the default deliberately. A ribbon is what the tester asked to
+    // have available, but it covers noticeably more of the map underneath, and
+    // changing how every existing user's map looks is not something to do to
+    // them without being asked. It is one control away.
+    int mapTrailStyle = 0;
+
     // --- Map window geometry --------------------------------------------------
     // The map is its own operating system window, and ImGui's own .ini
     // persistence is switched off in this application (IniFilename = nullptr,

@@ -136,6 +136,96 @@ struct HostPath {
 TrackPresentation pathPresentation(const HostPath& path,
                                    const std::vector<HostTrack>& tracks);
 
+// --- Observed altitudes along a trail ---------------------------------------
+//
+// WHY THE HOST KEEPS THIS AT ALL. A CascadePathPoint carries a latitude and a
+// longitude and nothing else (see the ABI), so the altitude at a trail vertex
+// is genuinely not in the data a plugin hands over, and colouring a trail per
+// segment from the path alone would mean inventing it. The way out is not to
+// change the ABI - plugins are shipped binaries and the vertex type is fixed -
+// but to notice that the host ALREADY SEES the missing number: poll() reads
+// every track's latDeg, lonDeg and altM together on every frame. So the host
+// records what it saw, and later answers "what altitude did this aircraft have
+// when it was HERE" from its own observations.
+//
+// THAT IS RECORDED OBSERVATION, NOT INTERPOLATION, and the distinction is the
+// whole justification. A vertex the host watched the aircraft pass through
+// gets the altitude that was reported at that moment; a vertex it never
+// observed - a trail that predates this session, a plugin that plots a
+// predicted track - is reported honestly as "no altitude here" and draws in
+// the owner's single colour, rather than borrowing a neighbouring vertex's
+// number and inventing a climb that never happened.
+//
+// KEYED ON (PLUGIN, TRACK ID), which is the pairing pathPresentation already
+// uses to match a trail to its owner and for the same reason: two sources may
+// key on the same ICAO address or MMSI, and an id alone is not an identity
+// across plugins.
+
+// How many observations one track keeps. An ADS-B trail is 48 vertices spaced
+// 200 m or more apart, so 256 covers five times the longest trail the shipped
+// decoder can draw and still costs 6 KB for an aircraft - which is the point
+// of a bound rather than a growing list: a target heard all day cannot turn
+// into unbounded memory, and the oldest observation to fall off the end is by
+// construction older than any vertex still being drawn.
+inline constexpr std::size_t kAltObservationsPerTrack = 256;
+
+// AND THE AGGREGATE, which the per-track bound alone does not state: the store
+// holds one ring per LIVE track, and kMaxTracksPerPlugin is 4000, so a single
+// plugin saturating its own cap costs 4000 x 256 x 24 bytes, about 24 MB. That
+// is the worst case a deliberately abusive plugin could reach, not anything
+// real traffic produces (a busy ADS-B site tracks a few hundred aircraft, some
+// 1.5 MB), and it is bounded and reclaimed - the per-frame eviction below
+// releases a track's ring as soon as the track stops being published.
+
+// How far a track must have moved since its last observation before another
+// one is recorded, in metres.
+//
+// A CHURN GUARD, not a measurement. Without it a parked aircraft, or one whose
+// source re-reports the same position twice a second, would push an identical
+// observation every frame and flush every real position out of the ring within
+// five seconds - so a trail with genuine history would answer "no altitude
+// here" for every vertex of it. 50 m is comfortably below the 200 m minimum
+// spacing of a trail vertex, so nothing a trail can draw is ever skipped, and
+// comfortably above the metre-scale jitter a reported position carries.
+inline constexpr double kAltObservationMinMoveM = 50.0;
+
+// How close an observation has to be to a queried position to answer for it,
+// in metres.
+//
+// BOUNDED FROM BOTH SIDES. It must be UNDER half the 200 m minimum spacing
+// between trail vertices, or a vertex could be handed its NEIGHBOUR's altitude
+// - and a climbing aircraft's neighbouring vertices are deliberately different
+// colours, so that error would draw a band boundary in the wrong place. It
+// must also be OVER the difference between a trail vertex and the track
+// position it was recorded from, which is zero when the plugin plots the
+// positions it reported and a few tens of metres when it resamples them.
+//
+// 80 m, not 100 m, and the correction is worth recording: 100 m is EXACTLY
+// half of 200 m, so it had no margin at all on the side that matters, and a
+// vertex landing midway between two observations was decided by which was
+// nearer by fractions of a metre. 80 m leaves a real 20 m of it.
+//
+// AND THE 200 m IS THE SHIPPED DECODER'S, not a rule the host enforces. A
+// plugin is free to publish vertices closer together than that, and one that
+// does can hand a vertex an observation from just beyond its neighbour. The
+// failure is a segment drawn in an adjacent band's colour - a picture slightly
+// wrong about where a climb crossed a boundary, never a wrong position and
+// never invented data.
+inline constexpr double kAltObservationToleranceM = 80.0;
+
+// How much altitude change is worth an observation on its own, in metres.
+// Roughly a hundred feet - below the height of any band boundary this store
+// feeds, so a climb cannot cross a colour boundary without being recorded, and
+// far above the metre-scale wobble a barometric altitude reports while parked.
+inline constexpr double kAltObservationMinClimbM = 30.0;
+
+// Slack on the cached bounding box used to reject a query before scanning the
+// ring, in degrees. About 120 m of latitude - comfortably more than the
+// tolerance above, so the cheap test can only ever admit a query the real
+// distance test would then judge properly; it must never reject one the scan
+// would have answered.
+inline constexpr double kAltObservationBoundsPadDeg = 0.0011;
+
 // Whether there is anything the map would actually DRAW - which is the only
 // honest reason to open the map window on the user's behalf.
 //
@@ -438,6 +528,25 @@ public:
     const std::vector<HostPath>& paths() const { return paths_; }
     const std::vector<HostPanel>& panels() const { return panels_; }
 
+    // THE ALTITUDE THIS HOST OBSERVED AT A POSITION, for the track `id`
+    // published by `plugin`. True and `outAltM` filled when an observation
+    // within kAltObservationToleranceM exists (the NEAREST one, so a query
+    // that lands between two takes the closer rather than the first found);
+    // false, and `outAltM` untouched, when there is none.
+    //
+    // FALSE IS AN ANSWER, not a failure. It means "this host never saw this
+    // aircraft here" - the vertex predates the session, or belongs to a
+    // predicted track that was never flown - and the caller must draw it as
+    // unknown rather than reach for a neighbouring vertex's number.
+    //
+    // Const and cheap, because it is called once per trail vertex per frame:
+    // no allocation, no transcendental per observation, and a binary search
+    // for the track rather than a scan - a linear one would have made drawing
+    // the trails quadratic in the number of live tracks, and the host's own
+    // cap allows four thousand of them per plugin.
+    bool altitudeNear(const std::string& plugin, const std::string& id, double latDeg,
+                      double lonDeg, double& outAltM) const;
+
     // The plugins that currently HAVE a track instance, by display name (the
     // same name every HostTrack::plugin carries), in load order. This is what
     // gives each track-capable plugin a map page of its own: CAPABILITY, not
@@ -475,6 +584,13 @@ public:
 
     std::size_t trackCount() const { return tracks_.size(); }
 
+    // How many tracks the altitude store is holding rings for. Exposed for
+    // one reason: a test that only checks "the lookup stops answering" cannot
+    // tell an entry that was RELEASED from one whose ring was merely emptied,
+    // and the second still leaks a little memory for every track ever heard.
+    // An adversarial reviewer demonstrated exactly that mutant surviving.
+    std::size_t altitudeTrackCount() const { return altTrails_.size(); }
+
     // --- Called by the C trampolines behind CascadeHostApi ----------------
     // Public because the trampolines are free functions in the .cpp (they must
     // be, to have C linkage-compatible signatures) and cannot reach private
@@ -500,6 +616,37 @@ private:
         std::size_t panelIndex = 0;  // into panels_
     };
 
+    // One thing the host saw, exactly as the plugin reported it.
+    struct AltObservation {
+        double latDeg = 0.0;
+        double lonDeg = 0.0;
+        double altM = 0.0;
+    };
+    // One track's history. The ring is a vector rather than a fixed array so
+    // an entry stays cheap to move when the store is compacted: a live-track
+    // list is erased from every frame, and 6 KB of by-value ring per element
+    // would make that shuffle the whole store around.
+    struct AltTrail {
+        std::string plugin;
+        std::string id;
+        std::vector<AltObservation> ring;  // grows to the cap, then overwrites
+        std::size_t next = 0;              // oldest slot, once the ring is full
+        // The ring's bounding box, so a vertex nowhere near this track can be
+        // refused without walking 256 observations - see altitudeNear. Grown
+        // on append and never shrunk: too large merely costs a scan that finds
+        // nothing, too small would refuse a vertex that has an answer.
+        double minLat = 0.0, maxLat = 0.0, minLon = 0.0, maxLon = 0.0;
+        // Set by poll() for every track the plugins reported THIS frame; the
+        // entries still clear at the end of it are tracks that have gone, and
+        // they are dropped. That is what bounds the store by LIVE tracks
+        // rather than by everything ever heard.
+        bool seenThisPoll = false;
+    };
+
+    // Records one observation for (plugin, id), applying the NaN rule and the
+    // movement guard. Called from poll() only.
+    void noteAltitude(const std::string& plugin, const CascadeTrack& t);
+
     // Bounds on what one plugin may put on screen in a frame. A plugin is
     // third-party code; without a cap a buggy one could ask the host to draw
     // an unbounded number of targets and take the frame rate with it.
@@ -524,6 +671,14 @@ private:
     std::vector<std::string> tuneRequesters_;
     std::vector<std::string> tuneAllowed_;
     std::string lastDenied_;
+
+    // What the host has watched each live track do. Bounded twice over: by the
+    // number of tracks the plugins are reporting right now (see
+    // AltTrail::seenThisPoll), and by kAltObservationsPerTrack within each.
+    //
+    // KEPT SORTED BY (plugin, id) - see altKeyLess in the .cpp, which also
+    // says why, and which every mutation of this vector has to preserve.
+    std::vector<AltTrail> altTrails_;
 
     // Scratch, reused so a per-frame poll allocates nothing.
     std::vector<CascadeTrack> trackScratch_;
