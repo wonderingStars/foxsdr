@@ -17,6 +17,8 @@
 
 #include <httplib.h>
 
+#include "radar/radar_assets.hpp"
+
 namespace cascade::net {
 namespace {
 
@@ -2487,6 +2489,37 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         res.set_content(appJs(), "text/javascript; charset=utf-8");
     });
 
+    // THE RADAR UNIT - a separate interface, not a page of this one. It is
+    // served here because the desktop shell that hosts it (foxsdr-radar.exe)
+    // has to reach the same tiles and the same /api/status as this server
+    // already publishes, and serving it from the same origin is what makes
+    // that need no cross-origin exception. The shell renders it in a real
+    // window; nothing about it is reachable by wandering in with a browser
+    // that has not signed in, because every /api route below still checks.
+    //
+    // Three routes, not one page with the style and script inline, for the
+    // same reason "/" is split: the policy below forbids inline script and
+    // inline style outright, and that is the property worth keeping.
+    const auto radarCsp = [](httplib::Response& res) {
+        res.set_header("Content-Security-Policy",
+                       "default-src 'none'; script-src 'self'; style-src 'self'; "
+                       "connect-src 'self'; img-src 'self' data:; "
+                       "form-action 'none'; frame-ancestors 'none'; base-uri 'none'");
+    };
+    svr.Get("/radar", [radarCsp](const httplib::Request&, httplib::Response& res) {
+        radarCsp(res);
+        res.set_content(reinterpret_cast<const char*>(cascade::radar::kRadarHtml),
+                        cascade::radar::kRadarHtmlLen, "text/html; charset=utf-8");
+    });
+    svr.Get("/radar.css", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(reinterpret_cast<const char*>(cascade::radar::kRadarCss),
+                        cascade::radar::kRadarCssLen, "text/css; charset=utf-8");
+    });
+    svr.Get("/radar.js", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(reinterpret_cast<const char*>(cascade::radar::kRadarJs),
+                        cascade::radar::kRadarJsLen, "text/javascript; charset=utf-8");
+    });
+
     // What the client needs before it can decide whether to show a login form.
     // Unauthenticated by necessity, and it deliberately reveals nothing beyond
     // whether a credential is needed and whether this one is held.
@@ -2697,6 +2730,9 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                                   {"acCountry", t.acCountry}});
             }
             j["tracks"] = std::move(tracks);
+            j["rxPositionSet"] = s.rxPositionSet;
+            j["rxLatDeg"] = s.rxPositionSet ? nlohmann::json(s.rxLatDeg) : nlohmann::json(nullptr);
+            j["rxLonDeg"] = s.rxPositionSet ? nlohmann::json(s.rxLonDeg) : nlohmann::json(nullptr);
 
             // What the browser's map needs to fetch and CREDIT the imagery —
             // the attribution requirement travels with the tiles or the tiles

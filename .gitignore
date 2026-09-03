@@ -30,3 +30,4 @@ installer/generated-version.iss
 # symbols/ here is the working copy that post-build populates on every build.
 # See docs/DIAGNOSTICS.md and tools/archive-symbols.ps1.
 symbols/
+cfg_test_*/

@@ -26,7 +26,7 @@ const char* const kKnownKeys[] = {
     "bookmarkTune", "bookmarkRemove", "scannerActive", "scanStartHz",
     "scanStopHz",   "scanStepHz",  "pluginFetch",    "pluginInstall",
     "acknowledgeNotice", "pluginRemove", "pluginTuneName", "pluginTuneAllowed",
-    "pluginPresetName", "pluginPresetIndex"};
+    "pluginPresetName", "pluginPresetIndex", "radarActive"};
 
 // Longest string a control field will accept. Device kwargs and antenna names
 // are short by nature; a cap keeps a hostile client from making the
@@ -108,6 +108,7 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"autoNotch", &req.autoNotch},
         {"stereoEnabled", &req.stereoEnabled},
         {"agc", &req.agc},
+        {"radarActive", &req.radarActive},
         {"scanDevices", &req.scanDevices},
         {"recordIq", &req.recordIq},
         {"recordAudio", &req.recordAudio},

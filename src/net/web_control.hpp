@@ -115,6 +115,13 @@ struct ControlRequest {
     // result: enumeration loads vendor modules and walks the USB bus, so it
     // happens on the application's own thread and the outcome appears in the
     // next status poll.
+    // THE RADAR UNIT HOLDS THE DISPLAY. True is a LEASE, not a switch: the
+    // radar application renews it every few seconds while it runs, and the
+    // desktop shows itself again on its own if the renewals stop. A radar
+    // that crashes therefore costs the user a few seconds, not their only
+    // route back to the receiver. False releases it immediately.
+    std::optional<bool> radarActive;
+
     std::optional<bool> scanDevices;
 
     // --- Recorder -------------------------------------------------------
@@ -167,7 +174,7 @@ struct ControlRequest {
                !nrEnabled && !nrStrength && !notchEnabled && !notchFreqHz &&
                !notchQ && !autoNotch && !stereoEnabled && !sourceKind &&
                !soapyArgs && !antenna && !sampleRateHz && !gainName && !gainDb &&
-               !agc && !scanDevices && !recordIq && !recordAudio &&
+               !agc && !radarActive && !scanDevices && !recordIq && !recordAudio &&
                !bookmarkAdd && !bookmarkTune && !bookmarkRemove &&
                !scannerActive && !scanStartHz && !scanStopHz && !scanStepHz &&
                !pluginFetch && !pluginInstall && !pluginRemove &&

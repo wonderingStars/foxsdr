@@ -22,11 +22,12 @@ namespace cascade::gui {
 // piecewise-linear ramp can otherwise dip by a fraction of a luma unit.
 //
 // Contract constants a display (and the tests) may rely on:
-//   waterfallColor(0.0f) == IM_COL32(  0,   0,  40, 255)   // deep blue anchor
-//   waterfallColor(1.0f) == IM_COL32(255, 100,  90, 255)   // red anchor
-// The red anchor carries some green/blue on purpose: a *pure* red (255,0,0)
-// has lower perceived brightness than yellow, so a jet-style map ending there
-// cannot be brightness-monotonic. All entries are fully opaque.
+//   waterfallColor(0.0f) == IM_COL32(  6,  20,  10, 255)   // quiet phosphor
+//   waterfallColor(1.0f) == IM_COL32(240, 235, 180, 255)   // cream anchor
+// The top anchor is a warm cream rather than white because it must be the
+// brightest entry in the table and still leave the eye somewhere to read a
+// peak; the bottom anchor is lifted off true black so a signal a few dB above
+// the noise floor stays visible. All entries are fully opaque.
 ImU32 waterfallColor(float norm01);
 
 // Converts one spectrum line into one texture row: clamped normalization

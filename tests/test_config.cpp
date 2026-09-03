@@ -101,6 +101,14 @@ AppConfig junkConfig() {
     // a load path that forgets to assign them would have to overwrite.
     c.mapTrails = false;
     c.mapTrailAltitudeColours = false;
+    // Away from its default AND out of range, the same rule every other
+    // clamped field here follows.
+    c.mapTrailStyle = 99;
+    // The radar scope, both fields away from their defaults and the range off
+    // the ladder entirely: a load path that forgets either assignment would
+    // leave the mode on and the renderer holding a scale it has no rings for.
+    c.scopeMode = true;
+    c.scopeRangeNm = 12345;
     // Map geometry, away from the "nothing saved" default and out of range, so
     // a load path that forgets to assign it is caught.
     c.mapWindowWidth = -5;
@@ -133,6 +141,10 @@ AppConfig junkConfig() {
     // mention stopped plugins has stopped none, and a leftover here would
     // silence a decoder the user never switched off.
     c.pluginsStopped = {"junk-stop.dll"};
+    // A closed window that must not survive either: a config that says
+    // nothing about closed windows has closed none, and a leftover here would
+    // hide a panel the user never shut.
+    c.closedWindows = {"Junk###panel_Junk"};
     // And an override that must not survive either: a config that says nothing
     // about mute overrides has none, so every plugin's mute follows the rule
     // its capabilities imply. A leftover here would silence a decoder whose
@@ -177,6 +189,9 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
+    CHECK(a.mapTrailStyle == b.mapTrailStyle);
+    CHECK(a.scopeMode == b.scopeMode);
+    CHECK(a.scopeRangeNm == b.scopeRangeNm);
     CHECK(a.mapWindowWidth == b.mapWindowWidth);
     CHECK(a.mapWindowHeight == b.mapWindowHeight);
     CHECK(a.mapWindowX == b.mapWindowX);
@@ -194,6 +209,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
     CHECK(a.pluginsStopped == b.pluginsStopped);
+    CHECK(a.closedWindows == b.closedWindows);
     CHECK(a.pluginMuteOverride == b.pluginMuteOverride);
     CHECK(a.webEnabled == b.webEnabled);
     CHECK(a.webBindAddress == b.webBindAddress);
@@ -269,6 +285,13 @@ int main() {
         in.mapTrails = false;
         in.mapTrailAltitudeColours = true;
         in.mapTrailStyle = 1;  // Ribbon, which is not the default
+        // The radar scope. The range is a LEGAL ladder value that is neither
+        // the default (200) nor what junkConfig() holds (12345, which snaps to
+        // 400), so the roundtrip proves the FILE is what came back rather than
+        // either end's fallback - and proves the sanitizer did not "correct" a
+        // value the user had actually selected.
+        in.scopeMode = true;
+        in.scopeRangeNm = 25;
         // Map pages: two, in an order the roundtrip must preserve, each with a
         // rectangle nobody would arrive at by accident and one with a NEGATIVE
         // x, because a second monitor to the left of the primary one is the
@@ -303,6 +326,13 @@ int main() {
         // and deliberately different names from the grants above so a save
         // that crossed the two lists would show up here.
         in.pluginsStopped = {"sstv-decoder.dll", "ais-decoder.dll"};
+        // Windows the user shut, in ImGui's identity form rather than a
+        // plugin file name, so a save that confused this list with the plugin
+        // lists either side of it would be visible here. This is what makes a
+        // close outlive the session: a panel and a decoded-image window used
+        // to reopen on every launch however many times they were closed.
+        in.closedWindows = {"Satellites###panel_Satellites",
+                            "NOAA APT image###image_NOAA APT"};
         // And the mute overrides, again with names of their own, so the full
         // round trip proves the three lists stay three lists.
         in.pluginMuteOverride = {"pocsag-decoder.dll"};
@@ -592,6 +622,128 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.mapTrails);
         CHECK(out.mapTrailAltitudeColours);
+    }
+
+    // --- the radar scope's mode and range (documented in config.hpp) ----------
+    //
+    // The range is the interesting half. Everything the scope draws is derived
+    // from it - four ring radii, four ring labels and the corner readout - so a
+    // value that is not on the ladder in gui/scope_view.hpp would reach the
+    // renderer as a scale nobody chose and nobody could reproduce. The file is
+    // hand-editable, which makes this sanitizer the only thing standing between
+    // a typo and that state.
+    {
+        const std::string path = p("scope.json");
+        AppConfig out;
+        std::string err;
+
+        // OFF, AND 200 NM. Off because a new install needs the receiver's own
+        // controls first and because the scope is empty with no aircraft source
+        // installed; 200 NM because a good ADS-B site hears 200-250, so it
+        // opens showing everything the receiver can realistically reach.
+        const AppConfig d;
+        CHECK(d.scopeMode == false);
+        CHECK(d.scopeRangeNm == 200);
+
+        // READ FROM THE FILE. For a bool defaulting false this can only be
+        // proved by writing true, and for the range by writing something that
+        // is not the default. RED WHEN either getter is dropped: load()
+        // assigns defaults before it parses, so a missing read leaves exactly
+        // the values asserted above.
+        CHECK(writeText(path, "{\"scopeMode\":true,\"scopeRangeNm\":25}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(out.scopeMode);
+        CHECK(out.scopeRangeNm == 25);
+
+        // ...and the mode reads false from the file too, so a getter wired to a
+        // constant is caught in both directions.
+        CHECK(writeText(path, "{\"scopeMode\":false,\"scopeRangeNm\":400}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.scopeMode);
+        CHECK(out.scopeRangeNm == 400);
+
+        // EVERY LEGAL VALUE SURVIVES UNTOUCHED. A sanitizer that "corrected" a
+        // range the user actually selected would be worse than none.
+        const int legal[] = {10, 25, 50, 100, 200, 400};
+        for (int nm : legal) {
+            CHECK(writeText(path, "{\"scopeRangeNm\":" + std::to_string(nm) + "}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.scopeRangeNm != nm) {
+                std::printf("  (legal range moved: %d -> %d)\n", nm, out.scopeRangeNm);
+            }
+            CHECK(out.scopeRangeNm == nm);
+        }
+
+        // ANYTHING ELSE SNAPS TO THE NEAREST LEGAL VALUE - not to the default,
+        // which would throw away what an almost-right edit was reaching for,
+        // and not to the next one up, which would silently widen the scope. The
+        // tie cases (75, 150, 300) go to the SMALLER range, which is the
+        // documented rule: a scope set tighter still draws everything inside it
+        // correctly, where one set longer claims reach nobody asked for.
+        struct RangeCase { int wrote; int want; const char* why; };
+        const RangeCase snap[] = {
+            {0, 10, "zero, below the ladder"},
+            {-40, 10, "negative, below the ladder"},
+            {17, 10, "just below the 10/25 midpoint"},
+            {18, 25, "just above the 10/25 midpoint"},
+            {75, 50, "exactly between 50 and 100 - ties go smaller"},
+            {150, 100, "exactly between 100 and 200 - ties go smaller"},
+            {173, 200, "a plausible hand-edit, nearest is 200"},
+            {300, 200, "exactly between 200 and 400 - ties go smaller"},
+            {999, 400, "above the ladder"},
+            // A hand-edit large enough to overflow int arithmetic if the scan
+            // subtracted in int rather than in long long. RED WHEN it does:
+            // on this compiler the failure is a wrong answer, not a crash.
+            {2000000000, 400, "near INT_MAX"},
+            {-2000000000, 10, "near INT_MIN"},
+        };
+        for (const RangeCase& c : snap) {
+            CHECK(writeText(path, "{\"scopeRangeNm\":" + std::to_string(c.wrote) + "}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.scopeRangeNm != c.want) {
+                std::printf("  (case: %s, wrote %d, wanted %d, got %d)\n", c.why, c.wrote,
+                            c.want, out.scopeRangeNm);
+            }
+            CHECK(out.scopeRangeNm == c.want);
+        }
+
+        // A file that predates both keys - the ordinary upgrade - gets the
+        // defaults, and in particular does NOT get a mode nobody switched on.
+        CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.scopeMode);
+        CHECK(out.scopeRangeNm == 200);
+
+        // A WRONG-TYPED VALUE IS TREATED AS ABSENT, the same rule every other
+        // field here follows: one hand-edited mistake must not wipe the rest of
+        // the settings. The range still comes out on the ladder, because the
+        // default it falls back to is on it.
+        CHECK(writeText(path, "{\"scopeMode\":\"yes\",\"scopeRangeNm\":\"200\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(!out.scopeMode);
+        CHECK(out.scopeRangeNm == 200);
+
+        // And both survive a full save/load roundtrip, which is the actual
+        // promise: a user who left the application showing a 50 NM scope is
+        // looking at a 50 NM scope when they open it again.
+        AppConfig in;
+        in.schemaVersion = 1;
+        in.scopeMode = true;
+        in.scopeRangeNm = 50;
+        const std::string rt = p("scope_roundtrip.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        out = junkConfig();
+        CHECK(ConfigStore::load(rt, out, err));
+        CHECK(out.scopeMode);
+        CHECK(out.scopeRangeNm == 50);
     }
 
     // --- map window geometry (documented in config.hpp) -----------------------

@@ -16,10 +16,19 @@ namespace {
 
 // Same background as the P0 placeholder panel so swapping the real widget in
 // causes no visual jump; trace color likewise carried over.
-constexpr ImU32 kBackground = IM_COL32(8, 10, 14, 255);
-constexpr ImU32 kTrace = IM_COL32(94, 189, 255, 255);
+// THE GLASS AND WHAT IS BEHIND IT, from the 1960s bench reference. The trace
+// was a cool blue on near-black - a perfectly good spectrum and the wrong
+// instrument. It is phosphor now, on the same near-black green the waterfall
+// and the radar scope sit on, so all three displays in this product read as
+// the same tube rather than three different ones.
+//
+// The grid stays a low-alpha WHITE rather than becoming green: a green
+// graticule under a green trace is much less separable than a neutral one,
+// and the graticule's whole job is to be legible without competing.
+constexpr ImU32 kBackground = IM_COL32(5, 10, 6, 255);
+constexpr ImU32 kTrace = IM_COL32(0x8F, 0xD9, 0xA0, 255);
 constexpr ImU32 kGridLine = IM_COL32(255, 255, 255, 26);
-constexpr ImU32 kGridLabel = IM_COL32(255, 255, 255, 110);
+constexpr ImU32 kGridLabel = IM_COL32(0x9C, 0x90, 0x78, 200);
 
 // VFO overlay: fill translucent enough that the trace stays readable through
 // it, edges brighter so the grab targets are visible, and a warm center line
@@ -28,7 +37,10 @@ constexpr ImU32 kGridLabel = IM_COL32(255, 255, 255, 110);
 constexpr ImU32 kVfoFill = IM_COL32(255, 255, 255, 28);
 constexpr ImU32 kVfoFillDragging = IM_COL32(255, 255, 255, 52);
 constexpr ImU32 kVfoEdge = IM_COL32(255, 255, 255, 140);
-constexpr ImU32 kVfoCenter = IM_COL32(255, 170, 60, 200);
+// The centre line takes the bench's amber, which is this product's colour for
+// a figure - and is still the one warm mark on a cool face, which is why it
+// could never be confused with the trace.
+constexpr ImU32 kVfoCenter = IM_COL32(0xF0, 0xA8, 0x40, 200);
 
 // Trace value at fractional bin `bin`, linearly interpolated between the two
 // straddled bins. Callers guarantee bin is within [0, n-1] and n >= 1. An
