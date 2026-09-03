@@ -55,6 +55,12 @@
 #if !FileExists(BuildDir + "\cascade.exe")
   #pragma error "cascade.exe not found in build\Release — build the Release configuration first (see README.md)"
 #endif
+; The radar unit is a SECOND shipped program, not an optional extra: the
+; README documents it and the Start Menu offers it, so a setup built without
+; it would install a shortcut to nothing.
+#if !FileExists(BuildDir + "\foxsdr-radar.exe")
+  #pragma error "foxsdr-radar.exe not found in build\Release — build the foxsdr-radar target too (see README.md, 'The radar unit')"
+#endif
 #if !FileExists(VcCrtDir + "\msvcp140.dll")
   #pragma error "VC CRT redist dir not found: " + VcCrtDir + " — pass /DVcCrtDir=<...\Microsoft.VC143.CRT>"
 #endif
@@ -126,9 +132,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; Core payload — the two runtime binaries the build produces.
+; Core payload — the runtime binaries the build produces.
 Source: "{#BuildDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\SoapySDR.dll"; DestDir: "{app}"; Flags: ignoreversion
+; The radar unit. Its own program with its own window, and it links the
+; WebView2 loader statically, so it travels as one file with no DLL beside it.
+Source: "{#BuildDir}\foxsdr-radar.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; App-local MSVC runtime (from the VS Redist folder — NEVER from C:\Windows).
 ; cascade.exe and SoapySDR.dll import exactly these three; the UCRT they also
 ; need is an OS component on Windows 10+.
@@ -146,6 +155,10 @@ Source: "POSTINSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"
+; Offered from the Start Menu but NOT on the desktop: it needs FoxSDR running
+; with web access on, so it is a thing you reach for once you have a receiver
+; working, not the first icon a new user clicks.
+Name: "{group}\Radar unit"; Filename: "{app}\foxsdr-radar.exe"; WorkingDir: "{app}"; Comment: "Aircraft radar display — needs {#AppName} running with web access on"
 Name: "{group}\Hardware setup notes"; Filename: "{app}\POSTINSTALL.txt"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon

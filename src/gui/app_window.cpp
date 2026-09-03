@@ -36,6 +36,8 @@
 // generated header would be a worse trade than a two-segment relative include.
 #include "../../resources/icon/foxsdr_icon_rgba.hpp"
 #include "core/image_write.hpp"
+#include "gui/scope_face.hpp"
+#include "gui/theme.hpp"
 #include "gui/map_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
@@ -343,6 +345,12 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
+           // The scope's mode and range. Both are user switches that change
+           // only on a click or a wheel notch, so they belong here: without
+           // them, leaving the application in scope mode - or on a range other
+           // than the one it opened with - would survive a restart only if
+           // something else happened to trigger a save.
+           a.scopeMode == b.scopeMode && a.scopeRangeNm == b.scopeRangeNm &&
            // Map page geometry takes part, which is what makes a resize save
            // at all. The debounce restarts on every change, so a drag writes
            // once when it stops rather than once per frame while it is
@@ -361,6 +369,11 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.pluginTuneAllowed == b.pluginTuneAllowed &&
            a.pluginsStopped == b.pluginsStopped &&
            a.pluginMuteOverride == b.pluginMuteOverride &&
+           // Without this a close is remembered in memory and never written:
+           // the comparison is what decides whether the file is saved at all,
+           // so a field missing from it persists only when something else
+           // happens to change in the same session.
+           a.closedWindows == b.closedWindows &&
            a.catEnabled == b.catEnabled && a.catBindAll == b.catBindAll &&
            a.catPort == b.catPort &&
            a.webEnabled == b.webEnabled &&
@@ -710,6 +723,7 @@ int AppWindow::run(int frames) {
     const std::string title =
         std::string(cascade::appName()) + " " + cascade::versionString();
     GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
+    mainWindow_ = window;
     if (window == nullptr) {
         std::fprintf(stderr, "cascade: glfwCreateWindow failed\n");
         glfwTerminate();
@@ -746,15 +760,20 @@ int AppWindow::run(int frames) {
     // decoded-image window the resize borders, title bar, and
     // minimise/maximise behaviour every other window on the desktop has.
     ImGui::GetIO().ConfigViewportsNoDecoration = false;
-    ImGui::StyleColorsDark();
-    // A window that has been torn off is a real window and should look like
-    // one: square corners and an opaque background, not the translucent
-    // rounded panel that reads correctly only when floating over the app.
-    {
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
+    // THE BENCH, applied once, before the first frame.
+    //
+    // This replaces ImGui::StyleColorsDark() outright rather than tinting it:
+    // the two are different instruments, and half a dark theme showing through
+    // brass is worse than either on its own. Everything the style can reach -
+    // every button, field, header, popup, tooltip, scrollbar and tab in the
+    // application - follows from gui/theme.hpp from here on.
+    //
+    // The two overrides that used to live here in full are now INSIDE
+    // applyTheme, with the reasoning that made them load-bearing: a torn-off
+    // window is a real operating system window in this application, so its
+    // background must be opaque and its corners square or the OS frame and the
+    // ImGui corner disagree.
+    cascade::gui::theme::applyTheme();
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
         std::fprintf(stderr, "cascade: ImGui GLFW backend init failed\n");
@@ -936,6 +955,20 @@ int AppWindow::run(int frames) {
             ImGui::RenderPlatformWindowsDefault();
             glfwMakeContextCurrent(restore);
         }
+
+        // THE RADAR UNIT COVERS THE WHOLE APPLICATION, NOT JUST THIS WINDOW.
+        // Hiding the main window alone left a user's map page and decoder
+        // output sitting on the desktop beside a radar that is supposed to BE
+        // the interface - seen the first time the two ran together.
+        //
+        // Applied every frame rather than once, because the torn-off windows
+        // are ImGui viewports: UpdatePlatformWindows above re-shows any it
+        // decides should be visible, so a single hide would be undone on the
+        // next frame. Hiding here, immediately after it, is what makes the
+        // decision stick without fighting the backend for ownership of the
+        // window - and the geometry read-back that persists their rectangles
+        // is unaffected, because a hidden window keeps its position.
+        applyRadarWindowVisibility();
 
         glfwSwapBuffers(window);
         ++rendered;
@@ -1162,18 +1195,43 @@ void AppWindow::drawUi() {
     drawToolbar();
     ImGui::Separator();
 
-    ImGui::BeginChild("##menu_column", ImVec2(kMenuWidth, 0.0f), ImGuiChildFlags_None);
-    drawMenuColumn();
-    ImGui::EndChild();
+    // SCOPE MODE REPLACES THE WHOLE LAYOUT, and that is the mode rather than a
+    // side effect of it: the instrument the request came from shows a scope, a
+    // detail panel and nothing else, and a scope sharing the window with a
+    // waterfall and a settings rail would be a smaller map rather than the
+    // thing that was asked for. The toolbar above stays - it carries Play/Stop
+    // and the frequency, which are what keeps the aircraft arriving at all -
+    // and drawScopeMode draws its own way back before anything else.
+    if (scopeMode_) {
+        // THE SPECTRUM IS STILL CONSUMED IN SCOPE MODE, even though nothing
+        // here draws it. getLatestFrame is what advances lastFrame_, and
+        // publishWebSnapshot copies its bins for the browser only when the
+        // sequence moves - so skipping it left the web UI serving the last
+        // spectrum captured before the mode was entered, underneath a status
+        // line that kept reporting the CURRENT frequency and mode. A picture
+        // of 88.5 MHz labelled 100.1 MHz is worse than no picture, and this
+        // mode persists across restarts, so an install left in it would have
+        // served that from its first frame. The waterfall is fed here too, or
+        // leaving the mode would show a hard gap in the history.
+        if (pipeline_.getLatestFrame(lastFrame_)) {
+            waterfall_->addLine(lastFrame_.dbBins.data(),
+                                static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+        }
+        drawScopeMode();
+    } else {
+        ImGui::BeginChild("##menu_column", ImVec2(kMenuWidth, 0.0f), ImGuiChildFlags_None);
+        drawMenuColumn();
+        ImGui::EndChild();
 
-    ImGui::SameLine();
+        ImGui::SameLine();
 
-    // The center area owns its scrolling (none): the spectrum/waterfall pair
-    // always fills whatever space the splitter hands it.
-    ImGui::BeginChild("##center", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    drawCenterPanels();
-    ImGui::EndChild();
+        // The center area owns its scrolling (none): the spectrum/waterfall
+        // pair always fills whatever space the splitter hands it.
+        ImGui::BeginChild("##center", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        drawCenterPanels();
+        ImGui::EndChild();
+    }
 
     ImGui::End();
 
@@ -1187,6 +1245,18 @@ void AppWindow::drawUi() {
     // top-level thing belongs at the top level, not nested in the borderless
     // root window's ID stack.
     drawDiagnosticsOffer();
+
+    // ONE basemap eviction pass, AFTER every surface that wanted tiles has
+    // asked for them. Two things ask now - the map pages, which draw inside
+    // drawPluginWindows near the top of this function, and the scope, which
+    // draws inside the root window below it - and endFrame() drops every tile
+    // nothing asked for during the frame. Left where it was (at the end of the
+    // page loop) it would have run BEFORE the scope's requests, evicting the
+    // scope's whole tile set on every frame and re-uploading it on the next.
+    // Skipped entirely when nothing asked, so an eviction pass with no map and
+    // no scope open cannot age the tile set for nothing.
+    if (basemapUsedThisFrame_) { basemap_.endFrame(); }
+    basemapUsedThisFrame_ = false;
 
     // Scanner driver, AFTER all widgets: any manual tune the user made this
     // frame (digit wheel, VFO drag, bookmark click) is already applied, so
@@ -1276,11 +1346,46 @@ void AppWindow::pollAudioHealth() {
     audioHealthNote_ = buf;
 }
 
+namespace {
+
+// The bench's quieter lettering, for captions and hints - the ink the
+// reference engraves its plate legends in rather than a dimmed white.
+//
+// THE KEYS NEED NO HELPER ANY MORE. When this was written the application was
+// still on ImGui's dark theme and each key had to be dressed at its own call
+// site; gui/theme.hpp now sets Button, Header, Frame and the rest globally, so
+// a pushBenchStyle() here would only be a second place for the same colours to
+// drift apart. That is the whole reason the theme file exists.
+// STAGE 3 - THE STATE OF A SECTION, READ WITHOUT OPENING IT.
+//
+// The reference's rail is a column of plates, each carrying a chip that says
+// what that section is doing and a lamp that says whether it is doing it. The
+// application's rail was a column of names, so answering "is the recorder on"
+// meant opening the recorder.
+//
+// This decorates the header ImGui has just submitted rather than replacing
+// CollapsingHeader, which is deliberate: the widget owns the open/closed
+// state, the keyboard and the click target, and reimplementing those to gain a
+// chip would be trading working behaviour for appearance.
+void railChip(const char* chipText, ImU32 lampColour, bool lampLit) {
+    cascade::gui::drawRailChip(ImGui::GetWindowDrawList(), ImGui::GetItemRectMin(),
+                               ImGui::GetItemRectMax(), chipText, lampColour, lampLit);
+}
+
+void benchHint(const char* text) {
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+    ImGui::TextUnformatted(text);
+    ImGui::PopStyleColor();
+}
+
+}  // namespace
+
 void AppWindow::drawToolbar() {
     // The label reads the pipeline, not a local flag, so the button can never
     // disagree with the actual thread state.
     const bool running = pipeline_.running();
-    if (ImGui::Button(running ? "Stop" : "Play", ImVec2(64.0f, 0.0f))) {
+    const bool transport = ImGui::Button(running ? "STOP" : "PLAY", ImVec2(74.0f, 0.0f));
+    if (transport) {
         if (running) {
             // Play-stop while recording stops the recording cleanly (spec):
             // taps uninstalled and both WAVs finalized BEFORE the DSP
@@ -1295,13 +1400,121 @@ void AppWindow::drawToolbar() {
             pipeline_.start();
         }
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::SliderFloat("##volume", &volume_, 0.0f, 1.0f, "Vol %.2f")) {
-        pipeline_.audio().setVolume(volume_);
+    // THE MASTER CLUSTER. Four lamps, each with its word beneath it, because
+    // a state carried by colour alone fails the design's own black-and-white
+    // rule - and MUTE amber against FAIL rust is a hue distinction that about
+    // one man in twelve cannot make.
+    ImGui::SameLine(0.0f, 16.0f);
+    {
+        ImDrawList* mdl = ImGui::GetWindowDrawList();
+        const float r = 5.0f;
+        const float step = 34.0f;
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const float cy = at.y + ImGui::GetFrameHeight() * 0.4f;
+        // ACTUALLY DECODING, not merely installed: a plugin the user has
+        // stopped is not a decoder that is running, and a lamp that counted it
+        // would be reporting inventory rather than activity.
+        std::size_t decoders = 0;
+        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+            // pluginIsStopped/pluginKey are the application's own pair for
+            // this question - asking it any other way is how two places come
+            // to disagree about whether a plugin is running.
+            if (p.loaded && !pluginIsStopped(cascade::core::pluginKey(p))) {
+                ++decoders;
+            }
+        }
+        const bool muted = !muteSubjectText().empty();
+        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + r, cy), r,
+                                    cascade::gui::theme::kPhosphor, running, "RUN");
+        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + step + r, cy), r,
+                                    cascade::gui::theme::kPhosphor, decoders > 0, "DEC");
+        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + step * 2.0f + r, cy), r,
+                                    cascade::gui::theme::kAmber, muted, "MUTE");
+        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + step * 3.0f + r, cy), r,
+                                    cascade::gui::theme::kAlarm, pipeline_.faulted(),
+                                    "FAIL");
+        ImGui::Dummy(ImVec2(step * 3.0f + r * 2.0f, 0.0f));
+    }
+
+    ImGui::SameLine(0.0f, 18.0f);
+    // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
+    // perfectly good control and completely wrong on a bench receiver; this
+    // one turns, carries its own tick arc, and answers the wheel as well as
+    // the hand so it is still usable without a drag.
+    {
+        ImDrawList* tdl = ImGui::GetWindowDrawList();
+        const float r = ImGui::GetFrameHeight() * 0.46f;
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const ImVec2 c(at.x + r, at.y + ImGui::GetFrameHeight() * 0.5f);
+        const float moved = cascade::gui::drawBrassVolumeKnob(tdl, c, r, volume_);
+        if (moved >= 0.0f) {
+            volume_ = moved;
+            pipeline_.audio().setVolume(volume_);
+        }
+        ImGui::SameLine(0.0f, r * 0.9f);
+        char vtxt[24];
+        std::snprintf(vtxt, sizeof(vtxt), "VOL %.2f", static_cast<double>(volume_));
+        ImGui::AlignTextToFramePadding();
+        benchHint(vtxt);
     }
     ImGui::SameLine(0.0f, 24.0f);
     drawFrequencyReadout();
+
+    // THE TWO METERS, and BOTH ARE DRIVEN BY THE FIGURE PRINTED UNDER THEM.
+    //
+    // The reference's own meters are decoration - its PROCESSOR needle animates
+    // through 44-62% of arc while the text beside it reads 22%, and its SAMPLE
+    // RATE needle is hand-placed with no full scale stated anywhere. Copying
+    // either would put a moving needle next to a number it disagrees with,
+    // which is the single most damaging thing a restyle can do: an instrument
+    // that lies is worse than no instrument.
+    //
+    // So both scales are chosen here, stated here, and the needle comes from
+    // the same value as the text. There is deliberately NO "processor load"
+    // meter, because this application measures no such thing and inventing one
+    // would be the same lie in a different place; the second meter reports the
+    // frame time it actually has, and says so.
+    {
+        const float meterW = 92.0f;
+        const float meterH = ImGui::GetFrameHeight() * 2.6f;
+        // SameLine's SECOND argument is spacing from the previous item, not a
+        // position - passing the remaining width there pushed both meters off
+        // the right edge of the window, where they drew perfectly and were
+        // never seen. The FIRST argument is the absolute x this wants.
+        const float barW = ImGui::GetWindowWidth();
+        if (barW > meterW * 2.0f + 460.0f) {
+            ImGui::SameLine(barW - meterW * 2.0f - 34.0f);
+            ImDrawList* mdl = ImGui::GetWindowDrawList();
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+
+            // SAMPLE RATE: full scale 10 MS/s, which covers every device this
+            // application has been run against without compressing the common
+            // 2 MS/s case into the first tenth of the arc.
+            const double rate = pipeline_.activeSource().sampleRateHz();
+            const bool haveRate = std::isfinite(rate) && rate > 0.0;
+            char rateTxt[32];
+            std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
+                          rate / 1.0e6);
+            cascade::gui::drawBenchMeter(mdl, at, meterW, meterH, "SAMPLE RATE",
+                                         static_cast<float>(rate / 10.0e6), haveRate,
+                                         rateTxt);
+
+            // FRAME TIME: the GUI's own, from ImGui's delta, against a 16.7 ms
+            // budget - so full scale is "one frame's worth of 60 Hz". It is a
+            // real measurement of a real thing, and it is NOT called PROCESSOR
+            // because it is not the DSP load and must not be read as one.
+            const float dt = ImGui::GetIO().DeltaTime;
+            const bool haveDt = dt > 0.0f && dt < 1.0f;
+            char dtTxt[32];
+            std::snprintf(dtTxt, sizeof(dtTxt), haveDt ? "%.0f %% - %.1f ms" : "--",
+                          static_cast<double>(dt) * 1000.0 / 16.7 * 100.0,
+                          static_cast<double>(dt) * 1000.0);
+            cascade::gui::drawBenchMeter(mdl, ImVec2(at.x + meterW + 16.0f, at.y), meterW,
+                                         meterH, "FRAME TIME", dt * 1000.0f / 16.7f,
+                                         haveDt, dtTxt);
+            ImGui::Dummy(ImVec2(meterW * 2.0f + 16.0f, meterH));
+        }
+    }
     // Beside the frequency, because the banner is ABOUT the frequency: it
     // appears when the user has tuned away from a decoder's preset and kept
     // the decoder running, and the two things it has to be read together with
@@ -1372,20 +1585,44 @@ void AppWindow::drawFrequencyReadout() {
     ImVec4 dim = bright;
     dim.w *= 0.25f;
 
-    // Large monospace look: scale the default font up. Base size (not
-    // GetFontSize()) so global scale factors are not applied twice.
-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.2f);
+    // THE COUNTER IS A ROW OF DRUMS, in the handoff's 1960s bench: amber
+    // digits in machined apertures, recessed into a dark well, grouped in
+    // thousands by a wider gap rather than by a printed separator - which is
+    // what a mechanical counter actually does.
+    //
+    // The behaviour underneath is unchanged and must stay that way: the wheel
+    // over a digit still steps that digit's place value, and a click still
+    // opens the typed editor. Those are the reasons this readout is worth
+    // having at all, and a restyle that lost them would be a downgrade
+    // wearing better clothes.
+    const float cellH = ImGui::GetFrameHeight() * 1.55f;
+    const float cellW = cellH * 0.62f;
+    const float fontPx = cellH * 0.66f;
+    const float wide = cellW * 0.36f;   // the thousands gap
+    ImDrawList* fdl = ImGui::GetWindowDrawList();
+    {
+        // The well behind the whole row, sized from the cells it will hold.
+        float total = 0.0f;
+        for (int i = 0; i < 10; ++i) {
+            total += cellW + ((i == 1 || i == 4 || i == 7) ? wide : 2.0f);
+        }
+        const ImVec2 wtl = ImGui::GetCursorScreenPos();
+        cascade::gui::drawFreqDrumWell(
+            fdl, ImVec2(wtl.x - 6.0f, wtl.y - 4.0f),
+            ImVec2(wtl.x + total + 6.0f, wtl.y + cellH + 4.0f));
+    }
     bool significant = false;
     bool hoveredDigit = false;
     for (int i = 0; i < 10; ++i) {
         if (digits[i] != '0') { significant = true; }
-        // Separators after digits 0, 3 and 6 group the field d.ddd.ddd.ddd; a
-        // separator inherits the dim state of the run it terminates.
-        const bool sepAfter = (i == 0 || i == 3 || i == 6);
-        const char cell[3] = {digits[i], sepAfter ? '.' : '\0', '\0'};
-        ImGui::PushStyleColor(ImGuiCol_Text, significant ? bright : dim);
-        ImGui::TextUnformatted(cell);
-        ImGui::PopStyleColor();
+        // A wider gap BEFORE the digit that starts each group of three, which
+        // is where a counter's thousands break falls.
+        if (i > 0) { ImGui::SameLine(0.0f, (i == 1 || i == 4 || i == 7) ? wide : 2.0f); }
+        const ImVec2 ctl = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
+                               ImVec2(cellW, cellH));
+        cascade::gui::drawFreqDrumCell(fdl, ctl, ImVec2(ctl.x + cellW, ctl.y + cellH),
+                                       digits[i], significant, fontPx);
 
         // Per-digit wheel tuning. A trailing separator belongs to the digit
         // cell it follows, so hovering it tunes that digit — the natural
@@ -1415,9 +1652,7 @@ void AppWindow::drawFrequencyReadout() {
                 freqEditWasActive_ = false;
             }
         }
-        if (i != 9) { ImGui::SameLine(0.0f, 0.0f); }
     }
-    ImGui::PopFont();
 
     // Tooltip AFTER PopFont: raised inside the 2.2x scope it inherited that
     // scale and painted a banner across the spectrum.
@@ -1442,7 +1677,12 @@ void AppWindow::drawMenuColumn() {
                       ImGuiChildFlags_None);
     drawUpdateBanner();
     drawSourceSection();
-    if (ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen)) {
+    const bool radioOpen = ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen);
+    // kModeNames is the one table the mode buttons and this chip both read,
+    // so the rail cannot claim a mode the buttons do not show.
+    railChip(kModeNames[modeIndex_], cascade::gui::theme::kPhosphor,
+             pipeline_.running());
+    if (radioOpen) {
         // Mode/bandwidth tables live at namespace scope (kModeNames &co):
         // the band-snap logic and the config store share them.
         constexpr int kColumns = 4;
@@ -1512,7 +1752,16 @@ void AppWindow::drawMenuColumn() {
         std::snprintf(overlay, sizeof(overlay), "%.1f dB", static_cast<double>(sDb));
         ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
     }
-    if (ImGui::CollapsingHeader("Sinks", ImGuiTreeNodeFlags_DefaultOpen)) {
+    const bool sinksOpen = ImGui::CollapsingHeader("Sinks", ImGuiTreeNodeFlags_DefaultOpen);
+    {
+        // MUTED is the state worth seeing from the rail without opening it -
+        // "why is there no sound" is the question this chip answers.
+        const bool muted = !muteSubjectText().empty();
+        railChip(muted ? "MUTED" : "ON",
+                 muted ? cascade::gui::theme::kAmber : cascade::gui::theme::kPhosphor,
+                 true);
+    }
+    if (sinksOpen) {
         if (devices_.empty()) {
             ImGui::TextDisabled("No audio output devices");
         } else if (ImGui::BeginCombo(
@@ -1810,7 +2059,17 @@ void AppWindow::drawUpdateBanner() {
 }
 
 void AppWindow::drawSourceSection() {
-    if (!ImGui::CollapsingHeader("Source", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+    const bool sourceOpen = ImGui::CollapsingHeader("Source", ImGuiTreeNodeFlags_DefaultOpen);
+    {
+        // The device in use, shortened to what fits: "SoapySDR: B200" is the
+        // full name and "B200" is the part that identifies it.
+        std::string chip = pipeline_.activeSource().name();
+        const std::size_t colon = chip.rfind(": ");
+        if (colon != std::string::npos) { chip = chip.substr(colon + 2); }
+        if (chip.size() > 10) { chip = chip.substr(0, 10); }
+        railChip(chip.c_str(), cascade::gui::theme::kPhosphor, pipeline_.running());
+    }
+    if (!sourceOpen) { return; }
 
     // Row label for a combo index; -1 (active device dropped by a Refresh)
     // falls back to the live source name so the preview is never a lie.
@@ -4055,6 +4314,7 @@ AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
         page.w = it->width;
         page.h = it->height;
         page.open = it->open;
+        page.selfOpenSuppressed = !it->open;
     } else if (mapWinW_ > 0 && mapWinH_ > 0) {
         const int stagger = 34 * static_cast<int>(mapPages_.size());
         page.x = mapWinX_ + stagger;
@@ -4091,6 +4351,684 @@ void AppWindow::syncMapPagesToSaved() {
             mapPagesSaved_.push_back(std::move(e));
         }
     }
+}
+
+void AppWindow::drawRxPositionEntry() {
+    // The receiver's own position is asked for, never guessed. It is what
+    // range and bearing are measured from - on the map, in the track table and
+    // now for every mark on the radar scope - and inferring it from a decoded
+    // target would be confidently wrong the moment the first aircraft appears.
+    //
+    // DOUBLE, NOT FLOAT, and persisted. A float carries about seven significant
+    // digits, which runs out inside the decimal part of a latitude and moves
+    // the origin of every range ring by metres for no reason; and the pair used
+    // to be static LOCALS, so the position died with the process. Both are now
+    // AppConfig fields - see AppConfig::rxPositionSet.
+    //
+    // ONE COPY, drawn by the map pages and by the scope's no-position state.
+    // The button does more than assign two numbers, and a second hand-written
+    // copy would sooner or later do only some of it.
+    ImGui::SetNextItemWidth(96.0f);
+    ImGui::InputDouble("##homelat", &rxLatInput_, 0.0, 0.0, "%.5f");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Receiver latitude, degrees north (-90..90)");
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(96.0f);
+    ImGui::InputDouble("##homelon", &rxLonInput_, 0.0, 0.0, "%.5f");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Receiver longitude, degrees east (-180..180)");
+    }
+    ImGui::SameLine();
+    // REFUSED RATHER THAN CLAMPED, and by the same positive range test the
+    // config sanitizer uses, so a typo cannot silently install a receiver at
+    // the pole and quietly make every distance wrong. The button simply does
+    // not accept the pair.
+    const bool rxInputOk = rxLatInput_ >= -90.0 && rxLatInput_ <= 90.0 &&
+                           rxLonInput_ >= -180.0 && rxLonInput_ <= 180.0;
+    ImGui::BeginDisabled(!rxInputOk);
+    if (ImGui::SmallButton("Set RX here")) {
+        rxLat_ = rxLatInput_;
+        rxLon_ = rxLonInput_;
+        rxSet_ = true;
+        // EVERY page, not just the one whose button was pressed: the receiver's
+        // position is a fact about the antenna, and two pages disagreeing about
+        // where home is would put the range rings in two different places at
+        // once. The scope is told for the same reason - it is a third view of
+        // the same antenna.
+        for (MapPage& other : mapPages_) {
+            other.view->setHome(rxLat_, rxLon_);
+        }
+        scope_.setReceiver(rxLat_, rxLon_);
+        // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it was
+        // measured from somewhere else, and keeping them would draw one
+        // antenna's pattern around another antenna's position.
+        coverage_.reset();
+    }
+    ImGui::EndDisabled();
+    if (!rxInputOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Latitude must be -90..90 and longitude -180..180");
+    }
+}
+
+void AppWindow::drawScopeModeControl() {
+    // THE SWITCH, in the Decoders section because that is where a user goes
+    // looking for what their ADS-B plugin can do. It is a button rather than a
+    // checkbox on purpose: turning it on replaces the entire window, which is
+    // a place you go rather than a setting you tick, and a checkbox that
+    // silently swallowed the spectrum would read as a fault.
+    if (ImGui::Button(scopeMode_ ? "Leave radar scope" : "Radar scope",
+                      ImVec2(-1.0f, 0.0f))) {
+        scopeMode_ = !scopeMode_;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "A plan-position indicator for aircraft: range rings and bearing\n"
+            "ticks around the receiver, with a detail panel for the one you\n"
+            "select. Takes the whole window; there is a way back on its own bar.");
+    }
+    // SAID HERE RATHER THAN DISCOVERED IN AN EMPTY SCOPE. The scope draws
+    // whatever aircraft the host has, which with no aircraft source installed
+    // is none at all - and an empty scope looks identical to a broken one.
+    if (pluginUi_.trackPluginNames().empty()) {
+        ImGui::TextDisabled("no aircraft source installed - the scope will be empty");
+    }
+}
+
+void AppWindow::drawScopeMode() {
+    telemetryNotePanel("scope");
+
+    // --- the bar, drawn FIRST and unconditionally ---------------------------
+    // The way out comes before anything that can run out of room. Everything
+    // below this bar is sized from what is left, and every one of those things
+    // is allowed to decide there is not enough space and draw nothing; the
+    // exit is not, because a mode you cannot leave is the map-page latch again
+    // in a larger form.
+    const bool leaveScope = ImGui::Button("EXIT SCOPE");
+    if (leaveScope) { scopeMode_ = false; }
+    // A SECOND WAY OUT, and it is not belt and braces for its own sake: the
+    // button above is a DRAWN thing, and a drawn thing can be below the fold of
+    // a window somebody has dragged very short - this root window has no
+    // scrollbar by design. Escape is what every full-screen mode is already
+    // expected to answer, and it costs one line.
+    //
+    // NOT WHILE A FIELD IS BEING EDITED and not while a popup is up: Escape
+    // means "cancel this edit" and "close this dialog" everywhere else in the
+    // application, and a mode that stole it would make the coordinate boxes on
+    // this very bar behave differently from every other box in the product.
+    const bool popupUp = ImGui::IsPopupOpen(
+        nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if (!popupUp && !ImGui::IsAnyItemActive() &&
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        scopeMode_ = false;
+    }
+    ImGui::SameLine();
+    benchHint("|");
+    ImGui::SameLine();
+    benchHint("RANGE");
+    ImGui::SameLine();
+    // A STEPPER, NOT A SLIDER OR A FREE FIELD. The range is a ladder of six
+    // values (see kScopeRangesNm) and the two buttons are the ladder: there is
+    // no state either of them can put the view into that it has no rings for,
+    // and each is disabled at its own end so the control says where the travel
+    // stops rather than silently doing nothing.
+    const int downNm = scopeRangeStepped(scopeRangeNm_, -1);
+    ImGui::BeginDisabled(downNm == scopeRangeNm_);
+    const bool stepDown = ImGui::Button("-##scoperange");
+    ImGui::EndDisabled();
+    if (stepDown) { scopeRangeNm_ = downNm; }
+    ImGui::SameLine();
+    // Fixed width so the buttons either side do not shuffle as the number's
+    // width changes between "10 NM" and "400 NM".
+    {
+        const std::string txt = scopeRangeReadout(scopeRangeNm_);
+        // "400 NM" is the widest entry on the ladder in every font this
+        // application is likely to be given, but the pad is floored anyway: a
+        // font where some other digit is wider would otherwise hand ImGui a
+        // negative-width item, and guessing about a font is exactly what the
+        // map's altitude legend was rewritten to stop doing.
+        const float w = ImGui::CalcTextSize("400 NM").x;
+        const float have = ImGui::CalcTextSize(txt.c_str()).x;
+        ImGui::Dummy(ImVec2(std::max(0.0f, w - have), 0.0f));
+        ImGui::SameLine(0.0f, 0.0f);
+        // A READING, not a legend: the bench letters its controls in ivory and
+        // its numbers in amber, and this is a number.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImVec4(240.0f / 255.0f, 168.0f / 255.0f, 64.0f / 255.0f, 1.0f));
+        ImGui::TextUnformatted(txt.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::SameLine();
+    const int upNm = scopeRangeStepped(scopeRangeNm_, +1);
+    ImGui::BeginDisabled(upNm == scopeRangeNm_);
+    const bool stepUp = ImGui::Button("+##scoperange");
+    ImGui::EndDisabled();
+    if (stepUp) { scopeRangeNm_ = upNm; }
+    ImGui::SameLine();
+    benchHint("the mouse wheel over the scope steps it too");
+    ImGui::Separator();
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+
+    // --- no receiver position is an HONEST EMPTY STATE ----------------------
+    //
+    // NOT A BROKEN SCOPE. Every mark on this face is a distance and a direction
+    // from one place; without that place there is nothing to centre it on. The
+    // one thing it must not do is default to 0N 0E, which is not a neutral
+    // value - it is a real place in the Gulf of Guinea, and a scope centred
+    // there would draw a plausible-looking picture in which every range and
+    // bearing was wrong by the distance from there to the antenna.
+    if (!rxSet_) {
+        ImGui::Spacing();
+        ImGui::TextUnformatted("The scope needs the receiver's position.");
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Everything on a radar scope is a range and a bearing measured from "
+            "the antenna, so there is nothing to draw until this receiver knows "
+            "where it is. It is the same position the map uses, and setting it "
+            "here sets it there.");
+        ImGui::Spacing();
+        drawRxPositionEntry();
+        return;
+    }
+
+    // The position may have been set from a map page (or restored from the
+    // config) since the last time this ran, so it is pushed in every frame
+    // rather than only on the button - the same rule the trail switches follow,
+    // and what makes a change on any surface reach every other one immediately.
+    scope_.setReceiver(rxLat_, rxLon_);
+    // The range likewise travels in both directions: the bar's buttons write
+    // scopeRangeNm_, the wheel over the face writes the view's own copy, and
+    // the read-back below is what carries the wheel's change into the config.
+    scope_.setRangeNm(scopeRangeNm_);
+
+    // --- the instrument face ------------------------------------------------
+    //
+    // The layout of the photographed receiver: gauges outboard, the round scope
+    // and its data panel inboard, two real controls on a plinth beneath. It is
+    // drawn only when there is genuinely room for it; below that the scope
+    // takes the whole area and the face is dropped entirely, because a bezel
+    // that has squeezed the actual instrument down to nothing has the priority
+    // exactly backwards.
+    // THE CABINET IS A FIXED 1080 x 822 SLAB, scaled uniformly and centred in
+    // whatever room the window has - not a set of parts stretched to fill it.
+    //
+    // That single decision is what makes the face read as one machined object:
+    // the reference design fixes every position inside that slab, and a layout
+    // that rescales each part independently reproduces the components while
+    // losing the thing they add up to. Measured against the reference, the
+    // fill-the-box version had the tube half again too large relative to its
+    // panel and the plinth bays at three different widths.
+    constexpr float kCabH = 822.0f;
+    // THE SCALE COMES FROM THE HEIGHT, and the cabinet then FILLS the window.
+    //
+    // Scaling uniformly on min(width/1080, height/822) and centring the result
+    // kept the reference's proportions exactly and letterboxed the rest -
+    // which on a wide window is a broad band of dead case down each side and
+    // under the plinth. Reported as exactly that.
+    //
+    // The reference's own grid already says what to do with slack: its upper
+    // deck is 62 | 1fr | 330 | 62, and the 1fr is the scope bay. So the FIXED
+    // parts - the two gauge bays, the LCD, the deck heights, every gap and pad
+    // - keep their designed size at this scale, and every spare pixel goes to
+    // the tube, which is the thing worth making bigger anyway.
+    const float scale = std::clamp(avail.y / kCabH, 0.42f, 2.2f);
+    // Below this, or too narrow to hold the fixed columns with a usable tube
+    // between them, the cabinet is dropped and the tube takes everything: a
+    // bezel that has squeezed the instrument to nothing has it backwards.
+    const bool roomForFace = scale >= 0.42f && avail.x >= 900.0f;
+
+    if (!roomForFace) {
+        scope_.draw(avail.x, avail.y, pluginUi_.tracks(), &basemap_, &trackInfo_);
+        scopeRangeNm_ = scope_.rangeNm();
+        return;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 winTL = ImGui::GetCursorScreenPos();
+    const float kGaugeW = 62.0f * scale;
+
+    // THE CABINET IS AS WIDE AS ITS CONTENTS, AND NO WIDER.
+    //
+    // Stretching it to the window put the deck's contents in the middle of a
+    // slab with a band of empty case down each side - the dead space this was
+    // reported as twice. The unit is an OBJECT: it should be the size of the
+    // instrument in it, and what is left over is the desk it sits on, not more
+    // of the unit.
+    //
+    // The width follows from the tube, and the tube from the deck's height,
+    // so the order below is forced: work out how tall the deck can be, that
+    // gives the tube its size, and the row of bays either side of it gives the
+    // cabinet its width. If that comes out wider than the window, the tube -
+    // the only flexible part - gives back the difference.
+    const float cabPad = 16.0f * scale;
+    const float innerGap = 10.0f * scale;
+    const float deckPadY = 12.0f * scale;
+    const float lowerH = 165.0f * scale;
+    const float cabH = std::floor(avail.y);
+    const float deckH =
+        cabH - cabPad * 2.0f - deckPadY * 3.0f - lowerH;
+    const float panelW = std::min(340.0f * scale, avail.x * 0.30f);
+    float tubeSide = std::max(120.0f, deckH);
+    float groupW = kGaugeW * 2.0f + innerGap * 2.0f + tubeSide + 14.0f + panelW;
+    const float maxGroupW = avail.x - cabPad * 2.0f;
+    if (groupW > maxGroupW) {
+        tubeSide = std::max(120.0f, tubeSide - (groupW - maxGroupW));
+        groupW = kGaugeW * 2.0f + innerGap * 2.0f + tubeSide + 14.0f + panelW;
+    }
+    const float cabW = std::min(avail.x, groupW + cabPad * 2.0f);
+    const ImVec2 faceTL(std::floor(winTL.x + (avail.x - cabW) * 0.5f),
+                        std::floor(winTL.y));
+    const ImVec2 faceBR(faceTL.x + cabW, faceTL.y + cabH);
+
+    // THE CASE, in the reference design's own colours rather than colours
+    // chosen here: #26271f down to #14150f at 55% and #0f100b at the foot,
+    // bordered #2e2f26, with an inner rule inset 12 px. The grey-blue case
+    // this replaced was a perfectly reasonable dark panel and completely wrong
+    // beside the thing it was meant to match.
+    {
+        constexpr float kRound = 12.0f;
+        const float midY = faceTL.y + (faceBR.y - faceTL.y) * 0.55f;
+        dl->AddRectFilled(faceTL, faceBR, IM_COL32(20, 21, 15, 255), kRound);
+        if (faceBR.x - faceTL.x > kRound * 2.0f) {
+            dl->AddRectFilledMultiColor(
+                ImVec2(faceTL.x + kRound, faceTL.y), ImVec2(faceBR.x - kRound, midY),
+                IM_COL32(38, 39, 31, 255), IM_COL32(38, 39, 31, 255),
+                IM_COL32(20, 21, 15, 255), IM_COL32(20, 21, 15, 255));
+            dl->AddRectFilledMultiColor(
+                ImVec2(faceTL.x + kRound, midY), ImVec2(faceBR.x - kRound, faceBR.y),
+                IM_COL32(20, 21, 15, 255), IM_COL32(20, 21, 15, 255),
+                IM_COL32(15, 16, 11, 255), IM_COL32(15, 16, 11, 255));
+        }
+        dl->AddRect(faceTL, faceBR, IM_COL32(46, 47, 38, 255), kRound, 0, 1.0f);
+        dl->AddLine(ImVec2(faceTL.x + kRound, faceTL.y + 1.0f),
+                    ImVec2(faceBR.x - kRound, faceTL.y + 1.0f),
+                    IM_COL32(255, 255, 255, 15), 1.0f);
+        dl->AddRect(ImVec2(faceTL.x + 12.0f, faceTL.y + 12.0f),
+                    ImVec2(faceBR.x - 12.0f, faceBR.y - 12.0f),
+                    IM_COL32(255, 255, 255, 10), kRound, 0, 1.0f);
+    }
+    // The four corner fixings, each a machined disc with a slot at its own
+    // angle - four identical screws read as a repeated sprite, and a real
+    // panel's never line up.
+    {
+        const float screwR = 15.0f;
+        const float screwIn = 26.0f;
+        const ImVec2 screws[4] = {
+            ImVec2(faceTL.x + screwIn, faceTL.y + screwIn),
+            ImVec2(faceBR.x - screwIn, faceTL.y + screwIn),
+            ImVec2(faceTL.x + screwIn, faceBR.y - screwIn),
+            ImVec2(faceBR.x - screwIn, faceBR.y - screwIn)};
+        const float slotDeg[4] = {28.0f, -14.0f, -40.0f, 12.0f};
+        for (int i = 0; i < 4; ++i) {
+            const ImVec2 c = screws[i];
+            // An eccentric highlight rather than a flat disc: the design lights
+            // every round part from 35%/30%, and a centred one reads as a hole.
+            dl->AddCircleFilled(c, screwR, IM_COL32(27, 28, 22, 255), 24);
+            dl->AddCircleFilled(ImVec2(c.x - screwR * 0.18f, c.y - screwR * 0.22f),
+                                screwR * 0.72f, IM_COL32(58, 59, 50, 255), 24);
+            dl->AddCircleFilled(ImVec2(c.x - screwR * 0.26f, c.y - screwR * 0.30f),
+                                screwR * 0.40f, IM_COL32(74, 75, 64, 255), 24);
+            dl->AddCircle(c, screwR, IM_COL32(13, 14, 10, 255), 24, 2.0f);
+            const float a = slotDeg[i] * 3.14159265f / 180.0f;
+            const float sx = std::cos(a) * 7.0f;
+            const float sy = std::sin(a) * 7.0f;
+            dl->AddLine(ImVec2(c.x - sx, c.y - sy), ImVec2(c.x + sx, c.y + sy),
+                        IM_COL32(12, 13, 9, 255), 4.0f);
+        }
+    }
+
+    // THE DESIGN'S GRID, in its own coordinates. Content box 27..1053; a 34 px
+    // deck gap; the upper deck 61..566 as columns 62 | 530 | 330 | 62 with 14
+    // px gaps; the lower deck 584..769 as three equal 331.33 px bays with 16 px
+    // gaps. These are measurements, not choices, which is why they are written
+    // out rather than derived.
+    // The reference's own metrics for everything that is FIXED - 27 px of
+    // cabinet padding, a 34 px deck gap, an 18 px gap between the decks, a 185
+    // px lower deck and 26 px beneath it - with the upper deck taking whatever
+    // is left. Measurements, not choices, which is why they are written out.
+    // TIGHTENED FROM THE REFERENCE'S OWN SPACING, deliberately and only here.
+    //
+    // The reference sets 27 px of cabinet padding, a 34 px gap above the upper
+    // deck, 18 px between the decks and 26 px below the plinth. Those are
+    // right on its fixed 1080x822 slab; on a window half as tall again they
+    // are four bands of empty case stacked around the one thing anybody is
+    // looking at. Every one of them is cut to what still reads as machining,
+    // and the height that frees goes to the upper deck - which is to say, to
+    // the tube.
+    const float instLeft = faceTL.x + cabPad;
+    const float instRight = faceBR.x - cabPad;
+    const float plinthBotY = faceBR.y - cabPad - deckPadY;
+    const float plinthTopY = plinthBotY - lowerH;
+    const float instTop = faceTL.y + cabPad + deckPadY;
+    const float instBot = plinthTopY - deckPadY;
+    const float bayGap = 16.0f * scale;
+    // The plinth's three bays span the same width as the deck above them, so
+    // the unit has one edge down each side rather than two.
+    const float bayW = (instRight - instLeft - bayGap * 2.0f) / 3.0f;
+
+    // The deck fills the cabinet exactly, because the cabinet was sized to it.
+    const float deckL = instLeft;
+    const float innerL = deckL + kGaugeW + innerGap;
+    const float innerR = instRight - kGaugeW - innerGap;
+
+    // Outboard gauges. Both are fed by a real measurement and say which; the
+    // left one has a reading only when the pipeline is running, and draws its
+    // scale with no bar when it does not.
+    const bool running = pipeline_.running();
+    const double sigDb = pipeline_.signalPowerDb();
+    const bool haveSig = running && std::isfinite(sigDb);
+    // -100..0 dBFS across the scale, which is the range the rest of this
+    // application's meters already work in.
+    const double sigFrac = haveSig ? (sigDb + 100.0) / 100.0 : 0.0;
+    char sigTxt[16];
+    std::snprintf(sigTxt, sizeof(sigTxt), "%.0f", sigDb);
+    cascade::gui::drawScopeGauge(dl, ImVec2(deckL, instTop),
+                                 ImVec2(deckL + kGaugeW, instBot), "SIG",
+                                 sigFrac, haveSig, sigTxt);
+
+    // THE RIGHT GAUGE IS THE SELECTED AIRCRAFT'S ALTITUDE.
+    //
+    // It began as a track count, which duplicated the number already in the
+    // scope's own corner; it then became the HIGHEST contact, which was a
+    // reading nobody had asked for and - the point - was indistinguishable on
+    // the face from the altitude of whatever the user had just clicked. Asked
+    // for directly: it should show the selected craft's altitude.
+    //
+    // WITH NOTHING SELECTED IT READS NOTHING. A gauge that silently switched
+    // to "the highest in the sky" when no target was picked would be answering
+    // a different question in the same needle, and there would be no way to
+    // tell which question from looking at it. The count of what is being heard,
+    // and how high the traffic is, live on the HOME screen where they can be
+    // labelled.
+    std::size_t aircraft = 0;
+    for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+        if (ht.t.kind == CASCADE_TRACK_AIRCRAFT) { ++aircraft; }
+    }
+
+    double topAltM = 0.0;
+    bool haveAlt = false;
+    const std::string& selId = scope_.selectedId();
+    if (!selId.empty()) {
+        for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+            if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
+            if (selId != ht.t.id) { continue; }
+            if (std::isfinite(ht.t.altM)) {
+                topAltM = ht.t.altM;
+                haveAlt = true;
+            }
+            break;
+        }
+    }
+    char altTxt[16];
+    if (haveAlt) {
+        std::snprintf(altTxt, sizeof(altTxt), "FL%03d",
+                      static_cast<int>(topAltM * 3.28084 / 100.0));
+    } else if (!selId.empty()) {
+        // Selected, but the aircraft has not reported an altitude - which is a
+        // different statement from nothing being selected, and reads as one.
+        std::snprintf(altTxt, sizeof(altTxt), "NO ALT");
+    } else {
+        std::snprintf(altTxt, sizeof(altTxt), "--");
+    }
+    // 13,000 m of full scale - a little above the ceiling of everything with a
+    // transponder, so an airliner at cruise sits high on the bar without ever
+    // pinning it.
+    const float deckR = instRight;
+    cascade::gui::drawScopeGauge(dl, ImVec2(deckR - kGaugeW, instTop),
+                                 ImVec2(deckR, instBot), "ALT",
+                                 haveAlt ? topAltM / 13000.0 : 0.0, haveAlt, altTxt);
+
+    // The scope and its panel fill everything between the gauges.
+
+    ImGui::SetCursorScreenPos(ImVec2(innerL, instTop));
+    scope_.draw(innerR - innerL, instBot - instTop, pluginUi_.tracks(), &basemap_,
+                &trackInfo_);
+
+    // --- the plinth ---------------------------------------------------------
+    // THREE EQUAL BAYS, which is what the reference has and what the previous
+    // "a third of the width each, minus a pad" arithmetic did not produce: the
+    // plate ended up wider than the knob bay and the power bay wider again.
+    const float plinthTop = plinthTopY;
+    const float plinthMid = (plinthTopY + plinthBotY) * 0.5f;
+
+    // The maker's plate, from the icon compiled into this binary - the same
+    // pixels Windows uses for the taskbar, so the badge cannot drift from the
+    // application's own identity.
+    {
+        const ImVec2 pTL(instLeft, plinthTop);
+        const ImVec2 pBR(instLeft + bayW, plinthBotY);
+        cascade::gui::addScopeBay(dl, pTL, pBR, true);
+        // Uploaded on first use rather than at start-up: a user who never
+        // opens the scope never pays for it, and here the GL context is
+        // certainly current.
+        if (scopeBadgeTex_ == 0u) {
+            glGenTextures(1, &scopeBadgeTex_);
+            glBindTexture(GL_TEXTURE_2D, scopeBadgeTex_);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, cascade::gui::icon::kSize48,
+                         cascade::gui::icon::kSize48, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                         cascade::gui::icon::kPixels48);
+        }
+        // TOP-LEFT, not centred: the reference sets the wordmark against the
+        // bay's top-left corner with the counters along the foot, and a
+        // nameplate floating in the middle of its panel reads as a label
+        // rather than as something stamped into the case.
+        const float padL = 18.0f * scale;
+        const float padT = 16.0f * scale;
+        if (scopeBadgeTex_ != 0u) {
+            const float side = std::max(20.0f, 34.0f * scale);
+            dl->AddImage(static_cast<ImTextureID>(scopeBadgeTex_),
+                         ImVec2(pTL.x + padL, pTL.y + padT),
+                         ImVec2(pTL.x + padL + side, pTL.y + padT + side));
+            // The wordmark, set as large as the bay allows and baseline-aligned
+            // with the mark beside it.
+            const float wordPx = std::max(16.0f, 30.0f * scale);
+            dl->AddText(ImGui::GetFont(), wordPx,
+                        ImVec2(pTL.x + padL + side + 10.0f * scale,
+                               pTL.y + padT + side * 0.5f - wordPx * 0.62f),
+                        IM_COL32(223, 226, 205, 255), "FOX");
+            // The diamond the reference sets after the wordmark - a rotated
+            // square, in the brand's own green.
+            const float dSide = std::max(6.0f, 11.0f * scale);
+            const float dcx = pTL.x + padL + side + 10.0f * scale +
+                              ImGui::GetFont()->CalcTextSizeA(wordPx, FLT_MAX, 0.0f,
+                                                              "FOX").x +
+                              10.0f * scale + dSide;
+            const float dcy = pTL.y + padT + side * 0.5f;
+            const ImVec2 dia[4] = {ImVec2(dcx, dcy - dSide), ImVec2(dcx + dSide, dcy),
+                                   ImVec2(dcx, dcy + dSide), ImVec2(dcx - dSide, dcy)};
+            dl->AddConvexPolyFilled(dia, 4, IM_COL32(122, 179, 58, 255));
+            // The sub-line, widely tracked as an engraved plate is.
+            const float subPx = std::max(9.0f, 11.0f * scale);
+            dl->AddText(ImGui::GetFont(), subPx,
+                        ImVec2(pTL.x + padL, pTL.y + padT + side + 8.0f * scale),
+                        IM_COL32(127, 134, 108, 255), "& SCHIRMER INDUSTRIES");
+        }
+
+        // THE ODOMETER COUNTERS. The range the face is set to and the number of
+        // aircraft on it, as mechanical drums - the reference design's, and the
+        // one part of the plate that is an instrument rather than a nameplate.
+        // Both repeat a number that is already in the scope's corners, which is
+        // deliberate: the corners are inside the tube and are read while
+        // looking AT the picture, and these are on the panel and are read while
+        // reaching for the knob.
+        const float drumH = std::max(20.0f, 38.0f * scale);
+        const float drumW = drumH * 0.68f;
+        const float capH = ImGui::GetTextLineHeight() + 4.0f;
+        const float drumsY = pBR.y - 16.0f * scale - drumH - capH;
+        if (drumsY > pTL.y + 4.0f && (pBR.x - pTL.x) > drumW * 7.0f) {
+            // THE COUNTER READS THE RANGE TO THE SELECTED AIRCRAFT, measured
+            // from the antenna - the one distance an operator actually wants
+            // off a panel, and the number the ALT gauge beside it is already
+            // reporting the other half of.
+            //
+            // WITH NOTHING SELECTED IT SHOWS THE SCOPE'S OWN RANGE SETTING,
+            // and the caption says WHICH of the two it is. Two different
+            // distances in the same three digits with one label would be
+            // unreadable: "100" could be an aircraft a hundred miles out or a
+            // face set to a hundred-mile sweep, and nothing on the panel would
+            // separate them.
+            int drumNm = scopeRangeNm_;
+            const char* drumCap = "SET RANGE NM";
+            const std::string& selId = scope_.selectedId();
+            if (!selId.empty() && rxSet_) {
+                for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+                    if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
+                    if (selId != ht.t.id) { continue; }
+                    const cascade::gui::ScopePolar p = cascade::gui::scopeRelative(
+                        rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg);
+                    if (std::isfinite(p.rangeNm)) {
+                        drumNm = static_cast<int>(p.rangeNm + 0.5);
+                        drumCap = "TGT RANGE NM";
+                    }
+                    break;
+                }
+            }
+            const float x0 = pTL.x + 18.0f * scale;
+            cascade::gui::drawScopeDrums(dl, ImVec2(x0, drumsY), drumW, drumH, 3,
+                                         drumNm, drumCap);
+            cascade::gui::drawScopeDrums(
+                dl, ImVec2(x0 + (drumW + 3.0f) * 3.0f + 26.0f * scale, drumsY), drumW,
+                drumH, 3, static_cast<int>(aircraft), "TRACKS");
+        }
+    }
+
+    // RANGE: the knob turns the same ladder the buttons on the bar do, and the
+    // buttons stay because a knob cannot be reached from a keyboard.
+    {
+        const ImVec2 kTL(instLeft + bayW + bayGap, plinthTop);
+        const ImVec2 kBR(kTL.x + bayW, plinthBotY);
+        cascade::gui::addScopeBay(dl, kTL, kBR, true);
+
+        // THE KNOB IS THE GAIN.
+        //
+        // Range already has three ways to set it - the wheel over the face, the
+        // two stepper buttons on the bar, and the ladder they both walk - while
+        // the gain, which is the ONLY control that changes how far this
+        // receiver actually hears, had none at all once scope mode hid the left
+        // rail. So the one physical control on the plinth drives the thing that
+        // could not be reached, not the thing that could be reached three ways.
+        //
+        // It drives the FIRST gain stage the device reports, which on every
+        // radio this has been run against is the one that matters - PGA on a
+        // B200, TUNER on an RTL dongle - and prints that stage's name beneath
+        // itself so it is never a mystery which one moved.
+        //
+        // AND IT REFUSES TO PRETEND. Under hardware AGC a manual gain would
+        // silently fight the device, so the knob is dead and reads AUTO; with
+        // no SoapySDR device open there is nothing to set and it reads N/A.
+        // Neither is a knob that turns and does nothing.
+        const float knobR = std::max(20.0f, 30.0f * scale);
+        const ImVec2 knobC((kTL.x + kBR.x) * 0.5f, plinthMid + 8.0f * scale);
+        const bool haveGain = soapy_ != nullptr && !soapyGainNames_.empty();
+        const bool gainLive = haveGain && !soapyAgc_;
+
+        // The scale, in whole decibels across the device's own travel.
+        {
+            int ticks[5];
+            for (int i = 0; i < 5; ++i) {
+                ticks[i] = static_cast<int>(
+                    kSoapyGainMinDb +
+                    (kSoapyGainMaxDb - kSoapyGainMinDb) * static_cast<float>(i) / 4.0f);
+            }
+            int sel = -1;
+            if (gainLive) {
+                const float span = kSoapyGainMaxDb - kSoapyGainMinDb;
+                if (span > 0.0f) {
+                    sel = static_cast<int>(
+                        (soapyGainsDb_[0] - kSoapyGainMinDb) / span * 4.0f + 0.5f);
+                    sel = std::clamp(sel, 0, 4);
+                }
+            }
+            cascade::gui::drawScopeKnobTicks(dl, knobC, knobR, ticks, 5, sel);
+        }
+
+        char gainTxt[24];
+        if (!haveGain) {
+            std::snprintf(gainTxt, sizeof(gainTxt), "N/A");
+        } else if (soapyAgc_) {
+            std::snprintf(gainTxt, sizeof(gainTxt), "AUTO");
+        } else {
+            std::snprintf(gainTxt, sizeof(gainTxt), "%.0f dB",
+                          static_cast<double>(soapyGainsDb_[0]));
+        }
+        // Where the gain sits on its own travel, so the pointer shows it.
+        float gainFrac = 0.5f;
+        if (haveGain && kSoapyGainMaxDb > kSoapyGainMinDb) {
+            gainFrac = (soapyGainsDb_[0] - kSoapyGainMinDb) /
+                       (kSoapyGainMaxDb - kSoapyGainMinDb);
+        }
+        const int gainSteps = cascade::gui::drawScopeKnob(dl, knobC, knobR, "GAIN",
+                                                          gainTxt, gainLive, gainFrac);
+        if (gainSteps != 0 && gainLive) {
+            // Two decibels a detent: fine enough to find the knee between more
+            // aircraft and more noise, coarse enough to cross the whole travel
+            // in one comfortable sweep.
+            float db = soapyGainsDb_[0] + static_cast<float>(gainSteps) * 2.0f;
+            db = std::clamp(db, kSoapyGainMinDb, kSoapyGainMaxDb);
+            if (db != soapyGainsDb_[0]) {
+                soapyGainsDb_[0] = db;
+                if (!soapy_->setGainDb(soapyGainNames_[0], static_cast<double>(db))) {
+                    sourceError_ = soapy_->lastError();
+                }
+            }
+        }
+        // Which stage moved, or why nothing will.
+        {
+            const char* note = !haveGain   ? "no device"
+                               : soapyAgc_ ? "auto gain is on"
+                                           : soapyGainNames_[0].c_str();
+            const ImVec2 nsz = ImGui::CalcTextSize(note);
+            // BELOW THE READOUT, and measured off the same radius the readout
+            // is, or the two land on each other - "30 dB" and "PGA" were
+            // printing through one another at the default knob size.
+            dl->AddText(ImVec2(knobC.x - nsz.x * 0.5f,
+                               knobC.y + knobR * 1.30f + ImGui::GetTextLineHeight() +
+                                   10.0f),
+                        IM_COL32(127, 134, 108, 255), note);
+        }
+    }
+
+    // POWER: the RECEIVER's run state. Not the application's, and not the way
+    // out of this mode - both of those would be a button lying about what it
+    // controls, and the way out is the bar above and Escape.
+    {
+        const ImVec2 wTL(instLeft + (bayW + bayGap) * 2.0f, plinthTop);
+        const ImVec2 wBR(wTL.x + bayW, plinthBotY);
+        cascade::gui::addScopeBay(dl, wTL, wBR, true);
+        const ImVec2 c((wTL.x + wBR.x) * 0.5f, plinthMid + 8.0f * scale);
+        // 48 px of lamp in a 96 px well, as the reference has it, so the button
+        // is the size of a thing a hand reaches for rather than a marker.
+        const float lampR = std::max(18.0f, 30.0f * scale);
+        if (cascade::gui::drawScopePowerButton(dl, c, lampR, running)) {
+            if (running) {
+                pipeline_.stop();
+            } else {
+                pipeline_.start();
+            }
+        }
+        const char* lbl = "POWER";
+        const ImVec2 lsz = ImGui::CalcTextSize(lbl);
+        dl->AddText(ImVec2(c.x - lsz.x * 0.5f,
+                           c.y - lampR - ImGui::GetTextLineHeight() - 8.0f),
+                    IM_COL32(207, 211, 188, 255), lbl);
+        // What the lamp means, spelled out. A lit lamp with no word beside it
+        // is a state carried by colour alone, which this design forbids.
+        const char* state = running ? "ON LINE" : "STANDBY";
+        const ImVec2 ssz = ImGui::CalcTextSize(state);
+        dl->AddText(ImVec2(c.x - ssz.x * 0.5f, c.y + lampR + 8.0f),
+                    IM_COL32(127, 134, 108, 255), state);
+    }
+
+    scopeRangeNm_ = scope_.rangeNm();
+    // Same eviction discipline as the map pages: the scope records that it
+    // asked, and the ONE endFrame() runs at the end of drawUi.
+    if (scope_.askedForTiles()) { basemapUsedThisFrame_ = true; }
 }
 
 void AppWindow::drawPluginWindows() {
@@ -4158,10 +5096,6 @@ void AppWindow::drawPluginWindows() {
         }
     }
 
-    // Whether any open page actually asked the basemap for tiles this frame,
-    // for the single endFrame() call after the loop — see the note there.
-    bool anyMapDrewTiles = false;
-
     for (std::size_t pageIndex = 0; pageIndex < mapPages_.size(); ++pageIndex) {
         MapPage& page = mapPages_[pageIndex];
 
@@ -4190,7 +5124,8 @@ void AppWindow::drawPluginWindows() {
         // dozen struct copies a frame is the price of a close button that
         // stays honest, and it was measured as nothing.
         const bool visNow = cascade::core::anyVisibleTarget(pageTracks_, pagePaths_);
-        if (!page.open && cascade::core::mapSelfOpens(page.hadVisible, visNow)) {
+        if (!page.open && !page.selfOpenSuppressed &&
+            cascade::core::mapSelfOpens(page.hadVisible, visNow)) {
             page.open = true;
         }
         page.hadVisible = visNow;
@@ -4320,55 +5255,7 @@ void AppWindow::drawPluginWindows() {
             page.h = static_cast<int>(wsize.y);
             if (ImGui::SmallButton("Fit")) { page.view->requestFitToTracks(); }
             ImGui::SameLine();
-            // The receiver's own position is asked for, never guessed. It is
-            // what range and bearing are measured from, and inferring it from
-            // a decoded target would be confidently wrong.
-            //
-            // DOUBLE, NOT FLOAT, and persisted. A float carries about seven
-            // significant digits, which runs out inside the decimal part of a
-            // latitude and moves the origin of every range ring by metres for
-            // no reason; and the pair used to be static LOCALS, so the position
-            // died with the process. Both are now AppConfig fields - see
-            // AppConfig::rxPositionSet.
-            ImGui::SetNextItemWidth(96.0f);
-            ImGui::InputDouble("##homelat", &rxLatInput_, 0.0, 0.0, "%.5f");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Receiver latitude, degrees north (-90..90)");
-            }
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(96.0f);
-            ImGui::InputDouble("##homelon", &rxLonInput_, 0.0, 0.0, "%.5f");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Receiver longitude, degrees east (-180..180)");
-            }
-            ImGui::SameLine();
-            // REFUSED RATHER THAN CLAMPED, and by the same positive range test
-            // the config sanitizer uses, so a typo cannot silently install a
-            // receiver at the pole and quietly make every distance wrong. The
-            // button simply does not accept the pair.
-            const bool rxInputOk = rxLatInput_ >= -90.0 && rxLatInput_ <= 90.0 &&
-                                   rxLonInput_ >= -180.0 && rxLonInput_ <= 180.0;
-            ImGui::BeginDisabled(!rxInputOk);
-            if (ImGui::SmallButton("Set RX here")) {
-                rxLat_ = rxLatInput_;
-                rxLon_ = rxLonInput_;
-                rxSet_ = true;
-                // EVERY page, not just the one whose button was pressed: the
-                // receiver's position is a fact about the antenna, and two
-                // pages disagreeing about where home is would put the range
-                // rings in two different places at once.
-                for (MapPage& other : mapPages_) {
-                    other.view->setHome(rxLat_, rxLon_);
-                }
-                // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it
-                // was measured from somewhere else, and keeping them would draw
-                // one antenna's pattern around another antenna's position.
-                coverage_.reset();
-            }
-            ImGui::EndDisabled();
-            if (!rxInputOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("Latitude must be -90..90 and longitude -180..180");
-            }
+            drawRxPositionEntry();
             ImGui::SameLine();
             // COUNTED THE WAY THEY ARE DRAWN, and counted for THIS page: the
             // number beside an ADS-B map must be its aircraft, not the whole
@@ -4506,8 +5393,10 @@ void AppWindow::drawPluginWindows() {
             // endFrame() is NOT called here: its eviction drops every tile
             // nothing asked for this frame, so calling it inside one page's
             // draw would let it evict a second open page's tiles mid-frame.
-            // The one call per frame happens after the page loop.
-            anyMapDrewTiles = true;
+            // The one call per frame happens at the END OF drawUi, not at the
+            // end of this loop, because the scope draws after it and asks for
+            // tiles of its own.
+            basemapUsedThisFrame_ = true;
 
             // THE FOLLOW-INTERRUPT ASK. A drag on the map while a target is
             // followed no longer pans (MapView latches the attempt instead —
@@ -4546,11 +5435,6 @@ void AppWindow::drawPluginWindows() {
         }
         ImGui::End();
     }
-
-    // ONE endFrame() for however many pages drew, and only when one did: the
-    // old single window called it only while open, and an eviction pass with
-    // no open map would age the whole tile set for nothing.
-    if (anyMapDrewTiles) { basemap_.endFrame(); }
 
     // OUTSIDE the map pages on purpose, so it is a sibling of them rather
     // than something drawn inside one: a map window can be small, and a detail
@@ -5150,6 +6034,7 @@ void AppWindow::drawTargetDetailsSection() {
         pg.view->setSelected(found->t.id);
         pg.view->goTo(found->t.latDeg, found->t.lonDeg);
         pg.open = true;
+        pg.selfOpenSuppressed = false;
     }
     ImGui::SameLine();
     MapPage* owner = findMapPage(found->plugin);
@@ -5163,6 +6048,7 @@ void AppWindow::drawTargetDetailsSection() {
             pg.view->setSelected(found->t.id);
             pg.view->setFollowed(found->t.id);
             pg.open = true;
+            pg.selfOpenSuppressed = false;
         }
     }
 }
@@ -5220,6 +6106,7 @@ void AppWindow::drawTargetDetailsWindow() {
                 pg.view->setSelected(found->t.id);
                 pg.view->goTo(found->t.latDeg, found->t.lonDeg);
                 pg.open = true;
+                pg.selfOpenSuppressed = false;
             }
             ImGui::SameLine();
             MapPage* owner = findMapPage(found->plugin);
@@ -5233,6 +6120,7 @@ void AppWindow::drawTargetDetailsWindow() {
                     pg.view->setSelected(found->t.id);
                     pg.view->setFollowed(found->t.id);
                     pg.open = true;
+                    pg.selfOpenSuppressed = false;
                 }
             }
         }
@@ -5370,7 +6258,9 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     {
         const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
-            ensureMapPage(p.name).open = true;
+            MapPage& pg = ensureMapPage(p.name);
+            pg.open = true;
+            pg.selfOpenSuppressed = false;
         }
     }
 
@@ -5807,8 +6697,14 @@ void AppWindow::pumpDecoderOutput() {
 
 void AppWindow::drawDecoderStatusRows() {
     const std::vector<cascade::core::DecoderStatus> st = pluginRunner_.status();
-    if (st.empty()) { return; }
 
+    // THE HEADING IS DRAWN WHETHER OR NOT A DECODER IS LOADED. It used to be
+    // skipped entirely on an empty status list, which was right while
+    // everything under it was about the decoders that happened to be running.
+    // The radar scope below is not: it is a way of LOOKING at what a receiver
+    // hears, it is the whole main window while it is on, and a switch that
+    // appeared and vanished with the plugin list is a switch nobody would find
+    // twice. The early returns became branches for the same reason.
     ImGui::SeparatorText("Decoders");
 
     // Why a decoder is silent stays HERE rather than moving to the output
@@ -5822,20 +6718,23 @@ void AppWindow::drawDecoderStatusRows() {
         ImGui::PopStyleColor();
     }
 
-    if (pluginRunner_.activeCount() == 0) {
+    if (st.empty()) {
+        ImGui::TextDisabled("No decoder plugin is installed.");
+    } else if (pluginRunner_.activeCount() == 0) {
         ImGui::TextDisabled("No decoder is running.");
-        return;
+    } else {
+        if (ImGui::Button(decoderWindowOpen_ ? "Hide decoder output"
+                                             : "Show decoder output",
+                          ImVec2(-1.0f, 0.0f))) {
+            decoderWindowOpen_ = !decoderWindowOpen_;
+        }
+        if (!decoderLog_.empty()) {
+            ImGui::TextDisabled("%d line%s decoded", static_cast<int>(decoderLog_.size()),
+                                decoderLog_.size() == 1 ? "" : "s");
+        }
     }
 
-    if (ImGui::Button(decoderWindowOpen_ ? "Hide decoder output"
-                                         : "Show decoder output",
-                      ImVec2(-1.0f, 0.0f))) {
-        decoderWindowOpen_ = !decoderWindowOpen_;
-    }
-    if (!decoderLog_.empty()) {
-        ImGui::TextDisabled("%d line%s decoded", static_cast<int>(decoderLog_.size()),
-                            decoderLog_.size() == 1 ? "" : "s");
-    }
+    drawScopeModeControl();
 }
 
 void AppWindow::drawDecoderWindow() {
@@ -6150,7 +7049,14 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
 // --- Recorder (P6) -------------------------------------------------------------
 
 void AppWindow::drawRecorderSection() {
-    if (!ImGui::CollapsingHeader("Recorder")) { return; }
+    const bool recorderOpen = ImGui::CollapsingHeader("Recorder");
+    {
+        const bool taping = iqRecorder_.recording() || audioRecorder_.recording();
+        railChip(taping ? "REC" : "OFF",
+                 taping ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
+                 taping);
+    }
+    if (!recorderOpen) { return; }
     telemetryNotePanel("recorder");
 
     // Destination, always visible so the user knows where takes land. The
@@ -6425,7 +7331,10 @@ double AppWindow::currentAbsoluteHz() {
 // --- Scanner (P6) ----------------------------------------------------------------
 
 void AppWindow::drawScannerSection() {
-    if (!ImGui::CollapsingHeader("Scanner")) { return; }
+    const bool scannerOpen = ImGui::CollapsingHeader("Scanner");
+    railChip(scanner_.active() ? "SCAN" : "IDLE", cascade::gui::theme::kPhosphor,
+             scanner_.active());
+    if (!scannerOpen) { return; }
     telemetryNotePanel("scanner");
 
     // Mirrors -> Params. Scanner::configure sanitizes (swap, step floor,
@@ -6649,6 +7558,9 @@ void AppWindow::publishWebSnapshot() {
     // ever copy what this leaves behind.
     cascade::source::IqSource& src = pipeline_.activeSource();
     cascade::net::RadioStatus s;
+    s.rxPositionSet = rxSet_;
+    s.rxLatDeg = rxLat_;
+    s.rxLonDeg = rxLon_;
     s.running = pipeline_.running();
     s.faulted = pipeline_.faulted();
     s.faultMessage = pipeline_.faultMessage();
@@ -6897,7 +7809,83 @@ void AppWindow::publishWebSnapshot() {
     }
 }
 
+// Hand the display to the radar unit, or take it back.
+//
+// Only the MAIN window is hidden. The torn-off windows a user has arranged -
+// map pages, decoder output, plugin panels - are their own operating system
+// windows and are left exactly as they are: hiding them would mean restoring
+// them, and a restore that got their order or their monitor wrong would be a
+// worse fault than leaving them where the user put them. The radar covers the
+// receiver's own window, which is the one it replaces.
+void AppWindow::setRadarHoldsDisplay(bool held) {
+    if (held == radarHoldsDisplay_) { return; }
+    radarHoldsDisplay_ = held;
+    if (mainWindow_ == nullptr) { return; }
+    if (held) {
+        glfwHideWindow(mainWindow_);
+    } else {
+        radarRestoreWindows_ = true;
+        glfwShowWindow(mainWindow_);
+        // Raised as well as shown: a window restored behind the radar's own
+        // window would look exactly like a restore that did not happen.
+        glfwFocusWindow(mainWindow_);
+    }
+}
+
+// Hide or show every window the application owns, following the radar lease.
+//
+// The main window is hidden by setRadarHoldsDisplay the moment the lease
+// changes so the handover looks immediate; this runs each frame and covers
+// the ImGui viewports, which are created and re-shown by the backend and so
+// cannot be settled once.
+void AppWindow::applyRadarWindowVisibility() {
+    // Leaving scope mode is an EDGE, and the frame it happens on is the one
+    // that has to show the windows again - after that ImGui owns their
+    // visibility once more, and forcing them visible every frame would stop
+    // the user ever closing one.
+    scopeLeftThisFrame_ = scopeWasOn_ && !scopeMode_;
+    if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) == 0) {
+        scopeWasOn_ = scopeMode_;
+        return;
+    }
+    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    for (int i = 0; i < pio.Viewports.Size; ++i) {
+        ImGuiViewport* vp = pio.Viewports[i];
+        if (vp == nullptr) { continue; }
+        // The main viewport is the main window, already handled - and hiding
+        // it here as well would fight setRadarHoldsDisplay for it.
+        if ((vp->Flags & ImGuiViewportFlags_IsPlatformWindow) == 0) { continue; }
+        GLFWwindow* w = static_cast<GLFWwindow*>(vp->PlatformHandle);
+        if (w == nullptr || w == mainWindow_) { continue; }
+        // SCOPE MODE COUNTS TOO. It is a full-screen instrument in the same
+        // sense the radar unit is - the user asked for the panel with as
+        // little around it as possible - and a torn-off decoder window
+        // floating over the middle of the tube is the opposite of that. Seen
+        // the first time the compact cabinet was drawn: the scope was correct
+        // and completely covered.
+        if (radarHoldsDisplay_ || scopeMode_) {
+            glfwHideWindow(w);
+        } else if (radarRestoreWindows_ || scopeLeftThisFrame_) {
+            glfwShowWindow(w);
+        }
+    }
+    // Showing is a one-shot: after the frame that restores them, ImGui owns
+    // their visibility again, and forcing them visible every frame would stop
+    // the user ever closing one.
+    radarRestoreWindows_ = false;
+    scopeLeftThisFrame_ = false;
+    scopeWasOn_ = scopeMode_;
+}
+
 void AppWindow::applyWebControls() {
+    // THE RADAR UNIT'S LEASE, EXPIRED FIRST. Checked before the new requests
+    // are read so an expiry and a renewal arriving in the same frame settle
+    // in the right order - the renewal wins, which is what makes a lease
+    // renewed at the last moment behave like a lease renewed early.
+    if (radarHoldsDisplay_ && glfwGetTime() > radarLeaseExpiry_) {
+        setRadarHoldsDisplay(false);
+    }
+
     std::vector<cascade::net::ControlRequest> requests =
         webServer_.takePendingControls();
     // CAT requests are the SAME ControlRequest type, so they are appended here
@@ -7028,6 +8016,16 @@ void AppWindow::applyWebControls() {
         // All of this runs on the GUI thread by construction (applyWebControls
         // is called from drawUi), which is what makes it safe to touch the
         // source at all.
+        if (r.radarActive.has_value()) {
+            if (*r.radarActive) {
+                // Renewed, whether or not it was already held: the lease is a
+                // deadline, and every renewal pushes it out.
+                radarLeaseExpiry_ = glfwGetTime() + kRadarLeaseSeconds;
+                setRadarHoldsDisplay(true);
+            } else {
+                setRadarHoldsDisplay(false);
+            }
+        }
         if (r.scanDevices.value_or(false)) {
             scanSoapy();
         }
@@ -7383,7 +8381,10 @@ void AppWindow::drawCatSection() {
 }
 
 void AppWindow::drawWebSection() {
-    if (!ImGui::CollapsingHeader("Web access")) { return; }
+    const bool webOpen = ImGui::CollapsingHeader("Web access");
+    railChip(webServer_.running() ? "ON" : "OFF", cascade::gui::theme::kPhosphor,
+             webServer_.running());
+    if (!webOpen) { return; }
     telemetryNotePanel("web");
 
     if (!webAddressesScanned_) {
@@ -7846,6 +8847,17 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
     mapTrailStyle_ = cfg.mapTrailStyle;
 
+    // The radar scope. The mode is restored because a user who left the
+    // application showing a scope asked to be looking at a scope, and an
+    // instrument that reverts to a spectrum on every launch is one they have
+    // to switch on every time. The range is snapped again here rather than
+    // trusted from the config: the loader already clamps it, and the view
+    // clamps it once more inside setRangeNm, so there is no path by which an
+    // unrepresentable scale reaches the rings - which is the point of a ladder.
+    scopeMode_ = cfg.scopeMode;
+    scopeRangeNm_ = clampScopeRangeNm(cfg.scopeRangeNm);
+    scope_.setRangeNm(scopeRangeNm_);
+
     // The map pages' rectangles from the last session, seeded here rather
     // than read at draw time so the very first Begin of each page already has
     // them — ImGui's FirstUseEver only fires once, and a value that arrived a
@@ -7904,6 +8916,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // source needs; doing it here means a stopped plugin never survives a
     // launch even for a frame.
     pluginsStopped_ = cfg.pluginsStopped;
+    // WINDOWS THE USER SHUT LAST TIME STAY SHUT. Restored before any window
+    // is drawn, so a panel the user does not want never appears at all rather
+    // than flashing up and vanishing on the first frame.
+    closedWindows_.clear();
+    for (const std::string& id : cfg.closedWindows) { closedWindows_.insert(id); }
     // BEFORE the rebuild, because refreshPluginRunner is what rebuilds the
     // mute snapshot the overrides are baked into. Restored after the stops for
     // the same reason they are restored at all: a decoder the user silenced
@@ -8208,6 +9225,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
+    cfg.scopeMode = scopeMode_;
+    cfg.scopeRangeNm = scopeRangeNm_;
     // The pages' rectangles and open flags, via the saved store so an entry
     // for a plugin with no page this session rides through untouched. The
     // legacy fields are copied back purely so the first configsEqual against
@@ -8226,6 +9245,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginsStopped = pluginsStopped_;
+    // Written back from the live set. rescanPlugins() clears that set, which
+    // is deliberate - a rescan is the one moment a window identity may have
+    // legitimately changed - so a close made before a rescan is not carried
+    // past it, and the user closes it once more.
+    cfg.closedWindows.assign(closedWindows_.begin(), closedWindows_.end());
     cfg.pluginMuteOverride = pluginMuteOverride_;
     cfg.catEnabled = catEnabled_;
     cfg.catBindAll = catBindAll_;

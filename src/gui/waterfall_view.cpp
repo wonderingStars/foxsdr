@@ -36,23 +36,40 @@ float lumaOf(int r, int g, int b) {
            0.114f * static_cast<float>(b);
 }
 
-// Colormap anchor stops. Chosen so the anchor lumas strictly increase
-// (4.6 -> 41.7 -> 105.1 -> 141.9 -> 145.2): channel-wise linear
-// interpolation makes luma linear per segment, so increasing anchor lumas
-// give a monotone ramp before rounding. The "yellow" stop is amber rather
-// than full (255,255,0) because full yellow (luma ~226) is brighter than any
-// color that still reads as red — the classic jet-map brightness inversion
-// this table is designed to avoid.
+// Colormap anchor stops - PHOSPHOR, and the same tube the spectrum and the
+// radar scope are drawn on.
+//
+// THE PROPERTY THIS TABLE EXISTS FOR IS UNCHANGED and is not a matter of
+// taste: the anchor lumas strictly increase (14.7 -> 48.1 -> 98.0 -> 169.1 ->
+// 230.2), so channel-wise linear interpolation gives a monotone ramp before
+// rounding, and the sweep below fixes up the rounding. A waterfall is a
+// MEASUREMENT: a stronger signal must never render darker than a weaker one,
+// whatever colours it is made of. The blue-to-red table this replaced had the
+// same property (4.6 -> 41.7 -> 105.1 -> 141.9 -> 145.2) and it was kept.
+//
+// THE FLOOR IS DELIBERATELY LIFTED off the reference's own value. The 1960s
+// design starts its ramp at #050A06, which is within a couple of luma units of
+// the panel it is painted on - and a signal a few dB above the noise floor
+// would simply not be visible. This table starts at luma 14.7 instead: still
+// unmistakably "nothing there", still darker than any real signal, but far
+// enough off the ground that the bottom of the range keeps its resolution.
+// The old table's first segment spanned 4.6 -> 41.7 and this one spans 14.7 ->
+// 48.1, so the usable contrast at the quiet end is preserved rather than
+// merely claimed.
+//
+// The top stop is a warm cream rather than white: it has to be the brightest
+// entry in the table, and a pure white would leave nothing above it for the
+// eye to read a peak against.
 struct Rgb {
     float r, g, b;
 };
 constexpr float kStopPos[5] = {0.0f, 0.20f, 0.45f, 0.75f, 1.0f};
 constexpr Rgb kStopRgb[5] = {
-    {0.0f, 0.0f, 40.0f},      // deep blue anchor (exact at norm 0)
-    {0.0f, 40.0f, 160.0f},    // blue
-    {0.0f, 145.0f, 175.0f},   // cyan
-    {190.0f, 145.0f, 0.0f},   // amber/yellow
-    {255.0f, 100.0f, 90.0f},  // red anchor (exact at norm 1)
+    {6.0f, 20.0f, 10.0f},      // quiet phosphor (exact at norm 0)
+    {10.0f, 70.0f, 35.0f},     // green
+    {30.0f, 140.0f, 60.0f},    // phosphor
+    {150.0f, 200.0f, 60.0f},   // yellow-green
+    {240.0f, 235.0f, 180.0f},  // cream anchor (exact at norm 1)
 };
 
 const std::array<ImU32, 256>& colorLut() {
@@ -82,7 +99,7 @@ const std::array<ImU32, 256>& colorLut() {
         // fixed red anchor, darkening any entry brighter than its hotter
         // neighbor. Green goes first: it has the largest luma weight (fewest
         // steps) and lowering G near the top is exactly the natural
-        // yellow -> orange -> red hue motion. Entry 255 is never touched and
+        // green -> yellow -> cream hue motion. Entry 255 is never touched and
         // entry 0's luma sits well below entry 1's, so both contract anchors
         // survive the sweep byte-exact.
         for (int i = 254; i >= 0; --i) {

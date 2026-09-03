@@ -170,6 +170,38 @@ struct AppConfig {
     // them without being asked. It is one control away.
     int mapTrailStyle = 0;
 
+    // --- The ADS-B radar scope ------------------------------------------------
+    // A plan-position indicator - the receiver at the centre, range rings and
+    // bearing ticks around it, aircraft plotted at their true range and
+    // bearing, and a detail panel for the one selected. It is a MODE of the
+    // main window rather than a panel in it: while it is on, the spectrum, the
+    // waterfall and the settings rail are not drawn at all.
+    //
+    // scopeMode  IS PERSISTED, and that is a deliberate choice rather than an
+    //            oversight about a "temporary" view. A user who left the
+    //            application showing a scope was using it as a scope; an
+    //            instrument that reopens as a spectrum analyser every launch is
+    //            one they have to switch on every time. It defaults OFF because
+    //            the receiver's own controls are what a new install needs to
+    //            see first, and because the scope is empty without an aircraft
+    //            source installed. The mode always draws its own way out, so
+    //            restoring it can never strand anybody.
+    //
+    // scopeRangeNm  the scale in nautical miles, and it is one of a fixed
+    //            LADDER of values (10, 25, 50, 100, 200, 400 - see
+    //            gui/scope_view.hpp, which owns that list). CLAMPED ON LOAD to
+    //            the nearest of them, because everything the view draws is
+    //            derived from this number: four ring radii, four ring labels
+    //            and the corner readout. A hand-edited 173 would reach the
+    //            renderer as a scale with rings nobody chose, so the sanitizer
+    //            snaps it - to the NEAREST rather than back to the default,
+    //            which keeps what the edit was reaching for instead of
+    //            discarding a number that was almost right. 200 NM is the
+    //            default: a good ADS-B site hears 200-250 NM, so it opens
+    //            showing everything the receiver can realistically reach.
+    bool scopeMode = false;
+    int scopeRangeNm = 200;
+
     // --- Map window geometry --------------------------------------------------
     // The map is its own operating system window, and ImGui's own .ini
     // persistence is switched off in this application (IniFilename = nullptr,
@@ -355,6 +387,19 @@ struct AppConfig {
     // list is capped. A name that matches no installed plugin is KEPT, so a
     // stop survives the plugin being quarantined by the retirement policy or
     // temporarily removed.
+    // WINDOWS THE USER HAS CLOSED, remembered across launches.
+    //
+    // A plugin-declared panel and a decoded-image window used to open on
+    // every launch and a close only held for the session, so a user who does
+    // not want their satellite tracker's list on screen had to shut it again
+    // every single time they started the application - reported exactly that
+    // way. The entries are ImGui window identities ("Satellites###panel_
+    // Satellites"); an identity that no longer exists is simply never
+    // matched, which is what makes an uninstalled plugin's leftovers
+    // harmless. Capped like every other list here so a corrupt or hostile
+    // file cannot grow the config without bound.
+    std::vector<std::string> closedWindows;
+
     std::vector<std::string> pluginsStopped;
 
     // --- Plugins whose MUTE setting is not the default -------------------------

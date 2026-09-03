@@ -2,6 +2,19 @@
 #include "core/config.hpp"
 
 #include "core/telemetry.hpp"
+// clampScopeRangeNm(): the radar scope's ladder of range steps.
+//
+// THE ONE PLACE core/ REACHES INTO gui/, and it is a considered exception
+// rather than a slip. The legal set of ranges is a property of the VIEW - it
+// is derived from what the scope can draw rings and labels for - while
+// keeping a value the view has no meaning for out of the renderer is this
+// sanitizer's whole job. Writing the ladder out a second time here is exactly
+// how the two would come to disagree, and the disagreement would be silent:
+// the file would load, the renderer would draw, and only the rings would be
+// wrong. The header is ImGui-free and pulls in no GL, no window and no
+// plugin instance, so nothing about this include reaches the application
+// shell.
+#include "gui/scope_view.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -92,13 +105,17 @@ void getStringArray(const json& j, const char* key, std::vector<std::string>& ds
     dst = std::move(v);
 }
 
-// The shared rule for the three lists of plugin module file names the config
-// carries (pluginTuneAllowed, pluginsStopped, pluginMuteOverride): drop
-// empties, drop duplicates, cap the length. One function rather than three
-// loops, because the lists are the same shape and a rule that applied to only
-// some of them would be a rule nobody could rely on. Name every caller here
-// when a fourth list arrives — an enumeration that stops being exhaustive is
-// worse than none.
+// The shared rule for the four name lists the config carries
+// (pluginTuneAllowed, pluginsStopped, pluginMuteOverride, closedWindows):
+// drop empties, drop duplicates, cap the length. One function rather than
+// four loops, because the lists are the same shape and a rule that applied to
+// only some of them would be a rule nobody could rely on. Name every caller
+// here when another list arrives — an enumeration that stops being exhaustive
+// is worse than none.
+//
+// closedWindows holds ImGui window identities rather than plugin file names.
+// It is the same shape and wants the same treatment, and keeping one rule is
+// worth more than a second function that would only differ in its name.
 std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in) {
     std::vector<std::string> out;
     for (const std::string& n : in) {
@@ -224,6 +241,15 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // CLAMPED ON LOAD, not trusted. The file is user-editable and an unknown
     // style would otherwise reach the draw loop and select nothing at all.
     if (out.mapTrailStyle < 0 || out.mapTrailStyle > 1) { out.mapTrailStyle = 0; }
+    // The radar scope. The range is SNAPPED TO THE LADDER the view defines,
+    // never trusted: the file is user-editable, and every ring radius, every
+    // ring label and the corner readout are derived from this one number, so a
+    // value off the ladder would reach the renderer as a scale nobody chose.
+    // Nearest rather than a reset to the default, so a hand-edit that was
+    // almost right keeps what it was reaching for.
+    getBool(j, "scopeMode", out.scopeMode);
+    getInt(j, "scopeRangeNm", out.scopeRangeNm);
+    out.scopeRangeNm = cascade::gui::clampScopeRangeNm(out.scopeRangeNm);
     // LEGACY KEYS, READ AND NEVER WRITTEN. A file saved before the map became
     // one page per plugin carries its single window's rectangle here; it is
     // read so that rectangle can seed the pages' default placement, and save()
@@ -273,6 +299,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
     getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
+    getStringArray(j, "closedWindows", out.closedWindows);
     getStringArray(j, "pluginsStopped", out.pluginsStopped);
     getStringArray(j, "pluginMuteOverride", out.pluginMuteOverride);
     getBool(j, "webEnabled", out.webEnabled);
@@ -446,6 +473,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // failure mode: a duplicate would make Start look like it did nothing,
     // since the second copy would still be stopping the plugin.
     out.pluginTuneAllowed = sanitisePluginNames(out.pluginTuneAllowed);
+    // Same shape as the plugin-name lists and the same treatment: empties
+    // and duplicates dropped, length capped. A window identity is longer than
+    // a plugin name but is bounded by the same reasoning.
+    out.closedWindows = sanitisePluginNames(out.closedWindows);
     out.pluginsStopped = sanitisePluginNames(out.pluginsStopped);
     // And the mute overrides, for the third time from the same function. A
     // duplicate here would be a preference that flipped twice - which is the
@@ -499,6 +530,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
+    j["scopeMode"] = cfg.scopeMode;
+    j["scopeRangeNm"] = cfg.scopeRangeNm;
     // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
     // deliberately NOT written: the map is one page per plugin now, and
     // mapPages below is the rectangle store. The keys are still read (see
@@ -539,6 +572,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
     j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
+    j["closedWindows"] = cfg.closedWindows;
     j["pluginsStopped"] = cfg.pluginsStopped;
     j["pluginMuteOverride"] = cfg.pluginMuteOverride;
     j["webEnabled"] = cfg.webEnabled;

@@ -35,8 +35,15 @@ double lumaOf(ImU32 c) {
 
 void testColorEndpoints() {
     // Documented contract anchors, exact RGBA.
-    CHECK(waterfallColor(0.0f) == IM_COL32(0, 0, 40, 255));
-    CHECK(waterfallColor(1.0f) == IM_COL32(255, 100, 90, 255));
+    // THE ANCHORS MOVED WITH THE PALETTE, DELIBERATELY. The map was a
+    // blue-to-red jet ramp and is now phosphor green to cream, because the
+    // waterfall, the spectrum and the radar scope are meant to read as one
+    // tube. What did NOT move is the property these anchors are pinned for:
+    // the table is still brightness-monotonic, which the checks below still
+    // prove across all 256 entries. Changing the hues is a design decision;
+    // breaking monotonicity would be breaking the measurement.
+    CHECK(waterfallColor(0.0f) == IM_COL32(6, 20, 10, 255));
+    CHECK(waterfallColor(1.0f) == IM_COL32(240, 235, 180, 255));
 }
 
 void testColorClamping() {
@@ -60,16 +67,33 @@ void testColorMonotonicBrightness() {
         CHECK(chA(c) == 255);
         prev = luma;
     }
-    // Hue milestones of the documented blue -> cyan -> yellow -> red
-    // progression (loose inequalities, not exact mid-table constants).
+    // Hue milestones of the documented PHOSPHOR progression: quiet green ->
+    // phosphor -> yellow-green -> cream (loose inequalities, not exact
+    // mid-table constants).
+    //
+    // ALL FOUR WERE REWRITTEN when the palette changed, not just the one that
+    // failed. Only the cold check went red on the new table; the other three
+    // still passed, but by accident rather than because they described the
+    // ramp - a green-to-cream map happens to satisfy "R > B at the warm end"
+    // as readily as a yellow-to-red one did. A test that keeps passing for the
+    // wrong reason is worse than one that fails, because nothing will ever
+    // draw attention to it again.
+    //
+    // GREEN LEADS FOR THE WHOLE COLD HALF, which is the actual claim "this is
+    // a phosphor ramp" makes, and it is the thing a future palette edit would
+    // most plausibly break.
     const ImU32 cold = waterfallColor(0.0f);
-    CHECK(chB(cold) > chR(cold) && chB(cold) > chG(cold));  // blue end
+    CHECK(chG(cold) > chR(cold) && chG(cold) > chB(cold));  // quiet green
     const ImU32 mid = waterfallColor(0.45f);
-    CHECK(chG(mid) > chR(mid) && chB(mid) > chR(mid));      // cyan-ish
+    CHECK(chG(mid) > chR(mid) && chG(mid) > chB(mid));      // phosphor
     const ImU32 warm = waterfallColor(0.75f);
-    CHECK(chR(warm) > chB(warm) && chG(warm) > chB(warm));  // yellow-ish
+    CHECK(chG(warm) > chB(warm) && chR(warm) > chB(warm));  // yellow-green
     const ImU32 hot = waterfallColor(1.0f);
-    CHECK(chR(hot) > chG(hot) && chR(hot) > chB(hot));      // red end
+    // Warm cream: red and green both well clear of blue, and - the part that
+    // matters - it is the brightest entry, which the monotone sweep above has
+    // already proved across all 256 entries.
+    CHECK(chR(hot) > chB(hot) && chG(hot) > chB(hot));
+    CHECK(lumaOf(hot) > lumaOf(warm));
 }
 
 // --- mapLineToPixels ------------------------------------------------------

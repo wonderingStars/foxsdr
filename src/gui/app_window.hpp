@@ -14,6 +14,11 @@
 #include <string>
 #include <vector>
 
+// Forward-declared rather than including GLFW here: this header is included
+// by the tests, and pulling a windowing library into them would make a
+// headless build depend on one.
+struct GLFWwindow;
+
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
@@ -27,6 +32,10 @@
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
+// The ADS-B radar scope. ImGui-free like track_metrics.hpp below, so it can be
+// held by value here without breaking the rule that main() - and the tests -
+// never see a GUI header.
+#include "gui/scope_view.hpp"
 #include "gui/track_info_cache.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
@@ -415,6 +424,30 @@ private:
     // every poll, so a stored pointer or index would go stale within a frame —
     // find it fresh, and only among tracks the staleness rule still shows.
     const cascade::core::HostTrack* findVisibleTrack(const std::string& id) const;
+
+    // --- the ADS-B radar scope (see gui/scope_view.hpp) ---------------------
+    //
+    // THE WHOLE MAIN WINDOW, drawn instead of the spectrum, the waterfall and
+    // the menu column. That is what the mode IS: a beta tester's dedicated
+    // ADS-B receiver shows a scope and nothing else, and a scope squeezed into
+    // a panel beside a waterfall would be a smaller version of the map rather
+    // than the instrument he asked for.
+    //
+    // IT ALWAYS DRAWS ITS OWN WAY OUT, in a bar above the face, before
+    // anything that can fail to have room. A mode with no exit is the
+    // map-page latch again in a larger form: there, every reopen affordance
+    // lived inside the window the user had just closed.
+    void drawScopeMode();
+    // The switch that turns it on, in the Decoders section of the left rail.
+    void drawScopeModeControl();
+    // The receiver position entry - two coordinate fields and "Set RX here" -
+    // drawn by BOTH the map pages and the scope's no-position state. One copy,
+    // because the button has consequences beyond the two numbers (every map
+    // page's home moves, the coverage accumulator is discarded because every
+    // wedge in it was measured from somewhere else) and a second copy would
+    // sooner or later do only some of them.
+    void drawRxPositionEntry();
+
     void drawPluginPresets(const cascade::core::LoadedPlugin& p);
     // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
     // rebuilds the decoders against the new receiver state, and opens what
@@ -888,6 +921,22 @@ private:
         // definition, so a session opens on its first arrival exactly
         // the way the single map always did.
         bool hadVisible = false;
+        // THE USER CLOSED THIS PAGE, AND MEANT IT ACROSS RESTARTS.
+        //
+        // hadVisible is deliberately not persisted, on the reasoning that a
+        // restart is a quiet gap and a session should open on its first
+        // arrival. That is right for a plugin whose targets ARRIVE - an
+        // aircraft is heard or it is not. It is wrong for one that COMPUTES
+        // them: the satellite tracker propagates from stored elements, so it
+        // has a full sky of visible targets on the first frame of every
+        // launch, with no radio and no user action. The edge therefore fired
+        // at start-up every time and reopened a map the user had closed,
+        // which is exactly what they reported.
+        //
+        // Set when a page is created from a saved entry that says closed, and
+        // cleared the moment the user opens the page by any route, so a close
+        // survives a restart while every deliberate reopen still works.
+        bool selfOpenSuppressed = false;
         // The window's rectangle: seeded at creation from the saved entry (or
         // the legacy single-window rectangle), read back from ImGui every
         // frame the window is drawn, and written to AppConfig::mapPages.
@@ -1040,6 +1089,31 @@ private:
     // The two INPUT fields are separate from the applied position on purpose:
     // typing a latitude must not move the range rings until the button is
     // pressed, or every intermediate keystroke would be a different receiver.
+    // THE RADAR UNIT'S LEASE ON THE DISPLAY. foxsdr-radar.exe is a separate
+    // desktop application showing the same receiver, so while it is up this
+    // window puts itself away - and the lease, not a flag, is what decides:
+    // the radar renews it every few seconds, and this window comes back on
+    // its own if the renewals stop. A radar that crashes must not be able to
+    // leave the user with no way back to their receiver.
+    // Three missed renewals at the radar's four-second cadence. Long enough
+    // that a stalled frame or a paused debugger does not pull the desktop
+    // back out from under a running radar; short enough that a crash is a
+    // pause, not a lockout.
+    static constexpr double kRadarLeaseSeconds = 12.0;
+    void setRadarHoldsDisplay(bool held);
+    void applyRadarWindowVisibility();
+    // Set for the one frame that gives the display back, so the torn-off
+    // windows are shown once rather than forced visible for ever.
+    bool radarRestoreWindows_ = false;
+    // Scope mode hides the torn-off windows the same way the radar lease does;
+    // these two carry the edge that puts them back on the way out.
+    bool scopeWasOn_ = false;
+    bool scopeLeftThisFrame_ = false;
+
+    GLFWwindow* mainWindow_ = nullptr;
+    bool radarHoldsDisplay_ = false;
+    double radarLeaseExpiry_ = 0.0;
+
     bool rxSet_ = false;
     double rxLat_ = 0.0;
     double rxLon_ = 0.0;
@@ -1060,6 +1134,29 @@ private:
     bool mapTrails_ = true;
     bool mapTrailAltColours_ = true;
     int mapTrailStyle_ = 0;  // 0 line, 1 ribbon - see AppConfig::mapTrailStyle
+
+    // --- the ADS-B radar scope ----------------------------------------------
+    // The renderer, and the two pieces of state that outlive it. The RANGE
+    // lives here rather than only in the view because it is persisted
+    // (AppConfig::scopeRangeNm) and because two controls set it - the stepper
+    // in the scope's own bar and the wheel over the face - so the value is
+    // pushed in before each draw and read back after it.
+    //
+    // Held BY VALUE, unlike the map pages' views: there is exactly one scope
+    // for the application (it is a mode of the main window, not a window per
+    // plugin), and it owns nothing that needs a stable address.
+    ScopeView scope_;
+    bool scopeMode_ = false;
+    int scopeRangeNm_ = kScopeDefaultRangeNm;
+    // Whether ANYTHING asked the basemap for a tile this frame - the map pages
+    // and, now, the scope. BasemapCache::endFrame() evicts every tile nothing
+    // asked for, so it must run exactly once per frame and only AFTER every
+    // surface that wants tiles has asked. It used to be called at the end of
+    // the map-page loop, which was correct while that loop was the only asker;
+    // with the scope drawing later in the same frame, an endFrame there would
+    // have thrown away the scope's tiles and made it re-upload every one of
+    // them, every frame.
+    bool basemapUsedThisFrame_ = false;
     // Sort state for the track list, held here because the sort menu above the
     // table is the only thing that sets it and the table below has to be
     // ordered by it every frame. SEEDED FROM THE SAME CONSTANT the menu opens
@@ -1100,6 +1197,12 @@ private:
     // only when the plugin says the pixels changed. imageTexPlugin_ records
     // whose picture each slot currently holds, so a rescan that puts a
     // different plugin in a slot cannot leave the old texture on screen.
+    // The maker's badge on the scope face, uploaded ONCE from the RGBA icon
+    // compiled into this binary (resources/icon/foxsdr_icon_rgba.hpp) - the
+    // same pixels the window and taskbar use, so the badge cannot drift from
+    // the application's own identity. 0 until the scope is first drawn.
+    unsigned int scopeBadgeTex_ = 0;
+
     std::vector<unsigned int> imageTex_;
     std::vector<std::uint64_t> imageTexRev_;
     std::vector<std::string> imageTexPlugin_;

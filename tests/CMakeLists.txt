@@ -26,7 +26,11 @@ foreach(src ${CASCADE_TESTS})
                     $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:${name}>)
     endif()
 
-    if(name STREQUAL "test_json_dump_policy")
+    if(name STREQUAL "test_radar_assets")
+        # Compares the compiled-in radar panel against the files it was
+        # generated from, so it needs the repository root on its command line.
+        add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
+    elseif(name STREQUAL "test_json_dump_policy")
         # The only test in this loop that takes an argument: it scans src/
         # for nlohmann `.dump(` sites missing the error_handler_t::replace
         # guard (see tests/test_json_dump_policy.cpp), so it needs the
