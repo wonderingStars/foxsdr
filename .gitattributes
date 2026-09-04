@@ -1,0 +1,13 @@
+# THE VENDORED TYPEFACES ARE BINARY AND MUST NEVER BE LINE-ENDING FILTERED.
+#
+# Git normally detects binary content on its own, and on these files it does.
+# The rule is here anyway because the cost of being wrong is asymmetric: this
+# machine checks out with autocrlf=true, tests/test_font_assets.cpp compares
+# the compiled-in bytes against these files byte for byte, and a single
+# translated 0x0a inside a TrueType table produces a font that fails to
+# rasterise on someone else's clone with nothing in the diff to show it.
+#
+# Everything else in the tree keeps git's default handling.
+*.ttf binary
+*.otf binary
+*.lib binary

@@ -37,13 +37,17 @@
 #include <SoapySDR/Version.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -242,6 +246,154 @@ SoapySDR::KwargsList findStall(const SoapySDR::Kwargs& args) {
 }
 
 SoapySDR::Device* makeStall(const SoapySDR::Kwargs&) { return new StallingDevice(); }
+
+// ---------------------------------------------------------------------------
+// A DRIVER WHOSE ESCAPE-PATH CALLS NEVER COME BACK, which is the 0.70.0 field
+// freeze reduced to something reproducible.
+//
+// The stalling device above wedges a READ, and what that proves is that a
+// control call gives up waiting for the LOCK. This one wedges the calls the
+// escape paths make themselves - deactivateStream out of stop(), closeStream
+// out of closeDevice() - which is the half the lock bound cannot cover: the
+// caller has the lock, and it is the driver that will not return. The field
+// report's stack symbolises to the single _Thrd_join call site in
+// rtlsdrSupport.dll, inside the function that calls rtlsdr_cancel_async,
+// _Thrd_id and _Thrd_join in that order: SoapyRTLSDR::deactivateStream joining
+// its own async RX thread, on the GUI thread, for ever.
+//
+// The wedge has a HARD 20 s CAP so a regression fails with a named assertion
+// instead of hanging the suite to its 120 s timeout - far past the 1.5 s bound
+// under test, far inside the suite's limit. Red-green: raising the bound in
+// soapy_source.cpp past that cap (the mutation that deletes the fix) makes
+// stop() wait the full 20 s and the elapsed-time, dead-latch and
+// abandoned-count checks below all fail.
+// ---------------------------------------------------------------------------
+std::mutex g_wedgeMutex;
+std::condition_variable g_wedgeCv;
+bool g_wedgeReleased = false;               // guarded by g_wedgeMutex
+
+std::atomic<bool> g_wedgeDeactivate{false};  // set before open(), not during
+std::atomic<bool> g_wedgeCloseStream{false};
+std::atomic<bool> g_inWedgedCall{false};     // the driver really was entered
+std::atomic<int> g_wedgedCallsReturned{0};
+std::atomic<int> g_closeStreamCalls{0};
+std::atomic<int> g_deviceDestroyed{0};       // unmake() would delete the fake
+// Every entry into the fake's readStream. This is what tells a read() that
+// gave up at the door from one that went into a driver it had been told never
+// to touch again - a timing or return-value assertion cannot, because a
+// wedged-then-abandoned device still answers a read perfectly happily.
+std::atomic<int> g_readStreamCalls{0};
+// One per open() that reached the device interrogation. Counted on the DEVICE
+// rather than on the factory because SoapySDR::Device::make keys a cache on
+// the resolved kwargs and hands back the same instance for args that resolve
+// alike - so a factory counter says nothing about how many opens got through.
+std::atomic<int> g_setupStreamCalls{0};
+
+void resetWedge() {
+    {
+        std::lock_guard<std::mutex> lk(g_wedgeMutex);
+        g_wedgeReleased = false;
+    }
+    g_wedgeDeactivate.store(false, std::memory_order_relaxed);
+    g_wedgeCloseStream.store(false, std::memory_order_relaxed);
+    g_inWedgedCall.store(false, std::memory_order_relaxed);
+    g_wedgedCallsReturned.store(0, std::memory_order_relaxed);
+    g_closeStreamCalls.store(0, std::memory_order_relaxed);
+    g_deviceDestroyed.store(0, std::memory_order_relaxed);
+    g_setupStreamCalls.store(0, std::memory_order_relaxed);
+    g_readStreamCalls.store(0, std::memory_order_relaxed);
+}
+
+void releaseWedge() {
+    {
+        std::lock_guard<std::mutex> lk(g_wedgeMutex);
+        g_wedgeReleased = true;
+    }
+    g_wedgeCv.notify_all();
+}
+
+// Blocks inside the vendor call until the test lets go (or the cap expires).
+// The counter is bumped only AFTER every test-owned object has been released,
+// so a worker the test has stopped waiting for touches nothing of this file's
+// once the count the test polls has moved.
+void wedgeUntilReleased() {
+    g_inWedgedCall.store(true, std::memory_order_release);
+    {
+        std::unique_lock<std::mutex> lk(g_wedgeMutex);
+        g_wedgeCv.wait_for(lk, std::chrono::seconds(20), [] { return g_wedgeReleased; });
+    }
+    g_wedgedCallsReturned.fetch_add(1, std::memory_order_release);
+}
+
+class WedgingDevice : public SoapySDR::Device {
+public:
+    ~WedgingDevice() override { g_deviceDestroyed.fetch_add(1, std::memory_order_release); }
+    std::string getDriverKey() const override { return "fakewedge"; }
+    std::string getHardwareKey() const override { return "fake wedging source"; }
+    size_t getNumChannels(const int) const override { return 1; }
+    SoapySDR::Stream* setupStream(const int, const std::string&,
+                                  const std::vector<size_t>&,
+                                  const SoapySDR::Kwargs&) override {
+        g_setupStreamCalls.fetch_add(1, std::memory_order_release);
+        return reinterpret_cast<SoapySDR::Stream*>(this);
+    }
+    void closeStream(SoapySDR::Stream*) override {
+        g_closeStreamCalls.fetch_add(1, std::memory_order_release);
+        if (g_wedgeCloseStream.load(std::memory_order_relaxed)) { wedgeUntilReleased(); }
+    }
+    int activateStream(SoapySDR::Stream*, const int, const long long,
+                       const size_t) override {
+        return 0;
+    }
+    int deactivateStream(SoapySDR::Stream*, const int, const long long) override {
+        if (g_wedgeDeactivate.load(std::memory_order_relaxed)) { wedgeUntilReleased(); }
+        return 0;
+    }
+    double getSampleRate(const int, const size_t) const override { return 2.4e6; }
+    void setFrequency(const int, const size_t, const double f,
+                      const SoapySDR::Kwargs&) override {
+        freq_ = f;
+    }
+    double getFrequency(const int, const size_t) const override { return freq_; }
+    int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
+                   int&, long long&, const long) override {
+        g_readStreamCalls.fetch_add(1, std::memory_order_release);
+        float* p = static_cast<float*>(buffs[0]);
+        for (size_t i = 0; i < 2 * numElems; ++i) { p[i] = 0.0f; }
+        return static_cast<int>(numElems);
+    }
+
+private:
+    double freq_ = 100.0e6;
+};
+
+SoapySDR::KwargsList findWedge(const SoapySDR::Kwargs& args) {
+    const auto driver = args.find("driver");
+    if (driver != args.end() && driver->second != "fakewedge") { return {}; }
+    SoapySDR::Kwargs k;
+    k["driver"] = "fakewedge";
+    k["label"] = "fake wedging source";
+    return SoapySDR::KwargsList{k};
+}
+
+SoapySDR::Device* makeWedge(const SoapySDR::Kwargs&) { return new WedgingDevice(); }
+
+// True once the abandoned driver call has come back out of the vendor module,
+// or false if it never does. Bounded so a broken release cannot hang the suite.
+bool waitForWedgedReturn(int expected) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(25);
+    while (g_wedgedCallsReturned.load(std::memory_order_acquire) < expected) {
+        if (std::chrono::steady_clock::now() > deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+long long msSince(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - t0)
+        .count();
+}
 
 SoapySDR::KwargsList findNonFinite(const SoapySDR::Kwargs& args) {
     const auto driver = args.find("driver");
@@ -736,6 +888,316 @@ int main() {
             reader.join();
             src.closeDevice();
         }
+    }
+
+    // --- a driver call that never returns must not freeze the interface ----
+    //
+    // THE 0.70.0 FIELD FREEZE. stop() already gave up waiting for the driver
+    // LOCK (the block above); it then called deactivateStream on the GUI
+    // thread and waited for that for ever. Bounding the lock cannot help when
+    // the call holding it is the one that hung.
+    {
+        std::printf("--- wedged deactivateStream: stop() must abandon it ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        g_wedgeDeactivate.store(true, std::memory_order_relaxed);
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+
+        // On the heap, so the source can be DESTROYED while the driver call is
+        // still parked inside the fake - the case that turns this fix into a
+        // use-after-free if the abandoned call kept a pointer to the source.
+        auto src = std::make_unique<SoapySource>();
+        CHECK(src->open("driver=fakewedge"));
+        CHECK(src->start());
+
+        const auto t0 = std::chrono::steady_clock::now();
+        src->stop();
+        const long long stopMs = msSince(t0);
+        std::printf("  stop() returned after %lld ms (driver still inside)\n", stopMs);
+        // The wedge holds for 20 s. Anything near that is stop() waiting it
+        // out, which is the freeze itself.
+        CHECK(stopMs < 3000);
+        // ...and it really did enter the driver: a stop that never got there
+        // would also be fast, and would prove nothing.
+        CHECK(g_inWedgedCall.load(std::memory_order_acquire));
+        // The abandonment is COUNTED, so this cannot pass on a driver that
+        // merely happened to answer quickly (the mutation that deletes the
+        // bound leaves every timing check to luck otherwise).
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+        CHECK(g_wedgedCallsReturned.load(std::memory_order_acquire) == 0);
+
+        // The verdict the user sees, and it must be the escape-path one.
+        CHECK(!src->running());
+        CHECK(src->faulted());
+        CHECK(src->deviceDead());
+        std::printf("  lastError=\"%s\"\n", src->lastError());
+        CHECK(std::strstr(src->lastError(), "abandoned") != nullptr);
+        CHECK(std::strstr(src->lastError(), "Restart FoxSDR") != nullptr);
+
+        // THE LOCK IS NOT LEFT HELD. A call that takes it must come straight
+        // back, not wait out the 1.5 s control-lock bound - if the abandoned
+        // call had kept the lock, every later control call would pay for it.
+        const auto t1 = std::chrono::steady_clock::now();
+        const std::vector<std::string> gains = src->listGainNames();
+        const long long lockMs = msSince(t1);
+        std::printf("  a control call after the abandonment took %lld ms\n", lockMs);
+        CHECK(gains.empty());
+        CHECK(lockMs < 500);
+
+        // NO FURTHER DRIVER CALLS, ever: the device a thread is still inside
+        // is not closed, not unmade, and not reopenable. That is what makes
+        // "restart FoxSDR to use this radio again" true rather than hopeful.
+        CHECK(!src->open("driver=fakewedge, serial=reopen"));
+        CHECK(std::strstr(src->lastError(), "abandoned") != nullptr);
+        CHECK(src->deviceDead());
+        CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 0);
+        CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
+
+        // DESTROYED WHILE THE CALL IS STILL BLOCKED. The abandoned call owns
+        // the mutex and the handles through a shared_ptr rather than through
+        // the source, so this must be survivable; a call that had captured the
+        // source would now be reading freed memory.
+        src.reset();
+        CHECK(g_wedgedCallsReturned.load(std::memory_order_acquire) == 0);
+        CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
+
+        // Now let the driver go and watch the abandoned call come back out of
+        // it, after the object that started it has ceased to exist.
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        std::printf("  the abandoned call returned after the source was destroyed\n");
+    }
+
+    // --- a reopen whose RELEASE is what wedges ------------------------------
+    //
+    // The switch the field report's user actually performed: pick another
+    // radio while the current one's deactivateStream is wedged. open() has to
+    // release what is open before it makes anything, so the abandonment
+    // happens INSIDE this call - and the interrogation that follows must not
+    // then write a fresh device handle over the two the wedged call is still
+    // holding.
+    {
+        std::printf("--- reopen while the release wedges: no second device ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        g_wedgeDeactivate.store(true, std::memory_order_relaxed);
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+
+        SoapySource src;
+        CHECK(src.open("driver=fakewedge, serial=first"));
+        CHECK(src.start());
+        CHECK(g_setupStreamCalls.load(std::memory_order_acquire) == 1);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool reopened = src.open("driver=fakewedge, serial=second");
+        const long long reopenMs = msSince(t0);
+        std::printf("  open() returned %s after %lld ms\n", reopened ? "true" : "false",
+                    reopenMs);
+        CHECK(!reopened);
+        CHECK(reopenMs < 3000);
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+        // THE SECOND DEVICE WAS NEVER SET UP. Interrogating one would have
+        // written a fresh device and stream over the two the abandoned call is
+        // still reading, and left the first radio's claim held by handles
+        // nothing points at any more.
+        CHECK(g_setupStreamCalls.load(std::memory_order_acquire) == 1);
+        CHECK(src.deviceDead());
+        CHECK(!src.isOpen());
+        CHECK(std::strstr(src.lastError(), "abandoned") != nullptr);
+
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        std::printf("  the abandoned release returned\n");
+    }
+
+    // --- the same, for the teardown half: closeStream ----------------------
+    //
+    // stopLocked() is not the only escape-path call into the driver.
+    // closeDevice() and ~SoapySource() run closeStream and unmake, on the same
+    // GUI thread, and a wedge there freezes the interface just as completely.
+    {
+        std::printf("--- wedged closeStream: closeDevice() must abandon it ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        g_wedgeCloseStream.store(true, std::memory_order_relaxed);
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+
+        SoapySource src;
+        // Different args from the block above: SoapySDR::Device::make keys its
+        // device table on them, and the first block's device was deliberately
+        // never unmade.
+        CHECK(src.open("driver=fakewedge, serial=teardown"));
+        CHECK(src.start());
+        // Only closeStream is wedged here, so the stop must be ORDINARY - that
+        // is what proves the next check is measuring the teardown call and not
+        // a leftover of the previous block's.
+        src.stop();
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+
+        const auto t0 = std::chrono::steady_clock::now();
+        src.closeDevice();
+        const long long closeMs = msSince(t0);
+        std::printf("  closeDevice() returned after %lld ms\n", closeMs);
+        CHECK(closeMs < 3000);
+        CHECK(g_inWedgedCall.load(std::memory_order_acquire));
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+        CHECK(src.deviceDead());
+        CHECK(!src.isOpen());
+        CHECK(std::strstr(src.lastError(), "abandoned") != nullptr);
+
+        // AND UNMAKE WAS NOT ATTEMPTED. Deleting a device object while one of
+        // this process's threads is still executing inside it would be the
+        // worst possible answer to a wedged closeStream, and the abandoned
+        // count says only one call was ever left behind.
+        CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
+
+        // Idempotent, and still no driver calls: a second close costs nothing
+        // and abandons nothing new.
+        src.closeDevice();
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+        CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 1);
+        CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
+
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        std::printf("  the abandoned teardown call returned\n");
+    }
+
+    // --- an abandoned radio must go on being COUNTED as open ---------------
+    //
+    // The process-wide open-device count is not bookkeeping about this class;
+    // it is the answer to "may a vendor walk run right now" (anyDeviceOpen(),
+    // read by the in-process enumeration fallback). Abandoning a wedged driver
+    // deliberately does NOT close its stream and does NOT unmake it - a thread
+    // of ours is still inside the module - so the radio is still open, in the
+    // strongest sense the word has anywhere in this file, and the count said
+    // zero at exactly that moment. A walk let through by that zero would open
+    // and close the very dongle the stranded call is in, which is adjudicated
+    // fix #1 for the 0.62.0 crashes performed against the worst possible
+    // device.
+    //
+    // NOTE FOR ANYONE ADDING A BLOCK AFTER THIS ONE: from here to the end of
+    // the process the gate is closed, by design. Any test needing an
+    // in-process walk belongs above the first block that abandons a device.
+    {
+        std::printf("--- the open-device count after an abandonment ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        g_wedgeDeactivate.store(true, std::memory_order_relaxed);
+        // A DELTA, not an absolute: earlier blocks in this file condemn
+        // devices of their own and (correctly) leave them counted, so what
+        // this block owns is the difference it makes.
+        const int openBefore = SoapySource::openDeviceCount();
+        {
+            SoapySource src;
+            CHECK(src.open("driver=fakewedge, serial=counted"));
+            CHECK(SoapySource::openDeviceCount() == openBefore + 1);
+            CHECK(src.start());
+            src.stop();  // deactivateStream wedges: abandoned, device condemned
+            CHECK(src.deviceDead());
+            src.closeDevice();
+            // PROVABLY STILL OPEN, and not by inference: the policy skipped
+            // both calls that could have given the radio back.
+            CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 0);
+            CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
+            std::printf("  after abandonment + close: count=%d (was %d)\n",
+                        SoapySource::openDeviceCount(), openBefore);
+            CHECK(SoapySource::openDeviceCount() == openBefore + 1);
+        }
+        // Destroying the source releases nothing either - its destructor runs
+        // the same closeDevice() - so the count must not move there.
+        CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
+        CHECK(SoapySource::openDeviceCount() == openBefore + 1);
+        CHECK(SoapySource::anyDeviceOpen());
+        // AND THE GATE IS WHAT THE COUNT IS FOR. The walk would list
+        // "fakewedge" if it ran (the registry above is live, and the same walk
+        // lists this file's other fake earlier in this suite), so an empty
+        // answer here is the gate holding against a module one of our threads
+        // is still parked inside.
+        CHECK(SoapySource::enumerateInProcess().empty());
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        std::printf("  the abandoned call returned; the radio stays counted\n");
+    }
+
+    // --- condemned WHILE a read was queued for the driver lock --------------
+    //
+    // read() is the one entry point whose dead-latch test happens before it
+    // takes the lock, and that test is stale by the time the lock is won: the
+    // thread holding it can spend that wait abandoning a wedged driver. The
+    // null-handle test read() then performs cannot stand in for a fresh latch
+    // test, because an abandoned link keeps its handles on purpose - a
+    // stranded worker is still reading them - so they never become null. The
+    // read would go into the module on a stream whose deactivateStream is
+    // still parked inside it.
+    //
+    // The reader is fired PART WAY through the wedge so that both halves of
+    // the state are real: it passes the pre-lock test (nothing is condemned
+    // yet) and is still parked on the mutex when stop() condemns the link and
+    // releases it. Both are asserted below rather than assumed.
+    {
+        std::printf("--- condemned while a read waited for the lock ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        g_wedgeDeactivate.store(true, std::memory_order_relaxed);
+
+        SoapySource src;
+        CHECK(src.open("driver=fakewedge, serial=postlock"));
+        CHECK(src.start());
+
+        // The fake ANSWERS a read when it is called - without this, "the
+        // driver was not entered" below would also be true of a device that
+        // never delivers anything, and the block would prove nothing.
+        std::vector<std::complex<float>> warm(64);
+        CHECK(src.read(warm.data(), warm.size()) == warm.size());
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == 1);
+
+        std::atomic<long long> readMs{-1};
+        std::atomic<std::size_t> readGot{warm.size()};  // not 0, so a read that
+                                                        // never ran cannot pass
+        std::thread reader([&] {
+            // Rendezvous on the DRIVER: g_inWedgedCall is set from inside the
+            // wedged deactivateStream, so stop() provably holds the lock from
+            // here. 900 ms of its 1500 ms bound is then spent before the read
+            // starts, which leaves the read ~600 ms parked on the mutex out of
+            // its own 1500 ms budget.
+            while (!g_inWedgedCall.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(900));
+            std::vector<std::complex<float>> buf(256);
+            const auto r0 = std::chrono::steady_clock::now();
+            const std::size_t got = src.read(buf.data(), buf.size());
+            const long long ms = msSince(r0);
+            readGot.store(got, std::memory_order_relaxed);
+            readMs.store(ms, std::memory_order_release);
+        });
+
+        src.stop();  // holds the lock ~1.5 s, condemns the link, then releases
+        reader.join();
+        std::printf("  read() returned %zu after %lld ms; readStream calls=%d\n",
+                    readGot.load(std::memory_order_relaxed),
+                    readMs.load(std::memory_order_acquire),
+                    g_readStreamCalls.load(std::memory_order_acquire));
+        CHECK(src.deviceDead());
+        // IT REALLY PARKED ON THE MUTEX. A read that returned at once either
+        // never entered (nothing to test) or saw the latch before the wait
+        // (the pre-lock test, which was never the hole) - so without this the
+        // assertion below could pass on a race that did not reproduce.
+        CHECK(readMs.load(std::memory_order_acquire) >= 200);
+        // ...and it came back out without entering the driver.
+        CHECK(readGot.load(std::memory_order_relaxed) == 0u);
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == 1);
+
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        std::printf("  the abandoned deactivate returned; the read never went in\n");
     }
 
     return testSummary("test_soapy_source");

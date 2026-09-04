@@ -50,9 +50,26 @@ struct DiagModule {
     char buildId[48] = {};  // 32 hex GUID digits + the age, uppercase hex
 };
 
-// Rebuild the snapshot. Call from the healthy path only - start-up, after a
-// plugin loads, after a device is opened. Returns the number of modules
-// captured (capped; see kMaxDiagModules in the .cpp).
+// Rebuild the snapshot. Call from the healthy path only, and after anything
+// that loaded code into this process. The shipped call sites are, in full:
+//
+//   - start-up (crash_handler.cpp and hang_watchdog.cpp, each only if the
+//     table is still empty),
+//   - AppWindow::rescanPlugins() and AppWindow::refreshDiagContext(), which
+//     between them cover every plugin load and unload,
+//   - AppWindow::pollSoapyAsync(), when a device open completes. The vendor
+//     module and its dependencies (rtlsdrSupport.dll, rtlsdr.dll, libusb)
+//     are mapped by SoapySDR::Device::make() on the open worker, so a table
+//     built at start-up cannot name them. This line was missing until 0.75.0
+//     while this comment already promised it: a field report whose radio was
+//     opened 102 s after launch printed all three as bare addresses, and the
+//     frame that identified the fault had to be recovered by hand.
+//
+// The device SCAN needs no entry here - it runs in a child process
+// (soapy_enum_proc), so no vendor module is mapped into this one.
+//
+// Returns the number of modules captured (capped; see kMaxDiagModules in the
+// .cpp).
 int refreshModuleTable();
 
 int moduleCount();

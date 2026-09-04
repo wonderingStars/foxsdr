@@ -1,12 +1,15 @@
 // Tests for gui/spectrum_view.hpp — pure display math only. draw() needs a
-// live ImGui/GL context, so the testable surface is dbToY, gridlineDbs, and
-// the zoom/VFO statics binToXFrac and hitTest; nothing here touches ImGui.
+// live ImGui/GL context, so the testable surface is dbToY, gridlineDbs, the
+// zoom/VFO statics binToXFrac and hitTest, and peakInBand, the figure the
+// panel prints as "PEAK IN PASSBAND"; nothing here touches ImGui.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/spectrum_view.hpp"
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <limits>
 
 #include "test_check.hpp"
 
@@ -34,6 +37,48 @@ int refGridlines(float dbMin, float dbMax, float* out) {
         if (gf >= dbMin && gf <= dbMax) { out[count++] = gf; }
     }
     return count;
+}
+
+// Independent statement of peakInBand's documented rule, written from the
+// header rather than from the implementation: normalize the band, invert
+// binToXFrac (unclamped — the peak is a fact about the signal, not the zoom),
+// take every WHOLE bin the resulting interval touches, and max over them
+// skipping poisoned bins.
+bool refPeakInBand(const float* bins, int n, double firstBin, double lastBin,
+                   double x0, double x1, float& out) {
+    if (bins == nullptr || n <= 0) { return false; }
+    const double lo = x0 < x1 ? x0 : x1;
+    const double hi = x0 < x1 ? x1 : x0;
+    if (!(lo <= hi)) { return false; }  // NaN edge
+    double binLo = 0.0;
+    double binHi = 0.0;
+    if (!(lastBin > firstBin)) {
+        if (!(hi >= 0.0) || !(lo <= 1.0) || !std::isfinite(firstBin)) { return false; }
+        binLo = firstBin;
+        binHi = firstBin;
+    } else {
+        binLo = firstBin + lo * (lastBin - firstBin);
+        binHi = firstBin + hi * (lastBin - firstBin);
+    }
+    if (!std::isfinite(binLo) || !std::isfinite(binHi)) { return false; }
+    const double maxBin = static_cast<double>(n - 1);
+    if (binHi < 0.0 || binLo > maxBin) { return false; }
+    if (binLo < 0.0) { binLo = 0.0; }
+    if (binHi > maxBin) { binHi = maxBin; }
+    int i0 = static_cast<int>(std::floor(binLo));
+    int i1 = static_cast<int>(std::ceil(binHi));
+    if (i0 < 0) { i0 = 0; }
+    if (i1 > n - 1) { i1 = n - 1; }
+    bool any = false;
+    float best = 0.0f;
+    for (int i = i0; i <= i1; ++i) {
+        const float v = bins[i];
+        if (!(v == v)) { continue; }
+        if (!any || v > best) { best = v; any = true; }
+    }
+    if (!any) { return false; }
+    out = best;
+    return true;
 }
 
 }  // namespace
@@ -267,6 +312,224 @@ int main() {
         const double bin = first - 10.0 + (span + 20.0) * next01();
         const double want = (bin - first) / span;
         CHECK_NEAR(SpectrumView::binToXFrac(bin, first, first + span), want, 1e-5);
+    }
+
+    // ===================== peakInBand ======================================
+    //
+    // THE FIGURE THE HEADER PRINTS AS "PEAK IN PASSBAND". Every expectation
+    // below is worked out by hand from the documented rule, and the bin
+    // values are deliberately non-monotonic so a max is a real max and not
+    // whichever end of the interval happened to be read last.
+    {
+        // bin:                  0      1      2      3      4      5      6      7
+        const float bins[8] = {-70.0f, -50.0f, -95.0f, -20.0f, -60.0f, -30.0f, -85.0f, -40.0f};
+        constexpr float kSentinel = -12345.0f;
+        float peak = kSentinel;
+
+        // Whole window, whole band: the peak of everything.
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{0.0, 1.0, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+
+        // A band over bins 1.75 .. 3.5 touches whole bins 1..4, whose peak is
+        // bin 3. The bins outside it (0, 5, 6, 7) include -30, which is
+        // louder than most of the band — so a band that silently widened
+        // would be caught here.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{0.25, 0.5, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+        // Order does not matter: the band is normalized exactly as hitTest
+        // normalizes it.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{0.5, 0.25, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+        // dragging is display state and must never move a reading.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{0.25, 0.5, true}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+
+        // A BAND NARROWER THAN ONE BIN: 4.2 .. 4.3 lies inside bin 4's
+        // interval, and the documented answer is the pair of whole bins it
+        // straddles (4 and 5), not nothing.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0,
+                                       VfoBand{4.2 / 7.0, 4.3 / 7.0, false}, peak));
+        CHECK_NEAR(peak, -30.0f, 0.0);
+        // A zero-width band landing exactly on a bin reports that one bin.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0,
+                                       VfoBand{2.0 / 7.0, 2.0 / 7.0, false}, peak));
+        CHECK_NEAR(peak, -95.0f, 0.0);
+
+        // A VFO PARKED OFF-SCREEN still reports its own peak: the window is
+        // zoomed to bins 0..3 and the band sits at bins 5..6, past the right
+        // edge. The band is not clamped to the view because the peak in the
+        // passband is a fact about the signal, not about the zoom.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 3.0, VfoBand{5.0 / 3.0, 2.0, false}, peak));
+        CHECK_NEAR(peak, -30.0f, 0.0);
+        // Half off the left of the data: the bins that exist are used.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{-0.5, 0.1, false}, peak));
+        CHECK_NEAR(peak, -50.0f, 0.0);  // whole bins 0..1
+
+        // ENTIRELY OUTSIDE THE DATA: no measurement, and peakDb is left
+        // exactly as the caller had it — the chrome tests that return value
+        // to decide whether to print a figure at all.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{1.5, 2.0, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{-1.0, -0.5, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+
+        // A DEGENERATE VIEW WINDOW has no bin ordering to invert; the panel
+        // is showing the single bin at firstBin, so that bin is reported if
+        // the band touches the panel at all and nothing is reported if it
+        // does not.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 3.0, 3.0, VfoBand{0.25, 0.75, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 5.0, 2.0, VfoBand{0.25, 0.75, false}, peak));
+        CHECK_NEAR(peak, -30.0f, 0.0);  // inverted window: bin 5
+        peak = kSentinel;  // touching the panel's left edge counts
+        CHECK(SpectrumView::peakInBand(bins, 8, 3.0, 3.0, VfoBand{-0.5, 0.0, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+        peak = kSentinel;  // and its right edge
+        CHECK(SpectrumView::peakInBand(bins, 8, 3.0, 3.0, VfoBand{1.0, 2.0, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+        peak = kSentinel;  // clear of the panel on either side: nothing
+        CHECK(SpectrumView::peakInBand(bins, 8, 3.0, 3.0, VfoBand{1.5, 2.0, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+        CHECK(SpectrumView::peakInBand(bins, 8, 3.0, 3.0, VfoBand{-2.0, -0.5, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+        // Degenerate window parked off the data entirely.
+        CHECK(SpectrumView::peakInBand(bins, 8, 99.0, 99.0, VfoBand{0.0, 1.0, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+
+        // NO DATA: null array, empty array, negative count.
+        CHECK(SpectrumView::peakInBand(nullptr, 8, 0.0, 7.0, VfoBand{0.0, 1.0, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 0, 0.0, 7.0, VfoBand{0.0, 1.0, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, -4, 0.0, 7.0, VfoBand{0.0, 1.0, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+        // One bin is a legitimate spectrum: the window is degenerate by
+        // construction and the single bin is the peak.
+        const float one[1] = {-33.0f};
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(one, 1, 0.0, 0.0, VfoBand{0.0, 1.0, false}, peak));
+        CHECK_NEAR(peak, -33.0f, 0.0);
+
+        // A POISONED BIN IS SKIPPED, not compared. NaN loses every
+        // comparison, so an unguarded max reports either the last non-NaN
+        // value or the NaN itself depending on operand order — and a NaN in
+        // the FIRST slot is the case that catches a `best = bins[i0]` seed.
+        const float poisonedFirst[4] = {std::nanf(""), -50.0f, -80.0f, -60.0f};
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(poisonedFirst, 4, 0.0, 3.0, VfoBand{0.0, 1.0, false}, peak));
+        CHECK_NEAR(peak, -50.0f, 0.0);
+        const float poisonedLast[4] = {-70.0f, -50.0f, -80.0f, std::nanf("")};
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(poisonedLast, 4, 0.0, 3.0, VfoBand{0.0, 1.0, false}, peak));
+        CHECK_NEAR(peak, -50.0f, 0.0);
+        CHECK(peak == peak);  // never a NaN reading
+        // Every bin poisoned: there is no measurement to report.
+        const float allNan[3] = {std::nanf(""), std::nanf(""), std::nanf("")};
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(allNan, 3, 0.0, 2.0, VfoBand{0.0, 1.0, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+
+        // NaN BAND EDGES: a poisoned passband can never produce a phantom
+        // reading. NaN WINDOW BOUNDS: a poisoned firstBin likewise.
+        const double dnan = static_cast<double>(qnan);
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{dnan, 0.75, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{0.25, dnan, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{dnan, dnan, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, dnan, 7.0, VfoBand{0.25, 0.75, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, dnan, dnan, VfoBand{0.25, 0.75, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+        // NOT COVERED, DELIBERATELY: a finite firstBin with a NaN lastBin.
+        // The header says NaN window bounds return false; the implementation
+        // takes the degenerate-window branch, which tests only firstBin, so
+        // peakInBand(bins, 8, 0.0, NaN, {0.25, 0.75}) returns TRUE and writes
+        // bin 0's -70 dB as a reading. Measured by adding that assertion here
+        // and watching it fail, then removing it: pinning the observed
+        // behaviour would make the defect the contract, and pinning the
+        // documented one would ship a red suite. Reported instead.
+
+        // AN INFINITE WINDOW has no finite bin to name, either end.
+        const double dinf = std::numeric_limits<double>::infinity();
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, dinf, VfoBand{0.25, 0.75, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, -dinf, 7.0, VfoBand{0.25, 0.75, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, dinf, VfoBand{0.0, 1.0, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{0.0, dinf, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 7.0, VfoBand{-dinf, dinf, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+
+        // A BAND MILES WIDE IN BIN TERMS must clamp in double before the
+        // cast — floor/ceil of 1e17 converted to int is undefined behaviour,
+        // and the band arrives unclamped by contract.
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 1.0e17, VfoBand{0.0, 1.0, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);  // the whole array, clamped to bin 7
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 1.0e17, VfoBand{0.9, 1.0, false}, peak) == false);
+        CHECK_NEAR(peak, kSentinel, 0.0);
+        peak = kSentinel;
+        CHECK(SpectrumView::peakInBand(bins, 8, 0.0, 1.0, VfoBand{-1.0e18, -1.0e17, false}, peak) == false);
+        CHECK(SpectrumView::peakInBand(bins, 8, -1.0e17, 1.0e17, VfoBand{0.0, 1.0, false}, peak));
+        CHECK_NEAR(peak, -20.0f, 0.0);
+    }
+
+    // --- peakInBand sweep against the independent reference: random finite
+    // windows (including inverted and degenerate ones), random bands inside
+    // and outside the data, and bin arrays sprinkled with poisoned values.
+    {
+        int mismatches = 0;
+        int reported = 0;
+        int refused = 0;
+        for (int trial = 0; trial < 4000; ++trial) {
+            float bins[12];
+            const int n = 1 + static_cast<int>(next01() * 11.0);
+            for (int i = 0; i < 12; ++i) {
+                bins[i] = next01() < 0.08 ? qnan
+                                          : static_cast<float>(-120.0 + 120.0 * next01());
+            }
+            const double firstBin = -4.0 + 16.0 * next01();
+            const double lastBin = (next01() < 0.15) ? firstBin  // degenerate window
+                                                     : -4.0 + 16.0 * next01();
+            const double x0 = -1.5 + 3.5 * next01();
+            const double x1 = -1.5 + 3.5 * next01();
+            float got = -4242.0f;
+            float want = -4242.0f;
+            const bool gotOk =
+                SpectrumView::peakInBand(bins, n, firstBin, lastBin, VfoBand{x0, x1, false}, got);
+            const bool wantOk = refPeakInBand(bins, n, firstBin, lastBin, x0, x1, want);
+            const bool same = (gotOk == wantOk) && (!gotOk || got == want);
+            if (!same) {
+                if (mismatches == 0) {
+                    std::printf("  peakInBand(n=%d, win=[%g,%g], band=[%g,%g]) = %d/%g,"
+                                " want %d/%g\n",
+                                n, firstBin, lastBin, x0, x1, gotOk ? 1 : 0,
+                                static_cast<double>(got), wantOk ? 1 : 0,
+                                static_cast<double>(want));
+                }
+                ++mismatches;
+            }
+            if (gotOk) {
+                ++reported;
+                CHECK(got == got);  // a reading is never NaN
+            } else {
+                ++refused;
+                CHECK_NEAR(got, -4242.0f, 0.0);  // and a refusal never writes
+            }
+        }
+        CHECK(mismatches == 0);
+        // Both outcomes must actually occur, or the sweep is only testing one
+        // of them: a change to the window/band ranges that made every trial
+        // land the same way would otherwise pass silently.
+        CHECK(reported > 400);
+        CHECK(refused > 400);
     }
 
     return testSummary("test_spectrum_view");

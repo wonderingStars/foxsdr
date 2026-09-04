@@ -1,4 +1,12 @@
-// Spectrum line-plot widget: dB bins -> ImDrawList polyline over a dB grid.
+// Spectrum line-plot widget: dB bins -> ImDrawList polyline over a dB grid,
+// inside the bench's framed, annotated well.
+//
+// THIS HEADER STAYS FREE OF ImGui TYPES ON PURPOSE. Everything below is a
+// pointer, a float or a plain struct of them, so tests/test_spectrum_view.cpp
+// can include it and exercise the display math — dbToY, gridlineDbs,
+// binToXFrac, hitTest and now peakInBand — with no graphics context at all.
+// The moment a member here needs an ImVec2, that whole test file stops
+// building, which is the separation doing its job.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -22,22 +30,113 @@ float dbToY(float db, float dbMin, float dbMax, float yTop, float yBottom);
 
 class SpectrumView {
 public:
-    // Draws background, 10 dB gridlines with labels, and one polyline vertex
-    // per bin with x spread evenly across `width`. Everything is emitted via
+    // The VFO band as the caller computed it: fractions of the panel width
+    // (0 = left edge, 1 = right edge). Pixel fractions rather than bins or
+    // Hz so the overlay and hit test are independent of whatever zoom window
+    // the spectrum was drawn with — the caller already solved that mapping.
+    struct VfoBand {
+        double x0Frac, x1Frac;  // band edges; order does not matter
+        bool dragging;          // caller's drag state; brightens the fill
+    };
+
+    // One mark on the frequency axis along the bottom of the well. Position
+    // is a panel-width fraction for the same reason VfoBand's is: the widget
+    // must not need to know the caller's frequency scale to draw its axis.
+    //
+    // `label` is drawn as-is and is NOT parsed, formatted or unit-converted
+    // here. The caller owns the axis's labelling rule (FreqScale::ticks has
+    // one, and it is pinned by that class's own tests); a second formatter
+    // living here could only ever disagree with it.
+    struct AxisTick {
+        float xFrac;        // 0 = panel left edge, 1 = right edge
+        const char* label;  // nullptr or "" draws the tick with no label
+    };
+
+    // WHAT THE PANEL IS ALLOWED TO SAY ABOUT ITSELF.
+    //
+    // The reference artboard letters this well with six figures: the bin
+    // count, the averaging depth, the peak in the passband, how long ago that
+    // peak was measured, the frequency axis and the span. Two of them
+    // (the bin count, the peak) the widget can measure from what it was
+    // handed; the rest belong to objects it cannot see — the estimator's
+    // configuration, the wall clock, the frequency scale — and they arrive
+    // here or they do not get drawn. NOTHING in this struct has a plausible
+    // default that would be printed as a reading: every field's "not
+    // supplied" value removes its element from the panel instead.
+    //
+    // A null Chrome pointer is a legitimate caller state (a panel not yet
+    // wired, or a second view with no scale behind it): the well, its frame,
+    // the dB axis and the trace still draw, and every annotation that needs
+    // an input silently stays off.
+    struct Chrome {
+        // Line 1 of the header names what is being shown. nullptr or ""
+        // takes the default, "SPECTRUM". The bin count is appended from the
+        // `n` passed to draw()/drawBinRange() — the widget counts what it was
+        // actually given rather than being told.
+        const char* title = nullptr;
+
+        // The spectrum estimator's EMA weight: avg = a*newest + (1-a)*avg.
+        //
+        // ONLY 0 < emaAlpha < 1 IS AN AVERAGE. a == 1 means the estimator is
+        // passing each block straight through, so both the "EMA x.xx" term in
+        // the header and the "AVERAGE - COMPUTED, NOT HEARD" caveat beneath it
+        // are omitted for it — a caveat about averaging on an unaveraged trace
+        // is a false statement about the picture, not a harmless extra line.
+        // The default (-1) is "not supplied" and behaves the same way.
+        //
+        // NOTE FOR THE CALLER: this is an EMA weight, not a boxcar depth. The
+        // reference artboard prints "AVG 4"; this estimator has no such
+        // number, and the two common conversions from alpha (1/a and
+        // (2-a)/a) disagree, so the panel prints the weight the estimator was
+        // actually configured with and names the mechanism.
+        float emaAlpha = -1.0f;
+
+        // The passband, in VfoBand's panel-width fractions, and it must be
+        // the SAME band handed to drawVfoOverlay this frame. The header's
+        // "PEAK IN PASSBAND" figure is measured over exactly the bins this
+        // band covers (see peakInBand) — a peak taken over the whole visible
+        // width and captioned "in passband" would be a different measurement
+        // wearing this one's name. nullptr omits the whole peak block.
+        const VfoBand* passband = nullptr;
+
+        // Seconds since the data behind the trace was published by the DSP —
+        // the age of the figures on this panel, not of the GUI frame. Negative
+        // or non-finite means "unknown" and drops the line; the peak figure
+        // itself still draws, because how old a reading is and whether there
+        // is one are different questions.
+        double dataAgeSec = -1.0;
+
+        // The frequency axis. `freqTicks` points at freqTickCount marks the
+        // caller has already positioned and labelled; null or 0 draws no axis
+        // (rather than an unlabelled ruler, which would imply a scale the
+        // panel cannot state).
+        const AxisTick* freqTicks = nullptr;
+        int freqTickCount = 0;
+
+        // Width of the view in Hz, for the boxed SPAN readout at the foot of
+        // the well. Zero, negative or non-finite omits the box.
+        double spanHz = 0.0;
+    };
+
+    // Draws the well and its frame, 10 dB gridlines with labels, one polyline
+    // vertex per bin with x spread evenly across `width`, and whatever of the
+    // chrome above the caller supplied inputs for. Everything is emitted via
     // the current window's ImDrawList, so this must run inside an ImGui
-    // window. n == 0 (or a null dbBins) draws the empty panel — background
-    // and grid only. A single bin (n == 1) has no x extent to spread, so it
-    // renders as a flat line across the panel at that bin's level.
+    // window. n == 0 (or a null dbBins) draws the empty panel — frame, grid
+    // and any chrome that does not depend on the data. A single bin (n == 1)
+    // has no x extent to spread, so it renders as a flat line across the
+    // panel at that bin's level.
     //
     // Implemented as the full-range special case of drawBinRange (window
     // [0, n-1]) so the zoomed and unzoomed paths cannot drift apart.
-    void draw(const float* dbBins, int n, float width, float height);
+    void draw(const float* dbBins, int n, float width, float height,
+              const Chrome* chrome = nullptr);
 
     // Zoomed variant of draw(): renders only the fractional-bin window
     // [firstBin, lastBin] across the full panel width, with the trace value
     // linearly interpolated where the window cuts between two bins. Panel
-    // furniture (background, grid, labels, clipping, layout advance) is
-    // identical to draw().
+    // furniture (frame, background, grid, labels, chrome, clipping, layout
+    // advance) is identical to draw().
     //
     // The window arrives as plain bin numbers — no frequency-scale type —
     // because the zoom controller owns the frequency<->bin mapping and this
@@ -56,16 +155,7 @@ public:
     //   - Inverted or NaN window: no defined sample positions, so the trace
     //     is omitted (grid-only panel) rather than guessing an ordering.
     void drawBinRange(const float* dbBins, int n, double firstBin, double lastBin,
-                      float width, float height);
-
-    // The VFO band as the caller computed it: fractions of the panel width
-    // (0 = left edge, 1 = right edge). Pixel fractions rather than bins or
-    // Hz so the overlay and hit test are independent of whatever zoom window
-    // the spectrum was drawn with — the caller already solved that mapping.
-    struct VfoBand {
-        double x0Frac, x1Frac;  // band edges; order does not matter
-        bool dragging;          // caller's drag state; brightens the fill
-    };
+                      float width, float height, const Chrome* chrome = nullptr);
 
     // Translucent band fill + edge lines + center line, painted over the
     // panel rectangle recorded by the most recent draw()/drawBinRange() call
@@ -110,6 +200,36 @@ public:
     // of dividing by zero. draw()'s classic layout is the identity case:
     // binToXFrac(i, 0, n-1) == i / (n-1).
     static float binToXFrac(double bin, double firstBin, double lastBin);
+
+    // THE FIGURE BEHIND "PEAK IN PASSBAND", as a pure static so the claim in
+    // that caption can be pinned without a graphics context.
+    //
+    // Writes the largest dB value among the bins the band covers and returns
+    // true; returns false, leaving peakDb untouched, when there is no such
+    // measurement. It is the inverse of binToXFrac applied to the band's two
+    // fractions, then a max over every WHOLE bin the resulting bin interval
+    // touches — floor(lo) through ceil(hi) — so a band narrower than one bin
+    // still reports the bins it straddles rather than nothing.
+    //
+    // Deliberate properties:
+    //   - The band is normalized first (order does not matter), exactly as
+    //     hitTest and drawVfoOverlay normalize it.
+    //   - Bins are clamped to [0, n-1] but the band is NOT clamped to the
+    //     visible window: the peak in the passband is a fact about the
+    //     signal, not about the zoom, so a VFO parked off-screen still
+    //     reports its own peak. A band entirely outside the data returns
+    //     false.
+    //   - A degenerate view window (lastBin <= firstBin) has no bin ordering
+    //     to invert; the panel is then showing the single bin at firstBin, so
+    //     that bin's value is reported if the band overlaps the panel at all,
+    //     and false otherwise.
+    //   - NaN band edges, NaN window bounds, a null/empty bin array, and a
+    //     band whose bins are all NaN all return false. A poisoned bin is
+    //     skipped rather than compared: NaN loses every comparison, so an
+    //     unguarded max would silently report the last non-NaN bin's value
+    //     or the NaN itself depending on operand order.
+    static bool peakInBand(const float* dbBins, int n, double firstBin, double lastBin,
+                           const VfoBand& band, float& peakDb);
 
     // Display range in dB. Stored verbatim: a degenerate/inverted pair is not
     // swapped or rejected here because dbToY and gridlineDbs already define

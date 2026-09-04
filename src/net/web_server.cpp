@@ -268,10 +268,37 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
 </html>
 )HTML";
 
-constexpr char kAppCss[] = R"CSS(
+// THE STYLE SHEET IS SPLIT ACROSS TWO LITERALS, for the same reason the client
+// script below is split across eight: MSVC caps a SINGLE string literal at
+// 16380 bytes, and this sheet reached 16073 of them when the whole page was
+// brought onto the bench palette. Three hundred bytes of headroom is not
+// headroom, it is a fuse - the next rule anybody adds here would have failed
+// the build with C2026, an error that names the limit and not the file.
+//
+// The split point is arbitrary and chosen for readability: layout above,
+// controls and everything after below. Nothing may rely on either piece being
+// independently valid CSS, and they are joined once, at first request, by
+// appCss().
+constexpr char kAppCss1[] = R"CSS(
+/* THE 1960s BENCH, from src/gui/theme.hpp - the palette the desktop window
+   draws from, so this is a third view of one instrument and not a second
+   product. These tokens GOVERN: a colour below that is not a var() is drift.
+   Fourteen of the fifteen are theme.hpp values exactly. The fifteenth is
+   --glass, which is spectrum_view.cpp's kBackground: the cool near-black green
+   the three display tubes share, and the one colour on the bench with no name
+   in theme.hpp (the palette's own darkest ground, kVoid, is a WARM near-black
+   for brass and would put the wrong cast behind a trace). It is a literal
+   there and a literal here, and both say so. */
 :root { color-scheme: dark;
-  --bg:#0f1216; --panel:#161a21; --edge:#242a34; --fg:#e6e9ee; --dim:#8a93a0;
-  --accent:#4fb0ff; --side:310px; --bar:52px; }
+  /* Brass is panel, key and rail; enamel and glass are anything recessed. */
+  --bg:#1f1b14; --panel:#4a4234; --edge:#6e6552; --key:#6e6552;
+  --accent:#8b8069; --well:#2a251c; --glass:#050a06;
+  /* Ivory letters a CONTROL; engraved ink is a caption. */
+  --fg:#efe7d2; --dim:#9c9078; --faint:#7d7360;
+  /* Amber is a READING, phosphor is WHAT THE RADIO HEARD, rust is TROUBLE. */
+  --read:#f0a840; --read-dim:#8a5a2a; --trace:#8fd9a0;
+  --fault:#b8552f; --fault-ink:#e07a4e;
+  --side:310px; --bar:52px; }
 * { box-sizing: border-box; }
 html, body { height:100%; }
 body { margin:0; background:var(--bg); color:var(--fg);
@@ -299,13 +326,13 @@ label.inline input[type=range] { width:8rem; }
 /* The control column's own width handle, on its right edge. */
 #sideGrip { position:sticky; top:0; float:right; width:7px; height:100vh;
             margin-bottom:-100vh; cursor:ew-resize; z-index:5; }
-#sideGrip:hover, #sideGrip.active { background:#243044; }
+#sideGrip:hover, #sideGrip.active { background:var(--accent); }
 
 /* Open-in-its-own-window buttons. Small and quiet: they decorate headers, and
    the header is not about them. */
 button.pop { background:transparent; border:0; color:var(--dim); font-size:.85rem;
              padding:0 .25rem; cursor:pointer; line-height:1; }
-button.pop:hover { color:var(--accent); background:transparent; }
+button.pop:hover { color:var(--fg); background:transparent; }
 #scope { position:relative; }
 #popScope { position:absolute; top:.3rem; right:.35rem; z-index:5; }
 
@@ -335,7 +362,7 @@ body[data-view="decoded"] #decoded { flex:1 1 auto; max-height:none; }
 #side details { border-bottom:1px solid var(--edge); }
 #side summary { cursor:pointer; padding:.5rem .75rem; font-weight:600; font-size:.85rem;
                 letter-spacing:.02em; user-select:none; }
-#side summary:hover { background:#1b202a; }
+#side summary:hover { background:var(--key); }
 .sec { padding:.15rem .75rem .7rem; display:flex; flex-direction:column; gap:.5rem; }
 .colgap { display:flex; flex-direction:column; gap:.5rem; }
 
@@ -350,10 +377,10 @@ body[data-view="decoded"] #decoded { flex:1 1 auto; max-height:none; }
    tall inside an 818 px panel). min-height:0 lets flex shrink them below
    their content size, which breaks the loop. */
 #scope { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
-#spectrum { flex:0 0 42%; width:100%; min-height:0; display:block; background:#080a0d;
+#spectrum { flex:0 0 42%; width:100%; min-height:0; display:block; background:var(--glass);
             border:1px solid var(--edge); border-bottom:0;
             border-radius:3px 3px 0 0; cursor:crosshair; }
-#waterfall { flex:1 1 auto; width:100%; min-height:0; display:block; background:#080a0d;
+#waterfall { flex:1 1 auto; width:100%; min-height:0; display:block; background:var(--glass);
              border:1px solid var(--edge); border-radius:0 0 3px 3px; }
 #panels { flex:0 0 auto; max-height:42%; overflow-y:auto; display:flex;
           flex-direction:column; gap:.5rem; }
@@ -379,64 +406,69 @@ body[data-view="decoded"] #decoded { flex:1 1 auto; max-height:none; }
 #status .cell { display:flex; gap:.35rem; align-items:baseline; }
 #status .k { color:var(--dim); text-transform:uppercase; letter-spacing:.05em;
              font-size:.68rem; }
-#status .v { font-variant-numeric:tabular-nums; }
+#status .v { color:var(--read); font-variant-numeric:tabular-nums; }
+)CSS";
 
+// The second half: type, form controls, panels and the responsive rules.
+constexpr char kAppCss2[] = R"CSS(
 h1 { font-size:1.1rem; margin:0 0 .5rem; }
 h2 { font-size:.95rem; margin:0 0 .6rem; }
 label { display:flex; flex-direction:column; gap:.15rem; color:var(--dim);
         font-size:.75rem; }
-label .val { color:var(--fg); font-variant-numeric:tabular-nums; }
-input, select { background:#1c2029; border:1px solid var(--edge); color:var(--fg);
-                padding:.3rem; border-radius:3px; font:inherit; width:100%; }
+label .val { color:var(--read); font-variant-numeric:tabular-nums; }
+input, select { background:var(--well); border:1px solid var(--edge); color:var(--fg);
+                padding:.3rem; border-radius:3px; font:inherit; width:100%;
+                accent-color:var(--read); }
 input[type=range] { padding:0; }
 input[type=checkbox] { width:auto; }
-button { background:#232a35; color:var(--fg); border:1px solid var(--edge);
+button { background:var(--key); color:var(--fg); border:1px solid var(--edge);
          padding:.32rem .7rem; border-radius:3px; font:inherit; cursor:pointer; }
-button:hover:not(:disabled) { background:#2c3543; }
+button:hover:not(:disabled) { background:var(--accent); }
 button:disabled { opacity:.5; cursor:default; }
-button.primary { background:var(--accent); color:#04121f; border-color:var(--accent);
+button.primary { background:var(--accent); color:var(--bg); border-color:var(--accent);
                  font-weight:600; }
-button.on { background:#7a2020; border-color:#7a2020; color:#ffd7d7; }
+button.on { background:var(--fault); border-color:var(--fault); color:var(--fg); }
 .row { display:flex; gap:.5rem; align-items:flex-end; flex-wrap:wrap; }
 .row.tight { flex-wrap:nowrap; }
 .grow { flex:1 1 auto; }
 label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg);
               font-size:.8rem; }
 .dim { color:var(--dim); font-size:.75rem; }
-.error { color:#ff9b9b; margin:0; font-size:.78rem; }
-.ok { color:#8fe0a8; margin:0; font-size:.78rem; }
-.badge { background:#7a2020; color:#ffd7d7; padding:.15rem .5rem; border-radius:3px;
+.error { color:var(--fault-ink); margin:0; font-size:.78rem; }
+.ok { color:var(--trace); margin:0; font-size:.78rem; }
+.badge { background:var(--fault); color:var(--fg); padding:.15rem .5rem; border-radius:3px;
          font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; }
-.badge.warn { background:#5a4a10; color:#ffe9a8; }
+.badge.warn { background:var(--read); color:var(--bg); }
 
 /* Frequency readout: big, tabular, one element per digit so each can be
    scrolled independently. */
 #freqDigits { display:inline-flex; gap:1px; font-variant-numeric:tabular-nums;
               font-size:1.5rem; font-weight:600; letter-spacing:.01em;
-              cursor:ns-resize; user-select:none; }
+              cursor:ns-resize; user-select:none; color:var(--read); }
 #freqDigits span { padding:0 .04em; border-radius:2px; }
-#freqDigits span.d:hover { background:#243044; }
-#freqDigits span.lead { color:#3d4653; }
+#freqDigits span.d:hover { background:var(--accent); }
+#freqDigits span.lead { color:var(--read-dim); }
 
 .modes { display:grid; grid-template-columns:repeat(4,1fr); gap:.25rem; }
 .modes button { padding:.28rem 0; font-size:.78rem; }
 .modes button.on { background:var(--accent); border-color:var(--accent);
-                   color:#04121f; font-weight:600; }
+                   color:var(--bg); font-weight:600; }
 
 #rds { flex:0 0 auto; background:var(--panel); border:1px solid var(--edge);
        border-radius:3px; padding:.4rem .6rem; display:grid; gap:.2rem;
-       grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); font-size:.78rem; }
+       grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); font-size:.78rem;
+       color:var(--trace); }
 #rds .rt { grid-column:1/-1; font-variant-numeric:tabular-nums; }
 
 #bookmarks { display:flex; flex-direction:column; gap:.2rem; }
-.bm { display:flex; align-items:center; gap:.4rem; background:#1b202a;
+.bm { display:flex; align-items:center; gap:.4rem; background:var(--well);
       border:1px solid var(--edge); border-radius:3px; padding:.25rem .4rem;
       font-size:.75rem; }
 .bm .f { font-variant-numeric:tabular-nums; color:var(--dim); }
 .bm .n { flex:1 1 auto; color:var(--fg); overflow:hidden; text-overflow:ellipsis;
          white-space:nowrap; }
 .bm button { padding:.15rem .4rem; font-size:.72rem; }
-.bm button.del, button.del { background:#5a1c1c; border-color:#7a2020; color:#ffd7d7; }
+.bm button.del, button.del { background:var(--fault); border-color:var(--fault); color:var(--fg); }
 
 /* THE TRACK LIST SITS BESIDE THE MAP, not under it — the desktop's layout,
    and the one that makes a wide window useful instead of leaving the list
@@ -454,7 +486,7 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
    across the map is claimed by the browser as a page scroll before a single
    pointermove reaches the page, so on a phone - which is what this UI is for -
    the map cannot be panned at all. */
-#map { flex:1 1 auto; min-width:0; min-height:180px; background:#080a0d;
+#map { flex:1 1 auto; min-width:0; min-height:180px; background:var(--glass);
        border:1px solid var(--edge); border-radius:3px; touch-action:none; }
 /* Beside the map, scrolling on its own, and resizable by its edge —
    resize:horizontal puts the browser's own grab handle on it, so the split
@@ -469,42 +501,43 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
   #mapRow { flex-direction:column; }
   #trackList { width:auto; max-width:none; height:11rem; resize:vertical; }
 }
-.tr { display:flex; flex-wrap:wrap; gap:.15rem .5rem; background:#1b202a;
+.tr { display:flex; flex-wrap:wrap; gap:.15rem .5rem; background:var(--well);
       border:1px solid var(--edge); border-radius:3px; padding:.2rem .45rem;
       font-size:.75rem; cursor:pointer; }
-.tr.sel { border-color:#4fb0ff; background:#22303e; }
+.tr.sel { border-color:var(--accent); background:var(--panel); }
 /* Followed: the map re-centres on this one every poll, so it gets a stronger
    mark than a selection — a persistent state deserves to look persistent. */
-.tr.fol { border-color:#ffd24f; }
-.tr.fol .id::before { content:'\25c9\00a0'; color:#ffd24f; }
-.tr .ac { flex:1 1 100%; color:#9fb4c8; font-size:.72rem; }
+.tr.fol { border-color:var(--trace); }
+.tr.fol .id::before { content:'\25c9\00a0'; color:var(--trace); }
+.tr .ac { flex:1 1 100%; color:var(--dim); font-size:.72rem; }
 .tr .id { font-variant-numeric:tabular-nums; color:var(--dim); min-width:5.5rem; }
 .tr .pos { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums; }
 
 #images { display:flex; flex-wrap:wrap; gap:.6rem; }
-.img { background:#1b202a; border:1px solid var(--edge); border-radius:3px; padding:.35rem; }
-.img img { display:block; max-width:100%; image-rendering:pixelated; background:#080a0d; }
+.img { background:var(--well); border:1px solid var(--edge); border-radius:3px; padding:.35rem; }
+.img img { display:block; max-width:100%; image-rendering:pixelated; background:var(--glass); }
 .img .cap { color:var(--dim); font-size:.72rem; margin-top:.2rem; }
 
-#decoded { background:#080a0d; border:1px solid var(--edge); border-radius:3px;
+#decoded { background:var(--glass); color:var(--trace);
+           border:1px solid var(--edge); border-radius:3px;
            padding:.45rem; height:14rem; max-height:none; overflow:auto;
            font-size:.76rem; white-space:pre-wrap; word-break:break-word;
            margin:0; resize:vertical; }
 
 #plugins { display:flex; flex-direction:column; gap:.25rem; }
-.pl { background:#1b202a; border:1px solid var(--edge); border-radius:3px;
+.pl { background:var(--well); border:1px solid var(--edge); border-radius:3px;
       padding:.3rem .45rem; font-size:.78rem; }
-.pl.bad { border-color:#7a2020; }
-.pl .meta, .cat .meta { color:var(--dim); font-size:.72rem; }
+.pl.bad { border-color:var(--fault); }
+.pl .meta, .cat .meta { color:var(--faint); font-size:.72rem; }
 .pl button { margin-top:.25rem; padding:.15rem .45rem; font-size:.72rem; }
 .pl button.preset { display:block; width:100%; text-align:left;
-                    background:#1f3243; border-color:#2e4a63; color:#cfe6ff; }
-.pl button.preset:hover { background:#274056; }
+                    background:var(--well); border-color:var(--edge); color:var(--fg); }
+.pl button.preset:hover { background:var(--key); }
 #catalogue { display:flex; flex-direction:column; gap:.3rem; }
-.cat { background:#1b202a; border:1px solid var(--edge); border-radius:3px; padding:.4rem .5rem; }
+.cat { background:var(--well); border:1px solid var(--edge); border-radius:3px; padding:.4rem .5rem; }
 .cat .hd { display:flex; gap:.4rem; align-items:baseline; flex-wrap:wrap; }
 .cat .hd .nm { font-weight:600; font-size:.8rem; }
-.cat .notice { background:#2a1f10; border:1px solid #5a4a10; color:#ffe9a8;
+.cat .notice { background:var(--well); border:1px solid var(--read-dim); color:var(--read);
                border-radius:3px; padding:.3rem .45rem; margin:.3rem 0; font-size:.75rem; }
 .cat button { margin-top:.3rem; padding:.18rem .5rem; font-size:.75rem; }
 
@@ -529,6 +562,13 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
   label.inline input[type=range] { width:6rem; }
 }
 )CSS";
+
+// The joined style sheet, built once on first use - the pieces are
+// compile-time constants, so there is nothing to invalidate.
+const std::string& appCss() {
+    static const std::string joined = std::string(kAppCss1) + kAppCss2;
+    return joined;
+}
 
 // THE CLIENT SCRIPT IS SPLIT ACROSS SEVERAL LITERALS because MSVC caps a single
 // string literal at 16380 bytes and this one outgrew it. The split points are
@@ -841,13 +881,13 @@ function reflectTracks(s) {
     // A graticule, so the picture has a scale rather than being floating
     // dots. Not drawn over tiles: the imagery is its own reference.
     const latSpan = lonSpan * h / w;
-    ctx.strokeStyle = '#1b212b'; ctx.lineWidth = 1;
+    ctx.strokeStyle = '#3b3529'; ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
       const y = (i / 4) * h, x = (i / 4) * w;
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
     }
-    ctx.fillStyle = '#4a5464';
+    ctx.fillStyle = '#7d7360';
     ctx.fillText((centreLat + latSpan / 2).toFixed(2) + 'N', 4, 12);
     ctx.fillText((centreLat - latSpan / 2).toFixed(2) + 'N', 4, h - 4);
     ctx.fillText((centreLon - lonSpan / 2).toFixed(2) + 'E', 4, h - 18);
@@ -873,7 +913,7 @@ function reflectTracks(s) {
         ctx.fillStyle = col;
         ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.fill();
         tracePlane(ctx, x, y, t.courseDeg, 8);
-        ctx.fillStyle = '#10141a'; ctx.fill();
+        ctx.fillStyle = '#0d0b07'; ctx.fill();
       } else {
         tracePlane(ctx, x, y, t.courseDeg, 9);
         ctx.fillStyle = col; ctx.fill();
@@ -900,7 +940,7 @@ function reflectTracks(s) {
     const lbl = t.label || t.id, lx = x + (sel ? 16 : 8);
     ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
     ctx.strokeText(lbl, lx, y - 6);
-    ctx.fillStyle = '#e6e9ee';
+    ctx.fillStyle = '#efe7d2';
     ctx.fillText(lbl, lx, y - 6);
     // Restored per target: the attribution box and the next frame's tiles draw
     // through this same context and must not inherit one aircraft's staleness.
@@ -914,9 +954,9 @@ function reflectTracks(s) {
   if (haveTiles && bm.attribution) {
     ctx.font = '10px system-ui, sans-serif';
     const tw = ctx.measureText(bm.attribution).width;
-    ctx.fillStyle = 'rgba(8,10,13,0.72)';
+    ctx.fillStyle = 'rgba(13,11,7,0.72)';
     ctx.fillRect(w - tw - 10, h - 16, tw + 10, 16);
-    ctx.fillStyle = '#c8d0dc';
+    ctx.fillStyle = '#9c9078';
     ctx.fillText(bm.attribution, w - tw - 5, h - 5);
   }
 
@@ -1142,7 +1182,7 @@ function reflectPlugins(s) {
     if (p.loaded && p.stopped) {
       const st = document.createElement('div');
       st.className = 'meta';
-      st.style.color = '#e6c35a';
+      st.style.color = '#f0a840';
       st.textContent = 'stopped - loaded but running nothing';
       d.appendChild(st);
     }
@@ -2050,8 +2090,21 @@ function binToUnit(q, wireMin, wireMax) {
   return t < 0 ? 0 : (t > 1 ? 1 : t);
 }
 
-// Black -> blue -> cyan -> yellow -> red, the conventional waterfall ramp.
-const WF_STOPS = [[0,0,0],[0,0,140],[0,180,200],[255,230,80],[255,60,40]];
+// PHOSPHOR, the same tube the desktop's waterfall and spectrum are drawn on
+// (src/gui/waterfall_view.cpp) - quiet phosphor at the floor, through green
+// and yellow-green, to a warm cream at the top. These five are that ramp
+// resampled at t = 0, 1/4, 1/2, 3/4, 1, because colormap() below spaces its
+// stops EVENLY and the desktop's table does not; resampling matches the ramp
+// without touching the interpolation.
+//
+// THE PROPERTY THIS TABLE EXISTS FOR IS UNCHANGED, and it is not a matter of
+// taste: a waterfall is a MEASUREMENT, so a stronger signal must never render
+// darker than a weaker one. The anchors' perceived brightness (BT.601 luma)
+// strictly increases - 14.7 -> 58.1 -> 109.8 -> 169.1 -> 230.2 - so linear
+// interpolation between them is monotone, exactly as the blue-to-red table
+// this replaced was (4.6 -> 41.7 -> 105.1 -> 141.9 -> 145.2). The floor is
+// lifted off true black so a signal a few dB above the noise stays visible.
+const WF_STOPS = [[6,20,10],[14,84,40],[50,150,60],[150,200,60],[240,235,180]];
 function colormap(t) {
   const s = t * (WF_STOPS.length - 1);
   const i = Math.min(WF_STOPS.length - 2, Math.floor(s));
@@ -2068,13 +2121,13 @@ function drawSpectrum(bins, wireMin, wireMax) {
   // reading the desktop window gives: this is the slice being demodulated.
   if (lastSpanHz > 0) {
     const x = ((lastVfoHz / lastSpanHz) + 0.5) * w;
-    ctx.fillStyle = 'rgba(79,176,255,0.16)';
+    ctx.fillStyle = 'rgba(255,255,255,0.11)';
     ctx.fillRect(x - 1, 0, 3, h);
-    ctx.strokeStyle = 'rgba(79,176,255,0.55)';
+    ctx.strokeStyle = 'rgba(240,168,64,0.78)';
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
   }
 
-  ctx.strokeStyle = '#4fb0ff';
+  ctx.strokeStyle = '#8fd9a0';
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
@@ -2482,7 +2535,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     });
 
     svr.Get("/app.css", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(kAppCss, "text/css; charset=utf-8");
+        res.set_content(appCss(), "text/css; charset=utf-8");
     });
 
     svr.Get("/app.js", [](const httplib::Request&, httplib::Response& res) {

@@ -75,6 +75,81 @@ void drawScopeKnobTicks(ImDrawList* dl, const ImVec2& centre, float radius,
 // point: the round green thing is the picture the radio made, and everything
 // around it is the machine that made it.
 
+// --- the cabinet ------------------------------------------------------------
+//
+// The vocabulary the whole face is built from: an edge, a screw, a rail, a
+// divider, a plate. Every one of them takes its colours from theme.hpp by name
+// and its sizes from its arguments, so the same call draws the same object at
+// any window size - the reference was measured in a 1720 x 986 artboard and
+// nothing here may assume that number.
+//
+// WHY BEVELS ARE A FUNCTION AND NOT A HABIT. One hairline of light along the
+// top and left and one of shadow along the bottom and right is the entire
+// difference between a coloured rectangle and a piece of metal. Written by hand
+// at each site it drifts - two pixels here, a different alpha there - and the
+// panel stops reading as one machined object.
+
+// A bevelled edge on a rounded rectangle. raised=true lights the top and left
+// and shadows the bottom and right, which is how brass reads as proud of the
+// panel; raised=false does the reverse, which is how a well reads as cut into
+// it. Draws the edge only - the caller has already filled the shape.
+void addBenchBevel(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
+                   float rounding, bool raised);
+
+// A countersunk screw. slotDeg turns the slot, so four corners can differ the
+// way real ones do.
+void addCabinetScrew(ImDrawList* dl, const ImVec2& centre, float radius,
+                     float slotDeg);
+
+// The horizontal bevelled rail dividing one deck of the face from the next: a
+// light hairline directly above a dark one.
+void addBenchRail(ImDrawList* dl, float x0, float x1, float y);
+
+// A vertical hairline separator between groups of controls in a bar: the dark
+// cut with its lit far wall beside it, lit from the upper left like everything
+// else on this panel.
+void addBenchDivider(ImDrawList* dl, float x, float y0, float y1);
+
+// The large round transport button: brass bezel, domed face, a specular
+// highlight in the upper left, its word across the middle. Returns true on the
+// frame it is pressed.
+//
+// IT IS A REAL ImGui ITEM. The hit area is an InvisibleButton, so the control
+// hovers, takes focus, answers the keyboard and takes part in the same input
+// arbitration as every other widget. A hand-drawn circle that only looks
+// clickable is exactly what the top of this file forbids.
+//
+// THE WORD FOLLOWS THE ACTION, not the picture. `running` draws the live rust
+// dome and letters it STOP; stopped draws the same dome drained of colour and
+// letters it START. The reference artboard only ever shows the running state,
+// and a button that said STOP while it started the receiver would be lying
+// about what pressing it does.
+bool drawBenchStopButton(ImDrawList* dl, const ImVec2& centre, float radius,
+                         bool running);
+
+// One small square key on the function rail, bevelled proud when off and
+// pressed in when on. Returns true on the frame it is clicked, and like the
+// transport button it is a real ImGui item.
+//
+// ITS IDENTITY COMES FROM ITS POSITION. A rail carries a dozen of these and
+// they cannot share one ImGui id, so the id is derived from `tl` - two keys
+// cannot occupy the same place, which makes that unique by construction and
+// saves every caller from remembering to PushID.
+bool drawBenchKey(ImDrawList* dl, const ImVec2& tl, float size, bool on);
+
+// A panel plate: bevelled ground, an engraved centred title in the legend face,
+// and a rule beneath it. Returns the y below the rule, so the caller lays out
+// from a measurement rather than a guess.
+float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
+                    const char* title);
+
+// An engraved group caption inside a plate - SIGNAL PATH, DECODE and the rest.
+// Small, letter-spaced, cut into the ground, with a rule carrying it out to
+// `width` so the caption reads as the head of a group rather than as a stray
+// word.
+void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
+                          const char* caption);
+
 // One digit of the tuned-frequency counter, in its own machined aperture.
 // `bright` is false for the leading zeros ahead of the first significant
 // figure, which are dimmed so the eye reads only the live value.
@@ -110,9 +185,15 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
 // reference artboard does precisely that - its PROCESSOR needle animates
 // through 44-62% of arc while the text beside it reads 22% - and it is the one
 // thing from that file that must not be copied.
+//
+// `unitLabel` is the tiny legend printed beside the pivot - "MS/s", "ms" - the
+// way a moving-coil meter names its own scale on its face. It is OPTIONAL and
+// defaults to nothing, because a unit is a claim about what the needle
+// measures: a caller with no honest unit for its scale must not be handed a
+// plausible one to print.
 void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                     const char* caption, float frac01, bool haveReading,
-                    const char* valueLine);
+                    const char* valueLine, const char* unitLabel = nullptr);
 
 // The chip and lamp that finish a rail section's plate - the state of that
 // section, read without opening it.

@@ -13,6 +13,8 @@
 
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
+#include "gui/fonts.hpp"
+#include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
 #include "imgui.h"
 
@@ -391,6 +393,22 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
     ImDrawList* bdl = ImGui::GetWindowDrawList();
     addScopeBay(bdl, bayTL, bayBR, false);
 
+    // THE WHOLE PANEL IS A SIZE SMALLER THAN THE REST OF THE APPLICATION,
+    // pushed once here rather than at every face. It is a small screen inside
+    // a cabinet and it holds a register of contacts; a size down buys two more
+    // rows without shrinking anything a hand operates.
+    //
+    // NOT the monospaced face, despite being a table: its columns are placed
+    // at explicit x positions rather than by character cell, so monospacing
+    // buys no alignment here - and the panel is full of callsigns, which are
+    // exactly the uppercase words Nova Mono cannot draw at this size.
+    //
+    // Pushing it around the WHOLE function keeps ImGui's own metrics honest:
+    // GetTextLineHeight and CalcTextSize inside here now report the face that
+    // is actually being drawn, so the row heights and the tab strip are
+    // measured against it rather than against a face nothing here uses.
+    ImGui::PushFont(cascade::gui::fonts::ui(), cascade::gui::fonts::kLegendSize);
+
     const float pad = 12.0f;
     screen = drawLcdTabs(ImVec2(bayTL.x + pad, bayTL.y + pad), width - pad * 2.0f, screen);
     const float tabsH = ImGui::GetTextLineHeight() + 14.0f;
@@ -465,12 +483,48 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             // NOT AN EMPTY TABLE. A grid of headings with nothing under them
             // reads as a decoder that failed; saying the sky is quiet is the
             // honest answer, and it is a different one.
-            textColoured(kPanelDim, "NOTHING BEING HEARD");
-            ImGui::Spacing();
-            ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
-            ImGui::TextWrapped("No aircraft have been decoded. Check the antenna is "
-                               "on 1090 MHz and try more gain.");
-            ImGui::PopStyleColor();
+            //
+            // AND THERE ARE TWO QUIET SKIES. These rows are filtered by KIND
+            // and by presentation AGE, so they empty out both when nothing has
+            // ever been decoded AND when a decoder that is working perfectly
+            // has had every target age past the host's drop threshold.
+            // `tracked` counts aircraft at ANY age, which is exactly the
+            // difference: it is the number this screen has ALREADY printed
+            // under the big count as "of N tracked", so "no aircraft have been
+            // decoded" on a panel reading "of 6 tracked" was the panel
+            // contradicting itself while it sent the user to change an antenna
+            // that was doing nothing wrong.
+            if (tracked > 0) {
+                textColoured(kPanelDim, "NOTHING CURRENT");
+                ImGui::Spacing();
+                char aged[320];
+                std::snprintf(
+                    aged, sizeof(aged),
+                    "%d aircraft %s been heard and none has reported inside the last "
+                    "%llu seconds, which is the age the host drops a target at. They "
+                    "have gone out of range, or the decoder has stopped being fed - the "
+                    "Fitted modules window says whether it is still being fed.",
+                    tracked, tracked == 1 ? "has" : "have",
+                    static_cast<unsigned long long>(cascade::core::kTrackDropMsAircraft /
+                                                    1000ull));
+                ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
+                ImGui::TextWrapped("%s", aged);
+                ImGui::PopStyleColor();
+            } else {
+                textColoured(kPanelDim, "NOTHING BEING HEARD");
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
+                // NO CLAIM THAT A DECODER IS RUNNING. This renderer is handed
+                // a track vector and nothing else - it cannot see the plugin
+                // list, so "check the antenna and try more gain" is advice to
+                // a user who may have no 1090 MHz decoder fitted at all. The
+                // window that can tell those apart is named instead.
+                ImGui::TextWrapped(
+                    "No aircraft position has reached this face. If a 1090 MHz decoder "
+                    "is fitted and being fed, check the antenna and try more gain; the "
+                    "Fitted modules window says whether it is.");
+                ImGui::PopStyleColor();
+            }
         } else {
             ImGui::BeginChild("##homelist", ImVec2(0.0f, 0.0f), false);
             for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -674,6 +728,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
     }
 
     ImGui::EndChild();
+    ImGui::PopFont();
 }
 
 }  // namespace
@@ -771,12 +826,18 @@ void drawScopeGauge(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                           1.0f);
     }
 
-    const ImVec2 lsz = ImGui::CalcTextSize(label);
-    dl->AddText(ImVec2((tl.x + br.x) * 0.5f - lsz.x * 0.5f, tl.y + 4.0f),
+    // The label is cut into the bezel; the readout under it is the UI face,
+    // not the monospaced one, because it carries a unit or a flight level
+    // rather than bare digits. See the rule in fonts.hpp.
+    ImFont* lf = cascade::gui::fonts::legend();
+    ImFont* rf = cascade::gui::fonts::ui();
+    const float px = cascade::gui::fonts::kTinySize;
+    const ImVec2 lsz = lf->CalcTextSizeA(px, FLT_MAX, 0.0f, label);
+    dl->AddText(lf, px, ImVec2((tl.x + br.x) * 0.5f - lsz.x * 0.5f, tl.y + 4.0f),
                 IM_COL32(111, 117, 97, 255), label);
     const char* rd = (haveReading && readout != nullptr) ? readout : "--";
-    const ImVec2 rsz = ImGui::CalcTextSize(rd);
-    dl->AddText(ImVec2((tl.x + br.x) * 0.5f - rsz.x * 0.5f, br.y - lineH - 4.0f),
+    const ImVec2 rsz = rf->CalcTextSizeA(px, FLT_MAX, 0.0f, rd);
+    dl->AddText(rf, px, ImVec2((tl.x + br.x) * 0.5f - rsz.x * 0.5f, br.y - lineH - 4.0f),
                 haveReading ? IM_COL32(154, 216, 79, 255) : kChromeDim, rd);
 }
 
@@ -816,8 +877,13 @@ void drawScopeDrums(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
         for (int k = 0; k < digits - 1 - i; ++k) { place *= 10; }
         const int digit = (v / place) % 10;
         char txt[2] = {static_cast<char>('0' + digit), '\0'};
-        const ImVec2 sz = ImGui::CalcTextSize(txt);
-        dl->AddText(ImVec2((cTL.x + cBR.x) * 0.5f - sz.x * 0.5f,
+        // Monospaced, and sized to the aperture rather than to the UI: a drum
+        // digit is the reading, so it is drawn as large as its window allows.
+        ImFont* font = cascade::gui::fonts::reading();
+        const float px = cellH * 0.72f;
+        const ImVec2 sz = font->CalcTextSizeA(px, FLT_MAX, 0.0f, txt);
+        dl->AddText(font, px,
+                    ImVec2((cTL.x + cBR.x) * 0.5f - sz.x * 0.5f,
                            (cTL.y + cBR.y) * 0.5f - sz.y * 0.5f),
                     IM_COL32(231, 234, 212, 255), txt);
     }
@@ -859,6 +925,384 @@ constexpr ImU32 kBrass = IM_COL32(139, 128, 105, 255);
 constexpr ImU32 kBenchInk = IM_COL32(59, 53, 41, 255);
 constexpr ImU32 kIvory = IM_COL32(239, 231, 210, 255);
 
+// --- the cabinet's own workshop ----------------------------------------------
+//
+// Everything below this line takes its colour from theme.hpp BY NAME. The five
+// constants above predate that file and are left alone because the functions
+// already shipped against them; nothing new here adds a sixth hex literal.
+
+namespace {
+
+constexpr float kPiF = 3.14159265f;
+
+// Two packed colours mixed. Needed because a dome, a drained lamp and a hover
+// state are all "this colour, some of the way towards that one", and doing it
+// by writing a third constant is how a palette turns into a list of hexes.
+ImU32 mixCol(ImU32 a, ImU32 b, float t) {
+    float f = t;
+    if (!(f >= 0.0f)) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    const int shifts[4] = {IM_COL32_R_SHIFT, IM_COL32_G_SHIFT, IM_COL32_B_SHIFT,
+                           IM_COL32_A_SHIFT};
+    ImU32 out = 0;
+    for (const int shift : shifts) {
+        const float ca = static_cast<float>((a >> shift) & 0xFFu);
+        const float cb = static_cast<float>((b >> shift) & 0xFFu);
+        const auto v = static_cast<ImU32>(ca + (cb - ca) * f + 0.5f);
+        out |= (v & 0xFFu) << shift;
+    }
+    return out;
+}
+
+// LETTER-SPACING, WHICH DEAR IMGUI HAS NOT. Several of the bench's captions are
+// tracked out - FUNCTION SELECT, SIGNAL PATH, TUNED - HERTZ - and tracking is
+// most of what separates an engraved legend from a word in a label. There is no
+// style var for it, so the glyphs are drawn one at a time with the advance
+// added by hand.
+//
+// ASCII ONLY, deliberately. A byte at a time is the wrong unit for UTF-8, and
+// every caption on this panel is a machine legend in capitals; anything else
+// would need the whole run measured and is not what these are for.
+float trackedWidth(ImFont* font, float px, const char* text, float tracking) {
+    if (font == nullptr || text == nullptr) { return 0.0f; }
+    float w = 0.0f;
+    int glyphs = 0;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const char one[2] = {*p, '\0'};
+        w += font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x;
+        ++glyphs;
+    }
+    if (glyphs > 1) { w += tracking * static_cast<float>(glyphs - 1); }
+    return w;
+}
+
+void addTrackedText(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, ImU32 col,
+                    const char* text, float tracking) {
+    if (dl == nullptr || font == nullptr || text == nullptr) { return; }
+    float x = at.x;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const char one[2] = {*p, '\0'};
+        dl->AddText(font, px, ImVec2(x, at.y), col, one);
+        x += font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x + tracking;
+    }
+}
+
+// An ImGui id taken from where the thing is drawn. A rail carries a dozen keys
+// and they must not share an id - two of them cannot occupy the same point, so
+// position IS a unique name and no caller has to remember to push one.
+void pushPositionId(const ImVec2& at) {
+    ImGui::PushID(static_cast<int>(at.x));
+    ImGui::PushID(static_cast<int>(at.y));
+}
+
+void popPositionId() {
+    ImGui::PopID();
+    ImGui::PopID();
+}
+
+}  // namespace
+
+void addBenchBevel(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float rounding,
+                   bool raised) {
+    if (dl == nullptr) { return; }
+    const float w = br.x - tl.x;
+    const float h = br.y - tl.y;
+    if (w < 2.0f || h < 2.0f) { return; }
+    float r = rounding;
+    if (!(r >= 0.0f)) { r = 0.0f; }
+    const float maxR = std::min(w, h) * 0.5f - 0.5f;
+    if (r > maxR) { r = maxR; }
+
+    // ONE LIGHT, UPPER LEFT, EVERYWHERE ON THIS PANEL. Every bevel, every
+    // screw, every dome on the face is lit from the same direction, which is
+    // what lets an eye read proud-versus-sunk without being told.
+    const ImU32 light = theme::withAlpha(theme::kBrassTint, 0.80f);
+    const ImU32 shadow = theme::withAlpha(theme::kVoid, 0.70f);
+    const ImU32 upper = raised ? light : shadow;
+    const ImU32 lower = raised ? shadow : light;
+
+    const ImVec2 cTL(tl.x + r, tl.y + r);
+    const ImVec2 cTR(br.x - r, tl.y + r);
+    const ImVec2 cBR(br.x - r, br.y - r);
+    const ImVec2 cBL(tl.x + r, br.y - r);
+
+    // The perimeter is walked as arcs whose straight joins ARE the edges, and
+    // it is split at the middle of the two corners where light meets shadow -
+    // bottom left and top right. Splitting at the corner points instead leaves
+    // a visible notch at each end of both strokes.
+    dl->PathArcTo(cBL, r, kPiF * 0.75f, kPiF);
+    dl->PathArcTo(cTL, r, kPiF, kPiF * 1.5f);
+    dl->PathArcTo(cTR, r, kPiF * 1.5f, kPiF * 1.75f);
+    dl->PathStroke(upper, ImDrawFlags_None, theme::kHairline);
+
+    dl->PathArcTo(cTR, r, kPiF * 1.75f, kPiF * 2.0f);
+    dl->PathArcTo(cBR, r, 0.0f, kPiF * 0.5f);
+    dl->PathArcTo(cBL, r, kPiF * 0.5f, kPiF * 0.75f);
+    dl->PathStroke(lower, ImDrawFlags_None, theme::kHairline);
+}
+
+void addCabinetScrew(ImDrawList* dl, const ImVec2& centre, float radius, float slotDeg) {
+    if (dl == nullptr || radius < 2.0f) { return; }
+
+    // The countersink: a shallow brass funnel with the head sunk in it. The
+    // ring is lighter than the panel and the hole darker, which is the whole
+    // reason a screw reads as a hole and not as a dot.
+    dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.12f), radius * 1.30f,
+                        theme::withAlpha(theme::kVoid, 0.40f), 0);
+    dl->AddCircleFilled(centre, radius * 1.24f, theme::kBrassShade, 0);
+    addBenchBevel(dl, ImVec2(centre.x - radius * 1.24f, centre.y - radius * 1.24f),
+                  ImVec2(centre.x + radius * 1.24f, centre.y + radius * 1.24f),
+                  radius * 1.24f, false);
+
+    // The head itself, lit from the upper left like every other bevel here.
+    dl->AddCircleFilled(centre, radius, theme::kEnamelDark, 0);
+    dl->AddCircleFilled(ImVec2(centre.x - radius * 0.14f, centre.y - radius * 0.16f),
+                        radius * 0.84f, theme::kBrassDark, 0);
+    dl->AddCircleFilled(ImVec2(centre.x - radius * 0.22f, centre.y - radius * 0.26f),
+                        radius * 0.52f, theme::kBrassMid, 0);
+
+    // The slot. Cut across at whatever angle this one was driven home at - the
+    // four corners of a real cabinet never agree, and four identical screws
+    // read as printed wallpaper.
+    const float a = slotDeg * kPiF / 180.0f;
+    const float sx = std::cos(a);
+    const float sy = std::sin(a);
+    const float len = radius * 0.88f;
+    const float th = std::max(1.5f, radius * 0.24f);
+    const ImVec2 p0(centre.x - sx * len, centre.y - sy * len);
+    const ImVec2 p1(centre.x + sx * len, centre.y + sy * len);
+    dl->AddLine(p0, p1, theme::kVoid, th);
+    // The slot's lit far wall, one pixel down-right of the cut.
+    const float ox = -sy * (th * 0.5f);
+    const float oy = sx * (th * 0.5f);
+    const float dir = (oy >= 0.0f) ? 1.0f : -1.0f;
+    dl->AddLine(ImVec2(p0.x + ox * dir, p0.y + oy * dir),
+                ImVec2(p1.x + ox * dir, p1.y + oy * dir),
+                theme::withAlpha(theme::kBrassTint, 0.35f), theme::kHairline);
+}
+
+void addBenchRail(ImDrawList* dl, float x0, float x1, float y) {
+    if (dl == nullptr || x1 - x0 < 2.0f) { return; }
+    dl->AddLine(ImVec2(x0, y), ImVec2(x1, y),
+                theme::withAlpha(theme::kBrassTint, 0.75f), theme::kHairline);
+    dl->AddLine(ImVec2(x0, y + 1.0f), ImVec2(x1, y + 1.0f),
+                theme::withAlpha(theme::kVoid, 0.65f), theme::kHairline);
+}
+
+void addBenchDivider(ImDrawList* dl, float x, float y0, float y1) {
+    if (dl == nullptr || y1 - y0 < 2.0f) { return; }
+    // Dark first, then its lit far wall: the same groove the rail is, stood on
+    // end and lit from the same upper left.
+    dl->AddLine(ImVec2(x, y0), ImVec2(x, y1), theme::withAlpha(theme::kVoid, 0.65f),
+                theme::kHairline);
+    dl->AddLine(ImVec2(x + 1.0f, y0), ImVec2(x + 1.0f, y1),
+                theme::withAlpha(theme::kBrassTint, 0.55f), theme::kHairline);
+}
+
+bool drawBenchStopButton(ImDrawList* dl, const ImVec2& centre, float radius,
+                         bool running) {
+    if (dl == nullptr || radius < 10.0f) { return false; }
+
+    // A REAL ITEM FIRST, DRAWING SECOND. InvisibleButton's own return is what
+    // is reported, not IsItemClicked: the return covers keyboard and gamepad
+    // activation as well as the mouse, and a transport control that could only
+    // be reached with a pointer is a regression this panel must not ship.
+    pushPositionId(centre);
+    ImGui::SetCursorScreenPos(ImVec2(centre.x - radius, centre.y - radius));
+    const bool pressed =
+        ImGui::InvisibleButton("##benchstop", ImVec2(radius * 2.0f, radius * 2.0f));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    popPositionId();
+
+    // The bezel: a brass ring standing proud of the panel, with its own shadow
+    // under it and the standard bevel round its lip.
+    dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.08f), radius * 1.06f,
+                        theme::withAlpha(theme::kVoid, 0.55f), 0);
+    dl->AddCircleFilled(centre, radius, theme::kBrassMid, 0);
+    addBenchBevel(dl, ImVec2(centre.x - radius, centre.y - radius),
+                  ImVec2(centre.x + radius, centre.y + radius), radius, true);
+    dl->AddCircleFilled(centre, radius * 0.86f, theme::kBrassDark, 0);
+
+    // THE DOME. A radial gradient is not something a draw list can express, so
+    // it is built the way the knobs on this panel already are: a stack of discs
+    // walking inwards while their centre drifts towards the upper left, each a
+    // step further along the rust ramp. Concentric would read as a hole; off
+    // centre reads as something turned and lit.
+    //
+    // RUST, AND ONLY BECAUSE THIS IS NOT A READING. The palette reserves amber
+    // for figures and rust for trouble; a transport stop is neither a figure
+    // nor a fault, but it is the one control on the bench that must be found
+    // without looking, and the reference draws it in exactly this orange-red.
+    const float faceR = radius * 0.80f;
+    const float press = held ? 1.0f : 0.0f;
+    const ImVec2 faceC(centre.x, centre.y + press * 1.0f);
+    ImU32 rim = theme::kAlarm;
+    ImU32 crown = hovered ? theme::kAlarmHot : mixCol(theme::kAlarm, theme::kAlarmHot, 0.75f);
+    if (!running) {
+        // Drained rather than recoloured: the same object with the light off.
+        rim = mixCol(rim, theme::kEnamel, 0.62f);
+        crown = mixCol(crown, theme::kEnamel, 0.55f);
+    }
+    constexpr int kSteps = 18;
+    for (int i = 0; i < kSteps; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kSteps - 1);
+        const float r = faceR * (1.0f - 0.88f * t);
+        const ImVec2 c(faceC.x - faceR * 0.20f * t, faceC.y - faceR * 0.24f * t);
+        dl->AddCircleFilled(c, r, mixCol(rim, crown, t), 0);
+    }
+
+    // The specular arc in the upper left, which is the last thing that makes a
+    // stack of discs read as a curved surface under a lamp.
+    if (!held) {
+        dl->PathArcTo(ImVec2(faceC.x - faceR * 0.16f, faceC.y - faceR * 0.18f),
+                      faceR * 0.64f, kPiF * 1.06f, kPiF * 1.46f, 20);
+        dl->PathStroke(theme::withAlpha(theme::kIvory, running ? 0.42f : 0.22f),
+                       ImDrawFlags_None, std::max(1.5f, faceR * 0.11f));
+    }
+
+    // THE WORD SAYS WHAT PRESSING IT DOES. See the header: the artboard only
+    // ever shows a running machine, and a button lettered STOP that starts the
+    // receiver would be the one kind of lie this panel cannot afford.
+    const char* word = running ? "STOP" : "START";
+    ImFont* f = cascade::gui::fonts::legend();
+    float px = std::max(cascade::gui::fonts::kTinySize, radius * 0.36f);
+    float track = px * 0.12f;
+    float tw = trackedWidth(f, px, word, track);
+    const float room = faceR * 1.46f;
+    if (tw > room && tw > 0.0f) {
+        px *= room / tw;
+        track = px * 0.12f;
+        tw = trackedWidth(f, px, word, track);
+    }
+    // A LEGIBILITY FLOOR, AND NO WORD AT ALL BELOW IT. Shrinking the lettering
+    // until it fits a button drawn at a quarter of the reference's radius
+    // produces a four-pixel smear, which is not a word; better to leave the
+    // dome bare and let the caller's own caption carry it than to draw
+    // something that only looks like text.
+    if (px < 8.0f) {
+        px = 8.0f;
+        track = px * 0.12f;
+        tw = trackedWidth(f, px, word, track);
+    }
+    if (tw <= radius * 2.0f - 4.0f) {
+        const ImVec2 ts = f->CalcTextSizeA(px, FLT_MAX, 0.0f, word);
+        const ImVec2 wAt(faceC.x - tw * 0.5f, faceC.y - ts.y * 0.5f);
+        // Cut into the dome: the lit lower lip under the letter, then the cut.
+        addTrackedText(dl, f, px, ImVec2(wAt.x, wAt.y + 1.0f),
+                       theme::withAlpha(theme::kIvory, 0.20f), word, track);
+        addTrackedText(dl, f, px, wAt,
+                       theme::withAlpha(theme::kEnamelDark, running ? 1.0f : 0.75f), word,
+                       track);
+    }
+
+    if (focused) {
+        // Keyboard focus has to be VISIBLE or reachability is a claim nobody
+        // can act on.
+        dl->AddCircle(centre, radius + 2.0f, theme::kBrassBright, 0, 2.0f);
+    }
+    return pressed;
+}
+
+bool drawBenchKey(ImDrawList* dl, const ImVec2& tl, float size, bool on) {
+    if (dl == nullptr || size < 6.0f) { return false; }
+
+    pushPositionId(tl);
+    ImGui::SetCursorScreenPos(tl);
+    const bool pressed = ImGui::InvisibleButton("##benchkey", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    popPositionId();
+
+    const ImVec2 br(tl.x + size, tl.y + size);
+    const bool down = on || held;
+    if (!down) {
+        // Proud metal casts a shadow; sunk metal does not. That one difference
+        // is the whole state indication, before any colour is involved.
+        dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 1.5f), ImVec2(br.x + 1.0f, br.y + 1.5f),
+                          theme::withAlpha(theme::kVoid, 0.45f), theme::kKeyRounding);
+    }
+    ImU32 face = down ? theme::kBrassDark : theme::kBrassMid;
+    if (hovered && !down) { face = theme::kBrassBright; }
+    dl->AddRectFilled(tl, br, face, theme::kKeyRounding);
+    if (down) {
+        // The inner shadow a pressed key sits under.
+        dl->AddRectFilledMultiColor(tl, ImVec2(br.x, tl.y + size * 0.45f),
+                                    theme::withAlpha(theme::kVoid, 0.55f),
+                                    theme::withAlpha(theme::kVoid, 0.55f),
+                                    theme::withAlpha(theme::kVoid, 0.0f),
+                                    theme::withAlpha(theme::kVoid, 0.0f));
+    }
+    addBenchBevel(dl, tl, br, theme::kKeyRounding, !down);
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+                    theme::kBrassBright, theme::kKeyRounding + 1.0f, 0, theme::kHairline);
+    }
+    return pressed;
+}
+
+float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* title) {
+    if (dl == nullptr) { return tl.y; }
+    const float w = br.x - tl.x;
+    const float h = br.y - tl.y;
+    if (w < 16.0f || h < 16.0f) { return tl.y; }
+
+    const float round = theme::kPanelRounding;
+    // The ground. AddRectFilledMultiColor cannot round its corners, so the
+    // shape is laid down flat first and the gradient inset by the radius - the
+    // same trick addScopeBay uses, and at this contrast the corners are
+    // indistinguishable from the ramp continuing through them.
+    dl->AddRectFilled(tl, br, theme::kEnamel, round);
+    if (w > round * 2.0f) {
+        dl->AddRectFilledMultiColor(ImVec2(tl.x + round, tl.y), ImVec2(br.x - round, br.y),
+                                    theme::kEnamel, theme::kEnamel, theme::kEnamelDark,
+                                    theme::kEnamelDark);
+    }
+    dl->AddRect(tl, br, theme::kBrassDark, round, 0, theme::kHairline);
+    addBenchBevel(dl, tl, br, round, true);
+
+    float y = tl.y + 7.0f;
+    if (title != nullptr && title[0] != '\0') {
+        // IVORY, NOT ENGRAVED. The design's own rule is that a caption may be
+        // cut into brass - about 2.3:1 - but this plate's ground is dark
+        // enamel, where the same treatment would be a title nobody can read.
+        // The cut is carried by the shadow under the letters instead.
+        ImFont* f = cascade::gui::fonts::legend();
+        const float px = cascade::gui::fonts::kLegendSize;
+        const float track = px * 0.20f;
+        const float tw = trackedWidth(f, px, title, track);
+        const float x = (tl.x + br.x) * 0.5f - tw * 0.5f;
+        addTrackedText(dl, f, px, ImVec2(x + 1.0f, y + 1.0f),
+                       theme::withAlpha(theme::kVoid, 0.60f), title, track);
+        addTrackedText(dl, f, px, ImVec2(x, y), theme::kIvory, title, track);
+        y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f;
+    }
+    addBenchRail(dl, tl.x + 8.0f, br.x - 8.0f, y);
+    // The measurement, handed back rather than left for the caller to guess at.
+    return y + 8.0f;
+}
+
+void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
+                          const char* caption) {
+    if (dl == nullptr || caption == nullptr || caption[0] == '\0') { return; }
+    ImFont* f = cascade::gui::fonts::legend();
+    const float px = cascade::gui::fonts::kTinySize;
+    const float track = px * 0.24f;
+    const float tw = trackedWidth(f, px, caption, track);
+    addTrackedText(dl, f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
+                   theme::withAlpha(theme::kVoid, 0.55f), caption, track);
+    addTrackedText(dl, f, px, at, theme::kInkFaint, caption, track);
+    // The rule that carries the caption across its group. Without it the
+    // caption is a stray word above a list; with it the list has a head.
+    const float x0 = at.x + tw + 7.0f;
+    const float x1 = at.x + width;
+    if (x1 > x0 + 6.0f) {
+        addBenchRail(dl, x0, x1, at.y + px * 0.62f);
+    }
+}
+
 void drawFreqDrumWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
     if (dl == nullptr) { return; }
     dl->AddRectFilled(tl, br, IM_COL32(16, 13, 9, 255), 3.0f);
@@ -886,7 +1330,11 @@ void drawFreqDrumCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char d
     dl->AddRect(tl, br, kBenchInk, 0.0f, 0, 1.0f);
 
     const char txt[2] = {digit, '\0'};
-    ImFont* font = ImGui::GetFont();
+    // THE COUNTER IS MONOSPACED, and this is the whole reason a third face is
+    // in the atlas. Every digit occupies the same width, so a frequency
+    // stepping through 9 -> 0 does not shuffle its neighbours sideways, and a
+    // 1 sits in the middle of its aperture instead of hugging one edge.
+    ImFont* font = cascade::gui::fonts::reading();
     const ImVec2 sz = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, txt);
     const ImVec2 at((tl.x + br.x) * 0.5f - sz.x * 0.5f,
                     (tl.y + br.y) * 0.5f - sz.y * 0.5f);
@@ -941,15 +1389,20 @@ float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
                     kBenchInk, 1.4f);
     }
 
+    // SEGMENT COUNTS ARE LEFT TO IMGUI rather than pinned at 32. This knob is
+    // drawn at whatever radius the bar it sits in works out to - the reference
+    // panel is half again the height this started at - and a fixed 32-gon that
+    // passes for a circle at radius 14 is visibly a polygon at 26, most of all
+    // on the brass ring where the facets catch the eye.
     dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.10f), radius * 1.02f,
-                        IM_COL32(0, 0, 0, 110), 32);
-    dl->AddCircleFilled(centre, radius, IM_COL32(13, 11, 7, 255), 32);
+                        IM_COL32(0, 0, 0, 110), 0);
+    dl->AddCircleFilled(centre, radius, IM_COL32(13, 11, 7, 255), 0);
     dl->AddCircleFilled(ImVec2(centre.x - radius * 0.14f, centre.y - radius * 0.22f),
-                        radius * 0.80f, IM_COL32(25, 21, 16, 255), 32);
+                        radius * 0.80f, IM_COL32(25, 21, 16, 255), 0);
     dl->AddCircleFilled(ImVec2(centre.x - radius * 0.22f, centre.y - radius * 0.30f),
-                        radius * 0.48f, IM_COL32(47, 42, 33, 255), 32);
+                        radius * 0.48f, IM_COL32(47, 42, 33, 255), 0);
     // The brass ring, which is the whole character of this control.
-    dl->AddCircle(centre, radius - 1.0f, kBrass, 32, std::max(2.0f, radius * 0.14f));
+    dl->AddCircle(centre, radius - 1.0f, kBrass, 0, std::max(2.0f, radius * 0.14f));
 
     float f = value;
     if (!(f >= 0.0f)) { f = 0.0f; }
@@ -1002,7 +1455,7 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
 
 void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                     const char* caption, float frac01, bool haveReading,
-                    const char* valueLine) {
+                    const char* valueLine, const char* unitLabel) {
     if (dl == nullptr || width < 40.0f || height < 40.0f) { return; }
     const float lineH = ImGui::GetTextLineHeight();
 
@@ -1012,8 +1465,13 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     // the reason the value is not simply dark-on-brass like the caption: at
     // this size that is about 2.3:1 contrast and not readable at arm's length.
     if (caption != nullptr) {
-        const ImVec2 cs = ImGui::CalcTextSize(caption);
-        dl->AddText(ImVec2(tl.x + width * 0.5f - cs.x * 0.5f, tl.y),
+        // Engraved: the semibold condensed face at the small size, which is
+        // what a legend cut into a panel looks like and what the handoff sets
+        // its own captions in.
+        ImFont* cf = cascade::gui::fonts::legend();
+        const float cpx = cascade::gui::fonts::kTinySize;
+        const ImVec2 cs = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, caption);
+        dl->AddText(cf, cpx, ImVec2(tl.x + width * 0.5f - cs.x * 0.5f, tl.y),
                     IM_COL32(0x3B, 0x35, 0x29, 255), caption);
     }
 
@@ -1068,9 +1526,34 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
         dl->AddCircleFilled(pivot, 3.4f, IM_COL32(0x9C, 0x90, 0x78, 255), 12);
     }
 
+    // THE UNIT, PRINTED ON THE FACE BESIDE THE PIVOT, the way a moving-coil
+    // meter names its own scale. Beside and not above: above is where the
+    // needle sweeps through mid-scale, and a legend the pointer crosses is a
+    // legend that cannot be read at the only moment it matters.
+    //
+    // It is drawn ONLY when the caller supplied one. A unit is a claim about
+    // what the needle measures, so an absent one stays absent rather than
+    // being guessed at from the value line.
+    if (unitLabel != nullptr && unitLabel[0] != '\0') {
+        // Words, so the UI face - Nova Mono's capitals close up at this size.
+        ImFont* uf = cascade::gui::fonts::ui();
+        const float upx = cascade::gui::fonts::kTinySize;
+        const ImVec2 us = uf->CalcTextSizeA(upx, FLT_MAX, 0.0f, unitLabel);
+        const float ux = pivot.x + armR * 0.16f;
+        if (ux + us.x < fBR.x - 3.0f) {
+            dl->AddText(uf, upx, ImVec2(ux, pivot.y - us.y - 2.0f),
+                        cascade::gui::theme::kEngraved, unitLabel);
+        }
+    }
+
     if (valueLine != nullptr) {
-        const ImVec2 vs = ImGui::CalcTextSize(valueLine);
-        dl->AddText(ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),
+        // The UI face, not the monospaced one: this line carries its units -
+        // "2.000 MS/s", "22 % - 3.6 ms" - and Nova Mono's M is unreadable at
+        // this size. See the rule in fonts.hpp.
+        ImFont* vf = cascade::gui::fonts::ui();
+        const float vpx = cascade::gui::fonts::kTinySize;
+        const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, valueLine);
+        dl->AddText(vf, vpx, ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),
                     haveReading ? IM_COL32(0xEF, 0xE7, 0xD2, 255)
                                 : IM_COL32(0x9C, 0x90, 0x78, 255),
                     valueLine);
@@ -1091,7 +1574,12 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
     drawBenchLamp(dl, lampC, lampR, lampColour, lampLit, nullptr);
 
     if (chipText != nullptr && chipText[0] != '\0') {
-        const ImVec2 ts = ImGui::CalcTextSize(chipText);
+        // A chip is a short state WORD - B200, RAW, MUTED, IDLE - so it takes
+        // the semibold engraving face, not the monospaced one. MUTED in Nova
+        // Mono at this size renders its M as a solid block; see fonts.hpp.
+        ImFont* cf = cascade::gui::fonts::legend();
+        const float cpx = cascade::gui::fonts::kTinySize;
+        const ImVec2 ts = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, chipText);
         const float padX = 5.0f;
         const ImVec2 cBR(lampC.x - lampR - 7.0f, cy + ts.y * 0.5f + 2.0f);
         const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f);
@@ -1100,7 +1588,7 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
             // amber rather than being engraved into the plate.
             dl->AddRectFilled(cTL, cBR, IM_COL32(0x14, 0x11, 0x0C, 220), 2.0f);
             dl->AddRect(cTL, cBR, IM_COL32(0x8B, 0x80, 0x69, 120), 2.0f, 0, 1.0f);
-            dl->AddText(ImVec2(cTL.x + padX, cy - ts.y * 0.5f),
+            dl->AddText(cf, cpx, ImVec2(cTL.x + padX, cy - ts.y * 0.5f),
                         IM_COL32(0xF0, 0xA8, 0x40, 255), chipText);
         }
     }

@@ -429,6 +429,12 @@ int main() {
         w.stop();
     }
 
+    // The teardown's own budget (beginShutdown) and the cost of stop() itself
+    // are asserted in tests/test_shutdown_budget.cpp rather than here - this
+    // file already spends 90 s of its 120 s ceiling on real application runs,
+    // and a suite that fails by timing out reports nothing useful about
+    // either.
+
     parked.join();
 
 #if defined(_WIN32)

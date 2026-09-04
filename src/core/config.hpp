@@ -316,13 +316,43 @@ struct AppConfig {
     // fetchIndex and is refused there, which is where that decision belongs.
     std::string pluginCatalogueUrl = PluginRepo::defaultIndexUrl();
 
-    // Whether the "Get plugins" browser was left open. Purely cosmetic
+    // Whether the plugin store window was left open. Purely cosmetic
     // restore of where the user was — it does NOT cause a fetch on startup.
     // Nothing in this product touches the catalogue origin until the user
-    // presses Browse; that promise is what the browser's privacy note makes,
-    // and a config field that could reinstate a network call behind the
-    // user's back would break it.
+    // presses CHECK NOW in that window; that promise is what the store's
+    // privacy note makes, and a config field that could reinstate a network
+    // call behind the user's back would break it.
     bool pluginBrowserOpen = false;
+
+    // --- The fitted modules window --------------------------------------------
+    // Whether the FITTED MODULES window was left open, and where it sat.
+    //
+    // ITS SIBLING ALREADY PERSISTED AND IT DID NOT. The plugin store and the
+    // fitted modules window are the same kind of thing — a rail key in DECODE
+    // that opens a window of its own — and the store's open state has always
+    // been remembered by pluginBrowserOpen above while this one was a plain
+    // member with no key at all, so it closed on exit and was gone on the next
+    // launch. Two sibling windows behaving differently is a bug in one of
+    // them.
+    //
+    // NOTHING HERE SELF-OPENS ANYTHING. The flag is written only by the user's
+    // own two gestures — the rail key and the window's close button — so
+    // restoring it puts back a window the user themselves left open. That is
+    // not the self-open the satellite page was fixed for: there is no arrival
+    // edge on this window, and nothing but a user action can ever set this
+    // true. Restoring it starts no scan and no fetch; the module list is what
+    // the host already loaded at start-up.
+    //
+    // The rectangle follows the map pages' rules verbatim — zero width means
+    // "nothing saved", the position is only honoured when a size was saved
+    // with it, and an out-of-range component discards the whole rectangle
+    // (the open flag survives, because "where the window sat" and "whether it
+    // was open" are separate decisions and only one of them went bad).
+    bool fittedModulesOpen = false;
+    int fittedModulesX = 0;
+    int fittedModulesY = 0;
+    int fittedModulesWidth = 0;
+    int fittedModulesHeight = 0;
 
     // --- Plugin version policy (P10) ------------------------------------------
     // When a plugin catalogue was last successfully seen, in seconds since the

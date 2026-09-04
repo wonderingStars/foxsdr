@@ -102,6 +102,56 @@ TrackRow makeRow(const char* id, const char* label, double altM, double speedMps
 
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
 
+// --- how far apart two band colours actually are ------------------------------
+//
+// WHY LAB AND NOT A CHANNEL COMPARE. The aviation palette's test asserts only
+// that no two bands are byte-identical, which passes for two colours a reader
+// cannot tell apart on a six-pixel marker. The orbital ladder's header states
+// measured separations - it claims its closest pair is no closer than the
+// closest pair of the palette that already shipped - and a stated measurement
+// that nothing checks is a number that rots. So the conversion is done here,
+// in the test, from the same sRGB the styles carry.
+//
+// CIE Lab with the D65 white point, and the 1976 distance. Not the 2000
+// refinement: dE76 over-weights saturated blues, which makes it the
+// CONSERVATIVE choice for a palette whose upper half is blue and violet - it
+// reports those pairs as further apart than a reader finds them, so an
+// assertion that passes under dE76 is not passing because the metric was
+// generous where this palette needed it.
+double srgbToLinear(double c) {
+    c /= 255.0;
+    return (c <= 0.04045) ? (c / 12.92) : std::pow((c + 0.055) / 1.055, 2.4);
+}
+
+struct Lab { double l, a, b; };
+
+Lab toLab(int r8, int g8, int b8) {
+    const double r = srgbToLinear(r8);
+    const double g = srgbToLinear(g8);
+    const double b = srgbToLinear(b8);
+    const double X = r * 0.4124564 + g * 0.3575761 + b * 0.1804375;
+    const double Y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750;
+    const double Z = r * 0.0193339 + g * 0.1191920 + b * 0.9503041;
+    const double xn = 0.95047, yn = 1.0, zn = 1.08883;
+    const auto f = [](double t) {
+        const double d = 6.0 / 29.0;
+        return (t > d * d * d) ? std::pow(t, 1.0 / 3.0) : (t / (3.0 * d * d) + 4.0 / 29.0);
+    };
+    const double fx = f(X / xn), fy = f(Y / yn), fz = f(Z / zn);
+    return Lab{116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)};
+}
+
+double deltaE76(const cascade::gui::AltBandStyle& a, int r, int g, int b) {
+    const Lab la = toLab(a.r, a.g, a.b);
+    const Lab lb = toLab(r, g, b);
+    return std::sqrt((la.l - lb.l) * (la.l - lb.l) + (la.a - lb.a) * (la.a - lb.a) +
+                     (la.b - lb.b) * (la.b - lb.b));
+}
+
+double deltaE76(const cascade::gui::AltBandStyle& a, const cascade::gui::AltBandStyle& b) {
+    return deltaE76(a, b.r, b.g, b.b);
+}
+
 // An INDEPENDENT destination point, by 3-D vector arithmetic rather than by the
 // spherical-trig direct formula under test. The start point, the local east and
 // north unit vectors and the initial direction of travel are built as Cartesian
@@ -852,6 +902,300 @@ int main() {
         CHECK(altBandStyle(-5).g == altBandStyle(0).g);
         CHECK(altBandStyle(999).r == altBandStyle(kAltBandCount - 1).r);
         CHECK(altBandStyle(999).g == altBandStyle(kAltBandCount - 1).g);
+    }
+
+    // --- orbital altitude bands ----------------------------------------------
+    //
+    // WHAT THIS BLOCK IS FOR. The ladder above is an AVIATION ladder: its top
+    // band opens at 30 kft, and the ISS at 421 km is 1,381,000 ft. Every
+    // satellite the application has ever tracked therefore landed in that one
+    // band, drew in one indigo, and sat under a legend reading "> 30 kft" - a
+    // unit nothing in orbit is anywhere near. The map could not tell a 421 km
+    // orbit from an 861 km one, and nothing on screen said so.
+    //
+    // THE ASSERTION THAT MATTERS is the one two blocks down: two real satellite
+    // altitudes 400 km apart must not share a band. That is the defect stated
+    // as a property, and it is what fails if anybody ever collapses the two
+    // ladders back into one.
+    {
+        using cascade::gui::kOrbitBandCount;
+        using cascade::gui::orbitBandIndex;
+        using cascade::gui::orbitBandStyle;
+
+        static_assert(kOrbitBandCount == 5, "five orbital bands, in kilometres");
+
+        // THE EIGHT TARGETS A STOCK INSTALLATION FOLLOWS, in kilometres, taken
+        // from the satellite list in the owner's design handoff. Every claim
+        // below is about these rather than about invented altitudes - which is
+        // the point: the bands were chosen so that these separate.
+        struct Sat { const char* name; double km; };
+        const Sat kSats[] = {
+            {"ISS (ZARYA)", 421.0},         {"SAUDISAT 1C (SO-50)", 692.0},
+            {"NOAA 15", 807.0},             {"METEOR-M2 4", 814.0},
+            {"METEOR-M2 2", 818.0},         {"METEOR-M2 3", 822.0},
+            {"NOAA 18", 854.0},             {"NOAA 19", 861.0},
+        };
+        // A compile-time assertion rather than a CHECK, for the reason the
+        // bucket-count one above gives: MSVC warns on a constant conditional,
+        // and the fact is knowable without running anything.
+        static_assert(sizeof kSats / sizeof kSats[0] == 8u, "the eight stock targets");
+        const int kSatCount = static_cast<int>(sizeof kSats / sizeof kSats[0]);
+
+        // --- THE DEFECT, as a measurement ------------------------------------
+        // Under the aviation ladder all eight are the SAME band. This is not a
+        // hypothetical: it is what shipped, and it is asserted here so that the
+        // reason the second ladder exists cannot be lost.
+        {
+            std::vector<int> aviation;
+            std::vector<int> orbital;
+            for (int i = 0; i < kSatCount; ++i) {
+                aviation.push_back(altitudeBandIndex(kSats[i].km * 1000.0));
+                orbital.push_back(orbitBandIndex(kSats[i].km * 1000.0));
+            }
+            CHECK(aviation == std::vector<int>({5, 5, 5, 5, 5, 5, 5, 5}));
+            // ...and under the orbital one they are four different bands: the
+            // station, SO-50, the 807-822 km sun-synchronous cluster, and
+            // NOAA 18 and 19 above it. Compared as a WHOLE VECTOR so a wrong
+            // length cannot make the check disappear.
+            CHECK(orbital == std::vector<int>({0, 1, 2, 2, 2, 2, 3, 3}));
+            // Four bands occupied by real traffic where the aviation ladder
+            // occupied one, stated independently of the exact indices above.
+            std::vector<int> distinct = orbital;
+            std::sort(distinct.begin(), distinct.end());
+            distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
+            CHECK(distinct.size() == 4u);
+        }
+
+        // --- THE ONE THE SUITE EXISTS TO CATCH -------------------------------
+        // A real satellite altitude must not land in the same band as another
+        // real satellite altitude 400 km away. Checked over every pair of the
+        // eight rather than over the one that motivated it, and the pair count
+        // is asserted so a mistyped bound cannot silently reduce the loop to
+        // nothing.
+        {
+            int farPairs = 0;
+            for (int i = 0; i < kSatCount; ++i) {
+                for (int j = i + 1; j < kSatCount; ++j) {
+                    if (std::fabs(kSats[i].km - kSats[j].km) < 400.0) { continue; }
+                    ++farPairs;
+                    CHECK(orbitBandIndex(kSats[i].km * 1000.0) !=
+                          orbitBandIndex(kSats[j].km * 1000.0));
+                }
+            }
+            // The ISS against Meteor-M2 3, NOAA 18 and NOAA 19 - 401, 433 and
+            // 440 km apart. The other twenty-five pairs are closer together
+            // than that and are not what this rule is about.
+            CHECK(farPairs == 3);
+            // Named explicitly as well, because a count is not a name: the
+            // aviation ladder calls the station and NOAA 19 identical and the
+            // orbital ladder must not.
+            CHECK(altitudeBandIndex(421.0e3) == altitudeBandIndex(861.0e3));
+            CHECK(orbitBandIndex(421.0e3) != orbitBandIndex(861.0e3));
+            // The two ladders are not the same function, said without leaning
+            // on any single altitude's index value.
+            CHECK(orbitBandIndex(421.0e3) != altitudeBandIndex(421.0e3));
+        }
+
+        // --- and the closer separations the belt actually needs --------------
+        // NOAA 19 at 861 km and NOAA 15 at 807 km are 54 km apart and are the
+        // pair a watcher most often has both of on screen at once. They are in
+        // different bands, which is why the 850 boundary is where it is.
+        CHECK(orbitBandIndex(807.0e3) != orbitBandIndex(861.0e3));
+        CHECK(orbitBandIndex(692.0e3) != orbitBandIndex(807.0e3));
+
+        // --- every boundary, both sides --------------------------------------
+        // ON the boundary is the HIGHER band: the labels read "< 500 km", so
+        // 500 is not in that band. The aviation ladder uses the same convention
+        // at 1000 ft and the two must not disagree about which side is which.
+        {
+            const double bounds[] = {500.0, 750.0, 850.0, 1200.0};
+            // One boundary fewer than there are bands, checked at compile time:
+            // a ladder whose bounds and count disagreed would leave a band
+            // unreachable, and no runtime assertion is needed to see it.
+            static_assert(sizeof bounds / sizeof bounds[0] ==
+                              static_cast<std::size_t>(kOrbitBandCount) - 1u,
+                          "one boundary fewer than there are bands");
+            const int nBounds = static_cast<int>(sizeof bounds / sizeof bounds[0]);
+            for (int i = 0; i < nBounds; ++i) {
+                CHECK(orbitBandIndex((bounds[i] - 1.0) * 1000.0) == i);
+                CHECK(orbitBandIndex(bounds[i] * 1000.0 - 1.0) == i);
+                CHECK(orbitBandIndex(bounds[i] * 1000.0) == i + 1);
+                CHECK(orbitBandIndex(bounds[i] * 1000.0 + 1.0) == i + 1);
+                CHECK(orbitBandIndex((bounds[i] + 1.0) * 1000.0) == i + 1);
+            }
+        }
+
+        // --- unknown is its own answer, not a band ---------------------------
+        // NaN is the ABI's "the source does not know"; an infinity is what a
+        // broken plugin sends. Neither is an altitude and neither may colour a
+        // marker as though it were.
+        CHECK(orbitBandIndex(kNaN) == -1);
+        CHECK(orbitBandIndex(std::numeric_limits<double>::infinity()) == -1);
+        CHECK(orbitBandIndex(-std::numeric_limits<double>::infinity()) == -1);
+        CHECK(orbitBandIndex(0.0) != orbitBandIndex(kNaN));
+        // Zero and a negative value are still values - a decayed object on its
+        // last orbit is a real thing to draw, and a decode error is not.
+        CHECK(orbitBandIndex(0.0) == 0);
+        CHECK(orbitBandIndex(-400.0) == 0);
+
+        // --- METRES IN, KILOMETRES INSIDE ------------------------------------
+        // The ABI says altM is metres for every track kind. An implementation
+        // that forgot the divide would read the ISS's 421000 as 421000 km and
+        // put it in the top band with everything else - which is the aviation
+        // ladder's failure wearing a new unit.
+        CHECK(orbitBandIndex(421.0e3) == 0);
+        CHECK(orbitBandIndex(421.0) == 0);
+        CHECK(orbitBandIndex(499.999e3) == 0);
+        CHECK(orbitBandIndex(500.001e3) == 1);
+        // Geostationary, and something absurd above it, are the top band.
+        CHECK(orbitBandIndex(35786.0e3) == kOrbitBandCount - 1);
+        CHECK(orbitBandIndex(1.0e12) == kOrbitBandCount - 1);
+
+        // --- the style accessor is bounds-safe -------------------------------
+        // Including the -1 that orbitBandIndex itself returns, which the map
+        // hands straight back when a plugin reports no altitude.
+        CHECK(orbitBandStyle(-1).label != nullptr);
+        CHECK(orbitBandStyle(-1000).label != nullptr);
+        CHECK(orbitBandStyle(kOrbitBandCount).label != nullptr);
+        CHECK(orbitBandStyle(1000000).label != nullptr);
+        // Clamping, not wrapping: an out-of-range index lands on an END band.
+        CHECK(orbitBandStyle(-5).r == orbitBandStyle(0).r);
+        CHECK(orbitBandStyle(-5).g == orbitBandStyle(0).g);
+        CHECK(orbitBandStyle(-5).b == orbitBandStyle(0).b);
+        CHECK(orbitBandStyle(999).r == orbitBandStyle(kOrbitBandCount - 1).r);
+        CHECK(orbitBandStyle(999).g == orbitBandStyle(kOrbitBandCount - 1).g);
+        CHECK(orbitBandStyle(999).b == orbitBandStyle(kOrbitBandCount - 1).b);
+
+        // --- THE LABELS STATE THE UNIT ---------------------------------------
+        // This is half the defect. "> 30 kft" under a satellite is not merely
+        // the wrong band, it is the wrong QUANTITY, and a legend reading
+        // "< 500" with no unit would only replace one unreadable label with
+        // another.
+        {
+            std::vector<std::string> labels;
+            for (int i = 0; i < kOrbitBandCount; ++i) {
+                const char* p = orbitBandStyle(i).label;
+                CHECK(p != nullptr);
+                const std::string s = (p != nullptr) ? std::string(p) : std::string();
+                CHECK(!s.empty());
+                // Every one of them ends in the unit.
+                CHECK(s.size() > 3u && s.compare(s.size() - 3u, 3u, " km") == 0);
+                // ...and none of them carries the aviation unit, in either
+                // spelling, which is what the satellite legend used to show.
+                CHECK(s.find("ft") == std::string::npos);
+                // No two say the same thing: a legend with a repeated entry
+                // cannot be used to read a colour off the map.
+                CHECK(std::find(labels.begin(), labels.end(), s) == labels.end());
+                labels.push_back(s);
+            }
+            CHECK(labels == std::vector<std::string>({"< 500 km", "500-750 km", "750-850 km",
+                                                      "850-1200 km", "> 1200 km"}));
+        }
+
+        // --- THE PALETTE, MEASURED -------------------------------------------
+        // The aviation palette's own test asserts only that no two bands are
+        // byte-identical, which two indistinguishable colours pass. The orbital
+        // header states real separations, so they are checked as real
+        // separations - see deltaE76 above for why CIE Lab and why the 1976
+        // distance is the conservative one here.
+        {
+            // READABLE OVER BOTH GROUNDS: the map is either a near-black empty
+            // field or a pale, busy raster, and a colour near either extreme is
+            // lost on one of them. Same window the aviation palette is held to.
+            for (int i = 0; i < kOrbitBandCount; ++i) {
+                const cascade::gui::AltBandStyle& s = orbitBandStyle(i);
+                const int lum = (299 * s.r + 587 * s.g + 114 * s.b) / 1000;
+                CHECK(lum >= 90);
+                CHECK(lum <= 210);
+            }
+
+            // DISTINGUISHABLE FROM EACH OTHER, and specifically no worse than
+            // the palette that already shipped. Both floors are measured here
+            // rather than remembered, so the comparison is between two numbers
+            // this test computed from the two palettes in front of it.
+            double minOrbit = 1e9;
+            for (int i = 0; i < kOrbitBandCount; ++i) {
+                for (int j = i + 1; j < kOrbitBandCount; ++j) {
+                    const double d = deltaE76(orbitBandStyle(i), orbitBandStyle(j));
+                    if (d < minOrbit) { minOrbit = d; }
+                    // Byte-distinct too, which is what the drawing code needs.
+                    CHECK(orbitBandStyle(i).r != orbitBandStyle(j).r ||
+                          orbitBandStyle(i).g != orbitBandStyle(j).g ||
+                          orbitBandStyle(i).b != orbitBandStyle(j).b);
+                }
+            }
+            double minAviation = 1e9;
+            for (int i = 0; i < kAltBandCount; ++i) {
+                for (int j = i + 1; j < kAltBandCount; ++j) {
+                    const double d = deltaE76(altBandStyle(i), altBandStyle(j));
+                    if (d < minAviation) { minAviation = d; }
+                }
+            }
+            // The two measurements, pinned, so a later "nicer" palette cannot
+            // drift out of the window without saying so.
+            CHECK_NEAR(minAviation, 38.8, 0.5);
+            CHECK_NEAR(minOrbit, 39.4, 0.5);
+            CHECK(minOrbit >= minAviation);
+            // An absolute backstop under both, in case the aviation palette is
+            // ever retuned downwards: below about 35 two adjacent bands stop
+            // being separable on a six-pixel marker.
+            CHECK(minOrbit >= 35.0);
+
+            // AND NEVER THE EMERGENCY COLOUR. Red is the kind colour an
+            // unknown-altitude target keeps and it is the emergency colour, and
+            // both have to win - a band that read as rust would put an ordinary
+            // satellite in the same colour as a distress case. The two rust
+            // values are theme::kAlarm (B8552F) and theme::kAlarmHot (E07A4E);
+            // they are written out here because this header is deliberately
+            // free of ImGui and theme.hpp is not.
+            double minAlarm = 1e9;
+            for (int i = 0; i < kOrbitBandCount; ++i) {
+                const double a = deltaE76(orbitBandStyle(i), 0xB8, 0x55, 0x2F);
+                const double b = deltaE76(orbitBandStyle(i), 0xE0, 0x7A, 0x4E);
+                if (a < minAlarm) { minAlarm = a; }
+                if (b < minAlarm) { minAlarm = b; }
+            }
+            CHECK_NEAR(minAlarm, 41.7, 0.5);
+            CHECK(minAlarm >= 35.0);
+
+            // THE TWO BANDS THAT ARE THEME CONSTANTS, pinned by value. The
+            // handoff pairs the lowest band with theme::kGold and the next with
+            // theme::kPhosphor, and this header cannot include theme.hpp to say
+            // so - so the agreement is asserted instead of assumed.
+            CHECK(orbitBandStyle(0).r == 0xD9 && orbitBandStyle(0).g == 0xB2 &&
+                  orbitBandStyle(0).b == 0x3C);
+            CHECK(orbitBandStyle(1).r == 0x8F && orbitBandStyle(1).g == 0xD9 &&
+                  orbitBandStyle(1).b == 0xA0);
+        }
+
+        // --- the orbital legend is wide enough for ITS OWN labels ------------
+        // "850-1200 km" is eleven characters where the widest aviation label is
+        // nine, so a satellite legend measured with altLegendWidth clips - the
+        // exact defect that made "20-30 kft" read as "20-30 kf", committed a
+        // second time. Asserted as a PROPERTY over three per-character
+        // advances, so it holds for whatever font the host loads.
+        {
+            for (const float advance : {6.0f, 7.0f, 13.5f}) {
+                const auto measure = [advance](const char* s) {
+                    return advance * static_cast<float>(std::strlen(s));
+                };
+                const float w = cascade::gui::orbitLegendWidth(measure);
+                const float fixed = cascade::gui::kAltLegendPad +
+                                    cascade::gui::kAltLegendSwatch +
+                                    cascade::gui::kAltLegendPad + cascade::gui::kAltLegendPad;
+                float longest = 0.0f;
+                for (int i = 0; i < kOrbitBandCount; ++i) {
+                    const float lw = measure(orbitBandStyle(i).label);
+                    CHECK(w >= fixed + lw);
+                    if (lw > longest) { longest = lw; }
+                }
+                CHECK_NEAR(w, fixed + longest, 0.001);
+                // WIDER THAN THE AVIATION PANEL, which is the whole reason this
+                // is a separate measurement: sizing a satellite legend with the
+                // other ladder's width would cut the longest label short.
+                CHECK(w > cascade::gui::altLegendWidth(measure));
+            }
+        }
     }
 
     // --- coverage: bucketing -------------------------------------------------

@@ -49,6 +49,43 @@
 //     reports all of them, and reports them while the user is still looking
 //     at the frozen window rather than after they have killed it.
 //
+// THE SHUTDOWN BUDGET, AND WHY THE TEARDOWN DOES NOT USE THOSE 5 SECONDS.
+//
+// The teardown deliberately runs UN-HEARTBEATEN, so a shutdown that wedges is
+// reported like any other hang. That is not an oversight: the worst freeze
+// this product ever shipped was 120 s inside a CAT client shutdown, and a
+// watchdog stopped before the teardown would make that exact bug invisible.
+//
+// But the teardown is also where the deliberate bounded waits of 0.68.0 and
+// after are spent. SoapySource::stop() will wait up to kControlLockWait
+// (1.5 s) for the driver lock and then up to kVendorCallWait (1.5 s) for the
+// one vendor call it makes with that lock held, and Pipeline::stop() up to
+// kSourceJoinWait (3 s) for a source thread parked in a vendor read() - 6 s
+// against a 5 s threshold, with nothing left at all for the DSP join, the
+// config write, both ImGui shutdowns and GLFW. Even the first two of those,
+// at 4.5 s, left only about 500 ms for the rest, and a field report proves
+// that was already not enough: the threshold was crossed
+// 478 ms after the second guard returned, and the watchdog filed a hang
+// report against its OWN clean shutdown, naming the main thread as stuck in
+// HangWatchdog::stop() - the join that was waiting for the capture being
+// written. The application had already exited normally. Making every driver
+// wait bounded made that false report near-certain on exactly the sessions
+// the guards exist for.
+//
+// So the teardown gets its own, longer budget rather than being excused.
+// AppWindow::run() calls beginShutdown() the instant the frame loop ends: it
+// restarts the stall clock, so the teardown is measured from its own start
+// rather than from the tail of the last frame, and raises the threshold to
+// kShutdownThresholdMs. Nothing is paused, nothing is disarmed and the report
+// path is untouched - a shutdown that genuinely wedges still crosses that
+// budget and is still captured with every thread's stack, and threshold-ms in
+// the report says which budget was in force. tests/test_shutdown_budget.cpp
+// holds the arithmetic to every bounded wait it can FIND in the shipping
+// source - not to a list of names it was given, which is how the third of
+// them went uncounted the day it was added - and runs the shipped binary
+// through both halves: a teardown longer than the frame threshold that must
+// NOT report, and one longer than the shutdown budget that must.
+//
 // FALSE POSITIVES, and the three separate things that cause them:
 //
 //   1. A DEBUGGER at a breakpoint stops the GUI thread for as long as the
@@ -76,6 +113,13 @@
 //      freezes the watchdog thread too. The watchdog therefore checks its OWN
 //      overshoot: if its 500 ms poll took longer than the threshold, the
 //      process was not running and nothing is reported.
+//   4. THE APPLICATION'S OWN TEARDOWN, which is the shutdown budget above -
+//      and, at the very end of it, stop() itself. Once stop() has been asked
+//      for, the GUI thread is inside it joining this thread; it is not
+//      stalled, and a capture begun after that point can only describe the
+//      watchdog. So the poll loop leaves rather than starting one. Nothing is
+//      lost by that: a shutdown that really wedges never reaches stop() at
+//      all, and is reported against the budget while it is still stuck.
 //
 // RECOVERY. A hang is reported once, and the watchdog then stays quiet until
 // the heartbeat resumes. If the application comes back - and the 120 s CAT
@@ -88,6 +132,7 @@
 #define CASCADE_CORE_HANG_WATCHDOG_HPP
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -101,8 +146,55 @@ public:
     static constexpr unsigned kDefaultThresholdMs = 5000;
 
     // How often the watchdog looks. Short enough that the reported stall
-    // duration is meaningful, long enough to cost nothing.
+    // duration is meaningful, long enough to cost nothing. The wait is
+    // INTERRUPTIBLE (see threadMain), so this is a polling interval and not a
+    // floor on how long stop() takes.
     static constexpr unsigned kPollMs = 500;
+
+    // THE SHUTDOWN BUDGET. See the header comment for the field report that
+    // forced it; the three numbers are the arithmetic that report exposed.
+    //
+    // The bounded waits on the shutdown path, in milliseconds. Traced
+    // through pipeline_.stop(), each spent at most once because the first
+    // abandonment condemns the device and every later call on that path is
+    // skipped rather than attempted:
+    //
+    //   kControlLockWait (1500, src/source/soapy_source.cpp) - the driver
+    //     lock, waited for by SoapySource::stop() on the GUI thread;
+    //   kVendorCallWait  (1500, src/source/soapy_source.cpp) - the
+    //     abandonable deactivateStream inside stopLocked(), once that lock
+    //     is held;
+    //   kSourceJoinWait  (3000, src/core/pipeline.cpp) - the source thread,
+    //     after both of the above.
+    //
+    // Copied rather than included, because all three are file-local
+    // constants of modules this one must not depend on - so
+    // tests/test_shutdown_budget.cpp DISCOVERS every bounded wait declared
+    // under src/ and goes red both when this number stops matching their sum
+    // and when a wait appears that it has never been introduced to. That
+    // second half is not hypothetical: the test's first version scanned for
+    // the first and third of the three by name, the same change-set added
+    // kVendorCallWait, and the sum still came out at the 4500 this constant
+    // then held - green, and wrong, on the very first drift. The teardown's
+    // cost and the threshold it had to fit inside had already drifted apart
+    // over three releases because nothing related the two.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 6000;
+
+    // What the REST of the teardown gets: the DSP join, the crash-upload
+    // cancel, two config writes, both ImGui shutdowns, glfwDestroyWindow and
+    // glfwTerminate. None of them has a named bound and all of them together
+    // are milliseconds in a healthy run - the field log that produced the
+    // false report crossed the old threshold 478 ms after the last bounded
+    // guard returned. Three seconds is six times that.
+    static constexpr unsigned kShutdownReserveMs = 3000;
+
+    // The threshold in force from beginShutdown() until stop(). At least
+    // twice the worst LEGITIMATE shutdown (bounded waits plus reserve), so a
+    // report written against it means something really did wedge rather than
+    // that a guard was slow; and short enough that the report is written
+    // while the user is still looking at a window that will not close.
+    // tests/test_shutdown_budget.cpp pins the "at least twice".
+    static constexpr unsigned kShutdownThresholdMs = 20000;
 
     HangWatchdog() = default;
     ~HangWatchdog();
@@ -114,7 +206,34 @@ public:
     // still logs a recovered stall to the ring, but writes no file. Starting
     // twice is a no-op; the first configuration wins until stop().
     void start(const std::string& reportDir, unsigned thresholdMs = kDefaultThresholdMs);
+
+    // THE TEARDOWN'S OWN BUDGET, and the answer to a false report the product
+    // filed against its own clean shutdown. Called once, from the GUI thread,
+    // the instant the frame loop ends and before any teardown work runs.
+    //
+    // Two effects, and both are needed. The stall clock restarts, so the
+    // teardown is measured from its own beginning rather than from whatever
+    // was left of the last frame's interval; and the threshold becomes
+    // `thresholdMs`, which is sized against the bounded waits the shutdown
+    // path actually contains (kShutdownBoundedWaitsMs above).
+    //
+    // WHAT IT DELIBERATELY DOES NOT DO is pause or disarm anything. The
+    // teardown still runs un-heartbeaten and still reports, because a
+    // shutdown that wedges is the fault class this product ships most; it
+    // simply gets judged against a budget it can meet. Idempotent, and safe
+    // to call whether or not the watchdog is running.
+    void beginShutdown(unsigned thresholdMs = kShutdownThresholdMs);
+
+    // Stops the watchdog thread and joins it. The poll wait is interruptible,
+    // so this returns in about as long as an in-flight capture takes rather
+    // than in the rest of a poll interval.
     void stop();
+
+    // The threshold currently in force: what start() was given until
+    // beginShutdown() is called, kShutdownThresholdMs after it. This is the
+    // number a report writes as threshold-ms, so a reader can tell a stall in
+    // the frame loop from one in the teardown.
+    unsigned thresholdMs() const;
 
     // THE USER'S SWITCH, APPLIED TO A WATCHDOG THAT IS ALREADY RUNNING.
     //
@@ -219,7 +338,22 @@ private:
     // would be measured against the wrong thing.
     std::atomic<bool> skipGap_{true};
 
-    unsigned thresholdMs_ = kDefaultThresholdMs;
+    // ATOMIC because beginShutdown() raises it from the GUI thread while the
+    // watchdog thread is reading it every poll and writing it into a report.
+    // It decides whether a report is written at all, so a torn read here
+    // would be the false positive it exists to prevent, wearing a different
+    // hat.
+    std::atomic<unsigned> thresholdMs_{kDefaultThresholdMs};
+
+    // THE POLL WAIT, MADE INTERRUPTIBLE. stop() used to set a flag that was
+    // only read at the top of the loop while the loop slept in a plain
+    // sleep_for, so asking the watchdog to stop cost the rest of a poll -
+    // half a second of a shutdown, on average, for nothing. The flag is now
+    // set under this mutex and the sleep is a wait_for on this variable, so
+    // the notify cannot be missed by a thread that has just checked the flag
+    // and not yet begun to wait.
+    mutable std::mutex stopMutex_;
+    std::condition_variable stopCv_;
     // Guarded because setReportDir() is the Settings checkbox on the GUI
     // thread and threadMain() reads it on the watchdog thread. It decides
     // whether a file is written at all, so a torn read here is a privacy bug

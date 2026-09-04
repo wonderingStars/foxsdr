@@ -130,6 +130,15 @@ AppConfig junkConfig() {
     // junk, so a load path that forgets to assign it is caught).
     c.pluginCatalogueUrl = "garbage";
     c.pluginBrowserOpen = true;
+    // The fitted modules window: open, and with a rectangle that is away from
+    // the "nothing saved" default AND out of range, so a load path that
+    // forgets to assign any of the five is caught here rather than by a window
+    // that reopens somewhere nobody put it.
+    c.fittedModulesOpen = true;
+    c.fittedModulesX = -999999;
+    c.fittedModulesY = 999999;
+    c.fittedModulesWidth = -5;
+    c.fittedModulesHeight = 999999;
     // P10: away from its default AND out of range, so a load path that forgets
     // to assign it is caught by the same rule as every other field.
     c.pluginLastUpdateCheck = -999;
@@ -206,6 +215,11 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.rxLonDeg == b.rxLonDeg);
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
+    CHECK(a.fittedModulesOpen == b.fittedModulesOpen);
+    CHECK(a.fittedModulesX == b.fittedModulesX);
+    CHECK(a.fittedModulesY == b.fittedModulesY);
+    CHECK(a.fittedModulesWidth == b.fittedModulesWidth);
+    CHECK(a.fittedModulesHeight == b.fittedModulesHeight);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
     CHECK(a.pluginsStopped == b.pluginsStopped);
@@ -316,6 +330,17 @@ int main() {
         // came back rather than either end's fallback.
         in.pluginCatalogueUrl = "https://plugins.example.invalid/team/index.json";
         in.pluginBrowserOpen = true;
+        // The fitted modules window, open and with a rectangle nobody would
+        // arrive at by accident — a NEGATIVE x, because a second monitor to
+        // the left of the primary one is the ordinary case a naive "must be
+        // positive" rule would silently throw away. Its sibling above is open
+        // too, which is the whole point of this pair: the two flags used to
+        // behave differently and now must not.
+        in.fittedModulesOpen = true;
+        in.fittedModulesX = -1720;
+        in.fittedModulesY = 96;
+        in.fittedModulesWidth = 1180;
+        in.fittedModulesHeight = 844;
         // P10: a timestamp past 2038, which is why the field is 64-bit.
         in.pluginLastUpdateCheck = 4102444800;  // 2100-01-01T00:00:00Z
         // Tune grants, in an order the roundtrip must preserve: the list is
@@ -1405,6 +1430,142 @@ int main() {
         CHECK(ConfigStore::load(rt, back, err));
         CHECK(back.pluginCatalogueUrl == in.pluginCatalogueUrl);
         CHECK(back.pluginBrowserOpen);
+    }
+
+    // --- the fitted modules window (documented in config.hpp) -----------------
+    //
+    // THE BUG THIS BLOCK EXISTS FOR: the store window above remembered whether
+    // it was open and the fitted modules window beside it did not, so a window
+    // the user left open closed on exit and was gone on the next launch. The
+    // two are siblings — a rail key in DECODE that opens a window — and the
+    // asymmetry was the whole of the fault.
+    {
+        const std::string path = p("fitted_modules.json");
+        const AppConfig d;
+        AppConfig out;
+        std::string err;
+
+        // CLOSED, AND NO RECTANGLE, on a machine that has never saved one.
+        // Zero width is the "nothing saved" sentinel the map pages use, and it
+        // is what makes a first run fall back to the default placement rather
+        // than to somebody else's rectangle.
+        CHECK(!d.fittedModulesOpen);
+        CHECK(d.fittedModulesX == 0);
+        CHECK(d.fittedModulesY == 0);
+        CHECK(d.fittedModulesWidth == 0);
+        CHECK(d.fittedModulesHeight == 0);
+
+        // A plausible rectangle survives untouched, negative coordinates
+        // included, and the open flag with it.
+        CHECK(writeText(path, "{\"fittedModulesOpen\":true,\"fittedModulesX\":-1600,"
+                              "\"fittedModulesY\":40,\"fittedModulesWidth\":1060,"
+                              "\"fittedModulesHeight\":720}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.fittedModulesOpen);
+        CHECK(out.fittedModulesX == -1600);
+        CHECK(out.fittedModulesY == 40);
+        CHECK(out.fittedModulesWidth == 1060);
+        CHECK(out.fittedModulesHeight == 720);
+
+        // Wrong types keep the defaults, like every other field.
+        CHECK(writeText(path, "{\"fittedModulesOpen\":\"yes\",\"fittedModulesX\":\"far\","
+                              "\"fittedModulesWidth\":true}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.fittedModulesOpen == d.fittedModulesOpen);
+        CHECK(out.fittedModulesX == d.fittedModulesX);
+        CHECK(out.fittedModulesWidth == d.fittedModulesWidth);
+
+        // A BAD COMPONENT TAKES THE WHOLE RECTANGLE AND LEAVES THE OPEN FLAG,
+        // which is the rule the map pages follow and the reason it is written
+        // once: half a rectangle is a rectangle nobody chose, while "the
+        // window was open" is a separate decision that did not go bad. Each
+        // case breaks exactly one component.
+        struct FitCase { const char* json; const char* why; };
+        const FitCase badFit[] = {
+            {"{\"fittedModulesOpen\":true,\"fittedModulesWidth\":0,"
+             "\"fittedModulesHeight\":900,\"fittedModulesX\":10,\"fittedModulesY\":10}",
+             "width unset but height set"},
+            {"{\"fittedModulesOpen\":true,\"fittedModulesWidth\":900,"
+             "\"fittedModulesHeight\":0,\"fittedModulesX\":10,\"fittedModulesY\":10}",
+             "height unset but width set"},
+            {"{\"fittedModulesOpen\":true,\"fittedModulesWidth\":319,"
+             "\"fittedModulesHeight\":900,\"fittedModulesX\":10,\"fittedModulesY\":10}",
+             "width below the minimum"},
+            {"{\"fittedModulesOpen\":true,\"fittedModulesWidth\":900,"
+             "\"fittedModulesHeight\":319,\"fittedModulesX\":10,\"fittedModulesY\":10}",
+             "height below the minimum"},
+            {"{\"fittedModulesOpen\":true,\"fittedModulesWidth\":16385,"
+             "\"fittedModulesHeight\":900,\"fittedModulesX\":10,\"fittedModulesY\":10}",
+             "width past the maximum"},
+            {"{\"fittedModulesOpen\":true,\"fittedModulesWidth\":900,"
+             "\"fittedModulesHeight\":900,\"fittedModulesX\":16385,\"fittedModulesY\":10}",
+             "x past the maximum"},
+            {"{\"fittedModulesOpen\":true,\"fittedModulesWidth\":900,"
+             "\"fittedModulesHeight\":900,\"fittedModulesX\":10,\"fittedModulesY\":-16385}",
+             "y past the minimum"},
+        };
+        for (const FitCase& c : badFit) {
+            CHECK(writeText(path, std::string(c.json) + "\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.fittedModulesX != 0 || out.fittedModulesY != 0 ||
+                out.fittedModulesWidth != 0 || out.fittedModulesHeight != 0) {
+                std::printf("  (case: %s)\n", c.why);
+            }
+            CHECK(out.fittedModulesX == 0);
+            CHECK(out.fittedModulesY == 0);
+            CHECK(out.fittedModulesWidth == 0);
+            CHECK(out.fittedModulesHeight == 0);
+            // The open flag is NOT collateral damage.
+            CHECK(out.fittedModulesOpen);
+        }
+
+        // The extremes of the documented range are IN range, not out of it —
+        // the same bounds the map rectangle is held to, because it is the same
+        // lambda.
+        CHECK(writeText(path, "{\"fittedModulesWidth\":320,\"fittedModulesHeight\":320,"
+                              "\"fittedModulesX\":-16384,\"fittedModulesY\":16384}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.fittedModulesWidth == 320);
+        CHECK(out.fittedModulesHeight == 320);
+        CHECK(out.fittedModulesX == -16384);
+        CHECK(out.fittedModulesY == 16384);
+
+        // AND THE WHOLE THING SURVIVES A FILE THE STORE WROTE ITSELF, which is
+        // the path the application actually uses: a save that never emitted
+        // these keys, or a load that never read them back, is exactly how the
+        // window came to forget where it was.
+        AppConfig in;
+        in.fittedModulesOpen = true;
+        in.fittedModulesX = -1720;
+        in.fittedModulesY = 96;
+        in.fittedModulesWidth = 1180;
+        in.fittedModulesHeight = 844;
+        const std::string rt = p("fitted_modules_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.fittedModulesOpen);
+        CHECK(back.fittedModulesX == -1720);
+        CHECK(back.fittedModulesY == 96);
+        CHECK(back.fittedModulesWidth == 1180);
+        CHECK(back.fittedModulesHeight == 844);
+
+        // CLOSED ROUNDTRIPS AS CLOSED. The keys are written unconditionally,
+        // so a user who shuts the window gets it shut on the next launch —
+        // "false" and "absent" load identically, and only the raw text can
+        // tell them apart.
+        AppConfig shut;
+        shut.fittedModulesOpen = false;
+        const std::string rt2 = p("fitted_modules_shut.json");
+        CHECK(ConfigStore::save(rt2, shut, err));
+        CHECK(readAll(rt2).find("fittedModulesOpen") != std::string::npos);
+        back = junkConfig();
+        CHECK(ConfigStore::load(rt2, back, err));
+        CHECK(!back.fittedModulesOpen);
     }
 
     // --- P10 plugin version policy -------------------------------------------
