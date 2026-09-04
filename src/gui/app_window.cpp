@@ -4,6 +4,7 @@
 #include "gui/app_window.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
@@ -37,8 +38,21 @@
 #include "../../resources/icon/foxsdr_icon_rgba.hpp"
 #include "core/image_write.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/fonts.hpp"
 #include "gui/theme.hpp"
 #include "gui/map_view.hpp"
+// WHY EVERY "nothing here" SENTENCE IN THIS FILE COMES FROM ONE PLACE. An empty
+// list from PluginUi or PluginRunner is not evidence about the disk - both skip
+// a refused module and a stopped one before they write anything - so the words
+// a surface prints when it is empty are decided by the census in this header
+// and by nothing else. No ImGui in it; it is tested without a graphics context.
+#include "gui/module_census.hpp"
+// The two windows that replaced the plugin store and plugin inventory rail
+// sections. Included here rather than in app_window.hpp because both include
+// imgui.h and that header is compiled into the tests; the members are held by
+// unique_ptr behind forward declarations for exactly that reason.
+#include "gui/plugin_store_view.hpp"
+#include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
 #include "gui/waterfall_view.hpp"
@@ -109,7 +123,10 @@ constexpr float kMinDbSpan = 10.0f;
 
 // Source-menu error color: readable red on the dark theme, used for
 // open()/setter failures surfaced from IqSource::lastError().
-constexpr ImVec4 kErrorRed{1.0f, 0.35f, 0.35f, 1.0f};
+// THE ONE RED. Defined from the theme rather than beside it: there used to be
+// a second, near-identical red written inline elsewhere in this file, which is
+// how a product ends up with two failure colours that are not quite the same.
+const ImVec4 kErrorRed = cascade::gui::theme::bad();
 
 // Soapy sample-rate choices. 2 MS/s (index 1) is the default because it is
 // the rate the DSP chain was configured at (kSampleRateHz); the other rates
@@ -180,11 +197,6 @@ constexpr const char* kDeemphLabels[3] = {"50 us (EU/world)", "75 us (Americas)"
 constexpr double kDeemphUs[3] = {50.0, 75.0, 0.0};
 constexpr int kDeemphCount = 3;
 
-// Height of the frequency tick strip. Placement decision (the spec left it
-// open): BETWEEN the spectrum and the waterfall, so one strip labels both
-// panels and stays clear of the spectrum's dB labels in the top-left corner.
-constexpr float kAxisHeight = 18.0f;
-
 // Tick capacity. FreqScale spaces ticks >= 80 px apart, so 128 slots cover a
 // panel over 10K pixels wide before the HIGH end of the axis would truncate.
 constexpr int kMaxTicks = 128;
@@ -208,14 +220,11 @@ constexpr double kVfoBwMaxChanFrac = 0.9;
 // every observed change).
 constexpr double kConfigDebounceS = 2.0;
 
-// Panel-furniture colors. kPanelBackground matches SpectrumView's background
-// so the axis strip reads as part of the same instrument face; the vertical
-// tick gridlines are fainter than the spectrum's 10 dB grid (alpha 18 vs 26)
-// so the two grids stay visually separable; the waterfall marker reuses the
-// spectrum overlay's warm center-line color.
-constexpr ImU32 kPanelBackground = IM_COL32(8, 10, 14, 255);
-constexpr ImU32 kAxisTickColor = IM_COL32(255, 255, 255, 140);
-constexpr ImU32 kAxisLabelColor = IM_COL32(255, 255, 255, 110);
+// Panel-furniture colors. The vertical tick gridlines are fainter than the
+// spectrum's 10 dB grid (alpha 18 vs 26) so the two grids stay visually
+// separable; the waterfall marker reuses the spectrum overlay's warm
+// center-line color. (The axis strip's own three colours went with it when
+// SpectrumView took over lettering the frequency scale.)
 constexpr ImU32 kTickGridColor = IM_COL32(255, 255, 255, 18);
 constexpr ImU32 kWfMarkerColor = IM_COL32(255, 170, 60, 200);
 
@@ -226,6 +235,34 @@ constexpr double kPlaceHz[10] = {1e9, 1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e
 // Largest value the fixed 10-digit field can show; the display clamps here
 // (a device readback cannot exceed it in practice — 9.99 GHz).
 constexpr double kMaxDisplayHz = 9999999999.0;
+
+// --- THE NARROWEST THE MAIN WINDOW MAY BE ------------------------------------
+//
+// THIS IS WHAT MAKES THE TOP BAR'S SCALE FLOOR TRUE. The bar shrinks with the
+// window and stops shrinking at kBarMinScale (see drawToolbar), which keeps
+// the whole fixed cluster - transport, master lamps, counter, VOLUME DIAL -
+// drawn at a legible size. What the floor cannot do on its own is keep that
+// cluster INSIDE the window: below some width the bar is simply wider than the
+// space it is drawn in, its child clips the overflow, and the dial - the only
+// volume control in the application - is silently not there and cannot be
+// operated. Refusing the width is the honest fix; scaling further down does
+// not work either, because drawBrassVolumeKnob draws nothing under a 6 px
+// radius and the dial would vanish just the same.
+//
+// The number is checked against the bar's own geometry by a static_assert
+// beside those constants, so neither can drift away from the other.
+// Both numbers are the CLIENT area, which is what glfwSetWindowSizeLimits
+// takes - GLFW adds the frame itself.
+constexpr int kMinWindowW = 560;
+// A minimum height is not needed by the bar and is given anyway: GLFW's Win32
+// backend applies its minimum only when BOTH dimensions are set, so a width
+// limit on its own is no limit at all. This is the height at which the bar and
+// the head of the function rail still sit on screen together.
+constexpr int kMinWindowH = 400;
+// The cabinet takes at most 24 px a side (drawCabinet clamps its margin there)
+// and the body clears the well's bevel by 3 more, so the bar is handed at
+// least kMinWindowW minus this much.
+constexpr float kCabinetInsetMaxPx = 27.0f * 2.0f;
 
 // SoapyAudio advertises every sound card on the machine as a SoapySDR device.
 // They are not receivers: no tuner (centerFrequencyHz reads 0), no RF, and
@@ -365,6 +402,16 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.rxLonDeg == b.rxLonDeg &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
+           // The fitted modules window, open flag AND rectangle, for the
+           // reason closedWindows_ is here: this comparison is what decides
+           // whether the file is written at all, so a field missing from it
+           // persists only when something else happens to change in the same
+           // session. Without the rectangle a resize would never be saved.
+           a.fittedModulesOpen == b.fittedModulesOpen &&
+           a.fittedModulesX == b.fittedModulesX &&
+           a.fittedModulesY == b.fittedModulesY &&
+           a.fittedModulesWidth == b.fittedModulesWidth &&
+           a.fittedModulesHeight == b.fittedModulesHeight &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
            a.pluginTuneAllowed == b.pluginTuneAllowed &&
            a.pluginsStopped == b.pluginsStopped &&
@@ -529,7 +576,15 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     : pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
                                                 /*audioEnabled=*/true}),
       spectrum_(std::make_unique<SpectrumView>()),
-      waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)) {
+      waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)),
+      // The plugin store's view and both windows' decks. Created here, where
+      // their headers are visible, and never rebuilt: a deck holds the search
+      // text, the SHOW rockers, the sort key and the selection, and every one
+      // of those is a thing the user set and expects to still be set after a
+      // rescan replaces the catalogue underneath it.
+      pluginStoreView_(std::make_unique<PluginStoreView>()),
+      pluginStoreDeck_(std::make_unique<PluginStoreDeck>()),
+      fittedDeck_(std::make_unique<FittedModulesDeck>()) {
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
     recordDir_ = defaultRecordDir();
@@ -565,8 +620,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     rescanPlugins();
     // The catalogue URL starts at the published default and is overwritten by
     // a config restore if the user (or an enterprise deployment) changed it.
-    // Setting it here is NOT a fetch: nothing contacts the origin until the
-    // Browse button is pressed.
+    // Setting it here is NOT a fetch: nothing contacts the origin until CHECK
+    // NOW is pressed in the plugin store window.
     pluginCatalogueUrl_ = cascade::core::AppConfig{}.pluginCatalogueUrl;
     std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
     // DELIBERATELY no SoapySDR enumeration here. Enumeration loads vendor
@@ -729,6 +784,20 @@ int AppWindow::run(int frames) {
         glfwTerminate();
         return 1;
     }
+    // A FLOOR ON THE WIDTH, because the top bar has one and could not keep it
+    // alone: narrower than this and the volume dial is drawn outside the bar's
+    // own child and clipped away, leaving no volume control at all.
+    //
+    // BOTH MINIMA HAVE TO BE GIVEN OR NEITHER IS APPLIED. GLFW's Win32 backend
+    // fills ptMinTrackSize only when minwidth AND minheight are both set
+    // (win32_window.c, WM_GETMINMAXINFO), so passing GLFW_DONT_CARE for the
+    // height silently threw the width limit away too - which is exactly what
+    // the first version of this line did, and it read as a working fix. The
+    // height chosen is the modest one that keeps the bar and the head of the
+    // rail on screen together; nothing on this face disappears below it, it
+    // only gets less room to scroll in.
+    glfwSetWindowSizeLimits(window, kMinWindowW, kMinWindowH, GLFW_DONT_CARE,
+                            GLFW_DONT_CARE);
     // Before the context is made current: purely a window-manager property,
     // independent of GL, so even a run that fails at backend init has already
     // shown the right icon.
@@ -741,6 +810,18 @@ int AppWindow::run(int frames) {
     // Layout is fully code-driven; a stray imgui.ini next to the exe would
     // silently override it and make runs non-reproducible.
     ImGui::GetIO().IniFilename = nullptr;
+    // THE TYPEFACES, before anything measures a string.
+    //
+    // Every hard-coded width in this layout was chosen against these faces, so
+    // they have to be in the atlas before the first frame rather than swapped
+    // in later. A failure here is survivable and deliberately not fatal: the
+    // application wears ImGui's own bitmap font, which is ugly and correct,
+    // and says so on the console rather than refusing to start over a font.
+    if (!cascade::gui::fonts::load()) {
+        std::fprintf(stderr,
+                     "cascade: could not load the bundled typefaces; "
+                     "falling back to the built-in font\n");
+    }
     // MULTI-VIEWPORT: the map and each decoded image get a REAL operating
     // system window rather than a panel penned inside this one. A received
     // picture and a target map are things a user wants on a second monitor,
@@ -828,9 +909,22 @@ int AppWindow::run(int frames) {
     pluginTestHook_.clear();
     pluginTestStarted_ = false;
     pluginStatusHook_ = false;
+    // The deliberate SHUTDOWN wedge, and the only way to hold the shutdown
+    // budget against the real teardown of the real binary. --diag-stall proves
+    // the frame-loop half; there is no equivalent for the teardown, because
+    // the teardown is not a place a test can reach — it has no frame counter,
+    // no UI, and by then the window is going away. Bounded runs only, exactly
+    // like the plugin hooks above: an interactive session can never be wedged
+    // by a stray environment variable.
+    int shutdownStallMs = 0;
     if (frames >= 0) {
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        const char* shutdownStall = std::getenv("CASCADE_DIAG_SHUTDOWN_STALL_MS");
+        if (shutdownStall != nullptr && *shutdownStall != '\0') {
+            shutdownStallMs = std::atoi(shutdownStall);
+            if (shutdownStallMs < 0) { shutdownStallMs = 0; }
+        }
         // The enforcement diagnostic (see reportPluginStatus). Same rules: only
         // in a bounded run, and silent unless asked for, so the
         // byte-identical-stdout contract of a plain --frames run is untouched.
@@ -1006,6 +1100,33 @@ int AppWindow::run(int frames) {
         }
     }
 
+    // THE TEARDOWN GETS ITS OWN BUDGET, AND STAYS WATCHED.
+    //
+    // Everything below runs with no heartbeat on purpose, so a shutdown that
+    // wedges is reported like any other hang — the worst freeze this product
+    // ever shipped was 120 s inside a CAT client shutdown. What it cannot do
+    // is run against the FRAME threshold: pipeline_.stop() alone may
+    // deliberately spend 1.5 s on the driver lock, 1.5 s on the abandonable
+    // vendor call inside it, and 3 s on the source thread — 6 s against the
+    // 5 s the frame loop is judged by, and the newest field report is the
+    // watchdog filing a hang against its own clean shutdown 478 ms after the
+    // second of those guards returned.
+    //
+    // DO NOT MAINTAIN THAT SUM BY HAND. It was 4.5 s across two waits until
+    // the vendor call was bounded, and the test written to catch exactly this
+    // drift was itself blinded by it, because it scanned for two constants by
+    // name. tests/test_shutdown_budget.cpp now DISCOVERS every
+    // constexpr chrono wait under src/ and fails on one it has never been
+    // told the cost of, so the next wait added here cannot pass quietly.
+    //
+    // beginShutdown() restarts the stall clock — the teardown is measured
+    // from here, not from whatever was left of the last frame — and raises
+    // the threshold to one sized against those bounded waits. It pauses
+    // nothing and disarms nothing: a shutdown that genuinely wedges still
+    // crosses the budget and is still captured with every thread's stack.
+    watchdog_.beginShutdown();
+    const auto teardownStart = std::chrono::steady_clock::now();
+
     // Closing the window mid-take finalizes both recordings cleanly (same
     // contract as the toolbar Stop): taps out, then headers patched — before
     // the pipeline teardown below ends the sample flow they were taping.
@@ -1036,6 +1157,18 @@ int AppWindow::run(int frames) {
     crashUploadFinish();
     if (!configPath_.empty()) { saveConfigNow(); }
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
+
+    // The deliberate shutdown wedge, in the place the real one lives: the
+    // stretch around pipeline_.stop(), where the bounded driver waits are
+    // spent and where the 120 s CAT freeze happened. Bounded runs only (see
+    // where shutdownStallMs is read). Printed, so a test can prove the hook
+    // ran rather than inferring it from an absent report.
+    if (shutdownStallMs > 0) {
+        std::printf("cascade: --diag-shutdown-stall wedging the teardown for %d ms\n",
+                    shutdownStallMs);
+        std::fflush(stdout);
+        std::this_thread::sleep_for(std::chrono::milliseconds(shutdownStallMs));
+    }
 
     // Closing the window while receiving must not leave DSP threads pacing a
     // dead display; stop before teardown so the join happens while the object
@@ -1088,10 +1221,24 @@ int AppWindow::run(int frames) {
     // shutdown that wedges is reported like any other hang. That is not an
     // oversight to be tidied away: the worst freeze this product ever shipped
     // was 120 s inside a CAT client shutdown, and stopping the watchdog before
-    // the teardown would make that exact bug invisible again. A normal
-    // teardown is far under the threshold, so a report from here means
-    // something really did take five seconds to close.
+    // the teardown would make that exact bug invisible again. Everything above
+    // is judged against the shutdown budget beginShutdown() set, so a report
+    // from here means the close really did wedge - not that a bounded driver
+    // wait spent what it is allowed to spend.
     watchdog_.stop();
+
+    // HOW LONG THE TEARDOWN ACTUALLY TOOK, printed rather than assumed - the
+    // same discipline as the worst frame gap above, and for the same reason.
+    // The budget it is judged against was derived from constants in two other
+    // files; this is the measurement that says what the real path costs, and
+    // tests/test_shutdown_budget.cpp reads it back and requires a healthy
+    // close to sit far under the budget. A teardown that grows into it goes
+    // red here instead of arriving as a false hang report on a user's
+    // machine, which is exactly how this defect reached the field.
+    std::printf("cascade: teardown %.1f ms\n",
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - teardownStart)
+                    .count());
 
     // Printed on every clean exit: this is what makes the exact-count half of
     // the --frames contract externally observable — app_smoke matches
@@ -1141,15 +1288,493 @@ void AppWindow::refreshDiagContext() {
     }
     cascade::core::setDiagContext(ctx);
 
-    // The module table only has to be rebuilt when something LOADED CODE, and
-    // a plugin load is the only thing that does so after start-up here. Doing
-    // it every frame would mean walking the loader's module list 60 times a
-    // second for a table that changes twice a session.
+    // The module table only has to be rebuilt when something LOADED CODE.
+    // Doing it every frame would mean walking the loader's module list 60
+    // times a second for a table that changes a handful of times a session.
+    // This covers the plugins; the OTHER thing that maps code into this
+    // process after start-up is a device open, and that has its own refresh
+    // where the open completes (pollSoapyAsync) - a device open changes no
+    // plugin count, so this test cannot see it.
     if (loaded != diagPluginCount_) {
         diagPluginCount_ = loaded;
         cascade::core::refreshModuleTable();
     }
 }
+
+namespace {
+
+// --- THE CABINET -------------------------------------------------------------
+//
+// THE WHOLE APPLICATION SITS IN A BOX, and until this existed it did not. The
+// panels were drawn straight onto a flat ground that simply stopped at the
+// window edge, which is why the face read as a screenshot of controls rather
+// than as a machine: a real instrument has an EDGE, and the edge is what tells
+// an eye where the machine ends and the desk begins.
+//
+// So: a rounded brass face with one hairline of light along the top and left
+// and one of shadow along the bottom and right, a countersunk screw at each
+// corner, and the panels sunk into a well cut in the middle of it. The screws
+// are each turned to their own angle, because four identical screws read as
+// printed wallpaper rather than as fasteners.
+//
+// NOTHING HERE IS MEASURED IN THE ARTBOARD'S PIXELS. The reference is a
+// 1720 x 986 image whose margin is 22 pixels; that margin is carried here as a
+// fraction of the window's smaller side, so the same cabinet is drawn at any
+// size. Returns the margin it used, so the caller insets its content by a
+// measurement rather than by a guess - the one number the two have to agree on
+// is handed over instead of being written down twice.
+float drawCabinet(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
+    const float w = br.x - tl.x;
+    const float h = br.y - tl.y;
+    if (dl == nullptr || w < 80.0f || h < 80.0f) { return 0.0f; }
+    const float m = std::clamp(std::min(w, h) * 0.022f, 10.0f, 24.0f);
+    const float round = std::max(4.0f, m * 0.45f);
+
+    // The brass, lit from above like every other surface on this face.
+    // AddRectFilledMultiColor cannot round its corners, so the shape is laid
+    // down flat first and the gradient inset by the radius - the same trick
+    // addBenchPlate uses, and at this contrast the corners are
+    // indistinguishable from the ramp continuing through them.
+    dl->AddRectFilled(tl, br, cascade::gui::theme::kBrassShade, round);
+    if (w > round * 2.0f) {
+        dl->AddRectFilledMultiColor(ImVec2(tl.x + round, tl.y), ImVec2(br.x - round, br.y),
+                                    cascade::gui::theme::kBrassShade,
+                                    cascade::gui::theme::kBrassShade,
+                                    cascade::gui::theme::kBrassMid,
+                                    cascade::gui::theme::kBrassMid);
+    }
+    cascade::gui::addBenchBevel(dl, tl, br, round, true);
+
+    // The well the panels sit in: the same hairline pair run the other way
+    // round, which is the entire difference between metal proud of the face
+    // and metal cut into it.
+    const ImVec2 iTL(tl.x + m, tl.y + m);
+    const ImVec2 iBR(br.x - m, br.y - m);
+    if (iBR.x > iTL.x + 8.0f && iBR.y > iTL.y + 8.0f) {
+        dl->AddRectFilled(iTL, iBR, cascade::gui::theme::kEnamelDark,
+                          cascade::gui::theme::kPanelRounding);
+        cascade::gui::addBenchBevel(dl, iTL, iBR, cascade::gui::theme::kPanelRounding,
+                                    false);
+    }
+
+    // FOUR SCREWS, FOUR ANGLES, sitting in the margin rather than on the well's
+    // lip: the countersink is 1.3 radii across, so a head at 0.52 of the margin
+    // with a radius of 0.30 clears both the outer bevel and the inner one.
+    const float sr = std::max(3.5f, m * 0.30f);
+    const float inset = m * 0.52f;
+    const float slot[4] = {24.0f, -38.0f, 68.0f, 7.0f};
+    const ImVec2 at[4] = {
+        ImVec2(tl.x + inset, tl.y + inset),
+        ImVec2(br.x - inset, tl.y + inset),
+        ImVec2(tl.x + inset, br.y - inset),
+        ImVec2(br.x - inset, br.y - inset),
+    };
+    for (int i = 0; i < 4; ++i) {
+        cascade::gui::addCabinetScrew(dl, at[i], sr, slot[i]);
+    }
+    return m;
+}
+
+// --- A LETTERED BRASS KEY ----------------------------------------------------
+//
+// scope_face.hpp's drawBenchKey is the small SQUARE key on a rail row and
+// carries no word; a key with a word on it is drawn by every hand-drawn panel
+// in this application from its own local copy (map_view.cpp, plugins_view.cpp
+// and plugin_store_view.cpp each have one). This is the copy the WINDOW OWNER
+// needs: the satellites window's two view controls and its follow key live
+// here, in the code that owns the MapView, and not inside the panel that draws
+// the rest of that window.
+//
+// A REAL ImGui ITEM, like every other control on this bench: an
+// InvisibleButton takes the hover, the focus and the keyboard, so the key is
+// operable without a mouse and takes part in the same input arbitration as the
+// widgets around it. `enabled` false draws a dead key that keeps its word -
+// a control that vanishes when it cannot be used is a control the user cannot
+// learn.
+bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
+                  bool enabled, const char* id) {
+    if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
+    ImGui::PushID(id);
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::BeginDisabled(!enabled);
+    const bool pressed = ImGui::InvisibleButton("##wordkey", ImVec2(br.x - tl.x, br.y - tl.y));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    ImGui::EndDisabled();
+    ImGui::PopID();
+
+    const float r = cascade::gui::theme::kKeyRounding;
+    if (!enabled) {
+        dl->AddRectFilled(tl, br, cascade::gui::theme::kWell, r);
+        dl->AddRect(tl, br,
+                    cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassDark, 0.80f),
+                    r, 0, cascade::gui::theme::kHairline);
+    } else {
+        // Proud metal casts a shadow and pressed metal does not, which is the
+        // state indication before any colour is used.
+        if (!held) {
+            dl->AddRectFilled(
+                ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
+                cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.45f), r);
+        }
+        const ImU32 top = held      ? cascade::gui::theme::kBrassMid
+                          : hovered ? cascade::gui::theme::kIvory
+                                    : cascade::gui::theme::kCream;
+        const ImU32 bot =
+            held ? cascade::gui::theme::kBrassDark : cascade::gui::theme::kBrassBright;
+        dl->AddRectFilled(tl, br, bot, r);
+        if (br.x - tl.x > r * 2.0f) {
+            dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top,
+                                        top, bot, bot);
+        }
+        cascade::gui::addBenchBevel(dl, tl, br, r, !held);
+    }
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+                    cascade::gui::theme::kBrassBright, r + 1.0f, 0,
+                    cascade::gui::theme::kHairline);
+    }
+    // The word is CUT INTO the brass - ink on metal, which is this palette's
+    // treatment for anything a hand operates. Never amber: amber is a reading.
+    ImFont* f = cascade::gui::fonts::ui();
+    const float px = cascade::gui::fonts::kTinySize;
+    const ImVec2 ts = f->CalcTextSizeA(px, FLT_MAX, 0.0f, label);
+    dl->AddText(f, px,
+                ImVec2((tl.x + br.x) * 0.5f - ts.x * 0.5f,
+                       (tl.y + br.y) * 0.5f - ts.y * 0.5f + (held ? 1.0f : 0.0f)),
+                enabled ? cascade::gui::theme::kEnamel : cascade::gui::theme::kInkFaint,
+                label);
+    return pressed;
+}
+
+// --- ONE ROW OF THE FUNCTION RAIL --------------------------------------------
+//
+// SAME CONTRACT AS ImGui::CollapsingHeader: it draws the row and returns
+// whether the section is open. Every section in the left column calls this
+// instead, so the rail is one object rather than nineteen bespoke rows - and a
+// section added next year gets the bench by writing the same call the others
+// write.
+//
+// IT IS A CollapsingHeader UNDERNEATH, and that is the whole design. The widget
+// keeps the open/closed state, the ImGui id, the click target, the Tab stop and
+// the space bar; all this adds is what the row looks like. Reimplementing the
+// header to gain a look would have traded working behaviour for appearance,
+// including the "Label###id" ids the plugin sections key their state on.
+//
+// THE KEY IS gui::drawBenchKey, THE SHARED PRIMITIVE, and it used to be a
+// hand-rolled copy of it sitting right here - thirty lines drawing the same
+// shadow, face, inner shadow and bevel, with a comment explaining that the
+// real one could not be used because it is an ImGui item and would fight the
+// header for the click. Two implementations of one part is how the rail and
+// the scope face drift apart, so the copy is gone and the objection is
+// answered instead:
+//
+//   - the header is submitted with ImGuiTreeNodeFlags_AllowOverlap, so the
+//     key laid over it afterwards is allowed to take the hover and the click
+//     rather than being refused by the header underneath;
+//   - the key is submitted under ImGuiItemFlags_NoNav, so it adds no second
+//     focus stop to a rail of sixteen rows - the header keeps the keyboard;
+//   - pressing the key toggles the same section pressing the row toggles, so
+//     it punches no hole in the header's click target. The toggle lands on the
+//     next frame (the header for this frame has already been submitted), which
+//     at any frame rate this application runs at is not visible.
+//
+// THE CHIP AND THE LAMP ARE ARGUMENTS RATHER THAN A SEPARATE CALL AFTER IT.
+// They used to be railChip(), which decorated "the last item ImGui submitted"
+// - true only while nothing else was submitted in between, which stopped being
+// true the moment the key became a real item. Drawing them here also means the
+// rail cannot grow a row that reports nothing by accident: a section with
+// genuinely no state passes no chip, deliberately and visibly.
+//
+// `chipText` == nullptr draws neither chip nor lamp.
+bool benchSection(const char* label, bool defaultOpen, const char* chipText = nullptr,
+                  ImU32 lampColour = cascade::gui::theme::kPhosphor,
+                  bool lampLit = false) {
+    // The visible name stops at the id suffix: "Plugins###plugins" is a widget
+    // called plugins that shows the word Plugins, and the rail must letter the
+    // word rather than the plumbing.
+    char shown[96];
+    std::size_t n = 0;
+    for (const char* p = label; *p != '\0' && n + 1 < sizeof(shown); ++p) {
+        if (p[0] == '#' && p[1] == '#') { break; }
+        shown[n++] = *p;
+    }
+    shown[n] = '\0';
+
+    // A row is a fixed deck like the top bar, not a line of text with padding
+    // round it: the reference's rows are all one height whatever is written on
+    // them.
+    constexpr float kRowH = 28.0f;
+    const float labelPx = cascade::gui::fonts::kUiSize;
+
+    // THE KEY'S PRESS, CARRIED ONE FRAME. The key is submitted after the
+    // header, so a press cannot change the state the header has already
+    // reported; it is remembered here and applied to the same id on the next
+    // frame. One pair rather than a map because a mouse press lands on exactly
+    // one key, and the GUI thread is the only thread that draws.
+    static ImGuiID pendingId = 0;
+    static bool pendingOpen = false;
+    const ImGuiID rowId = ImGui::GetID(label);
+    if (pendingId == rowId) {
+        ImGui::SetNextItemOpen(pendingOpen);
+        pendingId = 0;
+    }
+
+    // SUBMITTED INVISIBLY, THEN PAINTED. Header, HeaderHovered and HeaderActive
+    // carry the widget's entire background and Text carries both its label and
+    // its arrow, so four transparent colours leave an item that behaves exactly
+    // as it did and draws nothing at all.
+    const ImVec4 clear(0.0f, 0.0f, 0.0f, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(ImGui::GetStyle().FramePadding.x,
+                               std::max(2.0f, (kRowH - labelPx) * 0.5f)));
+    ImGui::PushStyleColor(ImGuiCol_Header, clear);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, clear);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, clear);
+    ImGui::PushStyleColor(ImGuiCol_Text, clear);
+    ImGui::PushFont(cascade::gui::fonts::ui(), labelPx);
+    const bool open = ImGui::CollapsingHeader(
+        label, ImGuiTreeNodeFlags_AllowOverlap |
+                   (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None));
+    ImGui::PopFont();
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+
+    const ImVec2 tl = ImGui::GetItemRectMin();
+    const ImVec2 br = ImGui::GetItemRectMax();
+    const float h = br.y - tl.y;
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (dl == nullptr || h < 6.0f) { return open; }
+
+    const float keySize = std::clamp(h - 10.0f, 9.0f, 18.0f);
+    const ImVec2 kTL(tl.x + 3.0f, tl.y + (h - keySize) * 0.5f);
+    const ImVec2 kBR(kTL.x + keySize, kTL.y + keySize);
+
+    // The label plate: a shade lighter than the ground it is screwed to, which
+    // is what makes the rail read as a column of plates rather than as text on
+    // a panel. It runs out to the header's right edge on purpose - railChip()
+    // lands its chip and lamp on that end afterwards, and they have to sit ON
+    // the plate rather than beside it.
+    const ImVec2 pTL(kBR.x + 6.0f, tl.y + 1.0f);
+    const ImVec2 pBR(br.x, br.y - 1.0f);
+    if (pBR.x > pTL.x + 24.0f) {
+        ImU32 plate = cascade::gui::theme::kBrassDark;
+        if (held) {
+            plate = cascade::gui::theme::kBrassShade;
+        } else if (hovered) {
+            plate = cascade::gui::theme::kBrassMid;
+        }
+        dl->AddRectFilled(pTL, pBR, plate, cascade::gui::theme::kKeyRounding);
+        cascade::gui::addBenchBevel(dl, pTL, pBR, cascade::gui::theme::kKeyRounding, true);
+
+        // IVORY ON METAL, which is the palette's rule for anything a hand
+        // operates - never amber, which on this panel means a reading. The dark
+        // pass under it is the cut the letters sit in, not a drop shadow.
+        ImFont* f = cascade::gui::fonts::ui();
+        const ImVec2 ts = f->CalcTextSizeA(labelPx, FLT_MAX, 0.0f, shown);
+        const ImVec2 where(pTL.x + 8.0f, (tl.y + br.y) * 0.5f - ts.y * 0.5f);
+        dl->AddText(f, labelPx, ImVec2(where.x + 1.0f, where.y + 1.0f),
+                    cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.55f),
+                    shown);
+        dl->AddText(f, labelPx, where,
+                    open ? cascade::gui::theme::kIvory : cascade::gui::theme::kCream,
+                    shown);
+    }
+
+    // THE STATE OF THE SECTION, READ WITHOUT OPENING IT: a chip naming what it
+    // is doing and a lamp saying whether it is doing it, landed on the end of
+    // the plate. The reference's rail carries both on every row; without them
+    // the rail is a column of names.
+    if (chipText != nullptr) {
+        cascade::gui::drawRailChip(dl, tl, br, chipText, lampColour, lampLit);
+    }
+
+    // THE KEY, and it is the shared primitive. `open || held` presses it in
+    // while the section is open OR while the row is being clicked anywhere
+    // along its length, so it still reads as the row's own disclosure
+    // indicator rather than as a separate control that happens to sit on it.
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+    const bool keyPressed = cascade::gui::drawBenchKey(dl, kTL, keySize, open || held);
+    ImGui::PopItemFlag();
+    if (keyPressed) {
+        pendingId = rowId;
+        pendingOpen = !open;
+    }
+    // AND THE ROW IS PUT BACK THE SIZE IT WAS. The key's InvisibleButton is a
+    // small item inset inside the row, so it leaves the cursor above where the
+    // header left it and tells the parent the content only reaches as far as
+    // the key - which on the last row of the rail is a scroll extent short by
+    // most of a line, and which ImGui's own error recovery reports as
+    // "SetCursorPos used to extend window boundaries". Re-declaring the row's
+    // own rectangle restores both the cursor and the extent exactly, and a
+    // Dummy carries no id, so nothing about the header's interaction changes.
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::Dummy(ImVec2(br.x - tl.x, br.y - tl.y));
+
+    // Keyboard focus has to be VISIBLE or reachability is a claim nobody can
+    // act on - and the header's own highlight was one of the four colours
+    // painted out above.
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 1.0f, tl.y - 1.0f), ImVec2(br.x + 1.0f, br.y + 1.0f),
+                    cascade::gui::theme::kBrassBright,
+                    cascade::gui::theme::kKeyRounding + 1.0f, 0,
+                    cascade::gui::theme::kHairline);
+    }
+    return open;
+}
+
+// --- ONE SWITCH ON THE FUNCTION RAIL -----------------------------------------
+//
+// THE SAME ROW, WIRED TO A FLAG INSTEAD OF TO A DRAWER. benchSection above is
+// a CollapsingHeader wearing the bench; this is the identical plate, key, chip
+// and lamp driving a boolean the CALLER owns. The satellites map needs exactly
+// that and nothing more: its rail row is a switch that puts the window on
+// screen, because every satellite control lives inside that window and a
+// second set of them out here would be the scattering the window exists to
+// end.
+//
+// Returns true on the frame it is pressed and toggles nothing itself, so the
+// row can operate a flag that lives somewhere else - a map page's `open`, in
+// the one caller there is.
+//
+// THE KEY AND THE ROW ARE TWO ITEMS AND ONLY ONE OF THEM CAN BE PRESSED. The
+// row is submitted first under SetNextItemAllowOverlap, so the key laid over
+// it afterwards takes the hover and the click when the pointer is on the key,
+// and the row takes it everywhere else - the same arbitration benchSection
+// uses, and the reason this needs no deferred-press bookkeeping: whichever
+// item reports the press, the answer is one press.
+//
+// `enabled` false is a BLOCKED control, not a hidden one. It keeps its plate,
+// its chip and its lamp and refuses the click; the sentence saying what would
+// unblock it is the caller's, drawn under the row, because only the caller
+// knows which of several reasons applies.
+bool benchSwitchRow(const char* label, bool on, const char* chipText,
+                    ImU32 lampColour, bool lampLit, bool enabled,
+                    const char* tooltip) {
+    // Same rule as benchSection: the visible name stops at the id suffix, so
+    // "Satellites map###satmap:X" letters the words and not the plumbing.
+    char shown[96];
+    std::size_t n = 0;
+    for (const char* p = label; *p != '\0' && n + 1 < sizeof(shown); ++p) {
+        if (p[0] == '#' && p[1] == '#') { break; }
+        shown[n++] = *p;
+    }
+    shown[n] = '\0';
+
+    constexpr float kRowH = 28.0f;
+    const float labelPx = cascade::gui::fonts::kUiSize;
+    const float w = ImGui::GetContentRegionAvail().x;
+    if (w < 40.0f) { return false; }
+
+    ImGui::PushID(label);
+    const ImVec2 tl = ImGui::GetCursorScreenPos();
+    const ImVec2 br(tl.x + w, tl.y + kRowH);
+
+    ImGui::BeginDisabled(!enabled);
+    ImGui::SetNextItemAllowOverlap();
+    const bool rowPressed = ImGui::InvisibleButton("##switchrow", ImVec2(w, kRowH));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    if (tooltip != nullptr &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (dl == nullptr) {
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        return false;
+    }
+
+    const float keySize = std::clamp(kRowH - 10.0f, 9.0f, 18.0f);
+    const ImVec2 kTL(tl.x + 3.0f, tl.y + (kRowH - keySize) * 0.5f);
+    const ImVec2 kBR(kTL.x + keySize, kTL.y + keySize);
+
+    const ImVec2 pTL(kBR.x + 6.0f, tl.y + 1.0f);
+    const ImVec2 pBR(br.x, br.y - 1.0f);
+    if (pBR.x > pTL.x + 24.0f) {
+        // A BLOCKED ROW IS DARK METAL, not greyed lettering on live brass: the
+        // plate itself has to say the control is not available, because a
+        // colour difference in the word alone is exactly what a user reads as
+        // "this one is just less important".
+        ImU32 plate = cascade::gui::theme::kEnamel;
+        if (enabled) {
+            plate = cascade::gui::theme::kBrassDark;
+            if (held) {
+                plate = cascade::gui::theme::kBrassShade;
+            } else if (hovered) {
+                plate = cascade::gui::theme::kBrassMid;
+            }
+        }
+        dl->AddRectFilled(pTL, pBR, plate, cascade::gui::theme::kKeyRounding);
+        cascade::gui::addBenchBevel(dl, pTL, pBR, cascade::gui::theme::kKeyRounding,
+                                    enabled);
+
+        // Ivory on metal, the palette's rule for anything a hand operates -
+        // never amber, which on this panel means a reading.
+        ImFont* f = cascade::gui::fonts::ui();
+        const ImVec2 ts = f->CalcTextSizeA(labelPx, FLT_MAX, 0.0f, shown);
+        const ImVec2 where(pTL.x + 8.0f, (tl.y + br.y) * 0.5f - ts.y * 0.5f);
+        dl->AddText(f, labelPx, ImVec2(where.x + 1.0f, where.y + 1.0f),
+                    cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.55f),
+                    shown);
+        dl->AddText(f, labelPx, where,
+                    !enabled ? cascade::gui::theme::kInkFaint
+                             : (on ? cascade::gui::theme::kIvory
+                                   : cascade::gui::theme::kCream),
+                    shown);
+    }
+
+    if (chipText != nullptr) {
+        cascade::gui::drawRailChip(dl, tl, br, chipText, lampColour, lampLit);
+    }
+
+    // NoNav for the same reason benchSection gives: the row already owns the
+    // keyboard stop, and a second one per switch would double the length of
+    // the rail's tab order to reach the same control twice.
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+    const bool keyPressed = cascade::gui::drawBenchKey(dl, kTL, keySize, on || held);
+    ImGui::PopItemFlag();
+    ImGui::EndDisabled();
+
+    // The key's small item left the cursor above where the row ended and told
+    // the parent the content reaches only as far as the key - which on the
+    // last row of a rail is a scroll extent short by most of a line, and which
+    // ImGui reports in its error hook. Re-declaring the row's own rectangle
+    // restores both; a Dummy carries no id, so no interaction changes.
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::Dummy(ImVec2(w, kRowH));
+
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 1.0f, tl.y - 1.0f), ImVec2(br.x + 1.0f, br.y + 1.0f),
+                    cascade::gui::theme::kBrassBright,
+                    cascade::gui::theme::kKeyRounding + 1.0f, 0,
+                    cascade::gui::theme::kHairline);
+    }
+    ImGui::PopID();
+    return enabled && (rowPressed || keyPressed);
+}
+
+// An engraved group caption across the rail - SIGNAL PATH, DECODE and the rest.
+// Reserves its own row so the sections below it flow normally; without the
+// Dummy the caption would be painted into space the next row then draws over.
+void benchGroup(const char* caption) {
+    ImGui::Spacing();
+    const float px = cascade::gui::fonts::kTinySize;
+    const float w = ImGui::GetContentRegionAvail().x;
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    cascade::gui::addBenchGroupCaption(ImGui::GetWindowDrawList(),
+                                       ImVec2(at.x + 3.0f, at.y), w - 6.0f, caption);
+    ImGui::Dummy(ImVec2(w, px + 4.0f));
+}
+
+}  // namespace
 
 void AppWindow::drawUi() {
     // Before anything is drawn: the decoders' output is bounded in the runner
@@ -1192,8 +1817,43 @@ void AppWindow::drawUi() {
         ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::Begin("##cascade_root", nullptr, rootFlags);
 
+    // THE CABINET, FIRST AND UNDERNEATH. Painted into the root window's own
+    // draw list before a single widget is submitted, which is what puts it
+    // under everything: ImGui renders a parent's list ahead of its children's,
+    // so the brass, the bevel, the four screws and the sunk well are laid down
+    // and every panel below is drawn into them.
+    //
+    // THEN THE CONTENT IS INSET BY THE MARGIN THE CABINET REPORTS. A panel
+    // painted over the bevel would rub out the one hairline that makes the edge
+    // an edge, so the body lives in a child sized from drawCabinet's own answer
+    // rather than from a number typed twice. Three pixels more than the margin:
+    // the well's bevel is drawn ON the margin's inner boundary and the content
+    // must clear it.
+    const ImVec2 rootTL = ImGui::GetWindowPos();
+    const ImVec2 rootSize = ImGui::GetWindowSize();
+    const float cabinetM =
+        drawCabinet(ImGui::GetWindowDrawList(), rootTL,
+                    ImVec2(rootTL.x + rootSize.x, rootTL.y + rootSize.y));
+    const float bodyInset = cabinetM + 3.0f;
+    ImGui::SetCursorScreenPos(ImVec2(rootTL.x + bodyInset, rootTL.y + bodyInset));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::BeginChild("##cabinet_face",
+                      ImVec2(rootSize.x - bodyInset * 2.0f, rootSize.y - bodyInset * 2.0f),
+                      ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    // BOTH POPPED IMMEDIATELY. BeginChild paints the child's background inside
+    // itself, so the transparent ChildBg has already done its work - and left
+    // pushed it would strip the ground from every child NESTED in this one, the
+    // status column and the centre included.
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    // The bar owns its own height - a fixed deck, not a row of widgets whose
+    // tallest item decides - and finishes itself with a bevelled rail. No
+    // ImGui separator under it: a flat grey line under a machined one reads as
+    // a mistake rather than as a second edge.
     drawToolbar();
-    ImGui::Separator();
 
     // SCOPE MODE REPLACES THE WHOLE LAYOUT, and that is the mode rather than a
     // side effect of it: the instrument the request came from shows a scope, a
@@ -1216,6 +1876,11 @@ void AppWindow::drawUi() {
         if (pipeline_.getLatestFrame(lastFrame_)) {
             waterfall_->addLine(lastFrame_.dbBins.data(),
                                 static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+            // Counted here too, so the tally and the ring cannot drift apart
+            // across a spell in scope mode. drawCenterPanels restarts its
+            // averaging window rather than dividing this by the time the scope
+            // was up - see the note there.
+            ++waterfallLines_;
         }
         drawScopeMode();
     } else {
@@ -1225,13 +1890,36 @@ void AppWindow::drawUi() {
 
         ImGui::SameLine();
 
+        // THE STATUS COLUMN IS OPTIONAL AND SIZED FIRST, so the centre takes
+        // what is left rather than the column taking what the centre spared.
+        // It is dropped entirely on a narrow window: the spectrum is what this
+        // application is for, and squeezing it to keep a status card visible
+        // has the priority backwards.
+        constexpr float kStatusWidth = 230.0f;
+        const bool showStatus =
+            ImGui::GetContentRegionAvail().x > kStatusWidth + 520.0f;
+        const float centreW = showStatus ? -(kStatusWidth + ImGui::GetStyle().ItemSpacing.x)
+                                         : 0.0f;
+
         // The center area owns its scrolling (none): the spectrum/waterfall
         // pair always fills whatever space the splitter hands it.
-        ImGui::BeginChild("##center", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
+        ImGui::BeginChild("##center", ImVec2(centreW, 0.0f), ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         drawCenterPanels();
         ImGui::EndChild();
+
+        if (showStatus) {
+            ImGui::SameLine();
+            ImGui::BeginChild("##status_column", ImVec2(kStatusWidth, 0.0f),
+                              ImGuiChildFlags_None);
+            drawStatusColumn();
+            ImGui::EndChild();
+        }
     }
+
+    // The cabinet's inner face closes here. Its own style pushes were popped at
+    // the top, so there is nothing left to unwind but the child itself.
+    ImGui::EndChild();
 
     ImGui::End();
 
@@ -1361,16 +2049,10 @@ namespace {
 // The reference's rail is a column of plates, each carrying a chip that says
 // what that section is doing and a lamp that says whether it is doing it. The
 // application's rail was a column of names, so answering "is the recorder on"
-// meant opening the recorder.
-//
-// This decorates the header ImGui has just submitted rather than replacing
-// CollapsingHeader, which is deliberate: the widget owns the open/closed
-// state, the keyboard and the click target, and reimplementing those to gain a
-// chip would be trading working behaviour for appearance.
-void railChip(const char* chipText, ImU32 lampColour, bool lampLit) {
-    cascade::gui::drawRailChip(ImGui::GetWindowDrawList(), ImGui::GetItemRectMin(),
-                               ImGui::GetItemRectMax(), chipText, lampColour, lampLit);
-}
+// meant opening the recorder. That work now lives in benchSection's own
+// arguments - see the note there - because the railChip() that used to stand
+// here decorated "whatever item ImGui submitted last", which stopped being the
+// header the moment the disclosure key became a real item.
 
 void benchHint(const char* text) {
     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
@@ -1378,14 +2060,688 @@ void benchHint(const char* text) {
     ImGui::PopStyleColor();
 }
 
+// --- WHY A SURFACE IS EMPTY: MOVED OUT OF THIS FILE ---------------------------
+//
+// The census of what this machine holds, and the sentence a surface prints when
+// it is holding none of it, now live in gui/module_census.hpp. They decide what
+// a user is TOLD, and while they sat in this anonymous namespace no test could
+// reach one line of them. The census there is general over capability bits, so
+// the track-source surfaces below and the decoder surfaces count one module the
+// same way and their two sentences cannot come to disagree about it.
+
+// --- the status column's lettering -------------------------------------------
+//
+// One sub-line of a status card: the words, and the ink they are cut in. A
+// colour per line rather than one per card, because a card can carry a SETTING
+// and a READING at once - the receiver's antenna port beside the sample rate it
+// is actually delivering - and the palette's whole rule is that those two are
+// not written in the same colour.
+struct StatusLine {
+    const char* text;
+    ImU32 colour;
+};
+
+// Letter-spaced width, which Dear ImGui cannot measure for us because it has no
+// tracking. ASCII only, deliberately: every caption on this column is a machine
+// legend in capitals.
+float statusTrackedWidth(ImFont* f, float px, const char* text, float track) {
+    if (f == nullptr || text == nullptr) { return 0.0f; }
+    float w = 0.0f;
+    int glyphs = 0;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const char one[2] = {*p, '\0'};
+        w += f->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x;
+        ++glyphs;
+    }
+    if (glyphs > 1) { w += track * static_cast<float>(glyphs - 1); }
+    return w;
+}
+
+void statusTrackedText(ImDrawList* dl, ImFont* f, float px, ImVec2 at, ImU32 col,
+                       const char* text, float track) {
+    if (dl == nullptr || f == nullptr || text == nullptr) { return; }
+    float x = at.x;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const char one[2] = {*p, '\0'};
+        dl->AddText(f, px, ImVec2(x, at.y), col, one);
+        x += f->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x + track;
+    }
+}
+
+// A card's caption. LIGHT INK WITH A SHADOW UNDER IT, not the dark cut a
+// caption gets on brass: these cards are wells of dark enamel, where the
+// engraved treatment would be a caption nobody could read. Same decision, and
+// the same reason, as addBenchPlate's title.
+void statusCaption(ImDrawList* dl, ImVec2 at, const char* text) {
+    ImFont* f = cascade::gui::fonts::legend();
+    const float px = cascade::gui::fonts::kTinySize;
+    const float track = px * 0.22f;
+    statusTrackedText(dl, f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
+                      cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.6f),
+                      text, track);
+    statusTrackedText(dl, f, px, at, cascade::gui::theme::kInkMuted, text, track);
+}
+
+// A legend CUT INTO BRASS, for the maker's plate at the foot of the column -
+// the one surface down here that is metal rather than enamel, and therefore the
+// one that takes the dark-into-metal treatment: the lit lower lip of the cut
+// first, then the cut itself.
+void statusEngrave(ImDrawList* dl, float centreX, float y, float px, const char* text) {
+    ImFont* f = cascade::gui::fonts::legend();
+    const float track = px * 0.24f;
+    const float x = centreX - statusTrackedWidth(f, px, text, track) * 0.5f;
+    statusTrackedText(dl, f, px, ImVec2(x, y + 1.0f),
+                      cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.55f),
+                      text, track);
+    statusTrackedText(dl, f, px, ImVec2(x, y), cascade::gui::theme::kEngraved, text, track);
+}
+
+// THE TYPEFACE RULE FROM fonts.hpp, APPLIED BY MEASUREMENT RATHER THAN BY
+// MEMORY. Nova Mono is for figures: its capital M is three close stems in a
+// monospaced cell, and below about 20 px they merge into a solid block - which
+// is exactly how "MUTED" came out of a status card once already. So a value
+// made only of digits and the punctuation a number carries takes the reading
+// face, and anything containing a letter takes the UI face.
+ImFont* statusValueFace(const char* text) {
+    for (const char* p = text; p != nullptr && *p != '\0'; ++p) {
+        const unsigned char c = static_cast<unsigned char>(*p);
+        if (std::isalpha(c) != 0) { return cascade::gui::fonts::ui(); }
+    }
+    return cascade::gui::fonts::reading();
+}
+
+// An elapsed duration as a bench clock reads one: m:ss under an hour, h:mm:ss
+// over it. Only ever called with a duration this application timed itself.
+void statusElapsed(char* out, std::size_t cap, double seconds) {
+    if (out == nullptr || cap == 0) { return; }
+    if (!(seconds >= 0.0) || !std::isfinite(seconds)) {
+        out[0] = '\0';
+        return;
+    }
+    const long long total = static_cast<long long>(seconds);
+    const long long h = total / 3600;
+    const long long m = (total % 3600) / 60;
+    const long long s = total % 60;
+    if (h > 0) {
+        std::snprintf(out, cap, "%lld:%02lld:%02lld", h, m, s);
+    } else {
+        std::snprintf(out, cap, "%lld:%02lld", m, s);
+    }
+}
+
+}  // namespace
+
+// THE STATUS COLUMN: what the receiver is doing, in one place.
+//
+// Everything here was already on screen somewhere - buried in a section the
+// user had to open, or in the footer, or nowhere at all. Gathering it into one
+// column is the point: an operator glances right and knows whether the radio,
+// the decoders, the audio and the recorder are healthy without opening
+// anything.
+//
+// EVERY CARD SAYS HOW OLD IT IS OR WHAT IT IS SHOWING. A figure with no
+// context reads as current whether or not it is, and this product's design
+// brief forbids exactly that.
+void AppWindow::drawStatusColumn() {
+    // THE COLUMN IS A PLATE, exactly as the function rail on the other side of
+    // the face is. addBenchPlate lays the ground, the bevel, the engraved title
+    // and the rule under it, and hands back the y beneath that rule - so the
+    // cards start from a measurement rather than from a guess at how tall a
+    // title is.
+    constexpr float kPad = 8.0f;
+    // How long the decoder-line rate is averaged over. Two seconds: long enough
+    // that a burst decoder (ADS-B is silent between aircraft) does not flick
+    // between 0 and 40, short enough that the figure still tracks a receiver
+    // being tuned across a band.
+    constexpr double kRateWindowS = 2.0;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 colTL = ImGui::GetWindowPos();
+    const ImVec2 colSize = ImGui::GetWindowSize();
+    const ImVec2 colBR(colTL.x + colSize.x, colTL.y + colSize.y);
+    if (colSize.x < 40.0f || colSize.y < 60.0f) { return; }
+    const float bodyTop = cascade::gui::addBenchPlate(dl, colTL, colBR, "STATUS");
+
+    ImFont* legendF = cascade::gui::fonts::legend();
+    ImFont* uiF = cascade::gui::fonts::ui();
+    const float tinyPx = cascade::gui::fonts::kTinySize;
+    const float valuePx = cascade::gui::fonts::kUiSize;
+    const float tinyH = legendF->CalcTextSizeA(tinyPx, FLT_MAX, 0.0f, "X").y;
+    const float valueH = uiF->CalcTextSizeA(valuePx, FLT_MAX, 0.0f, "X").y;
+
+    // THE MAKER'S PLATE IS MEASURED FIRST AND DRAWN LAST, so the cards know
+    // where they have to stop. A card laid over it would be dark lettering on
+    // brass, and the plate is the one fixed thing in this column.
+    const float plateH = tinyH * 2.0f + 13.0f;
+    const ImVec2 plateTL(colTL.x + kPad, colBR.y - kPad - plateH);
+    const ImVec2 plateBR(colBR.x - kPad, colBR.y - kPad);
+    const float cardsBottom = plateTL.y - 8.0f;
+
+    const float cardL = colTL.x + kPad;
+    const float cardR = colBR.x - kPad;
+    float y = bodyTop;
+
+    const double nowS = ImGui::GetTime();
+    const ImU32 kFaint = cascade::gui::theme::kInkFaint;
+    const ImU32 kMuted = cascade::gui::theme::kInkMuted;
+
+    // ONE CARD: a well cut into the plate, a caption, a value, and as many
+    // sub-lines as that card has honest things to say. The height is computed
+    // from the lines that actually go in it and never from a multiple of the
+    // current line height - the caption and the value are set at two different
+    // sizes, so "three and a bit lines" is not a measurement of anything, and
+    // when it was, every card clipped its own sub-line to a sliver.
+    //
+    // A card that will not fit above the maker's plate is SKIPPED whole. Half a
+    // card, or a card lettered across the plate, is worse than a card the user
+    // has to make the window taller to see.
+    const auto card = [&](const char* caption, ImU32 valueCol, const char* value,
+                          const StatusLine* lines, int lineCount) {
+        const float h = 6.0f + tinyH + 2.0f + valueH +
+                        static_cast<float>(lineCount) * (tinyH + 1.0f) + 6.0f;
+        if (y + h > cardsBottom) { return; }
+        const ImVec2 tl(cardL, y);
+        const ImVec2 br(cardR, y + h);
+        dl->AddRectFilled(tl, br, cascade::gui::theme::kWell,
+                          cascade::gui::theme::kKeyRounding);
+        dl->AddRect(tl, br,
+                    cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassDark, 0.90f),
+                    cascade::gui::theme::kKeyRounding, 0, cascade::gui::theme::kHairline);
+        // raised=false: the hairline of light along the BOTTOM and right, which
+        // is the whole difference between a card sitting on the plate and one
+        // cut into it.
+        cascade::gui::addBenchBevel(dl, tl, br, cascade::gui::theme::kKeyRounding, false);
+        // CLIPPED TO ITS OWN WELL. A device name is whatever its driver calls
+        // it, and one long enough to reach the next card would be lettering
+        // across a card it is not about.
+        dl->PushClipRect(ImVec2(tl.x + 1.0f, tl.y + 1.0f),
+                         ImVec2(br.x - 1.0f, br.y - 1.0f), true);
+        float ty = tl.y + 6.0f;
+        statusCaption(dl, ImVec2(tl.x + 8.0f, ty), caption);
+        ty += tinyH + 2.0f;
+        dl->AddText(statusValueFace(value), valuePx, ImVec2(tl.x + 8.0f, ty), valueCol,
+                    value);
+        ty += valueH;
+        for (int i = 0; i < lineCount; ++i) {
+            ty += 1.0f;
+            if (lines[i].text != nullptr && lines[i].text[0] != '\0') {
+                dl->AddText(legendF, tinyPx, ImVec2(tl.x + 8.0f, ty), lines[i].colour,
+                            lines[i].text);
+            }
+            ty += tinyH;
+        }
+        dl->PopClipRect();
+        y = br.y + 6.0f;
+    };
+
+    char v[96];
+    char l0[128];
+    char l1[128];
+    char l2[128];
+    char l3[128];
+
+    // --- AUDIO ---------------------------------------------------------------
+    //
+    // THE REFERENCE ARTBOARD LETTERS THIS CARD "AUDIO BUFFER" AND PRINTS "41
+    // ms". NOTHING IN THIS APPLICATION MEASURES THAT. AudioOut keeps its ring
+    // private and publishes no fill level, no depth and no latency; the single
+    // number it does publish about the health of the sound path is a count of
+    // STARVED CALLBACKS. So that is the figure, and the caption names it. A
+    // millisecond number here would have had to be invented, and an invented
+    // reading on an instrument face is the one fault this panel may not have.
+    const unsigned long long under =
+        static_cast<unsigned long long>(pipeline_.audio().underruns());
+    std::snprintf(v, sizeof(v), "%llu", under);
+    {
+        const StatusLine lines[1] = {
+            {under == 0 ? "no callback has starved yet" : "starved callbacks, since start",
+             under == 0 ? kFaint : cascade::gui::theme::kAlarm}};
+        card("AUDIO - UNDERRUNS", cascade::gui::theme::kAmber, v, lines, 1);
+    }
+
+    // --- MESSAGE RATE --------------------------------------------------------
+    //
+    // WHAT IS COUNTED IS SAID ON THE CARD. No decoder plugin reports a message
+    // tally across the ABI and PluginRunner keeps none, so the countable thing a
+    // decoder produces is a LINE of output - one per decoded message for every
+    // text decoder shipped, and status text for the rest. It is DIFFERENCED over
+    // a window rather than sampled: a cumulative counter is not a rate, and
+    // printing one as though it were is the same lie in a shorter form.
+    if (decoderRateWindowS_ < 0.0) {
+        decoderRateWindowS_ = nowS;
+        decoderLinesAtWindow_ = decoderLinesTotal_;
+    } else if (nowS - decoderRateWindowS_ >= kRateWindowS) {
+        decoderLinesPerSec_ = static_cast<float>(
+            static_cast<double>(decoderLinesTotal_ - decoderLinesAtWindow_) /
+            (nowS - decoderRateWindowS_));
+        decoderRateWindowS_ = nowS;
+        decoderLinesAtWindow_ = decoderLinesTotal_;
+    }
+    // BEING FED IS TWO CONDITIONS, NOT ONE. PluginRunner::activeCount says its
+    // instances exist and are matched to the rate the pipeline is configured
+    // for; it does NOT say the DSP threads are turning. A stopped receiver
+    // hands them nothing, so the run state is checked alongside it everywhere
+    // below - the first render of this column read "2 running" and "DECODING"
+    // with the pipeline stopped and the picture frozen.
+    const bool rxRunning = pipeline_.running();
+    // PER MODULE, not per instance - the same population the "of N fitted"
+    // denominator below counts. activeCount() counts decoder INSTANCES, and a
+    // module that declares both an audio decoder and an I/Q one has two, so
+    // the old pair could print "3 running of 2 fitted".
+    const std::size_t matched = fedDecoderCount();
+    const std::size_t feeding = rxRunning ? matched : 0;
+    {
+        StatusLine lines[1];
+        if (feeding == 0) {
+            lines[0] = {rxRunning ? "no decoder is running" : "the receiver is stopped",
+                        kFaint};
+            card("MESSAGE RATE", kMuted, "--", lines, 1);
+        } else if (decoderLinesPerSec_ < 0.0f) {
+            // The first window has not closed yet. "--" rather than 0.0 /s:
+            // "we have not measured" and "we measured nothing" are different
+            // statements and this panel is not allowed to confuse them.
+            lines[0] = {"measuring", kFaint};
+            card("MESSAGE RATE", kMuted, "--", lines, 1);
+        } else {
+            std::snprintf(v, sizeof(v), "%.1f /s",
+                          static_cast<double>(decoderLinesPerSec_));
+            std::snprintf(l0, sizeof(l0), "decoder output lines, %.0f s mean",
+                          kRateWindowS);
+            lines[0] = {l0, kFaint};
+            card("MESSAGE RATE", cascade::gui::theme::kAmber, v, lines, 1);
+        }
+    }
+
+    // --- DECODERS ------------------------------------------------------------
+    //
+    // BEING FED, NOT MERELY INSTALLED. PluginRunner::activeCount is the number
+    // of decoder instances the runner is actually handing samples to - which is
+    // a different question from "the user has not stopped it", and the runner's
+    // own header spends a paragraph on why they must not be conflated. A plugin
+    // that needs a rate the receiver is not producing is idle; it is counted on
+    // the sub-line, so a small figure here is explained rather than mysterious.
+    //
+    // AND THE DENOMINATOR IS DECODERS, WHICH IS WHAT THE CAPTION SAYS. It used
+    // to be every loaded module, so a basemap and a track-info provider - both
+    // of which are fed no signal by design and never can be - sat permanently
+    // in "of N installed, M not fed" under the word DECODERS. Two modules
+    // doing exactly what they were fitted to do were reported as two decoders
+    // that had stopped working. loadedDecoderCount() asks the runner's own
+    // question instead: does this module supply a decoder table at all.
+    const std::size_t installed = loadedDecoderCount();
+    if (!rxRunning) {
+        // READY, NOT RUNNING. The instances are built and matched; the receiver
+        // that would feed them is stopped, so nothing is decoding and the card
+        // must not imply that it is.
+        std::snprintf(v, sizeof(v), "%zu ready", matched);
+        std::snprintf(l0, sizeof(l0), "of %zu fitted - receiver stopped", installed);
+    } else {
+        std::snprintf(v, sizeof(v), "%zu running", feeding);
+        if (installed > feeding) {
+            std::snprintf(l0, sizeof(l0), "of %zu fitted, %zu not fed", installed,
+                          installed - feeding);
+        } else {
+            std::snprintf(l0, sizeof(l0), "of %zu fitted", installed);
+        }
+    }
+    {
+        const StatusLine lines[1] = {{l0, kFaint}};
+        card("DECODERS", feeding > 0 ? cascade::gui::theme::kPhosphor : kMuted, v, lines,
+             1);
+    }
+
+    // --- SINK ----------------------------------------------------------------
+    //
+    // "WHY IS THERE NO SOUND", ANSWERED BEFORE IT IS ASKED - and the duration
+    // beneath it is measured here or not written at all. Nothing in the pipeline
+    // timestamps a mute, so what this column can honestly report is how long IT
+    // has been watching this particular one: the subject is compared against
+    // what it saw last frame and the clock starts when that changes. A mute that
+    // began before the application did, or while this column was hidden, gets no
+    // duration line rather than a fabricated one.
+    const std::string muteBy = muteSubjectText();
+    if (muteBy != muteSubjectSeen_) {
+        muteSubjectSeen_ = muteBy;
+        muteSinceS_ = muteBy.empty() ? -1.0 : nowS;
+    }
+    {
+        StatusLine lines[2];
+        int n = 0;
+        if (!muteBy.empty()) {
+            std::snprintf(l0, sizeof(l0), "by %s", muteBy.c_str());
+            lines[n++] = {l0, kFaint};
+            if (muteSinceS_ >= 0.0) {
+                char elapsed[24];
+                statusElapsed(elapsed, sizeof(elapsed), nowS - muteSinceS_);
+                std::snprintf(l1, sizeof(l1), "for %s", elapsed);
+                lines[n++] = {l1, kFaint};
+            }
+            card("SINK", cascade::gui::theme::kAmber, "MUTED", lines, n);
+        } else if (!pipeline_.audio().everOpened()) {
+            lines[n++] = {"no output device was opened", kFaint};
+            card("SINK", kMuted, "NO DEVICE", lines, n);
+        } else if (!pipeline_.audio().streamAlive()) {
+            // The dead-stream case the audio watchdog exists for: everything
+            // upstream stays healthy and the speakers go quiet, so it has to be
+            // visible from the panel rather than inferred from silence.
+            lines[n++] = {"the output stream stopped", cascade::gui::theme::kAlarm};
+            card("SINK", cascade::gui::theme::kAlarm, "STOPPED", lines, n);
+        } else {
+            std::snprintf(l0, sizeof(l0), "%s",
+                          pipeline_.audio().openedDeviceName().c_str());
+            lines[n++] = {l0, kFaint};
+            card("SINK", cascade::gui::theme::kPhosphor, "OPEN", lines, n);
+        }
+    }
+
+    // --- RECORDER ------------------------------------------------------------
+    //
+    // Both figures come from the take itself: bytesWritten is what stdio
+    // actually accepted (Recorder's header is explicit that its counters only
+    // ever report accepted bytes), and the elapsed time runs from the start
+    // stamp the recorder section already takes. ONLY A LIVE RECORDER'S BYTES ARE
+    // ADDED - a stopped one keeps its final total by design, and including it
+    // would inflate the take that is running with the size of one that ended.
+    const bool iqTaping = iqRecorder_.recording();
+    const bool audioTaping = audioRecorder_.recording();
+    if (iqTaping || audioTaping) {
+        const char* what =
+            (iqTaping && audioTaping) ? "IQ + AUDIO" : (iqTaping ? "IQ" : "AUDIO");
+        const double startS = iqTaping ? iqRecordStartS_ : audioRecordStartS_;
+        char elapsed[24];
+        statusElapsed(elapsed, sizeof(elapsed), nowS - startS);
+        double bytes = 0.0;
+        if (iqTaping) { bytes += static_cast<double>(iqRecorder_.bytesWritten()); }
+        if (audioTaping) { bytes += static_cast<double>(audioRecorder_.bytesWritten()); }
+        std::snprintf(l0, sizeof(l0), "%s elapsed", elapsed);
+        std::snprintf(l1, sizeof(l1), "%.1f MB written", bytes / (1024.0 * 1024.0));
+        const StatusLine lines[2] = {{l0, kFaint}, {l1, kFaint}};
+        card("RECORDER", cascade::gui::theme::kAlarm, what, lines, 2);
+    } else {
+        const StatusLine lines[1] = {{"no file open", kFaint}};
+        card("RECORDER", kMuted, "off", lines, 1);
+    }
+
+    // --- WEB ACCESS ----------------------------------------------------------
+    //
+    // NOT ON THE REFERENCE ARTBOARD, AND KEPT ANYWAY. It is a listening socket
+    // on the user's own machine, and whether it is open is exactly the sort of
+    // thing a status column exists to answer without opening a section. Dropping
+    // it to match a mock would be losing a fact to gain a resemblance.
+    if (webServer_.running()) {
+        std::snprintf(v, sizeof(v), "port %d", webCfg_.port);
+        std::snprintf(l0, sizeof(l0), "%s", webCfg_.bindAddress.c_str());
+        const StatusLine lines[1] = {{l0, kFaint}};
+        card("WEB ACCESS", cascade::gui::theme::kPhosphor, v, lines, 1);
+    } else {
+        const StatusLine lines[1] = {{"not listening", kFaint}};
+        card("WEB ACCESS", kMuted, "off", lines, 1);
+    }
+
+    // --- RECEIVER, and it is the tall one ------------------------------------
+    //
+    // The reference card carries four lines: the device, the antenna port, the
+    // gain and a frequency correction. THE FOURTH DOES NOT EXIST HERE. Nothing
+    // in FoxSDR reads, sets or stores a PPM correction - not SoapySource, not
+    // the config store, nowhere - so this card has no "0.5 PPM" line, because
+    // the only way to draw one would be to make the number up.
+    //
+    // The three that do exist are lettered by what they ARE. The antenna is a
+    // readback (SoapySource::antenna(), taken after the open), the gain is what
+    // this application COMMANDED - the driver offers no per-element readback -
+    // and both are settings, so both are cream. The sample rate is the device's
+    // own readback of what it is delivering, so it is amber: the palette's rule
+    // is that amber belongs to a measurement and nothing else.
+    {
+        const bool faulted = pipeline_.faulted();
+        StatusLine lines[4];
+        int n = 0;
+        std::snprintf(l0, sizeof(l0), "%s", pipeline_.activeSource().name());
+        lines[n++] = {l0, cascade::gui::theme::kCream};
+        if (soapy_ != nullptr && !soapyAntenna_.empty()) {
+            std::snprintf(l1, sizeof(l1), "ANTENNA %s", soapyAntenna_.c_str());
+            lines[n++] = {l1, cascade::gui::theme::kCream};
+        }
+        l2[0] = '\0';
+        if (soapy_ != nullptr) {
+            if (soapyAgc_) {
+                std::snprintf(l2, sizeof(l2), "GAIN AUTO - AGC ON");
+            } else if (!soapyGainNames_.empty() &&
+                       soapyGainsDb_.size() == soapyGainNames_.size()) {
+                // The first element by name, and a count of the rest. Summing
+                // them would print a total this application never commanded and
+                // the driver never reported.
+                if (soapyGainNames_.size() == 1) {
+                    std::snprintf(l2, sizeof(l2), "%s %.0f dB", soapyGainNames_[0].c_str(),
+                                  static_cast<double>(soapyGainsDb_[0]));
+                } else {
+                    std::snprintf(l2, sizeof(l2), "%s %.0f dB +%zu more",
+                                  soapyGainNames_[0].c_str(),
+                                  static_cast<double>(soapyGainsDb_[0]),
+                                  soapyGainNames_.size() - 1);
+                }
+            }
+            if (l2[0] != '\0') { lines[n++] = {l2, cascade::gui::theme::kCream}; }
+        }
+        const double rate = pipeline_.activeSource().sampleRateHz();
+        if (std::isfinite(rate) && rate > 0.0) {
+            std::snprintf(l3, sizeof(l3), "%.3f MS/s", rate / 1.0e6);
+            lines[n++] = {l3, cascade::gui::theme::kAmber};
+        }
+        card("RECEIVER",
+             faulted ? cascade::gui::theme::kAlarm
+                     : (rxRunning ? cascade::gui::theme::kPhosphor : kMuted),
+             faulted ? "FAULT" : (rxRunning ? "RUNNING" : "STOPPED"), lines, n);
+    }
+
+    // --- the maker's plate ---------------------------------------------------
+    //
+    // The only brass in this column, so the only thing in it that takes the
+    // engraved treatment - dark cut into metal with the lit lower lip of the cut
+    // beneath. Two lines, because a maker's plate carries the maker and the
+    // type. Drawn last so nothing can be laid over it, and skipped entirely on a
+    // column too short to hold it above the title rule.
+    if (plateTL.y > bodyTop && plateBR.x > plateTL.x + 16.0f) {
+        const float round = cascade::gui::theme::kKeyRounding;
+        dl->AddRectFilled(plateTL, plateBR, cascade::gui::theme::kBrassShade, round);
+        if (plateBR.x - plateTL.x > round * 2.0f) {
+            dl->AddRectFilledMultiColor(ImVec2(plateTL.x + round, plateTL.y),
+                                        ImVec2(plateBR.x - round, plateBR.y),
+                                        cascade::gui::theme::kBrassShade,
+                                        cascade::gui::theme::kBrassShade,
+                                        cascade::gui::theme::kBrassMid,
+                                        cascade::gui::theme::kBrassMid);
+        }
+        cascade::gui::addBenchBevel(dl, plateTL, plateBR, round, true);
+        const float midX = (plateTL.x + plateBR.x) * 0.5f;
+        statusEngrave(dl, midX, plateTL.y + 5.0f, tinyPx, "FOX & SCHIRMER");
+        statusEngrave(dl, midX, plateTL.y + 5.0f + tinyH + 1.0f, tinyPx,
+                      "TYPE 71 - MK II");
+    }
+}
+
+namespace {
+
+// --- THE TOP BAR'S GEOMETRY --------------------------------------------------
+//
+// Measured off the reference face and kept in ITS units - a 1720 x 986 artboard
+// whose top bar is 157 tall - but laid out from the bar's own top-left corner
+// and never from that width. The cluster from the transport button to the
+// volume dial is a fixed piece of hardware, so it keeps its size as the window
+// grows; only the two meters are pinned to the right edge.
+//
+// WHY EXPLICIT GEOMETRY AND NOT SameLine. The reference positions things
+// vertically as well as horizontally: a caption at 45, the dial it names at 82,
+// the value it reads at 126, all three in one column. ImGui's cursor flow can
+// express a row of widgets and nothing else, and a row of widgets is exactly
+// what the old bar looked like.
+constexpr float kBarH = 160.0f;   // the bar's height, in reference units
+constexpr float kCoreW = 800.0f;  // transport button through volume dial
+
+// THE VOLUME DIAL'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the
+// bar's scale floor is a promise about this one control and a promise checked
+// against a number typed somewhere else is not checked at all.
+constexpr float kVolumeCx = 745.0f;  // the dial's centre, in reference units
+constexpr float kVolumeR = 26.0f;    // ...and its radius
+constexpr float kVolumeEdgePad = 6.0f;
+
+// The bar only ever shrinks, and it stops here: below this the counter's
+// digits stop being figures and the dial stops being a control (its primitive
+// draws nothing under a 6 px radius, which at this scale is a long way off).
+constexpr float kBarMinScale = 0.62f;
+
+// AND THE FLOOR IS ONLY HONEST IF THE WINDOW CANNOT GO NARROWER THAN IT NEEDS.
+// kMinWindowW is the width limit run() puts on the OS window; the cabinet eats
+// at most kCabinetInsetMaxPx of it before the bar is drawn. If someone lowers
+// that limit, or moves the dial right, this stops compiling rather than
+// quietly clipping the only volume control out of the application.
+static_assert((kVolumeCx + kVolumeR + kVolumeEdgePad) * kBarMinScale <=
+                  static_cast<float>(kMinWindowW) - kCabinetInsetMaxPx,
+              "the top bar's floor scale must leave the volume dial inside the "
+              "narrowest window run() allows");
+
+// THE COUNTER, CELL BY CELL, AND SHARED WITH drawFrequencyReadout. The bar
+// sizes its middle section from the same numbers the readout draws with,
+// because two copies of this arithmetic is how a well and the digits inside it
+// come to disagree about where they are.
+constexpr int kFreqCells = 10;
+constexpr float kFreqCellW = 30.0f;
+constexpr float kFreqCellH = 44.0f;
+constexpr float kFreqGap = 3.0f;        // between apertures
+constexpr float kFreqGroupGap = 10.0f;  // ...and at a thousands break
+constexpr float kFreqWellPadX = 12.0f;
+constexpr float kFreqWellPadY = 6.0f;
+
+// A wider gap BEFORE these cells: after the first digit, and after the fourth
+// and the seventh, which is where a mechanical counter's thousands breaks
+// fall. The reference calls out the break after the seventh; the other two are
+// the same rule carried up the scale, and dropping them would make ten
+// undifferentiated digits harder to read rather than easier.
+constexpr bool freqGroupBreak(int i) { return i == 1 || i == 4 || i == 7; }
+
+constexpr float freqRowWidth() {
+    float w = 0.0f;
+    for (int i = 0; i < kFreqCells; ++i) {
+        if (i > 0) { w += freqGroupBreak(i) ? kFreqGroupGap : kFreqGap; }
+        w += kFreqCellW;
+    }
+    return w;
+}
+constexpr float kFreqWellW = freqRowWidth() + kFreqWellPadX * 2.0f;
+constexpr float kFreqWellH = kFreqCellH + kFreqWellPadY * 2.0f;
+
+// LETTER-SPACING, WHICH DEAR IMGUI HAS NOT, and which is most of what
+// separates an engraved legend from a word in a label. ASCII only and
+// deliberately: every caption on this bar is a machine legend in capitals.
+float barTrackedWidth(ImFont* f, float px, const char* text, float track) {
+    if (f == nullptr || text == nullptr) { return 0.0f; }
+    float w = 0.0f;
+    int glyphs = 0;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const char one[2] = {*p, '\0'};
+        w += f->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x;
+        ++glyphs;
+    }
+    if (glyphs > 1) { w += track * static_cast<float>(glyphs - 1); }
+    return w;
+}
+
+// A caption CUT INTO THE BRASS: the lit lower lip of the cut first, then the
+// cut itself. Dark-into-metal is this design's treatment for a caption, and
+// for a caption only - a figure goes on glass, which is why every reading on
+// this bar is amber in a well or ivory on a meter's face and none of them is
+// lettered like this.
+void barEngrave(ImDrawList* dl, ImVec2 at, float px, const char* text, bool centred) {
+    if (dl == nullptr || text == nullptr || text[0] == '\0') { return; }
+    ImFont* f = cascade::gui::fonts::legend();
+    const float track = px * 0.24f;
+    if (centred) { at.x -= barTrackedWidth(f, px, text, track) * 0.5f; }
+    const ImU32 lip =
+        cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.55f);
+    float x = at.x;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const char one[2] = {*p, '\0'};
+        dl->AddText(f, px, ImVec2(x, at.y + 1.0f), lip, one);
+        dl->AddText(f, px, ImVec2(x, at.y), cascade::gui::theme::kEngraved, one);
+        x += f->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x + track;
+    }
+}
+
 }  // namespace
 
 void AppWindow::drawToolbar() {
+    // THE BAR IS A PANEL, NOT A ROW OF CONTROLS: a brass deck carrying the
+    // transport, the master lamps, the counter, the volume dial and the two
+    // meters, with a bevelled rail across its foot dividing it from the body
+    // below. Everything in it is placed at a measured position.
+    const float availW = ImGui::GetContentRegionAvail().x;
+
+    // ONE SCALE FOR THE WHOLE BAR, AND IT ONLY EVER SHRINKS. A window narrower
+    // than the fixed cluster gets the same panel drawn smaller rather than a
+    // panel with pieces missing - the volume dial is the ONLY volume control
+    // in the application, so dropping it on a narrow window would be a
+    // regression wearing the clothes of a layout decision.
+    //
+    // THE FLOOR IS KEPT BY THE WINDOW, NOT BY THIS LINE. Stopping the scale at
+    // kBarMinScale is what keeps the cluster legible; it is run()'s width limit
+    // on the OS window that keeps the cluster INSIDE the bar, and the
+    // static_assert beside kBarMinScale is what ties the two together. Before
+    // that limit existed this floor was a claim the code could not keep: at
+    // 300 px of width the dial was drawn 160 px past the bar's right edge, the
+    // child clipped it, and the application had no volume control at all.
+    float scale = 1.0f;
+    if (availW > 0.0f && availW < kCoreW) {
+        scale = std::max(kBarMinScale, availW / kCoreW);
+    }
+    const float barH = kBarH * scale;
+
+    // DRAWN IN A CHILD, so the bar clips itself. Explicit geometry means an
+    // item can be asked for at a position a narrow window cannot hold, and a
+    // child cuts it off at the bar's edge instead of letting it paint across
+    // the spectrum below.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    const bool barOpen =
+        ImGui::BeginChild("##bench_topbar", ImVec2(0.0f, barH), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    // A CULLED CHILD DRAWS NOTHING AT ALL. Everything below paints straight
+    // into a draw list, which does not consult ImGui's SkipItems the way a
+    // widget does, so the bar has to check for itself rather than emit a
+    // panel's worth of geometry into a window that is not being rendered.
+    if (!barOpen) {
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 barTL = ImGui::GetWindowPos();
+    const float barW = ImGui::GetWindowSize().x;
+    const ImVec2 barBR(barTL.x + barW, barTL.y + barH);
+    // Reference units to screen pixels, in one place: X and Y for a position,
+    // S for a length.
+    const auto X = [&](float u) { return barTL.x + u * scale; };
+    const auto Y = [&](float u) { return barTL.y + u * scale; };
+    const auto S = [&](float u) { return u * scale; };
+    // The engraving never goes below nine pixels: a caption too small to read
+    // is not a smaller caption, it is dirt on the panel.
+    const float capPx = std::max(9.0f, cascade::gui::fonts::kTinySize * scale);
+
+    // The brass the deck is machined from, lit from above like every other
+    // surface on this face.
+    dl->AddRectFilledMultiColor(barTL, barBR, cascade::gui::theme::kBrassShade,
+                                cascade::gui::theme::kBrassShade,
+                                cascade::gui::theme::kBrassMid,
+                                cascade::gui::theme::kBrassMid);
+
+    // --- the transport ------------------------------------------------------
     // The label reads the pipeline, not a local flag, so the button can never
-    // disagree with the actual thread state.
+    // disagree with the actual thread state - drawBenchStopButton letters
+    // itself STOP or START from the same bool.
     const bool running = pipeline_.running();
-    const bool transport = ImGui::Button(running ? "STOP" : "PLAY", ImVec2(74.0f, 0.0f));
-    if (transport) {
+    if (cascade::gui::drawBenchStopButton(dl, ImVec2(X(74.0f), Y(85.0f)), S(46.0f),
+                                          running)) {
         if (running) {
             // Play-stop while recording stops the recording cleanly (spec):
             // taps uninstalled and both WAVs finalized BEFORE the DSP
@@ -1400,65 +2756,94 @@ void AppWindow::drawToolbar() {
             pipeline_.start();
         }
     }
-    // THE MASTER CLUSTER. Four lamps, each with its word beneath it, because
-    // a state carried by colour alone fails the design's own black-and-white
-    // rule - and MUTE amber against FAIL rust is a hue distinction that about
-    // one man in twelve cannot make.
-    ImGui::SameLine(0.0f, 16.0f);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(running ? "Stop the receiver" : "Start the receiver");
+    }
+    // THE MASTER CLUSTER. Four lamps under an engraved caption, each with its
+    // word beneath it, because a state carried by colour alone fails the
+    // design's own black-and-white rule - and MUTE amber against FAIL rust is
+    // a hue distinction that about one man in twelve cannot make.
+    barEngrave(dl, ImVec2(X(150.0f), Y(52.0f)), capPx, "MASTER", false);
     {
-        ImDrawList* mdl = ImGui::GetWindowDrawList();
-        const float r = 5.0f;
-        const float step = 34.0f;
-        const ImVec2 at = ImGui::GetCursorScreenPos();
-        const float cy = at.y + ImGui::GetFrameHeight() * 0.4f;
-        // ACTUALLY DECODING, not merely installed: a plugin the user has
-        // stopped is not a decoder that is running, and a lamp that counted it
-        // would be reporting inventory rather than activity.
-        std::size_t decoders = 0;
-        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-            // pluginIsStopped/pluginKey are the application's own pair for
-            // this question - asking it any other way is how two places come
-            // to disagree about whether a plugin is running.
-            if (p.loaded && !pluginIsStopped(cascade::core::pluginKey(p))) {
-                ++decoders;
-            }
-        }
+        // BEING FED, WHICH IS THE STRONGEST THING THIS APPLICATION CAN
+        // HONESTLY SAY, and the same predicate the DECODERS card in the status
+        // column prints a few hundred pixels away. That card reads "2 running,
+        // of 4 installed, 2 not fed"; this lamp used to count every plugin the
+        // user had not stopped, so a rig with four installed and none being
+        // handed samples lit DEC while the card said nothing was running.
+        //
+        // PluginRunner::activeCount is the number of decoder instances the
+        // runner is actually giving samples to - not "loaded", and not "the
+        // user has not stopped it" - and the receiver has to be running for
+        // those samples to exist at all, which is why pipeline_.running() is
+        // part of it: the runner keeps its matched instances across a stop.
+        //
+        // It is a PROXY and the word is meant: being fed is not proof that a
+        // frame was decoded, only that the samples are arriving. Nothing in
+        // the plugin ABI reports a successful decode, so this is the honest
+        // ceiling, and MESSAGE RATE in the status column is where the traffic
+        // itself is reported.
+        const bool decoding = running && pluginRunner_.activeCount() > 0;
         const bool muted = !muteSubjectText().empty();
-        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + r, cy), r,
-                                    cascade::gui::theme::kPhosphor, running, "RUN");
-        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + step + r, cy), r,
-                                    cascade::gui::theme::kPhosphor, decoders > 0, "DEC");
-        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + step * 2.0f + r, cy), r,
-                                    cascade::gui::theme::kAmber, muted, "MUTE");
-        cascade::gui::drawBenchLamp(mdl, ImVec2(at.x + step * 3.0f + r, cy), r,
-                                    cascade::gui::theme::kAlarm, pipeline_.faulted(),
-                                    "FAIL");
-        ImGui::Dummy(ImVec2(step * 3.0f + r * 2.0f, 0.0f));
+        struct MasterLamp {
+            ImU32 colour;
+            bool lit;
+            const char* word;
+        };
+        const MasterLamp lamps[4] = {
+            {cascade::gui::theme::kPhosphor, running, "RUN"},
+            {cascade::gui::theme::kPhosphor, decoding, "DEC"},
+            {cascade::gui::theme::kAmber, muted, "MUTE"},
+            {cascade::gui::theme::kAlarm, pipeline_.faulted(), "FAIL"},
+        };
+        // drawBenchLamp letters its caption in whatever face is bound, and the
+        // UI face at its normal size runs MUTE straight into FAIL at this
+        // pitch. The engraving face at eleven fits the 28-unit spacing the
+        // reference draws them on.
+        ImGui::PushFont(cascade::gui::fonts::legend(), std::max(9.0f, S(11.0f)));
+        for (int i = 0; i < 4; ++i) {
+            cascade::gui::drawBenchLamp(
+                dl, ImVec2(X(158.0f + 28.0f * static_cast<float>(i)), Y(86.0f)), S(7.0f),
+                lamps[i].colour, lamps[i].lit, lamps[i].word);
+        }
+        ImGui::PopFont();
     }
 
-    ImGui::SameLine(0.0f, 18.0f);
+    // --- the counter --------------------------------------------------------
+    // A groove between the master cluster and the tuned figure, then the
+    // engraved caption over the well the digits are recessed into.
+    cascade::gui::addBenchDivider(dl, X(272.0f), Y(30.0f), Y(135.0f));
+    barEngrave(dl, ImVec2(X(304.0f), Y(42.0f)), capPx, "TUNED - HERTZ", false);
+    drawFrequencyReadout(X(292.0f), Y(62.0f), scale);
+    cascade::gui::addBenchDivider(dl, X(684.0f), Y(30.0f), Y(135.0f));
     // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
     // perfectly good control and completely wrong on a bench receiver; this
     // one turns, carries its own tick arc, and answers the wheel as well as
     // the hand so it is still usable without a drag.
     {
-        ImDrawList* tdl = ImGui::GetWindowDrawList();
-        const float r = ImGui::GetFrameHeight() * 0.46f;
-        const ImVec2 at = ImGui::GetCursorScreenPos();
-        const ImVec2 c(at.x + r, at.y + ImGui::GetFrameHeight() * 0.5f);
-        const float moved = cascade::gui::drawBrassVolumeKnob(tdl, c, r, volume_);
+        const float cx = X(kVolumeCx);
+        barEngrave(dl, ImVec2(cx, Y(42.0f)), capPx, "VOLUME", true);
+        const float moved = cascade::gui::drawBrassVolumeKnob(
+            dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), volume_);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Volume - drag the dial, or scroll over it");
+        }
         if (moved >= 0.0f) {
             volume_ = moved;
             pipeline_.audio().setVolume(volume_);
         }
-        ImGui::SameLine(0.0f, r * 0.9f);
-        char vtxt[24];
-        std::snprintf(vtxt, sizeof(vtxt), "VOL %.2f", static_cast<double>(volume_));
-        ImGui::AlignTextToFramePadding();
-        benchHint(vtxt);
+        // THE SETTING, IN CREAM, AND DELIBERATELY NOT IN AMBER. This is where
+        // the hand has put the control, not something the radio measured, and
+        // the palette reserves amber for a reading. Figures, so the monospaced
+        // face: the number stops shuffling sideways as the dial turns.
+        char vtxt[16];
+        std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(volume_));
+        ImFont* vf = cascade::gui::fonts::reading();
+        const float vpx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale);
+        const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, vtxt);
+        dl->AddText(vf, vpx, ImVec2(cx - vs.x * 0.5f, Y(118.0f)),
+                    cascade::gui::theme::kCream, vtxt);
     }
-    ImGui::SameLine(0.0f, 24.0f);
-    drawFrequencyReadout();
 
     // THE TWO METERS, and BOTH ARE DRIVEN BY THE FIGURE PRINTED UNDER THEM.
     //
@@ -1474,79 +2859,162 @@ void AppWindow::drawToolbar() {
     // meter, because this application measures no such thing and inventing one
     // would be the same lie in a different place; the second meter reports the
     // frame time it actually has, and says so.
-    {
-        const float meterW = 92.0f;
-        const float meterH = ImGui::GetFrameHeight() * 2.6f;
-        // SameLine's SECOND argument is spacing from the previous item, not a
-        // position - passing the remaining width there pushed both meters off
-        // the right edge of the window, where they drew perfectly and were
-        // never seen. The FIRST argument is the absolute x this wants.
-        const float barW = ImGui::GetWindowWidth();
-        if (barW > meterW * 2.0f + 460.0f) {
-            ImGui::SameLine(barW - meterW * 2.0f - 34.0f);
-            ImDrawList* mdl = ImGui::GetWindowDrawList();
-            const ImVec2 at = ImGui::GetCursorScreenPos();
+    //
+    // THE REFERENCE CAPTIONS THE SECOND METER "PROCESSOR", AND IT IS NOT
+    // RENAMED TO MATCH. Nothing in this application measures processor load -
+    // there is no such figure anywhere in the pipeline, the plugin host or the
+    // watchdog - so a meter under that caption would have to be fed by
+    // something invented, which is the artboard's own fault repeated in our
+    // code. It keeps the name of the thing it actually measures.
+    const float lineH = ImGui::GetTextLineHeight();
+    constexpr float kMeterW = 126.0f;
+    constexpr float kMeterFaceH = 66.0f;
+    // drawBenchMeter spends one text line above the face on the caption and
+    // one below it on the value, so the height asked for is the face the
+    // reference measures plus both of them.
+    const float meterH = kMeterFaceH + lineH * 2.0f + 8.0f;
+    const float meter2X = barTL.x + barW - 34.0f - kMeterW;
+    const float meter1X = meter2X - 16.0f - kMeterW;
+    // DROPPED ENTIRELY ON A NARROW WINDOW rather than allowed to slide left
+    // into the volume dial. They are the least load-bearing things on this bar
+    // - both figures are also in the status column - and the alternative is
+    // two instruments overlapping a control, or two drawn off the right edge
+    // where they render perfectly and are never seen.
+    const bool showMeters = (barW >= kCoreW + kMeterW * 2.0f + 110.0f);
+    if (showMeters) {
+        const float my = barTL.y + 28.0f;
 
-            // SAMPLE RATE: full scale 10 MS/s, which covers every device this
-            // application has been run against without compressing the common
-            // 2 MS/s case into the first tenth of the arc.
-            const double rate = pipeline_.activeSource().sampleRateHz();
-            const bool haveRate = std::isfinite(rate) && rate > 0.0;
-            char rateTxt[32];
-            std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
-                          rate / 1.0e6);
-            cascade::gui::drawBenchMeter(mdl, at, meterW, meterH, "SAMPLE RATE",
-                                         static_cast<float>(rate / 10.0e6), haveRate,
-                                         rateTxt);
+        // SAMPLE RATE: full scale 10 MS/s, which covers every device this
+        // application has been run against without compressing the common
+        // 2 MS/s case into the first tenth of the arc.
+        const double rate = pipeline_.activeSource().sampleRateHz();
+        const bool haveRate = std::isfinite(rate) && rate > 0.0;
+        char rateTxt[32];
+        std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
+                      rate / 1.0e6);
+        cascade::gui::drawBenchMeter(dl, ImVec2(meter1X, my), kMeterW, meterH,
+                                     "SAMPLE RATE", static_cast<float>(rate / 10.0e6),
+                                     haveRate, rateTxt, "MS/s");
 
-            // FRAME TIME: the GUI's own, from ImGui's delta, against a 16.7 ms
-            // budget - so full scale is "one frame's worth of 60 Hz". It is a
-            // real measurement of a real thing, and it is NOT called PROCESSOR
-            // because it is not the DSP load and must not be read as one.
-            const float dt = ImGui::GetIO().DeltaTime;
-            const bool haveDt = dt > 0.0f && dt < 1.0f;
-            char dtTxt[32];
-            std::snprintf(dtTxt, sizeof(dtTxt), haveDt ? "%.0f %% - %.1f ms" : "--",
-                          static_cast<double>(dt) * 1000.0 / 16.7 * 100.0,
-                          static_cast<double>(dt) * 1000.0);
-            cascade::gui::drawBenchMeter(mdl, ImVec2(at.x + meterW + 16.0f, at.y), meterW,
-                                         meterH, "FRAME TIME", dt * 1000.0f / 16.7f,
-                                         haveDt, dtTxt);
-            ImGui::Dummy(ImVec2(meterW * 2.0f + 16.0f, meterH));
-        }
+        // FRAME TIME: the GUI's own, from ImGui's delta, against a 16.7 ms
+        // budget - so full scale is "one frame's worth of 60 Hz". It is a
+        // real measurement of a real thing, and it is NOT called PROCESSOR
+        // because it is not the DSP load and must not be read as one.
+        const float dt = ImGui::GetIO().DeltaTime;
+        const bool haveDt = dt > 0.0f && dt < 1.0f;
+        char dtTxt[32];
+        std::snprintf(dtTxt, sizeof(dtTxt), haveDt ? "%.0f %% - %.1f ms" : "--",
+                      static_cast<double>(dt) * 1000.0 / 16.7 * 100.0,
+                      static_cast<double>(dt) * 1000.0);
+        cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), kMeterW, meterH,
+                                     "FRAME TIME", dt * 1000.0f / 16.7f, haveDt, dtTxt,
+                                     "ms");
     }
+
     // Beside the frequency, because the banner is ABOUT the frequency: it
     // appears when the user has tuned away from a decoder's preset and kept
     // the decoder running, and the two things it has to be read together with
     // are the readout that just changed and the volume control that is not
     // the reason there is no sound.
-    drawMuteBanner();
+    //
+    // It takes the bar's open middle where there is one, and the strip under
+    // the counter where there is not. Both are inside the bar, and neither can
+    // reach the dial or the meters - a warning that overlaps a control is a
+    // warning the user cannot act on.
+    {
+        const float from = X(kCoreW) + 12.0f;
+        const float to = showMeters ? meter1X - 16.0f : barTL.x + barW - 12.0f;
+        ImVec2 at(from, Y(62.0f));
+        if (to - from < 220.0f) { at = ImVec2(X(300.0f), Y(124.0f)); }
+        ImGui::SetCursorScreenPos(at);
+        // A zero-sized item so the SameLine drawMuteBanner opens with has a
+        // line to resume: the banner lays itself out and this is the only way
+        // to tell it where.
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+        drawMuteBanner();
+    }
+
+    // THE RAIL ACROSS THE FOOT. A light hairline directly above a dark one,
+    // and the whole of what divides this deck from the body below it - which
+    // is why the root layout no longer draws an ImGui separator under the bar.
+    cascade::gui::addBenchRail(dl, barTL.x + S(12.0f), barTL.x + barW - S(12.0f),
+                               barTL.y + barH - 3.0f);
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
 
-void AppWindow::drawFrequencyReadout() {
+void AppWindow::drawFrequencyReadout(float wellX, float wellY, float scale) {
     // Fixed 10-digit field grouped in thousands ("0.100.000.000" at 100 MHz).
     // The field width is constant so digits never shift as the tuned
     // frequency changes; the zeros (and separators) ahead of the first
     // significant digit are dimmed so the eye reads only the live value.
     //
-    // The value shown is ALWAYS the active source's centerFrequencyHz()
-    // readback — nominal for the generator/file, real device readback for
-    // Soapy — so the display can never disagree with the hardware. Tuning:
-    // the mouse wheel over a digit steps the frequency by that digit's place
-    // value (clamped at 0) through setCenterFrequencyHz(); the change shows
-    // up via the same readback on the next frame. activeSource() is a
-    // GUI/control-thread call per the IqSource contract, and this IS that
-    // thread — the same one that performs source swaps.
-    cascade::source::IqSource& src = pipeline_.activeSource();
-    const double hz = std::max(0.0, src.centerFrequencyHz());
+    // WHAT THE COUNTER SHOWS IS THE TUNED STATION - the source centre readback
+    // PLUS the VFO offset - and the bar letters it "TUNED - HERTZ". Those two
+    // used to disagree: the counter drew the bare centre, so with the VFO
+    // parked 5 kHz down a live capture read 1090.000000 MHz here while the
+    // waterfall's own footer read 1089.9950 MHz for the same instant. One of
+    // them had to give, and it is the value that gives, for three reasons.
+    //
+    // FIRST, EVERYTHING ELSE IN THE APPLICATION ALREADY MEANS TUNED. The band
+    // plan lookup, the bookmark this counter's neighbour saves, the scanner's
+    // user-tune baseline and the status footer all read currentAbsoluteHz();
+    // the counter was the only surface reading the centre, and it is the one
+    // with the caption on it.
+    //
+    // SECOND, THE TYPED EDITOR DID NOT ROUND-TRIP. It seeds itself from the
+    // figure on the drums and commits through tuneAbsoluteHz(), so with any
+    // VFO offset at all, opening the editor and pressing Enter without typing
+    // anything moved the radio by that offset. Seeding from the same quantity
+    // the commit path applies is what makes an unchanged edit a no-op.
+    //
+    // THIRD, THE READBACK ARGUMENT SURVIVES THE CHANGE. The comment this
+    // replaces defended the centre on the grounds that it is a readback -
+    // nominal for the generator and the IQ file, the device's own answer for
+    // Soapy - so the display can never disagree with the hardware. That still
+    // holds: the offset is an exact number this window set itself, added to
+    // that same readback, so the counter still cannot drift from what the
+    // tuner actually did. What it now also cannot do is disagree with the
+    // rest of the window.
+    //
+    // Tuning: the mouse wheel over a digit steps the TUNED frequency by that
+    // digit's place value through tuneAbsoluteHz(), which commands the source
+    // centre and leaves the offset where the user put it, so the digit under
+    // the cursor is the digit that moves. activeSource() is a GUI/control-
+    // thread call per the IqSource contract, and this IS that thread — the
+    // same one that performs source swaps.
+    const double hz = std::max(0.0, currentAbsoluteHz());
+    // A tune may never ask the source for a negative centre, so the lowest
+    // TUNED frequency the wheel can reach is the offset itself when that
+    // offset is positive.
+    const double minTunedHz = std::max(0.0, pipeline_.vfoOffsetHz());
+
+    // THE WELL FIRST, because everything else in the counter sits inside it -
+    // the ten apertures when the figure is being shown, the typed field when
+    // it is being set. Its size comes from the cells it holds, so the bar that
+    // placed it and the readout that fills it cannot disagree about where the
+    // counter ends.
+    ImDrawList* fdl = ImGui::GetWindowDrawList();
+    const ImVec2 wtl(wellX, wellY);
+    const ImVec2 wbr(wellX + kFreqWellW * scale, wellY + kFreqWellH * scale);
+    cascade::gui::drawFreqDrumWell(fdl, wtl, wbr);
 
     // --- Typed entry (click the readout) ------------------------------------
     // Enter commits, Escape or clicking away cancels. The field is seeded in
     // MHz because that is how frequencies are spoken; parseFrequencyHz still
     // accepts Hz, kHz and GHz with an explicit suffix.
     if (freqEditing_) {
-        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.2f);
-        ImGui::SetNextItemWidth(300.0f);
+        // IN THE WELL THE DIGITS CAME OUT OF. The editor used to open wherever
+        // the cursor happened to be, which on a bar laid out by position is
+        // nowhere in particular; typing a frequency belongs in the counter's
+        // own aperture, at the size the aperture has room for.
+        ImGui::PushFont(cascade::gui::fonts::ui(),
+                        std::max(14.0f, kFreqCellH * scale * 0.60f));
+        const float inputH = ImGui::GetFrameHeight();
+        ImGui::SetCursorScreenPos(
+            ImVec2(wtl.x + 6.0f, wtl.y + (wbr.y - wtl.y - inputH) * 0.5f));
+        ImGui::SetNextItemWidth(wbr.x - wtl.x - 12.0f);
         if (freqEditFocus_) { ImGui::SetKeyboardFocusHere(); }
         const bool commit = ImGui::InputText(
             "##freq_edit", freqEditBuf_, sizeof(freqEditBuf_),
@@ -1581,10 +3049,6 @@ void AppWindow::drawFrequencyReadout() {
                   static_cast<unsigned long long>(
                       std::llround(std::min(hz, kMaxDisplayHz))));
 
-    const ImVec4 bright = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    ImVec4 dim = bright;
-    dim.w *= 0.25f;
-
     // THE COUNTER IS A ROW OF DRUMS, in the handoff's 1960s bench: amber
     // digits in machined apertures, recessed into a dark well, grouped in
     // thousands by a wider gap rather than by a printed separator - which is
@@ -1595,30 +3059,32 @@ void AppWindow::drawFrequencyReadout() {
     // opens the typed editor. Those are the reasons this readout is worth
     // having at all, and a restyle that lost them would be a downgrade
     // wearing better clothes.
-    const float cellH = ImGui::GetFrameHeight() * 1.55f;
-    const float cellW = cellH * 0.62f;
+    //
+    // THE CELLS ARE PLACED, NOT FLOWED. Each aperture's left edge is computed
+    // from the well's, so the row cannot drift with ImGui's item spacing and
+    // the bar can put the whole counter wherever its own geometry says.
+    //
+    // WHICH DIGITS ARE DIM IS A MEASUREMENT, NOT A STYLE. The zeros ahead of
+    // the first significant figure are the dark ones, because they carry no
+    // value; the reference dims its three trailing digits instead, which would
+    // say the Hz are somehow less real than the MHz.
+    const float cellW = kFreqCellW * scale;
+    const float cellH = kFreqCellH * scale;
     const float fontPx = cellH * 0.66f;
-    const float wide = cellW * 0.36f;   // the thousands gap
-    ImDrawList* fdl = ImGui::GetWindowDrawList();
-    {
-        // The well behind the whole row, sized from the cells it will hold.
-        float total = 0.0f;
-        for (int i = 0; i < 10; ++i) {
-            total += cellW + ((i == 1 || i == 4 || i == 7) ? wide : 2.0f);
+    const float cellY = wtl.y + kFreqWellPadY * scale;
+    const auto cellLeft = [&](int i) {
+        float x = wtl.x + kFreqWellPadX * scale;
+        for (int k = 1; k <= i; ++k) {
+            x += (kFreqCellW + (freqGroupBreak(k) ? kFreqGroupGap : kFreqGap)) * scale;
         }
-        const ImVec2 wtl = ImGui::GetCursorScreenPos();
-        cascade::gui::drawFreqDrumWell(
-            fdl, ImVec2(wtl.x - 6.0f, wtl.y - 4.0f),
-            ImVec2(wtl.x + total + 6.0f, wtl.y + cellH + 4.0f));
-    }
+        return x;
+    };
     bool significant = false;
     bool hoveredDigit = false;
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < kFreqCells; ++i) {
         if (digits[i] != '0') { significant = true; }
-        // A wider gap BEFORE the digit that starts each group of three, which
-        // is where a counter's thousands break falls.
-        if (i > 0) { ImGui::SameLine(0.0f, (i == 1 || i == 4 || i == 7) ? wide : 2.0f); }
-        const ImVec2 ctl = ImGui::GetCursorScreenPos();
+        const ImVec2 ctl(cellLeft(i), cellY);
+        ImGui::SetCursorScreenPos(ctl);
         ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
                                ImVec2(cellW, cellH));
         cascade::gui::drawFreqDrumCell(fdl, ctl, ImVec2(ctl.x + cellW, ctl.y + cellH),
@@ -1633,10 +3099,14 @@ void AppWindow::drawFrequencyReadout() {
             if (wheel != 0.0f) {
                 double ticks = static_cast<double>(static_cast<long long>(wheel));
                 if (ticks == 0.0) { ticks = (wheel > 0.0f) ? 1.0 : -1.0; }
-                const double next = std::max(0.0, hz + ticks * kPlaceHz[i]);
-                // Failure (e.g. a tune the driver refuses) needs no handling
-                // here: the display follows the readback, which won't move.
-                retuneSourceHz(next);
+                const double next = std::max(minTunedHz, hz + ticks * kPlaceHz[i]);
+                // THE SAME QUANTITY THE DRUMS SHOW. tuneAbsoluteHz commands
+                // the source centre at (next - VFO offset), so the tuned
+                // figure moves by exactly this digit's place value and the
+                // offset the user set is left alone. Failure (a tune the
+                // driver refuses) needs no handling here: the display follows
+                // the readback, which won't move.
+                tuneAbsoluteHz(next);
             }
             hoveredDigit = true;  // tooltip is drawn after PopFont (see below)
             // SINGLE click opens the editor. Double-click was tried first and
@@ -1646,6 +3116,9 @@ void AppWindow::drawFrequencyReadout() {
             // does, and wheel tuning is unaffected because that needs only
             // hover, never a click.
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                // Seeded from the TUNED figure the drums are showing, which is
+                // the quantity the commit above applies - so opening the
+                // editor and pressing Enter unchanged tunes nowhere.
                 std::snprintf(freqEditBuf_, sizeof(freqEditBuf_), "%.6f", hz / 1.0e6);
                 freqEditing_ = true;
                 freqEditFocus_ = true;
@@ -1668,20 +3141,42 @@ void AppWindow::drawFrequencyReadout() {
 }
 
 void AppWindow::drawMenuColumn() {
+    // THE RAIL IS A PLATE, not a column of headers. addBenchPlate lays the
+    // ground, the bevel, the engraved title and the rule under it, and hands
+    // back the y beneath that rule - so the sections start from a measurement
+    // rather than from a guess at how tall a title is.
+    constexpr float kPlatePad = 8.0f;
+    ImDrawList* colDl = ImGui::GetWindowDrawList();
+    const ImVec2 colTL = ImGui::GetWindowPos();
+    const ImVec2 colSize = ImGui::GetWindowSize();
+    const float bodyTop = cascade::gui::addBenchPlate(
+        colDl, colTL, ImVec2(colTL.x + colSize.x, colTL.y + colSize.y), "FUNCTION SELECT");
+
     // The sections scroll inside an inner child sized to leave room for the
     // status footer, so the footer stays pinned to the bottom of the column
     // regardless of how many sections are open.
     const float footerHeight = 2.0f * ImGui::GetTextLineHeightWithSpacing() +
                                ImGui::GetStyle().ItemSpacing.y + 4.0f;
-    ImGui::BeginChild("##menu_sections", ImVec2(0.0f, -footerHeight),
+    ImGui::SetCursorScreenPos(ImVec2(colTL.x + kPlatePad, bodyTop));
+    // Transparent, so the plate's own ground carries the whole rail: the
+    // theme's ChildBg is a 55% well tint, and a second one laid inside the
+    // plate would draw a box around the sections that the reference does not
+    // have.
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::BeginChild("##menu_sections",
+                      ImVec2(colSize.x - kPlatePad * 2.0f, -(footerHeight + kPlatePad)),
                       ImGuiChildFlags_None);
+    ImGui::PopStyleColor();
     drawUpdateBanner();
+
+    // --- SIGNAL PATH: what the samples pass through, in the order they do ----
+    benchGroup("SIGNAL PATH");
     drawSourceSection();
-    const bool radioOpen = ImGui::CollapsingHeader("Radio", ImGuiTreeNodeFlags_DefaultOpen);
     // kModeNames is the one table the mode buttons and this chip both read,
     // so the rail cannot claim a mode the buttons do not show.
-    railChip(kModeNames[modeIndex_], cascade::gui::theme::kPhosphor,
-             pipeline_.running());
+    const bool radioOpen = benchSection("Radio", true, kModeNames[modeIndex_],
+                                        cascade::gui::theme::kPhosphor,
+                                        pipeline_.running());
     if (radioOpen) {
         // Mode/bandwidth tables live at namespace scope (kModeNames &co):
         // the band-snap logic and the config store share them.
@@ -1752,15 +3247,49 @@ void AppWindow::drawMenuColumn() {
         std::snprintf(overlay, sizeof(overlay), "%.1f dB", static_cast<double>(sDb));
         ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
     }
-    const bool sinksOpen = ImGui::CollapsingHeader("Sinks", ImGuiTreeNodeFlags_DefaultOpen);
-    {
-        // MUTED is the state worth seeing from the rail without opening it -
-        // "why is there no sound" is the question this chip answers.
-        const bool muted = !muteSubjectText().empty();
-        railChip(muted ? "MUTED" : "ON",
-                 muted ? cascade::gui::theme::kAmber : cascade::gui::theme::kPhosphor,
-                 true);
+    // Between the demodulator and the sinks, because that is where it sits in
+    // the pipeline: notch, auto-notch and noise reduction run on the audio
+    // AFTER the mode above produced it and BEFORE the device below plays it.
+    drawAudioFilterSection();
+    // MUTED is the state worth seeing from the rail without opening it -
+        // "why is there no sound" is the question this chip answers - but it
+        // is not the only way for the sound to stop, and the lamp beside it
+        // used to be the literal `true`. A lamp wired on reports nothing; this
+        // one now reports what the SINK card in the status column reports,
+        // from the same two predicates, so the rail and the card cannot
+        // contradict each other:
+        //
+        //   everOpened()   an output device was opened at all
+        //   streamAlive()  Pa_IsStreamActive - the case the audio watchdog
+        //                  exists for, where everything upstream stays healthy
+        //                  and the speakers go quiet because the host API took
+        //                  the stream away (0.57.0's "the radio keeps going
+        //                  silent")
+        //
+        // THE LAMP'S COLOUR SAYS WHICH STATE AND ITS LIT-NESS SAYS THERE IS
+        // ONE, which is the convention the rest of the rail already keeps
+        // (rust and lit while the recorder is taping, phosphor and lit while
+        // the web server listens). So: phosphor while audio is leaving the
+        // application, amber while a plugin holds the mute, rust while the
+        // stream is dead, and dark only when no output device has ever been
+        // opened - which is the one case where there is nothing to report.
+    const bool sinkMuted = !muteSubjectText().empty();
+    const bool sinkOpened = pipeline_.audio().everOpened();
+    const bool sinkAlive = sinkOpened && pipeline_.audio().streamAlive();
+    const char* sinkChip = "ON";
+    ImU32 sinkLamp = cascade::gui::theme::kPhosphor;
+    if (!sinkOpened) {
+        sinkChip = "NO DEV";
+        sinkLamp = cascade::gui::theme::kInkFaint;
+    } else if (!sinkAlive) {
+        // Rust, the same as the card: this is a fault, not a setting.
+        sinkChip = "DEAD";
+        sinkLamp = cascade::gui::theme::kAlarm;
+    } else if (sinkMuted) {
+        sinkChip = "MUTED";
+        sinkLamp = cascade::gui::theme::kAmber;
     }
+    const bool sinksOpen = benchSection("Sinks", true, sinkChip, sinkLamp, sinkOpened);
     if (sinksOpen) {
         if (devices_.empty()) {
             ImGui::TextDisabled("No audio output devices");
@@ -1790,7 +3319,7 @@ void AppWindow::drawMenuColumn() {
         // keeps going silent" and points the search at the wrong end of the
         // chain.
         if (!audioHealthNote_.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "%s",
+            ImGui::TextColored(cascade::gui::theme::warning(), "%s",
                                audioHealthNote_.c_str());
         }
         // WHY THERE IS NO SOUND, said where the sound settings are. This is the
@@ -1800,7 +3329,7 @@ void AppWindow::drawMenuColumn() {
         // audio investigation started from. Wrapped, because the menu column
         // is narrow and a plugin name is the plugin's to choose.
         if (!mutedBy_.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
             ImGui::TextWrapped("Muted by %s", muteSubjectText().c_str());
             ImGui::PopStyleColor();
             // Said separately rather than folded into the line above, because
@@ -1810,7 +3339,47 @@ void AppWindow::drawMenuColumn() {
             ImGui::TextDisabled("sound returns when the plugin stops");
         }
     }
-    if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // --- DECODE: what is made of the samples, and what is kept of it --------
+    //
+    // THE ORDER STILL MATTERS, AND ONE OF ITS TWO REASONS HAS MOVED. The store
+    // and the inventory are WINDOWS now, drawn from drawPluginWindows before
+    // this rail exists at all - so the "store before inventory" rule that
+    // pluginBrowserDrawnThisFrame_ needs is enforced there, by the order of
+    // those two calls, and no longer by the order of these two rows. What
+    // remains here is the reading order of a rail: the two keys that open
+    // those windows, then the decoder controls neither window carries, then
+    // TARGET DETAILS, which is drawn after them because the targets it
+    // describes come from the modules above it.
+    benchGroup("DECODE");
+    drawPluginStoreSection();
+    drawPluginsSection();
+    drawDecodersSection();
+    drawTargetDetailsSection();
+    // THE SATELLITES MAP'S ONLY PRESENCE OUT HERE. A switch, not a section:
+    // the window it opens carries every satellite control there is, and the
+    // design's own note in the corner of the mock says as much - it "reopens
+    // from the Windows menu and from its own rocker in DECODE". There is no
+    // Windows menu in this application, so this rocker is the whole of it, and
+    // it is drawn after the plugin inventory because the pages it switches are
+    // created from what that inventory loaded.
+    drawSatelliteMapSection();
+    drawRecorderSection();
+
+    // --- VIEW: how what was decoded is shown -------------------------------
+    benchGroup("VIEW");
+    // THE BAND PLAN OVERLAY IS THE ONLY THING IN THIS SECTION THAT IS EITHER
+    // ON OR OFF, so it is what the chip reports and the comment says so rather
+    // than the chip implying it speaks for the whole of Display. The dB window
+    // beside it is a range, not a state, and a two-ended range does not fit a
+    // chip without being rounded into something that is no longer the setting.
+    //
+    // The lamp is the overlay ACTUALLY DRAWING - asked for, no load error, and
+    // a plan with bands in it - so "PLAN" with the lamp out is the honest
+    // reading of "you switched it on and there is nothing installed".
+    const bool planDrawing = bandPlanOverlay_ && bandPlanError_.empty() &&
+                             !bandPlan_.entries().empty();
+    if (benchSection("Display", true, bandPlanOverlay_ ? "PLAN" : "PLAIN",
+                     cascade::gui::theme::kPhosphor, planDrawing)) {
         // One shared dB range drives both the spectrum axis and the waterfall
         // colormap so the two panels always agree on what "hot" means.
         const bool minChanged =
@@ -1842,22 +3411,19 @@ void AppWindow::drawMenuColumn() {
             }
         }
     }
-    // P6/P7 sections. Closed by default (unlike the always-needed sections
-    // above): all of them are occasional-use tools, and opening them by
-    // default would push the Display controls off a 720p column.
-    drawAudioFilterSection();
-    drawRecorderSection();
+    // Closed by default (unlike the always-needed sections above): both are
+    // occasional-use tools, and opening them by default would push the Display
+    // controls off a 720p column.
     drawBookmarksSection();
     drawScannerSection();
-    // Store first, then the inventory: it keeps the top-to-bottom order the
-    // one combined section had (browse above installed), and the store must be
-    // drawn first for pluginBrowserDrawnThisFrame_ to mean anything below.
-    drawPluginStoreSection();
-    drawPluginsSection();
-    // After the plugins on purpose: the targets it describes come from them.
-    drawTargetDetailsSection();
+
+    // --- EXTEND: the ways in from outside this window -----------------------
+    benchGroup("EXTEND");
     drawWebSection();
     drawCatSection();
+
+    // --- SYSTEM: the application talking about itself -----------------------
+    benchGroup("SYSTEM");
     drawUpdatesSection();
     drawDiagnosticsSection();
     drawUsageReportingSection();
@@ -1989,7 +3555,7 @@ void AppWindow::drawUpdateBanner() {
     // Amber for an ordinary update, red for one that fixes a build which could
     // not do its job. The distinction is the server's `critical` flag, and it
     // is the difference between a notice and a warning.
-    const ImVec4 accent = update_.critical ? kErrorRed : ImVec4(1.0f, 0.8f, 0.35f, 1.0f);
+    const ImVec4 accent = update_.critical ? kErrorRed : cascade::gui::theme::warning();
     ImGui::PushStyleColor(ImGuiCol_Text, accent);
     if (update_.critical) {
         ImGui::TextWrapped("Important update: FoxSDR %s", update_.version.c_str());
@@ -2014,7 +3580,7 @@ void AppWindow::drawUpdateBanner() {
 
     ImGui::Spacing();
     if (updateDownloading_) {
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Downloading...");
+        ImGui::TextColored(cascade::gui::theme::warning(), "Downloading...");
         // updateProgress_, not pluginRepo_.progress(): this transfer does not
         // go through a PluginRepo instance, so that value is whatever the
         // plugin browser last did — which for the common case of never having
@@ -2059,16 +3625,21 @@ void AppWindow::drawUpdateBanner() {
 }
 
 void AppWindow::drawSourceSection() {
-    const bool sourceOpen = ImGui::CollapsingHeader("Source", ImGuiTreeNodeFlags_DefaultOpen);
-    {
-        // The device in use, shortened to what fits: "SoapySDR: B200" is the
-        // full name and "B200" is the part that identifies it.
-        std::string chip = pipeline_.activeSource().name();
-        const std::size_t colon = chip.rfind(": ");
-        if (colon != std::string::npos) { chip = chip.substr(colon + 2); }
-        if (chip.size() > 10) { chip = chip.substr(0, 10); }
-        railChip(chip.c_str(), cascade::gui::theme::kPhosphor, pipeline_.running());
-    }
+    // The device in use, shortened to what fits: "SoapySDR: B200" is the
+    // full name and "B200" is the part that identifies it.
+    std::string sourceChip = pipeline_.activeSource().name();
+    const std::size_t colon = sourceChip.rfind(": ");
+    if (colon != std::string::npos) { sourceChip = sourceChip.substr(colon + 2); }
+    if (sourceChip.size() > 10) { sourceChip = sourceChip.substr(0, 10); }
+    // Rust and lit while the pipeline is faulted, phosphor and lit while it
+    // runs: the colour says which state and the lamp says there is one, which
+    // is the rule the whole rail keeps.
+    const bool sourceFaulted = pipeline_.faulted();
+    const bool sourceOpen =
+        benchSection("Source", true, sourceChip.c_str(),
+                     sourceFaulted ? cascade::gui::theme::kAlarm
+                                   : cascade::gui::theme::kPhosphor,
+                     sourceFaulted || pipeline_.running());
     if (!sourceOpen) { return; }
 
     // Row label for a combo index; -1 (active device dropped by a Refresh)
@@ -2096,7 +3667,7 @@ void AppWindow::drawSourceSection() {
 
     const bool soapyBusy = soapyScanPending_ || soapyOpenPending_;
     if (soapyBusy) {
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "%s",
+        ImGui::TextColored(cascade::gui::theme::warning(), "%s",
                            soapyOpenPending_
                                ? ("Opening " + soapyBusyLabel_ + "...").c_str()
                                : "Scanning for devices...");
@@ -2138,7 +3709,7 @@ void AppWindow::drawSourceSection() {
     // never flashes up during the first enumeration.
     if (soapyScanned_ && !soapyBusy && soapyDevices_.empty()) {
         ImGui::Separator();
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "No radio hardware found");
+        ImGui::TextColored(cascade::gui::theme::warning(), "No radio hardware found");
         ImGui::TextWrapped(
             "FoxSDR reaches radios through SoapySDR vendor modules, which are a separate "
             "install. The signal generator and IQ file playback need no hardware.");
@@ -2356,6 +3927,23 @@ void AppWindow::pollSoapyAsync() {
 
     if (soapyOpenPending_ && soapyOpenFuture_.valid() &&
         soapyOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
+        // THE MODULE TABLE, REBUILT BECAUSE THE OPEN LOADED CODE.
+        //
+        // SoapySDR::Device::make() maps the vendor module and everything it
+        // pulls in - rtlsdrSupport.dll, rtlsdr.dll, libusb - into THIS
+        // process, on the worker that has just finished. The table a report
+        // resolves addresses against was last built at start-up, so until now
+        // every one of those modules resolved to a bare address: a field
+        // report whose radio was opened 102 s after launch named the fault in
+        // hex, and the frame that identified it had to be recovered by hand.
+        // diag_report.hpp has always said "after a device is opened"; this is
+        // the call that makes that true.
+        //
+        // BEFORE finishSoapyOpen, not after, because that function returns
+        // early on a failed open and on an open the user has moved on from -
+        // and both of those loaded the vendor module just the same. Rebuilt
+        // once per open, which is a user action, not per frame.
+        cascade::core::refreshModuleTable();
         finishSoapyOpen(soapyOpenFuture_.get());
         soapyOpenPending_ = false;
         soapyBusyLabel_.clear();
@@ -2715,11 +4303,52 @@ void AppWindow::drawCenterPanels() {
     // against lastFrame_.seq, so this is one mutex lock returning false when
     // nothing new arrived — cheap enough to run unconditionally, which also
     // catches a frame published between the last poll and a Stop click.
+    const double nowS = ImGui::GetTime();
     if (pipeline_.getLatestFrame(lastFrame_)) {
         // One waterfall line per *new* frame (not per GUI frame): duplicate
         // lines would fake scroll speed while the pipeline is stalled.
         waterfall_->addLine(lastFrame_.dbBins.data(),
                             static_cast<int>(lastFrame_.dbBins.size()), dbMin_, dbMax_);
+        ++waterfallLines_;
+        // WHEN THIS FIGURE WAS TAKEN, which is what the spectrum's "HEARD n s
+        // AGO" line reports. SpectrumFrame carries a sequence number and no
+        // timestamp, so the closest honest measurement available is the moment
+        // the GUI took DELIVERY of the frame - later than the DSP published it
+        // by at most one GUI frame (~16 ms at 60 Hz), and the line is printed
+        // to a tenth of a second. Named for what it measures accordingly.
+        lastFrameSeenS_ = nowS;
+    }
+
+    // THE WATERFALL'S SCROLL RATE, MEASURED RATHER THAN ASSUMED, AND MEASURED
+    // ON THE RIGHT QUANTITY. It counts the lines actually pushed into the ring
+    // by the loop above - not the frames the DSP published, which is a much
+    // larger and completely different number: getLatestFrame hands over at most
+    // one frame per call, so at 2 MS/s with a 1024-point FFT the pipeline
+    // publishes about 1950 frames a second and this poll takes one of them per
+    // GUI frame. Measured from the sequence, the strip captioned a picture
+    // scrolling at sixty lines a second "SCROLL 1938 line/s" and called its
+    // whole visible history "0s VISIBLE".
+    //
+    // It is still not a count of GUI frames: a window in which the pipeline
+    // published nothing sees every poll fail, pushes no line, and closes on a
+    // difference of zero - which WaterfallView::Chrome reads as "not measured"
+    // and answers by removing the elapsed-time strip and the scroll line
+    // altogether, rather than scrolling labels over a picture that has stopped.
+    //
+    // A window LONGER than two seconds is thrown away rather than averaged: it
+    // means this panel was not being drawn at all (scope mode owns the whole
+    // window while it is on, and the pipeline keeps publishing underneath it),
+    // so dividing the lines pushed in that time by a stretch nothing here
+    // watched would answer a question that was not asked.
+    if (frameRateWindowS_ < 0.0 || nowS - frameRateWindowS_ > 2.0) {
+        frameRateWindowS_ = nowS;
+        waterfallLinesAtWindow_ = waterfallLines_;
+    } else if (nowS - frameRateWindowS_ >= 1.0) {
+        const std::uint64_t pushed = waterfallLines_ - waterfallLinesAtWindow_;
+        framesPerSecond_ = static_cast<float>(static_cast<double>(pushed) /
+                                              (nowS - frameRateWindowS_));
+        frameRateWindowS_ = nowS;
+        waterfallLinesAtWindow_ = waterfallLines_;
     }
 
     // The frequency scale follows the tuned center (active source readback)
@@ -2731,7 +4360,10 @@ void AppWindow::drawCenterPanels() {
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float splitterThickness = 6.0f;
-    const float usable = avail.y - splitterThickness - kAxisHeight;
+    // NO TICK STRIP TO RESERVE ANY MORE: the frequency axis is lettered inside
+    // the spectrum's own well (SpectrumView::Chrome::freqTicks), so the two
+    // panels and the splitter own the whole region between them.
+    const float usable = avail.y - splitterThickness;
     // A squeezed window can drive the region to zero; drawing into negative
     // sizes asserts inside ImGui, so just skip the panels that frame.
     if (usable < 40.0f || avail.x < 40.0f) { return; }
@@ -2751,38 +4383,36 @@ void AppWindow::drawCenterPanels() {
 
     // --- Spectrum -----------------------------------------------------------
     const ImVec2 specPos = ImGui::GetCursorScreenPos();
-    // Before the first frame lastFrame_.dbBins is empty; SpectrumView renders
-    // the background + grid for null bins, which is the wanted idle look.
-    const float* bins = lastFrame_.dbBins.empty() ? nullptr : lastFrame_.dbBins.data();
-    spectrum_->drawBinRange(bins, static_cast<int>(lastFrame_.dbBins.size()),
-                            firstBin, lastBin, width, spectrumHeight);
-    const bool specHovered = ImGui::IsItemHovered();
 
-    // Band plan behind the trace (see kBandFillAlphaScale for why "behind"
-    // is achieved with a translucent fill painted after it). Before the
-    // gridlines and the VFO overlay so those stay the topmost furniture.
-    if (bandPlanOverlay_) {
-        drawBandPlanOverlay(specPos.x, specPos.y, width, spectrumHeight);
-    }
-
-    // Axis ticks, computed once and shared by the spectrum's vertical
-    // gridlines and the tick strip below.
+    // THE AXIS IS COMPUTED BEFORE THE PANEL IS DRAWN, because the panel now
+    // letters it: SpectrumView draws the frequency scale along the foot of its
+    // own well from the ticks handed to it in Chrome, and the same ticks drive
+    // the vertical gridlines painted over the trace afterwards. One table, so
+    // a gridline and the number under it cannot disagree.
     double tickHz[kMaxTicks];
     char tickLabels[kMaxTicks][16];
     const int tickCount = scale_.ticks(static_cast<double>(width), tickHz,
                                        tickLabels, kMaxTicks);
+    SpectrumView::AxisTick axisTicks[kMaxTicks];
     for (int i = 0; i < tickCount; ++i) {
-        // ticks() only returns in-view frequencies, so x stays in-panel.
-        const float x =
-            specPos.x + static_cast<float>(scale_.hzToX(tickHz[i])) * width;
-        drawList->AddLine(ImVec2(x, specPos.y), ImVec2(x, specPos.y + spectrumHeight),
-                          kTickGridColor);
+        axisTicks[i].xFrac = static_cast<float>(scale_.hzToX(tickHz[i]));
+        axisTicks[i].label = tickLabels[i];
     }
 
-    // --- VFO band: interaction first, then the overlay ----------------------
+    // --- VFO band: the drag first, then the panel, then the overlay ---------
     // Band edges in absolute Hz -> panel-width fractions via the shared
     // scale. vfoBandwidthHz_ is the REQUESTED bandwidth (the Vfo clamps its
     // filter internally; the overlay shows what the user asked for).
+    //
+    // AN IN-PROGRESS DRAG IS SETTLED BEFORE THE SPECTRUM IS DRAWN, and that
+    // ordering is load-bearing rather than tidy. The panel's "PEAK IN
+    // PASSBAND" figure is a maximum over exactly the bins this band covers, so
+    // the band handed to drawBinRange has to be the same one drawVfoOverlay
+    // paints a few lines below; measuring over the pre-drag band and drawing
+    // the post-drag one would put a figure on the panel that belongs to a
+    // passband nothing on screen shows. Only the drag's CONTINUATION moves
+    // here - starting one needs the item's hover state, which does not exist
+    // until the panel has been submitted, and it stays below.
     double bandCenterAbs = src.centerFrequencyHz() + pipeline_.vfoOffsetHz();
     SpectrumView::VfoBand band;
     band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * vfoBandwidthHz_);
@@ -2791,33 +4421,10 @@ void AppWindow::drawCenterPanels() {
 
     const double mouseFrac =
         static_cast<double>(io.MousePos.x - specPos.x) / static_cast<double>(width);
-    if (vfoDrag_ == VfoDrag::None && specHovered) {
-        const auto hit = SpectrumView::hitTest(
-            mouseFrac, band, static_cast<double>(kVfoEdgeTolPx) / width);
-        if (hit == SpectrumView::VfoHit::EdgeLow ||
-            hit == SpectrumView::VfoHit::EdgeHigh) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        } else if (hit == SpectrumView::VfoHit::Center) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-        }
-        if (ImGui::IsMouseClicked(0) && hit != SpectrumView::VfoHit::None) {
-            vfoDrag_ = (hit == SpectrumView::VfoHit::Center)  ? VfoDrag::Center
-                       : (hit == SpectrumView::VfoHit::EdgeLow) ? VfoDrag::EdgeLow
-                                                                : VfoDrag::EdgeHigh;
-            vfoGrabDeltaHz_ = scale_.xToHz(mouseFrac) - bandCenterAbs;
-        } else if (ImGui::IsMouseClicked(0) && hit == SpectrumView::VfoHit::None) {
-            // Click anywhere off the band: jump the VFO there. Dragging the
-            // band still works (handled above); this is the "just take me to
-            // that signal" gesture, and it needs no grab-and-drop.
-            setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift);
-        }
-        if (ImGui::IsMouseDoubleClicked(0) && hit == SpectrumView::VfoHit::None) {
-            scale_.resetView();  // double-click on empty spectrum: unzoom
-        }
-    }
     if (vfoDrag_ != VfoDrag::None) {
         if (!ImGui::IsMouseDown(0)) {
             vfoDrag_ = VfoDrag::None;
+            band.dragging = false;
         } else {
             // xToHz is deliberately unclamped, so dragging past the panel
             // edge keeps working; the offset/bandwidth clamps below are what
@@ -2859,10 +4466,82 @@ void AppWindow::drawCenterPanels() {
             band.dragging = true;
         }
     }
-    spectrum_->drawVfoOverlay(band, width, spectrumHeight);
 
-    // --- Frequency tick strip ------------------------------------------------
-    drawFreqAxis(width, tickHz, tickLabels, tickCount);
+    // WHAT THE PANEL IS ALLOWED TO SAY ABOUT ITSELF, and every field of it
+    // comes from something this application measures or configures:
+    //
+    //   emaAlpha    kAveragingAlpha - the SAME constant the constructor hands
+    //               Pipeline::Config, so the caveat under the header describes
+    //               the estimator that actually drew the trace. NOT the
+    //               reference artboard's "AVG 4": no boxcar depth exists here,
+    //               and the two usual conversions from an EMA weight disagree.
+    //   passband    the band settled immediately above and painted by
+    //               drawVfoOverlay immediately below.
+    //   dataAgeSec  how long ago the GUI took delivery of this frame; negative
+    //               (the initial value) before any frame has arrived, which is
+    //               what suppresses the age line rather than printing "0.0 s".
+    //   freqTicks   FreqScale's own ticks and its own labels - this file never
+    //               formats a second frequency string of its own.
+    //   spanHz      the view window's width, from the same scale.
+    //
+    // There is deliberately no title override: the widget's default names it
+    // SPECTRUM and appends the bin count it was actually handed.
+    SpectrumView::Chrome chrome;
+    chrome.emaAlpha = kAveragingAlpha;
+    chrome.passband = &band;
+    chrome.dataAgeSec = (lastFrameSeenS_ >= 0.0) ? (nowS - lastFrameSeenS_) : -1.0;
+    chrome.freqTicks = (tickCount > 0) ? axisTicks : nullptr;
+    chrome.freqTickCount = tickCount;
+    chrome.spanHz = scale_.viewHighHz() - scale_.viewLowHz();
+
+    // Before the first frame lastFrame_.dbBins is empty; SpectrumView renders
+    // the background + grid for null bins, which is the wanted idle look.
+    const float* bins = lastFrame_.dbBins.empty() ? nullptr : lastFrame_.dbBins.data();
+    spectrum_->drawBinRange(bins, static_cast<int>(lastFrame_.dbBins.size()),
+                            firstBin, lastBin, width, spectrumHeight, &chrome);
+    const bool specHovered = ImGui::IsItemHovered();
+
+    // Band plan behind the trace (see kBandFillAlphaScale for why "behind"
+    // is achieved with a translucent fill painted after it). Before the
+    // gridlines and the VFO overlay so those stay the topmost furniture.
+    if (bandPlanOverlay_) {
+        drawBandPlanOverlay(specPos.x, specPos.y, width, spectrumHeight);
+    }
+
+    for (int i = 0; i < tickCount; ++i) {
+        // ticks() only returns in-view frequencies, so x stays in-panel.
+        const float x = specPos.x + axisTicks[i].xFrac * width;
+        drawList->AddLine(ImVec2(x, specPos.y), ImVec2(x, specPos.y + spectrumHeight),
+                          kTickGridColor);
+    }
+
+    // STARTING a drag, which is the half that needs the hover state and so
+    // could not move above the panel with the continuation.
+    if (vfoDrag_ == VfoDrag::None && specHovered) {
+        const auto hit = SpectrumView::hitTest(
+            mouseFrac, band, static_cast<double>(kVfoEdgeTolPx) / width);
+        if (hit == SpectrumView::VfoHit::EdgeLow ||
+            hit == SpectrumView::VfoHit::EdgeHigh) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        } else if (hit == SpectrumView::VfoHit::Center) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        }
+        if (ImGui::IsMouseClicked(0) && hit != SpectrumView::VfoHit::None) {
+            vfoDrag_ = (hit == SpectrumView::VfoHit::Center)  ? VfoDrag::Center
+                       : (hit == SpectrumView::VfoHit::EdgeLow) ? VfoDrag::EdgeLow
+                                                                : VfoDrag::EdgeHigh;
+            vfoGrabDeltaHz_ = scale_.xToHz(mouseFrac) - bandCenterAbs;
+        } else if (ImGui::IsMouseClicked(0) && hit == SpectrumView::VfoHit::None) {
+            // Click anywhere off the band: jump the VFO there. Dragging the
+            // band still works (handled above); this is the "just take me to
+            // that signal" gesture, and it needs no grab-and-drop.
+            setVfoToAbsoluteHz(scale_.xToHz(mouseFrac), !io.KeyShift);
+        }
+        if (ImGui::IsMouseDoubleClicked(0) && hit == SpectrumView::VfoHit::None) {
+            scale_.resetView();  // double-click on empty spectrum: unzoom
+        }
+    }
+    spectrum_->drawVfoOverlay(band, width, spectrumHeight);
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
@@ -2894,7 +4573,54 @@ void AppWindow::drawCenterPanels() {
     const ImVec2 wfPos = ImGui::GetCursorScreenPos();
     const double u0 = (firstBin + 0.5) / static_cast<double>(kFftSize);
     const double u1 = (lastBin + 0.5) / static_cast<double>(kFftSize);
-    waterfall_->draw(width, waterfallHeight, u0, u1);
+
+    // WHAT THE PICTURE CANNOT KNOW ABOUT ITSELF, supplied from the two things
+    // that do: the measured publish rate above, and the receiver's own state.
+    //
+    // The foot line is assembled ONLY from readbacks. The frequency is the
+    // same one the counter shows (source centre + VFO offset); the decoder
+    // named is one the runner reports as actually RUNNING, which is a
+    // different question from "installed" and from "not stopped" - a plugin
+    // whose rate the receiver is not producing is idle, and naming it here
+    // would caption the picture with a decode that is not happening.
+    //
+    // AND A STOPPED RECEIVER IS NOT DECODING WHATEVER THE RUNNER SAYS. Its
+    // instances exist and are matched to the rate - which is what the runner
+    // reports - but the DSP threads are not turning, so nothing is being handed
+    // to them. The first render of this line read "100.3000 MHz ADS-B +1 -
+    // DECODING" under a picture that had not moved since Stop; the run state is
+    // therefore checked first and wins. With no tuned frequency at all (an
+    // inert scale, before any source has opened) the line is left empty, which
+    // WaterfallView reads as "draw no line".
+    WaterfallView::Chrome wfChrome;
+    wfChrome.linesPerSecond = framesPerSecond_;
+    char decodeLine[192] = "";
+    if (std::isfinite(bandCenterAbs) && bandCenterAbs > 0.0) {
+        std::string firstDecoder;
+        int runningDecoders = 0;
+        if (pipeline_.running()) {
+            for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
+                if (s.reason != cascade::core::DecoderIdleReason::Running) { continue; }
+                if (runningDecoders == 0) { firstDecoder = s.plugin; }
+                ++runningDecoders;
+            }
+        }
+        char freqTxt[32];
+        std::snprintf(freqTxt, sizeof(freqTxt), "%.4f MHz", bandCenterAbs / 1.0e6);
+        if (runningDecoders == 1) {
+            std::snprintf(decodeLine, sizeof(decodeLine), "%s %s - DECODING", freqTxt,
+                          firstDecoder.c_str());
+        } else if (runningDecoders > 1) {
+            std::snprintf(decodeLine, sizeof(decodeLine), "%s %s +%d - DECODING", freqTxt,
+                          firstDecoder.c_str(), runningDecoders - 1);
+        } else {
+            std::snprintf(decodeLine, sizeof(decodeLine), "%s %s - %s", freqTxt,
+                          kModeNames[modeIndex_],
+                          pipeline_.running() ? "RECEIVING" : "STOPPED");
+        }
+    }
+    wfChrome.decoding = (decodeLine[0] != '\0') ? decodeLine : nullptr;
+    waterfall_->draw(width, waterfallHeight, u0, u1, wfChrome);
     const bool wfHovered = ImGui::IsItemHovered();
 
     // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
@@ -2960,27 +4686,12 @@ void AppWindow::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
     vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
 }
 
-void AppWindow::drawFreqAxis(float width, const double* tickHz,
-                             const char (*labels)[16], int count) {
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const ImVec2 p1(p0.x + width, p0.y + kAxisHeight);
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    drawList->AddRectFilled(p0, p1, kPanelBackground);
-    drawList->PushClipRect(p0, p1, true);
-    for (int i = 0; i < count; ++i) {
-        const float x = p0.x + static_cast<float>(scale_.hzToX(tickHz[i])) * width;
-        drawList->AddLine(ImVec2(x, p0.y), ImVec2(x, p0.y + 4.0f), kAxisTickColor);
-        // Label centered under its tick, shifted (not clipped) at the strip
-        // ends so the first/last label stays fully readable.
-        const ImVec2 sz = ImGui::CalcTextSize(labels[i]);
-        float tx = x - 0.5f * sz.x;
-        if (tx < p0.x + 2.0f) { tx = p0.x + 2.0f; }
-        if (tx + sz.x > p1.x - 2.0f) { tx = p1.x - 2.0f - sz.x; }
-        drawList->AddText(ImVec2(tx, p0.y + 4.0f), kAxisLabelColor, labels[i]);
-    }
-    drawList->PopClipRect();
-    ImGui::Dummy(ImVec2(width, kAxisHeight));
-}
+// AppWindow::drawFreqAxis USED TO LIVE HERE - an eighteen-pixel strip of its
+// own between the spectrum and the waterfall, carrying the frequency scale.
+// SpectrumView now letters that scale inside its own well, from the ticks
+// drawCenterPanels hands it, which is where the reference face draws it. The
+// strip is not kept as well: two renderings of one scale, eighteen pixels
+// apart, is a disagreement waiting for whichever of them is edited next.
 
 // --- Stereo / RDS (P7) ---------------------------------------------------------
 
@@ -3002,9 +4713,9 @@ void AppWindow::drawStereoRdsControls() {
     const bool locked = pipeline_.pilotLocked();
     const bool active = pipeline_.stereoActive();
     if (active) {
-        ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.45f, 1.0f), "ST");
+        ImGui::TextColored(cascade::gui::theme::good(), "ST");
     } else if (locked) {
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "ST (forced mono)");
+        ImGui::TextColored(cascade::gui::theme::warning(), "ST (forced mono)");
     } else {
         ImGui::TextDisabled("MONO");
     }
@@ -3045,7 +4756,22 @@ void AppWindow::drawStereoRdsControls() {
 // --- Audio filters: noise reduction + notch (P7) --------------------------------
 
 void AppWindow::drawAudioFilterSection() {
-    if (!ImGui::CollapsingHeader("Audio filters")) { return; }
+    // HOW MANY OF THE THREE ARE IN THE CHAIN, which is the only thing this
+    // section has that is either on or off. The three switches below are what
+    // the count is taken from, so the chip cannot claim a filter the panel
+    // does not show engaged.
+    const int filtersOn = (nrEnabled_ ? 1 : 0) + (notchEnabled_ ? 1 : 0) +
+                          (autoNotch_ ? 1 : 0);
+    char filterChip[16];
+    if (filtersOn == 0) {
+        std::snprintf(filterChip, sizeof(filterChip), "OFF");
+    } else {
+        std::snprintf(filterChip, sizeof(filterChip), "%d ON", filtersOn);
+    }
+    if (!benchSection("Audio filters", false, filterChip,
+                      cascade::gui::theme::kPhosphor, filtersOn > 0)) {
+        return;
+    }
     telemetryNotePanel("audio filters");
 
     // The order is the pipeline's, spelled out because it is the part a user
@@ -3083,7 +4809,7 @@ void AppWindow::drawAudioFilterSection() {
     if (autoNotch_) {
         ImGui::SameLine();
         if (pipeline_.autoNotchEngaged()) {
-            ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.45f, 1.0f), "on %.0f Hz",
+            ImGui::TextColored(cascade::gui::theme::good(), "on %.0f Hz",
                                pipeline_.autoNotchFrequencyHz());
         } else {
             ImGui::TextDisabled("searching");
@@ -3303,194 +5029,154 @@ void AppWindow::rescanPlugins() {
 
 std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const {
     // Pure, and empty until the user has fetched a catalogue this session:
-    // catalog_ is only ever filled by the Browse button.
+    // catalog_ is only ever filled by CHECK NOW in the plugin store window.
     return cascade::core::PluginRepo::planUpdates(catalog_, pluginInventory_.plugins);
 }
 
 void AppWindow::drawPluginStoreSection() {
-    // Reset BEFORE the header test, not inside it: a collapsed store draws no
-    // browser, and the installed section below has to know that so the result
-    // text does not fall down the gap between the two sections.
-    pluginBrowserDrawnThisFrame_ = false;
-
-    // "###pluginstore" for the same reason the section below fixes its own ID:
-    // a label that may grow a suffix later must not take the open/closed state
-    // with it. Nothing persists that state between runs — the app runs with
-    // ImGui's ini file disabled (see the IniFilename assignment in init) — so
-    // both sections simply start closed on every launch, as they always have.
-    if (!ImGui::CollapsingHeader("Plugin store###pluginstore")) { return; }
-    telemetryNotePanel("plugin store");
-
-    // The toggle stays a toggle rather than becoming the header itself. The
-    // header answers "do I want to think about plugins at all"; this answers
-    // "may the catalogue origin be contacted", it is persisted across runs
-    // (AppConfig::pluginBrowserOpen), and collapsing it is how a user parks the
-    // store without losing the section.
-    if (ImGui::Button(pluginBrowseOpen_ ? "Hide browser" : "Get plugins",
-                      ImVec2(-FLT_MIN, 0.0f))) {
-        // Opening the browser is NOT a fetch. The view appears with an empty
-        // list and a Browse button; the catalogue origin is contacted only
-        // when that button is pressed.
+    // A KEY, NOT A DRAWER. The catalogue is a window of its own now, for the
+    // reason the satellites map is: a function that gets its own window gets a
+    // shape, and what was a section body five levels deep in a 300 px rail is
+    // a panel the user can drag as large as their screen. This row is the
+    // switch that puts it there and the chip that reports it without opening
+    // it - the same arrangement, and the same primitive, as the satellite row
+    // below.
+    //
+    // "###pluginstore" IS KEPT so no open/closed state resets: the id is what
+    // ImGui hashes, and a row that changed identity would forget its state on
+    // the launch that shipped this change.
+    //
+    // WHAT THE STORE CAN HONESTLY SAY FROM THE RAIL, and what it must not.
+    // catalog_ is empty until the user asks for a catalogue, so "0 updates"
+    // before that would be the clean-zero this product has been bitten by:
+    // "nothing to update" and "we have not looked" are different statements.
+    // IDLE is the second one.
+    const bool haveCatalog = !catalog_.empty();
+    const std::size_t pendingUpdates =
+        haveCatalog ? plannedPluginUpdates().size() : 0u;
+    const bool storeBusy = catalogPending_ || installPending_;
+    char storeChip[16];
+    if (storeBusy) {
+        // A TRANSFER IS THE MOST IMPORTANT THING THIS ROW CAN SAY, and it
+        // outranks the update count: something is moving over the network on
+        // the user's behalf and the window that can cancel it is behind this
+        // key.
+        std::snprintf(storeChip, sizeof(storeChip), "BUSY");
+    } else if (!haveCatalog) {
+        std::snprintf(storeChip, sizeof(storeChip), "IDLE");
+    } else if (pendingUpdates > 0) {
+        std::snprintf(storeChip, sizeof(storeChip), "%zu UPD", pendingUpdates);
+    } else {
+        std::snprintf(storeChip, sizeof(storeChip), "OK");
+    }
+    if (benchSwitchRow("Plugin store###pluginstore", pluginBrowseOpen_, storeChip,
+                       storeBusy      ? cascade::gui::theme::kPhosphor
+                       : pendingUpdates > 0 ? cascade::gui::theme::kAmber
+                                            : cascade::gui::theme::kPhosphor,
+                       storeBusy || pendingUpdates > 0, true,
+                       "Opens the plugin store: the catalogue, what each module "
+                       "reaches for,\nwhat it costs to fit, and the updates the "
+                       "catalogue offers.\nNothing is fetched until you ask inside "
+                       "that window.")) {
         pluginBrowseOpen_ = !pluginBrowseOpen_;
     }
 
-    if (pluginBrowseOpen_) {
-        // Still noted separately from "plugin store": expanding the section is
-        // a different act from opening the view that can reach the network, and
-        // the second is the one worth counting.
-        telemetryNotePanel("plugin browser");
-        pluginBrowserDrawnThisFrame_ = true;
-        drawPluginBrowser();
+    // WHERE THE CATALOGUE IS READ FROM, and it stays EDITABLE. The store
+    // window shows the source as a fact - which is right, because on that
+    // window it is the provenance of everything on the panel - and it offers
+    // no way to change it. This field is the one that used to sit at the top
+    // of the browser, kept because taking it away would take a capability with
+    // it: an enterprise deployment points this at its own index, and a local
+    // index.json path is how the whole store is exercised offline. It is a
+    // deployment setting rather than a browse control, which is why the rail
+    // is a reasonable home for it.
+    //
+    // Committed on deactivate-after-edit rather than per keystroke, so a
+    // half-typed host is never what a fetch would use.
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##catalogue_url", "catalogue index.json URL",
+                             pluginUrlBuf_, sizeof(pluginUrlBuf_));
+    if (ImGui::IsItemDeactivatedAfterEdit()) { pluginCatalogueUrl_ = pluginUrlBuf_; }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("An https:// catalogue, or a path to a local index.json.\n"
+                          "Nothing is fetched until you press CHECK NOW in the plugin\n"
+                          "store window. Plugin downloads are always https and always\n"
+                          "sha256-verified.");
     }
+
+    // THE RETIRED MODULES HANG UNDER THE STORE'S KEY, and they are the one
+    // thing about plugins that belongs to neither window. A retired module is
+    // a fact about what the cached CATALOGUE POLICY now says - the host never
+    // loaded it, so the fitted window cannot list it, and PluginStoreModel
+    // carries no field for a module that is installed and quarantined. Its
+    // remedy is an update, which is the store's business, so its rows and its
+    // two keys stay here where the store's own key is.
+    drawBlockedPluginRows();
 }
 
-void AppWindow::drawPluginsSection() {
-    // THE BADGE. A user who never expands this section still has to learn that
-    // something they installed has stopped working — a silently shorter list
-    // is the same mystery the plugin host's per-file reasons exist to avoid.
-    // blockedCount() is the badge-cheap form of the same predicate the rows
-    // use, so the count and the rows can never disagree.
-    const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
-        pluginInventory_.plugins, pluginInventory_.policies);
-    char header[64];
-    if (blocked == 0u) {
-        // "###plugins" fixes the widget ID, so the open/closed state survives
-        // the label changing when a plugin is retired or updated.
-        std::snprintf(header, sizeof(header), "Plugins###plugins");
-    } else {
-        std::snprintf(header, sizeof(header), "Plugins (%d disabled)###plugins",
-                      static_cast<int>(blocked));
-    }
-    if (!ImGui::CollapsingHeader(header)) { return; }
-    telemetryNotePanel("plugins");
-
-    ImGui::TextDisabled("%s", pluginDir_.c_str());
-    // Full width now that "Get plugins" has gone to the store section: Rescan
-    // is a local, offline re-read of the plugins folder and is the only button
-    // this section opens with.
-    if (ImGui::Button("Rescan", ImVec2(-FLT_MIN, 0.0f))) { rescanPlugins(); }
-
-    drawBlockedPluginRows();
-
-    // The decoder output has its OWN WINDOW (see drawDecoderWindow); what is
-    // left here is the button that opens it and the idle reasons, which
-    // belong next to the plugin list because they are about installation
-    // rather than about traffic.
-    drawDecoderStatusRows();
-    drawPluginTuneControls();
-
-    ImGui::SeparatorText("Installed");
-    const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
-    if (list.empty()) {
-        ImGui::TextDisabled("No plugins installed");
-        // Still report a remove that just emptied the list — or one that
-        // failed, which is exactly when the user needs to be told.
-        if (!pluginBrowserDrawnThisFrame_) { drawPluginResultText(); }
+void AppWindow::drawDecodersSection() {
+    // WHAT NEITHER NEW WINDOW CARRIES. When the store and the inventory became
+    // windows, most of what those two rail sections held went with them - but
+    // not all of it, and the part that did not is not a leftover: it is four
+    // controls that exist today and would simply have been deleted.
+    //
+    //   - the decoder OUTPUT window's switch, which is about traffic and not
+    //     about installation;
+    //   - the RADAR SCOPE's switch, which is a way of looking at what the
+    //     receiver hears and only ever lived here because this is where a user
+    //     goes looking for what their ADS-B plugin can do;
+    //   - each loaded module's PRESETS - "where this decoder listens", one
+    //     click - which the fitted window has no key for;
+    //   - each loaded module's MUTE WHILE RUNNING override, which it has no
+    //     key for either.
+    //
+    // The receiver-control remnant is here too: the refusal notice and any
+    // grant held by a module that is no longer installed. Everything else
+    // about a fitted module - start, stop, remove, its grant, why it is silent
+    // - is in the fitted window and is deliberately not repeated.
+    const std::size_t fed = pipeline_.running() ? fedDecoderCount() : 0u;
+    char decChip[16];
+    std::snprintf(decChip, sizeof(decChip), "%zu FED", fed);
+    if (!benchSection("Decoders###decoders", false, decChip,
+                      cascade::gui::theme::kPhosphor, fed > 0)) {
         return;
     }
-    // Removal is deferred past the loop: removeInstalledPlugin() rescans,
-    // which replaces the very vector this loop is walking. The same goes for
-    // a stop or a start, which rebuilds every instance in the process.
-    std::string removeFile;
-    std::string toggleStopFile;
-    bool toggleStopTo = false;
-    // The mute toggle is deferred by INDEX rather than by file name, because
-    // setPluginMutes needs the plugin's capabilities to know what the default
-    // it is overriding actually is, and only the record carries those.
+    telemetryNotePanel("decoders");
+
+    drawDecoderStatusRows();
+
+    // --- presets and mute, per loaded module ---------------------------------
+    // Deferred past the loop, exactly as the old installed list deferred it:
+    // setPluginMutes rebuilds the mute snapshot, which walks the very vector
+    // being iterated, and applyPluginPreset rebuilds every decoder instance.
+    const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
     int toggleMuteIdx = -1;
     bool toggleMuteTo = false;
+    bool anyRow = false;
     for (std::size_t i = 0; i < list.size(); ++i) {
         const cascade::core::LoadedPlugin& p = list[i];
-        const std::string file = cascade::core::pluginKey(p);
-        const bool stopped = pluginIsStopped(file);
+        // A REFUSED CANDIDATE HAS NOTHING TO SET. Its reason is printed in the
+        // fitted window, against the module it belongs to, and a mute
+        // checkbox on a module that never loaded would imply the silence is
+        // something the user chose.
+        if (!p.loaded) { continue; }
+        const bool hasPresets = p.preset != nullptr && p.preset->count() > 0u;
+        const bool isDecoder =
+            p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
+        if (!hasPresets && !isDecoder) { continue; }
+        anyRow = true;
         ImGui::PushID(static_cast<int>(i));
-        if (p.loaded) {
-            ImGui::Text("%s %s", p.name.c_str(), p.version.c_str());
-            // STOPPED IS SAID ON THE ROW, in the warning colour the idle
-            // reasons use, because the whole failure this feature could
-            // introduce is a plugin that produces nothing for a reason the
-            // user has forgotten they chose.
-            //
-            // WRAPPED, like the idle reasons and unlike the name above it.
-            // The menu column is narrow and the user can make it narrower;
-            // measured on the running application at 264 px, TextColored cut
-            // this sentence off mid-word at the panel edge, which is a poor
-            // way to deliver the one line that explains why a decoder is
-            // silent.
-            if (stopped) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
-                ImGui::TextWrapped("Stopped - loaded, but running nothing");
-                ImGui::PopStyleColor();
-            }
-            if (!p.author.empty()) { ImGui::TextDisabled("by %s", p.author.c_str()); }
-            // The LICENCE is displayed, always and unconditionally. A plugin
-            // is third-party code loaded into a commercially sold binary:
-            // what terms it arrived under is the user's business and must not
-            // require digging.
-            ImGui::TextDisabled("licence: %s", p.licence.c_str());
-            drawPluginPresets(p);
-        } else {
-            // A refused candidate is shown WITH ITS REASON rather than
-            // omitted — "my plugin does not appear" with no explanation is
-            // the support ticket the host was designed to prevent.
-            ImGui::TextColored(kErrorRed, "%s", file.c_str());
-            ImGui::TextWrapped("%s", p.error.c_str());
-        }
-        // Two-step removal. Deleting a plugin is deleting a file the user
-        // downloaded and may not be able to get back (a catalogue entry can
-        // disappear), so a single mis-click must not do it.
-        if (removeConfirmIdx_ == static_cast<int>(i)) {
-            ImGui::TextWrapped("Delete %s?", file.c_str());
-            if (ImGui::Button("Confirm delete")) {
-                removeFile = file;
-                removeConfirmIdx_ = -1;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel##rm")) { removeConfirmIdx_ = -1; }
-        } else if (ImGui::SmallButton("Remove")) {
-            removeConfirmIdx_ = static_cast<int>(i);
-        }
-        // STOP / START, beside Remove and in the same small-button idiom,
-        // because they answer the same question ("I do not want this plugin
-        // running") at two very different costs. Stop is instant and
-        // reversible and therefore needs no confirmation; Remove deletes a
-        // downloaded file and keeps its two-step.
-        //
-        // The LABEL IS THE ACTION, never the state: a button saying "Running"
-        // leaves the user guessing whether pressing it stops the plugin or
-        // is simply a badge. The state is the orange line above.
-        //
-        // Offered only for a plugin that actually loaded: a refused candidate
-        // has no instances to stop, and a Stop button on it would imply the
-        // reason it is silent is something the user did.
-        if (p.loaded) {
-            ImGui::SameLine();
-            if (ImGui::SmallButton(stopped ? "Start" : "Stop")) {
-                toggleStopFile = file;
-                toggleStopTo = !stopped;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(stopped ? "Create this plugin's decoders, map targets "
-                                            "and windows again"
-                                          : "Destroy this plugin's decoders, map targets "
-                                            "and windows. It stays installed, and stays "
-                                            "stopped until you start it.");
-            }
+        ImGui::SeparatorText(p.name.c_str());
+        drawPluginPresets(p);
+        if (isDecoder) {
             // MUTE AUDIO WHILE RUNNING, per plugin, defaulted from what the
-            // plugin consumes rather than from a global preference.
-            //
-            // A checkbox and not a hidden rule, because the right answer
-            // differs by plugin and only the user knows which they want. An
-            // I/Q decoder leaves behind a demodulated channel that is not the
+            // plugin consumes rather than from a global preference. An I/Q
+            // decoder leaves behind a demodulated channel that is not the
             // signal being decoded - hiss, at whatever the volume is set to -
             // so it defaults ON; an audio decoder is fed the very audio the
             // speakers get, and SSTV's warble is how people tune it by ear, so
             // it defaults OFF. Neither default is right for everybody, which
-            // is the entire reason this is on the row.
-            //
-            // Deferred past the loop like the stop toggle: recording it
-            // rebuilds the mute snapshot, which walks the very list being
-            // iterated.
+            // is the entire reason this is a control.
             bool mutes = pluginMutes(p);
             if (ImGui::Checkbox("Mute audio while running", &mutes)) {
                 toggleMuteIdx = static_cast<int>(i);
@@ -3503,25 +5189,90 @@ void AppWindow::drawPluginsSection() {
                                   "silences nothing. The volume setting is not touched.");
             }
         }
-        ImGui::Separator();
         ImGui::PopID();
     }
     if (toggleMuteIdx >= 0 && static_cast<std::size_t>(toggleMuteIdx) < list.size()) {
         setPluginMutes(list[static_cast<std::size_t>(toggleMuteIdx)], toggleMuteTo);
     }
-    if (!toggleStopFile.empty()) { setPluginStopped(toggleStopFile, toggleStopTo); }
+    if (!anyRow) {
+        ImGui::TextDisabled("No fitted module publishes a preset or is fed a signal.");
+    }
     if (!presetNote_.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.9f, 0.55f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
         ImGui::TextWrapped("%s", presetNote_.c_str());
         ImGui::PopStyleColor();
     }
-    if (!removeFile.empty()) { removeInstalledPlugin(removeFile); }
-    // Only when the browser was not drawn this frame: with it on screen the
-    // same text has already been drawn under the Install button, and printing
-    // it twice in one column reads as two separate failures. The test is
-    // "drawn", not "open", because the store section can be collapsed over an
-    // open browser — and then this is the only place the text can appear.
-    if (!pluginBrowserDrawnThisFrame_) { drawPluginResultText(); }
+
+    drawPluginTuneControls();
+}
+
+void AppWindow::drawPluginsSection() {
+    // A KEY, NOT A DRAWER - the twin of the store row above it, and the same
+    // primitive the satellites map uses. What is installed, whether it is
+    // running, why it is not, and what to do about it are all in the fitted
+    // modules window; this row opens it and reports the one thing worth
+    // knowing without opening it.
+    //
+    // "###plugins" IS KEPT, so the row's open/closed state does not reset on
+    // the launch that ships this change - and so does the disabled count in
+    // the visible half of the label, which is the news a user who never opens
+    // the window still has to learn.
+    const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
+        pluginInventory_.plugins, pluginInventory_.policies);
+    char header[64];
+    if (blocked == 0u) {
+        std::snprintf(header, sizeof(header), "Plugins###plugins");
+    } else {
+        std::snprintf(header, sizeof(header), "Plugins (%d disabled)###plugins",
+                      static_cast<int>(blocked));
+    }
+    // FED, OF DECODERS FITTED - the same two numbers the DECODERS card in the
+    // status column prints, from the same two places, so the rail and the card
+    // cannot say different things about the same modules.
+    //
+    // AND THE DENOMINATOR IS DECODERS. It was every loaded module, which put a
+    // basemap and a track-info provider - neither of which is ever fed a
+    // signal - permanently in the bottom half of a chip whose top half counts
+    // decoders being fed, so a healthy receiver reported 1/3.
+    const std::size_t decoders = loadedDecoderCount();
+    const std::size_t fedPlugins = pipeline_.running() ? fedDecoderCount() : 0u;
+    char pluginChip[16];
+    std::snprintf(pluginChip, sizeof(pluginChip), "%zu/%zu", fedPlugins, decoders);
+    // The lamp is decoding, and only that. A blocked module is already
+    // lettered into this row's own label, and a rust lamp for it would put
+    // trouble on a rail row that is at that moment decoding perfectly well.
+    if (benchSwitchRow(header, fittedWindowOpen_, pluginChip,
+                       cascade::gui::theme::kPhosphor, fedPlugins > 0, true,
+                       "Opens the fitted modules window: what is installed, which\n"
+                       "modules are being fed, which were refused and why, and the\n"
+                       "keys that start, stop and remove them.")) {
+        fittedWindowOpen_ = !fittedWindowOpen_;
+    }
+
+    // ONE LINE, AND ONLY WHEN THERE IS SOMETHING TO SAY. A pointer, not a
+    // copy: the fitted window quotes the runner's own sentence against the
+    // module it belongs to, and repeating those sentences here would be the
+    // same idle decoder described twice, in two places, by two pieces of code.
+    // What this row owes a user who has not opened the window is the fact that
+    // there is something in it to read.
+    int refused = 0;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { ++refused; }
+    }
+    const bool notFed = pipeline_.running() && decoders > fedPlugins;
+    if (refused > 0 || notFed) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              refused > 0 ? kErrorRed : cascade::gui::theme::warning());
+        if (refused > 0) {
+            ImGui::TextWrapped("%d module%s found and refused. The window says why.",
+                               refused, refused == 1 ? " was" : "s were");
+        } else {
+            ImGui::TextWrapped("%zu fitted decoder%s not being fed. The window says why.",
+                               decoders - fedPlugins,
+                               (decoders - fedPlugins) == 1u ? " is" : "s are");
+        }
+        ImGui::PopStyleColor();
+    }
 }
 
 void AppWindow::drawBlockedPluginRows() {
@@ -3574,12 +5325,12 @@ void AppWindow::drawBlockedPluginRows() {
             } else {
                 // No Update button, because there is nothing to click yet: a
                 // plan needs a catalogue, and nothing fetches one until the
-                // user asks. Say where the button lives rather than showing a
-                // dead one — and it now lives in a DIFFERENT SECTION, so the
-                // directions have to name that section or they send the user
-                // hunting through this one for a button that left it.
-                ImGui::TextDisabled("Open \"Plugin store\", press \"Get plugins\", "
-                                    "then Browse, to fetch the update.");
+                // user asks. Say where the key lives rather than showing a
+                // dead one - and it now lives in a DIFFERENT WINDOW, so the
+                // directions have to name that window or they send the user
+                // hunting along this rail for a key that left it.
+                ImGui::TextDisabled("Open the plugin store with the key above, then "
+                                    "press CHECK NOW, to fetch the update.");
             }
         }
 
@@ -3613,193 +5364,6 @@ void AppWindow::drawBlockedPluginRows() {
     if (!removeBlockedFile.empty()) { removeBlockedPlugin(removeBlockedFile); }
 }
 
-// --- The catalogue browser (P9) --------------------------------------------
-
-void AppWindow::drawPluginBrowser() {
-    ImGui::SeparatorText("Get plugins");
-    // Stated in the UI, not just in the code: this is a promise to the user,
-    // and a promise nobody can see is worth nothing.
-    ImGui::TextWrapped("Nothing is downloaded, and the catalogue is not "
-                       "contacted, until you press Browse.");
-
-    // Catalogue URL. Committed on deactivate-after-edit rather than per
-    // keystroke, so a half-typed host is never what a Browse would use.
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint("##catalogue_url", "catalogue index.json URL",
-                             pluginUrlBuf_, sizeof(pluginUrlBuf_));
-    if (ImGui::IsItemDeactivatedAfterEdit()) { pluginCatalogueUrl_ = pluginUrlBuf_; }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("An https:// catalogue, or a path to a local index.json.\n"
-                          "Plugin downloads are always https and always sha256-verified.");
-    }
-
-    const bool busy = catalogPending_ || installPending_;
-    if (busy) {
-        // Progress + Cancel. PluginRepo::progress() stays at 0 when the
-        // server sends no Content-Length, which is deliberate on its side —
-        // the bar then simply does not move rather than inventing a figure.
-        if (installPending_) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Downloading %s...",
-                               installBusyName_.c_str());
-        } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Fetching catalogue...");
-        }
-        ImGui::ProgressBar(pluginRepo_.progress(), ImVec2(-FLT_MIN, 0.0f));
-        if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) { pluginRepo_.cancel(); }
-    } else if (ImGui::Button(catalog_.empty() ? "Browse catalogue"
-                                              : "Refresh catalogue",
-                             ImVec2(-FLT_MIN, 0.0f))) {
-        startCatalogFetch();
-    }
-
-    // A fetch failure is shown verbatim and in red. The published catalogue
-    // repository may be private, in which case this is an HTTP 404 — an
-    // ordinary, supported state, so the app carries on exactly as before.
-    if (!catalogError_.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", catalogError_.c_str());
-        ImGui::PopStyleColor();
-    }
-    if (!catalogStatus_.empty()) { ImGui::TextDisabled("%s", catalogStatus_.c_str()); }
-
-    // --- Updates available ---------------------------------------------------
-    //
-    // OPT-IN, and it stays opt-in. This list is a pure function of the
-    // catalogue the user just fetched and what is installed; nothing here
-    // starts a fetch, and no plugin updates itself. One button, one plugin,
-    // one user decision — which is the same rule install() follows, because an
-    // update IS an install and it is the riskiest one.
-    const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
-    if (!updates.empty()) {
-        ImGui::SeparatorText("Updates available");
-        for (std::size_t i = 0; i < updates.size(); ++i) {
-            const cascade::core::PluginUpdate& u = updates[i];
-            ImGui::PushID(static_cast<int>(2000 + i));
-            const std::string label =
-                (u.entry != nullptr && !u.entry->name.empty()) ? u.entry->name : u.id;
-            ImGui::Text("%s %s -> %s", label.c_str(), u.fromVersion.c_str(),
-                        u.toVersion.c_str());
-            ImGui::TextDisabled("%s", u.reason.c_str());
-            ImGui::BeginDisabled(busy);
-            if (ImGui::Button("Update", ImVec2(-FLT_MIN, 0.0f))) { startUpdate(u); }
-            ImGui::EndDisabled();
-            ImGui::PopID();
-        }
-    }
-
-    // --- The list ------------------------------------------------------------
-    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-        const cascade::core::PluginCatalogEntry& e =
-            catalog_[static_cast<std::size_t>(i)];
-        const bool installed = catalogEntryInstalled(e);
-        ImGui::PushID(i);
-        char label[256];
-        std::snprintf(label, sizeof(label), "%s %s%s", e.name.c_str(), e.version.c_str(),
-                      installed ? "  [installed]" : (e.compatible ? "" : "  [incompatible]"));
-        if (ImGui::Selectable(label, i == catalogSel_)) {
-            catalogSel_ = i;
-            // The acknowledgement belongs to ONE entry. Carrying a tick from
-            // the plugin the user just read about over to the next one would
-            // hand out consent nobody gave.
-            legalAck_ = false;
-            installError_.clear();
-            installReport_.clear();
-        }
-        // Author and LICENCE on every row, not only in the detail pane: the
-        // terms a plugin arrives under are part of choosing it, not a detail
-        // to discover after installing.
-        ImGui::TextDisabled("by %s | licence: %s",
-                            e.author.empty() ? "(unknown)" : e.author.c_str(),
-                            e.licence.empty() ? "(none declared)" : e.licence.c_str());
-        if (!e.compatible) {
-            ImGui::TextColored(kErrorRed, "not compatible with this version");
-        }
-        // THE DETAIL PANE OPENS HERE, under the row that was clicked, rather
-        // than at the foot of the list. With eleven plugins the old layout put
-        // a description and its Install button several screens below the name
-        // they belonged to, so the two could not be seen together - and the
-        // one thing this pane exists to do is show a licence and a legal
-        // notice NEXT TO the decision they govern.
-        if (i == catalogSel_) {
-            drawPluginCatalogueDetail(i);
-            // Still directly under the Install button, which has moved with it.
-            drawPluginResultText();
-        }
-        ImGui::PopID();
-    }
-
-    // An install result outlives its entry only when nothing is selected at
-    // all (the catalogue was refreshed, say). Drawn once, either way.
-    if (catalogSel_ < 0 || catalogSel_ >= static_cast<int>(catalog_.size())) {
-        drawPluginResultText();
-    }
-}
-
-// --- Detail pane + install gate, for ONE catalogue entry ---------------------
-//
-// Called from inside drawPluginBrowser's list loop, within that row's PushID,
-// so the checkbox and the Install button below belong to the row they follow.
-void AppWindow::drawPluginCatalogueDetail(int idx) {
-    if (idx < 0 || idx >= static_cast<int>(catalog_.size())) { return; }
-    {
-        const cascade::core::PluginCatalogEntry& e =
-            catalog_[static_cast<std::size_t>(idx)];
-        ImGui::Separator();
-        ImGui::Text("%s %s", e.name.c_str(), e.version.c_str());
-        ImGui::TextDisabled("by %s", e.author.empty() ? "(unknown)" : e.author.c_str());
-        // NOT TextDisabled. The licence is the one line in this pane the user
-        // is legally obliged to have seen before installing, so it is drawn
-        // at full contrast, above the button, every time.
-        ImGui::TextWrapped("Licence: %s",
-                           e.licence.empty() ? "(none declared)" : e.licence.c_str());
-        const std::string& body = e.description.empty() ? e.summary : e.description;
-        if (!body.empty()) { ImGui::TextWrapped("%s", body.c_str()); }
-        if (!e.homepage.empty()) { ImGui::TextDisabled("%s", e.homepage.c_str()); }
-        const cascade::core::PluginPlatform* plat = e.thisPlatform();
-        if (plat != nullptr && plat->sizeBytes > 0) {
-            ImGui::TextDisabled("%s | %.2f MB", plat->file.c_str(),
-                                static_cast<double>(plat->sizeBytes) / 1.0e6);
-        }
-
-        // THE LEGAL NOTICE. Some decoders demodulate transmissions whose
-        // interception is an offence in some countries; the notice is the
-        // author telling the user that, and it is not decoration. Install
-        // stays disabled until the box is ticked (pluginInstallBlockedReason).
-        if (!e.legalNotice.empty()) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Legal notice");
-            ImGui::TextWrapped("%s", e.legalNotice.c_str());
-            ImGui::Checkbox("I have read this notice and accept responsibility",
-                            &legalAck_);
-        }
-
-        const std::string blocked = pluginInstallBlockedReason(idx, legalAck_);
-        ImGui::BeginDisabled(!blocked.empty());
-        if (ImGui::Button("Install", ImVec2(-FLT_MIN, 0.0f))) { startInstall(e); }
-        ImGui::EndDisabled();
-        if (!blocked.empty()) { ImGui::TextDisabled("Install disabled: %s", blocked.c_str()); }
-        ImGui::Separator();
-    }
-}
-
-void AppWindow::drawPluginResultText() {
-    // The failure is PluginRepo's own text, verbatim and in red — a sha256
-    // mismatch names both digests and must be the most visible thing on the
-    // panel, because it means the bytes that arrived were not the bytes the
-    // catalogue vouched for. Paraphrasing it, or reducing it to "install
-    // failed", would throw away the only evidence the user has.
-    if (!installError_.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", installError_.c_str());
-        ImGui::PopStyleColor();
-    }
-    if (!installReport_.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 1.0f, 0.45f, 1.0f));
-        ImGui::TextWrapped("%s", installReport_.c_str());
-        ImGui::PopStyleColor();
-    }
-}
-
 bool AppWindow::catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const {
     const cascade::core::PluginPlatform* p = e.thisPlatform();
     if (p == nullptr) { return false; }
@@ -3823,6 +5387,28 @@ bool AppWindow::catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e
         if (!ip.missingFromDisk && equalsFileNameAscii(ip.file, want)) { return true; }
     }
     return false;
+}
+
+const cascade::core::LoadedPlugin* AppWindow::installedPluginRecord(
+    const cascade::core::PluginCatalogEntry& e) const {
+    const cascade::core::PluginPlatform* p = e.thisPlatform();
+    if (p == nullptr) { return nullptr; }
+    // The SAME sanitised-name comparison catalogEntryInstalled makes, and for
+    // the same reason: the name install() would write is the name to look for,
+    // not the one the catalogue happens to spell.
+    std::string want;
+    std::string err;
+    if (!cascade::core::PluginRepo::sanitiseFileName(p->file, want, err)) {
+        return nullptr;
+    }
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        const std::string have = std::filesystem::path(lp.path).filename().string();
+        if (equalsFileNameAscii(have, want)) { return &lp; }
+    }
+    // No manifest fallback here, deliberately - see the header. A retired
+    // module is installed and has no record; answering with something else's
+    // record would be worse than answering "the host never saw it".
+    return nullptr;
 }
 
 std::string AppWindow::pluginInstallBlockedReason(int idx, bool acknowledged) const {
@@ -3867,8 +5453,16 @@ void AppWindow::startCatalogFetch() {
     // installs from last time — the same all-or-nothing stance fetchIndex
     // takes with its own entries().
     catalog_.clear();
-    catalogSel_ = -1;
-    legalAck_ = false;
+    // AND THE SELECTION AND THE CONSENT GO WITH IT. The store window clamps
+    // its own selection every frame and clears its tick whenever the selection
+    // moves, but the tick is consent for ONE plugin and a fetch that replaces
+    // the whole catalogue can leave the same index pointing at a different
+    // module - so it is cleared here, at the moment the ground moves, rather
+    // than left to a rule that is about a different event.
+    if (pluginStoreDeck_) {
+        pluginStoreDeck_->selected = -1;
+        pluginStoreDeck_->legalAck = false;
+    }
     catalogError_.clear();
     catalogStatus_.clear();
     installError_.clear();
@@ -4353,6 +5947,42 @@ void AppWindow::syncMapPagesToSaved() {
     }
 }
 
+bool AppWindow::applyReceiverPosition(double latDeg, double lonDeg) {
+    // REFUSED RATHER THAN CLAMPED, and by the same positive range test the
+    // config sanitizer uses, so a typo cannot silently install a receiver at
+    // the pole and quietly make every distance wrong. Every caller - the
+    // toolbar's button, the satellites window's coordinate cells, a click on
+    // that window's map - gets the same refusal, because a check written once
+    // per entry point is a check that will eventually be missing from one.
+    if (!(latDeg >= -90.0 && latDeg <= 90.0 && lonDeg >= -180.0 && lonDeg <= 180.0)) {
+        return false;
+    }
+    rxLat_ = latDeg;
+    rxLon_ = lonDeg;
+    rxSet_ = true;
+    // THE TYPED FIELDS FOLLOW THE APPLIED POSITION. They are the toolbar's
+    // draft of this same number, and a position set from the satellites
+    // window would otherwise leave them showing whatever was last typed
+    // somewhere else - two controls claiming to be the receiver's latitude
+    // and disagreeing about it.
+    rxLatInput_ = latDeg;
+    rxLonInput_ = lonDeg;
+    // EVERY page, not just the one whose control was used: the receiver's
+    // position is a fact about the antenna, and two pages disagreeing about
+    // where home is would put the range rings in two different places at
+    // once. The scope is told for the same reason - it is a third view of
+    // the same antenna.
+    for (MapPage& other : mapPages_) {
+        other.view->setHome(rxLat_, rxLon_);
+    }
+    scope_.setReceiver(rxLat_, rxLon_);
+    // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it was
+    // measured from somewhere else, and keeping them would draw one antenna's
+    // pattern around another antenna's position.
+    coverage_.reset();
+    return true;
+}
+
 void AppWindow::drawRxPositionEntry() {
     // The receiver's own position is asked for, never guessed. It is what
     // range and bearing are measured from - on the map, in the track table and
@@ -4388,22 +6018,7 @@ void AppWindow::drawRxPositionEntry() {
                            rxLonInput_ >= -180.0 && rxLonInput_ <= 180.0;
     ImGui::BeginDisabled(!rxInputOk);
     if (ImGui::SmallButton("Set RX here")) {
-        rxLat_ = rxLatInput_;
-        rxLon_ = rxLonInput_;
-        rxSet_ = true;
-        // EVERY page, not just the one whose button was pressed: the receiver's
-        // position is a fact about the antenna, and two pages disagreeing about
-        // where home is would put the range rings in two different places at
-        // once. The scope is told for the same reason - it is a third view of
-        // the same antenna.
-        for (MapPage& other : mapPages_) {
-            other.view->setHome(rxLat_, rxLon_);
-        }
-        scope_.setReceiver(rxLat_, rxLon_);
-        // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it was
-        // measured from somewhere else, and keeping them would draw one
-        // antenna's pattern around another antenna's position.
-        coverage_.reset();
+        applyReceiverPosition(rxLatInput_, rxLonInput_);
     }
     ImGui::EndDisabled();
     if (!rxInputOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -4428,10 +6043,31 @@ void AppWindow::drawScopeModeControl() {
             "select. Takes the whole window; there is a way back on its own bar.");
     }
     // SAID HERE RATHER THAN DISCOVERED IN AN EMPTY SCOPE. The scope draws
-    // whatever aircraft the host has, which with no aircraft source installed
-    // is none at all - and an empty scope looks identical to a broken one.
+    // whatever aircraft the host has, which with nothing publishing tracks is
+    // none at all - and an empty scope looks identical to a broken one.
+    //
+    // AND IT SAYS WHICH KIND OF NOTHING. trackPluginNames() is empty for a
+    // machine with no tracker, for one whose tracker the user stopped and for
+    // one whose tracker the host refused; this line used to read "no aircraft
+    // source installed" in all three, which is a lie in two of them and sends
+    // the user to buy what they already own. See gui/module_census.hpp.
     if (pluginUi_.trackPluginNames().empty()) {
-        ImGui::TextDisabled("no aircraft source installed - the scope will be empty");
+        const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
+            pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
+            [this](const std::string& key) { return pluginIsStopped(key); });
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        // WRAPPED, not TextDisabled: this rail is narrow and a user may drag it
+        // narrower, and a sentence that runs off the edge of the column says
+        // nothing at all.
+        ImGui::TextWrapped(
+            "The scope will be empty. %s",
+            cascade::gui::trackSourceAbsenceNote(
+                census, "aircraft positions",
+                "An ADS-B decoder is what fills this face; the plugin store is where "
+                "one is fitted from.")
+                .c_str());
+        ImGui::PopStyleColor();
     }
 }
 
@@ -5031,7 +6667,488 @@ void AppWindow::drawScopeMode() {
     if (scope_.askedForTiles()) { basemapUsedThisFrame_ = true; }
 }
 
+void AppWindow::placeFeatureWindow(int slot, float wantW, float wantH) {
+    float x = 0.0f;
+    float y = 0.0f;
+    separateWindowAnchor(slot, x, y);
+    // THE MONITORS, in the virtual-desktop coordinates ImGui and the window
+    // manager both speak. Empty is a headless --frames run, where the main
+    // viewport's own work area is the only honest answer - the same fallback
+    // the map pages use.
+    std::vector<ScreenRect> workAreas;
+    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    for (int i = 0; i < pio.Monitors.Size; ++i) {
+        const ImGuiPlatformMonitor& m = pio.Monitors[i];
+        workAreas.push_back(ScreenRect{m.WorkPos.x, m.WorkPos.y, m.WorkSize.x, m.WorkSize.y});
+    }
+    if (workAreas.empty()) {
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        workAreas.push_back(
+            ScreenRect{mv->WorkPos.x, mv->WorkPos.y, mv->WorkSize.x, mv->WorkSize.y});
+    }
+    float w = wantW;
+    float h = wantH;
+    mapPlaceDefaultRect(x, y, w, h, workAreas);
+    ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_FirstUseEver);
+}
+
+void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h,
+                                        float wantW, float wantH) {
+    // A SAVED RECTANGLE ONLY COUNTS IF IT IS STILL SOMEWHERE. The config
+    // sanitizer checks the four numbers are sane; it cannot know what monitors
+    // exist, and a rectangle saved on a display that has since been unplugged
+    // restores off-screen where ImGui's own clamp leaves a 19 px sliver of
+    // title bar - a window that cannot be dragged back and whose unusable
+    // geometry is then re-saved every frame. The map pages were bitten by
+    // exactly this; the same two functions answer it here.
+    std::vector<ScreenRect> workAreas;
+    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    for (int i = 0; i < pio.Monitors.Size; ++i) {
+        const ImGuiPlatformMonitor& m = pio.Monitors[i];
+        workAreas.push_back(ScreenRect{m.WorkPos.x, m.WorkPos.y, m.WorkSize.x, m.WorkSize.y});
+    }
+    if (workAreas.empty()) {
+        // No platform monitor list: a headless --frames run. The main
+        // viewport's own work area is the only honest answer.
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        workAreas.push_back(
+            ScreenRect{mv->WorkPos.x, mv->WorkPos.y, mv->WorkSize.x, mv->WorkSize.y});
+    }
+    if (w > 0 && h > 0 && mapGeometryOnScreen(x, y, w, h, workAreas)) {
+        // ...AND NO BIGGER THAN WHAT FITS WHERE IT SITS, so the resize grip
+        // cannot end up off the bottom of a shorter screen. Only that overhang
+        // is taken off it; a rectangle that fits is the user's own and is
+        // restored untouched.
+        mapClampRestoredSize(x, y, w, h, workAreas);
+        ImGui::SetNextWindowPos(ImVec2(static_cast<float>(x), static_cast<float>(y)),
+                                ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(static_cast<float>(w), static_cast<float>(h)),
+                                 ImGuiCond_FirstUseEver);
+        return;
+    }
+    placeFeatureWindow(slot, wantW, wantH);
+}
+
+void AppWindow::drawPluginStoreWindow() {
+    // RESET FIRST, AND UNCONDITIONALLY. The fitted window reads this flag to
+    // decide whether IT has to print the install/remove outcome, and a store
+    // window that is closed prints nothing - so the reset has to happen on
+    // every frame, before the open test, exactly as it used to happen before
+    // the section's own header test.
+    pluginBrowserDrawnThisFrame_ = false;
+    if (!pluginBrowseOpen_) { return; }
+    telemetryNotePanel("plugin store");
+
+    // A REAL OPERATING SYSTEM WINDOW, by the same two devices the map pages
+    // use: an opening rectangle that overhangs the main window, and
+    // NoAutoMerge to say outright what the overhang only implies - a window
+    // that FITS inside the main viewport is otherwise merged into it, and a
+    // store dragged small would silently stop being its own window.
+    ImGuiWindowClass storeClass;
+    storeClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    ImGui::SetNextWindowClass(&storeClass);
+    // Wide enough for the deck, the module list and the data plate side by
+    // side - PluginStoreView refuses to lay out under 560 px and says so - and
+    // clamped to the monitor it opens on.
+    placeFeatureWindow(6, 1180.0f, 780.0f);
+    // NO WINDOW PADDING, because the content is a CABINET: the brass has to
+    // reach the frame the operating system drew, and four pixels of ImGui's
+    // window ground all the way round it would read as a gap between the
+    // instrument and its case.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    bool open = true;
+    // The visible half of the title is the plate's own word; the ### half is
+    // the stable identity, and it is NOT "###pluginstore" - that id belongs to
+    // the rail row, and two widgets sharing one id is how a window's drag
+    // state and a rail row's press end up in the same hash bucket.
+    const bool drawn = ImGui::Begin("Plugin store###pluginstorewindow", &open);
+    ImGui::PopStyleVar();
+    // The frame's close button is a real close: it puts the key on the rail
+    // back to off, and that is the only state either of them reads.
+    if (!open) { pluginBrowseOpen_ = false; }
+    if (drawn) {
+        // --- what the window is told, from where it is measured -------------
+        cascade::gui::PluginStoreModel model;
+        model.sourceUrl = pluginCatalogueUrl_;
+        // NOT "the catalogue is empty". Nothing here contacts the origin until
+        // the user asks, so before that every count would be a claim about
+        // something nobody has looked at; the window's banner says IDLE
+        // instead of printing a clean zero.
+        model.haveCatalogue = !catalog_.empty();
+        model.sourceStatus = catalogStatus_;
+        model.sourceError = catalogError_;
+        model.busy = catalogPending_ || installPending_;
+        model.progress = pluginRepo_.progress();
+        model.busyLabel = installPending_ ? ("downloading " + installBusyName_)
+                          : catalogPending_ ? std::string("fetching the catalogue")
+                                            : std::string();
+        model.resultReport = installReport_;
+        model.resultError = installError_;
+
+        // The update plans, once for the whole list rather than once per row:
+        // planUpdates walks the catalogue against the manifest, and asking it
+        // per module would be that walk squared for no new information.
+        const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
+
+        model.modules.reserve(catalog_.size());
+        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+            const cascade::core::PluginCatalogEntry& e =
+                catalog_[static_cast<std::size_t>(i)];
+            cascade::gui::StoreModule sm;
+            sm.id = e.id;
+            sm.plate.name = e.name;
+            sm.plate.version = e.version;
+            sm.plate.maker = e.author;
+            sm.plate.licence = e.licence;
+            sm.plate.blurb = e.description.empty() ? e.summary : e.description;
+            sm.plate.homepage = e.homepage;
+            sm.plate.legalNotice = e.legalNotice;
+            // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the
+            // comparison are stated so the plate can letter the mismatch
+            // rather than the verdict.
+            sm.plate.haveAbi = true;
+            sm.plate.abiVersion = e.abiVersion;
+            sm.plate.hostAbiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+            sm.plate.retirementFloor = e.minSupportedVersion;
+            // "windows/x64, linux/x64" - the builds the catalogue publishes.
+            for (const cascade::core::PluginPlatform& pf : e.platforms) {
+                if (!sm.plate.platforms.empty()) { sm.plate.platforms += ", "; }
+                sm.plate.platforms += pf.os + "/" + pf.arch;
+            }
+            const cascade::core::PluginPlatform* plat = e.thisPlatform();
+            if (plat != nullptr && plat->sizeBytes > 0u) {
+                // ADVISORY, AND ONLY WHEN STATED. A catalogue that publishes
+                // no size gets haveSizeBytes false and the plate says it was
+                // never told - never a clean zero, which is the opposite
+                // claim.
+                sm.plate.haveSizeBytes = true;
+                sm.plate.sizeBytes = plat->sizeBytes;
+            }
+            // IS THERE A BUILD THIS MACHINE COULD RUN. A stable fact about the
+            // entry - the exact-ABI test the loader uses, and an os/arch build
+            // existing - deliberately not blockedReason, which also carries
+            // transient states such as a transfer already in flight.
+            sm.installableHere = e.compatible && plat != nullptr;
+            // FITTED, by the SAME test the desktop has always used: the
+            // sanitised file name against the host's records AND the manifest,
+            // so a retired module still counts as fitted.
+            sm.plate.fitted = catalogEntryInstalled(e);
+            // ...and if it is fitted, what the host actually made of it. This
+            // is the only place the catalogue row and the loaded record meet,
+            // and it is what lets the store's plate report loaded/running/
+            // refused instead of guessing from "the file is there".
+            if (const cascade::core::LoadedPlugin* lp = installedPluginRecord(e)) {
+                sm.plate.fileName =
+                    std::filesystem::path(lp->path).filename().string();
+                sm.plate.loaded = lp->loaded;
+                sm.plate.refusalReason = lp->error;
+                sm.plate.haveCapabilities = lp->loaded;
+                sm.plate.capabilities = lp->capabilities;
+                const std::string key = cascade::core::pluginKey(*lp);
+                sm.plate.running = lp->loaded && !pluginIsStopped(key);
+                if (lp->hostClient != nullptr) {
+                    sm.plate.haveTuneGrant = true;
+                    sm.plate.tuneGranted =
+                        pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
+                }
+            }
+            // WHY FIT MAY NOT BE PRESSED, from the SAME predicate the key
+            // itself is tested against when the press is applied - so the
+            // sentence under the key and the key can never disagree.
+            //
+            // THE TICK BELONGS TO ONE MODULE, and the predicate is told so.
+            // deck.legalAck is the acknowledgement for the SELECTED row and
+            // for no other; passing it to every row would let a tick given to
+            // the plugin the user just read about unblock the FIT key on a
+            // different plugin's row, which is consent nobody gave. Every
+            // other row is asked as unacknowledged, so a module with a notice
+            // stays blocked until it is the one on the plate.
+            const bool acked =
+                (i == pluginStoreDeck_->selected) && pluginStoreDeck_->legalAck;
+            sm.blockedReason = pluginInstallBlockedReason(i, acked);
+            for (const cascade::core::PluginUpdate& u : updates) {
+                if (u.id != e.id) { continue; }
+                sm.updateToVersion = u.toVersion;
+                sm.updateReason = u.reason;
+                break;
+            }
+            model.modules.push_back(std::move(sm));
+        }
+
+        // --- the cabinet, and the plate as content --------------------------
+        // Whether PluginStoreView::draw actually ran; see the request block
+        // below for why that is not the same question as "the window drew".
+        bool viewDrawn = false;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 tl = ImGui::GetCursorScreenPos();
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        if (dl != nullptr && avail.x > 8.0f && avail.y > 8.0f) {
+            const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
+            const float margin = drawCabinet(dl, tl, br);
+            const ImVec2 pTL(tl.x + margin, tl.y + margin);
+            const ImVec2 pBR(br.x - margin, br.y - margin);
+            float bodyTop = pTL.y;
+            if (pBR.x > pTL.x + 32.0f && pBR.y > pTL.y + 32.0f) {
+                // THE PLATE STAYS AS CONTENT, which is the design's own
+                // arrangement - and the mock's minimise/maximise/close buttons
+                // beside it do not, because this is a real operating system
+                // window with the frame the operating system drew.
+                bodyTop = cascade::gui::addBenchPlate(dl, pTL, pBR, "PLUGIN STORE");
+            }
+            const float pad = 8.0f;
+            const float faceW = pBR.x - pTL.x - pad * 2.0f;
+            const float faceH = pBR.y - pad - bodyTop;
+            if (faceW > 40.0f && faceH > 40.0f) {
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop));
+                ImGui::BeginChild("##storeface", ImVec2(faceW, faceH), ImGuiChildFlags_None,
+                                  ImGuiWindowFlags_NoScrollbar |
+                                      ImGuiWindowFlags_NoScrollWithMouse);
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+                pluginStoreView_->draw(faceW, faceH, model, *pluginStoreDeck_);
+                // THE CURSOR THE VIEW LEAVES BEHIND HAS TO BE DECLARED. Its
+                // last statement moves the cursor to the foot of what it drew
+                // so a caller can carry on below it, and a cursor moved past a
+                // window's content extent with no item after it is exactly
+                // what ImGui's own check reports: "Code uses SetCursorPos() to
+                // extend window/parent boundaries. Please submit an item e.g.
+                // Dummy() afterwards." It printed once per frame into the
+                // bounded run's output, which is the contract those runs have
+                // to keep clean. A zero-size Dummy is that item.
+                ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                ImGui::EndChild();
+                viewDrawn = true;
+            } else {
+                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop + pad));
+                ImGui::TextDisabled("Too small - drag the window larger.");
+            }
+        }
+
+        // --- what the window ASKED for --------------------------------------
+        // THE VIEW ASKS, THIS APPLIES, and every one of these re-tests its own
+        // gate: a request is raised inside a draw and answered after it, and
+        // the state it was raised against can have moved on in between.
+        //
+        // ONLY IF THE VIEW ACTUALLY DREW THIS FRAME. Its four requests are
+        // cleared at the top of ITS draw and nowhere else, so a frame that
+        // skipped the draw - the window dragged too small, which is a state a
+        // user can hold with the mouse button down - would still be holding
+        // last frame's answers and would apply them again, once per frame. A
+        // second install of the module the user fitted a moment ago is not a
+        // theoretical fault; the transfer gate would refuse most of them and
+        // the first gap between two transfers would let one through.
+        //
+        // ...AND THE SAME TEST ANSWERS THE OTHER QUESTION. "Drawn" means the
+        // PANEL drew, not merely that the window did: the fitted window reads
+        // this flag to decide whether IT prints the install/remove outcome,
+        // and a store window dragged too small to lay out has printed nothing.
+        // It must not be the one claiming to have shown it, or a failed remove
+        // would appear on neither window.
+        pluginBrowserDrawnThisFrame_ = viewDrawn;
+        if (!viewDrawn) {
+            ImGui::End();
+            return;
+        }
+        if (pluginStoreView_->checkNowRequested()) { startCatalogFetch(); }
+        if (pluginStoreView_->cancelRequested()) { pluginRepo_.cancel(); }
+        const int fitIdx = pluginStoreView_->fitRequested();
+        if (fitIdx >= 0 && fitIdx < static_cast<int>(catalog_.size())) {
+            // RE-TESTED, NOT TRUSTED. The view only offers the key where the
+            // reason was empty, but the predicate covers a transfer in flight
+            // and an acknowledgement that may have been cleared since the key
+            // was drawn - and this is the single gate the web control path
+            // goes through as well. The acknowledgement is read the same way
+            // the model built it: it belongs to the SELECTED module and to no
+            // other, so a fit asked for on any other row is asked for
+            // unacknowledged.
+            const std::string blocked = pluginInstallBlockedReason(
+                fitIdx, fitIdx == pluginStoreDeck_->selected && pluginStoreDeck_->legalAck);
+            if (blocked.empty()) {
+                startInstall(catalog_[static_cast<std::size_t>(fitIdx)]);
+            } else {
+                installError_ = blocked;
+            }
+        }
+        const int updIdx = pluginStoreView_->updateRequested();
+        if (updIdx >= 0 && updIdx < static_cast<int>(catalog_.size())) {
+            // The plan is looked up again rather than captured with the model:
+            // planUpdates' entries point INTO catalog_, and the frame that
+            // built the model is not the frame that acts on it.
+            const std::string& id = catalog_[static_cast<std::size_t>(updIdx)].id;
+            const std::vector<cascade::core::PluginUpdate> plans = plannedPluginUpdates();
+            for (const cascade::core::PluginUpdate& u : plans) {
+                if (u.id == id) {
+                    startUpdate(u);
+                    break;
+                }
+            }
+        }
+    }
+    ImGui::End();
+}
+
+void AppWindow::drawFittedModulesWindow() {
+    if (!fittedWindowOpen_) { return; }
+    telemetryNotePanel("fitted modules");
+
+    ImGuiWindowClass fittedClass;
+    fittedClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    ImGui::SetNextWindowClass(&fittedClass);
+    // WHERE THE USER LEFT IT, and only if that place still exists on this
+    // machine; otherwise a different slot from the store's, so opening both
+    // for the first time does not stack one exactly on the other.
+    placeSavedFeatureWindow(7, fittedWinX_, fittedWinY_, fittedWinW_, fittedWinH_,
+                            1060.0f, 720.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    bool open = true;
+    const bool drawn = ImGui::Begin("Fitted modules###fittedmoduleswindow", &open);
+    ImGui::PopStyleVar();
+    if (!open) { fittedWindowOpen_ = false; }
+    // READ BACK EVERY FRAME, which is the whole of the persistence: ImGui's
+    // own .ini is switched off in this application, so unless the rectangle is
+    // copied out here and into AppConfig it exists only until the process
+    // ends. The POSITION is read even when Begin answered false - a collapsed
+    // window is not gone and can still be dragged, and freezing its position
+    // would lose a move made while it was rolled up - but the SIZE is not,
+    // because a collapsed window reports its title-bar-only height and
+    // persisting that would corrupt the real one.
+    {
+        const ImVec2 wpos = ImGui::GetWindowPos();
+        fittedWinX_ = static_cast<int>(wpos.x);
+        fittedWinY_ = static_cast<int>(wpos.y);
+        if (drawn) {
+            const ImVec2 wsize = ImGui::GetWindowSize();
+            fittedWinW_ = static_cast<int>(wsize.x);
+            fittedWinH_ = static_cast<int>(wsize.y);
+        }
+    }
+    if (drawn) {
+        // --- what the window is told ----------------------------------------
+        cascade::gui::FittedModulesModel model;
+        model.directory = pluginDir_;
+        // GATES FED FOR EVERY MODULE AT ONCE, which is why it is stated on the
+        // panel rather than left to be inferred from four idle rows.
+        model.receiverRunning = pipeline_.running();
+        const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
+        const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
+        model.modules.reserve(list.size());
+        for (const cascade::core::LoadedPlugin& p : list) {
+            const std::string file = cascade::core::pluginKey(p);
+            // THE RUNNER'S OWN SENTENCE, quoted rather than rewritten, and
+            // matched by KEY rather than by display name - two installed
+            // modules may legitimately print the same name.
+            std::string idleDetail;
+            for (const cascade::core::DecoderStatus& s : status) {
+                if (s.key != file) { continue; }
+                if (s.reason == cascade::core::DecoderIdleReason::Running) { continue; }
+                idleDetail = s.detail;
+                break;
+            }
+            cascade::gui::FittedModule m = cascade::gui::makeFittedModule(
+                p, pluginIsStopped(file), pluginRunner_.isFeeding(file),
+                std::move(idleDetail),
+                pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
+            // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
+            // only come from stat-ing the file; a failure leaves it at 0,
+            // which the shared plate reads as "not measured" and never draws
+            // as a clean zero.
+            std::error_code sizeEc;
+            const std::uintmax_t bytes = std::filesystem::file_size(p.path, sizeEc);
+            if (!sizeEc) { m.sizeBytes = static_cast<std::uint64_t>(bytes); }
+            model.modules.push_back(std::move(m));
+        }
+        // ONLY WHEN THE STORE DID NOT PRINT IT. installReport_/installError_
+        // are written by an install AND by a remove, so both windows can hold
+        // the same sentence; printing it in both reads as two separate
+        // outcomes, and printing it in neither loses a failed remove entirely.
+        if (!pluginBrowserDrawnThisFrame_) {
+            model.report = installReport_;
+            model.error = installError_;
+        }
+
+        // --- the cabinet ----------------------------------------------------
+        // NO TITLE PLATE HERE: drawFittedModulesPanel draws its own FITTED
+        // MODULES plate as the first thing in its layout, and a second plate
+        // above it would be the window's name twice.
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 tl = ImGui::GetCursorScreenPos();
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        cascade::gui::FittedModulesAction act;
+        if (dl != nullptr && avail.x > 8.0f && avail.y > 8.0f) {
+            const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
+            const float margin = drawCabinet(dl, tl, br);
+            const ImVec2 pTL(tl.x + margin, tl.y + margin);
+            const ImVec2 pBR(br.x - margin, br.y - margin);
+            const float pad = 8.0f;
+            const float faceW = pBR.x - pTL.x - pad * 2.0f;
+            const float faceH = pBR.y - pTL.y - pad * 2.0f;
+            if (faceW > 40.0f && faceH > 40.0f) {
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, pTL.y + pad));
+                ImGui::BeginChild("##fittedface", ImVec2(faceW, faceH),
+                                  ImGuiChildFlags_None,
+                                  ImGuiWindowFlags_NoScrollbar |
+                                      ImGuiWindowFlags_NoScrollWithMouse);
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+                act = cascade::gui::drawFittedModulesPanel(*fittedDeck_, model);
+                ImGui::EndChild();
+            } else {
+                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, pTL.y + pad));
+                ImGui::TextDisabled("Too small - drag the window larger.");
+            }
+        }
+
+        // --- what the frame's keys asked for --------------------------------
+        // APPLIED AFTER THE PANEL, never inside it: every one of these
+        // rebuilds the plugin set - rescan unloads and re-loads every module,
+        // a stop or a start rebuilds every instance, a remove deletes a file
+        // and rescans - and the vector the panel was drawn from is the vector
+        // they replace.
+        switch (act.kind) {
+            case cascade::gui::FittedModulesAction::Kind::Rescan:
+                rescanPlugins();
+                break;
+            case cascade::gui::FittedModulesAction::Kind::Start:
+                setPluginStopped(act.file, false);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::Stop:
+                setPluginStopped(act.file, true);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::Remove:
+                removeInstalledPlugin(act.file);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::SetTune:
+                setPluginTuneAllowed(act.file, act.flag);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::None:
+                break;
+        }
+    }
+    ImGui::End();
+}
+
 void AppWindow::drawPluginWindows() {
+    // THE STORE FIRST, THEN THE INVENTORY, and the order is load-bearing: the
+    // store resets pluginBrowserDrawnThisFrame_ and sets it if it draws, and
+    // the fitted window reads it to decide whether IT has to print the
+    // install/remove outcome. That rule used to live in the rail's DECODE
+    // group, where the two SECTIONS were drawn in this order; both are windows
+    // now, so the rule moved here with them and is these two lines.
+    //
+    // Neither window self-opens. There is no arrival edge on either - no
+    // equivalent of a map page's first visible target - so the only things
+    // that put one on screen are its rail key and, for the store, the open
+    // state the user left behind (AppConfig::pluginBrowserOpen). Restoring an
+    // open window the user left open is not the self-open the satellites page
+    // was fixed for; opening one nobody asked for would be.
+    drawPluginStoreWindow();
+    drawFittedModulesWindow();
+
     // One poll per frame feeds both the map and every panel: the plugins are
     // asked once and the answer is shared, so a plugin cannot be charged twice
     // for having two kinds of output.
@@ -5112,6 +7229,33 @@ void AppWindow::drawPluginWindows() {
         for (const cascade::core::HostPath& hp : pluginUi_.paths()) {
             if (hp.plugin == page.plugin) { pagePaths_.push_back(hp); }
         }
+
+        // IS THIS THE SATELLITE INSTRUMENT? Asked of the TRACK KIND, which is
+        // the ABI's own answer to "what is this", and never of the plugin's
+        // display name - that is third-party text and matching on it would be
+        // a guess dressed as a rule. Every track this page holds has to be a
+        // satellite: a source reporting satellites AND aircraft is not the
+        // window the design describes, and drawing it as one would put an
+        // orbital altitude ladder under an aeroplane.
+        //
+        // Sticky (see MapPage::satellite): a propagator with nothing to report
+        // for one frame must not throw the window's whole layout away and
+        // rebuild it on the next.
+        if (!page.satellite && !pageTracks_.empty()) {
+            bool everySatellite = true;
+            for (const cascade::core::HostTrack& ht : pageTracks_) {
+                if (ht.t.kind != CASCADE_TRACK_SATELLITE) {
+                    everySatellite = false;
+                    break;
+                }
+            }
+            page.satellite = everySatellite;
+        }
+        // COUNTED HERE, WHERE THE FILTER ALREADY RAN, and counted for closed
+        // pages too - a closed page's count is exactly what its rail row is
+        // for. One count, so the rail chip and the window's own TARGETS
+        // heading cannot disagree.
+        page.visibleCount = cascade::core::visibleTrackCount(pageTracks_);
 
         // SELF-OPEN IS AN EDGE, NOT A ONE-SHOT — the same mapSelfOpens
         // contract the single map lived by, now per page: nothing -> something
@@ -5226,7 +7370,17 @@ void AppWindow::drawPluginWindows() {
             if (idc == '#') { idc = '_'; }
         }
         const std::string pageTitle = pageIdent + " Map###mapPage:" + pageIdent;
+        // NO WINDOW PADDING ON THE SATELLITE PAGE, because its content is a
+        // CABINET: the brass has to reach the frame the operating system drew,
+        // and a four-pixel border of ImGui's window background all the way
+        // round it would read as a gap between the instrument and its case.
+        // Pushed before Begin, which is what reads it, and popped straight
+        // after so nothing nested inherits it.
+        if (page.satellite) {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        }
         const bool pageDrawn = ImGui::Begin(pageTitle.c_str(), &page.open);
+        if (page.satellite) { ImGui::PopStyleVar(); }
         if (!pageDrawn) {
             // COLLAPSED, NOT GONE. Begin() answers false for a collapsed
             // window, but the window still exists and can still be DRAGGED —
@@ -5253,150 +7407,162 @@ void AppWindow::drawPluginWindows() {
             page.y = static_cast<int>(wpos.y);
             page.w = static_cast<int>(wsize.x);
             page.h = static_cast<int>(wsize.y);
-            if (ImGui::SmallButton("Fit")) { page.view->requestFitToTracks(); }
-            ImGui::SameLine();
-            drawRxPositionEntry();
-            ImGui::SameLine();
-            // COUNTED THE WAY THEY ARE DRAWN, and counted for THIS page: the
-            // number beside an ADS-B map must be its aircraft, not the whole
-            // receiver's targets. A plugin that never evicts keeps reporting
-            // targets the staleness rule has dropped, and a count of
-            // everything reported over a map showing only what is live is a
-            // number that contradicts the picture beside it.
-            const std::size_t shown =
-                cascade::core::visibleTrackCount(pageTracks_);
-            ImGui::TextDisabled("%d target%s", static_cast<int>(shown),
-                                shown == 1 ? "" : "s");
-
-            // --- the coverage overlay's controls ---------------------------
-            // A second row, because the first is already the position entry and
-            // the two are different jobs: one says where the antenna is, this
-            // one says what it has managed to hear from there.
-            ImGui::Checkbox("Coverage", &coverageShow_);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(
-                    "Furthest anything has been heard, per 5 degrees of bearing.\n"
-                    "Measured from the receiver position, this session only.");
-            }
-            ImGui::SameLine();
-            // THE TRAIL SWITCHES, on this row because they answer the same
-            // kind of question the coverage one does - what else the map draws
-            // besides the targets themselves - and because a control the user
-            // has to open a menu to find is a control they will not find.
-            // Applied to EVERY page below, not just this one: how a trail is
-            // drawn is a preference, and two pages disagreeing about it would
-            // be two answers to one question.
-            ImGui::Checkbox("Trails", &mapTrails_);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(
-                    "Draw the lines plugins publish: flight trails, predicted\n"
-                    "ground tracks and footprints. Off draws targets only.");
-            }
-            ImGui::SameLine();
-            // DISABLED WHEN THERE ARE NO TRAILS, because a colour control for
-            // a hidden thing is a lie: ticking it would change nothing on
-            // screen and the user would be left wondering which of the two
-            // settings was broken. The value itself is untouched, so turning
-            // trails back on restores the colouring choice that was made.
-            ImGui::BeginDisabled(!mapTrails_);
-            ImGui::Checkbox("Altitude colours", &mapTrailAltColours_);
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip(
-                    mapTrails_
-                        ? "Colour each part of a trail by the altitude observed\n"
-                          "there, using the same bands as the markers. Off draws\n"
-                          "each trail in its target's single colour."
-                        : "Turn Trails on to colour them by altitude.");
-            }
-            ImGui::SameLine();
-            // A LIST, NOT MORE CHECKBOXES. The styles are alternatives, and a
-            // control that cannot express "line and ribbon at once" is the
-            // one that cannot be put into a state the renderer has no meaning
-            // for. It also makes a third style a one-line change here.
-            ImGui::BeginDisabled(!mapTrails_);
-            ImGui::SetNextItemWidth(110.0f);
-            const char* kTrailStyles[] = {"Line", "Ribbon"};
-            if (mapTrailStyle_ < 0 || mapTrailStyle_ > 1) { mapTrailStyle_ = 0; }
-            ImGui::Combo("##trailstyle", &mapTrailStyle_, kTrailStyles, 2);
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip(
-                    "Line draws a thin trail. Ribbon draws a wider translucent\n"
-                    "band, easier to follow over a detailed map, at the cost of\n"
-                    "covering more of what is underneath.");
-            }
-            ImGui::SameLine();
-            // RESET IS NOT OPTIONAL. A single spurious decode at an impossible
-            // range - and a noisy band produces them - would otherwise stretch
-            // one wedge to the horizon for the rest of the session and make the
-            // whole picture useless. One button undoes it.
-            ImGui::BeginDisabled(coverage_.empty());
-            if (ImGui::SmallButton("Reset coverage")) { coverage_.reset(); }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (!rxSet_) {
-                // DEGRADED, AND SAYING SO. Without a receiver position there is
-                // nothing to measure a bearing from, so the accumulator is
-                // never fed and the overlay would be an empty circle the user
-                // could not explain.
-                ImGui::TextDisabled("set the RX position to measure coverage");
-            } else if (coverage_.empty()) {
-                ImGui::TextDisabled("nothing heard yet");
+            // TWO KINDS OF MAP PAGE, AND THE SATELLITE ONE IS A WHOLE
+            // INSTRUMENT. Every control below - fit, the receiver position,
+            // the coverage and trail switches, the target list - exists on the
+            // satellites window too, inside it, captioned and with its blocked
+            // states explained. Drawing this bar above that panel would be the
+            // same controls twice, in two idioms, disagreeing about which is
+            // the real one.
+            if (page.satellite) {
+                drawSatelliteMapBody(page);
             } else {
-                ImGui::TextDisabled("%d of %d bearings, best %.0f km",
-                                    coverage_.filledBuckets(), CoverageMap::kBuckets,
-                                    coverage_.peakKm());
-            }
+                if (ImGui::SmallButton("Fit")) { page.view->requestFitToTracks(); }
+                ImGui::SameLine();
+                drawRxPositionEntry();
+                ImGui::SameLine();
+                // COUNTED THE WAY THEY ARE DRAWN, and counted for THIS page: the
+                // number beside an ADS-B map must be its aircraft, not the whole
+                // receiver's targets. A plugin that never evicts keeps reporting
+                // targets the staleness rule has dropped, and a count of
+                // everything reported over a map showing only what is live is a
+                // number that contradicts the picture beside it.
+                const std::size_t shown =
+                    cascade::core::visibleTrackCount(pageTracks_);
+                ImGui::TextDisabled("%d target%s", static_cast<int>(shown),
+                                    shown == 1 ? "" : "s");
 
-            // THE FLIGHT LIST, down the left of the map. A map alone answers
-            // "where is everything"; the list answers "what am I hearing" and,
-            // clicked, "take me to that one" - which is the question a
-            // callsign actually prompts.
-            //
-            // NARROWED AGAIN, because it no longer has eight columns to fit.
-            // It went to 480 px to hold them and still could not show their
-            // headings; with callsign, id and a button it needs about 300, and
-            // every pixel not spent here is map. Capped at a share of the
-            // window as well as at a constant, so a map dragged small still
-            // leaves a map.
-            const ImVec2 mapAvail = ImGui::GetContentRegionAvail();
-            const float listWidth = std::min(300.0f, std::max(190.0f, mapAvail.x * 0.36f));
-            ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
-            drawTrackList(page, pageTracks_);
-            ImGui::EndChild();
-            ImGui::SameLine();
+                // --- the coverage overlay's controls ---------------------------
+                // A second row, because the first is already the position entry and
+                // the two are different jobs: one says where the antenna is, this
+                // one says what it has managed to hear from there.
+                ImGui::Checkbox("Coverage", &coverageShow_);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Furthest anything has been heard, per 5 degrees of bearing.\n"
+                        "Measured from the receiver position, this session only.");
+                }
+                ImGui::SameLine();
+                // THE TRAIL SWITCHES, on this row because they answer the same
+                // kind of question the coverage one does - what else the map draws
+                // besides the targets themselves - and because a control the user
+                // has to open a menu to find is a control they will not find.
+                // Applied to EVERY page below, not just this one: how a trail is
+                // drawn is a preference, and two pages disagreeing about it would
+                // be two answers to one question.
+                ImGui::Checkbox("Trails", &mapTrails_);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Draw the lines plugins publish: flight trails, predicted\n"
+                        "ground tracks and footprints. Off draws targets only.");
+                }
+                ImGui::SameLine();
+                // DISABLED WHEN THERE ARE NO TRAILS, because a colour control for
+                // a hidden thing is a lie: ticking it would change nothing on
+                // screen and the user would be left wondering which of the two
+                // settings was broken. The value itself is untouched, so turning
+                // trails back on restores the colouring choice that was made.
+                ImGui::BeginDisabled(!mapTrails_);
+                ImGui::Checkbox("Altitude colours", &mapTrailAltColours_);
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::SetTooltip(
+                        mapTrails_
+                            ? "Colour each part of a trail by the altitude observed\n"
+                              "there, using the same bands as the markers. Off draws\n"
+                              "each trail in its target's single colour."
+                            : "Turn Trails on to colour them by altitude.");
+                }
+                ImGui::SameLine();
+                // A LIST, NOT MORE CHECKBOXES. The styles are alternatives, and a
+                // control that cannot express "line and ribbon at once" is the
+                // one that cannot be put into a state the renderer has no meaning
+                // for. It also makes a third style a one-line change here.
+                ImGui::BeginDisabled(!mapTrails_);
+                ImGui::SetNextItemWidth(110.0f);
+                const char* kTrailStyles[] = {"Line", "Ribbon"};
+                if (mapTrailStyle_ < 0 || mapTrailStyle_ > 1) { mapTrailStyle_ = 0; }
+                ImGui::Combo("##trailstyle", &mapTrailStyle_, kTrailStyles, 2);
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::SetTooltip(
+                        "Line draws a thin trail. Ribbon draws a wider translucent\n"
+                        "band, easier to follow over a detailed map, at the cost of\n"
+                        "covering more of what is underneath.");
+                }
+                ImGui::SameLine();
+                // RESET IS NOT OPTIONAL. A single spurious decode at an impossible
+                // range - and a noisy band produces them - would otherwise stretch
+                // one wedge to the horizon for the rest of the session and make the
+                // whole picture useless. One button undoes it.
+                ImGui::BeginDisabled(coverage_.empty());
+                if (ImGui::SmallButton("Reset coverage")) { coverage_.reset(); }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (!rxSet_) {
+                    // DEGRADED, AND SAYING SO. Without a receiver position there is
+                    // nothing to measure a bearing from, so the accumulator is
+                    // never fed and the overlay would be an empty circle the user
+                    // could not explain.
+                    ImGui::TextDisabled("set the RX position to measure coverage");
+                } else if (coverage_.empty()) {
+                    ImGui::TextDisabled("nothing heard yet");
+                } else {
+                    ImGui::TextDisabled("%d of %d bearings, best %.0f km",
+                                        coverage_.filledBuckets(), CoverageMap::kBuckets,
+                                        coverage_.peakKm());
+                }
 
-            ImVec2 avail = ImGui::GetContentRegionAvail();
-            // ROOM FOR THE ATTRIBUTION IS RESERVED BEFORE the map is sized, not
-            // left over after it. The map fills whatever it is given, so
-            // drawing the credit afterwards pushed it outside the window and it
-            // was never seen - which, for a host that REFUSES a basemap plugin
-            // supplying no attribution, would have been hypocrisy rather than a
-            // layout bug.
-            const bool credit = basemap_.active() && !basemap_.attribution().empty();
-            if (credit) { avail.y -= ImGui::GetTextLineHeightWithSpacing(); }
-            if (avail.y < 32.0f) { avail.y = 32.0f; }
-            // Borrowed for the frame, and null when the overlay is switched off
-            // - which is how the map is told to skip it without growing another
-            // boolean parameter. The accumulator keeps filling either way.
-            page.view->setCoverage(coverageShow_ ? &coverage_ : nullptr);
-            // Pushed every frame, like the coverage pointer beside it, so a
-            // checkbox on ANY page reaches every page's map on the next one.
-            page.view->setTrailOptions(mapTrails_, mapTrailAltColours_);
-            page.view->setTrailStyle(mapTrailStyle_);
-            page.view->draw(avail.x, avail.y, pageTracks_, pagePaths_,
-                            &basemap_, &trackInfo_);
-            if (credit) {
-                ImGui::TextDisabled("%s", basemap_.attribution().c_str());
+                // THE FLIGHT LIST, down the left of the map. A map alone answers
+                // "where is everything"; the list answers "what am I hearing" and,
+                // clicked, "take me to that one" - which is the question a
+                // callsign actually prompts.
+                //
+                // NARROWED AGAIN, because it no longer has eight columns to fit.
+                // It went to 480 px to hold them and still could not show their
+                // headings; with callsign, id and a button it needs about 300, and
+                // every pixel not spent here is map. Capped at a share of the
+                // window as well as at a constant, so a map dragged small still
+                // leaves a map.
+                const ImVec2 mapAvail = ImGui::GetContentRegionAvail();
+                const float listWidth =
+                    std::min(300.0f, std::max(190.0f, mapAvail.x * 0.36f));
+                ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
+                drawTrackList(page, pageTracks_);
+                ImGui::EndChild();
+                ImGui::SameLine();
+
+                ImVec2 avail = ImGui::GetContentRegionAvail();
+                // ROOM FOR THE ATTRIBUTION IS RESERVED BEFORE the map is sized, not
+                // left over after it. The map fills whatever it is given, so
+                // drawing the credit afterwards pushed it outside the window and it
+                // was never seen - which, for a host that REFUSES a basemap plugin
+                // supplying no attribution, would have been hypocrisy rather than a
+                // layout bug.
+                const bool credit = basemap_.active() && !basemap_.attribution().empty();
+                if (credit) { avail.y -= ImGui::GetTextLineHeightWithSpacing(); }
+                if (avail.y < 32.0f) { avail.y = 32.0f; }
+                // Borrowed for the frame, and null when the overlay is switched off
+                // - which is how the map is told to skip it without growing another
+                // boolean parameter. The accumulator keeps filling either way.
+                page.view->setCoverage(coverageShow_ ? &coverage_ : nullptr);
+                // Pushed every frame, like the coverage pointer beside it, so a
+                // checkbox on ANY page reaches every page's map on the next one.
+                page.view->setTrailOptions(mapTrails_, mapTrailAltColours_);
+                page.view->setTrailStyle(mapTrailStyle_);
+                page.view->draw(avail.x, avail.y, pageTracks_, pagePaths_,
+                                &basemap_, &trackInfo_);
+                if (credit) {
+                    ImGui::TextDisabled("%s", basemap_.attribution().c_str());
+                }
+                // endFrame() is NOT called here: its eviction drops every tile
+                // nothing asked for this frame, so calling it inside one page's
+                // draw would let it evict a second open page's tiles mid-frame.
+                // The one call per frame happens at the END OF drawUi, not at the
+                // end of this loop, because the scope draws after it and asks for
+                // tiles of its own.
+                basemapUsedThisFrame_ = true;
             }
-            // endFrame() is NOT called here: its eviction drops every tile
-            // nothing asked for this frame, so calling it inside one page's
-            // draw would let it evict a second open page's tiles mid-frame.
-            // The one call per frame happens at the END OF drawUi, not at the
-            // end of this loop, because the scope draws after it and asks for
-            // tiles of its own.
-            basemapUsedThisFrame_ = true;
 
             // THE FOLLOW-INTERRUPT ASK. A drag on the map while a target is
             // followed no longer pans (MapView latches the attempt instead —
@@ -5619,10 +7785,10 @@ void AppWindow::drawPluginWindows() {
                         // must not walk the host off the end of the array.
                         const char* cell = r.cells[c];
                         if ((r.flags & CASCADE_ROW_FLAG_WARN) != 0u) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "%.*s",
+                            ImGui::TextColored(cascade::gui::theme::warning(), "%.*s",
                                                CASCADE_PANEL_CELL_CHARS, cell);
                         } else if ((r.flags & CASCADE_ROW_FLAG_GOOD) != 0u) {
-                            ImGui::TextColored(ImVec4(0.55f, 0.9f, 0.55f, 1.0f), "%.*s",
+                            ImGui::TextColored(cascade::gui::theme::good(), "%.*s",
                                                CASCADE_PANEL_CELL_CHARS, cell);
                         } else if ((r.flags & CASCADE_ROW_FLAG_MUTED) != 0u) {
                             ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
@@ -5638,6 +7804,311 @@ void AppWindow::drawPluginWindows() {
         ImGui::End();
         if (!panelOpen) { closedWindows_.insert(id); }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The SATELLITES MAP window
+//
+// EVERYTHING FOR SATELLITES IS IN ONE WINDOW, and that is the whole design.
+// The receiver's position, the overlay switches, the trail style, the coverage
+// ring, the target register, the selected target's figures and the map itself
+// all live in here; the main window's rail keeps a single switch that opens
+// it, and nothing else. MapView::drawSatellitePanel draws the instrument, and
+// this draws the case it is bolted into.
+//
+// THE CASE IS CONTENT; THE FRAME IS WINDOWS'. Torn-off windows in this
+// application carry the operating system's own frame, deliberately - an
+// earlier undecorated version left users hunting for the resize edges - so the
+// minimise, maximise and close buttons and the drag bar are the platform's,
+// and the design's brass shell, its four screws and its SATELLITES MAP plate
+// are drawn inside them.
+// ---------------------------------------------------------------------------
+
+void AppWindow::drawSatelliteMapBody(MapPage& page) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 tl = ImGui::GetCursorScreenPos();
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    if (dl == nullptr || avail.x < 8.0f || avail.y < 8.0f) { return; }
+    const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
+
+    // THE CABINET, FIRST AND UNDERNEATH, painted into the window's own draw
+    // list before a single widget is submitted - ImGui renders a parent's list
+    // ahead of its children's, so the brass, the bevel, the four screws and
+    // the sunk well go down and every panel below is drawn into them. The same
+    // call the main window's root makes, so the two cases are one object and
+    // cannot drift apart.
+    const float margin = drawCabinet(dl, tl, br);
+    const ImVec2 pTL(tl.x + margin, tl.y + margin);
+    const ImVec2 pBR(br.x - margin, br.y - margin);
+
+    // THE PLATE THE WINDOW IS NAMED BY, as content rather than as a title bar:
+    // the same addBenchPlate the FUNCTION SELECT rail and the STATUS column
+    // wear, so the window is lettered in the application's own engraving
+    // rather than in a second style invented for it. It hands back the y below
+    // its rule, which is where the instrument starts - a measurement rather
+    // than a guess at how tall a title is.
+    float bodyTop = pTL.y;
+    if (pBR.x > pTL.x + 32.0f && pBR.y > pTL.y + 32.0f) {
+        bodyTop = cascade::gui::addBenchPlate(dl, pTL, pBR, "SATELLITES MAP");
+    }
+
+    // --- THE VIEW STRIP: what the satellite panel does not carry -------------
+    //
+    // TWO CONTROLS THIS WINDOW LOST WHEN IT BECAME AN INSTRUMENT, and both
+    // were reported. drawSatellitePanel draws the deck, the register and the
+    // map; it has no fit key and no follow indicator, and the only place those
+    // existed was the ELSE arm of this branch - the ordinary map page's little
+    // toolbar - so the satellites window had neither.
+    //
+    //   FIT and WHOLE WORLD. A satellites window that fits to a single
+    //   propagated target lands on a 24-degree patch of the planet with one
+    //   marker in it (map_view.hpp's setProjection note names the same case),
+    //   and until now there was no way back out: the whole-globe view is asked
+    //   for ONCE, on the frame the page first pins its projection, and a wheel
+    //   is not a control anybody finds. Two keys, because "show me everything
+    //   plotted" and "show me the planet" are different requests and on this
+    //   window the second is the one that rescues the first.
+    //
+    //   FOLLOWING, AND HOW TO STOP. A satellite can be followed from the
+    //   target details window ("Follow" reaches the owning page's view), and
+    //   the map then re-centres on it every frame and refuses to be dragged -
+    //   with nothing on this window saying so and no way to undo it. The
+    //   indicator is the followed id, in gold because it is a state the user
+    //   should notice, and the key beside it is the way out.
+    {
+        constexpr float kStripPad = 8.0f;
+        constexpr float kStripKeyH = 26.0f;
+        constexpr float kFitW = 66.0f;
+        constexpr float kWorldW = 108.0f;
+        constexpr float kStopW = 126.0f;
+        const float stripY = bodyTop + 4.0f;
+        if (pBR.x > pTL.x + kStripPad * 2.0f + kFitW + kWorldW + 8.0f &&
+            pBR.y > stripY + kStripKeyH + 24.0f) {
+            dl->PushClipRect(ImVec2(pTL.x + 2.0f, stripY),
+                             ImVec2(pBR.x - 2.0f, stripY + kStripKeyH), true);
+            float x = pTL.x + kStripPad;
+            // FIT IS DEAD WITH NOTHING PLOTTED, and says so by staying dead
+            // rather than by disappearing: requestFitToTracks is ignored by a
+            // draw with no tracks (see MapView::draw), so an enabled key would
+            // be one that visibly does nothing.
+            const std::size_t plotted = cascade::core::visibleTrackCount(pageTracks_);
+            if (benchWordKey(dl, ImVec2(x, stripY), ImVec2(x + kFitW, stripY + kStripKeyH),
+                             "FIT", plotted > 0u, "satfit")) {
+                page.view->requestFitToTracks();
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip(plotted > 0u
+                                      ? "Centre and zoom on everything plotted."
+                                      : "Nothing is plotted, so there is nothing to fit.");
+            }
+            x += kFitW + 8.0f;
+            if (benchWordKey(dl, ImVec2(x, stripY), ImVec2(x + kWorldW, stripY + kStripKeyH),
+                             "WHOLE WORLD", true, "satworld")) {
+                page.view->requestWholeWorld();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Back out until the whole planet is in the window.");
+            }
+            x += kWorldW + 12.0f;
+
+            ImFont* sf = cascade::gui::fonts::ui();
+            const float spx = cascade::gui::fonts::kTinySize;
+            const std::string followed = page.view->followedId();
+            if (!followed.empty()) {
+                // THE KEY IS OFFERED WHEREVER IT FITS, AND THE INDICATOR IS
+                // DRAWN WHETHER IT DOES OR NOT. A window dragged narrow is
+                // exactly the case where the two must not fail together: the
+                // whole fault being fixed here is a user who is following a
+                // target and cannot see that they are, and a strip that
+                // silently drew neither below some width would reintroduce it
+                // at a width the user chooses. The key goes if there is no
+                // room for it - the map's own drag prompt is still a way out -
+                // and the sentence stays, clipped by the strip's clip rect
+                // rather than dropped.
+                float textRight = pBR.x - kStripPad;
+                if (pBR.x - kStripPad - kStopW > x) {
+                    const float stopX = pBR.x - kStripPad - kStopW;
+                    textRight = stopX - 8.0f;
+                    if (benchWordKey(dl, ImVec2(stopX, stripY),
+                                     ImVec2(stopX + kStopW, stripY + kStripKeyH),
+                                     "STOP FOLLOWING", true, "satunfollow")) {
+                        page.view->clearFollow();
+                    }
+                }
+                char line[96];
+                std::snprintf(line, sizeof line, "FOLLOWING %s", followed.c_str());
+                const ImVec2 ts = sf->CalcTextSizeA(spx, FLT_MAX, 0.0f, line);
+                dl->AddText(sf, spx, ImVec2(x, stripY + (kStripKeyH - ts.y) * 0.5f),
+                            cascade::gui::theme::kGold, line, nullptr,
+                            (textRight > x) ? (textRight - x) : 1.0f);
+            } else {
+                dl->AddText(sf, spx,
+                            ImVec2(x, stripY + (kStripKeyH - cascade::gui::fonts::kTinySize) *
+                                                  0.5f),
+                            cascade::gui::theme::kInkFaint,
+                            "The map moves on its own only while a target is followed.",
+                            nullptr, pBR.x - kStripPad - x);
+            }
+            dl->PopClipRect();
+            bodyTop = stripY + kStripKeyH + 6.0f;
+        }
+    }
+
+    // --- the deck's four shared settings, borrowed for the frame ------------
+    // COPIED IN AND OUT RATHER THAN DUPLICATED. Coverage, trails, altitude
+    // colours and trail style are AppConfig fields every map page reads, and
+    // map_view.hpp is explicit that the caller owns them: two pages
+    // disagreeing about how a trail is drawn would be two answers to one
+    // question. The panel edits the deck in place; what it edited is written
+    // straight back to the one copy that persists.
+    page.deck.coverage = coverageShow_;
+    page.deck.groundTracks = mapTrails_;
+    page.deck.altitudeColours = mapTrailAltColours_;
+    page.deck.trailStyle = mapTrailStyle_;
+
+    const float pad = 8.0f;
+    const float faceW = pBR.x - pTL.x - pad * 2.0f;
+    const float faceH = pBR.y - pad - bodyTop;
+    if (faceW > 40.0f && faceH > 40.0f) {
+        // A CHILD SO THE PANEL'S CONTENT REGION IS EXACTLY THE PLATE'S INSIDE.
+        // drawSatellitePanel lays itself out from GetContentRegionAvail, and
+        // measured against the whole window it would run its map straight over
+        // the cabinet's lower bevel and its screws. Transparent, because the
+        // plate's own ground is already down; no scrollbar, because the panel
+        // scrolls its register internally and an outer bar would be a second
+        // one for the same content.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop));
+        ImGui::BeginChild("##satface", ImVec2(faceW, faceH), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar |
+                              ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        // THE ACCUMULATOR IS PASSED WHETHER OR NOT THE OVERLAY IS ON. The
+        // deck's own note reports what has been heard from this position even
+        // while the ring is hidden, because "nothing heard yet" and "hidden"
+        // are different facts and the window says which.
+        page.view->drawSatellitePanel(page.deck, pageTracks_, pagePaths_, &coverage_,
+                                      &trackInfo_);
+        ImGui::EndChild();
+    } else {
+        // TOO SMALL TO DRAW HONESTLY, AND SAYING SO. A control deck squeezed
+        // into forty pixels is a row of clipped words, which reads as a
+        // broken window rather than as a small one.
+        ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop + pad));
+        ImGui::TextDisabled("Too small - drag the window larger.");
+    }
+
+    coverageShow_ = page.deck.coverage;
+    mapTrails_ = page.deck.groundTracks;
+    mapTrailAltColours_ = page.deck.altitudeColours;
+    mapTrailStyle_ = page.deck.trailStyle;
+
+    // --- what the panel ASKED for -------------------------------------------
+    // THE PANEL ASKS, THIS APPLIES. A receiver position reaches every map
+    // page, the radar scope and the coverage accumulator, and the coverage
+    // ring belongs to this window rather than to a view - knowledge the map
+    // deliberately does not have. Both requests are latched rather than
+    // edge-triggered inside draw(), so neither can be lost by a frame that
+    // happened to skip; both are cleared here, after acting.
+    if (page.view->receiverPositionRequested()) {
+        applyReceiverPosition(page.view->requestedReceiverLatDeg(),
+                              page.view->requestedReceiverLonDeg());
+        page.view->clearReceiverPositionRequest();
+    }
+    if (page.view->coverageResetRequested()) {
+        coverage_.reset();
+        page.view->clearCoverageResetRequest();
+    }
+}
+
+void AppWindow::drawSatelliteMapSection() {
+    // THE WHOLE OF THE SATELLITE PRESENCE IN THE MAIN WINDOW: one row per
+    // satellite page, and no satellite controls anywhere else on the rail.
+    // The user asked for the instrument to be self-contained, so this is a
+    // switch that puts the window on screen and reports what is in it - never
+    // a second, smaller copy of the controls that window carries.
+    bool any = false;
+    for (MapPage& pg : mapPages_) {
+        if (!pg.satellite) { continue; }
+        any = true;
+        // THE CHIP IS THE COUNT THE WINDOW ITSELF SHOWS - MapPage::visibleCount
+        // is written where the page's tracks are filtered, so the rail and the
+        // window's TARGETS heading cannot report two different numbers. The
+        // LAMP is whether the window is open, which is the other half of what
+        // a switch has to say about itself.
+        char chip[24];
+        std::snprintf(chip, sizeof chip, "%d TGT", static_cast<int>(pg.visibleCount));
+        // The plugin's own display name, which is what its window is titled
+        // with: two satellite sources installed would otherwise give two rows
+        // reading the same word.
+        //
+        // '#' BECOMES '_' IN THE ID HALF, exactly as the window title does it
+        // and for both of that rule's reasons: a display name is third-party
+        // text, ImGui hashes what follows the LAST "###", and benchSwitchRow
+        // letters what precedes the FIRST "##" - so a name carrying either
+        // could collide two rows onto one id or truncate its own word.
+        std::string ident = pg.plugin;
+        for (char& idc : ident) {
+            if (idc == '#') { idc = '_'; }
+        }
+        const std::string row = ident + " map###satmap:" + ident;
+        if (benchSwitchRow(row.c_str(), pg.open, chip, cascade::gui::theme::kPhosphor,
+                           pg.open, true,
+                           "Opens the satellites window: receiver position, overlays,\n"
+                           "trail style, coverage, the target register and the map.\n"
+                           "Everything for satellites is in that one window.")) {
+            pg.open = !pg.open;
+            // CLEARED THE MOMENT THE USER OPENS THE PAGE BY ANY ROUTE, exactly
+            // as the preset button and the details window's "Go to on map" do.
+            // Closing leaves it alone: the suppression is set when a page is
+            // rebuilt from a saved entry that says closed, which is what stops
+            // a propagating tracker - a full sky on the first frame of every
+            // launch, with no radio and no user action - reopening a window
+            // the user shut. Setting it here as well would be harmless; not
+            // clearing it on open would strand the switch.
+            if (pg.open) { pg.selfOpenSuppressed = false; }
+        }
+    }
+    if (any) { return; }
+
+    // --- blocked, and saying what would unblock it --------------------------
+    // SEVERAL DIFFERENT REASONS THE ROW IS DEAD, and they must not read the
+    // same. One is answered by waiting for the tracker already running to
+    // report a satellite; the rest are answered by starting a module, by
+    // reading why the host refused one, or - and only then - by installing
+    // one. A single "unavailable" would send most of those users to the plugin
+    // store for nothing.
+    //
+    // WHAT trackPluginNames() ACTUALLY ANSWERS. It is the list of track
+    // sources PluginUi has INSTANTIATED, and rebuild skips an unloaded module
+    // and a stopped one before it reaches that list - so an empty list is
+    // equally true of a machine with no tracker and of one whose tracker the
+    // user stopped a moment ago. This row said "No track source installed" for
+    // both, while the Fitted modules window two keys away lettered that same
+    // file STOPPED BY YOU. See gui/module_census.hpp.
+    const bool anyTrackSource = !pluginUi_.trackPluginNames().empty();
+    benchSwitchRow("Satellites map###satmapnone", false, "NONE",
+                   cascade::gui::theme::kPhosphor, false, false, nullptr);
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    if (anyTrackSource) {
+        ImGui::TextWrapped(
+            "No satellite targets reported yet. A tracker that publishes satellite "
+            "positions gets its own window, and this key opens it.");
+    } else {
+        const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
+            pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
+            [this](const std::string& key) { return pluginIsStopped(key); });
+        ImGui::TextWrapped(
+            "%s", cascade::gui::trackSourceAbsenceNote(
+                      census, "satellite positions",
+                      "A satellite tracker plugin reports the positions this window "
+                      "draws - install one from the plugin store above.")
+                      .c_str());
+    }
+    ImGui::PopStyleColor();
 }
 
 void AppWindow::drawTrackList(MapPage& page,
@@ -5662,7 +8133,7 @@ void AppWindow::drawTrackList(MapPage& page,
     // glance that you asked for it.
     const bool following = !page.view->followedId().empty();
     if (following) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("following %s", page.view->followedId().c_str());
         ImGui::PopStyleColor();
         if (ImGui::SmallButton("Stop following")) { page.view->clearFollow(); }
@@ -5968,8 +8439,6 @@ const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& i
 }
 
 void AppWindow::drawTargetDetailsSection() {
-    if (!ImGui::CollapsingHeader("Target details")) { return; }
-
     // WHICH TARGET: the one whose Details button was pressed wins (it is the
     // explicit ask), then the one being followed (the map is already glued to
     // it, so it is what the user is watching), then the last one clicked in
@@ -6002,6 +8471,27 @@ void AppWindow::drawTargetDetailsSection() {
             }
         }
     }
+    // THE CHIP IS THE CHOSEN TARGET'S OWN ID, cut to what a chip can hold -
+    // an ICAO address or an MMSI is what identifies it and what the rest of
+    // this section is about to describe. The lamp is lit only while that
+    // target is STILL BEING HEARD (findVisibleTrack applies the staleness
+    // rule), so a chip with the lamp out is the honest reading of "this is
+    // what you singled out, and it has stopped transmitting".
+    //
+    // The precedence above is walked before the header rather than after it
+    // because the chip has to be handed over as the row is drawn; it reads no
+    // ImGui state and reorders nothing.
+    const std::string detailChip = id.substr(0, 10);
+    // Looked up ONCE and reused by the body below: the host's track vector is
+    // rebuilt every poll and walking it twice a frame to answer the same
+    // question would be paying for the chip twice.
+    const cascade::core::HostTrack* found =
+        id.empty() ? nullptr : findVisibleTrack(id);
+    if (!benchSection("Target details", false, id.empty() ? "NONE" : detailChip.c_str(),
+                      cascade::gui::theme::kPhosphor, found != nullptr)) {
+        return;
+    }
+
     if (id.empty()) {
         // Wrapped, not line-broken by hand: the menu column is narrower than a
         // comfortable sentence and hard-broken lines clipped at its edge.
@@ -6014,7 +8504,6 @@ void AppWindow::drawTargetDetailsSection() {
         return;
     }
 
-    const cascade::core::HostTrack* found = findVisibleTrack(id);
     if (found == nullptr) {
         // Same honesty as the details window: said, not silently blanked.
         ImGui::TextUnformatted(id.c_str());
@@ -6287,6 +8776,37 @@ void AppWindow::setPluginTuneAllowed(const std::string& pluginKey, bool allowed)
     } else if (!allowed && it != pluginTuneAllowed_.end()) {
         pluginTuneAllowed_.erase(it);
     }
+}
+
+std::size_t AppWindow::loadedDecoderCount() const {
+    // THE RUNNER'S OWN TEST, and deliberately not a capability-bit test of its
+    // own: PluginRunner::rebuild creates an instance when a module supplies a
+    // decoder, an iqDecoder or an imageDecoder TABLE, and the host only fills
+    // those pointers when the module declared the matching capability AND
+    // supplied the table behind it (a declared capability with no table is a
+    // refused load, PluginRejection::MissingDecoderApi). Asking the same
+    // question the same way is what keeps this denominator and the runner's
+    // activeCount numerator counting the same population.
+    std::size_t n = 0;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        if (p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+std::size_t AppWindow::fedDecoderCount() const {
+    std::size_t n = 0;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) {
+            continue;
+        }
+        if (pluginRunner_.isFeeding(cascade::core::pluginKey(p))) { ++n; }
+    }
+    return n;
 }
 
 bool AppWindow::pluginIsStopped(const std::string& pluginKey) const {
@@ -6598,7 +9118,7 @@ void AppWindow::drawMuteBanner() {
     const std::string who = muteSubjectText();
     if (who.empty()) { return; }
     ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
     ImGui::Text("Sound muted by %s", who.c_str());
     ImGui::PopStyleColor();
     ImGui::SameLine();
@@ -6608,70 +9128,103 @@ void AppWindow::drawMuteBanner() {
 }
 
 void AppWindow::drawPluginTuneControls() {
-    // WHO GETS A ROW. Only a plugin that declares the host-client capability
-    // can ever call request_tune, so only those are offerable — listing the
-    // rest would suggest the receiver is at risk from decoders that cannot
-    // touch it. A plugin that is NOT currently loaded but still holds a grant
-    // gets a row too: it is the only way to revoke a permission given to
-    // something since removed or quarantined, and a grant the user cannot see
-    // is exactly the kind that should not exist.
+    // THE HALF OF THE RECEIVER-CONTROL ROWS THE FITTED WINDOW CANNOT DRAW.
+    //
+    // That window carries a GRANT key on every module it lists, so a grant for
+    // an installed module is set there and is deliberately not repeated here -
+    // two controls on one permission is how two surfaces come to disagree
+    // about who has it. What that window cannot show is a grant held by a
+    // module it does not list: it lists what the host LOADED, and a module
+    // that was removed or quarantined is not in that list while its permission
+    // very much survives in the config. A grant the user can neither see nor
+    // revoke is exactly the kind that must not exist, so those rows are here.
+    //
+    // The refusal notice is here for the same reason: it names a plugin by the
+    // key PluginUi recorded, which may be one no longer installed, and it is
+    // the line that turns "why is my tracker doing nothing" into a visible
+    // one-click decision.
     //
     // A row is identified by its MODULE FILE, which is what the grant is keyed
-    // on; the display name only labels it, because a plugin picks its own name
-    // and two of them may print the same one.
-    struct TuneRow {
-        std::string key;    // PluginUi::tuneKey()
-        std::string label;
+    // on; a display name is the plugin's own to choose and two may share one.
+    //
+    // TWO REASONS A GRANT HAS NO KEY IN THAT WINDOW, AND THEY ARE NOT ONE
+    // FACT. The window draws the grant key only on a module that LOADED
+    // (plugins_view.cpp:1019), so a grant lands here either because no file of
+    // that name is fitted at all - removed, or renamed aside by the version
+    // policy - or because the file IS in the plugin folder and the host
+    // REFUSED it, which that window letters REFUSED and prints the host's own
+    // reason for. This surface called both "not currently installed", which of
+    // the second is simply untrue: it sends the user to fetch a file that is
+    // already on their disk, and it is a PERMISSION being described, which is
+    // the worst kind of thing to be wrong about.
+    struct StaleGrant {
+        std::string file;
+        // A record for this file exists and did not load. Empty capabilities
+        // or full, the host has a reason recorded either way.
+        bool refused = false;
     };
-    std::vector<TuneRow> rows;
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        if (!p.loaded || p.hostClient == nullptr) { continue; }
-        const std::string key = cascade::core::PluginUi::tuneKey(p);
-        rows.push_back({key, p.name + " (" + key + ")"});
-    }
-    const std::size_t loadedRows = rows.size();
+    std::vector<StaleGrant> stale;
     for (const std::string& g : pluginTuneAllowed_) {
-        const auto same = [&g](const TuneRow& r) { return r.key == g; };
-        if (std::find_if(rows.begin(), rows.end(), same) == rows.end()) {
-            rows.push_back({g, g});
+        bool loadedHere = false;
+        bool presentUnloaded = false;
+        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+            if (cascade::core::PluginUi::tuneKey(p) != g) { continue; }
+            if (p.loaded) {
+                loadedHere = true;
+                break;
+            }
+            // NOT a break: two files can share a key only if they share a
+            // name, which they cannot in one directory - but the loaded record
+            // is the one that decides, so the scan runs on rather than
+            // settling on the first match it happens to meet.
+            presentUnloaded = true;
         }
+        if (!loadedHere) { stale.push_back(StaleGrant{g, presentUnloaded}); }
     }
-    if (rows.empty()) { return; }
+    const std::string& denied = pluginUi_.lastDeniedPlugin();
+    const bool showDenied = !denied.empty() && !pluginUi_.tuneAllowed(denied);
+    if (stale.empty() && !showDenied) { return; }
 
     ImGui::SeparatorText("Receiver control");
 
-    // THE DENIAL NOTICE. A tracker that is refused just sits there looking
-    // broken; this is the line that turns "why is my plugin doing nothing" into
-    // a visible one-click decision, which is why PluginUi records refusals even
-    // though it rejects them.
-    const std::string& denied = pluginUi_.lastDeniedPlugin();
-    if (!denied.empty() && !pluginUi_.tuneAllowed(denied)) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+    if (showDenied) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("\"%s\" asked to tune the receiver and was refused.",
                            denied.c_str());
         ImGui::PopStyleColor();
+        ImGui::TextWrapped(
+            "A module may move the receiver's centre frequency only if it is granted "
+            "that - which is how a satellite tracker follows Doppler. The grant is a "
+            "key on the module's own plate in the Plugins window, and it is off until "
+            "you give it.");
     }
-    ImGui::TextWrapped(
-        "A ticked plugin may move the receiver's centre frequency — that is how a "
-        "satellite tracker follows Doppler. Off by default.");
 
-    for (std::size_t i = 0; i < rows.size(); ++i) {
-        const TuneRow& row = rows[i];
+    if (stale.empty()) { return; }
+    ImGui::TextWrapped(
+        "These grants belong to modules the Fitted modules window cannot put a key on, "
+        "because it draws one only on a module the host loaded. They are remembered, so "
+        "a module that comes back finds its permission as it was - and they are shown "
+        "here because a permission nobody can see is one nobody can take back. Each row "
+        "says which of the two it is.");
+    for (std::size_t i = 0; i < stale.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
-        bool allowed = pluginUi_.tuneAllowed(row.key);
-        if (ImGui::Checkbox(row.label.c_str(), &allowed)) {
-            setPluginTuneAllowed(row.key, allowed);
+        bool allowed = pluginUi_.tuneAllowed(stale[i].file);
+        if (ImGui::Checkbox(stale[i].file.c_str(), &allowed)) {
+            setPluginTuneAllowed(stale[i].file, allowed);
         }
-        // What the plugin has actually DONE with the permission, which is the
-        // part that tells the user whether the row matters.
-        const std::vector<std::string>& asked = pluginUi_.tuneRequesters();
-        if (i >= loadedRows) {
-            ImGui::TextDisabled("not currently installed — grant remembered");
-        } else if (std::find(asked.begin(), asked.end(), row.key) != asked.end()) {
-            ImGui::TextDisabled("has asked to tune this session");
+        // WHAT THE PREDICATE ABOVE ACTUALLY PROVED, and nothing more. One of
+        // these files is on the disk and one is not, and the remedy is a
+        // different one in each case.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        if (stale[i].refused) {
+            ImGui::TextWrapped(
+                "this file is in the plugin folder and the host refused it - the Fitted "
+                "modules window prints why. Grant kept.");
         } else {
-            ImGui::TextDisabled("has not asked to tune");
+            ImGui::TextWrapped("no module of this name is fitted here - grant kept");
         }
+        ImGui::PopStyleColor();
         ImGui::PopID();
     }
 }
@@ -6682,6 +9235,11 @@ void AppWindow::pumpDecoderOutput() {
     // block on the GUI), so draining only while the Plugins section happened
     // to be expanded would quietly lose decodes the user never knew existed.
     for (cascade::core::DecodedLine& l : pluginRunner_.drainText()) {
+        // COUNTED HERE BECAUSE THIS IS THE ONLY PLACE THAT SEES THEM ALL.
+        // decoderLog_ is a bounded tail and drops its oldest entries, so its
+        // size is not a count of anything; the status column's rate card
+        // differences this cumulative figure over a window instead.
+        ++decoderLinesTotal_;
         decoderLog_.push_back(std::move(l));
     }
     // The track-info plugin's status ("cannot reach the registry") lands in
@@ -6698,29 +9256,50 @@ void AppWindow::pumpDecoderOutput() {
 void AppWindow::drawDecoderStatusRows() {
     const std::vector<cascade::core::DecoderStatus> st = pluginRunner_.status();
 
-    // THE HEADING IS DRAWN WHETHER OR NOT A DECODER IS LOADED. It used to be
-    // skipped entirely on an empty status list, which was right while
-    // everything under it was about the decoders that happened to be running.
-    // The radar scope below is not: it is a way of LOOKING at what a receiver
-    // hears, it is the whole main window while it is on, and a switch that
-    // appeared and vanished with the plugin list is a switch nobody would find
-    // twice. The early returns became branches for the same reason.
-    ImGui::SeparatorText("Decoders");
-
-    // Why a decoder is silent stays HERE rather than moving to the output
-    // window, because it is a fact about the installation: "it is installed
-    // and shows nothing" is otherwise indistinguishable from "there is
-    // nothing on frequency", and only one of those is worth acting on.
-    for (const cascade::core::DecoderStatus& s : st) {
-        if (s.reason == cascade::core::DecoderIdleReason::Running) { continue; }
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
-        ImGui::TextWrapped("%s", s.detail.c_str());
+    // THE OUTPUT AND THE SCOPE ARE DRAWN WHETHER OR NOT A DECODER IS LOADED.
+    // The radar scope is a way of LOOKING at what a receiver hears, it is the
+    // whole main window while it is on, and a switch that appeared and
+    // vanished with the plugin list is a switch nobody would find twice. The
+    // early returns are branches for the same reason.
+    //
+    // WHY A DECODER IS SILENT IS NO LONGER PRINTED HERE. It is printed in the
+    // fitted modules window, against the module it is about, from the same
+    // DecoderStatus::detail this loop used to quote - which is where a user
+    // goes to ask the question, and which is one place rather than two. The
+    // rail's Plugins key carries a one-line pointer when there is something in
+    // there to read.
+    //
+    // AND AN EMPTY STATUS LIST IS NOT AN EMPTY PLUGIN FOLDER. THE FIFTH
+    // INSTANCE OF THE FAMILY gui/module_census.hpp EXISTS FOR: PluginRunner::
+    // rebuild skips a module that did not load and one the user stopped BEFORE
+    // it writes a status line (plugin_runner.cpp:50-57), so status().empty() is
+    // equally true of a machine with nothing in the folder, one whose decoder
+    // the host REFUSED, and one whose decoder loaded perfectly and the user
+    // STOPPED. This line read "No decoder plugin is installed." in all three,
+    // which is a lie in two of them - and in both of those the Fitted modules
+    // window one key away letters that same file REFUSED or STOPPED BY YOU.
+    //
+    // THE CENSUS IS TAKEN ONCE, for both branches, because the second one has
+    // the same fault in a quieter form: with only a basemap fitted the runner
+    // has a status line (the "provides no decoder this build can drive" one)
+    // and no instances, and "No decoder is running" would put an idle decoder
+    // on a machine that has none.
+    const cascade::gui::ModuleCensus decoders = cascade::gui::censusModules(
+        pluginHost_.plugins(), cascade::gui::kDecoderCaps,
+        [this](const std::string& key) { return pluginIsStopped(key); });
+    const bool anyDecoderFitted =
+        decoders.live + decoders.stopped + decoders.refused > 0;
+    if (st.empty() || (pluginRunner_.activeCount() == 0 && !anyDecoderFitted)) {
+        // WRAPPED, not TextDisabled: this rail is narrow and a user may drag it
+        // narrower, and a sentence that runs off the edge says nothing at all.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", cascade::gui::decoderAbsenceNote(decoders).c_str());
         ImGui::PopStyleColor();
-    }
-
-    if (st.empty()) {
-        ImGui::TextDisabled("No decoder plugin is installed.");
     } else if (pluginRunner_.activeCount() == 0) {
+        // A decoder IS fitted and none is running: the runner's own reason is
+        // against the module in the Fitted modules window, which is the one
+        // place this product answers "why is it silent".
         ImGui::TextDisabled("No decoder is running.");
     } else {
         if (ImGui::Button(decoderWindowOpen_ ? "Hide decoder output"
@@ -7049,13 +9628,11 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
 // --- Recorder (P6) -------------------------------------------------------------
 
 void AppWindow::drawRecorderSection() {
-    const bool recorderOpen = ImGui::CollapsingHeader("Recorder");
-    {
-        const bool taping = iqRecorder_.recording() || audioRecorder_.recording();
-        railChip(taping ? "REC" : "OFF",
-                 taping ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
-                 taping);
-    }
+    const bool taping = iqRecorder_.recording() || audioRecorder_.recording();
+    const bool recorderOpen =
+        benchSection("Recorder", false, taping ? "REC" : "OFF",
+                     taping ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
+                     taping);
     if (!recorderOpen) { return; }
     telemetryNotePanel("recorder");
 
@@ -7128,7 +9705,7 @@ void AppWindow::drawRecorderSection() {
         // file that is fine.
         const std::string mutedWho = muteSubjectText();
         if (pipeline_.audioMuted() && !mutedWho.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
             ImGui::TextWrapped("Muted by %s - this take is silent",
                                mutedWho.c_str());
             ImGui::PopStyleColor();
@@ -7168,7 +9745,17 @@ void AppWindow::stopAudioRecording() {
 // --- Bookmarks (P6) --------------------------------------------------------------
 
 void AppWindow::drawBookmarksSection() {
-    if (!ImGui::CollapsingHeader("Bookmarks")) { return; }
+    // HOW MANY ARE SAVED, which is what this section holds and the only thing
+    // about it worth reading from the rail. The lamp is lit while there is at
+    // least one, so an empty list reads as empty rather than as a count the
+    // user has to squint at.
+    const std::size_t bookmarkCount = freqMgr_.list().size();
+    char bookmarkChip[16];
+    std::snprintf(bookmarkChip, sizeof(bookmarkChip), "%zu", bookmarkCount);
+    if (!benchSection("Bookmarks", false, bookmarkChip, cascade::gui::theme::kPhosphor,
+                      bookmarkCount > 0)) {
+        return;
+    }
     telemetryNotePanel("bookmarks");
 
     ImGui::SetNextItemWidth(-90.0f);
@@ -7331,9 +9918,9 @@ double AppWindow::currentAbsoluteHz() {
 // --- Scanner (P6) ----------------------------------------------------------------
 
 void AppWindow::drawScannerSection() {
-    const bool scannerOpen = ImGui::CollapsingHeader("Scanner");
-    railChip(scanner_.active() ? "SCAN" : "IDLE", cascade::gui::theme::kPhosphor,
-             scanner_.active());
+    const bool scannerOpen =
+        benchSection("Scanner", false, scanner_.active() ? "SCAN" : "IDLE",
+                     cascade::gui::theme::kPhosphor, scanner_.active());
     if (!scannerOpen) { return; }
     telemetryNotePanel("scanner");
 
@@ -8329,7 +10916,27 @@ void AppWindow::setWebPassword(const std::string& password) {
 }
 
 void AppWindow::drawCatSection() {
-    if (!ImGui::CollapsingHeader("CAT control (rigctld)")) { return; }
+    // LISTENING, AND HOW MANY CLIENTS ARE ON IT. A CAT port with something
+    // connected to it can retune this receiver, which is exactly the sort of
+    // thing the rail exists to show without opening the section. catStatus_ is
+    // the listener's own failure text, so a refused port reads as trouble
+    // rather than as OFF.
+    char catChip[16];
+    ImU32 catLamp = cascade::gui::theme::kPhosphor;
+    if (!catStatus_.empty()) {
+        std::snprintf(catChip, sizeof(catChip), "FAIL");
+        catLamp = cascade::gui::theme::kAlarm;
+    } else if (!catServer_.running()) {
+        std::snprintf(catChip, sizeof(catChip), "OFF");
+    } else if (catServer_.clientCount() > 0) {
+        std::snprintf(catChip, sizeof(catChip), "%d CLI", catServer_.clientCount());
+    } else {
+        std::snprintf(catChip, sizeof(catChip), "ON");
+    }
+    if (!benchSection("CAT control (rigctld)", false, catChip, catLamp,
+                      !catStatus_.empty() || catServer_.running())) {
+        return;
+    }
     telemetryNotePanel("cat");
 
     ImGui::TextWrapped(
@@ -8362,13 +10969,13 @@ void AppWindow::drawCatSection() {
     if (catBindAll_) {
         // Said plainly, because it is a blunter exposure than the web server's:
         // there is no password to add.
-        ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.2f, 1.0f),
+        ImGui::TextColored(cascade::gui::theme::warning(),
                            "This protocol has no password. Anything that can "
                            "reach the port can retune the receiver.");
     }
 
     if (!catStatus_.empty()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s",
+        ImGui::TextColored(cascade::gui::theme::bad(), "%s",
                            catStatus_.c_str());
     } else if (catServer_.running()) {
         ImGui::Text("Listening on %s:%d — %d client(s), %llu command(s)",
@@ -8381,9 +10988,9 @@ void AppWindow::drawCatSection() {
 }
 
 void AppWindow::drawWebSection() {
-    const bool webOpen = ImGui::CollapsingHeader("Web access");
-    railChip(webServer_.running() ? "ON" : "OFF", cascade::gui::theme::kPhosphor,
-             webServer_.running());
+    const bool webOpen =
+        benchSection("Web access", false, webServer_.running() ? "ON" : "OFF",
+                     cascade::gui::theme::kPhosphor, webServer_.running());
     if (!webOpen) { return; }
     telemetryNotePanel("web");
 
@@ -8501,7 +11108,29 @@ void AppWindow::drawWebSection() {
 }
 
 void AppWindow::drawUpdatesSection() {
-    if (!ImGui::CollapsingHeader("Updates")) { return; }
+    // THE FOUR STATES THIS SECTION ACTUALLY HAS, and no fifth invented one.
+    // "OK" is only said once a check has completed without error - before
+    // that it is IDLE, because "up to date" and "we have not asked" are
+    // different statements and the second one must not wear the first one's
+    // clothes.
+    const char* updateChip = "OFF";
+    ImU32 updateLamp = cascade::gui::theme::kPhosphor;
+    bool updateLit = false;
+    if (updateCheckEnabled_) {
+        if (update_.newer) {
+            updateChip = update_.critical ? "IMPT" : "NEW";
+            updateLamp = update_.critical ? cascade::gui::theme::kAlarm
+                                          : cascade::gui::theme::kAmber;
+            updateLit = true;
+        } else if (updatePending_) {
+            updateChip = "CHECK";
+        } else if (updateStarted_ && updateError_.empty()) {
+            updateChip = "OK";
+        } else {
+            updateChip = "IDLE";
+        }
+    }
+    if (!benchSection("Updates", false, updateChip, updateLamp, updateLit)) { return; }
     telemetryNotePanel("updates");
 
     if (ImGui::Checkbox("Check for updates at startup", &updateCheckEnabled_)) {
@@ -8526,7 +11155,7 @@ void AppWindow::drawUpdatesSection() {
     } else if (updatePending_) {
         ImGui::TextDisabled("checking...");
     } else if (update_.newer) {
-        ImGui::TextColored(update_.critical ? kErrorRed : ImVec4(1.0f, 0.8f, 0.35f, 1.0f),
+        ImGui::TextColored(update_.critical ? kErrorRed : cascade::gui::theme::warning(),
                            "%s is available", update_.version.c_str());
         if (updateDismissed_ && ImGui::SmallButton("Show it again")) { updateDismissed_ = false; }
     } else if (updateStarted_ && updateError_.empty()) {
@@ -8539,7 +11168,18 @@ void AppWindow::drawUpdatesSection() {
 }
 
 void AppWindow::drawUsageReportingSection() {
-    if (!ImGui::CollapsingHeader("Usage reporting")) { return; }
+    // ON, OFF, OR NOT BUILT IN. A build with no endpoint compiled in cannot
+    // report at all, and saying OFF there would describe a switch this build
+    // does not have - the same distinction the body below draws when it
+    // refuses to offer the checkbox.
+    const bool usageAvailable = !cascade::core::telemetryEndpoint().empty();
+    if (!benchSection("Usage reporting", false,
+                      usageAvailable ? (telemetryEnabled_ ? "ON" : "OFF") : "N/A",
+                      usageAvailable ? cascade::gui::theme::kPhosphor
+                                     : cascade::gui::theme::kInkFaint,
+                      usageAvailable && telemetryEnabled_)) {
+        return;
+    }
     telemetryNotePanel("usage reporting");
 
     // No endpoint compiled in means the feature cannot work, so it is shown as
@@ -8623,7 +11263,16 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
 }
 
 void AppWindow::drawDiagnosticsSection() {
-    if (!ImGui::CollapsingHeader("Diagnostics")) { return; }
+    // WHETHER ANYTHING IS BEING RECORDED, which is the whole promise this
+    // section makes: off means no report is written and nothing is sent. The
+    // memory-dump switch is reported too, because it is the one setting here
+    // that changes what lands on the user's own disk.
+    if (!benchSection("Diagnostics", false,
+                      diagnosticsEnabled_ ? (diagnosticsMinidump_ ? "ON+DMP" : "ON")
+                                          : "OFF",
+                      cascade::gui::theme::kPhosphor, diagnosticsEnabled_)) {
+        return;
+    }
     telemetryNotePanel("diagnostics");
 
     ImGui::TextWrapped(
@@ -8893,12 +11542,22 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
         }
     }
 
-    // Plugin browser. Restoring the URL and the open/closed state does NOT
-    // start a fetch — see AppConfig::pluginCatalogueUrl. The user still has
-    // to press Browse, on this launch as on every other.
+    // The plugin store. Restoring the URL and the window's open/closed state
+    // does NOT start a fetch - see AppConfig::pluginCatalogueUrl. The user
+    // still has to press CHECK NOW, on this launch as on every other, and the
+    // restored window opens showing IDLE until they do.
     pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
     std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
+    // The fitted modules window, restored the same way and with the same
+    // promise: putting the window back opens it on the modules the host has
+    // ALREADY loaded and starts no scan, no fetch and no network call of any
+    // kind. Nothing but the user's own two gestures ever sets this true.
+    fittedWindowOpen_ = cfg.fittedModulesOpen;
+    fittedWinX_ = cfg.fittedModulesX;
+    fittedWinY_ = cfg.fittedModulesY;
+    fittedWinW_ = cfg.fittedModulesWidth;
+    fittedWinH_ = cfg.fittedModulesHeight;
     // Restored purely so it can be saved back unchanged when the user never
     // browses this session. Nothing reads it to decide whether to fetch.
     pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
@@ -9242,6 +11901,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.rxLonDeg = rxLon_;
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
+    cfg.fittedModulesOpen = fittedWindowOpen_;
+    cfg.fittedModulesX = fittedWinX_;
+    cfg.fittedModulesY = fittedWinY_;
+    cfg.fittedModulesWidth = fittedWinW_;
+    cfg.fittedModulesHeight = fittedWinH_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginsStopped = pluginsStopped_;

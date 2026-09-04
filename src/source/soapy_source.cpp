@@ -16,7 +16,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
+#include <memory>
+#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -35,7 +38,7 @@ namespace {
 // Multi-channel devices (B210 etc.) still work â€” they just expose one chain.
 constexpr std::size_t kChannel = 0;
 
-// read() blocking bound. Was 100 ms; 20 ms since devMutex_ serialised the
+// read() blocking bound. Was 100 ms; 20 ms since the device lock serialised the
 // vendor stack: a control call (a retune from the GUI, a stop) now waits
 // behind at most one bounded readStream(), so this bound IS the worst-case
 // control latency. 20 ms is still far above what a healthy device needs to
@@ -51,11 +54,40 @@ constexpr long kReadTimeoutUs = 20000;
 // application has died. See SoapySource::stop().
 constexpr std::chrono::milliseconds kControlLockWait{1500};
 
+// How long an escape path waits for ONE vendor call to come back before it
+// gives up on the call itself - see runAbandonableVendorCall below, and the
+// BOUNDING THE LOCK IS ONLY HALF OF IT note in the header.
+//
+// Same 1.5 s as the lock wait, and for the same reason: a healthy
+// deactivateStream/closeStream/unmake is milliseconds (SoapyRTLSDR's cancels
+// an async transfer and joins one thread), so this is orders of magnitude of
+// headroom, while a user who has just clicked Stop must not be left wondering
+// whether the application has died. The two bounds compose: an escape path
+// that loses BOTH races - the lock, then the call - is back in the user's
+// hands in at most 3 s, because the first abandonment condemns the device and
+// every later call on the same path is skipped rather than attempted.
+constexpr std::chrono::milliseconds kVendorCallWait{1500};
+
 const char* const kNoDeviceName = "SoapySDR: (no device)";
 
-// Process-wide count of open SoapySource devices, for the in-process
-// enumeration gate (see anyDeviceOpen() in the header). Maintained solely by
-// clearDeviceStateLocked()/open() via the per-instance counted_ flag.
+// The one wording for a driver that stopped answering, wherever we give up on
+// it: a lost race for the lock (stop/closeDevice) and a call that never
+// returned (runAbandonableVendorCall) are the same event to the person looking
+// at the screen, so they must not read as two different faults.
+const char* const kAbandonedMessage =
+    "the radio's driver stopped responding and has been abandoned. Restart "
+    "FoxSDR to use it again.";
+
+// Escape-path vendor calls abandoned since process start. See
+// SoapySource::driverCallsAbandoned().
+std::atomic<unsigned long long> s_abandonedCalls{0};
+
+// Process-wide count of devices this process still holds open, for the
+// in-process enumeration gate (see anyDeviceOpen() in the header). Maintained
+// solely by clearDeviceStateLocked()/open() via the per-instance counted_
+// flag - and it counts RADIOS, not sources: one the dead-device policy
+// abandoned without unmaking is still open, and stays counted for the life of
+// the process. clearDeviceStateLocked says why.
 std::atomic<int> s_openDevices{0};
 
 // A stream error the device can plausibly come back from unaided. Overflow is
@@ -149,6 +181,123 @@ bool guardedVendorCall(const Body& body) noexcept {
     return callGuardingVendorFaults(
         [](void* p) noexcept { (*static_cast<const Body*>(p))(); },
         const_cast<void*>(static_cast<const void*>(&body)));
+}
+
+// --- AN ESCAPE-PATH VENDOR CALL THAT CAN BE ABANDONED ----------------------
+//
+// THE DEFECT THIS EXISTS FOR, from a 0.70.0 field report. stopLocked() called
+// deactivateStream on the GUI thread. For an RTL-SDR that is
+// SoapyRTLSDR::deactivateStream: rtlsdr_cancel_async(dev), then
+// _rx_async_thread.join(). The join never returned, and because it was made on
+// the calling thread there was nothing left to give up - the interface froze
+// permanently and the user killed the process. Bounding the WAIT FOR THE LOCK
+// (which stop() already did) cannot help when this call is the one holding it.
+//
+// So the call runs on a worker thread and the caller waits kVendorCallWait for
+// it. If it comes back, everything proceeds exactly as before - same guard,
+// same return code, same exception text, one thread hop. If it does not, the
+// caller stops waiting, condemns the device and returns to the user; the call
+// stays parked in the driver for as long as it likes.
+//
+// WHAT THE ABANDONED CALL IS ALLOWED TO TOUCH is the whole design constraint.
+// It outlives the SoapySource - AppWindow makes a fresh source per open and
+// drops the old one, and the report's user was switching sources - so it may
+// not name `this`, or any member, or any local of the caller's frame. It
+// therefore owns everything it touches: one heap object, held by shared_ptr,
+// carrying the device link (SoapySource::DeviceLink: the mutex and the two
+// handles) and its own result slots and completion latch. The caller keeps a
+// reference until it gives up; the worker keeps one until the driver returns,
+// which may be never. Whichever ends last frees it.
+//
+// The caller HOLDS the link's mutex throughout, so the one-thread-in-the-
+// vendor-stack contract is unbroken while the call is in flight. Once the call
+// is abandoned that mutex is released with the call still running, and what
+// keeps the promise from there is the dead-device latch: a condemned device is
+// never called again by anything (see abandonWedgedDriverLocked).
+struct VendorJob {
+    // Kept alive BY VALUE for the worker; the fields the body reads live here.
+    std::shared_ptr<SoapySource::DeviceLink> link;
+
+    // A captureless function, so nothing of the caller's frame can be reached
+    // through it. Results go into the slots below, which the caller reads only
+    // after the latch says the worker is finished with them.
+    void (*body)(VendorJob&) noexcept = nullptr;
+
+    int ret = 0;
+    bool threw = false;
+    std::string message;
+
+    std::mutex m;
+    std::condition_variable cv;
+    bool done = false;
+    bool faulted = false;  // the vendor guard absorbed a structured exception
+};
+
+enum class JobOutcome {
+    Completed,  // the driver answered; ret/threw/message are readable
+    Faulted,    // a structured exception was absorbed inside the driver
+    Abandoned,  // it never came back - the caller must condemn the device
+};
+
+JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job) noexcept {
+    std::thread worker;
+    try {
+        worker = std::thread([job]() noexcept {
+            const bool completed = guardedVendorCall([&job]() noexcept { job->body(*job); });
+            {
+                std::lock_guard<std::mutex> lk(job->m);
+                job->faulted = !completed;
+                job->done = true;
+            }
+            job->cv.notify_all();
+            // Nothing else, deliberately: a worker that returns after being
+            // abandoned may be doing so during process teardown, and reaching
+            // for the logger (or anything else with static lifetime) from here
+            // would trade a fixed freeze for a shutdown crash.
+        });
+    } catch (...) {
+        // No thread, so NOTHING RAN. Reported as abandoned rather than run
+        // inline: a machine that cannot start a thread is in no state to be
+        // handed the call that froze the interface in the first place, and the
+        // caller's verdict (condemn, release, tell the user) is survivable
+        // where a freeze is not.
+        return JobOutcome::Abandoned;
+    }
+    bool done = false;
+    bool faulted = false;
+    try {
+        std::unique_lock<std::mutex> lk(job->m);
+        done = job->cv.wait_for(lk, kVendorCallWait, [&job] { return job->done; });
+        faulted = job->faulted;
+    } catch (...) {
+        done = false;  // an unwaitable latch is treated as a call that hung
+    }
+    if (!done) {
+        worker.detach();
+        s_abandonedCalls.fetch_add(1, std::memory_order_relaxed);
+        return JobOutcome::Abandoned;
+    }
+    // Fast: the worker sets done as its last act, so this joins a thread that
+    // is already on its way out. It is a real join, not a wait - the OS thread
+    // is finished before the caller drops the lock the job's handles live
+    // under.
+    worker.join();
+    return faulted ? JobOutcome::Faulted : JobOutcome::Completed;
+}
+
+// The caller-side half: build a job for one call on this link. Null on
+// allocation failure, which the call sites treat as an abandoned call for the
+// same reason a thread that will not start is treated as one.
+std::shared_ptr<VendorJob> makeVendorJob(const std::shared_ptr<SoapySource::DeviceLink>& link,
+                                         void (*body)(VendorJob&) noexcept) noexcept {
+    try {
+        auto job = std::make_shared<VendorJob>();
+        job->link = link;
+        job->body = body;
+        return job;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 }  // namespace
@@ -373,17 +522,45 @@ bool SoapySource::open(const std::string& args) {
     // open()), so a timeout here means "busy", not "broken" - the failure is
     // reported and nothing about the previous device's state is touched,
     // because this call never got far enough to touch any of it.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError(
             "the previous device's driver is busy or not answering; try "
             "again");
         return false;
     }
+    // A CONDEMNED LINK IS NOT REOPENABLE, and this gate is what makes the
+    // abandonment message true rather than merely hopeful. Once a vendor call
+    // has been left running (abandonWedgedDriverLocked), one of this process's
+    // threads is still inside that module holding a device this code can never
+    // unmake; making a second device through the same link would put a second
+    // thread in there beside it, which is the 0.62.0 crash class. It costs
+    // nothing in the application: AppWindow::openSoapy builds a FRESH
+    // SoapySource for every open, so this only ever refuses an object that has
+    // already been condemned - and the words are the ones the user was given
+    // when it happened.
+    //
+    // Checked BEFORE the release below, because teardownLocked() is what
+    // clears the fault latches and it must not be reached on this path.
+    if (link_->abandoned) {
+        setError(kAbandonedMessage);
+        return false;
+    }
     // Reopen semantics: whatever was open before must be fully released
     // first, or the old device handle (and its USB claim) would leak.
     stopLocked();
     teardownLocked();
+    // ...AND THE RELEASE ITSELF CAN CONDEMN THE LINK, which is the reopen a
+    // user actually performs: picking a second radio while the first one's
+    // deactivateStream is wedged. The gate above cannot see that - the link
+    // was healthy when this call started - and without this second check the
+    // interrogation below would write a new device handle over the two a
+    // wedged call is still reading, which is the race the freeze under it
+    // would deserve. Same verdict, same words, no device made.
+    if (link_->abandoned) {
+        setError(kAbandonedMessage);
+        return false;
+    }
     if (!runtimeAvailable()) {
         setError(
             "SoapySDR runtime not found (SoapySDR.dll). Reinstall, or use the "
@@ -417,36 +594,36 @@ bool SoapySource::open(const std::string& args) {
     const bool completed = guardedVendorCall([&o]() noexcept {
         SoapySource* s = o.self;
         try {
-            s->dev_ = SoapySDR::Device::make(*o.args);
-            if (s->dev_ == nullptr) {
+            s->link_->dev = SoapySDR::Device::make(*o.args);
+            if (s->link_->dev == nullptr) {
                 // make() normally throws on failure, but a null return is
                 // legal API-wise and must not turn into a null deref at
                 // setupStream.
                 o.result = Open::Result::NullDevice;
                 return;
             }
-            if (s->dev_->getNumChannels(SOAPY_SDR_RX) < 1) {
+            if (s->link_->dev->getNumChannels(SOAPY_SDR_RX) < 1) {
                 o.result = Open::Result::NoRxChannel;
                 return;
             }
             // CF32 everywhere: the DSP chain is complex<float>, and every Soapy
             // module provides CF32 via the built-in converter registry even
             // when the wire format is CS16/CS8, so no per-driver format logic.
-            s->stream_ = s->dev_->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32,
+            s->link_->stream = s->link_->dev->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32,
                                               std::vector<std::size_t>{kChannel});
-            if (s->stream_ == nullptr) {
+            if (s->link_->stream == nullptr) {
                 o.result = Open::Result::NullStream;
                 return;
             }
             // Cache the device's ACTUAL state, not assumptions: a fresh device
             // boots at whatever rate/frequency its driver defaults to, and the
             // display must agree with the hardware from the first frame.
-            o.rateHz = s->dev_->getSampleRate(SOAPY_SDR_RX, kChannel);
-            o.freqHz = s->dev_->getFrequency(SOAPY_SDR_RX, kChannel);
+            o.rateHz = s->link_->dev->getSampleRate(SOAPY_SDR_RX, kChannel);
+            o.freqHz = s->link_->dev->getFrequency(SOAPY_SDR_RX, kChannel);
 
-            o.label = s->dev_->getHardwareKey();
+            o.label = s->link_->dev->getHardwareKey();
             if (o.label.empty()) {
-                o.label = s->dev_->getDriverKey();
+                o.label = s->link_->dev->getDriverKey();
             }
             if (o.label.empty()) {
                 o.label = "device";
@@ -462,7 +639,7 @@ bool SoapySource::open(const std::string& args) {
     });
 
     if (!completed) {
-        // A FAULT MID-OPEN. dev_ may hold a half-made handle and stream_ a
+        // A FAULT MID-OPEN. The link may hold a half-made device and a
         // half-made stream, both belonging to a module that just raised an
         // access violation. They are ABANDONED rather than unmade - see the
         // dead-device policy above teardown() - and open() fails, which the
@@ -482,7 +659,7 @@ bool SoapySource::open(const std::string& args) {
                 name_ = "SoapySDR: " + o.label;
             }
             // CONDEMNED MID-OPEN? stop()/closeDevice() time out against
-            // devMutex_ - which this open has held throughout - and latch
+            // the device lock - which this open has held throughout - and latch
             // the dead flags without it. That is the user pressing Stop
             // during a slow, HEALTHY interrogation. Returning true here
             // would hand back a device that faulted() already reports
@@ -531,8 +708,9 @@ bool SoapySource::open(const std::string& args) {
 
 void SoapySource::closeDevice() {
     // Same bounded wait, and the same escape-path verdict, as stop() below -
-    // see the rationale there. On a timeout dev_/stream_ are left completely
-    // alone rather than cleared: they are writable ONLY under devMutex_, the
+    // see the rationale there. On a timeout the link's handles are left
+    // completely alone rather than cleared: they are writable ONLY under its
+    // mutex, the
     // parked holder is inside the driver dereferencing them right now, and
     // clearing them here without the lock would be a data race on a live
     // handle. This deliberately LEAKS the device - the same documented
@@ -540,7 +718,7 @@ void SoapySource::closeDevice() {
     // itself faults - and the message says so, matching stop()'s wording so
     // the user sees one consistent abandonment reason regardless of which
     // control path gave up.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         running_.store(false, std::memory_order_relaxed);
         core::diagWarnf(
@@ -552,9 +730,7 @@ void SoapySource::closeDevice() {
         deviceDead_ = true;
         faulted_ = true;
         try {
-            lastError_ =
-                "the radio's driver stopped responding and has been abandoned. "
-                "Restart FoxSDR to use it again.";
+            lastError_ = kAbandonedMessage;
         } catch (...) {
         }
         return;
@@ -595,13 +771,43 @@ void SoapySource::noteVendorFault(const char* what) noexcept {
     }
 }
 
-void SoapySource::clearDeviceStateLocked() noexcept {
-    if (counted_) {
+void SoapySource::clearDeviceStateLocked(bool deviceReleased) noexcept {
+    // THE COUNT FOLLOWS THE RADIO, NOT THIS OBJECT. It answers one question -
+    // does anything in this process still hold a device open (anyDeviceOpen(),
+    // the gate on the in-process vendor walk) - and this used to answer it
+    // with "did a SoapySource stop pointing at one", which are different
+    // questions on every path the dead-device policy takes.
+    //
+    // A faulted or wedged device is dropped WITHOUT closeStream and WITHOUT
+    // unmake, deliberately and permanently: the vendor module still owns that
+    // radio, and in the wedged case one of our threads is still executing
+    // inside it. Decrementing here told the rest of the process that nothing
+    // was open at the exact moment that was least true - and what reads this
+    // count then walks every vendor module's find(), opening and closing the
+    // very dongle a stranded call is still inside, which is the lifecycle
+    // overlap the 0.62.0 crashes were adjudicated to. So the decrement is
+    // conditional on a release that actually happened, and a radio nobody
+    // released stays counted until the process exits. That costs the
+    // in-process enumeration FALLBACK for the rest of the session (the normal
+    // scan runs in a child and is untouched, so the Source menu still
+    // refreshes), and it is the same bargain the user is offered in words:
+    // restart FoxSDR to use this radio again.
+    if (counted_ && deviceReleased) {
         s_openDevices.fetch_sub(1, std::memory_order_relaxed);
         counted_ = false;
     }
-    dev_ = nullptr;
-    stream_ = nullptr;
+    // THE HANDLES ARE NOT NULLED ON AN ABANDONED LINK, and that is the one
+    // asymmetry in this function. A vendor call that never came back is still
+    // running, on a thread that is still reading these two pointers out of the
+    // link (see runAbandonableVendorCall); writing them from here would be a
+    // data race on a live handle, and nulling them would not release anything
+    // anyway - nothing may unmake a device a wedged call is still inside. The
+    // link is frozen instead, and everything else below still says "closed",
+    // which is what the rest of the object and the GUI act on.
+    if (!link_->abandoned) {
+        link_->dev = nullptr;
+        link_->stream = nullptr;
+    }
     openMirror_.store(false, std::memory_order_relaxed);
     running_.store(false, std::memory_order_relaxed);
     sampleRateHz_.store(0.0, std::memory_order_relaxed);
@@ -615,7 +821,46 @@ void SoapySource::clearDeviceStateLocked() noexcept {
 void SoapySource::abandonDeviceLocked() noexcept {
     // No driver call of any kind. The fault latches and lastError_ are left
     // exactly as they are: they are the only record of why this happened.
-    clearDeviceStateLocked();
+    //
+    // Nothing was released, so nothing is uncounted: this runs from an open()
+    // that faulted with a half-built device in its hands, and that device is
+    // being left to the module exactly as teardown leaves a faulted one.
+    clearDeviceStateLocked(/*deviceReleased=*/false);
+}
+
+unsigned long long SoapySource::driverCallsAbandoned() {
+    return s_abandonedCalls.load(std::memory_order_relaxed);
+}
+
+int SoapySource::openDeviceCount() {
+    return s_openDevices.load(std::memory_order_relaxed);
+}
+
+void SoapySource::abandonWedgedDriverLocked(const char* what) noexcept {
+    // THE LINK IS CONDEMNED FIRST, before anything that can fail. From this
+    // store on, the handles are frozen (clearDeviceStateLocked stops nulling
+    // them), the dead latches survive teardown, and open() refuses - so the
+    // "restart FoxSDR to use this radio again" below is a promise this object
+    // keeps, not a hope. The call it names is still running: nothing here
+    // waits for it, and nothing after it will ever touch the driver again.
+    link_->abandoned = true;
+    // WORD FOR WORD what a lost race for the driver lock says (see stop() and
+    // closeDevice()). To the user these are one event - "the radio stopped
+    // answering and FoxSDR let it go" - and two wordings for it would read as
+    // two different faults with two different remedies.
+    core::diagWarnf(
+        "soapy: %s did not return within %lld ms - abandoning it rather than "
+        "freezing the interface; restart FoxSDR to use this radio again",
+        what, static_cast<long long>(kVendorCallWait.count()));
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    // Latches before the message, as in noteVendorFault: a string we could not
+    // allocate must not cost the latches that actually protect the device.
+    deviceDead_ = true;
+    faulted_ = true;
+    try {
+        lastError_ = kAbandonedMessage;
+    } catch (...) {
+    }
 }
 
 // THE DEAD-DEVICE POLICY, which is the one genuinely contestable decision in
@@ -640,45 +885,93 @@ void SoapySource::abandonDeviceLocked() noexcept {
 // of the three uploaded from 0.62.0 is a fault raised INSIDE teardown, so this
 // is exactly the path where the module is provably mid-collapse.
 void SoapySource::teardownLocked() noexcept {
-    if (dev_ != nullptr) {
+    // Whether the RADIO went back to the system, which only a completed
+    // unmake achieves. Every other way out of this function - the dead-device
+    // policy's silent drop, a fault, a call left running - leaves the module
+    // holding the device, and the process-wide count has to say so
+    // (clearDeviceStateLocked at the bottom, and anyDeviceOpen()).
+    bool released = false;
+    if (link_->dev != nullptr) {
         if (deviceDead()) {
             core::diagWarnf(
                 "soapy: releasing a device whose driver already faulted - the "
                 "handle is abandoned deliberately, no closeStream/unmake");
         } else {
-            if (stream_ != nullptr) {
-                const bool completed = guardedVendorCall([this]() noexcept {
+            // BOTH OF THESE ARE ESCAPE-PATH CALLS, so both are bounded the way
+            // stopLocked()'s deactivateStream is: teardown runs from
+            // closeDevice() and from the destructor, on whatever thread is
+            // closing the radio - the GUI thread, out of the Source panel -
+            // and a closeStream or an unmake that never returns freezes it
+            // exactly as thoroughly as the deactivateStream that produced the
+            // 0.70.0 report. See runAbandonableVendorCall.
+            if (link_->stream != nullptr) {
+                const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
                     try {
-                        dev_->closeStream(stream_);
+                        j.link->dev->closeStream(j.link->stream);
                     } catch (...) {
                         // Teardown must complete regardless; the handle is dead
                         // either way and unmake below still releases the device.
                     }
                 });
-                if (!completed) { noteVendorFault("closing the device stream"); }
+                switch (job ? runAbandonableVendorCall(job) : JobOutcome::Abandoned) {
+                    case JobOutcome::Completed:
+                        break;
+                    case JobOutcome::Faulted:
+                        noteVendorFault("closing the device stream");
+                        break;
+                    case JobOutcome::Abandoned:
+                        abandonWedgedDriverLocked("closing the device stream");
+                        break;
+                }
             }
-            // Re-checked, not cached: closeStream may have just killed it.
+            // Re-checked, not cached: closeStream may have just killed it -
+            // by faulting, or by never coming back at all, and an unmake of a
+            // device another thread is still inside is the one call this file
+            // must never make.
             if (!deviceDead()) {
-                const bool completed = guardedVendorCall([this]() noexcept {
+                const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
                     try {
-                        SoapySDR::Device::unmake(dev_);
+                        SoapySDR::Device::unmake(j.link->dev);
                     } catch (...) {
                     }
                 });
-                if (!completed) { noteVendorFault("releasing the device"); }
+                switch (job ? runAbandonableVendorCall(job) : JobOutcome::Abandoned) {
+                    case JobOutcome::Completed:
+                        // THE ONE PATH THAT GIVES THE RADIO BACK. A fault
+                        // inside unmake leaves the module's ownership in a
+                        // state it no longer guarantees, and an unmake still
+                        // running is not an unmake that finished, so neither
+                        // of those may claim it.
+                        released = true;
+                        break;
+                    case JobOutcome::Faulted:
+                        noteVendorFault("releasing the device");
+                        break;
+                    case JobOutcome::Abandoned:
+                        abandonWedgedDriverLocked("releasing the device");
+                        break;
+                }
             }
         }
     }
-    clearDeviceStateLocked();
+    clearDeviceStateLocked(released);
     // The FAULT state goes with the stream that raised it â€” there is nothing
     // left to be faulted about. lastError_ deliberately does NOT: teardown
     // runs immediately after the failures whose reason the GUI still shows
     // (see closeDevice), and clearing it here would erase every one of them â€”
     // including the vendor-fault message noteVendorFault just wrote.
+    //
+    // AN ABANDONED LINK IS THE EXCEPTION, and it is what makes the abandonment
+    // permanent. A fault leaves a device we have finished with; a wedged call
+    // leaves one a thread is still inside, holding handles this process can
+    // never reclaim. Clearing the latches there would let the very next
+    // start() call activateStream on it, so they stay set for the life of the
+    // object - and closeDevice() remains idempotent, because every path it
+    // takes from here is a no-op.
     {
         std::lock_guard<std::mutex> lk(errorMutex_);
-        faulted_ = false;
-        deviceDead_ = false;
+        faulted_ = link_->abandoned;
+        deviceDead_ = link_->abandoned;
         consecutiveErrors_ = 0;
     }
 }
@@ -692,7 +985,7 @@ void SoapySource::clearError() {
     std::lock_guard<std::mutex> lk(errorMutex_);
     // A CONDEMNED DEVICE STAYS CONDEMNED. The escape paths (stop() /
     // closeDevice() on a driver-lock timeout) latch deviceDead_ WITHOUT
-    // holding devMutex_, so they can fire while a healthy open() or
+    // holding the device lock, so they can fire while a healthy open() or
     // start() is mid-flight - and that call's success path lands here.
     // Clearing faulted_ then made faulted() read false for exactly the
     // window until something re-checked the dead latch, and erasing
@@ -746,12 +1039,12 @@ bool SoapySource::start() {
     // mark the device dead - only the user's own escape paths (stop(),
     // closeDevice()) may condemn it. Every setter/query in this file below
     // shares this exact reasoning; later ones do not repeat it.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
-    if (dev_ == nullptr || stream_ == nullptr) {
+    if (link_->dev == nullptr || link_->stream == nullptr) {
         // Documented before-open behavior: refuse with a reason, no crash.
         setError("start() called with no device open");
         return false;
@@ -777,7 +1070,7 @@ bool SoapySource::start() {
 
     const bool completed = guardedVendorCall([&a]() noexcept {
         try {
-            a.ret = a.self->dev_->activateStream(a.self->stream_);
+            a.ret = a.self->link_->dev->activateStream(a.self->link_->stream);
         } catch (const std::exception& e) {
             a.threw = true;
             a.message = describe(e, "activateStream failed");
@@ -817,13 +1110,27 @@ bool SoapySource::start() {
     // answering) and refuse; the abandonment message survives because
     // clearError() is latch-aware.
     if (deviceDead()) {
-        const bool undone = guardedVendorCall([this]() noexcept {
+        // Abandonable like every other deactivateStream in this file, and for
+        // the same reason: this one runs on the thread that called start(),
+        // which is the GUI thread out of the toolbar, and it is the exact call
+        // that froze 0.70.0 (see stopLocked). A stop that had to condemn the
+        // device must not be the thing that hangs honouring itself.
+        const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
             try {
-                dev_->deactivateStream(stream_);
+                j.link->dev->deactivateStream(j.link->stream);
             } catch (...) {
             }
         });
-        if (!undone) { noteVendorFault("deactivating a condemned stream"); }
+        switch (job ? runAbandonableVendorCall(job) : JobOutcome::Abandoned) {
+            case JobOutcome::Completed:
+                break;
+            case JobOutcome::Faulted:
+                noteVendorFault("deactivating a condemned stream");
+                break;
+            case JobOutcome::Abandoned:
+                abandonWedgedDriverLocked("deactivating a condemned stream");
+                break;
+        }
         return false;
     }
     running_.store(true, std::memory_order_relaxed);
@@ -854,7 +1161,7 @@ void SoapySource::stop() {
     // in a driver that is not answering â€” which is the same abandonment the
     // dead-device policy above already performs deliberately, for the same
     // reason â€” and the user is told, instead of the window going white.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         // running_ is atomic and is what the read loop actually tests, so
         // clearing it here still stops the source as soon as the driver
@@ -870,9 +1177,7 @@ void SoapySource::stop() {
             deviceDead_ = true;
             faulted_ = true;
             try {
-                lastError_ =
-                    "the radio's driver stopped responding and has been abandoned. "
-                    "Restart FoxSDR to use it again.";
+                lastError_ = kAbandonedMessage;
             } catch (...) {
             }
         }
@@ -893,38 +1198,53 @@ void SoapySource::stopLocked() {
     if (deviceDead()) {
         return;  // never call a driver that has already faulted
     }
-    struct Deactivate {
-        SoapySource* self;
-        int ret = 0;
-        bool threw = false;
-        std::string message;
-    } d{this};
-
-    const bool completed = guardedVendorCall([&d]() noexcept {
+    // THE 0.70.0 FIELD FREEZE IS THIS CALL. The stack was symbolised to the
+    // one _Thrd_join call site in rtlsdrSupport.dll, inside a function that
+    // calls rtlsdr_cancel_async, _Thrd_id and _Thrd_join in that order -
+    // SoapyRTLSDR::deactivateStream cancelling its async transfer and then
+    // joining its own RX thread. That join never returned. Called inline on
+    // the GUI thread, as this was, there is nothing left to give up: the
+    // interface froze for good and the user killed the process.
+    //
+    // So it runs where it can be abandoned, and this thread waits
+    // kVendorCallWait for it. running_ is already false above, so a call that
+    // has to be left behind still leaves the object in "stopped" - the only
+    // thing it costs is the device, which is condemned rather than freed.
+    const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
         try {
-            d.ret = d.self->dev_->deactivateStream(d.self->stream_);
+            j.ret = j.link->dev->deactivateStream(j.link->stream);
         } catch (const std::exception& e) {
-            d.threw = true;
-            d.message = describe(e, "deactivateStream failed");
+            j.threw = true;
+            j.message = describe(e, "deactivateStream failed");
         } catch (...) {
-            d.threw = true;
-            d.message = "deactivateStream failed: non-standard exception";
+            j.threw = true;
+            j.message = "deactivateStream failed: non-standard exception";
         }
     });
-    if (!completed) {
-        // stop() is void, so the only reporting channel is lastError() â€” and
-        // now also faulted(), which the pipeline polls. The teardown that
-        // usually follows will see deviceDead() and let the handle go without
-        // touching the driver again.
-        noteVendorFault("stopping the stream");
+    switch (job ? runAbandonableVendorCall(job) : JobOutcome::Abandoned) {
+        case JobOutcome::Completed:
+            break;
+        case JobOutcome::Faulted:
+            // stop() is void, so the only reporting channel is lastError() â€”
+            // and now also faulted(), which the pipeline polls. The teardown
+            // that usually follows will see deviceDead() and let the handle go
+            // without touching the driver again.
+            noteVendorFault("stopping the stream");
+            return;
+        case JobOutcome::Abandoned:
+            // Same destination by a different road: the teardown that follows
+            // sees deviceDead() and releases the handle without a driver call,
+            // which is the only safe thing to do with a device that still has
+            // one of our threads inside it.
+            abandonWedgedDriverLocked("stopping the stream");
+            return;
+    }
+    if (job->threw) {
+        setError(std::move(job->message));
         return;
     }
-    if (d.threw) {
-        setError(std::move(d.message));
-        return;
-    }
-    if (d.ret != 0) {
-        setError(std::string("deactivateStream failed: ") + SoapySDR::errToStr(d.ret));
+    if (job->ret != 0) {
+        setError(std::string("deactivateStream failed: ") + SoapySDR::errToStr(job->ret));
     }
 }
 
@@ -937,7 +1257,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // for the full timeout on every call against a handle whose device
         // has gone, which would make the pipeline's shutdown crawl. The source
         // loop polls faulted() and leaves; this is the belt to that braces.
-        // Checked BEFORE devMutex_ so a faulted spin never contends the lock.
+        // Checked BEFORE the device lock so a faulted spin never contends it.
         std::lock_guard<std::mutex> lk(errorMutex_);
         // BOTH latches, not just faulted_. clearError() (a successful
         // start()/open() commit) clears faulted_ and deliberately cannot
@@ -958,13 +1278,28 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
     // becomes a slightly later "nothing yet, retry" than usual. Nothing is
     // recorded and the device is not marked dead; that verdict belongs only
     // to the user's own escape paths (stop()/closeDevice()).
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         return 0;
     }
-    if (dev_ == nullptr || stream_ == nullptr) {
+    if (link_->dev == nullptr || link_->stream == nullptr) {
         // Before open (or after a teardown that won the lock first) there is
         // nothing to wait on: return the retry signal immediately.
+        return 0;
+    }
+    // CONDEMNED WHILE THIS CALL WAS QUEUED FOR THE LOCK, which the latch test
+    // above cannot see: it ran before the wait, and the thread that held the
+    // lock may have spent that wait abandoning a wedged driver. Every setter
+    // and query in this file re-tests deviceDead() after taking the lock; this
+    // was the one entry point that did not, and it relied on the null test
+    // above to stand in for it - which an ABANDONED link defeats by design.
+    // Its handles are frozen deliberately (a stranded worker is still reading
+    // them), so they stay non-null forever, and the read would go straight
+    // into a module this process has promised never to call again, on a stream
+    // whose deactivate is still parked inside it. 0 is the right answer here:
+    // the same "nothing, retry" the source loop already handles, and faulted()
+    // - set by every path that condemns a device - is what tells it to stop.
+    if (deviceDead()) {
         return 0;
     }
     // NOT ROUTED THROUGH THE VENDOR GUARD, and that is a decision rather than
@@ -982,7 +1317,8 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
     int flags = 0;
     long long timeNs = 0;
     try {
-        const int ret = dev_->readStream(stream_, buffs, n, flags, timeNs, kReadTimeoutUs);
+        const int ret = link_->dev->readStream(link_->stream, buffs, n, flags, timeNs,
+                                               kReadTimeoutUs);
         if (ret > 0) {
             const std::size_t got = static_cast<std::size_t>(ret);
             const bool scrubbed = sanitizeNonFinite(dst, got);
@@ -1037,12 +1373,12 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
 
 bool SoapySource::setSampleRateHz(double hz) {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         setError("setSampleRateHz() called with no device open");
         return false;
     }
@@ -1062,10 +1398,10 @@ bool SoapySource::setSampleRateHz(double hz) {
 
     const bool completed = guardedVendorCall([&r]() noexcept {
         try {
-            r.self->dev_->setSampleRate(SOAPY_SDR_RX, kChannel, r.want);
+            r.self->link_->dev->setSampleRate(SOAPY_SDR_RX, kChannel, r.want);
             // Readback, not echo: drivers coerce to the nearest supported rate
             // and the DSP chain must follow the hardware's real clock.
-            r.got = r.self->dev_->getSampleRate(SOAPY_SDR_RX, kChannel);
+            r.got = r.self->link_->dev->getSampleRate(SOAPY_SDR_RX, kChannel);
         } catch (const std::exception& e) {
             r.threw = true;
             r.message = describe(e, "setSampleRate failed");
@@ -1092,12 +1428,12 @@ bool SoapySource::setSampleRateHz(double hz) {
 
 bool SoapySource::setCenterFrequencyHz(double hz) {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         setError("setCenterFrequencyHz() called with no device open");
         return false;
     }
@@ -1115,10 +1451,10 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
 
     const bool completed = guardedVendorCall([&t]() noexcept {
         try {
-            t.self->dev_->setFrequency(SOAPY_SDR_RX, kChannel, t.want);
+            t.self->link_->dev->setFrequency(SOAPY_SDR_RX, kChannel, t.want);
             // Same readback rationale as the sample rate: the synthesizer lands
             // where its step size allows, and the display tracks the hardware.
-            t.got = t.self->dev_->getFrequency(SOAPY_SDR_RX, kChannel);
+            t.got = t.self->link_->dev->getFrequency(SOAPY_SDR_RX, kChannel);
         } catch (const std::exception& e) {
             t.threw = true;
             t.message = describe(e, "setFrequency failed");
@@ -1150,19 +1486,19 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
 
 std::vector<std::string> SoapySource::listGainNames() {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return {};
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         return {};  // no device, no gain stages - not an error
     }
     if (deviceDead()) { return {}; }
     std::vector<std::string> out;
     const bool completed = guardedVendorCall([this, &out]() noexcept {
         try {
-            out = dev_->listGains(SOAPY_SDR_RX, kChannel);
+            out = link_->dev->listGains(SOAPY_SDR_RX, kChannel);
         } catch (...) {
             out.clear();
         }
@@ -1176,12 +1512,12 @@ std::vector<std::string> SoapySource::listGainNames() {
 
 bool SoapySource::setGainDb(const std::string& name, double db) {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         setError("setGainDb() called with no device open");
         return false;
     }
@@ -1197,7 +1533,7 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
 
     const bool completed = guardedVendorCall([&g]() noexcept {
         try {
-            g.self->dev_->setGain(SOAPY_SDR_RX, kChannel, *g.name, g.db);
+            g.self->link_->dev->setGain(SOAPY_SDR_RX, kChannel, *g.name, g.db);
         } catch (const std::exception& e) {
             g.threw = true;
             g.message = describe(e, "setGain failed");
@@ -1221,12 +1557,12 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
 
 bool SoapySource::setAutoGain(bool on) {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         setError("setAutoGain() called with no device open");
         return false;
     }
@@ -1242,11 +1578,11 @@ bool SoapySource::setAutoGain(bool on) {
 
     const bool completed = guardedVendorCall([&a]() noexcept {
         try {
-            if (!a.self->dev_->hasGainMode(SOAPY_SDR_RX, kChannel)) {
+            if (!a.self->link_->dev->hasGainMode(SOAPY_SDR_RX, kChannel)) {
                 a.hasMode = false;
                 return;
             }
-            a.self->dev_->setGainMode(SOAPY_SDR_RX, kChannel, a.on);
+            a.self->link_->dev->setGainMode(SOAPY_SDR_RX, kChannel, a.on);
         } catch (const std::exception& e) {
             a.threw = true;
             a.message = describe(e, "setGainMode failed");
@@ -1274,12 +1610,12 @@ bool SoapySource::setAutoGain(bool on) {
 
 std::vector<std::string> SoapySource::listAntennas() {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return {};
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         return {};  // no device, no ports - not an error
     }
     if (deviceDead()) { return {}; }
@@ -1293,7 +1629,7 @@ std::vector<std::string> SoapySource::listAntennas() {
 
     const bool completed = guardedVendorCall([&p]() noexcept {
         try {
-            p.out = p.self->dev_->listAntennas(SOAPY_SDR_RX, kChannel);
+            p.out = p.self->link_->dev->listAntennas(SOAPY_SDR_RX, kChannel);
         } catch (const std::exception& e) {
             p.threw = true;
             p.message = describe(e, "listAntennas failed");
@@ -1315,12 +1651,12 @@ std::vector<std::string> SoapySource::listAntennas() {
 
 bool SoapySource::setAntenna(const std::string& name) {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         setError("setAntenna() called with no device open");
         return false;
     }
@@ -1341,12 +1677,12 @@ bool SoapySource::setAntenna(const std::string& name) {
             // ignore it silently - and a silently ignored port change is
             // precisely the failure this whole method exists to end.
             const std::vector<std::string> avail =
-                p.self->dev_->listAntennas(SOAPY_SDR_RX, kChannel);
+                p.self->link_->dev->listAntennas(SOAPY_SDR_RX, kChannel);
             if (std::find(avail.begin(), avail.end(), *p.name) == avail.end()) {
                 return;  // known stays false
             }
             p.known = true;
-            p.self->dev_->setAntenna(SOAPY_SDR_RX, kChannel, *p.name);
+            p.self->link_->dev->setAntenna(SOAPY_SDR_RX, kChannel, *p.name);
         } catch (const std::exception& e) {
             p.threw = true;
             p.message = describe(e, "setAntenna failed");
@@ -1372,12 +1708,12 @@ bool SoapySource::setAntenna(const std::string& name) {
 
 std::string SoapySource::antenna() {
     // Bounded, soft-failure - see start() above.
-    std::unique_lock<std::timed_mutex> devLk(devMutex_, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         setError("the radio's driver is busy or not answering; try again");
         return {};
     }
-    if (dev_ == nullptr) {
+    if (link_->dev == nullptr) {
         return {};
     }
     if (deviceDead()) { return {}; }
@@ -1391,7 +1727,7 @@ std::string SoapySource::antenna() {
 
     const bool completed = guardedVendorCall([&w]() noexcept {
         try {
-            w.out = w.self->dev_->getAntenna(SOAPY_SDR_RX, kChannel);
+            w.out = w.self->link_->dev->getAntenna(SOAPY_SDR_RX, kChannel);
         } catch (const std::exception& e) {
             w.threw = true;
             w.message = describe(e, "getAntenna failed");

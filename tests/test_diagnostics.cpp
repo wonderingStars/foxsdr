@@ -409,6 +409,46 @@ int main() {
         CHECK(!resolveAddress(static_cast<std::uintptr_t>(1), junk, junkOffset));
     }
 
+    // --- ...and it is rebuilt when a DEVICE OPEN loads the vendor module ----
+    //
+    // refreshModuleTable's own header says to call it "after anything that
+    // loaded code into this process ... after a device is opened", and for
+    // three releases it was called at start-up and when the loaded plugin
+    // count changed, and nowhere else. SoapySDR::Device::make() maps the
+    // vendor module and its dependencies into THIS process on the open
+    // worker, so a radio opened after start-up left rtlsdrSupport.dll,
+    // rtlsdr.dll and libusb resolving to nothing: a field report whose device
+    // was opened 102 seconds in printed all three as bare addresses, and the
+    // one frame that identified the fault had to be recovered by hand.
+    //
+    // Held statically, against the source that ships. The dynamic version of
+    // this test needs a radio plugged into the machine running ctest, which
+    // no CI has and most developers do not; what CAN be pinned is that the
+    // call is present on the completion path and reached BEFORE
+    // finishSoapyOpen, which returns early on a failed open and on one the
+    // user has moved on from - both of which loaded the module just the same.
+    {
+        const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
+        const std::string text = readFile(src);
+        CHECK(!text.empty());
+
+        // The open-completion branch, anchored on the wait that resolves it.
+        const std::size_t branch = text.find("soapyOpenFuture_.wait_for(kNoWait)");
+        const std::size_t finish =
+            (branch == std::string::npos) ? std::string::npos
+                                          : text.find("finishSoapyOpen(", branch);
+        const std::size_t refresh =
+            (branch == std::string::npos)
+                ? std::string::npos
+                : text.find("cascade::core::refreshModuleTable();", branch);
+        std::printf("device-open module refresh: branch@%zu refresh@%zu finish@%zu\n", branch,
+                    refresh, finish);
+        CHECK(branch != std::string::npos);
+        CHECK(finish != std::string::npos);
+        CHECK(refresh != std::string::npos);
+        CHECK(refresh != std::string::npos && finish != std::string::npos && refresh < finish);
+    }
+
     // --- The release binary's symbols are archived under its build id -------
     //
     // This is the one that is fatal if missed: without the PDB that matches

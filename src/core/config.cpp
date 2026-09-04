@@ -297,6 +297,14 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "rxLonDeg", out.rxLonDeg);
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
+    // The fitted modules window, open flag and rectangle. Its rectangle is
+    // sanitized with the map's below, by the same lambda, so the two stores
+    // can never apply different rules to the same kind of value.
+    getBool(j, "fittedModulesOpen", out.fittedModulesOpen);
+    getInt(j, "fittedModulesX", out.fittedModulesX);
+    getInt(j, "fittedModulesY", out.fittedModulesY);
+    getInt(j, "fittedModulesWidth", out.fittedModulesWidth);
+    getInt(j, "fittedModulesHeight", out.fittedModulesHeight);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
     getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
     getStringArray(j, "closedWindows", out.closedWindows);
@@ -408,6 +416,17 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
                 pg.width = 0;
                 pg.height = 0;
             }
+        }
+        // The fitted modules window, under the same rule and for the same
+        // reason: a half-rejected rectangle is a rectangle nobody chose. The
+        // open flag is deliberately left alone — it is a separate decision,
+        // and a bad rectangle must not close a window the user left open.
+        if (!rectOk(out.fittedModulesX, out.fittedModulesY, out.fittedModulesWidth,
+                    out.fittedModulesHeight)) {
+            out.fittedModulesX = 0;
+            out.fittedModulesY = 0;
+            out.fittedModulesWidth = 0;
+            out.fittedModulesHeight = 0;
         }
     }
     // The receiver's position is validated as ONE position, for the same reason
@@ -570,6 +589,11 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["rxLonDeg"] = cfg.rxLonDeg;
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
+    j["fittedModulesOpen"] = cfg.fittedModulesOpen;
+    j["fittedModulesX"] = cfg.fittedModulesX;
+    j["fittedModulesY"] = cfg.fittedModulesY;
+    j["fittedModulesWidth"] = cfg.fittedModulesWidth;
+    j["fittedModulesHeight"] = cfg.fittedModulesHeight;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
     j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
     j["closedWindows"] = cfg.closedWindows;

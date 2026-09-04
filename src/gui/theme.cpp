@@ -23,6 +23,10 @@ ImU32 withAlpha(ImU32 packed, float alpha) {
     return rgb | (static_cast<ImU32>(a * 255.0f + 0.5f) << IM_COL32_A_SHIFT);
 }
 
+ImVec4 warning() { return vec(kAmber); }
+ImVec4 good() { return vec(kPhosphor); }
+ImVec4 bad() { return vec(kAlarm); }
+
 void applyTheme() {
     ImGuiStyle& s = ImGui::GetStyle();
 

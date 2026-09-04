@@ -96,7 +96,8 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
         std::lock_guard<std::mutex> lk(dirMutex_);
         reportDir_ = reportDir;
     }
-    thresholdMs_ = (thresholdMs > 0) ? thresholdMs : kDefaultThresholdMs;
+    thresholdMs_.store((thresholdMs > 0) ? thresholdMs : kDefaultThresholdMs,
+                       std::memory_order_relaxed);
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 #endif
@@ -120,8 +121,35 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     thread_ = std::thread(&HangWatchdog::threadMain, this);
 }
 
+void HangWatchdog::beginShutdown(unsigned thresholdMs) {
+    // ORDER MATTERS. The budget is raised BEFORE the clock is restarted, so a
+    // poll that lands between these two lines judges the stall it measures
+    // against the new threshold and not the old one. The reverse order leaves
+    // a one-poll window in which the teardown is measured against the frame
+    // threshold - which is the whole defect.
+    thresholdMs_.store((thresholdMs > 0) ? thresholdMs : kShutdownThresholdMs,
+                       std::memory_order_relaxed);
+    lastBeatMs_.store(nowMs(), std::memory_order_relaxed);
+    // The interval that ends here is a frame loop that has finished, not a
+    // frame - so it must not become "the worst frame gap this build
+    // measured", which is the number the 5 s threshold is justified against.
+    skipGap_.store(true, std::memory_order_relaxed);
+    diagLogf("watchdog: shutdown budget %u ms", thresholdMs_.load(std::memory_order_relaxed));
+}
+
+unsigned HangWatchdog::thresholdMs() const {
+    return thresholdMs_.load(std::memory_order_relaxed);
+}
+
 void HangWatchdog::stop() {
-    stop_.store(true, std::memory_order_release);
+    {
+        // Set under the mutex so a watchdog thread sitting between "test the
+        // flag" and "begin to wait" cannot miss the notification and sleep
+        // out the rest of its poll.
+        std::lock_guard<std::mutex> lk(stopMutex_);
+        stop_.store(true, std::memory_order_release);
+    }
+    stopCv_.notify_all();
     if (thread_.joinable()) { thread_.join(); }
     running_.store(false, std::memory_order_release);
 }
@@ -218,17 +246,30 @@ bool HangWatchdog::suppressed() const {
 
 void HangWatchdog::threadMain() {
     double lastPoll = nowMs();
-    while (!stop_.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+    while (true) {
+        // THE POLL WAIT, INTERRUPTIBLE. A plain sleep_for here meant that
+        // asking the watchdog to stop cost the rest of a poll - up to half a
+        // second added to every shutdown, spent doing nothing. The predicate
+        // is evaluated before the wait begins and again on every wake, and
+        // stop() sets the flag under this same mutex, so the notification
+        // cannot be missed.
+        {
+            std::unique_lock<std::mutex> lk(stopMutex_);
+            if (stopCv_.wait_for(lk, std::chrono::milliseconds(kPollMs),
+                                 [this] { return stop_.load(std::memory_order_acquire); })) {
+                break;
+            }
+        }
         const double now = nowMs();
         const double pollInterval = now - lastPoll;
         lastPoll = now;
+        const double threshold = static_cast<double>(thresholdMs_.load(std::memory_order_relaxed));
 
         // 3. THE WHOLE MACHINE STOPPED. Sleep, hibernate or a paused VM freezes
         //    this thread too. If the watchdog lost as much time as it is about
         //    to accuse the GUI thread of losing, it cannot tell the two apart -
         //    so it re-arms and says nothing.
-        if (pollInterval > static_cast<double>(kPollMs) + static_cast<double>(thresholdMs_)) {
+        if (pollInterval > static_cast<double>(kPollMs) + threshold) {
             lastBeatMs_.store(now, std::memory_order_relaxed);
             continue;
         }
@@ -239,7 +280,7 @@ void HangWatchdog::threadMain() {
         }
 
         const double stalled = now - lastBeatMs_.load(std::memory_order_relaxed);
-        if (stalled < static_cast<double>(thresholdMs_)) {
+        if (stalled < threshold) {
             // RECOVERY. The application came back - and the 120 s CAT shutdown
             // freeze did come back. Log it with the duration and re-arm; the
             // app is never killed.
@@ -250,6 +291,16 @@ void HangWatchdog::threadMain() {
         }
         if (reported_.load(std::memory_order_relaxed)) { continue; }
         if (suppressed()) { continue; }
+
+        // ASKED TO STOP IS NOT STALLED - false-positive rule 4 in the header.
+        // stop() is called at the very end of AppWindow::run(), so once the
+        // flag is set the GUI thread is inside stop() joining this thread. A
+        // capture begun from here would name HangWatchdog::stop() as the
+        // fault, which is exactly the false report the shutdown budget above
+        // exists to stop writing. Nothing reportable is lost: a shutdown that
+        // really wedges never reaches stop() at all, and has already been
+        // captured against the shutdown budget while it was still stuck.
+        if (stop_.load(std::memory_order_acquire)) { break; }
 
         // Latched BEFORE the capture: a wedged application must produce one
         // report, not one per poll until the disk is full.
@@ -395,7 +446,9 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // without being added there fails that test.
     out << "kind: hang\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
-    out << "threshold-ms: " << thresholdMs_ << "\n";
+    // The threshold IN FORCE, which is what tells a reader whether this stall
+    // was measured against the frame loop's 5 s or the teardown's own budget.
+    out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
     out << "signature: " << sig << "\n";
     out << "threads: " << stacks.size() << "\n";
     out << "--- context ---\n";

@@ -61,7 +61,11 @@ function altBand(altM) {
 
 function bandColour(band, alpha) {
   var a = (alpha === undefined) ? 1 : alpha;
-  if (band < 0) { return 'rgba(134,214,74,' + a + ')'; }
+  // No band: the scope's own phosphor, which is theme.hpp's kPhosphor and the
+  // --phosphor-rgb in radar.css. Written out in numbers rather than read from
+  // the custom property because this string also goes to a canvas 2D context,
+  // and canvas paint values do not resolve var().
+  if (band < 0) { return 'rgba(143,217,160,' + a + ')'; }
   var c = ALT_BANDS[band].rgb;
   return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
 }
@@ -576,8 +580,10 @@ function renderTargets(vis, sel) {
       g.style.filter = 'drop-shadow(0 0 4px ' + altColour(c.altM, 0.8) + ')';
     }
     if (c.emergency) {
-      g.style.borderBottomColor = '#ff5a3c';
-      g.style.filter = 'drop-shadow(0 0 8px #ff5a3c)';
+      // The panel's one rust, named rather than copied: --alert in radar.css,
+      // which is theme.hpp's kAlarmHot.
+      g.style.borderBottomColor = 'var(--alert)';
+      g.style.filter = 'drop-shadow(0 0 8px var(--alert))';
     }
     wrap.appendChild(g);
 

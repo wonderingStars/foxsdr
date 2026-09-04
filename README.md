@@ -73,7 +73,9 @@ are still moving. What is in the current build:
   the furthest anything has been heard in each direction, drawn over the map,
   which is the cheapest antenna diagnostic there is. Decoder plugins produce
   text or pictures (slow-scan and weather-satellite images, shown in their own
-  windows and saveable).
+  windows and saveable). A plugin that reports **satellites** gets a whole
+  instrument of its own instead of a map page — see
+  [The satellites map](#the-satellites-map).
 - **Browser access.** The full interface over HTTP on your LAN, at feature
   parity with the desktop, with password authentication and live audio. Off by
   default; see [Browser access](#browser-access) for the security posture.
@@ -151,10 +153,11 @@ rather than the plugin repository.
 ## CAT control
 
 The receiver can be driven by logging software, digital-mode applications and
-anything else that speaks the protocol Hamlib's `rigctld` uses. Turn on **CAT
-control** in the settings panel, then point the client at this machine and
-choose a Hamlib **NET rigctl** radio. Port 4532 is the default because it is
-the one those clients already expect.
+anything else that speaks the protocol Hamlib's `rigctld` uses. Open **CAT
+control (rigctld)** in the **EXTEND** group of the FUNCTION SELECT rail down
+the left of the window and turn it on, then point the client at this machine
+and choose a Hamlib **NET rigctl** radio. Port 4532 is the default because it
+is the one those clients already expect.
 
 Frequency and mode can be read and set; a set that lands inside the band
 already being received moves only the VFO, so there is no retune and no gap in
@@ -173,11 +176,17 @@ same way every decoder in this project is written from its own specification.
 ## Plugins
 
 Decoders can be installed as separate native plugins, from an in-app
-catalogue ("Plugin store" -> "Get plugins"). Browsing and installing live in
-that section; what is already installed, and what it is allowed to do, lives in
-the "Plugins" section beneath it. The catalogue is contacted only when
-you press Browse: nothing is fetched at startup, and no plugin ever updates
-itself.
+catalogue. Two keys in the **DECODE** group of the FUNCTION SELECT rail open
+the two windows this lives in: **Plugin store** is the catalogue — what each
+module is, what it reaches for, what it costs to fit, and the updates the
+catalogue offers — and **Plugins** opens **Fitted modules**, which is what is
+already installed on this machine, which of them are being fed, which were
+refused and why, and the keys that start, stop, remove and permit them. Each
+is a real window you can drag as large as your screen, and each reopens if you
+left it open; the Fitted modules window comes back at the size and place you
+left it too. The catalogue is contacted only when you
+press **CHECK NOW** inside the store window: nothing is fetched at startup, and
+no plugin ever updates itself.
 
 A plugin may declare several capabilities. Decoders are fed real samples —
 either the tuned, demodulated audio or the raw receiver band — and produce
@@ -185,13 +194,17 @@ either text lines or **images** (slow-scan and weather-satellite pictures,
 shown in their own window and saveable as BMP). A plugin may also put targets
 and tracks on the map, and declare a window of its own.
 
-**Stop and start.** Every loaded plugin's row has a **Stop** button, and a
-stopped one has **Start**. Stopping destroys everything that plugin had
+**Stop and start.** In the Fitted modules window every loaded module's row
+carries a **STOP** key, and a stopped one carries **START**; the selected
+module's plate carries the same as **STOP MODULE** / **START MODULE**.
+Stopping destroys everything that plugin had
 running — its decoders, its map targets and trails, its window, its basemap
 tiles — while leaving the module loaded and the row where it was, so a stopped
 plugin decodes nothing, draws nothing, and cannot move the receiver. The row
-says "Stopped" in orange, because a plugin that produces nothing for a reason
-you have forgotten choosing is exactly what this must not become. It is
+then reads **STOPPED BY YOU**, lettered in plain ivory rather than in anything
+that reads as a fault, because a module you switched off is a choice — and a
+plugin that produces nothing for a reason you have forgotten choosing is
+exactly what this must not become. It is
 remembered between sessions and across a rescan. Pressing one of the plugin's
 own preset buttons starts it first: pressing "ADS-B 1090 MHz" is an unambiguous
 request for that plugin, and tuning there with the decoder still switched off
@@ -200,7 +213,8 @@ would be worse than useless.
 **Mute audio while running.** A decoder that consumes raw I/Q is handed the
 whole receiver band and tunes inside it, so the channel your speakers are fed
 is not the signal being decoded: on ADS-B at 1090 MHz it is hiss, at whatever
-the volume happens to be. Every loaded plugin's row therefore has a **Mute
+the volume happens to be. The **Decoders** section of the rail therefore gives
+every loaded decoder a **Mute
 audio while running** checkbox, ticked by default for exactly the plugins that
 declare they consume raw I/Q and clear for every other. The checkbox on the row
 is the answer for any given plugin, because that is read from the plugin
@@ -221,8 +235,9 @@ is remembered between sessions.
 
 "Running" here means actually decoding, not merely loaded. A plugin you have
 stopped mutes nothing, and neither does one sitting idle because the receiver
-is not producing the sample rate it asked for — the Plugins panel already says
-so on its row, in orange, and taking the sound away on behalf of a decoder the
+is not producing the sample rate it asked for — the Fitted modules window
+already says so on that module's row, in gold, and quotes the reason on its
+plate, and taking the sound away on behalf of a decoder the
 program itself says is not being fed would be silence for no benefit.
 
 **Tuning away.** Leave a running decoder's preset and FoxSDR asks once whether
@@ -234,11 +249,17 @@ own Stop button, until the plugin is stopped or you tune back. It asks again
 only after you have returned to a preset and left it again.
 
 **Tune permission.** A plugin that can move the receiver can also take it away
-from you, so a plugin may only retune the radio if you tick it under
-"Plugins" -> "Receiver control". It is off by default and off for every newly
-installed plugin; a plugin that asks and is refused says so on that panel, so a
+from you, so a plugin may only retune the radio if you press **GRANT RECEIVER
+CONTROL** on that module's plate in the Fitted modules window. The key is
+offered only for a module that can actually ask — one that declares no host
+client could never use the grant, and a control that sets something nothing
+reads is a control that lies about having done something. It is off by default
+and off for every newly installed plugin; a plugin that asks and is refused is
+named in the rail's **Decoders** section, under "Receiver control", so a
 satellite tracker that needs Doppler correction is one visible click away
-rather than mysteriously idle. The grant is per plugin and is remembered
+rather than mysteriously idle. That same place lists any grant still held by a
+module which is no longer fitted — a permission nobody can see is one nobody
+can take back. The grant is per plugin and is remembered
 between sessions.
 
 Security model, in one line: every download is https, sha256-verified against
@@ -251,8 +272,9 @@ own: a portable copy keeps plugins in `plugins/` beside the executable, while an
 installation under a directory the user does not own — `C:\Program Files\FoxSDR`
 being the ordinary case — uses `%LOCALAPPDATA%\foxsdr\plugins` instead
 (`$XDG_DATA_HOME/foxsdr/plugins`, or `~/.local/share/foxsdr/plugins`, on Linux).
-The panel prints the one in use above the catalogue. Nothing needs elevating
-either way.
+The Fitted modules window prints the one in use, in full, under **MODULES ARE
+READ FROM**, and each module's plate says which file it was **LOADED FROM**.
+Nothing needs elevating either way.
 
 Compatibility is ABI-exact. A plugin must be built against this host's
 `src/core/plugin_abi.h` and declare exactly its ABI version — a near miss is
@@ -263,16 +285,21 @@ new build from its author; no update can fix it.
 Retirement: the catalogue may publish a minimum supported version per plugin.
 That floor is cached locally the moment a catalogue is seen, so it applies
 offline and forever after, and an installed plugin below it is **disabled** —
-renamed out of the scan, so it is never loaded into the process — and shown in
-red with a one-click Update when the catalogue has a newer build. Plugins the
+renamed out of the scan, so it is never loaded into the process. Those are
+listed in red under **Disabled**, on the rail beneath the Plugin store key
+rather than in either window: the host never loaded them, so the Fitted
+modules window has nothing to list. Each carries a one-click **Update** once a
+catalogue has been fetched that offers a newer build, and a **Remove** whether
+it does or not — an ABI mismatch has no other way out. Plugins the
 catalogue has never described (private or hand-installed builds) are left
 alone and keep loading.
 
 ## Browser access
 
 FoxSDR can serve its interface to a browser, so the receiver can live where the
-antenna is. Open **Web access** in the settings panel, set a password, tick it
-and press Apply; the panel then shows the address to open on another machine.
+antenna is. Open **Web access** in the **EXTEND** group of the rail, set a
+password, tick it and press Apply; the section then shows the address to open
+on another machine.
 
 Read the security posture before exposing it:
 
@@ -327,6 +354,81 @@ rather than decoration: the waterfall's colour ramp, which is built to keep a
 stronger signal always brighter than a weaker one, and the map's altitude
 bands, which are a scale an operator reads.
 
+The lettering is part of the same rule. FoxSDR carries its own typefaces rather
+than borrowing the system's, so the panel looks the same on every machine:
+**Saira Condensed** for anything a hand operates and for all prose, and **Nova
+Mono** for counter digits — monospaced so the frequency stops shuffling
+sideways as it changes. Both are SIL Open Font License faces, embedded in the
+executable unmodified; `third_party/THIRD_PARTY.md` records exactly which
+release each one is. Nova Mono is used for figures and not for words, which is
+measured rather than fussy: its capital M is three close stems and rasterises
+as a solid block below about 20 pixels.
+
+## The satellites map
+
+A plugin that reports satellites gets a **window of its own**, and that window
+is the whole instrument. It opens from its key in the **DECODE** group of the
+rail — one key per such plugin, lettered with that plugin's own name and
+carrying its live target count — and there is deliberately nothing
+satellite-shaped anywhere else in the main window: the key is a switch that
+puts the instrument on screen, never a second, smaller copy of its controls.
+With no satellite reported yet the key reads **NONE** and says which of the two
+reasons applies — nothing installed that publishes satellite positions, or
+something installed that has not reported one yet. Those are different
+problems, and only one of them is answered by a trip to the plugin store.
+
+Inside, in one panel: the receiver's position, with the coordinate cells and
+the key that applies them; **MAP OVERLAYS** — coverage, ground tracks and
+altitude colours, each a rocker with its own caption; **TRAIL STYLE** as LINE,
+RIBBON or OFF; **COVERAGE** with a RESET and a note saying what the ring
+actually holds; the **TARGETS** register, sorted by CALLSIGN, NORAD, ALT or AGE
+in either direction, with a card for the selected target; and the map itself.
+**FIT** centres on everything plotted and stays visibly dead when nothing is —
+a key that would silently do nothing is worse than one that says it cannot.
+**WHOLE WORLD** backs out until the whole planet is in the window, which is the
+way out of a fit onto a single target. While a target is being followed the
+strip says **FOLLOWING** with its id, in gold, and offers **STOP FOLLOWING**;
+when none is, it says outright that the map moves on its own only while a
+target is followed. It remembers whether it was open and the rectangle it sat
+in, and a window you shut stays shut across a restart — a propagator reports a
+full sky on the first frame of every launch, with no radio and no action from
+you, and that must never be allowed to reopen a window you closed. Within a
+session a page does open itself on the arrival edge, when a plugin that had
+nothing plotted starts reporting again; closing it holds until that happens
+afresh.
+
+The map here is drawn **equirectangular**, not Web Mercator, and the trade is
+deliberate: the poles are on screen and a polar orbit reads as the sinusoid it
+really is, at the price of basemap tiles — a Mercator raster under an
+equirectangular graticule would put every coastline in the wrong place, which
+is worse than having no imagery. The built-in Natural Earth coastline is drawn
+instead. Every other map page is untouched by this and still uses tiles when a
+basemap plugin supplies them.
+
+**What it will not show you, and why that is not a gap to be fixed.** Every
+figure on this window comes from something the application actually has. The
+plugin ABI carries a track's id, label, position, altitude, course, speed and
+the age of the fix, plus polylines — and that is the whole of it. So there are
+two different kinds of missing here, drawn differently on purpose:
+
+- **Recoverable.** DISTANCE and BEARING are blank — hatched, never zeroed —
+  until you set the receiver's position, and a note beside them says so.
+  Setting one fills them in, and the coverage ring with them. A bearing to a
+  target directly overhead stays hatched even then: there is no direction to
+  it, and 000 would be read as north.
+- **Not reported, ever.** **INCLINATION**, **ORBITAL PERIOD**, the **age of the
+  element set** and **next-pass predictions** are not in the plugin ABI at all.
+  A track source reports a position, not the elements that position was
+  computed from, so no receiver position and no amount of clicking will produce
+  them. The window says that in words rather than leaving a blank a user would
+  keep poking at. An earlier draft of this panel printed four such numbers and
+  every one of them was invented; they are gone.
+
+The coverage ring is worded the same way, because it had the same problem: it
+records how far out a target has been **plotted** on each of 72 bearings, from
+every plugin, and a satellite's position is normally *computed* rather than
+heard — so it does not claim to be a record of what the antenna received.
+
 ## The radar unit
 
 **foxsdr-radar.exe** is a second, separate application: a Fox & Schirmer
@@ -374,7 +476,8 @@ the program says so plainly if it is ever missing.
 
 ## Privacy
 
-FoxSDR reports anonymous usage counts. **Settings → Usage reporting** is
+FoxSDR reports anonymous usage counts. **Usage reporting**, in the **SYSTEM**
+group of the rail, is
 **on by default** — untick it and reporting stops. It sends counts only:
 version, operating system, session length, which modes and plugins get used,
 and which radio model, against a random identifier created on your machine.
@@ -386,8 +489,33 @@ sent. The complete list of what is and is not transmitted is in
 [PRIVACY.md](PRIVACY.md), the payload is held to it by an automated test, and
 the receiving endpoint's source is in [telemetry-worker/](telemetry-worker/).
 
-Apart from that, the application makes exactly one network request: fetching
-the plugin catalogue, and only when you press **Browse**.
+**Everything else that reaches the network, in full.** Apart from the usage
+report above, these are the only things this application sends or fetches, and
+each says what starts it:
+
+- **The update check.** Once per launch, to foxsdr.com, sending the version you
+  are running and nothing else — no identifier and no cookie. It is on by
+  default and is the **Check for updates at startup** tick in **SYSTEM →
+  Updates**; nothing is downloaded or installed unless you press the button.
+  It is not the usage report and the two share nothing.
+- **The plugin catalogue.** Fetched only when you press **CHECK NOW** in the
+  Plugin store window. Nothing is fetched at startup, restoring that window
+  open fetches nothing, and no plugin ever updates itself.
+- **A plugin download**, when you press **FIT MODULE** or **UPDATE MODULE** for
+  one — always https, sha256-verified against the catalogue, size-capped and
+  refused on a cross-host redirect.
+- **A crash or freeze report**, and only with Diagnostics on: the report's text
+  goes out the *next* time you open the application, never from inside the
+  fault. See [When it crashes or freezes](#when-it-crashes-or-freezes).
+
+A plugin is native code loaded into this application's own process, so an
+installed plugin may make requests of its own — a basemap plugin fetching map
+tiles from the server you pointed it at is the ordinary case. That is the
+plugin's traffic, not the host's, and it is why each module's plate says
+plainly that a fitted module runs with every privilege the application has,
+with no sandbox and no permission model, and that its declared capability list
+is what the maker says the module PROVIDES rather than a limit on what it can
+take.
 
 ## When it crashes or freezes
 
@@ -407,12 +535,19 @@ holds the request, the code and that document to each other in both directions.
   none of those. If the window stops responding for five seconds, a watchdog
   captures the stack of **every** thread — a deadlock is only legible as a pair
   — and then lets the application carry on if it recovers.
+- **Closing counts as well, on a longer clock.** Shutting down is where this
+  product's worst freeze ever happened, so the watchdog stays armed right
+  through it — but closing legitimately waits on the radio driver for a few
+  seconds, so the teardown is given twenty rather than five. Until 0.75.0 it
+  was judged by the same five, and a slow but perfectly healthy close could
+  file a freeze report against an application that had already exited. The
+  report says which clock it was measured against.
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`.
 - Each report that has been sent — or could not be — carries a small `.upload`
   file beside it saying which, in plain words. At most five reports a day leave
   one machine, and the same fault only once a day, so a machine stuck in a crash
   loop stops sending on its own.
-- **Settings → Diagnostics** shows both paths, has the on/off switch, and has
+- **SYSTEM → Diagnostics** on the rail shows both paths, has the on/off switch, and has
   **Copy diagnostics**: one click that puts the version, commit, operating
   system, loaded plugins with versions, source and device state and the recent
   log on your clipboard, so you can read it before you send it to anybody. Off

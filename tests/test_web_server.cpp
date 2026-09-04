@@ -1279,6 +1279,135 @@ console.log(out.join(' '));
     }
 }
 
+// THE BROWSER'S WATERFALL IS A MEASUREMENT, and until this test it was the
+// only one of the three in this product with nothing holding it to that.
+//
+// The rule is the same one tests/test_waterfall_view.cpp pins for the desktop:
+// a waterfall encodes signal strength as brightness, so a STRONGER signal must
+// never render DARKER than a weaker one. Break that and the picture still
+// looks like a waterfall - it just answers the question wrongly, everywhere,
+// with nothing on screen to say so.
+//
+// It is checked here rather than assumed because this ramp has already been
+// rewritten once: it was a blue-to-red jet map, and was re-toned to phosphor
+// so the page and the desktop read as one instrument. That change was correct
+// and it was also exactly the kind of change that can quietly cost the
+// property, since the old table happened to be monotone too.
+//
+// The endpoints are pinned as literals against the DESKTOP's documented
+// anchors rather than by calling waterfallColor(): this test binary does not
+// link the GUI, and dragging imgui into the web suite to compare five bytes
+// would be a worse trade than writing them down with the reason.
+void testServedWaterfallRampIsMonotone() {
+    const std::string js = fetchAppJs();
+    CHECK(js.find("function colormap(") != std::string::npos);
+    CHECK(js.find("const WF_STOPS = ") != std::string::npos);
+
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP testServedWaterfallRampIsMonotone: node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app_wf.js";
+    CHECK(writeFile(jsPath, js));
+
+    // Lifts the table and the interpolator out of the served script and runs
+    // the real one, rather than re-implementing it here - a re-implementation
+    // would only ever prove that two copies of my own arithmetic agree.
+    //
+    // The result goes through a Uint8ClampedArray because that is what the
+    // page writes into, and its rounding is half-to-EVEN. Checking the floats
+    // instead would pass on a table whose rounded output dips.
+    const char* kDriver = R"NODE(
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+function block(name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing function ' + name);
+  let depth = 0, opened = false;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') { depth++; opened = true; }
+    else if (src[j] === '}') { depth--; if (opened && depth === 0) return src.slice(i, j + 1); }
+  }
+  throw new Error('unterminated function ' + name);
+}
+function decl(name) {
+  const m = src.match(new RegExp('^const ' + name + ' = .*;$', 'm'));
+  if (!m) throw new Error('missing const ' + name);
+  return m[0];
+}
+const prelude = [decl('WF_STOPS'), block('colormap')].join(String.fromCharCode(10));
+const cm = new Function(prelude + String.fromCharCode(10) + 'return colormap;')();
+const px = new Uint8ClampedArray(3);
+const out = [];
+for (let n = 0; n < 256; n++) {
+  const c = cm(n / 255);
+  px[0] = c[0]; px[1] = c[1]; px[2] = c[2];
+  out.push(px[0] + ' ' + px[1] + ' ' + px[2]);
+}
+console.log(out.join(String.fromCharCode(10)));
+)NODE";
+    const fs::path driver = dir / "wf_driver.js";
+    CHECK(writeFile(driver, kDriver));
+
+    std::string output;
+    const int rc = runCaptured(
+        "node \"" + driver.string() + "\" \"" + jsPath.string() + "\"", dir / "wf.txt", output);
+    if (rc != 0) {
+        std::printf("waterfall driver failed:\n%s\n", output.c_str());
+    }
+    CHECK(rc == 0);
+
+    struct Rgb {
+        int r = 0;
+        int g = 0;
+        int b = 0;
+    };
+    std::vector<Rgb> ramp;
+    {
+        std::istringstream in(output);
+        Rgb c;
+        while (in >> c.r >> c.g >> c.b) {
+            ramp.push_back(c);
+        }
+    }
+    // The size is checked FIRST and every index below is inside a block that
+    // the size has already satisfied - never an assertion guarded by a size
+    // CHECK that would then read out of bounds in exactly the failing run.
+    CHECK(ramp.size() == 256u);
+    if (ramp.size() != 256u) {
+        return;
+    }
+
+    // The desktop's own anchors, from gui/waterfall_view.hpp's documented
+    // contract: quiet phosphor at the floor, cream at full scale. The floor is
+    // deliberately NOT black - a signal a few dB above the noise has to stay
+    // visible against the panel behind it.
+    CHECK(ramp.front().r == 6 && ramp.front().g == 20 && ramp.front().b == 10);
+    CHECK(ramp.back().r == 240 && ramp.back().g == 235 && ramp.back().b == 180);
+
+    // BT.601 luma, the same measure the desktop's test uses, across every one
+    // of the 256 levels the page can actually emit.
+    const auto luma = [](const Rgb& c) {
+        return 0.299 * static_cast<double>(c.r) + 0.587 * static_cast<double>(c.g) +
+               0.114 * static_cast<double>(c.b);
+    };
+    int dips = 0;
+    for (std::size_t i = 1; i < ramp.size(); ++i) {
+        if (luma(ramp[i]) < luma(ramp[i - 1]) - 1e-9) {
+            if (dips < 4) {
+                std::printf("waterfall ramp darkens at %zu: %.2f -> %.2f\n", i,
+                            luma(ramp[i - 1]), luma(ramp[i]));
+            }
+            ++dips;
+        }
+    }
+    CHECK(dips == 0);
+    // And it must actually SPAN a range: a table that never darkens but also
+    // never brightens would pass the check above and encode nothing.
+    CHECK(luma(ramp.back()) - luma(ramp.front()) > 150.0);
+}
+
 }  // namespace
 
 int main() {
@@ -1302,5 +1431,6 @@ int main() {
     testServedScriptParses();
     testMapPanIsBoundToPointerEvents();
     testTrackFadeMatchesTheDesktopRule();
+    testServedWaterfallRampIsMonotone();
     return testSummary("test_web_server");
 }

@@ -31,3 +31,9 @@ installer/generated-version.iss
 # See docs/DIAGNOSTICS.md and tools/archive-symbols.ps1.
 symbols/
 cfg_test_*/
+
+# Dear ImGui layout file. The application disables it outright (IniFilename is
+# null, see app_window.cpp) so this is never written by FoxSDR itself - it only
+# appears when a debug or probe harness runs ImGui with the default settings.
+# Committing it would give the repository a layout the product does not read.
+imgui.ini

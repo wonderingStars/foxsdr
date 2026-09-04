@@ -131,6 +131,44 @@ int altitudeBandIndex(double altM);
 // undefined behaviour.
 const AltBandStyle& altBandStyle(int index);
 
+// --- orbital altitude bands ---------------------------------------------------
+
+// THE SAME IDEA IN THE OTHER UNIT, and it exists because the ladder above is an
+// AVIATION ladder wearing a general name. Its top band opens at 30 kft and the
+// ISS at 421 km is 1,381,000 ft: EVERY satellite this application has ever
+// tracked falls in that one band, draws in the same indigo, and sits under a
+// legend reading "> 30 kft" - a unit nothing in orbit is anywhere near. A 421 km
+// orbit and an 861 km orbit have therefore never been told apart on the map.
+//
+// THE AVIATION LADDER IS NOT CHANGED, and must not be: it is correct for its
+// own subject, its boundaries are the phases of flight a watcher distinguishes,
+// and the tests pin every one of them. Two subjects, two ladders; the call site
+// picks one by track kind (CASCADE_TRACK_SATELLITE against the rest).
+//
+// FIVE BANDS, IN KILOMETRES, and the boundaries are where the populations
+// actually sit rather than where round numbers fall: the station and the very
+// low orbits under 500, the amateur and rideshare orbits from 500 to 750, the
+// sun-synchronous weather belt from 750 to 850 that NOAA 15 and the three
+// Meteor-M2s share, 850 to 1200 for the higher sun-synchronous orbits NOAA 18
+// and 19 fly, and everything above that. Against the eight targets a stock
+// installation follows - ISS 421, SO-50 692, NOAA 15 807, Meteor-M2 4 814,
+// Meteor-M2 2 818, Meteor-M2 3 822, NOAA 18 854, NOAA 19 861 - that puts real
+// traffic in four of the five bands, where the aviation ladder put all eight in
+// one.
+inline constexpr int kOrbitBandCount = 5;
+
+// -1 when the altitude is unknown, exactly as altitudeBandIndex does: NaN by ABI
+// contract, and also whatever infinity a broken plugin might send. Metres in,
+// kilometres inside - the ABI says altM is metres for every track kind, orbital
+// ones included.
+int orbitBandIndex(double altM);
+
+// Bounds-safe on the same terms as altBandStyle: an index outside
+// 0..kOrbitBandCount-1 is clamped rather than read past the end, so the -1 that
+// orbitBandIndex itself returns for an unknown altitude yields a colour rather
+// than undefined behaviour.
+const AltBandStyle& orbitBandStyle(int index);
+
 // --- altitude legend layout --------------------------------------------------
 
 // The legend's fixed parts: a square swatch, and the same padding either side
@@ -151,6 +189,14 @@ inline constexpr float kAltLegendPad = 5.0f;
 // hands it ImGui::CalcTextSize with the font actually in use.
 template <typename MeasureTextWidth>
 float altLegendWidth(MeasureTextWidth&& measureTextWidth);
+
+// The same measurement for the ORBITAL ladder, and it is not the same number:
+// "850-1200 km" is eleven characters where the widest aviation label,
+// "20-30 kft", is nine. A satellite legend laid out at altLegendWidth would clip
+// its own longest label - which is the shipped defect described directly above,
+// re-committed in a second place - so the two ladders each measure their own.
+template <typename MeasureTextWidth>
+float orbitLegendWidth(MeasureTextWidth&& measureTextWidth);
 
 // --- coverage accumulation ---------------------------------------------------
 
@@ -549,18 +595,100 @@ inline const AltBandStyle& altBandStyle(int index) {
     return kBands[index];
 }
 
-template <typename MeasureTextWidth>
-inline float altLegendWidth(MeasureTextWidth&& measureTextWidth) {
+inline int orbitBandIndex(double altM) {
+    if (!std::isfinite(altM)) { return -1; }
+    // Metres in, kilometres inside - the mirror of altitudeBandIndex's metres
+    // in, feet inside. A satellite plugin reports altM in metres like every
+    // other track source does, so the conversion belongs here and not at the
+    // eight call sites that would each have to remember it.
+    const double km = altM / 1000.0;
+    if (km < 500.0) { return 0; }
+    if (km < 750.0) { return 1; }
+    if (km < 850.0) { return 2; }
+    if (km < 1200.0) { return 3; }
+    return 4;
+}
+
+inline const AltBandStyle& orbitBandStyle(int index) {
+    // THE PALETTE, from the design handoff's own BANDS array, walking warm to
+    // cool exactly as the aviation one does so a user reads both the same way
+    // round. Two of the five ARE theme constants rather than colours invented
+    // here: the < 500 km band is theme::kGold (D9B23C) and the 500-750 km band
+    // is theme::kPhosphor (8FD9A0). They are written out as channels because
+    // this header is deliberately free of ImGui - AltBandStyle is three bytes
+    // and a label, theme.hpp's constants are ImU32 - and this is the only place
+    // the hex is repeated.
+    //
+    // THE SAME TWO CONSTRAINTS AS THE AVIATION PALETTE, and they were MEASURED
+    // against it rather than judged by eye, because "distinguishable" is not an
+    // opinion when the aviation palette already fixes the standard.
+    //
+    //   READABLE OVER BOTH GROUNDS. The map is either a near-black empty field
+    //   or a pale, busy raster. Every entry is mid-luminance - the five sit at
+    //   176, 188, 175, 154 and 158 on the 601 weighting, inside the 90..210
+    //   window the aviation palette's test pins - so none is lost to either.
+    //
+    //   DISTINGUISHABLE FROM EACH OTHER. The closest pair here is 39.4 in CIE
+    //   Lab (1976); the aviation palette's own closest pair, its orange against
+    //   its amber, is 38.8. So this ladder is no harder to read than the one
+    //   that shipped.
+    //
+    //   AND NEVER THE EMERGENCY COLOUR. Nothing here is red, for the reason the
+    //   aviation comment gives: red is the kind colour and the emergency
+    //   colour and both have to win. The nearest any band comes to theme
+    //   ::kAlarmHot (E07A4E) is 41.7, and to theme::kAlarm (B8552F) 49.1 -
+    //   where the aviation palette's own low band comes within 30.8 of the
+    //   first.
+    //
+    // ONE COLOUR WAS MOVED FROM THE HANDOFF, and this is the whole of it. The
+    // handoff's high band was B87FD9, which measures 30.3 from the 850-1200 km
+    // band beside it - below the 38.8 the shipped aviation palette establishes
+    // as this product's floor, and the two are adjacent bands, which is the
+    // pair a reader is most often asked to tell apart. Rotating it towards
+    // magenta to C97AE8 - a shift of 12.3, still plainly the same violet -
+    // opens that pair to 41.3 and makes 39.4 the ladder's floor instead.
+    static const AltBandStyle kBands[kOrbitBandCount] = {
+        {217, 178, 60, "< 500 km"},      // the station and the very low orbits
+        {143, 217, 160, "500-750 km"},   // amateur and rideshare
+        {111, 201, 217, "750-850 km"},   // the sun-synchronous weather belt
+        {127, 155, 224, "850-1200 km"},  // the higher sun-synchronous orbits
+        {201, 122, 232, "> 1200 km"},    // everything above
+    };
+    if (index < 0) { index = 0; }
+    if (index >= kOrbitBandCount) { index = kOrbitBandCount - 1; }
+    return kBands[index];
+}
+
+namespace detail {
+// The legend arithmetic, once, for both ladders. Written as one function
+// because the fixed parts - pad, swatch, pad, label, pad - have to agree with
+// the drawing code, and when the aviation width and the drawing code were
+// written separately they did not.
+template <typename BandStyleAt, typename MeasureTextWidth>
+inline float legendWidth(int count, BandStyleAt&& bandStyleAt,
+                         MeasureTextWidth&& measureTextWidth) {
     // The LONGEST label decides the width, so the panel is sized by the one
     // that would otherwise overflow rather than by the one that happened to be
-    // measured. All six are measured every call: this runs once per frame and
-    // measuring six short strings is nothing beside the drawing it precedes.
+    // measured. All of them are measured every call: this runs once per frame
+    // and measuring a handful of short strings is nothing beside the drawing it
+    // precedes.
     float longest = 0.0f;
-    for (int i = 0; i < kAltBandCount; ++i) {
-        const float w = measureTextWidth(altBandStyle(i).label);
+    for (int i = 0; i < count; ++i) {
+        const float w = measureTextWidth(bandStyleAt(i).label);
         if (w > longest) { longest = w; }
     }
     return kAltLegendPad + kAltLegendSwatch + kAltLegendPad + longest + kAltLegendPad;
+}
+}  // namespace detail
+
+template <typename MeasureTextWidth>
+inline float altLegendWidth(MeasureTextWidth&& measureTextWidth) {
+    return detail::legendWidth(kAltBandCount, altBandStyle, measureTextWidth);
+}
+
+template <typename MeasureTextWidth>
+inline float orbitLegendWidth(MeasureTextWidth&& measureTextWidth) {
+    return detail::legendWidth(kOrbitBandCount, orbitBandStyle, measureTextWidth);
 }
 
 inline TrackSortKey trackSortKeyForMenuIndex(int index) {

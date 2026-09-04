@@ -41,6 +41,14 @@ struct GLFWwindow;
 // receiver-relative features. Header-only and ImGui-free, so including it here
 // keeps app_window.hpp usable from the tests (see the note below).
 #include "gui/track_metrics.hpp"
+// SatelliteDeck, and with it the MapView declaration this header used to
+// forward-declare. Included rather than forward-declared because the deck is
+// held BY VALUE in a MapPage below: it is the satellites window's settings,
+// and map_view.hpp is explicit that the CALLER owns them. Safe to include for
+// the same reason scope_view.hpp and track_metrics.hpp are - it declares no
+// ImGui type and includes no ImGui header, so the rule that main() and the
+// tests never see a graphics header still holds.
+#include "gui/map_view.hpp"
 #include "core/telemetry.hpp"
 #include "core/crash_upload.hpp"
 #include "core/hang_watchdog.hpp"
@@ -59,7 +67,16 @@ namespace cascade::gui {
 // includes imgui.h), preserving the rule that main() never sees GUI headers.
 class SpectrumView;
 class WaterfallView;
-class MapView;
+// The two plugin windows' view objects and their decks, for exactly the same
+// reason: gui/plugin_store_view.hpp and gui/plugins_view.hpp both include
+// imgui.h, and this header is compiled into the tests. They are held by
+// unique_ptr below and created in the constructor, where those headers are
+// included; the decks are owned here rather than by the views because both
+// view headers say outright that the CALLER owns them - they outlive a frame
+// and this is the object that outlives frames.
+class PluginStoreView;
+struct PluginStoreDeck;
+struct FittedModulesDeck;
 
 // Whether a device open that finished on a worker thread should still be
 // applied to the pipeline.
@@ -290,7 +307,16 @@ private:
 
     void drawUi();
     void drawToolbar();
-    void drawFrequencyReadout();
+    // The right-hand column: what the receiver is doing, gathered from where it
+    // was already scattered. Drawn only when the window is wide enough that
+    // taking 230 px from the spectrum is not a bad trade.
+    void drawStatusColumn();
+    // The tuned-frequency counter, drawn into the geometry the top bar hands
+    // it: the screen position of the well's top-left corner, and the scale the
+    // bar is drawn at. Plain floats rather than an ImVec2 because this header
+    // is deliberately free of ImGui types - see the forward declarations
+    // above.
+    void drawFrequencyReadout(float wellX, float wellY, float scale);
     void drawMenuColumn();
     // The update banner, and the work behind it. Drawn at the top of the menu
     // column because a build that cannot see the user's radio is the most
@@ -330,12 +356,13 @@ private:
     // (opens immediately; on failure the combo selection is left unchanged).
     void selectSource(int idx);
     void drawCenterPanels();
-    // The slim tick strip between the spectrum and the waterfall. tickHz /
-    // labels / count come from FreqScale::ticks, computed once per frame in
-    // drawCenterPanels and shared with the spectrum's vertical gridlines so
-    // strip and grid can never disagree.
-    void drawFreqAxis(float width, const double* tickHz, const char (*labels)[16],
-                      int count);
+    // THE SLIM TICK STRIP BETWEEN THE PANELS IS GONE, and this is where it was
+    // declared. SpectrumView now letters the frequency axis along the foot of
+    // its own well from the ticks drawCenterPanels hands it in
+    // SpectrumView::Chrome, which is where the reference face puts it; the
+    // strip would have been the same scale drawn a second time, eighteen
+    // pixels below the first, disagreeing with it the moment either formatter
+    // changed.
 
     // --- Recorder / Bookmarks / Scanner (P6) ----------------------------------
     void drawRecorderSection();
@@ -350,37 +377,44 @@ private:
     // "Audio filters": noise reduction + manual/auto notch, in the order the
     // pipeline applies them (notch -> auto-notch -> NR; see Pipeline).
     void drawAudioFilterSection();
-    // "Plugin store": everything that talks to the CATALOGUE — the "Get
-    // plugins" toggle and the browser it opens (drawPluginBrowser), which is
-    // where fetching, the update plans and installing live. Split out of the
-    // Plugins section because those are an app store and the section below is
-    // an inventory: one reaches the network, the other never does, and mixing
-    // them made "am I about to download something?" a question the user had to
-    // answer by reading button labels.
+    // "Plugin store": the rail KEY that opens the plugin store window, and
+    // nothing else. The catalogue itself - fetching, the update plans, the
+    // reach panel and the fit gate - is the window's, exactly as every
+    // satellite control is the satellites window's: a function that gets its
+    // own window gets a shape, and the rail row becomes the key that opens it
+    // rather than a lid over a drawer.
+    //
+    // The RETIRED rows still hang under this key (drawBlockedPluginRows). They
+    // are the catalogue version policy's doing and their remedy is an update,
+    // so they belong to the store side; the store WINDOW cannot carry them
+    // because PluginStoreModel has no field for a module the host never saw.
     void drawPluginStoreSection();
-    // "Plugins": what is installed on THIS machine and nothing else. Loaded
-    // plugins with their LICENCE, refused candidates with their reason, a
-    // Remove button per install, a Rescan button, the RETIRED plugins as red
-    // rows, the decoder idle reasons and the per-plugin receiver-control
-    // grants. Nothing here contacts the catalogue.
+    // "Plugins": the rail KEY that opens the fitted-modules window. What is
+    // installed on this machine, whether it is running, and why it is not, all
+    // live in that window; this row is the switch and the chip that reports
+    // fed-of-fitted without opening it.
     void drawPluginsSection();
     // The red rows: every plugin the cached catalogue policy retires, each
-    // carrying PluginRepo::pluginBlockMessage() verbatim. Drawn above the
-    // installed list because a disabled plugin is the news on this panel.
+    // carrying PluginRepo::pluginBlockMessage() verbatim. Drawn under the
+    // store's key because a disabled plugin is news about the catalogue.
     void drawBlockedPluginRows();
-    // The body of the Plugin store section: the URL field, the Browse /
-    // Refresh button (the ONLY thing in the product that contacts the
-    // catalogue origin), the in-flight progress + Cancel, the entry list and
-    // the selected entry's detail pane with the install gate.
-    void drawPluginBrowser();
-    // The last install/remove outcome: PluginRepo's own error verbatim in
-    // red, or the success line in green. Its own method because BOTH sections
-    // produce one (Install lives in the store's browser, Remove in the
-    // installed list) and it must be visible whichever one the user is
-    // looking at — a failed remove with the browser collapsed would otherwise
-    // report nothing at all.
-    void drawPluginCatalogueDetail(int idx);
-    void drawPluginResultText();
+    // "Decoders": what neither new window carries and what would otherwise
+    // have been lost when the two section bodies moved into them - the decoder
+    // output window's switch, the radar scope's switch, each loaded plugin's
+    // PRESETS and its mute-while-running override, and the receiver-control
+    // grants that belong to plugins no longer installed. Every one of these is
+    // a control that exists today; none of them is a fitted-module fact, and
+    // the fitted window's own action set (plugins_view.hpp) has no room for
+    // them.
+    void drawDecodersSection();
+    // The PLUGIN STORE window: cabinet, corner screws, the title plate as
+    // content, and PluginStoreView filling the rest. Its own operating-system
+    // window with the native frame, like the satellites map.
+    void drawPluginStoreWindow();
+    // The FITTED MODULES window, the same treatment. Drawn AFTER the store in
+    // the same frame - see pluginBrowserDrawnThisFrame_ for the one ordering
+    // constraint that survived both bodies becoming windows.
+    void drawFittedModulesWindow();
     // "Receiver control": the checkbox that grants one plugin permission to
     // tune the radio. Without it the permission PluginUi enforces could never
     // be given — every request_tune was refused and the user had no way to say
@@ -447,6 +481,18 @@ private:
     // wedge in it was measured from somewhere else) and a second copy would
     // sooner or later do only some of them.
     void drawRxPositionEntry();
+    // WHAT "SET RX HERE" ACTUALLY DOES, as a function, because there are now
+    // THREE ways to say where the antenna is: the toolbar's fields, the
+    // satellites window's coordinate cells, and a click on that window's map
+    // while SET FROM MAP CLICK is armed. Every one of them has to move every
+    // page's home, tell the scope, discard the coverage accumulated from the
+    // old origin and put the toolbar's fields back in step - and a second
+    // hand-written copy would sooner or later do only some of that.
+    //
+    // The pair is REFUSED, not clamped, outside -90..90 / -180..180: a typo
+    // must not be able to install a receiver at the pole and quietly make
+    // every distance on the window wrong. Answers whether it applied.
+    bool applyReceiverPosition(double latDeg, double lonDeg);
 
     void drawPluginPresets(const cascade::core::LoadedPlugin& p);
     // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
@@ -455,6 +501,13 @@ private:
     // plugin publishing where it listens, never a plugin retuning the radio —
     // that still needs the separate per-plugin permission.
     void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps);
+    // The REMNANT of the receiver-control rows, and it is the half the fitted
+    // window cannot draw: the refusal notice PluginUi records, and the grants
+    // held by modules that are NOT installed any more. The fitted window
+    // carries the grant key for every module it lists, so those rows are not
+    // repeated here - but it lists only what the host loaded, and a permission
+    // the user can neither see nor revoke is exactly the kind that must not
+    // exist. Draws nothing when there is neither a refusal nor a stale grant.
     void drawPluginTuneControls();
     // Grants or revokes one plugin, updating both the live PluginUi and the
     // persisted list. One function so the two can never disagree: a grant that
@@ -467,6 +520,30 @@ private:
     // grants along with the instances — without this a rescan silently revoked
     // every permission the user had given.
     void applyPluginTuneGrants();
+    // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
+    // word DECODERS, and under the rail's fed-of-fitted chip.
+    //
+    // It is the RUNNER'S OWN TEST, not a new opinion: PluginRunner creates an
+    // instance for a module that supplies a decoder, an I/Q decoder or an
+    // image decoder table, and for nothing else (see its rebuild). Counting
+    // every loaded module instead put a basemap and a track-info provider -
+    // neither of which can ever be fed a signal - permanently in the
+    // denominator of "of N installed, M not fed", so a perfectly healthy
+    // receiver read as two decoders broken.
+    std::size_t loadedDecoderCount() const;
+    // HOW MANY OF THOSE ARE BEING FED - the numerator over the same
+    // population, counted the same way: per MODULE, from
+    // PluginRunner::isFeeding, which answers from the very status list the
+    // fitted window's rows are drawn from.
+    //
+    // NOT PluginRunner::activeCount, which counts INSTANCES. A module may
+    // declare both an audio decoder and an I/Q one and get an instance for
+    // each, so an instance count over a module count is two populations in one
+    // chip - and can read 3/2. It also does NOT test the receiver's run state:
+    // "matched to the rate the pipeline is configured for" is a different
+    // question from "the DSP threads are turning", and the callers that need
+    // both check pipeline_.running() beside this, exactly as they always did.
+    std::size_t fedDecoderCount() const;
     // Whether the user has stopped this plugin. `pluginKey` is a module file
     // name (cascade::core::pluginKey), the same identity the tune grant uses.
     bool pluginIsStopped(const std::string& pluginKey) const;
@@ -519,8 +596,12 @@ private:
     // line per plugin that is loaded but not being fed and why. Drained from
     // PluginRunner every frame, because the runner's buffer is bounded and a
     // GUI that stops reading would silently drop the newest lines.
-    // Idle reasons and the button that opens the output window; stays in the
-    // Plugins section because it is about installation, not traffic.
+    // The button that opens the output window, and the count of what has been
+    // decoded into it. The per-decoder IDLE REASONS are no longer printed
+    // here: the fitted-modules window quotes the runner's own sentence against
+    // the module it belongs to, which is where a user goes to ask why a
+    // decoder is silent, and one sentence in two places is how two surfaces
+    // come to describe one idle decoder two ways.
     void drawDecoderStatusRows();
     // The decoded text, in its own operating system window.
     void drawDecoderWindow();
@@ -544,6 +625,20 @@ private:
     // staggered by page index.
     MapPage* findMapPage(const std::string& plugin);
     MapPage& ensureMapPage(const std::string& plugin);
+    // THE WHOLE CONTENT OF A SATELLITES MAP WINDOW: the cabinet, its four
+    // screws and the SATELLITES MAP plate drawn as CONTENT inside the
+    // operating system's own frame, with MapView::drawSatellitePanel filling
+    // the plate. The frame, its minimise/maximise/close and its resize edges
+    // stay Windows' own - torn-off windows here are real OS windows on
+    // purpose, after a user could not find the resize edges on an undecorated
+    // one.
+    void drawSatelliteMapBody(MapPage& page);
+    // The satellites map's row on the FUNCTION SELECT rail, in DECODE. A
+    // SWITCH, not a section: it opens and closes the window and reports what
+    // that window holds, and it is the whole of the satellite presence in the
+    // main window - every satellite control lives in the window itself, which
+    // is the point of the window.
+    void drawSatelliteMapSection();
     // Folds every live page's rectangle and open flag into mapPagesSaved_,
     // which is what currentConfig() writes out. Entries for plugins with no
     // page this session ride through untouched, so a geometry saved for a
@@ -554,6 +649,25 @@ private:
     // several of them. See the definition for why the position is what decides
     // this — ImGui has no flag for it.
     void placeAsSeparateWindow(int slot);
+    // The same, at a size the caller asks for and MOVED so all of it - the
+    // resize grip in the bottom-right corner included - lands on the monitor
+    // it opens on (mapPlaceDefaultRect). placeAsSeparateWindow's fixed
+    // 720 x 520 is too small for a catalogue and its data plate, and an
+    // anchor that knows nothing about the monitor is how the map window came
+    // to open with its bottom off the work area. FirstUseEver throughout, so
+    // this is where a window OPENS and never fights a later drag.
+    void placeFeatureWindow(int slot, float wantW, float wantH);
+    // The same, but preferring a rectangle SAVED from a previous session.
+    // The saved one is used only if it is still reachable on the monitors
+    // this machine has now, and only after being clamped to what fits where
+    // it lands - the two rules the map pages learned the hard way, applied
+    // through the same mapGeometryOnScreen/mapClampRestoredSize pair rather
+    // than through a second copy of them. Anything else falls back to
+    // placeFeatureWindow's default placement for `slot`. x/y/w/h are the
+    // caller's saved rectangle and are updated in place by the clamp, so what
+    // is persisted is what the window was actually asked to be.
+    void placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h, float wantW,
+                                 float wantH);
     // The same anchor as a VALUE rather than as a side effect. The map needs
     // it before it is used: its default rectangle has to be checked against
     // the monitor (mapPlaceDefaultRect), and a function that only calls
@@ -651,6 +765,37 @@ private:
     // to the views) so the spectrum keeps drawing the last data after Stop —
     // SpectrumView::draw takes bins per call and holds no history of its own.
     cascade::core::SpectrumFrame lastFrame_;
+
+    // --- WHAT THE TWO PANELS ARE ALLOWED TO SAY ABOUT THEMSELVES -------------
+    //
+    // SpectrumView::Chrome and WaterfallView::Chrome both refuse to invent a
+    // figure: every annotation they draw needs an input, and an absent input
+    // removes the element rather than defaulting it. These four members are
+    // where those inputs are MEASURED, and each one is measured rather than
+    // assumed for a reason stated at the site that maintains it.
+    //
+    // Time is glfw/ImGui time (seconds since start), not a wall clock: every
+    // consumer is an ELAPSED figure, and a wall clock would drag time-zone and
+    // step changes into an age.
+    //
+    // When the GUI took delivery of the newest spectrum frame. Negative until
+    // the first one arrives, which is what makes "no reading" distinguishable
+    // from "zero seconds old".
+    double lastFrameSeenS_ = -1.0;
+    // Rolling one-second window behind the waterfall's scroll rate. It counts
+    // LINES THIS GUI ACTUALLY PUSHED INTO THE RING, which is not the same as
+    // frames the DSP published: getLatestFrame hands over at most one frame per
+    // call, so at 2 MS/s the pipeline publishes ~1950 frames a second and the
+    // waterfall takes one of them per GUI frame. Measured from the sequence
+    // instead, the strip claimed 1938 line/s over a picture scrolling at about
+    // sixty, and reported its whole visible history as "0 s". A stalled
+    // pipeline still closes a window on zero, because no poll succeeds and no
+    // line is pushed - which is the property that mattered about not counting
+    // GUI frames.
+    double frameRateWindowS_ = -1.0;
+    std::uint64_t waterfallLines_ = 0;
+    std::uint64_t waterfallLinesAtWindow_ = 0;
+    float framesPerSecond_ = 0.0f;
 
     // Display range for both the spectrum axis and the waterfall colormap.
     float dbMin_ = -110.0f;
@@ -945,6 +1090,32 @@ private:
         int y = 0;
         int w = 0;
         int h = 0;
+        // THIS PAGE IS THE SATELLITE INSTRUMENT, and it is decided from what
+        // the plugin PUBLISHES rather than from what it is called: a page is
+        // the satellites window once every track it has reported carries
+        // CASCADE_TRACK_SATELLITE. A plugin name is third-party text and
+        // matching on it would be a guess; the track kind is the ABI's own
+        // answer to "what is this".
+        //
+        // STICKY FOR THE SESSION, because the alternative is a window that
+        // rebuilds its entire layout the moment a propagator has nothing to
+        // report for a frame. It is never persisted: the kinds arrive again
+        // on the first poll of the next launch, and a saved flag could only
+        // ever be a stale opinion about a plugin that has since changed.
+        bool satellite = false;
+        // How many of this page's targets the staleness rule shows, recorded
+        // where the page's tracks are already filtered so the rail row and the
+        // window cannot report two different numbers. Updated for CLOSED pages
+        // too - that is exactly when the rail is the only thing saying it.
+        std::size_t visibleCount = 0;
+        // The satellites window's own controls. Held here rather than in the
+        // MapView because map_view.hpp says outright that the caller owns
+        // them: four of the eight fields are AppConfig settings shared with
+        // every other map page (copied in and out each frame, so there is one
+        // copy of each and this is a view onto it), and the other four - the
+        // sort key, its direction and the two coordinate cells while they are
+        // being typed - belong to this window and are session-scoped.
+        cascade::gui::SatelliteDeck deck;
     };
     // Creation order, which is the plugins' load order — that is what keeps
     // the default cascade of fresh pages stable across launches.
@@ -1211,6 +1382,25 @@ private:
     // archive; the recorder is where a permanent copy belongs.
     std::deque<cascade::core::DecodedLine> decoderLog_;
     static constexpr std::size_t kDecoderLogMax = 500;
+    // THE ONLY MESSAGE COUNT THIS APPLICATION HAS. No decoder plugin reports a
+    // message tally over the ABI and the runner keeps none, so the one
+    // countable thing a decoder produces is a LINE of output, counted here as
+    // pumpDecoderOutput drains it. Cumulative and never reset, so the status
+    // column can difference it over a window; decoderLog_ itself cannot serve
+    // (it is a bounded tail and drops its oldest entries).
+    std::uint64_t decoderLinesTotal_ = 0;
+    // Rolling window behind the status column's decoder-line rate. Negative
+    // rate means "not measured yet" - the card then prints no figure at all.
+    std::uint64_t decoderLinesAtWindow_ = 0;
+    double decoderRateWindowS_ = -1.0;
+    float decoderLinesPerSec_ = -1.0f;
+    // WHEN THE MUTE STARTED, as this GUI observed it: the mute subject the
+    // status column last saw, and the time it changed to that. Nothing in the
+    // pipeline timestamps a mute, so an unobserved one (the window was closed,
+    // the application had not started) has no age and the card says nothing
+    // about duration rather than guessing one.
+    std::string muteSubjectSeen_;
+    double muteSinceS_ = -1.0;
     bool decoderAutoScroll_ = true;
     // The output window opens itself the first time a decoder says something,
     // and not before — the same rule the map follows. Once the user closes it
@@ -1410,6 +1600,20 @@ private:
     // manifest is what keeps it from looking uninstalled and sending the user
     // down an Install path when Update is the remedy.
     bool catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const;
+    // The HOST RECORD for a catalogue entry, or null when the host has none.
+    //
+    // Narrower than catalogEntryInstalled on purpose, and the difference is
+    // the point: this answers "did the loader see this file", which is what
+    // lets the store's data plate report loaded, refused, running and the tune
+    // grant from the same record the fitted window uses. A RETIRED module is
+    // installed and has no host record - it was renamed out of the scan - so
+    // this returns null for one while catalogEntryInstalled still says true,
+    // and neither answer is wrong.
+    //
+    // The pointer is into PluginHost's own vector and is valid only until the
+    // next rescan; every caller uses it inside the frame that asked.
+    const cascade::core::LoadedPlugin* installedPluginRecord(
+        const cascade::core::PluginCatalogEntry& e) const;
 
     // THE INSTALL GATE, as one named predicate so the button, the tooltip and
     // the --frames diagnostic can never disagree about it. Returns the reason
@@ -1430,16 +1634,65 @@ private:
     // needs PluginRepo::removeQuarantined rather than remove().
     void removeBlockedPlugin(const std::string& fileName);
 
-    bool pluginBrowseOpen_ = false;  // "Get plugins" view expanded
-    // Whether the browser was ACTUALLY DRAWN this frame, which is not the same
-    // question as pluginBrowseOpen_ now that the browser lives in its own
-    // collapsible section: the flag can be true while the Plugin store header
-    // is collapsed, and in that state nothing has drawn the install/remove
-    // result text yet. The installed section reads this to decide whether to
-    // draw it — printing it twice in one column reads as two separate
-    // failures, printing it in neither loses a failed remove entirely.
-    // Reset at the top of drawPluginStoreSection, which runs first.
+    // IS THE PLUGIN STORE WINDOW OPEN. Still AppConfig::pluginBrowserOpen,
+    // which is exactly what that field has always meant - "the plugin browser
+    // was open when you left" - now that the browser IS the window. Restoring
+    // it opens the window and starts no fetch, the same promise the field
+    // carried before: nothing in this application contacts the catalogue until
+    // the user asks.
+    //
+    // NOTHING SELF-OPENS THIS WINDOW. There is no arrival edge here of the
+    // kind the map pages have, so the only two things that can put it on
+    // screen are the rail key and a saved open state the user themselves left.
+    bool pluginBrowseOpen_ = false;
+    // IS THE FITTED MODULES WINDOW OPEN, and where it sat.
+    //
+    // PERSISTED, exactly as its sibling is. This was a plain session member
+    // with no config key while the store beside it had one, so a window the
+    // user left open closed on exit and was gone on the next launch - two
+    // sibling keys in the same rail group behaving differently. It is now
+    // AppConfig::fittedModulesOpen, and the rectangle is
+    // AppConfig::fittedModulesX/Y/Width/Height, restored the way a map page's
+    // is: checked against the monitors that exist NOW, clamped to what fits
+    // where it lands, and read back every frame because ImGui's own .ini
+    // persistence is switched off in this application.
+    //
+    // NOTHING SELF-OPENS IT. There is no arrival edge here of the kind the map
+    // pages have; the only two things that set this true are the rail key and
+    // a saved open state the user themselves left, which is the same promise
+    // pluginBrowseOpen_ above makes.
+    bool fittedWindowOpen_ = false;
+    // Zero width means "nothing saved" - the map pages' sentinel, and the
+    // reason no companion flag is needed. Written back from the live window
+    // every frame it is drawn (see drawFittedModulesWindow).
+    int fittedWinX_ = 0;
+    int fittedWinY_ = 0;
+    int fittedWinW_ = 0;
+    int fittedWinH_ = 0;
+    // Whether the STORE WINDOW actually drew its content this frame.
+    //
+    // THE ORDERING CONSTRAINT SURVIVED BOTH BODIES BECOMING WINDOWS, it only
+    // moved: it used to be "the store SECTION is drawn before the inventory
+    // SECTION", because the rail drew them in that order and the second read
+    // the flag the first had set. Both are windows now, drawn from
+    // drawPluginWindows before the rail exists at all - so the rule is now
+    // that drawPluginStoreWindow() is called before drawFittedModulesWindow(),
+    // and it is enforced by their call order there and by this flag being
+    // reset at the top of the store's own draw.
+    //
+    // What it is for is unchanged. installReport_/installError_ are written by
+    // BOTH an install (the store) and a remove (the fitted window), so both
+    // windows can show the same sentence; printing it twice reads as two
+    // separate outcomes, and printing it in neither loses a failed remove
+    // entirely. The store window shows it whenever it is drawn; the fitted
+    // window shows it only when the store did not.
     bool pluginBrowserDrawnThisFrame_ = false;
+    // The two windows' view objects and their persistent decks. Pointers
+    // because both types live behind imgui.h; see the forward declarations at
+    // the top of this header.
+    std::unique_ptr<PluginStoreView> pluginStoreView_;
+    std::unique_ptr<PluginStoreDeck> pluginStoreDeck_;
+    std::unique_ptr<FittedModulesDeck> fittedDeck_;
     char pluginUrlBuf_[512] = "";    // edit buffer for the catalogue URL
     std::string pluginCatalogueUrl_;  // committed value (persisted)
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
@@ -1489,11 +1742,18 @@ private:
     std::future<bool> updateCheckFuture_;
     std::future<bool> updateDownloadFuture_;
 
-    int catalogSel_ = -1;        // index into catalog_, -1 = nothing selected
-    bool legalAck_ = false;      // legal-notice checkbox for the SELECTED entry
+    // WHICH CATALOGUE ROW IS SELECTED, AND WHETHER ITS NOTICE WAS TICKED, both
+    // live in PluginStoreDeck now (selected, legalAck) - the store window owns
+    // its own selection and clears the tick whenever that selection moves, so
+    // consent given for one plugin can never be carried to the next. The two
+    // members that used to hold them are gone rather than kept in step with
+    // the deck: two copies of a consent flag is one copy too many.
     std::string installReport_;  // green: last successful install/remove
     std::string installError_;   // red: last failed install/remove, verbatim
-    int removeConfirmIdx_ = -1;  // installed-list row awaiting confirmation
+    // The REMOVE confirmation for an installed module is the fitted window's
+    // (FittedModulesDeck::confirmRemove, keyed on the module file name because
+    // a rescan reorders the list). Only the disabled list still keeps an index
+    // here, and it is drawn from the rail.
     int blockedRemoveConfirmIdx_ = -1;  // disabled-list row awaiting confirmation
 
     // --- Bounded-run test hook (P9) --------------------------------------------

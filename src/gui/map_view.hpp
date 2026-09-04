@@ -20,6 +20,16 @@
 // imagery is least useful. Aircraft, ships and APRS stations all sit well
 // inside the latitudes where Mercator behaves.
 //
+// ...UNLESS A PAGE PINS IT. That reasoning is right for an aircraft page and
+// backwards for a satellite one, so a page can now say which it is - see
+// MapProjection below. The satellite window pins equirectangular and forgoes
+// tiles; every other page keeps the rule above, unchanged.
+//
+// AND ONE PAGE IS A WHOLE INSTRUMENT. drawSatellitePanel draws the SATELLITES
+// MAP window's entire content - the control deck, the target register, the
+// selected target's card and the map - so that everything for satellites is in
+// one window rather than scattered across the main window's rail.
+//
 // BASEMAP. The built-in one is a Natural Earth coastline compiled in as vector
 // data: public domain, offline, and free of the conditions raster imagery
 // carries. Real map tiles arrive only through a plugin the user installs and
@@ -44,6 +54,145 @@ namespace cascade::gui {
 
 class BasemapCache;
 class TrackInfoCache;
+
+// --- which projection a page draws in ----------------------------------------
+//
+// THE SMALLEST HONEST WAY TO LET A PAGE CHOOSE, and it is small because the
+// choice already existed - it was simply not addressable. This view has always
+// drawn equirectangular UNLESS a basemap plugin was supplying tiles, in which
+// case it switched to Web Mercator because the tile grid IS Mercator. So there
+// is no second projection to write and no coordinate maths to convert: the
+// only thing missing was a way for a page to say "I am the one that must not
+// tear a polar orbit apart", and to accept the consequence.
+//
+// AND THE CONSEQUENCE IS REAL, so it is stated here rather than buried:
+// Equirectangular means NO BASEMAP TILES on that page. Drawing a Mercator
+// raster under an equirectangular graticule would put every coastline in the
+// wrong place, which is worse than having no imagery; the built-in Natural
+// Earth outline is drawn instead. That trade is right for satellites - street
+// imagery is least useful exactly when a whole hemisphere is on screen - and
+// wrong for aircraft, which is why Automatic stays the default and the ADS-B
+// page is untouched.
+enum class MapProjection {
+    // Web Mercator while a basemap plugin supplies tiles, equirectangular
+    // otherwise. What every page did before this existed.
+    Automatic = 0,
+    // Always equirectangular; basemap tiles are not asked for and not drawn.
+    Equirectangular,
+};
+
+// --- the satellite window's controls -----------------------------------------
+//
+// THE SETTINGS THE SATELLITES MAP WINDOW OPERATES, owned by the CALLER because
+// every one of them is application state that outlives this view: the trail
+// switches and the coverage overlay are already AppConfig fields shared by
+// every map page, and two pages disagreeing about how a trail is drawn would
+// be two answers to one question. The panel edits them in place and never
+// stores a second copy.
+//
+// The receiver's position is NOT here: it lives where it always did, applied
+// through MapView::setHome by whoever owns it, because it is a fact about the
+// antenna rather than a setting of this window. What the panel does instead is
+// ASK for a new one - see receiverPositionRequested() - so the one caller that
+// knows about every page, the radar scope and the coverage accumulator is the
+// one that applies it.
+struct SatelliteDeck {
+    // Draw the coverage overlay. Inert without a receiver position, and the
+    // panel says so rather than offering a switch that does nothing.
+    bool coverage = false;
+    // Draw the path layer at all - ground tracks included. The OFF segment of
+    // the trail-style selector and the GROUND TRACKS rocker are two views of
+    // this one flag, exactly as the design's mock has them.
+    bool groundTracks = true;
+    // Colour trails and markers by altitude band. False gives each its owner's
+    // single colour.
+    bool altitudeColours = true;
+    // 0 = line, 1 = ribbon. Matches AppConfig::mapTrailStyle, which is what
+    // the existing toolbar's style list already sets.
+    int trailStyle = 0;
+    // Which of the four visible sort keys the register is ordered by, and
+    // which way. An INDEX rather than a TrackSortKey so the caller can persist
+    // it as a number without knowing the enum's values; see satelliteSortKey.
+    int sortKey = 0;
+    bool sortAscending = true;
+    // The two coordinate cells while they are being TYPED. Separate from the
+    // applied position for the same reason the toolbar's fields always were:
+    // an intermediate keystroke must not move the range rings. Committed by
+    // Enter, and only then does the panel raise a request.
+    double latInput = 0.0;
+    double lonInput = 0.0;
+};
+
+// How many sort keys the register shows, and which they are. FOUR, VISIBLE, as
+// buttons - the design's point being that the current sort is legible without
+// opening anything. They are a SUBSET of TrackSortKey rather than a new set,
+// so the register orders its rows with the same tested comparator the flight
+// list uses (sortTrackRows) instead of a second one that could disagree.
+//
+// The four are the ones a satellite register can actually answer: a callsign,
+// a NORAD number, an orbital altitude and the age of the fix. Distance and
+// bearing are deliberately absent - they are empty until a receiver position
+// is set, and a sort key that silently orders by nothing is the failure this
+// window exists to remove.
+inline constexpr int kSatelliteSortKeyCount = 4;
+
+// The key at position `index`, and the engraved word over its button. An index
+// outside the range answers with the first key rather than with whatever the
+// last case happened to be.
+TrackSortKey satelliteSortKey(int index);
+const char* satelliteSortKeyLabel(int index);
+
+// --- the three figures the no-position page is built out of -------------------
+//
+// All three are PURE and declared here so they can be pinned by a test. Every
+// one of them is read on the frame a brand-new install draws its first
+// satellite window, which is the state nothing else in this file can be tested
+// in: there is no receiver position, nothing is selected, and the page has to
+// be right anyway.
+
+// THE WHOLE PLANET, in degrees of longitude across a viewport of this shape,
+// and the view a page that pins equirectangular opens at. 360 across is the
+// obvious half of it; the other half is that a viewport WIDER than two to one
+// would then be showing less than 180 degrees of latitude and cropping the
+// poles off - which on a satellite page is cropping off the part a polar orbit
+// spends its time in. Whichever of the two demands more zoom wins.
+double wholeWorldSpanDeg(float widthPx, float heightPx);
+
+// WHAT ONE APERTURE OF THE RECEIVER'S COORDINATE COUNTER SHOWS.
+//
+// `shape` is the character the formatter produced for that aperture and
+// `known` says whether there is a position behind it. With a position the
+// character is shown as it stands. WITHOUT ONE THE FIGURES ARE NEVER SHOWN,
+// and that is the whole point of this function: the formatter is handed 0.0
+// so that the counter keeps its shape, and a row of apertures reading
+// 00.00000 / 000.00000 is not a blank counter - it is a receiver claiming to
+// stand at 0N 0E, which is a real place in the Gulf of Guinea and the exact
+// conflation this application has been bitten by before. A figure becomes a
+// dash; the SIGN is blanked rather than dashed, because a '-' in that cell
+// reads as a southern latitude; the decimal point stays, so the counter still
+// reads as a coordinate waiting for one.
+//
+// The SHAPE is what decides the widths (see the cells' layout), so it is the
+// unchanged text that is measured and only the glyph that is replaced - the
+// well therefore does not resize the moment a position arrives.
+char coordApertureGlyph(char shape, bool known);
+
+// WHICH NOTES THE SELECTED TARGET'S CARD DRAWS, from the only two facts that
+// decide it. Both the height the card is RESERVED and the card's own drawing
+// read this one answer, so the box can never be reserved for a note that is
+// not drawn - which is what it was doing on the very first screen a new user
+// sees: nothing selected and no position set reserved two notes' worth of
+// space for a card whose whole content is the words NO TARGET SELECTED.
+struct SatelliteCardNotes {
+    // "DISTANCE and BEARING are hatched because no receiver position is set."
+    // Recoverable: setting a position fills both in.
+    bool noReceiver = false;
+    // "INCLINATION, ORBITAL PERIOD and the age of the element set are not part
+    // of what a track source reports." Not recoverable by anything the user
+    // can click, which is why the two are drawn differently.
+    bool notReported = false;
+};
+SatelliteCardNotes satelliteCardNotes(bool haveTarget, bool haveReceiverPosition);
 
 class MapView {
 public:
@@ -107,6 +256,90 @@ public:
         drawTrails_ = drawTrails;
         trailAltitudeColours_ = altitudeColours;
     }
+
+    // See MapProjection. Automatic is what every page did before this existed,
+    // and is still the default.
+    //
+    // AND A PAGE THAT PINS EQUIRECTANGULAR OPENS ON THE WHOLE WORLD. That is
+    // not a side effect, it is the answer to what the pin MEANS: a page asks
+    // for equirectangular because the poles matter to it and a track may be
+    // anywhere on the planet, and the first thing such a page must show is the
+    // planet. Left to the ordinary fit-to-content rule it did the opposite -
+    // one satellite has no extent, so the fit fell back to a 24-degree span
+    // and the satellites window opened on a patch of Indonesia with a single
+    // marker in it and no way to tell where on earth that was.
+    //
+    // ONLY WHEN NOTHING HAS CHOSEN A VIEW YET (see fittedOnce_), so this can
+    // never yank the map out from under a user who has already panned, zoomed
+    // or gone to a target; and only on the CHANGE, so a page that sets its
+    // projection every frame - which the satellite panel does - asks for the
+    // whole world once, on the frame it opens.
+    void setProjection(MapProjection p) {
+        if (p != projection_ && p == MapProjection::Equirectangular && !fittedOnce_) {
+            wholeWorldRequested_ = true;
+        }
+        projection_ = p;
+    }
+    MapProjection projection() const { return projection_; }
+
+    // Centres on 0,0 and zooms out until the whole planet is inside the
+    // viewport. Public because "show me everything" is a thing a caller may
+    // legitimately want at any time, and because it is what makes the rule
+    // above testable without going through drawSatellitePanel.
+    void requestWholeWorld() { wholeWorldRequested_ = true; }
+
+    // --- the satellite instrument -------------------------------------------
+    //
+    // THE WHOLE CONTENT OF THE SATELLITES MAP WINDOW, drawn into the CURRENT
+    // ImGui window: the control deck across the top, the target register down
+    // the left with the selected target's card beneath it, and the map with
+    // its overlays filling the rest. The window itself - its frame, its place
+    // in the Windows menu and the rail switch that opens it - belongs to the
+    // caller; this draws what is inside it.
+    //
+    // ONE WINDOW, AND THAT IS THE POINT. Everything for satellites is in here:
+    // receiver position, overlays, trail style, coverage, the register, the
+    // selected target's figures and the map. Nothing satellite-shaped is left
+    // scattered in the main window's rail.
+    //
+    // IT FORCES ITS OWN PROJECTION. A satellite window is equirectangular (see
+    // MapProjection) - the poles are on screen and a ground track reads as the
+    // sinusoid it is - which is why `tiles` is not a parameter: this page does
+    // not draw basemap tiles, and offering a pointer it would ignore would be
+    // a lie in the signature.
+    //
+    // `coverage` may be null and is borrowed for the call. It is passed even
+    // when the overlay is switched off, because the deck's own note reports
+    // what has been accumulated whether or not it is being drawn - "nothing
+    // heard yet" and "hidden" are different facts.
+    void drawSatellitePanel(SatelliteDeck& deck,
+                            const std::vector<cascade::core::HostTrack>& tracks,
+                            const std::vector<cascade::core::HostPath>& paths,
+                            const CoverageMap* coverage, TrackInfoCache* info = nullptr);
+
+    // SET FROM MAP CLICK, as a latch rather than as a mode the caller has to
+    // maintain. While armed, the next click on the map that is not a drag
+    // reads its position and raises the request below; a second press of the
+    // button, or the click itself, disarms it.
+    bool receiverPickArmed() const { return pickHomeArmed_; }
+    void armReceiverPick() { pickHomeArmed_ = true; }
+    void cancelReceiverPick() { pickHomeArmed_ = false; }
+
+    // THE PANEL ASKS, THE CALLER APPLIES. A receiver position reaches every map
+    // page, the radar scope and the coverage accumulator - which is knowledge
+    // this view does not have and must not acquire - so the panel raises a
+    // request and the owner acts on it, exactly as followInterruptRequested()
+    // already does for the follow prompt. Not cleared by draw(): the caller
+    // clears it after acting, so a request cannot be missed by a frame that
+    // happened to skip.
+    bool receiverPositionRequested() const { return homeRequest_; }
+    double requestedReceiverLatDeg() const { return homeRequestLat_; }
+    double requestedReceiverLonDeg() const { return homeRequestLon_; }
+    void clearReceiverPositionRequest() { homeRequest_ = false; }
+
+    // Likewise for RESET COVERAGE: the accumulator belongs to the caller.
+    bool coverageResetRequested() const { return coverageResetRequest_; }
+    void clearCoverageResetRequest() { coverageResetRequest_ = false; }
 
     bool hasHome() const { return hasHome_; }
     double homeLatDeg() const { return homeLat_; }
@@ -183,9 +416,40 @@ private:
     // clutter. A frame member rather than a local because the two loops are
     // far apart and the path one runs first.
     int trailStyle_ = 0;
+    // ONE FLAG PER LADDER, because there are two of them and they are read in
+    // different units. A page whose trails were banded on the ORBITAL ladder
+    // must not put an aviation legend on screen: "> 30 kft" over a picture
+    // banded in kilometres is a legend that actively misinforms.
     bool anyBandedTrail_ = false;
+    bool anyOrbitTrail_ = false;
     bool fitRequested_ = true;  // fit once, the first time there is anything
     bool fittedOnce_ = false;
+    // Applied by the next draw(), which is the first place the viewport's
+    // shape is known - "the whole world" is 360 degrees across AND 180 down,
+    // and which of those two decides the zoom depends on the aspect ratio.
+    bool wholeWorldRequested_ = false;
+
+    MapProjection projection_ = MapProjection::Automatic;
+
+    // SET FROM MAP CLICK, and what it produced. See armReceiverPick and
+    // receiverPositionRequested.
+    bool pickHomeArmed_ = false;
+    bool homeRequest_ = false;
+    double homeRequestLat_ = 0.0;
+    double homeRequestLon_ = 0.0;
+    bool coverageResetRequest_ = false;
+    // Which coordinate cell the user is typing into, or -1 for none: 0 is the
+    // latitude, 1 the longitude. A cell is a MACHINED APERTURE, not a text
+    // box, so it becomes an editable field only while it is being edited -
+    // and only one at a time, because two open fields would each need their
+    // own commit and the pair is applied together.
+    int coordEditing_ = -1;
+    // True for the one frame after a cell is opened, which is when the
+    // keyboard has to be put into it. Asked as its own flag rather than
+    // inferred from "nothing else is active" because that inference is about
+    // the PREVIOUS frame's arbitration and would silently stop working the
+    // day another control on this deck took focus first.
+    bool coordEditFocus_ = false;
 
     std::string hoveredId_;
     std::string followId_;

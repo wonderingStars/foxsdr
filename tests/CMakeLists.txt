@@ -26,9 +26,11 @@ foreach(src ${CASCADE_TESTS})
                     $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:${name}>)
     endif()
 
-    if(name STREQUAL "test_radar_assets")
-        # Compares the compiled-in radar panel against the files it was
-        # generated from, so it needs the repository root on its command line.
+    if(name STREQUAL "test_radar_assets" OR name STREQUAL "test_font_assets")
+        # Both compare something compiled INTO the binary against the files it
+        # was generated from - the radar panel against resources/web/radar, the
+        # typefaces against third_party/fonts - so both need the repository
+        # root on their command line.
         add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
     elseif(name STREQUAL "test_json_dump_policy")
         # The only test in this loop that takes an argument: it scans src/

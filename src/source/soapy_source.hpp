@@ -34,8 +34,23 @@
 // this code can enforce — field report 4214EAE4 proved a vendor readStream
 // can simply ignore it and freeze every waiter forever, and a hang on the GUI
 // thread is worse than a crash, because the user cannot even restart from it.
-// The verdict on losing that race differs by what the call is FOR, not just
-// by whether it timed out: read() treats it as an ordinary retry (the source
+//
+// BOUNDING THE LOCK IS ONLY HALF OF IT, and the missing half was a second
+// field freeze on 0.70.0. Winning the lock and then calling a driver that
+// never returns freezes the interface exactly as thoroughly as losing it: the
+// symbolised report resolves to the one _Thrd_join call site in
+// rtlsdrSupport.dll, inside SoapyRTLSDR::deactivateStream, which does
+// rtlsdr_cancel_async and then joins its own async RX thread — a join that
+// never came back, on the GUI thread, out of stopLocked(). So the VENDOR CALL
+// on each escape path is bounded too, not just the wait for the lock: the
+// calls in stopLocked() (deactivateStream) and teardownLocked() (closeStream,
+// unmake) run on a worker that can be abandoned, and the caller waits
+// kVendorCallWait for it. On a timeout the device is condemned exactly as a
+// lock timeout condemns it, with the same words, and the call is left running.
+// See DeviceLink below for what makes leaving it running safe.
+//
+// The verdict on losing the LOCK race differs by what the call is FOR, not
+// just by whether it timed out: read() treats it as an ordinary retry (the source
 // thread is not the injured party), a setter/query reports a soft failure
 // without touching the device's health (it can lose this race against a
 // perfectly healthy slow open()), and only the user's own escape paths —
@@ -64,6 +79,7 @@
 #include <complex>
 #include <cstddef>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -166,7 +182,25 @@ public:
     // using, through the same in-process libusb whose corrupted lock state the
     // 0.62.0 field crashes fingerprinted. The child-process scan is unaffected
     // (a fresh process never has a device open).
+    //
+    // A DEVICE THIS PROCESS DELIBERATELY NEVER RELEASED KEEPS THIS TRUE FOR
+    // THE LIFE OF THE PROCESS, and that is the point rather than a leak in the
+    // bookkeeping. The dead-device policy (see the .cpp) drops a faulted or
+    // wedged device's handle WITHOUT closeStream or unmake, so the module
+    // still owns that radio - and in the wedged case one of our own threads is
+    // still executing inside it. Those are precisely the conditions under
+    // which a vendor walk must not run, so the count follows the RADIO and not
+    // this object's state: it goes down only when a device was actually
+    // unmade. The user is told the same thing in words ("restart FoxSDR to use
+    // this radio again"); this is that promise expressed as state.
     static bool anyDeviceOpen();
+
+    // The number behind anyDeviceOpen(), exposed for the same reason
+    // driverCallsAbandoned() is: a boolean cannot tell "the radio this test
+    // abandoned is still held" from "some other device happens to be open", so
+    // a test asserting the count did not lie would pass against the bug it
+    // names. This is a delta a test can pin.
+    static int openDeviceCount();
 
     // --- gain hooks for the Source panel (GUI wires these later) ----------
     // All are safe with no device open: empty list / false, never a throw.
@@ -247,6 +281,14 @@ public:
     // retry signal, not an error, because the source thread is not who is
     // blocking whom here.
     //
+    // And 0 once more if the device was condemned WHILE this call was waiting
+    // for the lock. The latches are tested before the lock as well, but that
+    // test is stale by the time the lock is won: the thread that held it may
+    // have spent the wait abandoning a wedged driver, and an abandoned link
+    // keeps its handles (nothing may null them), so the null-handle test that
+    // used to catch a torn-down device catches nothing here. Every setter and
+    // query re-tests deviceDead() after taking the lock; this does too.
+    //
     // Errors are CLASSIFIED rather than uniformly retried, because "retry
     // forever" is the wrong recovery for half of them:
     //   - timeout: not an error at all. Not even recorded — an idle device
@@ -303,6 +345,59 @@ public:
     // tests can tell "this driver crashed" from "the driver said no".
     bool deviceDead() const;
 
+    // Escape-path vendor calls this PROCESS has abandoned because they did not
+    // return within kVendorCallWait — deactivateStream, closeStream, unmake.
+    // 0 on every healthy path.
+    //
+    // Counted for the same reason Pipeline counts abandoned source threads: a
+    // timing assertion alone cannot tell an abandonment from a driver that
+    // happened to answer quickly, so a test that only measures elapsed time
+    // still passes when the bound is deleted. This number is the difference.
+    static unsigned long long driverCallsAbandoned();
+
+    // THE DEVICE LINK: the mutex that serialises entry into the vendor driver,
+    // and the two handles that entry uses, in one object owned by a
+    // shared_ptr.
+    //
+    // It is a separate object because AN ABANDONED DRIVER CALL OUTLIVES THE
+    // SOURCE THAT STARTED IT. When an escape-path call does not come back
+    // inside kVendorCallWait, it is left running on its worker thread — still
+    // inside the vendor module, still using these two handles — and the
+    // SoapySource can be destroyed a millisecond later (AppWindow::openSoapy
+    // makes a fresh one per open and drops the old one; the field freeze this
+    // exists for is a user switching sources). A worker that captured `this`
+    // would then be reading freed memory, which is a worse defect than the
+    // freeze it was added to prevent.
+    //
+    // So the worker captures a COPY OF THE SHARED POINTER instead, by value,
+    // and the link outlives whichever of the two ends first. Nothing ever
+    // unmakes an abandoned device, so the handles it names leak for the life
+    // of the process — deliberately, and documented, exactly like the zombie
+    // source thread Pipeline::quiesceSourceThreadLocked leaks one level up.
+    //
+    // Public only because the worker that runs a call is a free function in
+    // the .cpp; nothing outside this class has any business touching one.
+    struct DeviceLink {
+        // Serialises every entry into the vendor driver (see the file header).
+        // A TIMED mutex, so every entry point can give up rather than freeze.
+        std::timed_mutex mutex;
+
+        // Read and written ONLY under `mutex`, and — once a call using them
+        // has been abandoned — read WITHOUT it by the worker still inside the
+        // driver. That is safe because `abandoned` is the point after which
+        // this object's fields are frozen: nothing may write them again.
+        SoapySDR::Device* dev = nullptr;
+        SoapySDR::Stream* stream = nullptr;
+
+        // Set once, under `mutex`, when a call on these handles was abandoned.
+        // From then on the device is condemned permanently: the dead-device
+        // latches survive teardown, the handles are never nulled (a worker may
+        // still be reading them) and never touched, and open() refuses. That
+        // is what makes "restart FoxSDR to use this radio again" a promise
+        // this object actually keeps rather than a hopeful message.
+        bool abandoned = false;
+    };
+
 private:
     // The *Locked helpers assume devMutex_ is HELD by the caller — they exist
     // so open()/closeDevice() can run stop-then-teardown under one lock
@@ -329,12 +424,26 @@ private:
     // Resets the mirrors and the open-device count on any path that lets go
     // of dev_ — the one place the bookkeeping lives so teardown and
     // abandonment cannot disagree about it.
-    void clearDeviceStateLocked() noexcept;
+    //
+    // deviceReleased says whether the DRIVER let go of the radio (an unmake
+    // that actually completed), which is a different question from whether
+    // this object stopped pointing at it. Only the first decrements the
+    // process-wide count: see anyDeviceOpen() for why a device the
+    // dead-device policy abandoned has to keep being counted.
+    void clearDeviceStateLocked(bool deviceReleased) noexcept;
 
     // Records an absorbed vendor fault: the message the GUI shows, the fault
     // latch the pipeline's source loop polls, and the dead-device latch.
     // noexcept because teardown and the destructor call it.
     void noteVendorFault(const char* what) noexcept;
+
+    // Records a vendor call that never came back: marks the link abandoned
+    // (permanently — see DeviceLink::abandoned), condemns the device with the
+    // same words a driver-lock timeout uses, and logs. The call itself is
+    // still running when this returns; that is the point.
+    //
+    // Caller holds the link's mutex, like every other *Locked helper.
+    void abandonWedgedDriverLocked(const char* what) noexcept;
 
     // The only writers of the error slot. Every failure path goes through
     // setError so no site can forget the lock; clearError also resets the
@@ -345,20 +454,19 @@ private:
     void setError(std::string msg);
     void clearError();
 
-    // Serialises every entry into the vendor driver — see the file header.
-    // Touched only by public entry points; held across the driver call. A
-    // TIMED mutex, so EVERY entry point — not only stop() — can give up
-    // rather than freeze the interface. The whole design depends on
-    // readStream honouring its 20 ms timeout, and a vendor driver that simply
-    // never returns turns every waiter into a permanent hang; field report
-    // 4214EAE4 is exactly that, on a Mirics device. Every acquisition in the
-    // .cpp uses the shared kControlLockWait bound; what happens on a lost
-    // race differs by call site, and is explained there.
-    mutable std::timed_mutex devMutex_;
-
-    // dev_ and stream_ are read and written ONLY under devMutex_.
-    SoapySDR::Device* dev_ = nullptr;
-    SoapySDR::Stream* stream_ = nullptr;
+    // The mutex that serialises every entry into the vendor driver, and the
+    // handles that entry uses — see DeviceLink above for why they live behind
+    // a shared_ptr instead of being members here, and the file header for the
+    // serialisation contract itself. Every acquisition in the .cpp uses the
+    // shared kControlLockWait bound; what happens on a lost race differs by
+    // call site, and is explained there.
+    //
+    // NEVER REASSIGNED, hence const: an abandoned worker holds its own copy of
+    // this pointer, so a source that swapped in a fresh link could be inside a
+    // new device while a wedged call is still inside the old one. One link per
+    // SoapySource, for the whole life of the object; a condemned one stays
+    // condemned and AppWindow makes a new SoapySource for the next open.
+    const std::shared_ptr<DeviceLink> link_ = std::make_shared<DeviceLink>();
 
     // Lock-free mirrors for the per-frame GUI readouts (see the file header).
     // Written under devMutex_ at the points the driver state actually changed.
@@ -369,8 +477,9 @@ private:
 
     // Whether THIS source is counted in the process-wide open-device count —
     // set exactly at the successful-open commit, cleared exactly once on the
-    // release paths, so a half-made device that gets abandoned mid-open can
-    // never unbalance the count.
+    // path that actually RELEASED the device, so a half-made device that gets
+    // abandoned mid-open can never unbalance the count and one this process
+    // never unmade goes on being counted (see anyDeviceOpen()).
     bool counted_ = false;
 
     // See the error-slot note in the file header: everything below is written

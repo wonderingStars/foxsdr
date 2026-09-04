@@ -96,6 +96,19 @@ inline constexpr float kRailThickness = 2.0f;
 ImVec4 vec(ImU32 packed);
 ImU32 withAlpha(ImU32 packed, float alpha);
 
+// --- semantics ---------------------------------------------------------------
+//
+// What a message MEANS, for the widget layer. These exist because the three
+// states below were previously written as raw ImVec4 literals at every site:
+// the warning amber appeared SEVENTEEN times, with two more near-duplicates
+// that meant the same thing in a slightly different hue, and there were two
+// different "good" greens and two different reds. Three subtly different
+// warning colours is worse than one wrong colour, because it implies a
+// distinction the product does not actually make.
+ImVec4 warning();  // amber: something the user should look at
+ImVec4 good();     // phosphor: working, connected, receiving
+ImVec4 bad();      // rust: failed, refused, stopped
+
 // --- the style ---------------------------------------------------------------
 //
 // Sets every ImGuiCol_ and the style vars from the palette above. Call it once,

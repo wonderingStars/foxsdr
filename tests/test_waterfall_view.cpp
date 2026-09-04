@@ -1,7 +1,8 @@
 // Tests for gui/waterfall_view.hpp — everything here is headless: only the
-// colormap, the dB->pixel row conversion, the CPU ring and the seam/window
-// uv math (uvRects) are exercised; the draw() overloads (the GL-touching
-// members) are never called, so no GL context is needed. Expected colors are
+// colormap, the dB->pixel row conversion, the CPU ring, the seam/window uv
+// math (uvRects), the two axis ladders (timeLabelStep, dbLabelStep) and the
+// written-history count (filledRows) are exercised; the draw() overloads (the
+// GL-touching members) are never called, so no GL context is needed. Expected colors are
 // derived in-test from the documented contract (anchor RGBA constants, the
 // normalization formula, the nearest-resampling rule
 // floor((x + 0.5) * n / texWidth)) — never read back from internals — and
@@ -10,7 +11,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/waterfall_view.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <limits>
 #include <vector>
 
 #include "test_check.hpp"
@@ -425,6 +430,530 @@ void testUvInvariantsSweep() {
     }
 }
 
+// --- timeLabelStep (the elapsed-time strip's ladder) ------------------------
+//
+// THE LADDER IS RESTATED HERE, not reached for in the implementation. A test
+// that reads the table it is checking cannot notice the table changing, and
+// the table IS the contract: the header names these rungs one by one.
+
+const double kTimeLadder[] = {1.0,  2.0,   5.0,   10.0,  15.0,  20.0,   30.0,
+                              60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0};
+constexpr int kTimeLadderN = 14;
+
+bool onTimeLadder(double s) {
+    for (int i = 0; i < kTimeLadderN; ++i) {
+        if (s == kTimeLadder[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Independent statement of the documented rule: the smallest rung at least
+// span/maxLabels, whole hours past the top of the ladder, 0 where there is no
+// answer.
+double refTimeStep(double span, int maxLabels) {
+    if (!(span > 0.0) || maxLabels < 1) {
+        return 0.0;
+    }
+    const double want = span / static_cast<double>(maxLabels);
+    for (int i = 0; i < kTimeLadderN; ++i) {
+        if (kTimeLadder[i] >= want) {
+            return kTimeLadder[i];
+        }
+    }
+    return std::ceil(want / 3600.0) * 3600.0;
+}
+
+// How many figures drawTimeStrip's own loop would put down the edge for this
+// step: k = 1, 2, ... while k * step <= span (waterfall_view.cpp's label
+// loop). The cap exists so a runaway is REPORTED by the caller rather than
+// hanging the suite — a silently truncated count would turn "hundreds of
+// labels" into a passing test.
+constexpr int kLabelCountCap = 4096;
+int labelsDrawn(double span, double step) {
+    if (!(step > 0.0)) {
+        return 0;
+    }
+    int n = 0;
+    while (n < kLabelCountCap && static_cast<double>(n + 1) * step <= span) {
+        ++n;
+    }
+    return n;
+}
+
+void testTimeLabelStepLadderBoundaries() {
+    // A step function is all boundaries. maxLabels == 1 makes want == span
+    // exactly, so these land ON each transition rather than near it: the rung
+    // is taken when want EQUALS it (>= not >), which is the off-by-one that
+    // would otherwise hand every exact span the next rung up and halve the
+    // number of figures on the axis.
+    for (int i = 0; i < kTimeLadderN; ++i) {
+        const double s = kTimeLadder[i];
+        CHECK(WaterfallView::timeLabelStep(s, 1) == s);
+        CHECK(WaterfallView::timeLabelStep(std::nextafter(s, 0.0), 1) == s);
+        const double above = std::nextafter(s, 1.0e300);
+        const double wantAbove = (i + 1 < kTimeLadderN) ? kTimeLadder[i + 1]
+                                                        : std::ceil(above / 3600.0) * 3600.0;
+        CHECK(WaterfallView::timeLabelStep(above, 1) == wantAbove);
+    }
+    // The same boundaries approached through maxLabels rather than span. Four
+    // rungs' worth of history asked for in four labels is exactly that rung;
+    // one ulp more is the next one up. (4 * s and its quarter are exact in
+    // binary, so these sit on the boundary and not beside it.)
+    for (int i = 0; i + 1 < kTimeLadderN; ++i) {
+        const double s = kTimeLadder[i];
+        CHECK(WaterfallView::timeLabelStep(4.0 * s, 4) == s);
+        CHECK(WaterfallView::timeLabelStep(std::nextafter(4.0 * s, 1.0e300), 4) ==
+              kTimeLadder[i + 1]);
+    }
+}
+
+void testTimeLabelStepDegenerate() {
+    const double qnan = std::nan("");
+    // No span is no axis — and the NaN case is the one that matters, because
+    // a NaN reaching the ladder compares false against every rung and would
+    // otherwise fall out of the bottom as "1s" beside a picture of nothing.
+    CHECK(WaterfallView::timeLabelStep(0.0, 4) == 0.0);
+    CHECK(WaterfallView::timeLabelStep(-1.0, 4) == 0.0);
+    CHECK(WaterfallView::timeLabelStep(-1.0e9, 4) == 0.0);
+    CHECK(WaterfallView::timeLabelStep(qnan, 4) == 0.0);
+    // maxLabels < 1: a strip with no room for a figure gets no step.
+    CHECK(WaterfallView::timeLabelStep(60.0, 0) == 0.0);
+    CHECK(WaterfallView::timeLabelStep(60.0, -3) == 0.0);
+    CHECK(WaterfallView::timeLabelStep(60.0, -1000000) == 0.0);
+    CHECK(WaterfallView::timeLabelStep(qnan, 0) == 0.0);
+
+    // AN INFINITE SPAN is not in the documented contract and cannot arrive
+    // through drawTimeStrip (its span is a finite row count over a rate it has
+    // already proved positive and finite), so what is asserted here is only
+    // the property that holds whichever way it is answered: the step is either
+    // "no axis" or at least the spacing that was asked for. Pinning the value
+    // would freeze an undocumented answer.
+    //
+    // MEASURED, for the record: it currently returns inf for every budget,
+    // which is NOT the "0" the non-positive/NaN cases give. If a span of inf
+    // could ever reach drawTimeStrip, its `step > span` guard would pass
+    // (inf > inf is false) and its label loop would then never terminate,
+    // since k * inf <= inf holds for every k.
+    const double dinf = std::numeric_limits<double>::infinity();
+    for (int maxLabels = 1; maxLabels <= 8; ++maxLabels) {
+        const double step = WaterfallView::timeLabelStep(dinf, maxLabels);
+        CHECK(step == 0.0 || !(step < dinf / static_cast<double>(maxLabels)));
+    }
+}
+
+void testTimeLabelStepNarrowAndWide() {
+    // A HISTORY UNDER A SECOND. The ladder stops at 1 s, so the step comes
+    // back larger than the whole span and drawTimeStrip's `step > span` guard
+    // then draws no strip at all. That pair — a floor on the ladder plus the
+    // caller's guard — is what the header means by "no labels at all rather
+    // than ones rounded to 1s", and it is only true of the pair.
+    const double shortSpans[] = {0.001, 0.05, 0.25, 0.5, 0.999};
+    for (const double span : shortSpans) {
+        const double step = WaterfallView::timeLabelStep(span, 8);
+        CHECK(step == 1.0);
+        CHECK(step > span);
+        CHECK(labelsDrawn(span, step) == 0);
+    }
+    // One second exactly is the first history that carries a figure.
+    CHECK(WaterfallView::timeLabelStep(1.0, 8) == 1.0);
+    CHECK(labelsDrawn(1.0, WaterfallView::timeLabelStep(1.0, 8)) == 1);
+
+    // A HISTORY OF DAYS. The strip must still carry at most the number of
+    // figures it has room for, never a column of hundreds: 8 labels is 8
+    // labels whether the ring holds ten seconds or eleven days.
+    const double longSpans[] = {3600.0, 86400.0, 86400.0 * 30.0, 1.0e9};
+    for (const double span : longSpans) {
+        // From two labels up — the fewest drawTimeStrip ever asks for.
+        for (int maxLabels = 2; maxLabels <= 8; ++maxLabels) {
+            const double step = WaterfallView::timeLabelStep(span, maxLabels);
+            CHECK(step > 0.0);
+            const int drawn = labelsDrawn(span, step);
+            CHECK(drawn <= maxLabels);
+            CHECK(drawn >= 1);
+            CHECK(drawn < kLabelCountCap);  // the count was not truncated
+        }
+    }
+    // ONE label is the budget where the whole-hour rounding can overshoot:
+    // 1e9 s is 277777.8 hours, rounded up to 277778, which is longer than the
+    // history itself — so the step no longer fits and drawTimeStrip drops the
+    // strip. drawTimeStrip never asks for fewer than two labels (it clamps
+    // with std::max(2, ...)), so this is pinned as behaviour, not relied on.
+    CHECK(WaterfallView::timeLabelStep(1.0e9, 1) == 1000000800.0);
+    CHECK(WaterfallView::timeLabelStep(1.0e9, 1) > 1.0e9);
+    CHECK(labelsDrawn(1.0e9, WaterfallView::timeLabelStep(1.0e9, 1)) == 0);
+    CHECK(labelsDrawn(1.0e9, WaterfallView::timeLabelStep(1.0e9, 2)) >= 1);
+    // Past the top of the ladder the step is whole hours, and it is the
+    // ROUNDED-UP hour, so the label count never exceeds what was asked for.
+    CHECK(WaterfallView::timeLabelStep(7200.0, 1) == 7200.0);
+    CHECK(WaterfallView::timeLabelStep(3601.0, 1) == 7200.0);
+    CHECK(WaterfallView::timeLabelStep(9000.0, 1) == 10800.0);  // 2.5 h -> 3 h
+    CHECK(WaterfallView::timeLabelStep(86400.0, 8) == 10800.0);  // 3 h x 8 = a day
+}
+
+void testTimeLabelStepSweep() {
+    // Geometric sweep from a millisecond to thirty years against the
+    // independent reference, checking the three properties the axis rests on
+    // at every point: the answer is the reference's, it never puts more
+    // figures on the strip than were asked for, and it is always a rung of
+    // the ladder or a whole number of hours (never an arbitrary interval like
+    // "37 s", which is what a mis-ordered ladder produces).
+    int mismatches = 0;
+    int tooManyLabels = 0;
+    int offLadder = 0;
+    int notMonotone = 0;
+    int examined = 0;
+    for (int maxLabels = 1; maxLabels <= 8; ++maxLabels) {
+        double prevStep = 0.0;
+        for (int i = 0; i <= 720; ++i) {
+            const double span = std::pow(10.0, -3.0 + 0.0175 * static_cast<double>(i));
+            const double step = WaterfallView::timeLabelStep(span, maxLabels);
+            const double want = refTimeStep(span, maxLabels);
+            ++examined;
+            if (step != want) {
+                if (mismatches == 0) {
+                    std::printf("  timeLabelStep(%.6g, %d) = %.6g, want %.6g\n", span,
+                                maxLabels, step, want);
+                }
+                ++mismatches;
+            }
+            if (labelsDrawn(span, step) > maxLabels) {
+                ++tooManyLabels;
+            }
+            if (!onTimeLadder(step) && std::fmod(step, 3600.0) != 0.0) {
+                ++offLadder;
+            }
+            if (step < prevStep) {  // a longer history can never get a finer step
+                ++notMonotone;
+            }
+            prevStep = step;
+        }
+    }
+    CHECK(examined == 8 * 721);
+    CHECK(mismatches == 0);
+    CHECK(tooManyLabels == 0);
+    CHECK(offLadder == 0);
+    CHECK(notMonotone == 0);
+}
+
+// --- dbLabelStep (the strength key's dB scale) ------------------------------
+
+const double kDbLadderRef[] = {1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0};
+constexpr int kDbLadderN = 9;
+
+bool onDbLadder(double s) {
+    for (int i = 0; i < kDbLadderN; ++i) {
+        if (s == kDbLadderRef[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// HOW MANY FIGURES ACTUALLY REACH THE SCALE, asked the way the scale is drawn
+// rather than derived from the span: the first tick sits on the first multiple
+// of the step at or above the floor, and the last is kept if it is within
+// 1e-6 dB of the ceiling (kDbTickEps in waterfall_view.cpp — the same
+// tolerance layoutDbTicks uses, so "fits" and "drawn" cannot disagree).
+constexpr int kDbTickCap = 4096;
+int dbTicksInRange(double lo, double hi, double step) {
+    if (!(step > 0.0) || !(hi > lo)) {
+        return 0;
+    }
+    const double first = std::ceil(lo / step) * step;
+    int n = 0;
+    while (n < kDbTickCap && first + static_cast<double>(n) * step <= hi + 1.0e-6) {
+        ++n;
+    }
+    return n;
+}
+
+// Independent statement of the documented rule, including the exception.
+double refDbStep(double lo, double hi, int maxIntervals) {
+    const double range = hi - lo;
+    if (!(range > 0.0) || maxIntervals < 1) {
+        return 0.0;
+    }
+    const double want = range / static_cast<double>(maxIntervals);
+    double chosen = 0.0;
+    for (int i = 0; i < kDbLadderN; ++i) {
+        if (kDbLadderRef[i] >= want) {
+            chosen = kDbLadderRef[i];
+            break;
+        }
+    }
+    if (!(chosen > 0.0)) {
+        chosen = std::ceil(want / 500.0) * 500.0;
+    }
+    if (dbTicksInRange(lo, hi, chosen) >= 2) {
+        return chosen;
+    }
+    double best = 0.0;
+    for (int i = 0; i < kDbLadderN; ++i) {
+        if (kDbLadderRef[i] < chosen && dbTicksInRange(lo, hi, kDbLadderRef[i]) >= 2) {
+            best = kDbLadderRef[i];
+        }
+    }
+    return best;
+}
+
+void testDbLabelStepDocumentedCases() {
+    // THE HEADER'S OWN CASE, and the reason this function exists: -160 dB ..
+    // -5 dB on the default panel width chose 100 and printed the single
+    // figure "-100". The step is coarse enough to fit the range on paper and
+    // still lands its first tick most of the way in, so the second one falls
+    // past the ceiling. The exception must take 50 instead.
+    CHECK(dbTicksInRange(-160.0, -5.0, 100.0) == 1);  // the defect, stated
+    CHECK(WaterfallView::dbLabelStep(-160.0, -5.0, 2) == 50.0);
+    CHECK(WaterfallView::dbLabelStep(-160.0, -5.0, 3) == 50.0);
+    CHECK(dbTicksInRange(-160.0, -5.0, 50.0) == 3);  // -150, -100, -50
+    // maxIntervals == 1 asks for the coarsest scale there is; the exception
+    // still overrides it, because a scale finer than requested crowds the bar
+    // while a lone number says nothing at all.
+    CHECK(WaterfallView::dbLabelStep(-160.0, -5.0, 1) == 50.0);
+
+    // The header's other example: the common ranges stay as fine as they
+    // were — the default -110 .. 0 keeps -100 / -50 / 0.
+    CHECK(WaterfallView::dbLabelStep(-110.0, 0.0, 3) == 50.0);
+    CHECK(dbTicksInRange(-110.0, 0.0, 50.0) == 3);
+    // A range whose width-driven rung fits: no exception, the rung stands.
+    CHECK(WaterfallView::dbLabelStep(-100.0, 0.0, 4) == 25.0);
+    CHECK(dbTicksInRange(-100.0, 0.0, 25.0) == 5);
+}
+
+void testDbLabelStepLadderBoundaries() {
+    // Both sides of every rung. The floor is -1000, a multiple of every rung
+    // AND of the 500 fallback, so the first tick always lands on it and the
+    // two-figure exception cannot mask the transition being measured; four
+    // intervals' worth of range makes the rung above still fit two figures,
+    // so the change of rung is the only thing moving.
+    //
+    // The hair either side is a nanodecibel rather than one ulp: at the top
+    // rung the ulp of the ceiling (2.8e-14 at -200 dB) is finer than the ulp
+    // of the range it produces (1.1e-13 at 800 dB), so a one-ulp nudge is
+    // rounded away and the boundary never moves. 1e-9 dB survives that and is
+    // still nine orders below anything the Display section can express.
+    const double lo = -1000.0;
+    const double hair = 1.0e-9;
+    for (int i = 0; i < kDbLadderN; ++i) {
+        const double s = kDbLadderRef[i];
+        const double hi = lo + 4.0 * s;
+        CHECK(WaterfallView::dbLabelStep(lo, hi, 4) == s);
+        CHECK(WaterfallView::dbLabelStep(lo, hi - hair, 4) == s);
+        const double wantAbove = (i + 1 < kDbLadderN) ? kDbLadderRef[i + 1] : 500.0;
+        CHECK(WaterfallView::dbLabelStep(lo, hi + hair, 4) == wantAbove);
+    }
+    // Past the top of the ladder the step is rounded up to whole 500s. Both
+    // of these are unreachable through the Display section (its widest range
+    // is 180 dB); they pin the branch, not a user-visible state.
+    CHECK(WaterfallView::dbLabelStep(-4000.0, -3000.0, 2) == 500.0);
+    CHECK(WaterfallView::dbLabelStep(-4000.0, -2998.0, 2) == 1000.0);  // 501 -> 1000
+}
+
+void testDbLabelStepNarrowAndDegenerate() {
+    const double qnan = std::nan("");
+    // A SPAN UNDER A DECIBEL. Nothing on the ladder puts two figures inside
+    // it, and the documented answer is no scale at all — an unlabelled ramp
+    // under a plate that still states the exact floor and ceiling.
+    CHECK(WaterfallView::dbLabelStep(-100.5, -100.0, 4) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(-100.25, -100.0, 1) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(-100.0, std::nextafter(-100.0, 0.0), 8) == 0.0);
+    // Exactly one decibel, phased onto the integers: two figures fit, so
+    // there IS a scale.
+    CHECK(WaterfallView::dbLabelStep(-100.0, -99.0, 1) == 1.0);
+    CHECK(dbTicksInRange(-100.0, -99.0, 1.0) == 2);
+    // The same one-decibel span phased off the integers: the first multiple
+    // is almost the whole span in, so only one figure lands and the answer
+    // goes back to none. Same width, opposite outcome — which is exactly why
+    // the decision cannot be made from the span alone.
+    CHECK(dbTicksInRange(-100.5, -99.5, 1.0) == 1);
+    CHECK(WaterfallView::dbLabelStep(-100.5, -99.5, 1) == 0.0);
+
+    // No range, inverted range, NaN either end, no intervals asked for.
+    CHECK(WaterfallView::dbLabelStep(-100.0, -100.0, 4) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(0.0, -100.0, 4) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(qnan, 0.0, 4) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(-100.0, qnan, 4) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(qnan, qnan, 4) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(-100.0, 0.0, 0) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(-100.0, 0.0, -3) == 0.0);
+    CHECK(WaterfallView::dbLabelStep(-100.0, 0.0, -1000000) == 0.0);
+
+    // AN INFINITE BOUND, on the same terms as timeLabelStep's: unreachable
+    // through the Display section (both sliders are bounded), undocumented,
+    // and asserted only for the property that must hold either way — a step
+    // that is returned at all is one that puts at least two figures on the
+    // scale, which is the whole reason this function is not just a ladder
+    // lookup.
+    //
+    // MEASURED, for the record: all three answer 200 dB — the width-driven
+    // choice is infinite, fails the two-figure test, and the exception falls
+    // back to the coarsest rung on the ladder.
+    const double dinf = std::numeric_limits<double>::infinity();
+    const double infCases[3][2] = {{-100.0, dinf}, {-dinf, 0.0}, {-dinf, dinf}};
+    for (const auto& c : infCases) {
+        const double step = WaterfallView::dbLabelStep(c[0], c[1], 4);
+        CHECK(step == 0.0 || dbTicksInRange(c[0], c[1], step) >= 2);
+    }
+}
+
+void testDbLabelStepReachableSweep() {
+    // EVERY FLOOR/CEILING PAIR THE PRODUCT CAN REACH. The Display section's
+    // Min dB slider spans [-160, -20] and Max dB [-100, 20], and the section
+    // holds the two ends at least kMinDbSpan = 10 dB apart (app_window.cpp).
+    // That domain is the 12,966 whole-decibel pairs the header counts, and
+    // the count is asserted below so a slider range changing underneath this
+    // test is visible rather than silently shrinking the sweep.
+    //
+    // Over all of them, and over every label budget a panel from a sliver to
+    // a full window can produce: the answer matches the independent
+    // reference, there is ALWAYS a scale (never the lone-figure case, never
+    // none), the step is always a rung of the ladder, and the scale never
+    // needs more ticks than the drawing loop's 64-entry cap can place.
+    int pairs = 0;
+    int mismatches = 0;
+    int lonelyOrAbsent = 0;
+    int offLadder = 0;
+    int overTickCap = 0;
+    int maxTicks = 0;
+    for (int floorDb = -160; floorDb <= -20; ++floorDb) {
+        for (int ceilDb = -100; ceilDb <= 20; ++ceilDb) {
+            if (ceilDb - floorDb < 10) {
+                continue;
+            }
+            ++pairs;
+            const double lo = static_cast<double>(floorDb);
+            const double hi = static_cast<double>(ceilDb);
+            for (int maxIntervals = 1; maxIntervals <= 12; ++maxIntervals) {
+                const double step = WaterfallView::dbLabelStep(lo, hi, maxIntervals);
+                const double want = refDbStep(lo, hi, maxIntervals);
+                if (step != want) {
+                    if (mismatches == 0) {
+                        std::printf("  dbLabelStep(%g, %g, %d) = %g, want %g\n", lo, hi,
+                                    maxIntervals, step, want);
+                    }
+                    ++mismatches;
+                }
+                const int ticks = dbTicksInRange(lo, hi, step);
+                if (ticks < 2) {
+                    if (lonelyOrAbsent == 0) {
+                        std::printf("  dbLabelStep(%g, %g, %d) = %g places %d figure(s)\n",
+                                    lo, hi, maxIntervals, step, ticks);
+                    }
+                    ++lonelyOrAbsent;
+                }
+                if (!onDbLadder(step)) {
+                    ++offLadder;
+                }
+                if (ticks > 64) {  // kMaxDbTicks, the drawing loop's cap
+                    ++overTickCap;
+                }
+                maxTicks = std::max(maxTicks, ticks);
+            }
+        }
+    }
+    CHECK(pairs == 12966);
+    CHECK(mismatches == 0);
+    CHECK(lonelyOrAbsent == 0);
+    CHECK(offLadder == 0);
+    CHECK(overTickCap == 0);
+    CHECK(maxTicks >= 2);
+}
+
+// --- filledRows (how much of the ring is a measurement) ---------------------
+
+void testFilledRowsCountsWrittenLines() {
+    WaterfallView wf(8, 4);
+    // A view that has received nothing holds no history — the whole point:
+    // the application's own line counter survives a GL rebuild and this does
+    // not, so a restart must read as an empty ring and not a full one.
+    CHECK(wf.filledRows() == 0);
+    CHECK(wf.hasRange() == false);
+
+    // One per line, then saturating at texHeight() and staying there: past
+    // that the ring recycles a row per line and the written depth stops
+    // growing.
+    for (int i = 1; i <= 20; ++i) {
+        addUniformLine(wf, static_cast<float>(i % 15) / 15.0f);
+        CHECK(wf.filledRows() == std::min(i, wf.texHeight()));
+        CHECK(wf.filledRows() <= wf.texHeight());
+    }
+}
+
+void testFilledRowsMarksExactlyTheWrittenRows() {
+    // THE PROPERTY THE TIME STRIP RESTS ON: rows cursor .. cursor+filled-1
+    // (mod H) are the ones a line was actually written into, and every other
+    // row is still the constructor's pre-fill. Labelling those with an age is
+    // what put "5s" beside a band of nothing on a fresh receiver.
+    WaterfallView wf(8, 8);
+    const float levels[3] = {3.0f / 15.0f, 7.0f / 15.0f, 11.0f / 15.0f};
+    for (int i = 0; i < 3; ++i) {
+        addUniformLine(wf, levels[i]);
+    }
+    CHECK(wf.filledRows() == 3);
+    const int c = wf.rowCursor();
+    // Newest first, from the cursor.
+    CHECK(rowIsUniform(wf, (c + 0) % 8, waterfallColor(levels[2])));
+    CHECK(rowIsUniform(wf, (c + 1) % 8, waterfallColor(levels[1])));
+    CHECK(rowIsUniform(wf, (c + 2) % 8, waterfallColor(levels[0])));
+    // Everything past filledRows() is still the empty colour, and none of the
+    // three written levels is the empty colour, so this cannot pass by
+    // accident.
+    for (int i = 0; i < 3; ++i) {
+        CHECK(waterfallColor(levels[i]) != waterfallColor(0.0f));
+    }
+    for (int k = wf.filledRows(); k < 8; ++k) {
+        CHECK(rowIsUniform(wf, (c + k) % 8, waterfallColor(0.0f)));
+    }
+}
+
+void testFilledRowsCountsDegenerateLines() {
+    // A dropout was still received. It is painted as the floor colour on
+    // purpose so the gap scrolls through the picture like any other line, and
+    // it must count: a strip that skipped them would measure the history as
+    // shorter than the picture it labels.
+    WaterfallView wf(8, 16);
+    float bins[8];
+    for (int i = 0; i < 8; ++i) {
+        bins[i] = -100.0f + 10.0f * static_cast<float>(i);
+    }
+    wf.addLine(nullptr, 0, -100.0f, 0.0f);  // null line
+    CHECK(wf.filledRows() == 1);
+    wf.addLine(bins, 0, -100.0f, 0.0f);  // empty line
+    CHECK(wf.filledRows() == 2);
+    wf.addLine(bins, 8, -30.0f, -30.0f);  // degenerate range
+    CHECK(wf.filledRows() == 3);
+    CHECK(wf.hasRange() == false);  // ... and no range to name it with
+    wf.addLine(bins, 8, 0.0f, -100.0f);  // inverted range
+    CHECK(wf.filledRows() == 4);
+    const float qnanf = std::nanf("");
+    wf.addLine(bins, 8, qnanf, 0.0f);  // NaN bound
+    CHECK(wf.filledRows() == 5);
+    CHECK(wf.hasRange() == false);
+    // All five were painted as the empty colour, and all five counted.
+    const int c = wf.rowCursor();
+    for (int k = 0; k < 5; ++k) {
+        CHECK(rowIsUniform(wf, (c + k) % 16, waterfallColor(0.0f)));
+    }
+}
+
+void testFilledRowsInertViews() {
+    // No texture, no history — and never a count over a ring that has no
+    // rows to hold it.
+    float bins[4] = {-90.0f, -60.0f, -30.0f, 0.0f};
+    const int dims[3][2] = {{0, 0}, {8, 0}, {-4, -4}};
+    for (const auto& d : dims) {
+        WaterfallView wf(d[0], d[1]);
+        CHECK(wf.filledRows() == 0);
+        for (int i = 0; i < 5; ++i) {
+            wf.addLine(bins, 4, -100.0f, 0.0f);
+        }
+        CHECK(wf.filledRows() == 0);
+        CHECK(wf.filledRows() <= wf.texHeight());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -443,5 +972,17 @@ int main() {
     testUvSeam();
     testUvClampAndDegenerate();
     testUvInvariantsSweep();
+    testTimeLabelStepLadderBoundaries();
+    testTimeLabelStepDegenerate();
+    testTimeLabelStepNarrowAndWide();
+    testTimeLabelStepSweep();
+    testDbLabelStepDocumentedCases();
+    testDbLabelStepLadderBoundaries();
+    testDbLabelStepNarrowAndDegenerate();
+    testDbLabelStepReachableSweep();
+    testFilledRowsCountsWrittenLines();
+    testFilledRowsMarksExactlyTheWrittenRows();
+    testFilledRowsCountsDegenerateLines();
+    testFilledRowsInertViews();
     return testSummary("test_waterfall_view");
 }
