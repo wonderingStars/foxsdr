@@ -140,11 +140,18 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     }
 
     // Engraved into brass, which the palette's rule allows for a caption on
-    // metal and forbids for a reading on glass. A dead key letters in the
-    // faint ink instead, so it reads as unavailable rather than as unlabelled.
+    // metal and forbids for a reading on glass. A dead key letters in a muted
+    // ink instead, so it reads as unavailable rather than as unlabelled.
+    //
+    // MUTED, NOT FAINT. A disabled key's ground is kWell; kInkFaint on it is
+    // about 4:1, and this window has three keys that spend most of their life
+    // disabled - FIT on a module that cannot be fitted, ALREADY FITTED, and
+    // CHECK NOW before a source is set - so the dead label is the one a user
+    // most often has to read. kInkMuted is about 6:1 there and is still a
+    // clear step below the cream of a live key.
     ImFont* f = fonts::ui();
     const float px = fonts::kTinySize;
-    const ImU32 ink = enabled ? theme::kEnamel : theme::kInkFaint;
+    const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     const float lh = faceH(f, px);
     const int lines = (line2 != nullptr && line2[0] != '\0') ? 2 : 1;
     float y = (tl.y + br.y) * 0.5f - lh * static_cast<float>(lines) * 0.5f +
@@ -314,13 +321,17 @@ void drawCountLine(ImDrawList* dl, const ImVec2& at, int n, int m, const char* t
     const float base = at.y;
     const float uOff = base + (faceH(rf, px) - faceH(uf, px)) * 0.5f;
     float x = at.x;
+    // THE WORDS ARE MUTED, NOT FAINT. The two figures are the reading and keep
+    // the amber; the words between and after them are what say WHAT was
+    // counted, and "3 OF 11 MODULES SHOWN" with the words unreadable is a pair
+    // of numbers about nothing.
     dl->AddText(rf, px, ImVec2(x, base), theme::kAmber, nBuf);
     x += textW(rf, px, nBuf);
-    dl->AddText(uf, px, ImVec2(x, uOff), theme::kInkFaint, " OF ");
+    dl->AddText(uf, px, ImVec2(x, uOff), theme::kInkMuted, " OF ");
     x += textW(uf, px, " OF ");
     dl->AddText(rf, px, ImVec2(x, base), theme::kAmber, mBuf);
     x += textW(rf, px, mBuf);
-    dl->AddText(uf, px, ImVec2(x + 4.0f, uOff), theme::kInkFaint, trail);
+    dl->AddText(uf, px, ImVec2(x + 4.0f, uOff), theme::kInkMuted, trail);
 }
 
 float countLineHeight() {
@@ -657,7 +668,20 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
     }
     const float blurbH = m.blurb.empty() ? 0.0f : (wrapH(uf, tiny, inner, m.blurb.c_str()) + 8.0f);
     const int factRows = (static_cast<int>(facts.size()) + 1) / 2;
-    const float factRowH = legH + 2.0f + tinyH + 8.0f;
+    // THE ROW IS AS TALL AS THE TALLEST VALUE IN IT, measured in the face that
+    // value will actually be drawn in. Every cell is drawn WRAPPED to its
+    // column, so a value that no longer fits on one line does not clip - it
+    // takes a second and prints through the key of the row beneath it. The two
+    // that get close are "fitted, takes no signal" and "12, this build needs
+    // 13", and whether either fits depends on the face's size AND on how
+    // narrow the caller made the plate, which is exactly the pair of things a
+    // constant cannot know.
+    float factValueH = tinyH;
+    for (const PlateFact& f : facts) {
+        factValueH = std::max(
+            factValueH, wrapH(faceForValue(f.value.c_str()), tiny, colW, f.value.c_str()));
+    }
+    const float factRowH = legH + 2.0f + factValueH + 8.0f;
     float box1H = kBoxPad + nameH + 3.0f + tinyH + blurbH + 10.0f + 1.0f + 10.0f +
                   factRowH * static_cast<float>(factRows) + kBoxPad - 8.0f;
     const float homeH = m.homepage.empty() ? 0.0f : (tinyH + 6.0f);
@@ -726,7 +750,11 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
             const PlateFact& f = facts[i];
             const float cx = x + (i % 2u == 0u ? 0.0f : (colW + 14.0f));
             const float cy = y + factRowH * static_cast<float>(i / 2u);
-            dl->AddText(lf, tiny, ImVec2(cx, cy), theme::kInkFaint, f.key);
+            // THE KEY IS WHAT MAKES THE VALUE MEAN ANYTHING, so it is lettered
+            // to be read: muted ink on the plate's dark ground is about 6:1
+            // where the faint it used to take is about 4:1, and the value
+            // under it still carries the emphasis in its own tone.
+            dl->AddText(lf, tiny, ImVec2(cx, cy), theme::kInkMuted, f.key);
             const ImVec2 vAt(cx, cy + legH + 2.0f);
             if (f.hatched) {
                 addHatch(dl, ImVec2(vAt.x, vAt.y + 1.0f),
@@ -738,7 +766,10 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
         }
         y += factRowH * static_cast<float>(factRows);
         if (!m.homepage.empty()) {
-            dl->AddText(uf, tiny, ImVec2(x, y - 2.0f), theme::kInkFaint, m.homepage.c_str(),
+            // A URL IS FOR COPYING, so it is lettered to be transcribed rather
+            // than to be sensed. Faint ink on this ground is about 4:1, which
+            // is where a run of punctuation stops being readable first.
+            dl->AddText(uf, tiny, ImVec2(x, y - 2.0f), theme::kInkMuted, m.homepage.c_str(),
                         nullptr, inner);
         }
         boxTop = bBR.y + kBoxGap;
@@ -774,7 +805,11 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
                 dl->AddText(uf, tiny, ImVec2(x + markW, y),
                             r.outward ? theme::kIvory : theme::kCream, r.key);
                 y += faceH(uf, tiny) + 2.0f;
-                dl->AddText(uf, tiny, ImVec2(x + markW, y), theme::kInkFaint,
+                // THE SENTENCE UNDER EACH REACH ROW IS THE ANSWER to what the
+                // module can actually do with this machine - the one thing on
+                // this plate a user reads before deciding to fit something.
+                // Muted rather than faint for that reason alone.
+                dl->AddText(uf, tiny, ImVec2(x + markW, y), theme::kInkMuted,
                             r.detail.c_str(), nullptr, inner - markW);
                 y += wrapH(uf, tiny, inner - markW, r.detail.c_str()) + 8.0f;
             }
@@ -939,6 +974,23 @@ const char* moduleKindTag(const ModulePlate& m) {
     return "MODULE";
 }
 
+// See plugin_store_view.hpp. Every word moduleKindTag can return, measured in
+// the face the chip is lettered in, plus the shoulder the chip needs either
+// side of it. The list is written out rather than derived, because a tag
+// missing from it is a chip that overflows in exactly the state nobody tests.
+float moduleKindTagWidth() {
+    static const char* const kTags[] = {"NOT KNOWN", "NOT DECLARED", "DECODER",
+                                        "MAP",       "PANEL",        "CONTROL",
+                                        "MODULE"};
+    ImFont* f = fonts::ui();
+    const float px = fonts::kTinySize;
+    float w = 0.0f;
+    for (const char* t : kTags) { w = std::max(w, textW(f, px, t)); }
+    // The floor is the width the store's card used before this was measured,
+    // so a narrow face cannot shrink the chip out of the design.
+    return std::max(84.0f, w + 14.0f);
+}
+
 std::string moduleReachSummary(const ModulePlate& m) {
     // NEVER "reaches nothing". Every plugin here is native code mapped into
     // this process; there is no data-only module type, so no module reaches
@@ -961,6 +1013,13 @@ std::string moduleReachSummary(const ModulePlate& m) {
 }
 
 ImU32 moduleReachColour(const ModulePlate& m) {
+    // FAINT STAYS FAINT HERE, and it was tried the other way. Raising the
+    // unknown case to kInkMuted for legibility would have made it the SAME
+    // tone as the inward case two lines below - two different answers in one
+    // colour, which is worse than a dim one, and testReachColour rejected it
+    // on exactly that ground. The three tones on this ladder are the whole
+    // signal; the legibility of the sentence they colour is bought with the
+    // size raise instead.
     if (!m.haveCapabilities) { return theme::kInkFaint; }
     if ((m.capabilities &
          (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
@@ -982,6 +1041,11 @@ const char* moduleStateWord(const ModulePlate& m) {
 
 ImU32 moduleStateColour(const ModulePlate& m) {
     switch (plateState(m)) {
+        // FAINT STAYS FAINT HERE, for the same reason as moduleReachColour
+        // above: NoSignal three lines down is kInkMuted, so lifting NotFitted
+        // to it would letter two of the five states identically. Five states
+        // need five tones more than one of them needs a brighter one, and
+        // testStateInkAndLamp rejected the change on that ground.
         case PlateState::NotFitted: return theme::kInkFaint;
         case PlateState::Refused: return theme::kAlarm;
         // A stop is a choice the user made, so it letters in plain ink rather
@@ -1051,9 +1115,50 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
     constexpr float kPad = 10.0f;
     constexpr float kGap = 10.0f;
-    constexpr float kKeyH = 28.0f;
-    constexpr float kRockerH = 22.0f;
-    constexpr float kSegH = 24.0f;
+    // THE CONTROL HEIGHTS, MEASURED RATHER THAN TYPED. Each was fitted around
+    // a 12 px engraving and each holds a different amount of it, so no single
+    // adjustment would have been right for all three:
+    //
+    //   A KEY carries one centred word.
+    //
+    //   A ROCKER carries a label PLATE, which is the face's height plus five,
+    //   and the rows are stacked with no gap between them - so a row only as
+    //   tall as its own plate makes two neighbouring plates touch.
+    //
+    //   A SEGMENT carries one centred word in the shallowest of the three.
+    //
+    // And the PLATE KEY at the foot of the data plate carries TWO lines -
+    // "UPDATE MODULE" over "TO v1.2.3" - so it is the one that runs out of
+    // room first as the face grows: 34 px holds two 14 px lines with three
+    // pixels top and bottom, and two 17 px lines not at all.
+    //
+    // The old figures stay as floors: they are the design's proportions and
+    // nothing here should shrink if a future face happens to be short.
+    const float kKeyH = std::max(28.0f, tinyH + 12.0f);
+    const float kRockerH = std::max(22.0f, tinyH + 10.0f);
+    const float kSegH = std::max(24.0f, tinyH + 10.0f);
+    const float kPlateKeyH = std::max(34.0f, tinyH * 2.0f + 8.0f);
+    // AND THE FIXED KEY WIDTHS, each from the widest word it can carry. Every
+    // one of these was a literal, and a key whose word no longer fits does not
+    // wrap or clip - drawDeckKey CENTRES its label, so the word simply hangs
+    // out over both machined edges.
+    const float kClearW = std::max(60.0f, textW(uf, tiny, "CLEAR") + 22.0f);
+    const float kCheckW = std::max({92.0f, textW(uf, tiny, "CHECK NOW") + 22.0f,
+                                    textW(uf, tiny, "CHECK AGAIN") + 22.0f});
+    const float kUpdKeyW = std::max(96.0f, textW(uf, tiny, "UPDATE") + 22.0f);
+    // The banner's caption column: a lamp, then the longest of the five
+    // headings it can show, then the "n MODULES" line under it. Sized for the
+    // widest so the divider and the note beside it do not move when the
+    // catalogue's state changes.
+    const float kBannerCapW =
+        std::max({178.0f,
+                  6.0f * 2.0f + 8.0f +
+                      std::max({textW(lf, tiny, "CATALOGUE NOT READ"),
+                                textW(lf, tiny, "LAST CHECK FAILED"),
+                                textW(lf, tiny, "CATALOGUE IS EMPTY"),
+                                textW(lf, tiny, "UPDATES AVAILABLE"),
+                                textW(lf, tiny, "NO UPDATES")}) +
+                      kPad * 2.0f});
 
     // --- which rows are on screen, and in what order -------------------------
     const std::string q = lowerAscii(std::string(deck.search));
@@ -1180,10 +1285,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             "signature and vouches for nobody.";
     }
 
-    const float capW = 178.0f;
+    const float capW = kBannerCapW;
     const float bannerNoteW = width - capW - kPad * 3.0f - 12.0f;
     const float bannerHeadH = std::max(20.0f, noteHeight(bannerNoteW, bannerNote));
-    const float updKeyW = 96.0f;
+    const float updKeyW = kUpdKeyW;
     const float updNoteW = width - kPad * 2.0f - updKeyW - 12.0f;
 
     std::vector<int> updRows;
@@ -1216,7 +1321,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // alone is unreadable in a greyscale photograph and to about one man
         // in twelve.
         dl->AddText(lf, tiny, ImVec2(lampC.x + lampR + 8.0f, lampC.y - legH * 0.5f),
-                    bannerLit ? bannerLamp : theme::kInkFaint, bannerCaption);
+                    bannerLit ? bannerLamp : theme::kInkMuted, bannerCaption);
         if (updateCount > 0) {
             char n[16];
             std::snprintf(n, sizeof n, "%d", updateCount);
@@ -1226,7 +1331,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             dl->AddText(uf, tiny,
                         ImVec2(lampC.x + lampR + 8.0f + textW(rf, tiny, n) + 4.0f,
                                lampC.y - legH * 0.5f + legH + 3.0f),
-                        theme::kInkFaint, updateCount == 1 ? "MODULE" : "MODULES");
+                        theme::kInkMuted, updateCount == 1 ? "MODULE" : "MODULES");
         }
         addBenchDivider(dl, tl.x + kPad + capW - 10.0f, tl.y + kPad,
                         tl.y + kPad + bannerHeadH);
@@ -1259,7 +1364,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // PluginUpdate::reason, verbatim - it is user-facing copy the
                 // planner already wrote, and two wordings of one decision is
                 // how a product comes to give two answers.
-                dl->AddText(uf, tiny, ImVec2(rTL.x + 10.0f, ry), theme::kInkFaint,
+                dl->AddText(uf, tiny, ImVec2(rTL.x + 10.0f, ry), theme::kInkMuted,
                             sm.updateReason.c_str(), nullptr, updNoteW);
             }
             char keyId[24];
@@ -1292,15 +1397,31 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // TWO COLUMNS WHEN THEY FIT, ONE WHEN THEY DO NOT. A rocker whose label
     // plate has been squeezed off the row is a switch nobody can read, so the
     // well grows taller rather than letting that happen.
+    //
+    // AND "FIT" IS MEASURED FROM THE LONGEST LABEL, not from 74. A rocker's
+    // plate is drawn at the label's own width and is never clipped, so a
+    // column too narrow does not shorten the word - it puts the plate out
+    // through the switch beside it and through the count on the right-hand end
+    // of the row. At 14 px the longest of these six needs about 82 px of
+    // column before its count, so 74 was already the wrong side of the line
+    // and said so nowhere.
+    const float showRockerMinW = 16.0f + 7.0f +
+                                 std::max({textW(uf, tiny, "NOT DECLARED"),
+                                           textW(uf, tiny, "OTHER KINDS"),
+                                           textW(uf, tiny, "NOT FITTED"),
+                                           textW(uf, tiny, "CANNOT FIT"),
+                                           textW(uf, tiny, "DECODERS"),
+                                           textW(uf, tiny, "FITTED")}) +
+                                 12.0f + 6.0f + textW(rf, tiny, "000");
     const float showColW = (wellInner - 12.0f) * 0.5f;
-    const bool showTwoCols = showColW >= 74.0f;
+    const bool showTwoCols = showColW >= showRockerMinW;
     const float showRows = showTwoCols ? 3.0f : 6.0f;
     const float deckBH = kPad + legH + 8.0f + kRockerH * showRows + 8.0f +
                          noteHeight(wellInner, showNote) + kPad;
 
     const std::string sourceLine =
         model.sourceUrl.empty() ? std::string("no catalogue source set") : model.sourceUrl;
-    const float srcTextW = wellInner - 92.0f - 8.0f;
+    const float srcTextW = wellInner - kCheckW - 8.0f;
     const float srcLineH = std::max(kKeyH, wrapH(uf, tiny, srcTextW, sourceLine.c_str()));
     float deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
                    srcLineH + kPad;
@@ -1326,7 +1447,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "CATALOGUE SEARCH");
         y += legH + 8.0f;
 
-        const float clearW = 60.0f;
+        const float clearW = kClearW;
         const ImVec2 fTL(tl.x + kPad, y);
         const ImVec2 fBR(fTL.x + wellInner - clearW - 8.0f, y + fieldH);
         drawFreqDrumWell(dl, fTL, fBR);
@@ -1339,7 +1460,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
         ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kIvory));
-        ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::vec(theme::kInkFaint));
+        // The field's PLACEHOLDER, which is the only instruction the search
+        // gives before anything is typed - muted rather than faint for that.
+        ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::vec(theme::kInkMuted));
         ImGui::PushFont(uf, uiPx);
         ImGui::InputTextWithHint("##search", "type to narrow the catalogue", deck.search,
                                  sizeof deck.search);
@@ -1352,7 +1475,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             deck.search[0] = '\0';
         }
         y += fieldH + 9.0f;
-        dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkFaint, searchLegend,
+        dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted, searchLegend,
                     nullptr, wellInner);
         y += tinyH + 4.0f;
         // WHAT IS ON SCREEN AND WHAT EXISTS, both. "3 shown" alone cannot tell
@@ -1457,7 +1580,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // is asking for a decision it has withheld the facts for.
         dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted,
                     sourceLine.c_str(), nullptr, srcTextW);
-        if (drawDeckKey(dl, ImVec2(br.x - kPad - 92.0f, y),
+        if (drawDeckKey(dl, ImVec2(br.x - kPad - kCheckW, y),
                         ImVec2(br.x - kPad, y + kKeyH),
                         // AGAIN once anything has been asked, whatever came
                         // back. A failed check and an empty catalogue have
@@ -1499,7 +1622,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         }
         if (!model.sourceStatus.empty()) {
             y += 6.0f;
-            dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkFaint,
+            dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted,
                         model.sourceStatus.c_str(), nullptr, wellInner);
             y += wrapH(uf, tiny, wellInner, model.sourceStatus.c_str());
         }
@@ -1542,7 +1665,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             dl->AddText(uf, tiny,
                         ImVec2(br.x - kPad - cw + textW(rf, tiny, cnt) + 6.0f,
                                y + nameH - faceH(uf, tiny)),
-                        theme::kInkFaint, "SHOWN");
+                        theme::kInkMuted, "SHOWN");
         }
         y += nameH + 6.0f;
         addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
@@ -1587,8 +1710,17 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 drawNote(cdl, at, cw - 8.0f, theme::kGold, why);
                 ImGui::Dummy(ImVec2(cw, noteHeight(cw - 8.0f, why)));
             }
-            constexpr float kTagW = 84.0f;
-            constexpr float kActW = 92.0f;
+            // BOTH FIXED COLUMNS MEASURED FROM THEIR OWN WORDS. The tag chip
+            // is the shared measurement, so this card and the fitted-modules
+            // row draw one chip and not two; the action column has to hold
+            // whichever of FIT, UPDATE and FITTED this row gets, plus the
+            // state word wrapped beneath it, and 92 px was fitted around a
+            // 12 px face.
+            const float kTagW = moduleKindTagWidth();
+            const float kActW =
+                std::max({92.0f, textW(uf, tiny, "FIT") + 24.0f,
+                          textW(uf, tiny, "UPDATE") + 24.0f,
+                          textW(uf, tiny, "FITTED") + 24.0f});
             for (int idx : visible) {
                 const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
                 const ModulePlate& p = sm.plate;
@@ -1678,6 +1810,22 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
                 const float mx = cTL.x + 10.0f + kTagW + 12.0f;
                 float my = cTL.y + 10.0f;
+                // THE IDENTITY LINE IS CLIPPED TO ITS OWN COLUMN, which is the
+                // one thing on this card that was not. The name, the version
+                // and the state word are laid end to end from mx, none of them
+                // wrapped, so a long name pushes the two that follow it - and
+                // on a narrow store window midW is under a hundred pixels,
+                // which a twenty-character name at 18 px passes on its own.
+                // What they then print through is the FIT key, which is the
+                // control the row exists for. midW is the same width the blurb
+                // below is wrapped to and the same one the card's height was
+                // measured from, so the clip cannot disagree with either.
+                //
+                // Clipped rather than shortened deliberately: a name cut by
+                // the column edge still reads as a name that did not fit,
+                // where an ellipsis in the middle of a module's identity is a
+                // different string.
+                cdl->PushClipRect(ImVec2(mx, cTL.y), ImVec2(mx + midW, cBR.y), true);
                 cdl->AddText(lf, uiPx, ImVec2(mx, my),
                              isSel ? theme::kIvory : theme::kCream,
                              p.name.empty() ? "(unnamed module)" : p.name.c_str());
@@ -1696,12 +1844,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     const char* state = !p.fitted ? "NOT FITTED"
                                         : !p.loaded ? "REFUSED"
                                                     : "FITTED";
-                    const ImU32 sc = !p.fitted    ? theme::kInkFaint
+                    const ImU32 sc = !p.fitted    ? theme::kInkMuted
                                      : !p.loaded  ? theme::kAlarm
                                                   : theme::kPhosphor;
                     cdl->AddText(uf, tiny, ImVec2(vx, my + faceH(lf, uiPx) - tinyH), sc,
                                  state);
                 }
+                cdl->PopClipRect();
                 my += std::max(faceH(lf, uiPx), tinyH) + 4.0f;
                 if (!p.blurb.empty()) {
                     cdl->AddText(uf, tiny, ImVec2(mx, my), theme::kInkMuted, p.blurb.c_str(),
@@ -1712,8 +1861,12 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // Maker and licence on the ROW, not only on the plate: the
                     // terms a module arrives under are part of choosing it,
                     // not a detail to discover after fitting.
+                    // MUTED, NOT FAINT. This line is the maker and the licence
+                    // - the terms the module arrives under - and the comment
+                    // above says why they are on the row at all. A line worth
+                    // putting there is a line worth being able to read.
                     cdl->AddText(uf, tiny, ImVec2(mx, my),
-                                 p.licence.empty() ? theme::kGold : theme::kInkFaint, foot);
+                                 p.licence.empty() ? theme::kGold : theme::kInkMuted, foot);
                     if (reachBeside) {
                         cdl->AddText(uf, tiny,
                                      ImVec2(mx + textW(uf, tiny, foot) + 14.0f, my),
@@ -1851,25 +2004,25 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     blocked = "the legal notice must be acknowledged first";
                 }
                 if (!sm.plate.fitted) {
-                    if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + 34.0f),
+                    if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
                                     "FIT MODULE", nullptr, blocked.empty(), "platefit")) {
                         fitIndex_ = deck.selected;
                     }
                 } else if (hasUpdate) {
                     char to[96];
                     std::snprintf(to, sizeof to, "TO v%s", sm.updateToVersion.c_str());
-                    if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + 34.0f),
+                    if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
                                     "UPDATE MODULE", to, !model.busy, "plateupd")) {
                         updateIndex_ = deck.selected;
                     }
                 } else {
-                    drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + 34.0f),
+                    drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
                                 "ALREADY FITTED", nullptr, false, "platefitted");
                 }
-                ImGui::SetCursorScreenPos(ImVec2(kTL.x, kTL.y + 34.0f + 8.0f));
+                ImGui::SetCursorScreenPos(ImVec2(kTL.x, kTL.y + kPlateKeyH + 8.0f));
                 ImGui::Dummy(ImVec2(pw, 0.0f));
 
-                float ny = kTL.y + 34.0f + 8.0f;
+                float ny = kTL.y + kPlateKeyH + 8.0f;
                 if (!blocked.empty() && !sm.plate.fitted) {
                     // A DEAD KEY ALWAYS SAYS WHY. A greyed control with no
                     // sentence beside it is the fault this whole redesign

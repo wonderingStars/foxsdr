@@ -1161,6 +1161,23 @@ void MapView::draw(float width, float height,
     }
 
     // --- graticule --------------------------------------------------------
+    //
+    // EVERY WORD LAID ON THIS CHART IS PLACED FROM THE LINE HEIGHT, not from a
+    // literal. AddText takes a TOP-LEFT corner, so "sit this label above the
+    // line it names" is `line - lineHeight - a gap` and nothing else. The
+    // offsets here were -14, -15 and -16: that arithmetic done once by hand
+    // against the face size of the day, and untrue of any other. ImGui's line
+    // box IS the font size, so at 18 px a caption at -14 reaches four pixels
+    // PAST the parallel it names, and one at -16 on the chart's floor reaches
+    // two pixels past the bottom edge, where the map's own clip rect cuts it.
+    const float mapLineH = ImGui::GetTextLineHeight();
+    // The gap between a caption and the mark it belongs to. Small, because the
+    // pairing is what makes the number mean something.
+    constexpr float kLabelGap = 3.0f;
+    // How far off the floor of the chart the scale bar's rule is drawn. Named
+    // because the graticule below has to stand out of its way and was doing so
+    // against a number that had nothing to do with it.
+    constexpr float kScaleBarUp = 26.0f;
     const double step = graticuleStep(spanDeg_);
     // A graticule is engraved into the plate and its numbers are a caption on
     // it - never a reading, which is why neither of them is amber.
@@ -1191,8 +1208,15 @@ void MapView::draw(float width, float height,
         // other, neither readable. The line is still drawn; only its label
         // stands down, because the bar is the one that says what the map's
         // scale is.
-        if (a.y < origin.y + height - 40.0f) {
-            addMapLabel(dl, ImVec2(origin.x + 3.0f, a.y - 14.0f), theme::kCream, buf);
+        //
+        // THE KEEP-OUT IS THE BAR'S OWN GEOMETRY, not a literal 40. The bar
+        // sits kScaleBarUp above the floor and its caption a line height above
+        // that, so the zone to stand out of grows with the face exactly as the
+        // caption does - which a hand-fitted 40 could not.
+        const float scaleKeepOut = kScaleBarUp + mapLineH + kLabelGap + 4.0f;
+        if (a.y - kLabelGap < origin.y + height - scaleKeepOut) {
+            addMapLabel(dl, ImVec2(origin.x + 3.0f, a.y - mapLineH - kLabelGap),
+                        theme::kCream, buf);
         }
     }
     const double lon0 = std::floor((centreLon_ - lonSpan * 0.5) / step) * step;
@@ -1202,7 +1226,10 @@ void MapView::draw(float width, float height,
         dl->AddLine(a, b, gridCol);
         char buf[24];
         std::snprintf(buf, sizeof buf, "%.4g", lon);
-        addMapLabel(dl, ImVec2(a.x + 3.0f, origin.y + height - 16.0f), theme::kCream, buf);
+        // ON THE FLOOR OF THE CHART, and the whole line box inside it - which
+        // -16 gave a 16 px face exactly and an 18 px face two pixels short of.
+        addMapLabel(dl, ImVec2(a.x + 3.0f, origin.y + height - mapLineH - kLabelGap),
+                    theme::kCream, buf);
     }
 
     // --- range rings around the receiver ---------------------------------
@@ -1224,7 +1251,8 @@ void MapView::draw(float width, float height,
             dl->AddCircle(h, px, theme::withAlpha(theme::kBrassDark, 200.0f / 255.0f), 64);
             char buf[24];
             std::snprintf(buf, sizeof buf, "%.0f km", r);
-            addMapLabel(dl, ImVec2(h.x + 3.0f, h.y - px - 14.0f), theme::kCream, buf);
+            addMapLabel(dl, ImVec2(h.x + 3.0f, h.y - px - mapLineH - kLabelGap),
+                        theme::kCream, buf);
         }
         // THE RECEIVER'S OWN MARK IS LETTERING, not a reading: this is the one
         // position on the map a hand put there, so it takes the ivory the rest
@@ -1604,7 +1632,10 @@ void MapView::draw(float width, float height,
 
         const char* lbl = ht.t.label[0] != '\0' ? ht.t.label : ht.t.id;
         const float lblX = s.x + (picked ? 15.0f : 8.0f);
-        addMapLabel(dl, ImVec2(lblX, s.y - 6.0f), col, lbl);
+        // CENTRED ON THE MARK IT NAMES, which is half a line height up. The
+        // six pixels that stood here centred no face this application has
+        // shipped; at 18 px the label rode three below the target's own dot.
+        addMapLabel(dl, ImVec2(lblX, s.y - mapLineH * 0.5f), col, lbl);
 
         if (hovered) {
             const float dx = mouse.x - s.x;
@@ -1756,7 +1787,7 @@ void MapView::draw(float width, float height,
             double barKm = 1.0;
             while (barKm / kmPerPx < 60.0) { barKm *= 2.0; }
             const float barPx = static_cast<float>(barKm / kmPerPx);
-            const ImVec2 a(origin.x + 12.0f, origin.y + height - 26.0f);
+            const ImVec2 a(origin.x + 12.0f, origin.y + height - kScaleBarUp);
             const ImVec2 b(a.x + barPx, a.y);
             // Printed on the chart in cream, one tone below the ivory the
             // receiver's own mark takes: the bar states the map's scale, it is
@@ -1775,7 +1806,11 @@ void MapView::draw(float width, float height,
                 std::snprintf(buf, sizeof buf, "%.0f km at %.0f %c", barKm,
                               std::fabs(refLat), (refLat < 0.0) ? 'S' : 'N');
             }
-            addMapLabel(dl, ImVec2(a.x, a.y - 15.0f), barCol, buf);
+            // ABOVE THE RULE IT DESCRIBES, by a whole line. At -15 an 18 px
+            // line box reaches three pixels below the bar - so the one figure
+            // on this chart that is a MEASUREMENT was set overlapping its own
+            // scale, which is where a descender lands.
+            addMapLabel(dl, ImVec2(a.x, a.y - mapLineH - kLabelGap), barCol, buf);
         }
     }
 
@@ -1913,11 +1948,18 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     }
 
     // ENGRAVED INTO BRASS, which the design's own rule allows for a caption on
-    // metal and forbids for a reading on glass. A dead key letters in the
-    // faint ink instead, so it reads as unavailable rather than as unlabelled.
+    // metal and forbids for a reading on glass. A dead key letters in a muted
+    // ink instead, so it reads as unavailable rather than as unlabelled.
+    //
+    // MUTED, NOT FAINT. A disabled key's ground is kWell, and kInkFaint on it
+    // is about 4:1 - legible in a screenshot and not on a panel at arm's
+    // length, which for the one control that has to say what it WOULD do is
+    // the wrong half of the trade. kInkMuted on the same ground is about 6:1
+    // and still visibly dimmer than the cream of a live key, so the state is
+    // carried by the tone gap rather than by making the words unreadable.
     ImFont* f = cascade::gui::fonts::ui();
     const float px = cascade::gui::fonts::kTinySize;
-    const ImU32 ink = enabled ? theme::kEnamel : theme::kInkFaint;
+    const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     const float lh = faceH(f, px);
     const int lines = (line2 != nullptr && line2[0] != '\0') ? 2 : 1;
     float y = (tl.y + br.y) * 0.5f - lh * static_cast<float>(lines) * 0.5f +
@@ -2011,8 +2053,14 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
             // A blocked switch's hint is the REASON, and a reason is trouble
             // the user can clear - so it takes the amber a note takes, not the
             // engraved grey of an ordinary caption.
+            //
+            // AND THE ORDINARY ONE IS MUTED RATHER THAN FAINT. This hint is
+            // the only thing on the row that says what the switch DOES; it is
+            // a sentence to be read, not a decorative legend, and kInkFaint on
+            // the deck's enamel is about 3.7:1 - below the 4.5:1 a run of
+            // words needs.
             dl->AddText(hf, hpx, ImVec2(hx, tl.y + (rowH - faceH(hf, hpx)) * 0.5f),
-                        blocked ? theme::kGold : theme::kInkFaint, hint);
+                        blocked ? theme::kGold : theme::kInkMuted, hint);
         }
     }
     return pressed && !blocked;
@@ -2104,9 +2152,17 @@ void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
 // already exists; all that is added here is the arithmetic that decides how
 // wide each aperture is, since a sign and a decimal point do not need a
 // digit's width.
-constexpr float kCellW = 13.0f;
-constexpr float kCellNarrowW = 8.0f;
-constexpr float kCellH = 26.0f;
+//
+// AND THE APERTURE IS MEASURED FROM THE FIGURE IT HOLDS. These three were
+// literals - 13, 8 and 26 - fitted by eye around a 15 px counter face. What
+// the raise to 17 cost is the SHOULDER on the narrow cells: Nova Mono advances
+// 6.85 px at 17, so the sign and the decimal point stood in an 8 px aperture
+// with about half a pixel of metal either side, where the figure cells still
+// had two. A figure touching the machined edge of its window reads as a letter
+// in a box rather than as a drum behind glass - and one more point of face
+// would have taken it past the edge entirely, because drawFreqDrumCell CENTRES
+// its glyph and never clips, so the overflow would have gone into the cell
+// beside it rather than being cut. See coordCellWidth.
 constexpr float kCellGap = 2.0f;
 
 bool narrowCell(char c) { return c == '.' || c == '+' || c == '-'; }
@@ -2121,7 +2177,7 @@ bool narrowCell(char c) { return c == '.' || c == '+' || c == '-'; }
 float coordCellsWidth(const char* text, float scale) {
     float w = 0.0f;
     for (const char* p = text; *p != '\0'; ++p) {
-        w += (narrowCell(*p) ? kCellNarrowW : kCellW) * scale;
+        w += cascade::gui::coordCellWidth(*p) * scale;
         w += kCellGap;
     }
     return (w > 0.0f) ? w - kCellGap : 0.0f;
@@ -2142,8 +2198,9 @@ void drawCoordCells(ImDrawList* dl, const ImVec2& tl, const char* text, bool kno
     // out. The clip on the well is what keeps the overflow tidy.
     const float px = std::max(9.0f, cascade::gui::fonts::kReadingSize * scale);
     for (const char* p = text; *p != '\0'; ++p) {
-        const float w = (narrowCell(*p) ? kCellNarrowW : kCellW) * scale;
-        drawFreqDrumCell(dl, ImVec2(x, tl.y), ImVec2(x + w, tl.y + kCellH * scale),
+        const float w = cascade::gui::coordCellWidth(*p) * scale;
+        drawFreqDrumCell(dl, ImVec2(x, tl.y),
+                         ImVec2(x + w, tl.y + cascade::gui::coordCellHeight() * scale),
                          cascade::gui::coordApertureGlyph(*p, known), known, px);
         x += w + kCellGap;
     }
@@ -2195,6 +2252,28 @@ const char* satelliteSortKeyLabel(int index) {
     }
 }
 
+// See map_view.hpp. Both are measured in the COUNTER face at the size the
+// aperture is lettered at, because that is the only thing either of them is
+// about: an aperture exists to frame one figure, and a frame with no metal
+// left around what it frames has stopped being a frame.
+//
+// The SHOULDERS are the point - three pixels for a sign or a point, four for a
+// figure - and they are what the old literals stopped providing at 17 px. The
+// old widths stay as floors, so a face whose glyphs happen to be narrow cannot
+// shrink the counter below the proportions the design drew it at.
+float coordCellWidth(char shape) {
+    ImFont* f = cascade::gui::fonts::reading();
+    const float px = cascade::gui::fonts::kReadingSize;
+    const char s[2] = {shape, '\0'};
+    const float glyph = f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x;
+    // A sign and a decimal point are not figures and do not need a figure's
+    // width; they still need their own glyph plus a shoulder.
+    return narrowCell(shape) ? std::max(8.0f, glyph + 3.0f)
+                             : std::max(13.0f, glyph + 4.0f);
+}
+
+float coordCellHeight() { return std::max(26.0f, cascade::gui::fonts::kReadingSize + 9.0f); }
+
 // See map_view.hpp. A figure becomes a dash, a sign becomes nothing, and
 // everything else - the decimal point - is left where it is so the counter
 // still reads as a coordinate rather than as a broken display.
@@ -2242,9 +2321,40 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
 
     constexpr float kPad = 10.0f;
     constexpr float kGap = 10.0f;
-    constexpr float kRockerH = 22.0f;
-    constexpr float kSegH = 26.0f;
-    constexpr float kKeyH = 30.0f;
+    // THE THREE CONTROL HEIGHTS, MEASURED RATHER THAN TYPED. Each was a
+    // literal fitted around a 12 px engraving - 22, 26 and 30 - and each holds
+    // a different amount of lettering, so a single "add two" would have been
+    // wrong for at least one of them:
+    //
+    //   A ROCKER carries a label PLATE, which is the face's height plus six.
+    //   Rows are stacked with no gap between them, so a row only as tall as
+    //   its own plate makes two neighbouring plates touch.
+    //
+    //   A SEGMENT carries one centred word.
+    //
+    //   A DECK KEY carries TWO lines - "SET FROM" over "MAP CLICK" - so it is
+    //   the one that runs out of room first, and it did: two 14 px lines in a
+    //   30 px key leave one pixel top and bottom.
+    //
+    // The old figures stay as floors: they are the design's proportions, and
+    // nothing here should shrink if a future face happens to be short.
+    const float kRockerH = std::max(22.0f, smallH + 10.0f);
+    const float kSegH = std::max(26.0f, smallH + 12.0f);
+    const float kKeyH = std::max(30.0f, smallH * 2.0f + 8.0f);
+    // WIDE ENOUGH FOR THE WIDEST THING EVER LETTERED ON IT. The key changes
+    // its words when it is armed, so the narrow measurement is over all four
+    // lines and not over the pair showing this frame - a key that resized when
+    // it latched would move the coordinate wells beside it.
+    const float kDeckKeyMinW =
+        std::max({textW(uiF, tinyPx, "SET FROM"), textW(uiF, tinyPx, "MAP CLICK"),
+                  textW(uiF, tinyPx, "CLICK THE"), textW(uiF, tinyPx, "MAP NOW")}) +
+        16.0f;
+    // RESET and its note. The key was 64 px and the note began at 74, two
+    // literals whose only relationship was that somebody had subtracted them
+    // correctly once; the gap between them is what the note is INSET by, so it
+    // is written as that and the key is measured from the word on it.
+    const float kResetKeyW = std::max(64.0f, textW(uiF, tinyPx, "RESET") + 22.0f);
+    const float kResetNoteX = kResetKeyW + 10.0f;
 
     // Whether the position that everything else here is measured FROM exists.
     // Its absence is the single fact that blocks the most controls on this
@@ -2316,20 +2426,27 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     const float rxInnerW = wellW - kPad * 2.0f;
     const float coordsFull =
         coordCellsWidth(latText, 1.0f) + coordCellsWidth(lonText, 1.0f) + 12.0f + 12.0f;
-    const bool keyBeside = (coordsFull + 74.0f) <= rxInnerW;
+    const bool keyBeside = (coordsFull + kDeckKeyMinW) <= rxInnerW;
     const float coordScale =
         (coordsFull <= rxInnerW) ? 1.0f
                                  : std::clamp(rxInnerW / coordsFull, 0.55f, 1.0f);
     const float latW = coordCellsWidth(latText, coordScale);
     const float lonW = coordCellsWidth(lonText, coordScale);
-    const float cellRowH = kCellH * coordScale + 6.0f;
+    // THE ROW MUST HOLD THE KEY AS WELL AS THE DRUMS when the two sit side by
+    // side, because in that arrangement the key takes the row's height - and
+    // two lines of lettering is now the taller of the two demands. The drums
+    // are then CENTRED in the well rather than pinned three pixels from its
+    // top, so the extra height reads as a deeper recess and not as a counter
+    // that has slipped upwards in its aperture.
+    const float cellsH = coordCellHeight() * coordScale;
+    const float cellRowH = std::max(cellsH + 6.0f, keyBeside ? kKeyH : 0.0f);
 
     const float deckA = kPad + tinyH + 8.0f + smallH + 3.0f + cellRowH +
                         (keyBeside ? 0.0f : (6.0f + kKeyH)) + 10.0f +
                         noteHeight(noteW, rxShown) + kPad;
     const float deckB = kPad + tinyH + 8.0f + kRockerH * 3.0f + 12.0f + kPad;
     const float deckC = kPad + tinyH + 8.0f + kSegH + 12.0f + tinyH + 8.0f +
-                        std::max(kKeyH, noteHeight(noteW - 74.0f, covNote)) + kPad;
+                        std::max(kKeyH, noteHeight(noteW - kResetNoteX, covNote)) + kPad;
     const float deckH = std::max(deckA, std::max(deckB, deckC));
 
     ImGui::Dummy(ImVec2(avail.x, deckH));
@@ -2351,8 +2468,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // the leftover after two coordinate wells is most of the panel, and a
         // brass key four hundred pixels across stops reading as a key.
         const float keyW =
-            keyBeside ? std::clamp(rxInnerW - coordsFull, 74.0f, 190.0f)
-                      : std::clamp(rxInnerW, 74.0f, 190.0f);
+            keyBeside ? std::clamp(rxInnerW - coordsFull, kDeckKeyMinW, 190.0f)
+                      : std::clamp(rxInnerW, kDeckKeyMinW, 190.0f);
 
         // EVERY CONTROL IS CAPTIONED. Two fields showing 0.00000 with nothing
         // to say which was which is the exact defect this window was redrawn
@@ -2401,7 +2518,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 }
                 return;
             }
-            drawCoordCells(dl, ImVec2(wTL.x + 3.0f, wTL.y + 3.0f), text, haveRx, coordScale);
+            drawCoordCells(dl, ImVec2(wTL.x + 3.0f, wTL.y + (cellRowH - cellsH) * 0.5f), text,
+                           haveRx, coordScale);
             ImGui::PushID(which);
             ImGui::SetCursorScreenPos(wTL);
             if (ImGui::InvisibleButton("##coordcell", ImVec2(wBR.x - wTL.x, wBR.y - wTL.y))) {
@@ -2512,11 +2630,12 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f, "COVERAGE");
         y += tinyH + 8.0f;
         const bool canReset = coverage != nullptr && !coverage->empty();
-        if (drawDeckKey(dl, ImVec2(tl.x + kPad, y), ImVec2(tl.x + kPad + 64.0f, y + kKeyH),
-                        "RESET", nullptr, canReset, "covreset")) {
+        if (drawDeckKey(dl, ImVec2(tl.x + kPad, y),
+                        ImVec2(tl.x + kPad + kResetKeyW, y + kKeyH), "RESET", nullptr,
+                        canReset, "covreset")) {
             coverageResetRequest_ = true;
         }
-        drawNote(dl, ImVec2(tl.x + kPad + 74.0f, y), noteW - 74.0f,
+        drawNote(dl, ImVec2(tl.x + kPad + kResetNoteX, y), noteW - kResetNoteX,
                  haveRx ? theme::kPhosphor : theme::kGold, covNote);
         dl->PopClipRect();
     }
@@ -2525,7 +2644,38 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     ImGui::SetCursorScreenPos(ImVec2(origin.x, afterDeck.y + kGap));
     const ImVec2 bodyTL = ImGui::GetCursorScreenPos();
     const float bodyH = std::max(80.0f, origin.y + avail.y - bodyTL.y);
-    const float regW = std::clamp(avail.x * 0.30f, 260.0f, 430.0f);
+
+    // THE REGISTER'S FOUR COLUMNS, MEASURED ONCE AND HOISTED, because the
+    // register's WIDTH now depends on them. Each is the wider of its heading
+    // and the widest figure that can appear under it, which is the only
+    // arithmetic that keeps a head and its column over one another.
+    //
+    // ALT is measured against BOTH of its headings. Which one it gets depends
+    // on whether everything in the register is orbital, and that is not known
+    // until the rows have been walked - but the column must be the same width
+    // either way, or the table would change shape the moment an aircraft
+    // appeared.
+    const float noradW =
+        std::max(textW(lgF, tinyPx, "NORAD"), textW(uiF, tinyPx, "00000")) + 6.0f;
+    const float altW = std::max({textW(lgF, tinyPx, "ALT km"), textW(lgF, tinyPx, "ALT"),
+                                 textW(uiF, tinyPx, "000000 ft")}) +
+                       6.0f;
+    const float ageW =
+        std::max(textW(lgF, tinyPx, "AGE"), textW(uiF, tinyPx, "00.0 min")) + 6.0f;
+    const float dotW = 16.0f;
+
+    // AND THE REGISTER CANNOT BE NARROWER THAN THEM. Its width was clamped
+    // between two literals fitted when the table was lettered at 12 px. Below
+    // the floor the callsign column hits its own 30 px minimum and every name
+    // in the register is cut to three characters, while the four sort keys
+    // above it - which are centred, not clipped - print through one another.
+    // "ISS (ZARYA)" is the yardstick because it is the longest name most
+    // satellite registers will ever hold and it is the one every user has.
+    const float regMinW = kPad * 2.0f + dotW + noradW + altW + ageW + 12.0f +
+                          textW(uiF, tinyPx, "ISS (ZARYA)") +
+                          ImGui::GetStyle().ScrollbarSize;
+    const float regW = std::clamp(avail.x * 0.30f, std::max(260.0f, regMinW),
+                                  std::max(430.0f, regMinW));
     const float mapW = avail.x - regW - kGap;
 
     // ---- the register -----------------------------------------------------
@@ -2556,8 +2706,12 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // --- sort: four visible keys and a direction ------------------------
         if (deck.sortKey < 0 || deck.sortKey >= kSatelliteSortKeyCount) { deck.sortKey = 0; }
         const float sortCapW = textW(lgF, tinyPx, "SORT") + 8.0f;
-        dl->AddText(lgF, tinyPx, ImVec2(innerL, y + 4.0f), theme::kInkFaint, "SORT");
-        const float dirW = 42.0f;
+        dl->AddText(lgF, tinyPx, ImVec2(innerL, y + 4.0f), theme::kInkMuted, "SORT");
+        // Both words this key can carry, not the one it is showing: a key that
+        // resized when it was pressed would shuffle the four sort keys beside
+        // it every time the order was reversed.
+        const float dirW = std::max({42.0f, textW(uiF, tinyPx, "ASC") + 18.0f,
+                                     textW(uiF, tinyPx, "DESC") + 18.0f});
         const float keysW = innerW - sortCapW - dirW - 6.0f;
         const float keyW = (keysW - 3.0f * 3.0f) / static_cast<float>(kSatelliteSortKeyCount);
         for (int i = 0; i < kSatelliteSortKeyCount; ++i) {
@@ -2704,32 +2858,34 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         const float tableW =
             innerW - (listScroll ? ImGui::GetStyle().ScrollbarSize : 0.0f);
         const float cardW = tableW;
-        const float noradW =
-            std::max(textW(lgF, tinyPx, "NORAD"), textW(uiF, tinyPx, "00000")) + 6.0f;
-        const float altW =
-            std::max(textW(lgF, tinyPx, altHead), textW(uiF, tinyPx, "000000 ft")) + 6.0f;
-        const float ageW =
-            std::max(textW(lgF, tinyPx, "AGE"), textW(uiF, tinyPx, "00.0 min")) + 6.0f;
-        const float dotW = 16.0f;
+        // The four column widths were measured before the register's own width
+        // was decided, because that width is derived from them; see regMinW.
         const float callW = std::max(30.0f, tableW - dotW - noradW - altW - ageW - 12.0f);
 
         // The column head, on its own strip of glass.
+        //
+        // MUTED INK, NOT FAINT. These four words are what say which column a
+        // figure is in, and a column head nobody can read turns a table of
+        // numbers into a table of numbers about nothing. kInkFaint on the kWell
+        // strip is about 4:1; kInkMuted is about 6:1 on the same ground, and
+        // the head is still a shade below the cream of the rows so it does not
+        // start competing with them.
         dl->AddRectFilled(ImVec2(innerL, y), ImVec2(innerR, y + tinyH + 8.0f), theme::kWell);
         {
             float cx = innerL + 6.0f;
-            dl->AddText(lgF, tinyPx, ImVec2(cx, y + 4.0f), theme::kInkFaint, "CALLSIGN");
+            dl->AddText(lgF, tinyPx, ImVec2(cx, y + 4.0f), theme::kInkMuted, "CALLSIGN");
             cx = innerL + dotW + callW + 6.0f;
             dl->AddText(lgF, tinyPx,
                         ImVec2(cx + noradW - textW(lgF, tinyPx, "NORAD") - 6.0f, y + 4.0f),
-                        theme::kInkFaint, "NORAD");
+                        theme::kInkMuted, "NORAD");
             cx += noradW;
             dl->AddText(lgF, tinyPx,
                         ImVec2(cx + altW - textW(lgF, tinyPx, altHead) - 6.0f, y + 4.0f),
-                        theme::kInkFaint, altHead);
+                        theme::kInkMuted, altHead);
             cx += altW;
             dl->AddText(lgF, tinyPx,
                         ImVec2(cx + ageW - textW(lgF, tinyPx, "AGE") - 6.0f, y + 4.0f),
-                        theme::kInkFaint, "AGE");
+                        theme::kInkMuted, "AGE");
         }
         y += tinyH + 8.0f;
 
@@ -2750,7 +2906,10 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
             ImDrawList* rdl = ImGui::GetWindowDrawList();
             if (rows.empty()) {
                 const ImVec2 at = ImGui::GetCursorScreenPos();
-                rdl->AddText(uiF, tinyPx, ImVec2(at.x + 6.0f, at.y + 4.0f), theme::kInkFaint,
+                // A SENTENCE, SO IT IS LETTERED TO BE READ. This is the only
+                // thing on the register when a new install opens it, and the
+                // faint ink it used to take is about 4:1 on the well.
+                rdl->AddText(uiF, tinyPx, ImVec2(at.x + 6.0f, at.y + 4.0f), theme::kInkMuted,
                              "No targets. Decoded and propagated tracks appear here.",
                              nullptr, tableW - 12.0f);
                 // Reserved so the cards below start where the rows would have
@@ -2855,12 +3014,16 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                               ImVec2(cBR.x - 1.0f, cBR.y - 1.0f), true);
             float cy = cTL.y + 8.0f;
             if (sel == nullptr) {
-                rdl->AddText(uiF, uiPx, ImVec2(cTL.x + 8.0f, cy), theme::kInkFaint,
+                // BOTH IN MUTED INK. This card is the whole of what a brand
+                // new install has to read, and both lines are instructions
+                // rather than ornament - the heading says what state the card
+                // is in and the line under it says what to do about it.
+                rdl->AddText(uiF, uiPx, ImVec2(cTL.x + 8.0f, cy), theme::kInkMuted,
                             "NO TARGET SELECTED");
                 cy += uiH + 4.0f;
                 // The SAME sentence the height above was measured from, and it
                 // is a named constant precisely so the two cannot drift.
-                rdl->AddText(uiF, tinyPx, ImVec2(cTL.x + 8.0f, cy), theme::kInkFaint,
+                rdl->AddText(uiF, tinyPx, ImVec2(cTL.x + 8.0f, cy), theme::kInkMuted,
                             noSelPrompt, nullptr, cardW - 16.0f);
             } else {
                 const char* name =
@@ -2952,7 +3115,11 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 for (int i = 0; i < 6; ++i) {
                     const float px2 = cTL.x + 8.0f + colW * static_cast<float>(i % 2);
                     const float py = cy + detailRowH * static_cast<float>(i / 2);
-                    rdl->AddText(lgF, tinyPx, ImVec2(px2, py), theme::kInkFaint,
+                    // THE KEY IS WHAT MAKES THE FIGURE MEAN ANYTHING, so it is
+                    // lettered to be read: muted ink on the card's well is
+                    // about 6:1, where the faint it used to take is about 4:1.
+                    // The amber figure under it still carries the emphasis.
+                    rdl->AddText(lgF, tinyPx, ImVec2(px2, py), theme::kInkMuted,
                                 cells[i].key);
                     const float vy = py + smallH + 1.0f;
                     if (cells[i].known) {
@@ -3021,8 +3188,10 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         ImGui::PopStyleVar(2);
 
         // The one cue on this window that is not self-explanatory, on the
-        // floor of the register where a maker's plate goes.
-        dl->AddText(lgF, tinyPx, ImVec2(innerL, br.y - kPad - tinyH), theme::kInkFaint,
+        // floor of the register where a maker's plate goes. It is the key to
+        // the hatching, which is a mark the user is expected to look up, so it
+        // is lettered to be read rather than to be part of the metalwork.
+        dl->AddText(lgF, tinyPx, ImVec2(innerL, br.y - kPad - tinyH), theme::kInkMuted,
                     "HATCHED VALUE - CANNOT BE COMPUTED");
         dl->PopClipRect();
     }

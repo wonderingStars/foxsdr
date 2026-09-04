@@ -31,6 +31,13 @@ namespace cascade::gui {
 // "we measured, and it is nothing", which is the opposite of "we have not
 // measured" - a conflation this product has already been bitten by once, in a
 // panel that rendered clean zeroes when it had no data at all.
+//
+// IT OWNS ITS OWN TYPE AND ITS OWN MEASUREMENTS. Both words are lettered at
+// fonts::kTinySize in faces this file pushes, and the room kept for them is
+// measured from those glyphs - not from the ambient line height, which belongs
+// to whatever the caller left bound and is not what is drawn here. A label
+// wider than the bay is drawn smaller rather than over the tube beside it, so
+// the caller may pass any width its layout produces.
 void drawScopeGauge(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                     const char* label, double frac, bool haveReading,
                     const char* readout);
@@ -45,6 +52,12 @@ void addScopeBay(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool lower)
 // One odometer drum group - the RANGE NM and TRACKS counters on the maker's
 // plate. `digits` cells, each showing one digit of `value`, right-aligned and
 // zero-padded exactly as a mechanical counter does.
+//
+// THE CAPTION IS FITTED TO THE COUNTER it names, in the face the caller has
+// bound: it is the only thing separating SET RANGE NM from TGT RANGE NM - two
+// different distances in the same three figures - so it may not be allowed to
+// run into the counter standing beside it. The row still opens one AMBIENT
+// line below `tl`, which is what a caller reserves above the drums.
 void drawScopeDrums(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                     int digits, int value, const char* caption);
 
@@ -140,13 +153,24 @@ bool drawBenchKey(ImDrawList* dl, const ImVec2& tl, float size, bool on);
 // A panel plate: bevelled ground, an engraved centred title in the legend face,
 // and a rule beneath it. Returns the y below the rule, so the caller lays out
 // from a measurement rather than a guess.
+//
+// THE TITLE IS FITTED TO THE PLATE. It is centred, so a title wider than its
+// ground is not clipped - it is drawn out over the bevel and into whatever is
+// beside it - and tracked capitals are the widest thing this file draws. A
+// title that cannot fit at fonts::kLegendSize is drawn smaller, down to a nine
+// pixel floor, and the returned y follows the size actually used.
 float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                     const char* title);
 
 // An engraved group caption inside a plate - SIGNAL PATH, DECODE and the rest.
 // Small, letter-spaced, cut into the ground, with a rule carrying it out to
 // `width` so the caption reads as the head of a group rather than as a stray
-// word.
+// word. Fitted to `width` for the same reason the plate's title is fitted to
+// its plate.
+//
+// CUT IN THE MUTED INK, NOT THE FAINT ONE. These are how a user finds the
+// control they came for; on the plate's dark enamel the faint ink measures
+// about 3.3:1, which is under what a caption this size needs.
 void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
                           const char* caption);
 
@@ -168,6 +192,12 @@ float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
 // colour; `caption` is drawn whatever the state, because a lamp whose meaning
 // is carried by colour alone cannot be read in a greyscale photograph and is
 // unreadable to about one man in twelve.
+//
+// AND THE UNLIT CAPTION HAS TO BE READABLE FOR THAT PROMISE TO MEAN ANYTHING.
+// It was drawn in the muted ink, which on the brass these lamps sit on is
+// about 1.7:1 - so the words were not quiet, they were absent, in exactly the
+// state the colour has stopped carrying the meaning. Lit is ivory, unlit is
+// cream, and both sit over a dark pass that cuts them into the metal.
 void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 colour,
                    bool lit, const char* caption);
 
@@ -191,6 +221,17 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
 // defaults to nothing, because a unit is a claim about what the needle
 // measures: a caller with no honest unit for its scale must not be handed a
 // plausible one to print.
+//
+// `height` COVERS THE CAPTION, THE FACE AND THE VALUE LINE, and how it is
+// divided between them is measured HERE from the two lines this function
+// letters, at fonts::kTinySize, in the faces it pushes itself. It used to be
+// divided by the AMBIENT line height, which is the application's ordinary UI
+// size and is not what is drawn on a meter: every point that face went up took
+// two off the meter's own face, and enough of it would have taken the face
+// under its minimum and drawn no meter at all while the figures beside it
+// carried on updating. A caller may still size `height` however it likes; the
+// meter now spends it on the picture rather than on room for type it is not
+// setting.
 void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                     const char* caption, float frac01, bool haveReading,
                     const char* valueLine, const char* unitLabel = nullptr);

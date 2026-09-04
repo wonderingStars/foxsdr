@@ -452,13 +452,24 @@ To use it:
    runs on the same machine). The radar reads the receiver through it.
 2. Set the receiver's position, or the scope has nothing to measure range
    from and says so rather than guessing.
-3. Run `foxsdr-radar.exe`.
+3. Open it from **Radar → Open the radar unit** in the FUNCTION SELECT rail, or
+   run `foxsdr-radar.exe` from the Start menu.
 
-Closing the window, or switching **POWER** to standby on the panel itself,
-gives the display back to FoxSDR. If the radar is killed rather than closed,
-FoxSDR shows itself again on its own within about twelve seconds — the
-arrangement is a lease the radar renews, not a switch it can leave flipped, so
-a crash cannot leave the application hidden with no way back to it.
+While the radar holds the display FoxSDR **minimises itself**, rather than
+hiding, and that distinction is deliberate. Until 0.76.0 it hid the window,
+which takes it off the taskbar too — so opening the radar removed every trace
+of the receiver at once, and was reported as a crash. It never was one: the
+application went on running and rendering the whole time. A minimised window
+keeps its taskbar button, so FoxSDR is visibly still there.
+
+**Clicking that taskbar button takes the display back** without closing the
+radar, and the radar's next renewal will not snatch it away again — the two
+can sit side by side from then on. Closing the radar window, or switching
+**POWER** to standby on the panel itself, hands the display back the usual
+way. If the radar is killed rather than closed, FoxSDR restores itself on its
+own within about twelve seconds — the arrangement is a lease the radar renews,
+not a switch it can leave flipped, so a crash cannot leave the application
+minimised with no way back to it.
 
 Two things the panel deliberately will not do. It never invents a reading: a
 value the receiver has not reported is drawn as a hatched **NO REPORT**, which

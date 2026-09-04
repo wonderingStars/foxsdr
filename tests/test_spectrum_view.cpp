@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 
 #include "test_check.hpp"
@@ -530,6 +531,116 @@ int main() {
         // land the same way would otherwise pass silently.
         CHECK(reported > 400);
         CHECK(refused > 400);
+    }
+
+    // --- dbLabelStride: the dB ladder must never print through itself -------
+    //
+    // WHY THIS FUNCTION EXISTS AT ALL. The gridlines are every 10 dB whatever
+    // the panel is worth, so the space between one label and the next is set
+    // by the well's height and the dB range and by nothing else. The
+    // lettering grew by two points and a short well went from three pixels of
+    // air between figures to none — and two dB numbers printed through each
+    // other are not a coarser scale, they are a smear. The stride is what
+    // keeps the ladder legible, and the property below is the whole contract:
+    // whatever it returns, the figures that survive clear each other.
+    {
+        // Documented cases, worked from the rule rather than from the code.
+        CHECK(SpectrumView::dbLabelStride(-100.0f, 0.0f, 400.0f, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, 0.0f, 150.0f, 14.0f) == 2);
+        CHECK(SpectrumView::dbLabelStride(-160.0f, -5.0f, 150.0f, 14.0f) == 2);
+        // A very tall well needs no thinning at all, however wide the range.
+        CHECK(SpectrumView::dbLabelStride(-160.0f, -5.0f, 2000.0f, 14.0f) == 1);
+        // THE LADDER: a raw stride of 3 or 4 is rounded up to a 50 dB ladder
+        // rather than a 30 or 40 dB one, and a raw 6 to 100 dB. A dB scale
+        // read in sevens is not a scale anybody reads.
+        for (int h = 30; h <= 900; ++h) {
+            const int stride =
+                SpectrumView::dbLabelStride(-160.0f, 0.0f, static_cast<float>(h), 14.0f);
+            const bool onLadder = (stride == 1 || stride == 2 || stride == 5 ||
+                                   stride == 10 || stride == 20 || stride == 50 ||
+                                   stride == 64);
+            CHECK(onLadder);
+        }
+        // And an absurd one is capped rather than returning a stride past
+        // every gridline the grid can hold.
+        CHECK(SpectrumView::dbLabelStride(-500.0f, 500.0f, 1.0f, 14.0f) == 64);
+
+        // Degenerate inputs label every line — the draw loop's own header and
+        // axis guards then drop whatever will not fit.
+        const float qnanF = std::numeric_limits<float>::quiet_NaN();
+        CHECK(SpectrumView::dbLabelStride(0.0f, -100.0f, 400.0f, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, -100.0f, 400.0f, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, 0.0f, 0.0f, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, 0.0f, -400.0f, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, 0.0f, 400.0f, 0.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(qnanF, 0.0f, 400.0f, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, qnanF, 400.0f, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, 0.0f, qnanF, 14.0f) == 1);
+        CHECK(SpectrumView::dbLabelStride(-100.0f, 0.0f, 400.0f, qnanF) == 1);
+
+        // THE PROPERTY, over every panel height and dB range the Display
+        // section and the splitter can produce, at every type size fonts.hpp
+        // currently defines. `crowdedAtStrideOne` counts the cases that would
+        // have collided without the stride: if a refactor ever made the sweep
+        // stop exercising crowding, the property below would be vacuously
+        // true and this count is what says so.
+        int crowdedAtStrideOne = 0;
+        int checkedPairs = 0;
+        int worstStride = 0;
+        for (int h = 40; h <= 900; h += 7) {
+            for (int floorDb = -160; floorDb <= -20; floorDb += 5) {
+                for (int ceilDb = floorDb + 10; ceilDb <= 0; ceilDb += 15) {
+                    const float dbMin = static_cast<float>(floorDb);
+                    const float dbMax = static_cast<float>(ceilDb);
+                    const float panelH = static_cast<float>(h);
+                    for (const float labelH : {12.0f, 14.0f, 16.0f, 18.0f}) {
+                        const int stride =
+                            SpectrumView::dbLabelStride(dbMin, dbMax, panelH, labelH);
+                        CHECK(stride >= 1);
+                        if (stride > worstStride) { worstStride = stride; }
+                        const double per10 =
+                            static_cast<double>(panelH) * 10.0 /
+                            (static_cast<double>(dbMax) - static_cast<double>(dbMin));
+                        if (per10 < static_cast<double>(labelH) + 3.0) {
+                            ++crowdedAtStrideOne;
+                        }
+                        // Walk the gridlines the panel would draw and check the
+                        // gap between the figures that survive the stride.
+                        float grid[64];
+                        const int gridCount =
+                            SpectrumView::gridlineDbs(dbMin, dbMax, grid, 64);
+                        double prevY = 0.0;
+                        bool havePrev = false;
+                        for (int i = 0; i < gridCount; ++i) {
+                            const int decade =
+                                static_cast<int>(std::lround(grid[i] / 10.0f));
+                            if (stride > 1 && decade % stride != 0) { continue; }
+                            const double y = dbToY(grid[i], dbMin, dbMax, 0.0f, panelH);
+                            if (havePrev) {
+                                ++checkedPairs;
+                                // Labels sit BELOW their line and run downward,
+                                // so consecutive figures must be a full label
+                                // height plus the stated 3 px of air apart.
+                                // The stride cap can legitimately fail this on
+                                // a panel too short for two figures at any
+                                // stride; those cases have at most one label
+                                // on screen anyway, so they are excluded
+                                // rather than silently tolerated.
+                                if (stride < 64) {
+                                    CHECK(std::fabs(y - prevY) >=
+                                          static_cast<double>(labelH) + 3.0 - 1e-6);
+                                }
+                            }
+                            prevY = y;
+                            havePrev = true;
+                        }
+                    }
+                }
+            }
+        }
+        CHECK(checkedPairs > 10000);
+        CHECK(crowdedAtStrideOne > 1000);
+        CHECK(worstStride > 1);
     }
 
     return testSummary("test_spectrum_view");

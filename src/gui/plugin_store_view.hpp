@@ -202,6 +202,25 @@ float drawModuleDataPlate(ImDrawList* dl, const ImVec2& tl, float width,
 // silence belongs to the refusal and not to the module.
 const char* moduleKindTag(const ModulePlate& m);
 
+// HOW WIDE THAT PLATE HAS TO BE, measured across EVERY word it can carry.
+//
+// IT WAS TWO NUMBERS, AND THAT IS THE FAULT THIS FIXES. The store's card used
+// 84 px and the fitted-modules row used 82 minus 8, which is 74 - the same
+// component, drawn ten pixels apart in the two windows the shared plate exists
+// to keep identical. Both still HELD their words after the engraving grew
+// ("NOT DECLARED", the longest, measures 46.8 px at 14), so this is a
+// consistency fix rather than an overflow one; what it also buys is that the
+// chip can never quietly stop holding them, because the tag is CENTRED in it
+// and not clipped - a tag wider than its plate is not cut, it hangs out over
+// the machined edge at both ends.
+//
+// And it is measured across every tag rather than the one on screen, because a
+// chip that changed width with its word would move the module's name beside it
+// from row to row.
+//
+// Call inside a frame: it asks the atlas to measure.
+float moduleKindTagWidth();
+
 // The one-line REACH SUMMARY for a row: what this module declares, in the
 // fewest honest words. Never says "reaches nothing" - every plugin here is
 // native code in this process, so nothing reaches nothing.

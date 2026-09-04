@@ -237,6 +237,40 @@ public:
     // bug instead of degrading visibly (flat-lined plot, no grid).
     void setRange(float dbMin, float dbMax);
 
+    // HOW MANY 10 dB GRIDLINES TO STEP BETWEEN LABELS on the dB axis, so the
+    // ladder cannot collide with itself.
+    //
+    // THIS EXISTS BECAUSE THE LABELS ARE THE ONLY THING ON THIS PANEL THAT
+    // OVERLAPS ITSELF WHEN THE TYPE GROWS. gridlineDbs draws a line every
+    // 10 dB whatever the panel is worth; the labels beside them are a fixed
+    // number of pixels tall, so their spacing is set by the panel height and
+    // the dB range and by nothing else. A 150 px well showing -100..0 dB puts
+    // its eleven lines 15 px apart, which at the old 12 px lettering left
+    // three pixels of air and at 14 px leaves none — and two dB figures
+    // printed through each other are not a coarse scale, they are a smear.
+    //
+    // The answer is a stride and not a smaller face: the ladder steps to
+    // 20 dB, or 50, and stays legible. Labels are drawn where the decade
+    // index (db / 10) divides by the stride, so the ladder is anchored on
+    // 0 dB and steps in round numbers rather than sliding as the panel is
+    // resized.
+    //
+    // Returns the smallest stride that leaves at least THREE PIXELS of clear
+    // air between one label and the next — stride * (pixels per 10 dB) >=
+    // labelHeight + 3 — rounded UP to one of {1, 2, 5, 10, 20, 50}, so the
+    // figures that survive step by 10, 20, 50, 100, 200 or 500 dB rather than
+    // by some arithmetic remainder like 70. Rounding up only widens the gap,
+    // so the spacing guarantee holds either way. Nothing on that ladder
+    // reaching it means the well is far too short for its range; the answer
+    // is then 64, the gridline cap, which leaves at most one figure.
+    //
+    // A degenerate input — dbMin >= dbMax, a non-positive panel height or
+    // label height, any NaN — returns 1, which labels every line exactly as
+    // this panel did before the stride existed; the draw loop's own
+    // header/axis guards then drop what will not fit.
+    static int dbLabelStride(float dbMin, float dbMax, float panelHeight,
+                             float labelHeight);
+
     // Gridline generator, exposed as a pure static so tests can pin down the
     // grid without a GL context. Writes the multiples of 10 dB inside
     // [dbMin, dbMax] — boundary-INCLUSIVE on both ends, so a range of exactly

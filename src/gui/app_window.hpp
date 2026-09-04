@@ -97,6 +97,114 @@ inline bool asyncOpenStillWanted(std::uint64_t requestedAtGen,
     return requestedAtGen == currentGen;
 }
 
+// --- THE FUNCTION SELECT RAIL'S ROW GEOMETRY ---------------------------------
+//
+// WHY IT IS OUT HERE AND NOT IN app_window.cpp's ANONYMOUS NAMESPACE. These
+// numbers decide where a rail row's own name has to STOP, and Dear ImGui text
+// does not wrap - it clips, silently, so a row that has quietly lost the end
+// of its label looks like a design decision rather than a fault. The rail was
+// laid out to a set of literals measured against a smaller typeface (the sizes
+// in gui/fonts.hpp were raised by two points on a report that captions were
+// hard to read), and a literal that happened to fit is not a measurement of
+// anything. tests/test_app_rail.cpp pins every function below against the real
+// typefaces at the sizes fonts.hpp is currently set to - and pins
+// railChipReserve against drawRailChip's OWN DRAWN OUTPUT rather than against a
+// transcription of its constants, so the two cannot drift apart in silence.
+//
+// PURE ARITHMETIC, NO ImGui TYPES, AND EVERY SIZE ARRIVES AS A PARAMETER. This
+// header is compiled into the tests and must not pull in gui/fonts.hpp, which
+// includes imgui.h - see the forward declarations further down.
+
+// The height of one rail row. The reference draws a 28 px deck and that is the
+// FLOOR, not the answer: a row carries a label at fonts::kUiSize, so once the
+// type is larger than the row can hold at a sane padding the ROW grows and the
+// label is not squeezed into it. At kUiSize 18 this is still exactly 28.
+inline constexpr float kRailRowMinH = 28.0f;
+// The smallest gap above and below the label inside a row. Anything less and
+// the word touches the plate's bevel.
+inline constexpr float kRailRowPadY = 5.0f;
+inline float railRowHeight(float labelPx) {
+    const float fromType = labelPx + 2.0f * kRailRowPadY;
+    return fromType > kRailRowMinH ? fromType : kRailRowMinH;
+}
+
+// The square key at the left of the row, and the plate that starts after it.
+// kRailKeyMax is the reference's own key; below it the key follows the row so a
+// short row does not carry an oversized one.
+inline constexpr float kRailKeyInset = 3.0f;    // row's left edge to the key
+inline constexpr float kRailKeyGap = 6.0f;      // key to the plate
+inline constexpr float kRailLabelPadX = 8.0f;   // plate's edge to the word
+inline constexpr float kRailKeyMin = 9.0f;
+inline constexpr float kRailKeyMax = 18.0f;
+inline float railKeySize(float rowH) {
+    const float s = rowH - 10.0f;
+    if (s < kRailKeyMin) { return kRailKeyMin; }
+    if (s > kRailKeyMax) { return kRailKeyMax; }
+    return s;
+}
+inline float railPlateLeft(float rowLeft, float rowH) {
+    return rowLeft + kRailKeyInset + railKeySize(rowH) + kRailKeyGap;
+}
+inline float railLabelLeft(float rowLeft, float rowH) {
+    return railPlateLeft(rowLeft, rowH) + kRailLabelPadX;
+}
+
+// WHAT THE STATE CHIP AND ITS LAMP TAKE OFF THE RIGHT END OF THE PLATE.
+//
+// This mirrors scope_face.hpp's drawRailChip, which lands the lamp hard against
+// the plate's right edge and the chip just inboard of it. It is a mirror and
+// not a shared constant because the chip is drawn by the scope's own face
+// library and the label is drawn here; the test closes that gap by MEASURING
+// what drawRailChip actually emits and refusing to pass if this disagrees.
+inline constexpr float kRailLampRadiusMin = 3.0f;
+inline constexpr float kRailLampRadiusShare = 0.20f;
+inline constexpr float kRailLampEdgeGap = 6.0f;   // plate's right edge to lamp
+inline constexpr float kRailChipLampGap = 7.0f;   // chip's right edge to lamp
+inline constexpr float kRailChipPadX = 5.0f;      // inside the chip, each side
+// Clear air between the end of the label and the start of the chip, so the two
+// read as separate things rather than as one run-on line.
+inline constexpr float kRailLabelChipGap = 4.0f;
+
+inline float railLampRadius(float rowH) {
+    const float r = rowH * kRailLampRadiusShare;
+    return r > kRailLampRadiusMin ? r : kRailLampRadiusMin;
+}
+// `chipTextWidth` < 0 means the row carries a lamp but no chip; the row's
+// callers here always pass one, and drawRailChip draws the lamp either way.
+inline float railChipReserve(float rowH, float chipTextWidth) {
+    const float lampR = railLampRadius(rowH);
+    const float toLampLeft = 2.0f * lampR + kRailLampEdgeGap;
+    if (!(chipTextWidth >= 0.0f)) { return toLampLeft; }
+    return 2.0f * lampR + kRailChipLampGap + chipTextWidth + 2.0f * kRailChipPadX +
+           kRailLampEdgeGap;
+}
+
+// The x a row's label must not cross. `chipTextWidth` < 0 for a row with no
+// chip at all, in which case only the plate's own padding is kept back.
+inline float railLabelRight(float rowRight, float rowH, float chipTextWidth) {
+    const float plateEdge = rowRight - kRailLabelPadX;
+    const float beforeChip =
+        rowRight - railChipReserve(rowH, chipTextWidth) - kRailLabelChipGap;
+    return beforeChip < plateEdge ? beforeChip : plateEdge;
+}
+
+// The width of the left column, and the pad that insets the rail's plate
+// inside it. Out here with the rest of the rail's geometry because the test
+// has to know how much room a row actually gets before it can say whether a
+// label fits in one.
+inline constexpr float kMenuWidth = 260.0f;   // left column, per the parity spec
+inline constexpr float kRailPlatePad = 8.0f;  // plate inset inside that column
+
+// How wide ONE ROW ends up: the column, less the plate's inset on both sides,
+// less the scrolling child's own padding, less the scrollbar that child has
+// whenever the rail is longer than the window - which is every real session.
+// The ImGui style values arrive as parameters for the same reason the font
+// sizes do.
+inline float railRowWidth(float menuWidth, float platePad, float childPadX,
+                          float scrollbarW) {
+    return menuWidth - 2.0f * platePad - 2.0f * childPadX - scrollbarW;
+}
+
 // One monitor's usable area, in the virtual-desktop coordinates ImGui and the
 // window manager both speak. Its own type rather than an ImGui one so this
 // stays testable without a platform backend.
@@ -473,6 +581,7 @@ private:
     // lived inside the window the user had just closed.
     void drawScopeMode();
     // The switch that turns it on, in the Decoders section of the left rail.
+    void drawRadarSection();
     void drawScopeModeControl();
     // The receiver position entry - two coordinate fields and "Set RX here" -
     // drawn by BOTH the map pages and the scope's no-position state. One copy,
@@ -1284,6 +1393,16 @@ private:
     GLFWwindow* mainWindow_ = nullptr;
     bool radarHoldsDisplay_ = false;
     double radarLeaseExpiry_ = 0.0;
+    // Set when the user restores the main window while the radar still holds
+    // the lease - they have taken the display back by hand, and the radar's
+    // next renewal must not snatch it away again. Cleared once the lease has
+    // expired, which is how the application notices the radar has gone.
+    bool radarDisplayTakenBack_ = false;
+    // The frame the hold began on. The iconified attribute is set from a
+    // window message, so it is not safe to read one back in the same frame it
+    // was asked for; a few frames of grace stops the handover being mistaken
+    // for the user undoing it.
+    int radarHoldFrame_ = 0;
 
     bool rxSet_ = false;
     double rxLat_ = 0.0;

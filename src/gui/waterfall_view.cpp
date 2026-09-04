@@ -176,8 +176,15 @@ float textWidth(ImFont* font, float px, const char* text) {
 // colour in the ramp, up to a near-white cream, so text laid straight onto it
 // is unreadable exactly when the waterfall is busiest - which is when a legend
 // is most wanted.
+//
+// 0.76 WAS NOT ENOUGH OPACITY TO MAKE THAT TRUE. Over the ramp's cream anchor
+// a quarter of #F0EBB4 still came through, leaving the plate at a luminance
+// the dim phosphor the key and the foot lines are lettered in reads against at
+// 2.5:1 - which is not "quieter", it is gone. At 0.84 the same worst case is a
+// plate the same text sits on at 8:1. The plate is the same colour it always
+// was; it is simply doing the job the paragraph above says it is for.
 void addGlassPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    dl->AddRectFilled(tl, br, theme::withAlpha(theme::kVoid, 0.76f),
+    dl->AddRectFilled(tl, br, theme::withAlpha(theme::kVoid, 0.84f),
                       theme::kPanelRounding);
     dl->AddRect(tl, br, theme::withAlpha(theme::kBrassDark, 0.85f),
                 theme::kPanelRounding, 0, theme::kHairline);
@@ -387,15 +394,22 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // lines have arrived to earn one.
     const float stripH =
         h * static_cast<float>(std::min(ages.rows, totalRows)) / static_cast<float>(totalRows);
-    if (stripH < 48.0f) {
+    // FOUR LINES OF THE SMALLEST FACE - the heading, two figures and the
+    // margins between them - which is the least an axis can be and still be
+    // one. It was the literal 48, and 48 is exactly four lines of the 12 px
+    // this strip was laid out at; written this way it travels with the type
+    // instead of quietly becoming three lines the next time the type grows.
+    if (stripH < fonts::kTinySize * 4.0f) {
         return 0.0f;
     }
     // How many labels the strip has ROOM for, not a fixed number: the panel
     // is split with the spectrum and can be anything from a sliver to most of
-    // the window. 38 px per label leaves a clear gap at kTinySize; a fixed
+    // the window. Three line heights and a hair per label leaves a clear gap
+    // (the literal was 38 px, which is that rule at 12 px lettering); a fixed
     // count either crowds the short panel or leaves the tall one with two
     // lonely figures.
-    const int maxLabels = std::max(2, std::min(8, static_cast<int>(stripH / 38.0f)));
+    const float perLabel = fonts::kTinySize * 3.0f + 2.0f;
+    const int maxLabels = std::max(2, std::min(8, static_cast<int>(stripH / perLabel)));
     const double step = WaterfallView::timeLabelStep(ages.span, maxLabels);
     const TimeTicks ticks = timeTicks(ages.newest, ages.oldest, step);
     if (ticks.count < 1) {
@@ -405,6 +419,13 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     ImFont* lf = fonts::ui();
     ImFont* cf = fonts::legend();
     const float px = fonts::kTinySize;
+    // THE FIGURES TAKE THE FULL PHOSPHOR, the heading keeps the dim one.
+    // theme.hpp's rule, applied to this gutter: "AGO" is a caption at rest and
+    // may be engraved into its plate, but "2m30" is a reading, and every one
+    // of these was written in the dim tone. On a busy picture that was 1.6:1
+    // and on a quiet one 4.9:1; it is 7.1:1 and 11.7:1 now, and the heading
+    // above them is still visibly the quieter of the two.
+    const ImU32 kFigureInk = theme::kPhosphor;
 
     // THE BREAK: the single row where the picture jumps furthest in age, which
     // is where the lines stopped arriving. The ladder cannot describe it - a
@@ -459,7 +480,13 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     }
 
     const ImVec2 sBR(tl.x + stripW, tl.y + stripH);
-    dl->AddRectFilled(tl, sBR, theme::withAlpha(theme::kVoid, 0.62f));
+    // THE GUTTER IS A PLATE, and it has to be as opaque as one. At 0.62 the
+    // picture behind it came through hard enough that a run of strong signal
+    // - the cream end of the ramp - lifted the gutter to roughly the same
+    // luminance as the figures written on it: 1.6:1, which is an axis that
+    // disappears precisely when the waterfall is worth reading. Same colour,
+    // same recessed look, enough of it to letter on.
+    dl->AddRectFilled(tl, sBR, theme::withAlpha(theme::kVoid, 0.80f));
     dl->AddLine(ImVec2(sBR.x, tl.y), ImVec2(sBR.x, sBR.y),
                 theme::withAlpha(theme::kBrassTint, 0.20f), theme::kHairline);
     // Where a partly-filled history ends, the gutter is closed off with the
@@ -491,11 +518,11 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
             formatElapsed(breakAbove, buf, sizeof(buf));
             float tw = textWidth(lf, px, buf);
             dl->AddText(lf, px, ImVec2(sBR.x - kChromePad - tw, y - px - 2.0f),
-                        theme::kPhosphorDim, buf);
+                        kFigureInk, buf);
             formatElapsed(breakBelow, buf, sizeof(buf));
             tw = textWidth(lf, px, buf);
             dl->AddText(lf, px, ImVec2(sBR.x - kChromePad - tw, y + 2.0f),
-                        theme::kPhosphorDim, buf);
+                        kFigureInk, buf);
         }
     }
 
@@ -531,7 +558,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
         dl->AddLine(ImVec2(sBR.x - 4.0f, y), ImVec2(sBR.x + 5.0f, y),
                     theme::withAlpha(theme::kPhosphorDim, 0.55f), theme::kHairline);
         dl->AddText(lf, px, ImVec2(sBR.x - kChromePad - tw, y - px * 0.5f),
-                    theme::kPhosphorDim, buf);
+                    kFigureInk, buf);
     }
     return stripW;
 }
@@ -675,8 +702,12 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
     }
     const float tickY = barTop + barH + 2.0f;
     for (int i = 0; i < count; ++i) {
-        dl->AddText(nf, px, ImVec2(barL + ticks[i].x, tickY),
-                    theme::withAlpha(theme::kPhosphorDim, 0.95f), ticks[i].text);
+        // Full phosphor, for the same reason the elapsed-time figures take it:
+        // this is the scale that says which colour in the bar means what, and
+        // in the dim tone on this plate it measured 2.5:1 over a bright
+        // picture. The plate's captions below stay engraved-quiet.
+        dl->AddText(nf, px, ImVec2(barL + ticks[i].x, tickY), theme::kPhosphor,
+                    ticks[i].text);
     }
 
     const float ruleY = tickY + lineH + 2.0f;
@@ -724,6 +755,14 @@ void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
     // which is the common case straight after the sliders move. The first
     // render of this put "RANGE CHANGED" underneath the plate every time.
     if (x1 - x0 > tw + kChromePad * 3.0f) {
+        // ON A PLATE, like every other annotation in this file. It was the one
+        // caption drawn straight onto the picture, and the picture under it is
+        // whatever the ramp happens to be painting there - against the cream
+        // end it was 2.5:1, which is an unexplained rail across a measurement,
+        // which the comment above calls worse than no rail at all.
+        const ImVec2 cTL(x1 - kChromePad * 2.0f - tw, y + 1.0f);
+        const ImVec2 cBR(x1, y + 5.0f + px);
+        addGlassPlate(dl, cTL, cBR);
         dl->AddText(cf, px, ImVec2(x1 - kChromePad - tw, y + 3.0f),
                     theme::withAlpha(theme::kInkMuted, 0.90f), cap);
     }
@@ -799,7 +838,12 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
 
     float y = fTL.y + kChromePad;
     if (scrollText[0] != '\0') {
-        dl->AddText(sf, spx, ImVec2(fTL.x + kChromePad, y), theme::kPhosphorDim, scrollText);
+        // A shade under the decode line below it, which keeps the two apart -
+        // but not the dim tone it was, which put a line carrying two figures
+        // (the rate and the history the picture holds) at 2.5:1 over a bright
+        // waterfall. 6.3:1 there now, and still visibly the quieter line.
+        dl->AddText(sf, spx, ImVec2(fTL.x + kChromePad, y),
+                    theme::withAlpha(theme::kPhosphor, 0.85f), scrollText);
         y += spx + lineGap;
     }
     if (haveDecode) {

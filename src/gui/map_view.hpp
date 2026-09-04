@@ -177,6 +177,32 @@ double wholeWorldSpanDeg(float widthPx, float heightPx);
 // well therefore does not resize the moment a position arrives.
 char coordApertureGlyph(char shape, bool known);
 
+// HOW WIDE AND HOW TALL ONE OF THOSE APERTURES IS, measured in the counter
+// face at the size it is lettered at rather than typed as a literal.
+//
+// WHY THIS IS NOT A CONSTANT ANY MORE. It was three of them - 13 px for a
+// figure's cell, 8 for a sign or a decimal point, 26 for the height - fitted
+// by eye around a 15 px counter. At 17 the counter face advances 6.85 px, so
+// the narrow cells were down to about half a pixel of metal either side of
+// their glyph while the figure cells still had two: the same control, drawn
+// with and without a shoulder, because the two widths were typed rather than
+// derived.
+//
+// AND THE NEXT POINT WOULD NOT HAVE CLIPPED, IT WOULD HAVE SPILLED.
+// drawFreqDrumCell CENTRES its glyph in whatever cell it is handed and clips
+// nothing, so a cell narrower than its figure lets that figure cross the
+// machined edge into the cell beside it - which reads as a smeared counter
+// rather than as a cut one, and gets taken for a rendering fault.
+//
+// `shape` is the character the formatter produced for that aperture - the
+// SHAPE, not the glyph finally drawn, which is what keeps the well from
+// resizing the moment a receiver position arrives (see coordApertureGlyph).
+// A sign and a decimal point are narrower than a figure, because they are.
+//
+// Both must be called inside a frame: they ask the atlas to measure.
+float coordCellWidth(char shape);
+float coordCellHeight();
+
 // WHICH NOTES THE SELECTED TARGET'S CARD DRAWS, from the only two facts that
 // decide it. Both the height the card is RESERVED and the card's own drawing
 // read this one answer, so the box can never be reserved for a note that is
