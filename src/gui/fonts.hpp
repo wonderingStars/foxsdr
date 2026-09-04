@@ -55,10 +55,23 @@ namespace cascade::gui::fonts {
 // --- the sizes, by role ------------------------------------------------------
 // Measured against the design handoff and then checked at 100% Windows scaling
 // against the widths the layout already hard-codes.
-inline constexpr float kUiSize = 16.0f;       // controls, prose, table cells
-inline constexpr float kLegendSize = 14.0f;   // engraved captions, small plates
-inline constexpr float kReadingSize = 15.0f;  // a number on glass
-inline constexpr float kTinySize = 12.0f;     // the smallest engraving that
+//
+// RAISED BY TWO POINTS THROUGHOUT, on the report that captions were hard to
+// read. The design is drawn at 9-11 px in a scaled artboard and those figures
+// were carried across too literally: on a real panel at 100% scaling they are
+// small, and the engraved tones make them smaller still, because a caption cut
+// dark into brass is about 2.3:1 contrast and is carrying most of the loss.
+// Size is the half of that this file controls.
+//
+// EVERY HARD-CODED WIDTH IN THE INTERFACE WAS MEASURED AGAINST THE OLD NUMBERS.
+// Changing them here is one edit and a sweep: keys, plates, chips, drum
+// apertures, meter faces and card heights all have to be re-checked, because
+// text that no longer fits does not wrap, it clips. Do not raise these again
+// without walking the same surfaces.
+inline constexpr float kUiSize = 18.0f;       // controls, prose, table cells
+inline constexpr float kLegendSize = 16.0f;   // engraved captions, small plates
+inline constexpr float kReadingSize = 17.0f;  // a number on glass
+inline constexpr float kTinySize = 14.0f;     // the smallest engraving that
                                               // still has to be readable
 
 // --- the faces ---------------------------------------------------------------

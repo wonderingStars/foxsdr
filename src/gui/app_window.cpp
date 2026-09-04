@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <system_error>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -104,7 +105,10 @@ void drainSoapyScan(Fut& f) {
     }
 }
 
-constexpr float kMenuWidth = 260.0f;  // left column width per parity spec
+// kMenuWidth now lives in app_window.hpp, beside the rail-row geometry it is
+// part of: the test that asks whether a rail label still fits its plate has to
+// know how wide a row is, and a column width kept private here is a column
+// width nothing can check against.
 
 // Pipeline configuration. 2 MS/s at FFT 1024 publishes far more frames than
 // the GUI's ~60 fps polls; the latest-frame slot in Pipeline absorbs the
@@ -1448,6 +1452,54 @@ bool benchWordKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char
     return pressed;
 }
 
+// --- THE WORD ON A RAIL ROW'S PLATE, CLIPPED TO THE ROOM IT ACTUALLY HAS ------
+//
+// Both rail rows draw the same label the same way, so they draw it through one
+// function: a second copy is how the switch row and the section row come to
+// clip at two different places.
+//
+// IT USED TO BE UNCLIPPED, and that was safe only for as long as every label
+// happened to be short. It is not a property of the map rows, whose name is a
+// PLUGIN's own display name and therefore arbitrary third-party text; it was
+// not a property anything in the build checked; and it stopped being comfortably
+// true when fonts.hpp raised the type by two points. An overrunning word runs
+// under the state chip, then past the end of the plate, and Dear ImGui does not
+// wrap it - it clips it at the window, so what the user sees is a name with its
+// tail missing and nothing to say that is a fault rather than a style.
+//
+// The limit comes from railLabelRight() and the chip's OWN MEASURED WIDTH, so
+// the label and the chip are laid out from one piece of arithmetic instead of
+// from two hopes. `chipText` null is a row with no chip, which keeps back only
+// the plate's own padding.
+void railPlateLabel(ImDrawList* dl, const ImVec2& rowTL, const ImVec2& rowBR,
+                    float plateLeft, float labelPx, const char* shown,
+                    const char* chipText, ImU32 ink) {
+    if (dl == nullptr || shown == nullptr || shown[0] == '\0') { return; }
+    ImFont* f = cascade::gui::fonts::ui();
+    float chipW = -1.0f;
+    if (chipText != nullptr && chipText[0] != '\0') {
+        chipW = cascade::gui::fonts::legend()
+                    ->CalcTextSizeA(cascade::gui::fonts::kTinySize, FLT_MAX, 0.0f,
+                                    chipText)
+                    .x;
+    }
+    const float right =
+        cascade::gui::railLabelRight(rowBR.x, rowBR.y - rowTL.y, chipW);
+    const ImVec2 ts = f->CalcTextSizeA(labelPx, FLT_MAX, 0.0f, shown);
+    const ImVec2 at(plateLeft + cascade::gui::kRailLabelPadX,
+                    (rowTL.y + rowBR.y) * 0.5f - ts.y * 0.5f);
+    if (right <= at.x + 1.0f) { return; }
+    // PER-GLYPH CLIPPING, not a wrap width: a wrap would push the tail of a
+    // long name onto a second line the row has no height for, which is a worse
+    // fault than the one being fixed. The dark pass under the word is the cut
+    // the letters sit in, not a drop shadow, so it is clipped with them.
+    const ImVec4 clip(at.x, rowTL.y, right, rowBR.y);
+    dl->AddText(f, labelPx, ImVec2(at.x + 1.0f, at.y + 1.0f),
+                cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.55f), shown,
+                nullptr, 0.0f, &clip);
+    dl->AddText(f, labelPx, at, ink, shown, nullptr, 0.0f, &clip);
+}
+
 // --- ONE ROW OF THE FUNCTION RAIL --------------------------------------------
 //
 // SAME CONTRACT AS ImGui::CollapsingHeader: it draws the row and returns
@@ -1504,9 +1556,12 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
 
     // A row is a fixed deck like the top bar, not a line of text with padding
     // round it: the reference's rows are all one height whatever is written on
-    // them.
-    constexpr float kRowH = 28.0f;
+    // them. The height is NO LONGER THE LITERAL 28 IT WAS MEASURED AT - see
+    // railRowHeight in app_window.hpp. At the sizes fonts.hpp is set to now it
+    // still works out to exactly 28; raised again, the row grows rather than
+    // the label being squeezed into a deck that was measured for smaller type.
     const float labelPx = cascade::gui::fonts::kUiSize;
+    const float kRowH = cascade::gui::railRowHeight(labelPx);
 
     // THE KEY'S PRESS, CARRIED ONE FRAME. The key is submitted after the
     // header, so a press cannot change the state the header has already
@@ -1550,8 +1605,8 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (dl == nullptr || h < 6.0f) { return open; }
 
-    const float keySize = std::clamp(h - 10.0f, 9.0f, 18.0f);
-    const ImVec2 kTL(tl.x + 3.0f, tl.y + (h - keySize) * 0.5f);
+    const float keySize = cascade::gui::railKeySize(h);
+    const ImVec2 kTL(tl.x + cascade::gui::kRailKeyInset, tl.y + (h - keySize) * 0.5f);
     const ImVec2 kBR(kTL.x + keySize, kTL.y + keySize);
 
     // The label plate: a shade lighter than the ground it is screwed to, which
@@ -1559,7 +1614,7 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     // a panel. It runs out to the header's right edge on purpose - railChip()
     // lands its chip and lamp on that end afterwards, and they have to sit ON
     // the plate rather than beside it.
-    const ImVec2 pTL(kBR.x + 6.0f, tl.y + 1.0f);
+    const ImVec2 pTL(kBR.x + cascade::gui::kRailKeyGap, tl.y + 1.0f);
     const ImVec2 pBR(br.x, br.y - 1.0f);
     if (pBR.x > pTL.x + 24.0f) {
         ImU32 plate = cascade::gui::theme::kBrassDark;
@@ -1572,17 +1627,11 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
         cascade::gui::addBenchBevel(dl, pTL, pBR, cascade::gui::theme::kKeyRounding, true);
 
         // IVORY ON METAL, which is the palette's rule for anything a hand
-        // operates - never amber, which on this panel means a reading. The dark
-        // pass under it is the cut the letters sit in, not a drop shadow.
-        ImFont* f = cascade::gui::fonts::ui();
-        const ImVec2 ts = f->CalcTextSizeA(labelPx, FLT_MAX, 0.0f, shown);
-        const ImVec2 where(pTL.x + 8.0f, (tl.y + br.y) * 0.5f - ts.y * 0.5f);
-        dl->AddText(f, labelPx, ImVec2(where.x + 1.0f, where.y + 1.0f),
-                    cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.55f),
-                    shown);
-        dl->AddText(f, labelPx, where,
-                    open ? cascade::gui::theme::kIvory : cascade::gui::theme::kCream,
-                    shown);
+        // operates - never amber, which on this panel means a reading. Where
+        // the word has to STOP is railPlateLabel's business: it is measured
+        // against the chip that is about to be landed on the same plate.
+        railPlateLabel(dl, tl, br, pTL.x, labelPx, shown, chipText,
+                       open ? cascade::gui::theme::kIvory : cascade::gui::theme::kCream);
     }
 
     // THE STATE OF THE SECTION, READ WITHOUT OPENING IT: a chip naming what it
@@ -1665,8 +1714,11 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
     }
     shown[n] = '\0';
 
-    constexpr float kRowH = 28.0f;
+    // The same deck height benchSection's header works out to, from the same
+    // function, so a switch and a section can never sit at two heights on one
+    // rail. See railRowHeight in app_window.hpp for why it is no longer 28.
     const float labelPx = cascade::gui::fonts::kUiSize;
+    const float kRowH = cascade::gui::railRowHeight(labelPx);
     const float w = ImGui::GetContentRegionAvail().x;
     if (w < 40.0f) { return false; }
 
@@ -1692,11 +1744,11 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
         return false;
     }
 
-    const float keySize = std::clamp(kRowH - 10.0f, 9.0f, 18.0f);
-    const ImVec2 kTL(tl.x + 3.0f, tl.y + (kRowH - keySize) * 0.5f);
+    const float keySize = cascade::gui::railKeySize(kRowH);
+    const ImVec2 kTL(tl.x + cascade::gui::kRailKeyInset, tl.y + (kRowH - keySize) * 0.5f);
     const ImVec2 kBR(kTL.x + keySize, kTL.y + keySize);
 
-    const ImVec2 pTL(kBR.x + 6.0f, tl.y + 1.0f);
+    const ImVec2 pTL(kBR.x + cascade::gui::kRailKeyGap, tl.y + 1.0f);
     const ImVec2 pBR(br.x, br.y - 1.0f);
     if (pBR.x > pTL.x + 24.0f) {
         // A BLOCKED ROW IS DARK METAL, not greyed lettering on live brass: the
@@ -1717,18 +1769,14 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
                                     enabled);
 
         // Ivory on metal, the palette's rule for anything a hand operates -
-        // never amber, which on this panel means a reading.
-        ImFont* f = cascade::gui::fonts::ui();
-        const ImVec2 ts = f->CalcTextSizeA(labelPx, FLT_MAX, 0.0f, shown);
-        const ImVec2 where(pTL.x + 8.0f, (tl.y + br.y) * 0.5f - ts.y * 0.5f);
-        dl->AddText(f, labelPx, ImVec2(where.x + 1.0f, where.y + 1.0f),
-                    cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.55f),
-                    shown);
-        dl->AddText(f, labelPx, where,
-                    !enabled ? cascade::gui::theme::kInkFaint
-                             : (on ? cascade::gui::theme::kIvory
-                                   : cascade::gui::theme::kCream),
-                    shown);
+        // never amber, which on this panel means a reading. THE CLIP MATTERS
+        // MOST HERE: a map row's label is "<plugin display name> map", and a
+        // plugin names itself. Nothing bounds that string, so nothing but
+        // railPlateLabel's measured limit keeps it off the chip.
+        railPlateLabel(dl, tl, br, pTL.x, labelPx, shown, chipText,
+                       !enabled ? cascade::gui::theme::kInkFaint
+                                : (on ? cascade::gui::theme::kIvory
+                                      : cascade::gui::theme::kCream));
     }
 
     if (chipText != nullptr) {
@@ -2651,18 +2699,39 @@ float barTrackedWidth(ImFont* f, float px, const char* text, float track) {
 // for a caption only - a figure goes on glass, which is why every reading on
 // this bar is amber in a well or ivory on a meter's face and none of them is
 // lettered like this.
+//
+// THE CUT IS DEEPER THAN IT WAS, AND THAT IS THE OTHER HALF OF "HARD TO SEE".
+// theme.hpp says so in its own header: dark-into-brass is about 2.3:1, "fine
+// for a label at rest and not acceptable for a number somebody is trying to
+// read at arm's length". Measured, kEngraved (#3B3529) on this deck's own
+// gradient is 2.11:1 against kBrassMid at the bottom of the ramp and 2.62:1
+// against kBrassShade at the top - the worst contrast anywhere on this window,
+// and it is carrying MASTER, TUNED - HERTZ and VOLUME, which are the three
+// words that say what the three instruments on the deck ARE. Those are labels
+// a user has to read at least once; the lamp words under MASTER, the digits in
+// the counter and the figure under the dial are all already on glass.
+//
+// So the cut is FILLED rather than repainted: the void laid into it at 0.90,
+// which is what a paint-filled engraving on a 1960s brass panel actually is,
+// and which measures 3.19:1 against kBrassMid and 3.93:1 against kBrassShade.
+// The lit lip is raised with it, from 0.55 to 0.75, because on a real cut it is
+// the highlight along the lower edge that makes the letterform, not the shadow.
+// Nothing else about the treatment changes and no other surface is touched: the
+// maker's plate at the foot of the status column keeps the shallow cut, because
+// a maker's plate is decoration and is not read for information.
 void barEngrave(ImDrawList* dl, ImVec2 at, float px, const char* text, bool centred) {
     if (dl == nullptr || text == nullptr || text[0] == '\0') { return; }
     ImFont* f = cascade::gui::fonts::legend();
     const float track = px * 0.24f;
     if (centred) { at.x -= barTrackedWidth(f, px, text, track) * 0.5f; }
     const ImU32 lip =
-        cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.55f);
+        cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.75f);
+    const ImU32 cut = cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.90f);
     float x = at.x;
     for (const char* p = text; *p != '\0'; ++p) {
         const char one[2] = {*p, '\0'};
         dl->AddText(f, px, ImVec2(x, at.y + 1.0f), lip, one);
-        dl->AddText(f, px, ImVec2(x, at.y), cascade::gui::theme::kEngraved, one);
+        dl->AddText(f, px, ImVec2(x, at.y), cut, one);
         x += f->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x + track;
     }
 }
@@ -2798,9 +2867,21 @@ void AppWindow::drawToolbar() {
         };
         // drawBenchLamp letters its caption in whatever face is bound, and the
         // UI face at its normal size runs MUTE straight into FAIL at this
-        // pitch. The engraving face at eleven fits the 28-unit spacing the
-        // reference draws them on.
-        ImGui::PushFont(cascade::gui::fonts::legend(), std::max(9.0f, S(11.0f)));
+        // pitch, so these take the engraving face - AT THE DECK'S OWN CAPTION
+        // SIZE, which is what they should have been all along.
+        //
+        // ELEVEN WAS A GUESS THAT SURVIVED A TYPE CHANGE. It was chosen to fit
+        // the reference's 28-unit lamp spacing and never re-checked; when
+        // fonts.hpp went up two points these four words stayed put and became
+        // the smallest lettering anywhere in the application - four state
+        // indicators, set smaller than the caption above them and smaller than
+        // every legend around them, which is precisely the complaint this
+        // change set answers. Measured at the engraving face: the tightest
+        // adjacent pair is MUTE/FAIL, which needs 15.74 px of the 28-unit
+        // pitch at capPx = 14, leaving over twelve pixels of clear metal
+        // between them. capPx keeps its own nine-pixel floor, so a bar shrunk
+        // to kBarMinScale still letters them rather than smudging them.
+        ImGui::PushFont(cascade::gui::fonts::legend(), capPx);
         for (int i = 0; i < 4; ++i) {
             cascade::gui::drawBenchLamp(
                 dl, ImVec2(X(158.0f + 28.0f * static_cast<float>(i)), Y(86.0f)), S(7.0f),
@@ -3354,6 +3435,7 @@ void AppWindow::drawMenuColumn() {
     drawPluginStoreSection();
     drawPluginsSection();
     drawDecodersSection();
+    drawRadarSection();
     drawTargetDetailsSection();
     // THE SATELLITES MAP'S ONLY PRESENCE OUT HERE. A switch, not a section:
     // the window it opens carries every satellite control there is, and the
@@ -6026,12 +6108,99 @@ void AppWindow::drawRxPositionEntry() {
     }
 }
 
+// THE RADAR, ON THE RAIL - both of them.
+//
+// This product ships two things called radar, and a user asking where the
+// radar is should not have to know which one they mean before they can find
+// either:
+//
+//   Radar scope - a mode inside this window, drawn by this application.
+//   Radar unit  - foxsdr-radar.exe, its own program with its own window,
+//                 installed beside this one.
+//
+// Until this key existed the scope was buried inside the Decoders section and
+// the unit was reachable only from the Start menu. It was reported missing
+// from the rail twice, which is twice more than a feature should have to be.
+void AppWindow::drawRadarSection() {
+    const char* chip = scopeMode_ ? "SCOPE" : (radarHoldsDisplay_ ? "UNIT" : "OFF");
+    if (!benchSection("Radar", false, chip, cascade::gui::theme::kPhosphor,
+                      scopeMode_ || radarHoldsDisplay_)) {
+        return;
+    }
+    telemetryNotePanel("radar");
+
+    drawScopeModeControl();
+
+    ImGui::Spacing();
+
+#ifdef _WIN32
+    // The unit is a separate executable, so the honest states are "here" and
+    // "not here" - and it is genuinely absent from a build that did not make
+    // it, which is not a thing to discover through a button that does nothing.
+    std::error_code ec;
+    std::filesystem::path unit;
+    {
+        std::wstring buf(32768, L'\0');
+        const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(),
+                                             static_cast<DWORD>(buf.size()));
+        if (n > 0 && n < buf.size()) {
+            buf.resize(n);
+            unit = std::filesystem::path(buf).parent_path() / L"foxsdr-radar.exe";
+        }
+    }
+    const bool haveUnit = !unit.empty() && std::filesystem::exists(unit, ec);
+
+    ImGui::BeginDisabled(!haveUnit);
+    if (ImGui::Button("Open the radar unit", ImVec2(-1.0f, 0.0f))) {
+        ::ShellExecuteW(nullptr, L"open", unit.c_str(), nullptr,
+                        unit.parent_path().c_str(), SW_SHOWNORMAL);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "The Fox & Schirmer Radar Unit: a separate program with its own\n"
+            "window, drawing this receiver's aircraft. While it is open FoxSDR\n"
+            "minimises itself to leave the screen to it - click FoxSDR in the\n"
+            "taskbar to take the display back without closing the radar.");
+    }
+
+    if (!haveUnit) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("foxsdr-radar.exe is not installed beside FoxSDR.");
+        ImGui::PopStyleColor();
+    } else if (!webServer_.running()) {
+        // IT DRAWS EVERYTHING THROUGH THE WEB SERVER. With that off the unit
+        // opens and says it has no link, which reads as a broken program
+        // rather than a switch that is off - so the switch is named here,
+        // before the button is pressed.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(
+            "Web access is off. The unit draws its aircraft, its map tiles and "
+            "its signal reading through it, and will report no link until it is "
+            "on - see the Web access section.");
+        ImGui::PopStyleColor();
+    } else if (radarHoldsDisplay_) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("The radar unit holds the display.");
+        ImGui::PopStyleColor();
+    }
+#else
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("The radar unit is a Windows program; this build has none.");
+    ImGui::PopStyleColor();
+#endif
+}
+
 void AppWindow::drawScopeModeControl() {
-    // THE SWITCH, in the Decoders section because that is where a user goes
-    // looking for what their ADS-B plugin can do. It is a button rather than a
-    // checkbox on purpose: turning it on replaces the entire window, which is
-    // a place you go rather than a setting you tick, and a checkbox that
-    // silently swallowed the spectrum would read as a fault.
+    // THE SWITCH. It lives in the Radar section of the rail - the place a user
+    // goes looking for a radar - and is a button rather than a checkbox on
+    // purpose: turning it on replaces the entire window, which is a place you
+    // go rather than a setting you tick, and a checkbox that silently
+    // swallowed the spectrum would read as a fault.
     if (ImGui::Button(scopeMode_ ? "Leave radar scope" : "Radar scope",
                       ImVec2(-1.0f, 0.0f))) {
         scopeMode_ = !scopeMode_;
@@ -9312,8 +9481,6 @@ void AppWindow::drawDecoderStatusRows() {
                                 decoderLog_.size() == 1 ? "" : "s");
         }
     }
-
-    drawScopeModeControl();
 }
 
 void AppWindow::drawDecoderWindow() {
@@ -10409,9 +10576,29 @@ void AppWindow::setRadarHoldsDisplay(bool held) {
     radarHoldsDisplay_ = held;
     if (mainWindow_ == nullptr) { return; }
     if (held) {
-        glfwHideWindow(mainWindow_);
+        // MINIMISED, NOT HIDDEN - and the difference between those two is the
+        // whole of a bug reported as "when you open it, it crashes".
+        //
+        // glfwHideWindow takes a window off the TASKBAR as well as off the
+        // screen. Handing the display over therefore removed every trace of
+        // FoxSDR at once: no window, no taskbar button, nothing in front of
+        // the user that said the receiver was still running. Measured on
+        // 0.75.0 - the visible windows went from "[Decoder output] [FoxSDR
+        // 0.75.0]" to none, while the process stayed perfectly healthy and
+        // rendered 13,435 more frames. There is no way to tell that apart
+        // from a crash by looking, and a user should not have to.
+        //
+        // A minimised window keeps its taskbar button. The screen is just as
+        // clear for the radar, the application is visibly still there, and
+        // clicking that button takes the display back without closing the
+        // radar first - see the take-back in applyRadarWindowVisibility.
+        radarHoldFrame_ = frameCounter_;
+        glfwIconifyWindow(mainWindow_);
     } else {
         radarRestoreWindows_ = true;
+        // Restored AND shown: restore un-minimises, while show covers a
+        // window that an older build of this function left hidden.
+        glfwRestoreWindow(mainWindow_);
         glfwShowWindow(mainWindow_);
         // Raised as well as shown: a window restored behind the radar's own
         // window would look exactly like a restore that did not happen.
@@ -10426,6 +10613,23 @@ void AppWindow::setRadarHoldsDisplay(bool held) {
 // the ImGui viewports, which are created and re-shown by the backend and so
 // cannot be settled once.
 void AppWindow::applyRadarWindowVisibility() {
+    // THE TAKE-BACK. The main window is minimised while the radar holds the
+    // display, so the taskbar button is a real control: clicking it restores
+    // the window, and that is the user saying they want the receiver back.
+    // Honour it - drop the hold, put the torn-off windows back, and remember
+    // it so the radar's next four-second renewal does not minimise them
+    // again. Without the memory this would be a fight the user could not win.
+    //
+    // The frame guard is not decoration: GLFW learns a window is iconified
+    // from a window message, so the attribute cannot be trusted on the frame
+    // the hold was asked for.
+    if (radarHoldsDisplay_ && mainWindow_ != nullptr &&
+        frameCounter_ > radarHoldFrame_ + 8 &&
+        glfwGetWindowAttrib(mainWindow_, GLFW_ICONIFIED) == 0) {
+        radarDisplayTakenBack_ = true;
+        setRadarHoldsDisplay(false);
+    }
+
     // Leaving scope mode is an EDGE, and the frame it happens on is the one
     // that has to show the windows again - after that ImGui owns their
     // visibility once more, and forcing them visible every frame would stop
@@ -10471,6 +10675,12 @@ void AppWindow::applyWebControls() {
     // renewed at the last moment behave like a lease renewed early.
     if (radarHoldsDisplay_ && glfwGetTime() > radarLeaseExpiry_) {
         setRadarHoldsDisplay(false);
+    }
+    // A lease that has run out means the radar has stopped renewing, which
+    // means it has gone. That is the moment a hand-back stops applying: the
+    // next radar to open is a fresh request, not the one the user overruled.
+    if (radarDisplayTakenBack_ && glfwGetTime() > radarLeaseExpiry_) {
+        radarDisplayTakenBack_ = false;
     }
 
     std::vector<cascade::net::ControlRequest> requests =
@@ -10608,9 +10818,13 @@ void AppWindow::applyWebControls() {
                 // Renewed, whether or not it was already held: the lease is a
                 // deadline, and every renewal pushes it out.
                 radarLeaseExpiry_ = glfwGetTime() + kRadarLeaseSeconds;
-                setRadarHoldsDisplay(true);
+                // Not if the user has already taken the display back by hand.
+                // The renewal still pushes the deadline out - the radar is
+                // plainly alive - it just no longer claims the screen.
+                if (!radarDisplayTakenBack_) { setRadarHoldsDisplay(true); }
             } else {
                 setRadarHoldsDisplay(false);
+                radarDisplayTakenBack_ = false;
             }
         }
         if (r.scanDevices.value_or(false)) {

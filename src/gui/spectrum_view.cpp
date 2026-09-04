@@ -61,8 +61,65 @@ constexpr float kChromePad = 8.0f;
 // Below these the annotations are not small, they are illegible and they cover
 // the trace: a squeezed panel keeps its frame, its grid and its plot and drops
 // the lettering rather than shipping a smear.
-constexpr float kChromeMinWidth = 180.0f;
-constexpr float kChromeMinHeight = 90.0f;
+//
+// BOTH WERE LITERALS (180 x 90) MEASURED AGAINST 12/14 PX LETTERING, and both
+// are now computed from the type, because the numbers were never about pixels
+// — they were about how many lines of text the panel has to hold and still
+// leave a picture underneath. The height is the sum of the bands this function
+// lays out below, in the order it lays them out; evaluated at the sizes those
+// literals were chosen at it comes to exactly 90, which is the check that this
+// is the rule they encoded rather than a rule invented to replace them.
+//
+// The width is the one honest proportion here rather than a sum: nothing on
+// this panel has a width the widget can know in advance (the title is the
+// caller's, the axis labels are the caller's), so it stays what it always was
+// — a judgement that a well narrower than about fifteen lines of the smallest
+// engraving cannot carry lettering at all — expressed so it travels with the
+// type instead of having to be re-measured.
+float chromeMinWidth() { return 15.0f * fonts::kTinySize; }
+
+float chromeMinHeight() {
+    const float header = kChromePad * 0.75f    // the header's top margin
+                         + fonts::kLegendSize  // line 1: title, bins, EMA
+                         + 1.0f                // line gap
+                         + fonts::kTinySize    // line 2: the averaging caveat
+                         + 3.0f;               // headerBottom's own clearance
+    const float axis = 8.0f                    // gap the axis demands below it
+                       + fonts::kTinySize + 10.0f;  // the frequency-axis band
+    return header + axis + 24.0f;              // and a usable strip of trace
+}
+
+// Clear air between one dB figure and the next, and between two frequency
+// labels along the foot. Three pixels reads as a gap at any of these sizes;
+// less and the ladder looks like one long smudge.
+constexpr float kLabelGapPx = 3.0f;
+
+// Past this there are no gridlines left to thin out: gridlineDbs itself is
+// capped at 64 lines by the caller's array.
+constexpr int kMaxDbLabelStride = 64;
+
+// A dB ladder is read in tens, twenties and fifties, not in sevens. The raw
+// stride the arithmetic asks for is rounded UP to one of these, so the figures
+// that survive step by 10, 20, 50, 100, 200 or 500 dB - which is the same
+// ladder the waterfall's strength key is read on (kDbLadder there), for the
+// same reason. Rounding up only ever increases the gap, so the spacing
+// guarantee survives the snap.
+constexpr int kDbStrideLadder[] = {1, 2, 5, 10, 20, 50};
+
+// THE INK AN AXIS IS LETTERED IN, and it is deliberately not the faint ink the
+// captions take.
+//
+// theme.hpp states the rule this panel was breaking: a caption may be
+// engraved, a figure somebody is reading may not. The frequency scale along
+// the foot and the dB ladder down the side are not decoration - they are the
+// only things on the panel that say what the picture is OF, and both were
+// drawn at the same weight as the averaging caveat. Against the well's own
+// ground that is 3.4:1 for the frequency labels and 4.2:1 for the dB ones; at
+// this ink they are 5.7:1 and 5.8:1, still clearly quieter than the phosphor
+// trace and the amber readings, so the hierarchy the face is built on is
+// unchanged. It is a function and not a constant only because withAlpha is
+// not constexpr.
+ImU32 axisInk() { return theme::withAlpha(theme::kInkMuted, 0.95f); }
 
 // Trace value at fractional bin `bin`, linearly interpolated between the two
 // straddled bins. Callers guarantee bin is within [0, n-1] and n >= 1. An
@@ -163,6 +220,29 @@ float dbToY(float db, float dbMin, float dbMax, float yTop, float yBottom) {
         t = 0.0f;
     }
     return yTop + t * (yBottom - yTop);
+}
+
+int SpectrumView::dbLabelStride(float dbMin, float dbMax, float panelHeight,
+                                float labelHeight) {
+    // Every guard is written !(a > b) so a NaN lands here rather than in the
+    // arithmetic: a NaN stride would drop every label on the axis, which is a
+    // far worse failure than the crowding this function exists to prevent.
+    if (!(dbMax > dbMin) || !(panelHeight > 0.0f) || !(labelHeight > 0.0f)) { return 1; }
+    const double per10Db = static_cast<double>(panelHeight) * 10.0 /
+                           (static_cast<double>(dbMax) - static_cast<double>(dbMin));
+    if (!(per10Db > 0.0)) { return 1; }
+    const double need = static_cast<double>(labelHeight) + kLabelGapPx;
+    const double raw = std::ceil(need / per10Db);
+    if (!(raw > 1.0)) { return 1; }
+    // Up to the next rung of the ladder, so the surviving figures step in a
+    // number a scale is actually read in. Nothing on the ladder reaches it
+    // means the panel is far too short for its range: take the cap, which
+    // leaves at most one figure and is the honest answer for a well that has
+    // no room for a scale.
+    for (const int s : kDbStrideLadder) {
+        if (static_cast<double>(s) >= raw) { return s; }
+    }
+    return kMaxDbLabelStride;
 }
 
 int SpectrumView::gridlineDbs(float dbMin, float dbMax, float* out, int cap) {
@@ -271,7 +351,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
                 float& headerBottom, float& axisTop) {
     const float w = p1.x - p0.x;
     const float h = p1.y - p0.y;
-    if (w < kChromeMinWidth || h < kChromeMinHeight) { return; }
+    if (w < chromeMinWidth() || h < chromeMinHeight()) { return; }
 
     ImFont* uiFont = fonts::ui();
     ImFont* legendFont = fonts::legend();
@@ -286,6 +366,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
     const ImU32 kBright = theme::kPhosphor;
     const ImU32 kDim = theme::withAlpha(theme::kInkMuted, 0.82f);
     const ImU32 kFaint = theme::withAlpha(theme::kInkFaint, 0.85f);
+    const ImU32 kAxisInk = axisInk();
 
     // --- header, top left ----------------------------------------------------
     // Line 1 names the picture and its parameters. The bin count is counted
@@ -388,7 +469,12 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
                             theme::withAlpha(theme::kAmber, 0.85f), kUnit);
                 y += readH + 1.0f;
                 if (ageLine[0] != '\0') {
-                    addTrackedText(dl, uiFont, tinyPx, ImVec2(right - ageW, y), kFaint,
+                    // kDim, not the caveat's fainter ink: this line carries a
+                    // FIGURE, and it is the figure that says whether the peak
+                    // above it is worth reading at all. The caveat under the
+                    // title is a statement about the picture and stays
+                    // engraved-quiet; this is a measurement.
+                    addTrackedText(dl, uiFont, tinyPx, ImVec2(right - ageW, y), kDim,
                                    ageLine, 0.4f);
                 }
             }
@@ -419,6 +505,21 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
                                         solid, solid);
             dl->AddRectFilled(ImVec2(p0.x + 1.0f, axisY + 3.0f),
                               ImVec2(p1.x - 1.0f, p1.y - 1.0f), solid);
+            // Right edge of the last label actually drawn, so a label that
+            // would touch its neighbour can be dropped. THE CALLER SIZES THE
+            // TICK PITCH FROM AN ESTIMATE OF THE LABEL WIDTH (FreqScale's
+            // kMinTickSpacingPx), which is an estimate made at one type size:
+            // measured over every band, rate and zoom this product reaches,
+            // the widest label the axis can produce is 53.98 px at 14 px
+            // lettering against an 80 px pitch, so nothing collides today —
+            // but the two end labels slide inboard to clear the frame and can
+            // close that gap from either end. This panel is the last thing
+            // between an estimate and two frequencies printed through each
+            // other, so it checks. The TICK is always drawn — the mark is
+            // true whether or not there was room to letter it.
+            // (tests/test_spectrum_waterfall_type.cpp holds that measurement
+            // and fails the moment a size change starts dropping labels.)
+            float lastLabelRight = -FLT_MAX;
             for (int i = 0; i < chrome->freqTickCount; ++i) {
                 const SpectrumView::AxisTick& t = chrome->freqTicks[i];
                 // Off-panel or NaN positions are dropped rather than clamped:
@@ -433,7 +534,9 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
                 // frame; the tick itself stays put, so the mark is still true.
                 if (lx < p0.x + 3.0f) { lx = p0.x + 3.0f; }
                 if (lx + lw > p1.x - 3.0f) { lx = p1.x - 3.0f - lw; }
-                dl->AddText(uiFont, tinyPx, ImVec2(lx, axisY + 6.0f), kFaint, t.label);
+                if (lx < lastLabelRight + kLabelGapPx) { continue; }
+                lastLabelRight = lx + lw;
+                dl->AddText(uiFont, tinyPx, ImVec2(lx, axisY + 6.0f), kAxisInk, t.label);
             }
         }
     }
@@ -573,7 +676,18 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     // that would land under the header or in the frequency axis is dropped
     // rather than overprinted.
     const float dbLabelH = lineHeight(fonts::reading(), fonts::kTinySize);
+    // How many lines to step between FIGURES. The lines themselves stay every
+    // 10 dB - the graticule is what the eye measures against and it costs
+    // nothing - but a short well or a wide dB range puts those lines closer
+    // together than a label is tall, and the ladder then prints through
+    // itself. See dbLabelStride.
+    const int labelStride = dbLabelStride(dbMin_, dbMax_, height, dbLabelH);
     for (int i = 0; i < gridCount; ++i) {
+        // Anchored on the decade index rather than on i, so the surviving
+        // figures are round multiples (-100, -50, 0) and stay on the same
+        // values as the panel is resized instead of shuffling.
+        const int decade = static_cast<int>(std::lround(gridDb[i] / 10.0f));
+        if (labelStride > 1 && decade % labelStride != 0) { continue; }
         const float y = dbToY(gridDb[i], dbMin_, dbMax_, p0.y, p1.y) + 2.0f;
         if (y < headerBottom || y + dbLabelH > axisTop) { continue; }
         char label[16];
@@ -581,8 +695,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
         // Figures, so the monospaced face: a dB ladder whose digits are all
         // the same width reads as a scale rather than as a column of words.
         drawList->AddText(fonts::reading(), fonts::kTinySize,
-                          ImVec2(p0.x + kChromePad, y),
-                          theme::withAlpha(theme::kInkMuted, 0.78f), label);
+                          ImVec2(p0.x + kChromePad, y), axisInk(), label);
     }
 
     drawList->PopClipRect();

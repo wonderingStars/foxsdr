@@ -330,11 +330,17 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     }
 
     // ENGRAVED INTO BRASS, which the design's own rule allows for a caption on
-    // metal and forbids for a reading on glass. A dead key letters in the
-    // faint ink instead, so it reads as unavailable rather than as unlabelled.
+    // metal and forbids for a reading on glass. A dead key letters in a muted
+    // ink instead, so it reads as unavailable rather than as unlabelled.
+    //
+    // MUTED, NOT FAINT. A disabled key's ground is kWell, and kInkFaint on it
+    // is about 4:1. This window's dead key is NOTHING TO START on a refused
+    // module - the exact row a user opens this window to understand - so its
+    // words are the last ones that should be hard to read. kInkMuted is about
+    // 6:1 there and stays a clear step below a live key's cream.
     ImFont* f = cascade::gui::fonts::ui();
     const float px = cascade::gui::fonts::kTinySize;
-    const ImU32 ink = enabled ? theme::kEnamel : theme::kInkFaint;
+    const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     dl->AddText(f, px,
                 ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
                        (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f + (held ? 1.0f : 0.0f)),
@@ -439,6 +445,15 @@ ImU32 stateInk(FittedState s) {
 // green lamp is worth something.
 bool stateLampLit(FittedState s) { return s == FittedState::Fed || s == FittedState::Refused; }
 
+// A KEY WITH ONE WORD ON IT, tall enough for the word. This was the literal 24
+// in three places - the row's START/STOP key, the strip's SCAN AGAIN and the
+// row-height floor that has to allow for the first of them - and the three had
+// to agree or the floor stopped being a floor.
+float oneLineKeyH() {
+    return std::max(24.0f, faceH(cascade::gui::fonts::ui(),
+                                 cascade::gui::fonts::kTinySize) + 10.0f);
+}
+
 // One row's height, measured from the text that will actually be in it. A row
 // sized from a different string to the one drawn is a row that clips itself.
 float rowHeight(const std::string& body, float bodyWidth) {
@@ -449,9 +464,11 @@ float rowHeight(const std::string& body, float bodyWidth) {
     const float bodyH =
         uf->CalcTextSizeA(cascade::gui::fonts::kTinySize, FLT_MAX, wrap, body.c_str()).y;
     // The floor is what the right-hand column needs: the state word on the
-    // title line and the START/STOP key beneath it.
+    // title line and the START/STOP key beneath it - and the key's own height
+    // is asked for rather than repeated, so the row cannot come to be a
+    // pixel short of the control it was sized around.
     const float needed = 9.0f + titleH + 4.0f + bodyH + 3.0f + tinyH + 9.0f;
-    return std::max(needed, 9.0f + titleH + 6.0f + 24.0f + 9.0f);
+    return std::max(needed, 9.0f + titleH + 6.0f + oneLineKeyH() + 9.0f);
 }
 
 }  // namespace
@@ -556,7 +573,15 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     const FittedCounts counts = countStates(model.modules, model.receiverRunning);
 
     // ======================= THE PLATE ======================================
-    const float titlePlateH = 40.0f;
+    //
+    // AS TALL AS addBenchPlate's OWN ARITHMETIC. That helper letters its title
+    // in the LEGEND face at kLegendSize, seven pixels down, and puts a rail
+    // five below it - so the plate needs the legend face's height plus its
+    // furniture, and 40 was that sum computed once for a 14 px legend. Too
+    // short and the rail is drawn outside the plate it belongs to.
+    const float titlePlateH =
+        std::max(40.0f, faceH(cascade::gui::fonts::legend(),
+                              cascade::gui::fonts::kLegendSize) + 24.0f);
     addBenchPlate(dl, origin, ImVec2(origin.x + avail.x, origin.y + titlePlateH),
                   "FITTED MODULES");
     float y = origin.y + titlePlateH + 10.0f;
@@ -571,7 +596,11 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             : "The receiver is stopped, so NOTHING is being fed to any module however it "
               "is set. That is why no module below reads FED.";
     const float stripInner = avail.x - 24.0f;
-    const float rescanW = 96.0f;
+    // MEASURED FROM THE WORDS ON IT. drawDeckKey CENTRES its label and does
+    // not clip, so a key too narrow for its word does not shorten it - the
+    // word hangs out over both machined edges and, here, over the engraved
+    // caption to its left.
+    const float rescanW = std::max(96.0f, textW(uf, tiny, "SCAN AGAIN") + 22.0f);
     const float stripNoteW = stripInner;
     constexpr int kGroups = 5;
     const float groupW = stripInner / static_cast<float>(kGroups);
@@ -621,8 +650,8 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         // SCAN AGAIN, on the strip because it is the one action that is about
         // the whole folder rather than about one module.
         const ImVec2 rtl(br.x - 12.0f - rescanW, ty - 4.0f);
-        if (drawDeckKey(dl, rtl, ImVec2(rtl.x + rescanW, rtl.y + 24.0f), "SCAN AGAIN", true,
-                        "rescan")) {
+        if (drawDeckKey(dl, rtl, ImVec2(rtl.x + rescanW, rtl.y + oneLineKeyH()), "SCAN AGAIN",
+                        true, "rescan")) {
             act.kind = FittedModulesAction::Kind::Rescan;
         }
         ty += capH + 8.0f;
@@ -686,12 +715,28 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
 
     // ======================= THE FILTER KEYS ================================
     {
-        const float keyH = 24.0f;
+        const float keyH = oneLineKeyH();
         const float gap = 8.0f;
         constexpr int kFilters = 5;
+        // THE CAP IS THE WIDEST WORD, NOT 150. drawFilterKey clips its label
+        // to the key on purpose - the user can narrow this window past any
+        // width and a legend running out across the panel is worse than one
+        // that is cut - but a fixed cap decides when that last resort starts,
+        // and 150 was a figure with no relationship to the words. It happens
+        // to be enough for "TAKES NO SIGNAL" at 14 px and it would not be the
+        // arithmetic that told anyone if it stopped being. The lamp and its
+        // shoulder are inside the measurement because the word starts after
+        // them.
+        const float lampRun = 9.0f + 3.5f + 6.0f;
+        const float widestLabel = std::max({textW(uf, tiny, "TAKES NO SIGNAL"),
+                                            textW(uf, tiny, "NOT DECODING"),
+                                            textW(uf, tiny, "STOPPED"),
+                                            textW(uf, tiny, "REFUSED"),
+                                            textW(uf, tiny, "FED")});
         const float keyW =
-            std::min(150.0f, (avail.x - gap * static_cast<float>(kFilters - 1)) /
-                                 static_cast<float>(kFilters));
+            std::min(std::max(150.0f, lampRun + widestLabel + 10.0f),
+                     (avail.x - gap * static_cast<float>(kFilters - 1)) /
+                         static_cast<float>(kFilters));
         struct Filter {
             const char* label;
             bool* flag;
@@ -789,8 +834,18 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             ImGui::SetCursorScreenPos(ImVec2(lo.x, lo.y + noteHeight(innerW, why)));
             ImGui::Dummy(ImVec2(innerW, 0.0f));
         } else {
-            const float tagW = 82.0f;
-            const float keyW = 78.0f;
+            // THE KIND TAG IS THE SHARED MEASUREMENT, and this is the point at
+            // which the two windows stopped agreeing about it. The chip drawn
+            // here was tagW - 8, i.e. 74 px, while the store's card drew the
+            // same chip at 84 - one component, two widths, in the two windows
+            // the shared plate exists to keep identical. Both were wide enough
+            // for their words and neither was measured from them;
+            // moduleKindTagWidth() is now the only answer either window has.
+            const float tagW = moduleKindTagWidth() + 16.0f;
+            // START and STOP, measured across both, so the key does not change
+            // width when it is pressed and drag the row's title with it.
+            const float keyW = std::max({78.0f, textW(uf, tiny, "START") + 26.0f,
+                                         textW(uf, tiny, "STOP") + 26.0f});
             const float bodyX = tagW + 12.0f;
             const float bodyW = innerW - bodyX - keyW - 20.0f;
             float ry = lo.y;
@@ -850,9 +905,13 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                     ldl->AddRectFilled(tl, ImVec2(tl.x + 3.0f, br.y), theme::kAlarm);
                 }
 
-                // The kind tag: a brass chip, engraved.
+                // The kind tag: a brass chip, engraved. THE CHIP IS EXACTLY
+                // the shared width, so it is the same object in this window
+                // and in the store; the column around it is that plus its
+                // margins, which is where the two layouts are allowed to
+                // differ and the chip itself is not.
                 const ImVec2 ttl(tl.x + 8.0f, tl.y + 9.0f);
-                const ImVec2 tbr(ttl.x + tagW - 8.0f, ttl.y + tinyH + 6.0f);
+                const ImVec2 tbr(ttl.x + moduleKindTagWidth(), ttl.y + tinyH + 6.0f);
                 ldl->AddRectFilled(ttl, tbr, theme::kBrassBright, theme::kKeyRounding);
                 addBenchBevel(ldl, ttl, tbr, theme::kKeyRounding, true);
                 const char* tag = moduleKindTag(rowPlate);
@@ -897,7 +956,12 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                                                         : moduleReachColour(rowPlate),
                              body.c_str(), nullptr, std::max(40.0f, bodyW));
                 ty += bodyH + 3.0f;
-                ldl->AddText(uf, tiny, ImVec2(tl.x + bodyX, ty), theme::kInkFaint,
+                // THE FILE NAME IS THE MODULE'S IDENTITY - every per-module
+                // decision in this product keys on it, and it is what a user
+                // reads back when they go looking in the folder. Muted rather
+                // than faint for that: it is a string to be transcribed, and a
+                // run of punctuation at 4:1 is where legibility fails first.
+                ldl->AddText(uf, tiny, ImVec2(tl.x + bodyX, ty), theme::kInkMuted,
                              m.file.c_str(), nullptr, std::max(40.0f, bodyW));
 
                 // The lamp and the state word, right of the name. Both are
@@ -918,7 +982,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 // the module or is simply a badge.
                 if (m.loaded) {
                     const ImVec2 ktl(br.x - keyW - 8.0f, tl.y + 9.0f + faceH(uf, uiPx) + 6.0f);
-                    if (drawDeckKey(ldl, ktl, ImVec2(ktl.x + keyW, ktl.y + 24.0f),
+                    if (drawDeckKey(ldl, ktl, ImVec2(ktl.x + keyW, ktl.y + oneLineKeyH()),
                                     m.stopped ? "START" : "STOP", true, "rowstop")) {
                         act.kind = m.stopped ? FittedModulesAction::Kind::Start
                                              : FittedModulesAction::Kind::Stop;
@@ -974,7 +1038,10 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             py = drawOperatingWell(pdl, po.x, py, innerW, m, model.receiverRunning) + 10.0f;
 
             // ---- the actions ---------------------------------------------
-            const float keyH = 32.0f;
+            // Taller than a row key because these are the consequential ones -
+            // and measured, because "consequential" is no protection against a
+            // face that outgrows the box.
+            const float keyH = std::max(32.0f, tinyH + 14.0f);
             const float half = (innerW - 8.0f) * 0.5f;
             if (m.loaded) {
                 if (drawDeckKey(pdl, ImVec2(po.x, py), ImVec2(po.x + half, py + keyH),

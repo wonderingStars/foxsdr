@@ -69,15 +69,85 @@ constexpr ImU32 kRing = IM_COL32(134, 214, 74, 36);        // rgba(--acc,.14)
 constexpr ImU32 kRim = IM_COL32(134, 214, 74, 77);         // rgba(--acc,.30)
 constexpr ImU32 kTick = IM_COL32(134, 214, 74, 90);
 constexpr ImU32 kChrome = IM_COL32(124, 138, 95, 255);     // #7c8a5f
-constexpr ImU32 kChromeDim = IM_COL32(93, 106, 69, 255);   // #5d6a45
+// LIFTED OFF THE DESIGN'S OWN #5d6a45, and this is the one value on this face
+// that is deliberately not the reference's. It is the dim half of the chrome,
+// and what it letters is not decoration: the inner range rings' labels - the
+// scale the whole instrument is read against - the numbered bearing ticks, the
+// receiver's position and the mode. On the tube's ground that hue measures
+// about 3.0:1 and on the surround around it about 3.3:1, which is below the
+// 4.5:1 a caption at this size needs and is exactly the "hard to see" the
+// report named. #748656 is the same colour taken up until it measures 4.4:1 on
+// the tube and 4.7:1 on the surround; it is still visibly the dimmer of the
+// two chromes, so the hierarchy the design draws survives.
+constexpr ImU32 kChromeDim = IM_COL32(116, 132, 86, 255);  // was #5d6a45
 constexpr ImU32 kPanelLabel = IM_COL32(95, 138, 60, 255);  // --acc-dim
 constexpr ImU32 kPanelValue = IM_COL32(183, 245, 106, 255);  // --acc-bright
-constexpr ImU32 kPanelDim = IM_COL32(111, 122, 92, 255);
+// The panel's secondary ink, and it carries PROSE - "NOTHING BEING HEARD", the
+// paragraph explaining why the sky is empty, the range and bearing under every
+// row in the register, and the note at the foot of the flight page. At
+// (111,122,92) that is 4.1:1 on the panel's glass; this is the same hue at
+// 4.9:1. A label a user is meant to read is not a decorative legend.
+constexpr ImU32 kPanelDim = IM_COL32(124, 136, 104, 255);
 // The one hue nothing else on the scope uses, which is the whole reason it is
 // reserved. Matches the map's emergency colour exactly, so a target that is
 // red on one is red on the other.
 constexpr ImU32 kAlert = IM_COL32(255, 45, 45, 255);
 
+// --- fitting a word to the thing that holds it --------------------------------
+//
+// EVERY BOX ON THIS PANEL WAS MEASURED AGAINST A FONT SIZE, and the sizes in
+// fonts.hpp have moved once already. Dear ImGui does not wrap and it does not
+// shrink: a caption wider than its plate is drawn straight across whatever is
+// beside it, and on an instrument face that reads as a fault in the instrument
+// rather than in the label.
+//
+// So a caption that cannot fit its own furniture is drawn SMALLER rather than
+// drawn wrong, and the size comes back from a measurement of the actual glyphs
+// at the actual face - never from a literal that happened to fit last time.
+// Text that already fits is returned untouched, so this only ever costs
+// something where the alternative was a collision.
+//
+// THE FLOOR IS DELIBERATE. Below about nine pixels an engraved capital is not
+// a smaller caption, it is dirt on the panel - drawBenchStopButton says the
+// same thing about its own word - so a box that small gets the floor and the
+// caller's own width guard decides whether to draw at all.
+// IT MEASURES AGAIN AFTER SHRINKING, and that is not belt and braces. A glyph's
+// advance is rasterised at the size it is asked for and lands on a whole
+// pixel, so the width of a word is very nearly - but not exactly - linear in
+// the size, and the one division that ought to land on the answer can leave a
+// caption a pixel or two over its room. A pixel or two is one letter of a
+// tracked title, which is the difference between a caption that fits and a
+// caption with its last letter cut off. Four passes is far more than the
+// rounding ever needs and cannot loop.
+float fitTextPx(ImFont* font, float px, const char* text, float room) {
+    if (font == nullptr || text == nullptr || text[0] == '\0') { return px; }
+    if (!(room > 0.0f) || !(px > 0.0f)) { return px; }
+    float out = px;
+    for (int pass = 0; pass < 4; ++pass) {
+        const float w = font->CalcTextSizeA(out, FLT_MAX, 0.0f, text).x;
+        if (!(w > room) || !(w > 0.0f)) { break; }
+        const float next = std::max(9.0f, out * room / w - 0.05f);
+        if (!(next < out)) { break; }  // at the floor, and the cut takes over
+        out = next;
+    }
+    return out;
+}
+
+// The floor's other half, and the reason fitTextPx may return a size that still
+// does not fit: what cannot be drawn legibly at nine pixels is CUT OFF at the
+// edge of the thing it is written on rather than allowed to run past it.
+// Truncating spoils the caption; overflowing spoils the control standing next
+// to it, and only one of those is the caption's own business. ImGui clips a
+// glyph at a time against this rectangle, so the cut lands on the letter rather
+// than on the word.
+void addClippedText(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, ImU32 col,
+                    const char* text, float x0, float x1) {
+    if (dl == nullptr || font == nullptr || text == nullptr || text[0] == '\0') { return; }
+    // Generous on the vertical: this bounds the COLUMN the caption sits in, and
+    // an ascender or a descender clipped away would be a fault of its own.
+    const ImVec4 clip(x0, at.y - px * 2.0f, x1, at.y + px * 3.0f);
+    dl->AddText(font, px, at, col, text, nullptr, 0.0f, &clip);
+}
 
 // --- the tube's own optics ----------------------------------------------------
 //
@@ -372,11 +442,19 @@ int drawLcdTabs(const ImVec2& tl, float width, int current) {
                           6.0f);
         dl->AddLine(ImVec2(a.x + 6.0f, a.y + 1.0f), ImVec2(b.x - 6.0f, a.y + 1.0f),
                     IM_COL32(255, 255, 255, on ? 46 : 20), 1.0f);
-        const ImVec2 sz = ImGui::CalcTextSize(kNames[i]);
-        dl->AddText(ImVec2((a.x + b.x) * 0.5f - sz.x * 0.5f,
-                           (a.y + b.y) * 0.5f - sz.y * 0.5f),
-                    on ? IM_COL32(220, 240, 182, 255) : IM_COL32(141, 147, 121, 255),
-                    kNames[i]);
+        // FITTED TO THE KEY. Three keys share the panel's width, so the widest
+        // word - FLIGHT - has a third of a 260 px panel minus the gaps to sit
+        // in, and a word wider than its own key is drawn over the key beside
+        // it. Measured and drawn at ONE size, so the centring cannot be
+        // computed against a size the glyphs are not laid at.
+        ImFont* tf = ImGui::GetFont();
+        const float tpx = fitTextPx(tf, ImGui::GetFontSize(), kNames[i], w - 10.0f);
+        const ImVec2 sz = tf->CalcTextSizeA(tpx, FLT_MAX, 0.0f, kNames[i]);
+        addClippedText(dl, tf, tpx,
+                       ImVec2((a.x + b.x) * 0.5f - sz.x * 0.5f,
+                              (a.y + b.y) * 0.5f - sz.y * 0.5f),
+                       on ? IM_COL32(220, 240, 182, 255) : IM_COL32(141, 147, 121, 255),
+                       kNames[i], a.x, b.x);
     }
     return chosen;
 }
@@ -553,8 +631,6 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 // aircraft with no identity rather than one not yet decoded.
                 const char* name = (ht.t.label[0] != '\0') ? ht.t.label : ht.t.id;
                 const bool alert = (ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u;
-                d->AddText(ImVec2(tl.x + 4.0f, tl.y + 2.0f),
-                           alert ? kAlert : kPanelValue, name);
                 // Altitude beside it, banded by the same rule the face uses.
                 char altTxt[24];
                 if (std::isfinite(ht.t.altM)) {
@@ -564,6 +640,17 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                     std::snprintf(altTxt, sizeof(altTxt), "NO ALT");
                 }
                 const ImVec2 asz = ImGui::CalcTextSize(altTxt);
+                // THE NAME STOPS WHERE THE ALTITUDE STARTS. Both are placed
+                // from opposite ends of the row, so a long callsign on a narrow
+                // panel is drawn straight through the flight level - and two
+                // readings over one another are not a longer name, they are
+                // neither reading. The clip is where the collision would be,
+                // measured this frame at the face actually bound.
+                const ImVec4 nameClip(tl.x + 4.0f, tl.y,
+                                      tl.x + w - asz.x - 10.0f, tl.y + rowH);
+                d->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                           ImVec2(tl.x + 4.0f, tl.y + 2.0f),
+                           alert ? kAlert : kPanelValue, name, nullptr, 0.0f, &nameClip);
                 const int band = altitudeBandIndex(ht.t.altM);
                 const AltBandStyle& bs = altBandStyle(band < 0 ? 0 : band);
                 d->AddText(ImVec2(tl.x + w - asz.x - 4.0f, tl.y + 2.0f),
@@ -791,9 +878,28 @@ void drawScopeGauge(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 40.0f) { return; }
     addScopeBay(dl, tl, br, false);
 
-    const float lineH = ImGui::GetTextLineHeight();
-    const float top = tl.y + lineH + 8.0f;
-    const float bot = br.y - lineH - 8.0f;
+    // MEASURED AT THE SIZE IT IS ACTUALLY DRAWN AT. Both words on this gauge
+    // are lettered at kTinySize with faces pushed by hand, so reserving
+    // ImGui::GetTextLineHeight() - the AMBIENT face, whatever the caller left
+    // bound - reserved room for a size nothing here draws. It cost the
+    // bargraph height every time the application's own type went up, and a
+    // large enough ambient face would have taken the meter below its own
+    // minimum and drawn no gauge at all.
+    //
+    // AND FITTED TO THE BAY'S WIDTH. Both words are centred, so one wider than
+    // the gauge does not clip - it spills sideways onto the tube.
+    ImFont* lf = cascade::gui::fonts::legend();
+    ImFont* rf = cascade::gui::fonts::ui();
+    const char* cap = (label != nullptr) ? label : "";
+    const char* rd = (haveReading && readout != nullptr) ? readout : "--";
+    const float textRoom = br.x - tl.x - 6.0f;
+    const float lpx = fitTextPx(lf, cascade::gui::fonts::kTinySize, cap, textRoom);
+    const float rpx = fitTextPx(rf, cascade::gui::fonts::kTinySize, rd, textRoom);
+    const ImVec2 lsz = lf->CalcTextSizeA(lpx, FLT_MAX, 0.0f, cap);
+    const ImVec2 rsz = rf->CalcTextSizeA(rpx, FLT_MAX, 0.0f, rd);
+
+    const float top = tl.y + 4.0f + lsz.y + 4.0f;
+    const float bot = br.y - 4.0f - rsz.y - 4.0f;
     if (bot <= top) { return; }
 
     constexpr int kSegments = 18;
@@ -829,16 +935,19 @@ void drawScopeGauge(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // The label is cut into the bezel; the readout under it is the UI face,
     // not the monospaced one, because it carries a unit or a flight level
     // rather than bare digits. See the rule in fonts.hpp.
-    ImFont* lf = cascade::gui::fonts::legend();
-    ImFont* rf = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
-    const ImVec2 lsz = lf->CalcTextSizeA(px, FLT_MAX, 0.0f, label);
-    dl->AddText(lf, px, ImVec2((tl.x + br.x) * 0.5f - lsz.x * 0.5f, tl.y + 4.0f),
-                IM_COL32(111, 117, 97, 255), label);
-    const char* rd = (haveReading && readout != nullptr) ? readout : "--";
-    const ImVec2 rsz = rf->CalcTextSizeA(px, FLT_MAX, 0.0f, rd);
-    dl->AddText(rf, px, ImVec2((tl.x + br.x) * 0.5f - rsz.x * 0.5f, br.y - lineH - 4.0f),
-                haveReading ? IM_COL32(154, 216, 79, 255) : kChromeDim, rd);
+    //
+    // THE LABEL TAKES THE CHROME RATHER THAN ITS OWN GREY. SIG and ALT are the
+    // only thing on this bay that says what the bar is measuring, and the
+    // (111,117,97) it was written in measures about 4.0:1 against the bay it
+    // sits on - under what a caption at this size needs, and the sort of label
+    // the report meant. kChrome is the tone the rest of this face's furniture
+    // already uses and measures 5.1:1 there; it is also one fewer near-duplicate
+    // grey in a file the theme header was written to stop.
+    addClippedText(dl, lf, lpx, ImVec2((tl.x + br.x) * 0.5f - lsz.x * 0.5f, tl.y + 4.0f),
+                   kChrome, cap, tl.x, br.x);
+    addClippedText(dl, rf, rpx,
+                   ImVec2((tl.x + br.x) * 0.5f - rsz.x * 0.5f, br.y - 4.0f - rsz.y),
+                   haveReading ? IM_COL32(154, 216, 79, 255) : kChromeDim, rd, tl.x, br.x);
 }
 
 // The odometer drums. Each digit sits in its own machined aperture with the
@@ -847,8 +956,30 @@ void drawScopeGauge(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 void drawScopeDrums(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                     int digits, int value, const char* caption) {
     if (dl == nullptr || digits <= 0 || digits > 8) { return; }
+    // THE CAPTION IS FITTED TO THE COUNTER UNDER IT, because it is the only
+    // thing that separates SET RANGE NM from TGT RANGE NM - two different
+    // distances printed in the same three digits - and a caption that runs
+    // past its own drums runs into the counter standing beside it. Twelve
+    // characters of the bound face is already wider than three cells.
+    //
+    // Measured and drawn through ONE font and ONE size, so the reservation
+    // below cannot be computed against something else's metrics.
+    const float groupW = static_cast<float>(digits) * cellW +
+                         static_cast<float>(digits - 1) * 3.0f;
+    ImFont* cf = ImGui::GetFont();
+    const float cpx = fitTextPx(cf, ImGui::GetFontSize(), caption, groupW);
+    // THE ROW STILL OPENS WHERE THE AMBIENT LINE HEIGHT PUTS IT. The caller
+    // reserves exactly that above the drums and lays the whole group out from
+    // it, so a caption that fitted itself into less would leave the counter
+    // floating in the gap rather than sitting under its own name.
     const float lineH = ImGui::GetTextLineHeight();
-    dl->AddText(ImVec2(tl.x, tl.y), IM_COL32(118, 124, 100, 255), caption);
+    if (caption != nullptr && caption[0] != '\0') {
+        // kChrome rather than the (118,124,100) this was written in: on the
+        // bay that grey is about 4.4:1 and this caption is read, not glanced
+        // at - see the note above about which distance the drums are showing.
+        addClippedText(dl, cf, cpx, ImVec2(tl.x, tl.y), kChrome, caption, tl.x,
+                       tl.x + groupW);
+    }
     const float rowY = tl.y + lineH + 4.0f;
 
     int v = value;
@@ -976,14 +1107,54 @@ float trackedWidth(ImFont* font, float px, const char* text, float tracking) {
     return w;
 }
 
+// The tracked half of fitTextPx: the size at which this caption, WITH its
+// tracking, fits `room`. Tracking is expressed as a fraction of the size so
+// that both halves of the width scale together and one division is exact.
+//
+// A PLATE TITLE THAT DOES NOT FIT ITS PLATE IS NOT A SMALLER FAULT THAN A
+// CLIPPED ONE. Tracked capitals are the widest thing this panel draws - the
+// spacing that makes them read as engraving adds a fifth of the size between
+// every pair of letters - so FUNCTION SELECT on a narrow rail is exactly where
+// a font bump lands first.
+float fitTrackedPx(ImFont* font, float px, const char* text, float trackingFrac,
+                   float room) {
+    if (font == nullptr || text == nullptr || text[0] == '\0') { return px; }
+    if (!(room > 0.0f) || !(px > 0.0f)) { return px; }
+    // Re-measured after each pass, for the reason fitTextPx spells out: glyph
+    // advances are rounded per size, so one division is close and not exact.
+    float out = px;
+    for (int pass = 0; pass < 4; ++pass) {
+        const float w = trackedWidth(font, out, text, out * trackingFrac);
+        if (!(w > room) || !(w > 0.0f)) { break; }
+        const float next = std::max(9.0f, out * room / w - 0.05f);
+        if (!(next < out)) { break; }
+        out = next;
+    }
+    return out;
+}
+
+// `maxX` IS THE END OF THE THING THE CAPTION IS WRITTEN ON, and the run stops
+// there rather than carrying on past it. It is the floor's other half: fitting
+// shrinks a caption until it fits, but nothing may be drawn below about nine
+// pixels, so a box small enough to defeat that has to be handled by a rule
+// rather than by hope. Truncating spoils the caption; overflowing spoils the
+// control standing next to it, and only one of those is the caption's own
+// business.
 void addTrackedText(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, ImU32 col,
-                    const char* text, float tracking) {
+                    const char* text, float tracking, float maxX = FLT_MAX) {
     if (dl == nullptr || font == nullptr || text == nullptr) { return; }
     float x = at.x;
     for (const char* p = text; *p != '\0'; ++p) {
         const char one[2] = {*p, '\0'};
+        const float adv = font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x;
+        // Half a pixel of slack, because the shadow pass is drawn one pixel
+        // right of the cut it sits under and a caption fitted exactly to its
+        // room lands exactly on this edge. Without it the last letter of every
+        // fitted title is dropped from one of the two passes, which is the
+        // truncation this limit exists to make unnecessary.
+        if (x + adv > maxX + 1.5f) { break; }
         dl->AddText(font, px, ImVec2(x, at.y), col, one);
-        x += font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x + tracking;
+        x += adv + tracking;
     }
 }
 
@@ -1270,13 +1441,28 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         // enamel, where the same treatment would be a title nobody can read.
         // The cut is carried by the shadow under the letters instead.
         ImFont* f = cascade::gui::fonts::legend();
-        const float px = cascade::gui::fonts::kLegendSize;
-        const float track = px * 0.20f;
+        // FITTED TO THE PLATE, and the plate is whatever width the caller's
+        // column came out at. The title is centred, so one wider than its
+        // ground is not clipped - it is drawn out over the bevel and into the
+        // panel beside it, and at a fifth of the size of tracking between every
+        // pair of capitals a fifteen-character title is the widest thing this
+        // file draws. The rail's own 8 px inset is left clear at both ends so
+        // the title never touches the bevel it sits inside.
+        constexpr float kTitleTrack = 0.20f;
+        const float px = fitTrackedPx(f, cascade::gui::fonts::kLegendSize, title,
+                                      kTitleTrack, w - 16.0f);
+        const float track = px * kTitleTrack;
         const float tw = trackedWidth(f, px, title, track);
-        const float x = (tl.x + br.x) * 0.5f - tw * 0.5f;
+        // Centred, unless centring would start it left of the plate - which is
+        // what a title too long to fit even at the floor does. Then it is laid
+        // from the inset and cut off at the far one, so what is lost is the end
+        // of the word rather than the panel next door.
+        float x = (tl.x + br.x) * 0.5f - tw * 0.5f;
+        if (x < tl.x + 8.0f) { x = tl.x + 8.0f; }
+        const float titleMaxX = br.x - 8.0f;
         addTrackedText(dl, f, px, ImVec2(x + 1.0f, y + 1.0f),
-                       theme::withAlpha(theme::kVoid, 0.60f), title, track);
-        addTrackedText(dl, f, px, ImVec2(x, y), theme::kIvory, title, track);
+                       theme::withAlpha(theme::kVoid, 0.60f), title, track, titleMaxX);
+        addTrackedText(dl, f, px, ImVec2(x, y), theme::kIvory, title, track, titleMaxX);
         y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f;
     }
     addBenchRail(dl, tl.x + 8.0f, br.x - 8.0f, y);
@@ -1288,12 +1474,24 @@ void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
                           const char* caption) {
     if (dl == nullptr || caption == nullptr || caption[0] == '\0') { return; }
     ImFont* f = cascade::gui::fonts::legend();
-    const float px = cascade::gui::fonts::kTinySize;
-    const float track = px * 0.24f;
+    // Fitted to the group it heads. A caption wider than its own rule runs off
+    // the end of the column, and this face's tracking is the widest on the
+    // panel - a quarter of the size between every pair of letters.
+    constexpr float kCapTrack = 0.24f;
+    const float px = fitTrackedPx(f, cascade::gui::fonts::kTinySize, caption, kCapTrack,
+                                  width - 8.0f);
+    const float track = px * kCapTrack;
     const float tw = trackedWidth(f, px, caption, track);
+    const float capMaxX = at.x + width;
     addTrackedText(dl, f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
-                   theme::withAlpha(theme::kVoid, 0.55f), caption, track);
-    addTrackedText(dl, f, px, at, theme::kInkFaint, caption, track);
+                   theme::withAlpha(theme::kVoid, 0.55f), caption, track, capMaxX);
+    // kInkMuted RATHER THAN kInkFaint. These are the rail's section heads -
+    // SIGNAL PATH, DECODE - and they are how a user finds the control they
+    // came for, not ornament. On the plate's dark enamel the faint ink
+    // measures 3.3:1, which is under what a caption at fourteen pixels needs;
+    // the muted ink is the same family at 4.8:1 and is still quieter than the
+    // ivory of the plate's own title above it.
+    addTrackedText(dl, f, px, at, theme::kInkMuted, caption, track, capMaxX);
     // The rule that carries the caption across its group. Without it the
     // caption is a stray word above a list; with it the list has a head.
     const float x0 = at.x + tw + 7.0f;
@@ -1446,10 +1644,23 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
     dl->AddCircle(centre, radius + 1.5f, IM_COL32(0x8B, 0x80, 0x69, 190), 20, 1.0f);
 
     if (caption != nullptr && caption[0] != '\0') {
-        const ImVec2 sz = ImGui::CalcTextSize(caption);
-        dl->AddText(ImVec2(centre.x - sz.x * 0.5f, centre.y + radius + 4.0f),
-                    lit ? IM_COL32(0xEF, 0xE7, 0xD2, 255) : IM_COL32(0x9C, 0x90, 0x78, 255),
-                    caption);
+        // THE UNLIT CAPTION WAS ALMOST INVISIBLE, and it is the half of this
+        // control that has to work: the header promises the word is drawn
+        // whatever the state so the lamp can be read in a photograph and by a
+        // man who cannot separate the hues. On the brass these lamps sit on,
+        // the muted ink it was written in (#9C9078) measures about 1.7:1 - two
+        // light tones a shade apart - so RUN, DEC, MUTE and FAIL simply were
+        // not there while their lamps were out. Cream is 3.7:1 and ivory 4.7:1
+        // on the same ground, and the dark pass underneath is the cut the
+        // letters sit in - the same treatment addBenchPlate gives its title,
+        // and what carries the engraved look at a legible ink.
+        ImFont* f = ImGui::GetFont();
+        const float px = ImGui::GetFontSize();
+        const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, caption);
+        const ImVec2 at(centre.x - sz.x * 0.5f, centre.y + radius + 4.0f);
+        dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
+                    theme::withAlpha(theme::kVoid, 0.55f), caption);
+        dl->AddText(f, px, at, lit ? theme::kIvory : theme::kCream, caption);
     }
 }
 
@@ -1457,26 +1668,60 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                     const char* caption, float frac01, bool haveReading,
                     const char* valueLine, const char* unitLabel) {
     if (dl == nullptr || width < 40.0f || height < 40.0f) { return; }
-    const float lineH = ImGui::GetTextLineHeight();
+
+    // THE ROOM FOR THE TEXT IS MEASURED FROM THE TEXT, and this is the fault
+    // this sweep was looking for. Both lines are lettered at kTinySize through
+    // faces pushed by hand, and the face they were RESERVED against was
+    // ImGui::GetTextLineHeight() - the ambient one, which is the application's
+    // ordinary UI size and has nothing to do with what is drawn here. Every
+    // point the UI face went up took two of them off the meter's own face,
+    // and the guard below turns enough of that into a meter that draws
+    // NOTHING: silently, on a bar where the number beside it still updates.
+    //
+    // Measured this way the meter is independent of whatever the caller left
+    // bound, which is the property that survives the next change to fonts.hpp.
+    ImFont* cf = cascade::gui::fonts::legend();
+    ImFont* vf = cascade::gui::fonts::ui();
+    const float tiny = cascade::gui::fonts::kTinySize;
+    // Fitted to the meter's own width: both lines are centred on it, so
+    // anything wider is drawn over the meter standing next to it rather than
+    // clipped. "22 % - 3.6 ms" under a 126 px face is the tight one.
+    const char* cap = (caption != nullptr) ? caption : "";
+    const char* val = (valueLine != nullptr) ? valueLine : "";
+    const float cpx = fitTextPx(cf, tiny, cap, width - 4.0f);
+    const float vpx = fitTextPx(vf, tiny, val, width - 4.0f);
+    const ImVec2 cs = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, cap);
+    const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, val);
+    const float capH = (cap[0] != '\0') ? cs.y : 0.0f;
+    const float valH = (val[0] != '\0') ? vs.y : 0.0f;
 
     // The caption is ENGRAVED into the brass above the face; the value line is
     // ivory on the dark strip below it. That split is the design's own rule -
     // a caption may be cut into metal, a figure must be on glass - and it is
-    // the reason the value is not simply dark-on-brass like the caption: at
-    // this size that is about 2.3:1 contrast and not readable at arm's length.
-    if (caption != nullptr) {
+    // the reason the value is not simply dark-on-brass like the caption.
+    if (cap[0] != '\0') {
         // Engraved: the semibold condensed face at the small size, which is
         // what a legend cut into a panel looks like and what the handoff sets
         // its own captions in.
-        ImFont* cf = cascade::gui::fonts::legend();
-        const float cpx = cascade::gui::fonts::kTinySize;
-        const ImVec2 cs = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, caption);
-        dl->AddText(cf, cpx, ImVec2(tl.x + width * 0.5f - cs.x * 0.5f, tl.y),
-                    IM_COL32(0x3B, 0x35, 0x29, 255), caption);
+        //
+        // AND CUT DEEPER THAN IT WAS. This caption is the meter's name - two
+        // of them sit side by side on the bar and nothing else says which is
+        // the sample rate and which the frame time - so it is read, not
+        // glanced at. The engraved ink (#3B3529) measures about 2.5:1 against
+        // the brass here, which theme.hpp's own header calls acceptable for a
+        // label at rest and nothing more; the same cut taken down to the void
+        // is 4.1:1 and still an engraving rather than a printed word. The pale
+        // pass under it is the lit lower lip of the cut, the same thing
+        // drawBenchStopButton letters its dome with.
+        const ImVec2 capAt(tl.x + width * 0.5f - cs.x * 0.5f, tl.y);
+        addClippedText(dl, cf, cpx, ImVec2(capAt.x, capAt.y + 1.0f),
+                       theme::withAlpha(theme::kBrassTint, 0.55f), cap, tl.x,
+                       tl.x + width);
+        addClippedText(dl, cf, cpx, capAt, theme::kVoid, cap, tl.x, tl.x + width);
     }
 
-    const float faceTop = tl.y + lineH + 3.0f;
-    const float faceH = height - lineH * 2.0f - 8.0f;
+    const float faceTop = tl.y + capH + 3.0f;
+    const float faceH = height - capH - valH - 8.0f;
     if (faceH < 20.0f) { return; }
     const ImVec2 fTL(tl.x, faceTop);
     const ImVec2 fBR(tl.x + width, faceTop + faceH);
@@ -1491,8 +1736,20 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     // The pivot sits below the face so the needle sweeps the top of it, which
     // is how a moving-coil meter is actually built.
     const ImVec2 pivot(tl.x + width * 0.5f, fBR.y - 4.0f);
-    const float armR = faceH * 0.78f;
     constexpr float kHalfSweepDeg = 52.0f;
+    // THE ARC IS BOUNDED BY BOTH SIDES OF ITS OWN FACE. Taken from the height
+    // alone - which is what this was - the needle and the outer ticks reach
+    // sin(52) * 0.94 of the arm to each side of the pivot, so a face taller
+    // than it is wide throws its own scale off the cream and onto whatever is
+    // beside it. It went unseen because the bar asks for 126 x 66, where the
+    // height is the binding constraint; giving the face back the space the
+    // captions no longer need made the arm longer and moved it closer to the
+    // edge, which is exactly the kind of thing a font change does at one
+    // remove.
+    const float armByHeight = faceH * 0.78f;
+    const float reach = std::sin(kHalfSweepDeg * 3.14159265f / 180.0f) * 0.94f;
+    const float armByWidth = (width * 0.5f - 3.0f) / std::max(0.01f, reach);
+    const float armR = std::min(armByHeight, armByWidth);
 
     // Nine ticks, the last two in the alarm colour: the top of any meter's
     // travel is where it should be uncomfortable to sit.
@@ -1546,17 +1803,21 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
         }
     }
 
-    if (valueLine != nullptr) {
+    if (val[0] != '\0') {
         // The UI face, not the monospaced one: this line carries its units -
         // "2.000 MS/s", "22 % - 3.6 ms" - and Nova Mono's M is unreadable at
-        // this size. See the rule in fonts.hpp.
-        ImFont* vf = cascade::gui::fonts::ui();
-        const float vpx = cascade::gui::fonts::kTinySize;
-        const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, valueLine);
-        dl->AddText(vf, vpx, ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),
-                    haveReading ? IM_COL32(0xEF, 0xE7, 0xD2, 255)
-                                : IM_COL32(0x9C, 0x90, 0x78, 255),
-                    valueLine);
+        // this size. See the rule in fonts.hpp. Measured at the top of this
+        // function, at the size it is drawn at here.
+        //
+        // THE NO-READING LINE IS CREAM, NOT THE MUTED INK. This line is on
+        // brass, where the muted ink is about 1.7:1 - so "--" was not a quiet
+        // dash, it was no dash at all, and a meter with no needle and no value
+        // line reads as a meter that is not there rather than as one with
+        // nothing to report. Cream is 3.6:1 on the same ground and still
+        // plainly quieter than the ivory a live figure gets.
+        addClippedText(dl, vf, vpx, ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),
+                       haveReading ? theme::kIvory : theme::kCream, val, tl.x,
+                       tl.x + width);
     }
 }
 
@@ -1583,7 +1844,15 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
         const float padX = 5.0f;
         const ImVec2 cBR(lampC.x - lampR - 7.0f, cy + ts.y * 0.5f + 2.0f);
         const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f);
-        if (cTL.x > headerMin.x + 60.0f) {
+        // ROOM LEFT FOR THE ROW'S OWN NAME, which the caller letters along the
+        // same plate in the face it has bound. The 60 px this was written as
+        // was measured against a sixteen-pixel UI face; held as a literal it
+        // would let the chip creep back over the name every time the type went
+        // up, and a chip painted over the word SIGNAL PATH is worse than a
+        // section with no chip. Expressed against the bound face it keeps the
+        // proportion it was drawn at whatever that face becomes.
+        const float nameRoom = ImGui::GetFontSize() * 3.75f;
+        if (cTL.x > headerMin.x + nameRoom) {
             // A chip is a READING about that section, so it goes on glass in
             // amber rather than being engraved into the plate.
             dl->AddRectFilled(cTL, cBR, IM_COL32(0x14, 0x11, 0x0C, 220), 2.0f);
@@ -2280,7 +2549,13 @@ void ScopeView::draw(float width, float height,
         }
 
         const char* lbl = ht.t.label[0] != '\0' ? ht.t.label : ht.t.id;
-        dl->AddText(ImVec2(s.x + (picked ? 15.0f : 8.0f), s.y - 6.0f), col, lbl);
+        // BESIDE THE SILHOUETTE AND LEVEL WITH IT. The -6 this was written as
+        // was half a line of the face bound when it was written; a label
+        // centred against a height nothing is drawn at rides above its own
+        // aircraft, and on a busy face it lands on the target above instead.
+        dl->AddText(ImVec2(s.x + (picked ? 15.0f : 8.0f),
+                           s.y - ImGui::GetTextLineHeight() * 0.5f),
+                    col, lbl);
 
         if (hovered) {
             const float dx = mouse.x - s.x;
@@ -2414,12 +2689,26 @@ void ScopeView::draw(float width, float height,
     // on the face - not what the plugin reported, which includes stale targets
     // and everything beyond the range.
     {
+        // TWO READOUTS TO A CORNER PAIR, AND THEY ARE CHECKED AGAINST EACH
+        // OTHER BEFORE BOTH ARE DRAWN. Each is placed from its own end of the
+        // square, so on a face too narrow to hold the pair they are drawn
+        // through one another - two readings in one place, which is not a
+        // smaller readout but an unreadable one. The right-hand member is the
+        // one dropped: RANGE is also on the outermost ring and on the panel,
+        // and the receiver's position does not change.
+        const auto pairFits = [](float leftW, float rightW, float span) {
+            return leftW + rightW + 24.0f <= span;
+        };
+        const float span = sqBR.x - sqTL.x;
         const std::string tracksText = scopeTracksReadout(plotted_);
         const std::string rangeText = scopeRangeReadout(rangeNm_);
-        dl->AddText(ImVec2(sqTL.x + 8.0f, sqTL.y + 6.0f), kChrome, tracksText.c_str());
+        const ImVec2 tracksSize = ImGui::CalcTextSize(tracksText.c_str());
         const ImVec2 rangeSize = ImGui::CalcTextSize(rangeText.c_str());
-        dl->AddText(ImVec2(sqBR.x - 8.0f - rangeSize.x, sqTL.y + 6.0f), kChrome,
-                    rangeText.c_str());
+        dl->AddText(ImVec2(sqTL.x + 8.0f, sqTL.y + 6.0f), kChrome, tracksText.c_str());
+        if (pairFits(tracksSize.x, rangeSize.x, span)) {
+            dl->AddText(ImVec2(sqBR.x - 8.0f - rangeSize.x, sqTL.y + 6.0f), kChrome,
+                        rangeText.c_str());
+        }
         // MODE and the receiver's own position, on the bottom corners, which is
         // where the design puts them and where they stay out of the way of the
         // range ladder along the top.
@@ -2427,10 +2716,13 @@ void ScopeView::draw(float width, float height,
         std::snprintf(pos, sizeof(pos), "%.1f%c %05.1f%c", std::fabs(rxLat_),
                       rxLat_ >= 0.0 ? 'N' : 'S', std::fabs(rxLon_),
                       rxLon_ >= 0.0 ? 'E' : 'W');
+        const ImVec2 modeSize = ImGui::CalcTextSize("MODE ADS-B");
         const ImVec2 posSize = ImGui::CalcTextSize(pos);
         const float bottomY = sqBR.y - 6.0f - ImGui::GetTextLineHeight();
         dl->AddText(ImVec2(sqTL.x + 8.0f, bottomY), kChromeDim, "MODE ADS-B");
-        dl->AddText(ImVec2(sqBR.x - 8.0f - posSize.x, bottomY), kChromeDim, pos);
+        if (pairFits(modeSize.x, posSize.x, span)) {
+            dl->AddText(ImVec2(sqBR.x - 8.0f - posSize.x, bottomY), kChromeDim, pos);
+        }
     }
 
     // --- the glass, over everything the tube shows ---------------------------
@@ -2472,7 +2764,16 @@ void ScopeView::draw(float width, float height,
     // and a scope whose furniture is unreadable is worse than one with less of
     // it. The ticks themselves are always drawn, so the thirty-degree grid
     // survives at every size.
-    const bool numberTicks = radius >= 150.0f;
+    // The 150 is the face this was drawn and looked at on; the second term is
+    // the arithmetic behind it, so the rule survives a change of face. Twelve
+    // labels sit on a circle of 0.9 radius, which puts 2*pi*0.9/12 = 0.471 of
+    // the radius between neighbours; a label needs its own width and a gap
+    // inside that, so the smallest face that can carry the numbers is about
+    // 2.2 times the width of one. At the sizes in fonts.hpp today that works
+    // out well under 150 and the threshold is unchanged - it is there so a
+    // later, larger face raises it instead of quietly overlapping.
+    const float tickLabelW = ImGui::CalcTextSize("000").x;
+    const bool numberTicks = radius >= std::max(150.0f, 2.2f * (tickLabelW + 8.0f));
     for (int b = 0; b < 360; b += 30) {
         const double a = static_cast<double>(b) * kPi / 180.0;
         const float sx = static_cast<float>(std::sin(a));
