@@ -85,8 +85,10 @@ public:
     // view) plus their labels; returns the count written.
     //
     // Step rule: the smallest "nice" step from {1, 2, 5} * 10^k whose pixel
-    // pitch at widthPx is >= 80 px — labels render ~70 px wide, so 80 px
-    // guarantees a visible gap between neighbors and never collides.
+    // pitch at widthPx is >= 104 px — the widest label the axis produces is
+    // 65.55 px at the current lettering, an end label may slide inboard by
+    // half of that to clear the frame, and 3 px of gap must remain (see
+    // kMinTickSpacingPx in freq_scale.cpp for the arithmetic).
     //
     // Label rule (ONE rule, pinned by tests): every label on the axis shares
     // one unit, chosen from the larger view-endpoint magnitude — >= 1 GHz ->

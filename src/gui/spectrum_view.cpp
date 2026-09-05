@@ -510,10 +510,12 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
             // TICK PITCH FROM AN ESTIMATE OF THE LABEL WIDTH (FreqScale's
             // kMinTickSpacingPx), which is an estimate made at one type size:
             // measured over every band, rate and zoom this product reaches,
-            // the widest label the axis can produce is 53.98 px at 14 px
-            // lettering against an 80 px pitch, so nothing collides today —
-            // but the two end labels slide inboard to clear the frame and can
-            // close that gap from either end. This panel is the last thing
+            // the widest label the axis can produce is 65.55 px at the 17 px
+            // lettering of 0.79.0 against a 104 px pitch (it was 53.98 px at
+            // 14 px against 80), so nothing collides today — but the two end
+            // labels slide inboard to clear the frame and can close that gap
+            // from either end, which is exactly what the pitch is sized for
+            // (a label and a half plus the gap). This panel is the last thing
             // between an estimate and two frequencies printed through each
             // other, so it checks. The TICK is always drawn — the mark is
             // true whether or not there was room to letter it.
