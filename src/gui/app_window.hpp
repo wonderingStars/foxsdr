@@ -605,6 +605,11 @@ private:
     // wedge in it was measured from somewhere else) and a second copy would
     // sooner or later do only some of them.
     void drawRxPositionEntry();
+    // The one-click ways to a receiver position, drawn wherever the entry is
+    // asked for and there is none yet: the middle of the aircraft being heard,
+    // and the centre of a map page the user has been looking at. See the
+    // implementation for why each is offered and how it is labelled.
+    void drawReceiverPositionOffers();
     // WHAT "SET RX HERE" ACTUALLY DOES, as a function, because there are now
     // THREE ways to say where the antenna is: the toolbar's fields, the
     // satellites window's coordinate cells, and a click on that window's map

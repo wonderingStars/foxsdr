@@ -753,5 +753,56 @@ int main() {
 
     testViewCentreAndTargetCull();
 
+    // --- the middle of the traffic, offered as a starting position --------------
+    //
+    // A user whose config never carried a receiver position pressed "Radar
+    // scope" and got two zeroed fields on an empty panel: "the radar scope
+    // doesn't work". scopeTrafficCentre is the one-click answer, so it is
+    // pinned: aircraft only, positions only, a real mean, and the count that
+    // decides whether the key is offered.
+    {
+        std::vector<cascade::core::HostTrack> tracks;
+        const auto add = [&tracks](uint32_t kind, double lat, double lon) {
+            cascade::core::HostTrack ht;
+            ht.t.kind = kind;
+            ht.t.latDeg = lat;
+            ht.t.lonDeg = lon;
+            tracks.push_back(ht);
+        };
+        double lat = 99.0;
+        double lon = 99.0;
+        // Nothing heard: nothing written, nothing counted.
+        CHECK(cascade::gui::scopeTrafficCentre(tracks, lat, lon) == 0);
+        CHECK(lat == 99.0 && lon == 99.0);
+
+        // Three aircraft around Manchester: the mean is their middle.
+        add(CASCADE_TRACK_AIRCRAFT, 53.0, -2.0);
+        add(CASCADE_TRACK_AIRCRAFT, 54.0, -3.0);
+        add(CASCADE_TRACK_AIRCRAFT, 54.5, -1.0);
+        CHECK(cascade::gui::scopeTrafficCentre(tracks, lat, lon) == 3);
+        CHECK_NEAR(lat, 53.8333333, 1e-6);
+        CHECK_NEAR(lon, -2.0, 1e-6);
+        int minAircraft = cascade::gui::kScopeTrafficCentreMinAircraft;
+        CHECK(3 >= minAircraft);
+
+        // A ship, a satellite, an aircraft with no position and one with an
+        // impossible one are all skipped - not counted, and not averaged in.
+        add(CASCADE_TRACK_VESSEL, 0.0, 0.0);
+        add(CASCADE_TRACK_SATELLITE, 10.0, 10.0);
+        add(CASCADE_TRACK_AIRCRAFT, std::numeric_limits<double>::quiet_NaN(), -2.0);
+        add(CASCADE_TRACK_AIRCRAFT, 53.5, 400.0);
+        CHECK(cascade::gui::scopeTrafficCentre(tracks, lat, lon) == 3);
+        CHECK_NEAR(lat, 53.8333333, 1e-6);
+        CHECK_NEAR(lon, -2.0, 1e-6);
+
+        // Below the minimum the count still comes back, so the key can say
+        // how many more it is waiting for.
+        std::vector<cascade::core::HostTrack> two(tracks.begin(), tracks.begin() + 2);
+        CHECK(cascade::gui::scopeTrafficCentre(two, lat, lon) == 2);
+        CHECK(2 < minAircraft);
+        CHECK_NEAR(lat, 53.5, 1e-6);
+        CHECK_NEAR(lon, -2.5, 1e-6);
+    }
+
     return testSummary("test_scope_view");
 }

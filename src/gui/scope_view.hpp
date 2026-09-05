@@ -143,6 +143,52 @@ inline int scopeRangeStepped(int currentNm, int steps) {
     return kScopeRangesNm[static_cast<int>(target)];
 }
 
+// --- a starting position, from the traffic ------------------------------------
+//
+// The scope needs the receiver's position and refuses to guess one - see
+// AppWindow::drawRxPositionEntry for why a guess is worse than nothing. But
+// "type your latitude" is a trip to another program, and the first thing a
+// user with an ADS-B decoder running actually HAS is a sky full of aircraft
+// whose positions they are hearing. The middle of that traffic is where the
+// antenna approximately is: reception is roughly a disc about the receiver,
+// and the disc's centre is the receiver. It is offered as a starting point,
+// labelled as one, and applied only when the user presses the key.
+//
+// Returns how many aircraft with a real position contributed, and writes
+// their mean position when there was at least one. Aircraft only - a ship
+// or a satellite says nothing about where a 1090 MHz antenna is - and a
+// track with no position is skipped, not counted. A plain mean of degrees:
+// at the sizes a receiver hears (a few hundred kilometres) that is within a
+// kilometre or two of the great-circle centroid, and the antimeridian is
+// left to the one user who lives on it.
+inline int scopeTrafficCentre(const std::vector<cascade::core::HostTrack>& tracks,
+                              double& latDeg, double& lonDeg) {
+    int n = 0;
+    double sumLat = 0.0;
+    double sumLon = 0.0;
+    for (const cascade::core::HostTrack& ht : tracks) {
+        if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
+        if (!std::isfinite(ht.t.latDeg) || !std::isfinite(ht.t.lonDeg)) { continue; }
+        if (ht.t.latDeg < -90.0 || ht.t.latDeg > 90.0 || ht.t.lonDeg < -180.0 ||
+            ht.t.lonDeg > 180.0) {
+            continue;
+        }
+        sumLat += ht.t.latDeg;
+        sumLon += ht.t.lonDeg;
+        ++n;
+    }
+    if (n > 0) {
+        latDeg = sumLat / static_cast<double>(n);
+        lonDeg = sumLon / static_cast<double>(n);
+    }
+    return n;
+}
+
+// How many aircraft the traffic-centre offer needs before it is made. One
+// aircraft's position is that aircraft's position, not the antenna's; three
+// spread around the sky start to have a middle.
+inline constexpr int kScopeTrafficCentreMinAircraft = 3;
+
 // --- where a target sits ------------------------------------------------------
 
 // A target as the scope thinks of it: how far, and which way.

@@ -157,6 +157,18 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
 
+[InstallDelete]
+; The WebView radar unit shipped as a second program, foxsdr-radar.exe, from
+; 0.72.0 to 0.76.0 and was removed in 0.77.0 in favour of the native scope.
+; Inno only ever ADDS on an upgrade: a file and a Start Menu key that a newer
+; script no longer lists stay exactly where the older installer put them, so
+; every upgraded install kept a dead "Radar unit" beside the real one (seen on
+; the 0.77.0 upgrade of this machine: the .exe in {app} and the .lnk in the
+; group, both dated from the old install). Removed here, at install time,
+; before the new files go down.
+Type: files; Name: "{app}\foxsdr-radar.exe"
+Type: files; Name: "{group}\Radar unit.lnk"
+
 [UninstallDelete]
 ; The app never writes into {app} at runtime (config lives under the user
 ; profile), so nothing to purge beyond what the installer placed.
