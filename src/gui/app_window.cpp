@@ -412,8 +412,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.rxLonDeg == b.rxLonDeg &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
-           // The fitted modules window, open flag AND rectangle, for the
-           // reason closedWindows_ is here: this comparison is what decides
+           // The fitted modules window, open flag AND rectangle, because
+           // this comparison is what decides
            // whether the file is written at all, so a field missing from it
            // persists only when something else happens to change in the same
            // session. Without the rectangle a resize would never be saved.
@@ -3773,6 +3773,9 @@ void AppWindow::drawDecodeBank() {
     // it is drawn after the plugin inventory because the pages it switches are
     // created from what that inventory loaded.
     drawSatelliteMapSection();
+    // THE PLUGIN WINDOWS' ONLY PRESENCE OUT HERE, and their only way onto the
+    // screen: one row per picture or panel a plugin publishes (0.79.1).
+    drawPluginWindowRows();
 }
 
 // --- THE BANK KEYS -----------------------------------------------------------
@@ -5420,11 +5423,12 @@ void AppWindow::rescanPlugins() {
     // Scope guard, because there is a `return` in the middle of this function.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
 
-    // Every panel and image window is about to be rebuilt from a fresh set of
-    // plugins, so a window the user closed before the rescan no longer refers
-    // to anything that still exists. Forgetting the closures here is what
-    // makes a rescan the way to get them all back.
-    closedWindows_.clear();
+    // The plugin windows the user has OPEN ride through the rescan: their
+    // identities are the plugin's name and its window's title, so a plugin
+    // that survives the rescan keeps its window on screen and one that does
+    // not simply has no window to show. (Until 0.79.1 this cleared the set
+    // of CLOSED windows, which was then the only way to get one back; a
+    // window now opens from its own row on the rail instead.)
 
     // The map pages are NOT cleared. The first version cleared them here,
     // and an adversarial review measured the cost: every MapView died, so a
@@ -5433,8 +5437,8 @@ void AppWindow::rescanPlugins() {
     // zoom, centre, selection and an active follow. Geometry is folded into
     // the saved store as a belt (a page whose plugin vanishes is pruned in
     // drawPluginWindows, and that prune re-syncs first), and the page
-    // objects, their views and their self-open edge state all ride through
-    // the rescan untouched. A plugin that reappears finds its page exactly
+    // objects and their views all ride through the rescan untouched. A
+    // plugin that reappears finds its page exactly
     // where it was.
     syncMapPagesToSaved();
 
@@ -6801,8 +6805,9 @@ AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
         page.y = it->y;
         page.w = it->width;
         page.h = it->height;
-        page.open = it->open;
-        page.selfOpenSuppressed = !it->open;
+        // Not the saved entry's open flag. A page is created closed and opened
+        // by the user's own hand - its rail row, a preset, a details window's
+        // Go-to - whatever the file says it was doing at the last exit.
     } else if (mapWinW_ > 0 && mapWinH_ > 0) {
         const int stagger = 34 * static_cast<int>(mapPages_.size());
         page.x = mapWinX_ + stagger;
@@ -8176,12 +8181,11 @@ void AppWindow::drawPluginWindows() {
     // group, where the two SECTIONS were drawn in this order; both are windows
     // now, so the rule moved here with them and is these two lines.
     //
-    // Neither window self-opens. There is no arrival edge on either - no
-    // equivalent of a map page's first visible target - so the only things
-    // that put one on screen are its rail key and, for the store, the open
-    // state the user left behind (AppConfig::pluginBrowserOpen). Restoring an
-    // open window the user left open is not the self-open the satellites page
-    // was fixed for; opening one nobody asked for would be.
+    // Neither window opens by itself, and since 0.79.1 neither is restored
+    // from the config either: the only thing that puts one on screen is its
+    // rail key. (Until 0.79.1 the store and this window came back if they
+    // were open at the last exit; the user asked for the application to
+    // start on the main screen alone.)
     drawPluginStoreWindow();
     drawFittedModulesWindow();
 
@@ -8219,7 +8223,7 @@ void AppWindow::drawPluginWindows() {
     // aircraft decoded yet still exists, because "the page is there but
     // empty" answers the user's question and "the page is missing" does not.
     // Pages are created lazily here and never destroyed while the app runs;
-    // rescanPlugins() clears them alongside closedWindows_.
+    // rescanPlugins() leaves them in place.
     for (const std::string& name : pluginUi_.trackPluginNames()) {
         ensureMapPage(name);
     }
@@ -8293,22 +8297,11 @@ void AppWindow::drawPluginWindows() {
         // heading cannot disagree.
         page.visibleCount = cascade::core::visibleTrackCount(pageTracks_);
 
-        // SELF-OPEN IS AN EDGE, NOT A ONE-SHOT — the same mapSelfOpens
-        // contract the single map lived by, now per page: nothing -> something
-        // opens the page; a user's close then HOLDS until this plugin's air
-        // genuinely goes quiet and something new arrives. The first version
-        // here was a once-per-session latch, and an adversarial review proved
-        // it stranded a closed page for the whole session — every reopen
-        // affordance lived inside the closed window. The filter above runs
-        // even for closed pages precisely so this edge has its input; a few
-        // dozen struct copies a frame is the price of a close button that
-        // stays honest, and it was measured as nothing.
-        const bool visNow = cascade::core::anyVisibleTarget(pageTracks_, pagePaths_);
-        if (!page.open && !page.selfOpenSuppressed &&
-            cascade::core::mapSelfOpens(page.hadVisible, visNow)) {
-            page.open = true;
-        }
-        page.hadVisible = visNow;
+        // A PAGE NEVER OPENS ITSELF. Until 0.79.1 it did, as an edge - nothing
+        // -> something opened it, a close held until the air went quiet - and
+        // the user asked for the application to show nothing but the main
+        // screen unless they open it. The count above still runs for a closed
+        // page: its rail row carries it, and that row is the invitation.
         if (!page.open) { continue; }
         telemetryNotePanel("map");
         // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
@@ -8682,24 +8675,23 @@ void AppWindow::drawPluginWindows() {
     }
     for (std::size_t i = 0; i < imgs.size(); ++i) {
         const cascade::core::HostImage& im = imgs[i];
-        // NOTHING RECEIVED YET, NO WINDOW. An image decoder is created the
-        // moment its plugin loads, so every launch used to open a window
-        // saying "waiting for the first image..." - for SSTV, which may not
-        // hear a transmission all day. A window that appears when a picture
-        // starts arriving, and not before, is the same rule the map already
-        // follows: it opens itself the first time there is something to show.
-        if (im.width == 0u || im.height == 0u) { continue; }
+        // THE WINDOW APPEARS WHEN THE USER OPENS IT FROM ITS ROW IN DECODE, and
+        // not before - not when the decoder loads, not when a picture starts
+        // arriving (0.79.1: the application starts on the main screen alone
+        // and opens nothing by itself; until then a picture window appeared
+        // on its own the moment a picture began, and a close was remembered
+        // across launches). Opened before a picture exists it says it is
+        // waiting, which is the truth and what the user asked to see.
+        const std::string id = im.plugin + " image###image_" + im.plugin;
+        if (!pluginWindows_.shown(id)) { continue; }
         telemetryNotePanel("image");
         // Its own operating system window, for the same reason as the map: a
         // received picture is something to put beside the radio, or on another
         // screen, not a panel inside it. Staggered per decoder so two plugins
         // producing pictures do not land exactly on top of each other.
         placeAsSeparateWindow(static_cast<int>(i) + 1);
-        const std::string id = im.plugin + " image###image_" + im.plugin;
-        // A REAL p_open, so the frame's close button is not a lie. See
-        // closedWindows_ in the header for why this became necessary the
-        // moment torn-off windows gained the OS's own title bar.
-        if (closedWindows_.count(id) != 0u) { continue; }
+        // A REAL p_open, so the frame's close key is not a lie: closing takes
+        // the window out of pluginWindows_ and its row's lamp goes out.
         bool imageOpen = true;
         std::string railName = im.plugin + " IMAGE";
         for (char& rc : railName) {
@@ -8785,7 +8777,7 @@ void AppWindow::drawPluginWindows() {
             if (!imageSaveNote_.empty()) { ImGui::TextDisabled("%s", imageSaveNote_.c_str()); }
         }
         endPage();
-        if (!imageOpen) { closedWindows_.insert(id); }
+        if (!imageOpen) { pluginWindows_.hide(id); }
     }
 
     drawDecoderWindow();
@@ -8793,12 +8785,15 @@ void AppWindow::drawPluginWindows() {
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
     for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
-        ImGui::SetNextWindowSize(ImVec2(520.0f, 300.0f), ImGuiCond_FirstUseEver);
         // The plugin NAME is part of the ImGui id, not just the title: two
         // plugins may legitimately call their window the same thing, and
         // colliding ids would merge them into one window.
         const std::string id = p.title + "###panel_" + p.plugin;
-        if (closedWindows_.count(id) != 0u) { continue; }
+        // Shown only once the user has opened it from its row in DECODE
+        // (0.79.1). The size hint is given AFTER that decision: a hint left
+        // behind by a skipped window would land on whatever Begin came next.
+        if (!pluginWindows_.shown(id)) { continue; }
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 300.0f), ImGuiCond_FirstUseEver);
         bool panelOpen = true;
         std::string railName = p.title;
         for (char& rc : railName) {
@@ -8851,7 +8846,7 @@ void AppWindow::drawPluginWindows() {
             if (p.rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
         }
         endPage();
-        if (!panelOpen) { closedWindows_.insert(id); }
+        if (!panelOpen) { pluginWindows_.hide(id); }
     }
 }
 
@@ -9075,6 +9070,56 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
     }
 }
 
+void AppWindow::drawPluginWindowRows() {
+    // ONE ROW PER WINDOW A PLUGIN PUBLISHES - a decoder's picture, a plugin's
+    // own panel - and these rows are the only way such a window reaches the
+    // screen. Since 0.79.1 nothing opens by itself: the application starts on
+    // the main screen alone, and a window is opened by pressing its row and
+    // closed by its own key, which puts the row's lamp out. The chip says
+    // what the window would show right now, so a row can be judged without
+    // opening it: for a picture WAIT until the first one arrives, RX while
+    // one is being received, IMG once one is complete; for a panel, how many
+    // rows it holds.
+    //
+    // '#' BECOMES '_' IN THE ID HALF, as the map rows do it and for the same
+    // reasons: a plugin's name and a panel's title are third-party text, ImGui
+    // hashes what follows the LAST "###", and benchSwitchRow letters what
+    // precedes the FIRST "##".
+    auto ident = [](const std::string& s) {
+        std::string out = s;
+        for (char& c : out) {
+            if (c == '#') { c = '_'; }
+        }
+        return out;
+    };
+    for (const cascade::core::HostImage& im : pluginImages_) {
+        const std::string id = im.plugin + " image###image_" + im.plugin;
+        const bool on = pluginWindows_.shown(id);
+        const char* chip =
+            (im.width == 0u || im.height == 0u) ? "WAIT" : (im.complete ? "IMG" : "RX");
+        const std::string row = ident(im.plugin) + " image###imgrow:" + ident(im.plugin);
+        if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
+                           "Opens this decoder's picture window. WAIT until the first\n"
+                           "picture arrives, RX while one is coming in, IMG when it is\n"
+                           "complete. Nothing opens this window for you.")) {
+            pluginWindows_.toggle(id);
+        }
+    }
+    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
+        const std::string id = p.title + "###panel_" + p.plugin;
+        const bool on = pluginWindows_.shown(id);
+        char chip[24];
+        std::snprintf(chip, sizeof chip, "%d ROW", static_cast<int>(p.rows.size()));
+        const std::string row =
+            ident(p.title) + "###panelrow:" + ident(p.plugin) + ":" + ident(p.title);
+        if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
+                           "Opens this plugin's own window. Nothing opens it for you;\n"
+                           "close it from its key and it stays closed.")) {
+            pluginWindows_.toggle(id);
+        }
+    }
+}
+
 void AppWindow::drawSatelliteMapSection() {
     // THE WHOLE OF THE SATELLITE PRESENCE IN THE MAIN WINDOW: one row per
     // satellite page, and no satellite controls anywhere else on the rail.
@@ -9112,15 +9157,6 @@ void AppWindow::drawSatelliteMapSection() {
                            "trail style, coverage, the target register and the map.\n"
                            "Everything for satellites is in that one window.")) {
             pg.open = !pg.open;
-            // CLEARED THE MOMENT THE USER OPENS THE PAGE BY ANY ROUTE, exactly
-            // as the preset button and the details window's "Go to on map" do.
-            // Closing leaves it alone: the suppression is set when a page is
-            // rebuilt from a saved entry that says closed, which is what stops
-            // a propagating tracker - a full sky on the first frame of every
-            // launch, with no radio and no user action - reopening a window
-            // the user shut. Setting it here as well would be harmless; not
-            // clearing it on open would strand the switch.
-            if (pg.open) { pg.selfOpenSuppressed = false; }
         }
     }
     if (any) { return; }
@@ -9575,7 +9611,6 @@ void AppWindow::drawTargetDetailsSection() {
         pg.view->setSelected(found->t.id);
         pg.view->goTo(found->t.latDeg, found->t.lonDeg);
         pg.open = true;
-        pg.selfOpenSuppressed = false;
     }
     ImGui::SameLine();
     MapPage* owner = findMapPage(found->plugin);
@@ -9589,7 +9624,6 @@ void AppWindow::drawTargetDetailsSection() {
             pg.view->setSelected(found->t.id);
             pg.view->setFollowed(found->t.id);
             pg.open = true;
-            pg.selfOpenSuppressed = false;
         }
     }
 }
@@ -9648,7 +9682,6 @@ void AppWindow::drawTargetDetailsWindow() {
                 pg.view->setSelected(found->t.id);
                 pg.view->goTo(found->t.latDeg, found->t.lonDeg);
                 pg.open = true;
-                pg.selfOpenSuppressed = false;
             }
             ImGui::SameLine();
             MapPage* owner = findMapPage(found->plugin);
@@ -9662,7 +9695,6 @@ void AppWindow::drawTargetDetailsWindow() {
                     pg.view->setSelected(found->t.id);
                     pg.view->setFollowed(found->t.id);
                     pg.open = true;
-                    pg.selfOpenSuppressed = false;
                 }
             }
         }
@@ -9789,12 +9821,11 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // be configured for wherever the radio used to be.
     refreshPluginRunner();
 
-    // THE PRESET BUTTON OPENS THE MAP PAGE, EXPLICITLY. The self-open edge
-    // covers the first arrival, but a user who closed the page mid-traffic
-    // gets no edge until the air goes quiet — and pressing this button is the
+    // THE PRESET BUTTON OPENS THE MAP PAGE, EXPLICITLY. Pressing it is the
     // one unambiguous "show me this plugin" gesture the product offers (its
-    // tooltip promises as much). An adversarial review proved that without
-    // this line a closed page could be unreachable for a whole busy session.
+    // tooltip promises as much), and since 0.79.1 a page opens by such a
+    // gesture and by nothing else - no page opens itself on its first
+    // target any more, so this line is one of the ways a page is reached.
     // Guarded to track-capable plugins so a preset on a plain decoder does
     // not conjure an empty map window it never asked for.
     {
@@ -9802,7 +9833,6 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
             MapPage& pg = ensureMapPage(p.name);
             pg.open = true;
-            pg.selfOpenSuppressed = false;
         }
     }
 
@@ -10374,13 +10404,11 @@ void AppWindow::drawDecoderWindow() {
     // beside the radio or on a second screen, not to read through a slot in a
     // side panel.
     //
-    // Opens itself the first time a decoder actually says something, which is
-    // the rule the map already follows. A window that appears before there is
-    // anything in it is just another empty box to close.
-    if (!decoderLog_.empty() && !decoderWindowEverOpened_) {
-        decoderWindowOpen_ = true;
-        decoderWindowEverOpened_ = true;
-    }
+    // IT NEVER OPENS ITSELF. Until 0.79.1 it did, on a decoder's first line -
+    // and the NOAA APT decoder says "listening" the moment it is fed, so the
+    // window appeared at every launch with that plugin fitted. The user asked
+    // for the application to start on the main screen alone; this window is
+    // the DECODERS row's own key away ("Show decoder output").
     if (!decoderWindowOpen_) { return; }
     telemetryNotePanel("decoded");
 
@@ -12472,7 +12500,16 @@ void AppWindow::copyDiagnosticsBundle() {
     cascade::core::diagLogf("diagnostics bundle produced (%zu bytes)", bundle.size());
 }
 
-void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
+void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
+    // WHAT THE WINDOW STARTS FROM IS NOT THE FILE AS SAVED. The file records
+    // what was showing at the last exit - the scope, the store, the fitted
+    // modules window, each map page - and the application starts on the
+    // bench alone whatever that was (the user's instruction, 0.79.1). So the
+    // saved config passes through core::startupState first, which clears
+    // every open flag and the scope mode and touches nothing else: every
+    // rectangle, every setting, every position survives. Everything below
+    // reads `cfg`, the start-up state, never `saved`.
+    const cascade::core::AppConfig cfg = cascade::core::startupState(saved);
     // Panel mirrors + always-safe DSP settings first (none of these can
     // fail; load() already range-sanitized volume/split/db*).
     volume_ = cfg.volume;
@@ -12511,13 +12548,14 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
     mapTrailStyle_ = cfg.mapTrailStyle;
 
-    // The radar scope. The mode is restored because a user who left the
-    // application showing a scope asked to be looking at a scope, and an
-    // instrument that reverts to a spectrum on every launch is one they have
-    // to switch on every time. The range is snapped again here rather than
-    // trusted from the config: the loader already clamps it, and the view
-    // clamps it once more inside setRangeNm, so there is no path by which an
-    // unrepresentable scale reaches the rings - which is the point of a ladder.
+    // The radar scope. The MODE arrives off - startupState cleared it, because
+    // the application starts on the bench whatever was showing at the last
+    // exit. The RANGE is restored, so the scope comes up at the scale it was
+    // left at when the user switches it on; it is snapped again here rather
+    // than trusted from the config: the loader already clamps it, and the
+    // view clamps it once more inside setRangeNm, so there is no path by
+    // which an unrepresentable scale reaches the rings - which is the point
+    // of a ladder.
     scopeMode_ = cfg.scopeMode;
     scopeRangeNm_ = clampScopeRangeNm(cfg.scopeRangeNm);
     // The rail opens on the bank it was left on. Clamped again here even
@@ -12560,17 +12598,17 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
         }
     }
 
-    // The plugin store. Restoring the URL and the window's open/closed state
-    // does NOT start a fetch - see AppConfig::pluginCatalogueUrl. The user
-    // still has to press CHECK NOW, on this launch as on every other, and the
-    // restored window opens showing IDLE until they do.
+    // The plugin store. Restoring the URL does NOT start a fetch - see
+    // AppConfig::pluginCatalogueUrl. The user still has to press CHECK NOW,
+    // on this launch as on every other. The window's open flag arrives
+    // cleared (startupState): the store opens from its rail key, never by
+    // itself.
     pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
     std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
-    // The fitted modules window, restored the same way and with the same
-    // promise: putting the window back opens it on the modules the host has
-    // ALREADY loaded and starts no scan, no fetch and no network call of any
-    // kind. Nothing but the user's own two gestures ever sets this true.
+    // The fitted modules window: its rectangle is restored, its open flag
+    // arrives cleared for the same reason. Opening it later starts no scan,
+    // no fetch and no network call of any kind.
     fittedWindowOpen_ = cfg.fittedModulesOpen;
     fittedWinX_ = cfg.fittedModulesX;
     fittedWinY_ = cfg.fittedModulesY;
@@ -12593,11 +12631,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // source needs; doing it here means a stopped plugin never survives a
     // launch even for a frame.
     pluginsStopped_ = cfg.pluginsStopped;
-    // WINDOWS THE USER SHUT LAST TIME STAY SHUT. Restored before any window
-    // is drawn, so a panel the user does not want never appears at all rather
-    // than flashing up and vanishing on the first frame.
-    closedWindows_.clear();
-    for (const std::string& id : cfg.closedWindows) { closedWindows_.insert(id); }
+    // AppConfig::closedWindows is no longer applied. Until 0.79.1 every plugin
+    // window appeared by itself and this list kept the ones the user had shut
+    // from coming back; now no plugin window appears until the user opens it
+    // from its row, so there is nothing for the list to hold back. It is
+    // still read and written so older builds and this one agree on the file.
     // BEFORE the rebuild, because refreshPluginRunner is what rebuilds the
     // mute snapshot the overrides are baked into. Restored after the stops for
     // the same reason they are restored at all: a decoder the user silenced
@@ -12928,11 +12966,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginsStopped = pluginsStopped_;
-    // Written back from the live set. rescanPlugins() clears that set, which
-    // is deliberate - a rescan is the one moment a window identity may have
-    // legitimately changed - so a close made before a rescan is not carried
-    // past it, and the user closes it once more.
-    cfg.closedWindows.assign(closedWindows_.begin(), closedWindows_.end());
+    // closedWindows is written empty: nothing reads it since 0.79.1 (see
+    // applyConfig), and an empty list is what an older build would take to
+    // mean "no window was shut" - the nearest true statement it can make
+    // about a session in which windows only ever open by hand.
+    cfg.closedWindows.clear();
     cfg.pluginMuteOverride = pluginMuteOverride_;
     cfg.catEnabled = catEnabled_;
     cfg.catBindAll = catBindAll_;

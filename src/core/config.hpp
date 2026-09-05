@@ -177,15 +177,15 @@ struct AppConfig {
     // main window rather than a panel in it: while it is on, the spectrum, the
     // waterfall and the settings rail are not drawn at all.
     //
-    // scopeMode  IS PERSISTED, and that is a deliberate choice rather than an
-    //            oversight about a "temporary" view. A user who left the
-    //            application showing a scope was using it as a scope; an
-    //            instrument that reopens as a spectrum analyser every launch is
-    //            one they have to switch on every time. It defaults OFF because
-    //            the receiver's own controls are what a new install needs to
-    //            see first, and because the scope is empty without an aircraft
-    //            source installed. The mode always draws its own way out, so
-    //            restoring it can never strand anybody.
+    // scopeMode  IS SAVED AND NOT RESTORED. Until 0.79.1 it was restored, on
+    //            the argument that a user who left the application showing a
+    //            scope was using it as a scope. The user's own instruction
+    //            settled it the other way ("whenever the software starts it
+    //            only shows the main screen, regardless of what was running
+    //            when it was closed"): every launch opens on the bench, and
+    //            the scope is a key press away. The field is still written,
+    //            so a config file says what was showing at the last exit, but
+    //            startupState() clears it before the window reads it.
     //
     // scopeRangeNm  the scale in nautical miles, and it is one of a fixed
     //            LADDER of values (10, 25, 50, 100, 200, 400, 800, 1600 - see
@@ -249,7 +249,8 @@ struct AppConfig {
 
     // --- Per-plugin map pages -------------------------------------------------
     // One entry per plugin map page: which plugin, where its window sits, and
-    // whether it was open. The map used to be ONE window fed every plugin's
+    // whether it was open at the last exit (recorded; since 0.79.1 not
+    // restored - see startupState below). The map used to be ONE window fed every plugin's
     // targets at once, which is why switching from Satellites to ADS-B still
     // showed "the satellite map"; each track-capable plugin now gets a page of
     // its own, and each page's rectangle has to survive a restart for exactly
@@ -326,38 +327,30 @@ struct AppConfig {
     // fetchIndex and is refused there, which is where that decision belongs.
     std::string pluginCatalogueUrl = PluginRepo::defaultIndexUrl();
 
-    // Whether the plugin store window was left open. Purely cosmetic
-    // restore of where the user was — it does NOT cause a fetch on startup.
-    // Nothing in this product touches the catalogue origin until the user
-    // presses CHECK NOW in that window; that promise is what the store's
-    // privacy note makes, and a config field that could reinstate a network
-    // call behind the user's back would break it.
+    // Whether the plugin store window was open at the last exit. Recorded,
+    // and since 0.79.1 NOT restored - the application starts on the bench
+    // alone (see startupState below). It never caused a fetch on startup even
+    // when it was restored: nothing in this product touches the catalogue
+    // origin until the user presses CHECK NOW in that window; that promise is
+    // what the store's privacy note makes, and a config field that could
+    // reinstate a network call behind the user's back would break it.
     bool pluginBrowserOpen = false;
 
     // --- The fitted modules window --------------------------------------------
-    // Whether the FITTED MODULES window was left open, and where it sat.
-    //
-    // ITS SIBLING ALREADY PERSISTED AND IT DID NOT. The plugin store and the
-    // fitted modules window are the same kind of thing — a rail key in DECODE
-    // that opens a window of its own — and the store's open state has always
-    // been remembered by pluginBrowserOpen above while this one was a plain
-    // member with no key at all, so it closed on exit and was gone on the next
-    // launch. Two sibling windows behaving differently is a bug in one of
-    // them.
-    //
-    // NOTHING HERE SELF-OPENS ANYTHING. The flag is written only by the user's
-    // own two gestures — the rail key and the window's close button — so
-    // restoring it puts back a window the user themselves left open. That is
-    // not the self-open the satellite page was fixed for: there is no arrival
-    // edge on this window, and nothing but a user action can ever set this
-    // true. Restoring it starts no scan and no fetch; the module list is what
-    // the host already loaded at start-up.
+    // Whether the FITTED MODULES window was open at the last exit, and where
+    // it sat. The rectangle IS restored - the window comes back where the user
+    // put it. The open flag is recorded and, since 0.79.1, NOT restored: the
+    // application starts on the bench alone (startupState below), and the
+    // window is one rail key away. It was made to persist in the first place
+    // so that it and the plugin store, two sibling windows opened by sibling
+    // keys, behaved the same way; they still do - neither reopens by itself.
     //
     // The rectangle follows the map pages' rules verbatim — zero width means
     // "nothing saved", the position is only honoured when a size was saved
     // with it, and an out-of-range component discards the whole rectangle
-    // (the open flag survives, because "where the window sat" and "whether it
-    // was open" are separate decisions and only one of them went bad).
+    // (the open flag survives the discard, because "where the window sat" and
+    // "whether it was open" are separate records and only one of them went
+    // bad).
     bool fittedModulesOpen = false;
     int fittedModulesX = 0;
     int fittedModulesY = 0;
@@ -427,7 +420,11 @@ struct AppConfig {
     // list is capped. A name that matches no installed plugin is KEPT, so a
     // stop survives the plugin being quarantined by the retirement policy or
     // temporarily removed.
-    // WINDOWS THE USER HAS CLOSED, remembered across launches.
+    // WINDOWS THE USER HAS CLOSED, remembered across launches - OBSOLETE
+    // SINCE 0.79.1, read and written for compatibility and never applied.
+    // Every plugin window now starts closed and opens only from its row on
+    // the rail (core::PluginWindows), so there is nothing for this list to
+    // hold back; this build writes it empty. The history, for the record:
     //
     // A plugin-declared panel and a decoded-image window used to open on
     // every launch and a close only held for the session, so a user who does
@@ -622,6 +619,26 @@ struct AppConfig {
     // list every frame.
     static constexpr std::size_t kMaxMapPages = 64;
 };
+
+// THE STATE THE APPLICATION STARTS IN: the bench, and nothing else.
+//
+// A saved config records what was showing when the application last closed -
+// the scope, the plugin store, the fitted modules window, each plugin's map
+// page. Until 0.79.1 the window reopened all of it, on the argument that a
+// user who left a window open wanted it back. The user's own instruction
+// settled it the other way: "whenever the software starts it only shows the
+// main screen, regardless of what was running when it was closed." So this
+// is what the window reads at start-up instead of the file as saved: the same
+// config with every "open" cleared and the scope off. Everything that says
+// WHERE a window sits survives - a page opened by hand comes back to the
+// place it was left - and everything that says WHETHER it was open does not.
+//
+// A pure function over the config, rather than a rule buried in the window,
+// so a test can hand it a config with everything open and check that nothing
+// comes out open and nothing else changed. AppWindow::applyConfig is its one
+// caller; the fields themselves are still saved, so the file remains a record
+// of the last session for anyone reading it.
+AppConfig startupState(AppConfig cfg);
 
 class ConfigStore {
 public:

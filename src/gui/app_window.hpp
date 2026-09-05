@@ -774,6 +774,9 @@ private:
     // main window - every satellite control lives in the window itself, which
     // is the point of the window.
     void drawSatelliteMapSection();
+    // One row per window a plugin publishes (a picture, a panel): the only
+    // way such a window reaches the screen since 0.79.1.
+    void drawPluginWindowRows();
     // Folds every live page's rectangle and open flag into mapPagesSaved_,
     // which is what currentConfig() writes out. Entries for plugins with no
     // page this session ride through untouched, so a geometry saved for a
@@ -1185,38 +1188,20 @@ private:
     // Each page owns its own MapView, so view centre, zoom, follow and
     // selection are all per-page — that separation is the point of the
     // feature. Pages are created lazily the first frame their plugin appears
-    // and never destroyed while the app runs; rescanPlugins() clears them the
-    // way it clears closedWindows_, and they rebuild from mapPagesSaved_ on
-    // the next frame.
+    // and never destroyed while the app runs; rescanPlugins() leaves them in
+    // place (its comment measures the cost of clearing them), so a plugin
+    // that reappears finds its page where it was.
     struct MapPage {
         std::string plugin;  // display name, as HostTrack::plugin carries it
         std::unique_ptr<MapView> view;
+        // Opened by the user's own hand - the rail row, a preset, a details
+        // window's Go-to - and by nothing else: not restored from the config
+        // at start-up, and never self-opened on an arriving target (0.79.1,
+        // the application starts on the main screen alone). Until then the
+        // first visible target opened the page as an edge, which on a
+        // propagating tracker - a full sky on the first frame of every launch
+        // - meant a window at every start whether wanted or not.
         bool open = false;
-        // The page has self-opened once already this session. The first
-        // visible track opens the page exactly once; this flag is what stops
-        // it re-opening after the user closes it.
-        // The self-open EDGE's memory (see core/plugin_ui.hpp's
-        // mapSelfOpens): whether this plugin had a visible target last
-        // frame. Never persisted - a restart is a quiet gap by
-        // definition, so a session opens on its first arrival exactly
-        // the way the single map always did.
-        bool hadVisible = false;
-        // THE USER CLOSED THIS PAGE, AND MEANT IT ACROSS RESTARTS.
-        //
-        // hadVisible is deliberately not persisted, on the reasoning that a
-        // restart is a quiet gap and a session should open on its first
-        // arrival. That is right for a plugin whose targets ARRIVE - an
-        // aircraft is heard or it is not. It is wrong for one that COMPUTES
-        // them: the satellite tracker propagates from stored elements, so it
-        // has a full sky of visible targets on the first frame of every
-        // launch, with no radio and no user action. The edge therefore fired
-        // at start-up every time and reopened a map the user had closed,
-        // which is exactly what they reported.
-        //
-        // Set when a page is created from a saved entry that says closed, and
-        // cleared the moment the user opens the page by any route, so a close
-        // survives a restart while every deliberate reopen still works.
-        bool selfOpenSuppressed = false;
         // The window's rectangle: seeded at creation from the saved entry (or
         // the legacy single-window rectangle), read back from ImGui every
         // frame the window is drawn, and written to AppConfig::mapPages.
@@ -1513,19 +1498,15 @@ private:
     std::string detailsTrackId_;
     bool detailsOpen_ = false;
 
-    // WINDOWS THE USER HAS CLOSED, by ImGui id. The decoded-image windows and
-    // the plugin-declared panels are opened BY their content arriving rather
-    // than by a menu, so they had no close state at all and were drawn with a
-    // null p_open. That was survivable while torn-off viewports were
-    // undecorated - there was no close button to press. Once they carry the
-    // operating system's own frame (see ConfigViewportsNoDecoration in
-    // run()), a null p_open means a real X that silently does nothing, which
-    // is worse than no X at all.
-    //
-    // Closing one keeps it closed for the session; a plugin rescan clears the
-    // set, because that is the point at which the whole set of panels and
-    // decoders is rebuilt and "closed" no longer refers to the same thing.
-    std::set<std::string> closedWindows_;
+    // WHICH PLUGIN WINDOWS ARE ON SCREEN - a decoder's picture, a plugin's own
+    // panel - by ImGui window identity. Empty at every launch and never saved:
+    // the application starts on the main screen alone (0.79.1), a plugin's
+    // window opens from its row in DECODE (drawPluginWindowRows) and closes
+    // from its own key. Until 0.79.1 this was the opposite memory - the
+    // windows the user had CLOSED, persisted as AppConfig::closedWindows -
+    // because every published window used to appear by itself. See
+    // core::PluginWindows for the rule and its test.
+    cascade::core::PluginWindows pluginWindows_;
     // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
     // rather than by the runner because it is written only when a decoder
     // produces a new picture: keeping the GUI's copy out of the runner is what
@@ -1570,11 +1551,10 @@ private:
     std::string muteSubjectSeen_;
     double muteSinceS_ = -1.0;
     bool decoderAutoScroll_ = true;
-    // The output window opens itself the first time a decoder says something,
-    // and not before — the same rule the map follows. Once the user closes it
-    // that stays closed, which is why the "ever opened" latch exists.
+    // The output window opens from the DECODERS row's key and closes from its
+    // own; it never opens itself (0.79.1 - it used to, on a decoder's first
+    // line, which put it on screen at every launch).
     bool decoderWindowOpen_ = false;
-    bool decoderWindowEverOpened_ = false;
     std::string pluginDir_;
 
     // --- Retirement enforcement (P11) -----------------------------------------
@@ -1809,9 +1789,9 @@ private:
     // carried before: nothing in this application contacts the catalogue until
     // the user asks.
     //
-    // NOTHING SELF-OPENS THIS WINDOW. There is no arrival edge here of the
-    // kind the map pages have, so the only two things that can put it on
-    // screen are the rail key and a saved open state the user themselves left.
+    // NOTHING OPENS THIS WINDOW BUT ITS RAIL KEY. Not restored from the
+    // config at start-up since 0.79.1 (the application starts on the main
+    // screen alone), and nothing ever opened it by itself.
     bool pluginBrowseOpen_ = false;
     // IS THE FITTED MODULES WINDOW OPEN, and where it sat.
     //
@@ -1825,10 +1805,9 @@ private:
     // where it lands, and read back every frame because ImGui's own .ini
     // persistence is switched off in this application.
     //
-    // NOTHING SELF-OPENS IT. There is no arrival edge here of the kind the map
-    // pages have; the only two things that set this true are the rail key and
-    // a saved open state the user themselves left, which is the same promise
-    // pluginBrowseOpen_ above makes.
+    // NOTHING OPENS IT BUT ITS RAIL KEY - the same promise pluginBrowseOpen_
+    // above makes, and like it not restored from the config at start-up
+    // since 0.79.1.
     bool fittedWindowOpen_ = false;
     // Zero width means "nothing saved" - the map pages' sentinel, and the
     // reason no companion flag is needed. Written back from the live window
