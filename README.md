@@ -371,7 +371,37 @@ on an empty panel, the Radar section and the scope's empty state both offer
 two places the application already knows: the middle of the aircraft it has
 heard, once there are three of them, and the centre of the map a plugin is
 showing. Either key sets the receiver and the scope draws on the same frame;
-the exact figure can still be typed, or taken from a click on a map page.
+the exact figure can still be typed, or taken from a click on a map page. One
+pair is refused at every door, typed or offered or read from the config file:
+0 N 0 E, which is a point in the Gulf of Guinea and the value every empty
+field holds, and which one receiver was found measuring from.
+
+The scope's range ladder runs 10, 25, 50, 100, 200, 400, 800 and 1600 NM. The
+top two are not for hearing further — nothing on this band is heard past
+about 300 NM — but for placing: a region, then a continent, under the traffic.
+They are possible because the ground under the face is drawn in the scope's
+own polar projection, each map tile cut into cells and every corner placed by
+the same pair of functions that places an aircraft, so a coast and the
+contact over it sit on the same pixel at any range. Until 0.78.0 the ground
+was laid on in Mercator, matched at the middle and about 9% out at the edge
+of a 400 NM picture, which is why 400 was the ceiling.
+
+**No title bars.** The operating system used to draw its own strip above the
+main window and above every page torn out of it — a white bar in another
+decade's style, with the desktop's minimise, maximise and close. They are
+gone. The cabinet's own top rail carries the window's name, engraved between
+the screws, and three brass keys at its right; the rest of the rail is what
+the window is dragged by, a double-click on it fills the screen, and a
+right-click offers the system menu. On Windows the main window keeps every
+convenience a framed one has — snapping to an edge, the keyboard's window
+shortcuts, resizing from its edges — because the frame is only *hidden*: the
+system still owns the window and is told which part of it is the rail. Every
+page is drawn the same way, as a cabinet with its name and keys on the rail;
+a page inside the main window rolls up to its rail when minimised and fills
+the main window when maximised, and a page torn off to its own window does
+both to the desktop, with a taskbar button to come back from. On Linux the
+main window keeps the frame the desktop gives it, and the rail carries the
+name alone.
 
 Every one of those lives in `src/gui/theme.hpp`, in one palette named by role.
 Two things it deliberately does NOT govern, because they are measurements

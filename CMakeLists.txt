@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.77.1 LANGUAGES C CXX)
+project(cascade VERSION 0.78.0 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -302,6 +302,12 @@ if(NOT WIN32)
     # CPPHTTPLIB_OPENSSL_SUPPORT). Windows takes both from the OS instead —
     # CNG and WinHTTP — which is why neither is a dependency there.
     target_link_libraries(cascade_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+endif()
+
+if(WIN32)
+    # The frameless main window (gui/win_frame.cpp) keeps the desktop's shadow
+    # on a captionless window through DwmExtendFrameIntoClientArea.
+    target_link_libraries(cascade_lib PUBLIC dwmapi)
 endif()
 
 # ---------------------------------------------------------------------------

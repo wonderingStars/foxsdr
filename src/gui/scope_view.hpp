@@ -61,11 +61,19 @@ class TrackInfoCache;
 // label and the corner readout are derived from it, so a free-running value
 // would print ranges like "173 NM" on rings nobody chose.
 //
-// The ladder itself is the one every ADS-B receiver of this shape offers:
-// roughly doubling steps from a circuit-sized 10 NM out to 400, which is past
-// the horizon for a ground station at any sane antenna height and therefore
-// past anything this radio can hear.
-inline constexpr int kScopeRangesNm[] = {10, 25, 50, 100, 200, 400};
+// The ladder itself is the one every ADS-B receiver of this shape offers,
+// roughly doubling from a circuit-sized 10 NM out to 400, which is past the
+// horizon for a ground station at any sane antenna height and therefore past
+// anything this radio can hear - and then two more, 800 and 1600, which are
+// not for hearing further but for PLACING. At those two the picture is a
+// region and a continent, which is what a view that has been dragged off the
+// aerial, or an operator asking where the traffic sits in the world, needs; a
+// 400 NM ceiling answered "zoom right out" with a greyed key. They are only
+// possible because the ground under the face is drawn in the scope's own
+// projection (see scopeGroundPoint): a Mercator ground matched at the middle
+// is 9% out at the edge of a 400 NM picture and would be out by three
+// quarters at 1600.
+inline constexpr int kScopeRangesNm[] = {10, 25, 50, 100, 200, 400, 800, 1600};
 inline constexpr int kScopeRangeCount =
     static_cast<int>(sizeof(kScopeRangesNm) / sizeof(kScopeRangesNm[0]));
 
@@ -298,44 +306,175 @@ struct ScopeLatLon {
 };
 
 // WHERE THE MIDDLE OF THE GLASS IS after the view has been dragged by
-// (panXpx, panYpx) screen pixels.
+// (panXpx, panYpx) screen pixels, with pxPerNm screen pixels to the nautical
+// mile - which is the scope's ONE scale, the same at every point of the face.
 //
 // This is the number every other thing on the face is measured from, and
 // getting it wrong is not a small visual error - it silently moves the whole
 // picture relative to the map under it. It is here, in the ImGui-free half,
 // precisely so it can be checked without a graphics context.
 //
+// IN THE SCOPE'S OWN PROJECTION, not Mercator's. The first version turned the
+// drag into degrees through normalised Mercator at the ANTENNA's latitude,
+// which was right while the ground under the face was drawn that way and the
+// view stayed near the aerial. Now that the ground is laid on the polar frame
+// (see scopeGroundPoint) a drag is what it looks like: the point under the
+// middle moves by the dragged distance, along the dragged direction, over the
+// sphere - through destinationPoint, the tested inverse of the pair
+// scopeRelative uses, so a drag and the picture it moves can never disagree
+// about where a mile is.
+//
 // SIGNS. Dragging RIGHT (panXpx > 0) carries the map right, so the point in
-// the middle of the glass moves WEST - a smaller longitude. Dragging DOWN
-// (panYpx > 0) carries the map down, so the middle moves NORTH, which in
-// normalised Mercator is a SMALLER y. Both are the opposite of the pan's own
+// the middle of the glass moves WEST; dragging DOWN (panYpx > 0) carries the
+// map down, so the middle moves NORTH. Screen y grows downwards, which is why
+// north is +panYpx and east is -panXpx. Both are the opposite of the pan's own
 // sign, which is exactly the kind of thing that reads as correct in code and
 // is wrong on screen.
 //
-// pixPerWorld is how many screen pixels one whole world-width spans. Zero or
-// negative means there is no usable scale - the receiver is at a pole, or the
-// face has not been laid out yet - and the answer is then the receiver itself
-// rather than a coordinate derived by dividing by it.
-inline ScopeLatLon scopeViewCentre(double rxLatDeg, double rxLonDeg, double panXpx,
-                                   double panYpx, double pixPerWorld) {
-    ScopeLatLon out{rxLatDeg, rxLonDeg};
-    if (!(pixPerWorld > 0.0) || !std::isfinite(panXpx) || !std::isfinite(panYpx)) {
+// A zero or negative scale means there is no usable face - it has not been
+// laid out yet - and the answer is then the view itself rather than a
+// coordinate derived by dividing by it.
+inline ScopeLatLon scopeViewMoved(double latDeg, double lonDeg, double panXpx, double panYpx,
+                                  double pxPerNm) {
+    ScopeLatLon out{latDeg, lonDeg};
+    if (!(pxPerNm > 0.0) || !std::isfinite(panXpx) || !std::isfinite(panYpx)) {
         return out;
     }
-    // AN UNPANNED VIEW IS THE ANTENNA EXACTLY, not a value that has been
-    // through a Mercator round trip. scopeMercLat(scopeMercY(lat)) is a log,
-    // an atan and a sinh, and it does not come back bit-identical - so without
-    // this the centre of an untouched scope drifts a few billionths of a
-    // degree off the aerial it is supposed to BE. Harmless on screen and
-    // exactly the kind of thing that makes an equality check downstream fail
-    // for a reason nobody can see. The test caught it on the first run.
-    if (panXpx != 0.0) {
-        out.lonDeg = rxLonDeg - panXpx / pixPerWorld * 360.0;
-    }
-    if (panYpx != 0.0) {
-        out.latDeg = scopeMercLat(scopeMercY(rxLatDeg) - panYpx / pixPerWorld);
-    }
+    // AN UNMOVED VIEW IS THE SAME PLACE EXACTLY, not a value that has been
+    // through a destination-point round trip: sin, cos, asin and atan2 do not
+    // come back bit-identical, and an equality check downstream must not fail
+    // for a reason nobody can see. The Mercator version's test caught exactly
+    // this on its first run.
+    if (panXpx == 0.0 && panYpx == 0.0) { return out; }
+    const double eastPx = -panXpx;
+    const double northPx = panYpx;
+    const double nm = std::sqrt(eastPx * eastPx + northPx * northPx) / pxPerNm;
+    double bearing = std::atan2(eastPx, northPx) * 180.0 / 3.14159265358979323846;
+    if (bearing < 0.0) { bearing += 360.0; }
+    const LatLon moved = destinationPoint(latDeg, lonDeg, bearing, nm * kKmPerNm);
+    out.latDeg = moved.latDeg;
+    out.lonDeg = moved.lonDeg;
     return out;
+}
+
+// --- the ground, in the same projection as the targets -----------------------
+
+// WHERE A PLACE ON THE GROUND IS ON THE FACE - and it is THE SAME PAIR OF
+// FUNCTIONS THAT PLACES A TARGET, deliberately and not as tidiness. Until
+// 0.78.0 the tiles and the coastline were laid under the face in Web
+// Mercator, matched to the polar frame at the middle and diverging from it
+// outwards: about 9% at the north edge of a 400 NM picture in British
+// latitudes, which is a coast drawn thirty miles from where the aircraft over
+// it was plotted, and which ruled out any longer range at all. Every
+// aircraft, every trail, every tile corner and every coastline vertex now
+// goes through scopeRelative and scopeProject, so a coast and the contact
+// over it land on the same pixel at 10 NM and at 1600.
+inline ScopePoint scopeGroundPoint(double centreX, double centreY, double radiusPx,
+                                   double fullScaleNm, double viewLatDeg, double viewLonDeg,
+                                   double latDeg, double lonDeg) {
+    const ScopePolar p = scopeRelative(viewLatDeg, viewLonDeg, latDeg, lonDeg);
+    return scopeProject(centreX, centreY, radiusPx, p.rangeNm, p.bearingDeg, fullScaleNm);
+}
+
+// Which Web Mercator tiles, at `zoom`, cover a disc of `coverNm` about the
+// view. The disc's extent in Mercator has no closed form worth having - it is
+// not a rectangle, and near a pole it is the whole top of the world - so the
+// rim is sampled at 24 bearings through destinationPoint and the window is
+// the bounding box of what comes back. x0..x1 are UNWRAPPED, in the
+// continuous longitude the tile index implies (a disc across the antimeridian
+// keeps one range past the edge, and the caller wraps the index); y is
+// clamped to the world.
+struct ScopeTileWindow {
+    long x0 = 0;
+    long x1 = -1;
+    long y0 = 0;
+    long y1 = -1;
+    // The pole is inside the disc: every longitude is on the glass, and the
+    // rows run to the edge of the Mercator world on that side.
+    bool allLongitudes = false;
+};
+
+inline ScopeTileWindow scopeTileWindow(double viewLatDeg, double viewLonDeg, double coverNm,
+                                       int zoom) {
+    ScopeTileWindow w;
+    if (!(coverNm > 0.0) || zoom < 0 || zoom > 30) { return w; }
+    const double n = std::pow(2.0, static_cast<double>(zoom));
+    double minX = 1.0e30;
+    double maxX = -1.0e30;
+    double minY = 1.0e30;
+    double maxY = -1.0e30;
+    const auto take = [&](double lat, double lon) {
+        double dl = lon - viewLonDeg;
+        while (dl > 180.0) { dl -= 360.0; }
+        while (dl < -180.0) { dl += 360.0; }
+        const double x = (viewLonDeg + dl + 180.0) / 360.0;
+        const double y = scopeMercY(lat);
+        if (x < minX) { minX = x; }
+        if (x > maxX) { maxX = x; }
+        if (y < minY) { minY = y; }
+        if (y > maxY) { maxY = y; }
+    };
+    take(viewLatDeg, viewLonDeg);
+    for (int i = 0; i < 24; ++i) {
+        const LatLon rim =
+            destinationPoint(viewLatDeg, viewLonDeg, 15.0 * i, coverNm * kKmPerNm);
+        take(rim.latDeg, rim.lonDeg);
+    }
+    const double coverDeg = coverNm / 60.0;
+    if (viewLatDeg + coverDeg >= 90.0) {
+        w.allLongitudes = true;
+        minY = 0.0;
+    }
+    if (viewLatDeg - coverDeg <= -90.0) {
+        w.allLongitudes = true;
+        maxY = 1.0;
+    }
+    w.x0 = static_cast<long>(std::floor(minX * n));
+    w.x1 = static_cast<long>(std::floor(maxX * n));
+    w.y0 = static_cast<long>(std::floor(minY * n));
+    w.y1 = static_cast<long>(std::floor(maxY * n));
+    const long last = static_cast<long>(n) - 1;
+    if (w.y0 < 0) { w.y0 = 0; }
+    if (w.y1 > last) { w.y1 = last; }
+    if (w.allLongitudes) {
+        w.x0 = 0;
+        w.x1 = last;
+    }
+    return w;
+}
+
+// How many cells a tile is cut into, per side, before it is laid on the polar
+// frame. A tile is drawn as cells because a quad is two triangles and the
+// mapping inside each is affine: a whole 22-degree tile bent onto the face in
+// one piece would fold along its diagonal. Cells of about four degrees keep
+// that bend below a pixel at every range the ladder offers; small tiles at a
+// high zoom need no cutting at all.
+inline int scopeTileCells(int zoom) {
+    if (zoom < 0) { zoom = 0; }
+    const double tileDeg = 360.0 / std::pow(2.0, static_cast<double>(zoom));
+    int k = static_cast<int>(std::ceil(tileDeg / 4.0));
+    if (k < 1) { k = 1; }
+    if (k > 16) { k = 16; }
+    return k;
+}
+
+// --- the receiver's own position --------------------------------------------
+
+// WHETHER A PAIR CAN BE THE RECEIVER. Finite and on the globe, and NOT the
+// exact origin: 0 N 0 E is a point in the Gulf of Guinea that nobody who
+// types, clicks or presses a key on this application is at, and it is the
+// value every empty field, every unset map and every zeroed struct holds. A
+// user's scope was found measuring from there, with the view dragged three
+// thousand miles to the coast it should have been on; the position had been
+// set from a control whose inputs still read 0.00000. The application
+// refuses it at every door - the typed entry, the one-click offers, the
+// config file - so that "unset" and "set to nothing" can never be the same
+// picture.
+inline bool receiverPositionAcceptable(double latDeg, double lonDeg) {
+    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return false; }
+    if (latDeg < -90.0 || latDeg > 90.0 || lonDeg < -180.0 || lonDeg > 180.0) { return false; }
+    if (latDeg == 0.0 && lonDeg == 0.0) { return false; }
+    return true;
 }
 
 // --- what the readouts say ----------------------------------------------------

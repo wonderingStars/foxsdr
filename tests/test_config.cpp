@@ -721,11 +721,14 @@ int main() {
             {150, 100, "exactly between 100 and 200 - ties go smaller"},
             {173, 200, "a plausible hand-edit, nearest is 200"},
             {300, 200, "exactly between 200 and 400 - ties go smaller"},
-            {999, 400, "above the ladder"},
+            {600, 400, "exactly between 400 and 800 - ties go smaller"},
+            {999, 800, "nearest is 800, since 0.78.0 put it on the ladder"},
+            {1200, 800, "exactly between 800 and 1600 - ties go smaller"},
+            {5000, 1600, "above the ladder"},
             // A hand-edit large enough to overflow int arithmetic if the scan
             // subtracted in int rather than in long long. RED WHEN it does:
             // on this compiler the failure is a wrong answer, not a crash.
-            {2000000000, 400, "near INT_MAX"},
+            {2000000000, 1600, "near INT_MAX"},
             {-2000000000, 10, "near INT_MIN"},
         };
         for (const RangeCase& c : snap) {
@@ -995,17 +998,38 @@ int main() {
         CHECK(out.rxLatDeg == 53.480759);
         CHECK(out.rxLonDeg == -2.242631);
 
-        // THE ORIGIN IS A PLACE. 0,0 with the flag set is a receiver on the
-        // equator at the prime meridian, and must load as a SET position - it
-        // is the case a bare "all zero means unset" sentinel would get wrong,
-        // and the reason this field carries a flag of its own.
+        // THE ORIGIN IS NOT A RECEIVER. Until 0.78.0 this block asserted the
+        // opposite - that 0,0 with the flag set is a place on the equator at
+        // the prime meridian and must load as SET, the flag rather than a
+        // sentinel saying whether it is meant. That reasoning was sound and
+        // the outcome was not: a real user's scope was found measuring from
+        // the Gulf of Guinea with the view dragged to Liverpool, the pair
+        // having been applied from a control whose fields still read 0.00000.
+        // The one receiver that could honestly sit at 0,0 is a buoy. So the
+        // pair now loads as UNSET, which is what puts the one-click position
+        // offers back in front of the user who has it. RED WHEN the sanitizer
+        // goes back to the plain range test.
         CHECK(writeText(path,
                         "{\"rxPositionSet\":true,\"rxLatDeg\":0,\"rxLonDeg\":0}\n"));
         out = junkConfig();
         CHECK(ConfigStore::load(path, out, err));
-        CHECK(out.rxPositionSet);
+        CHECK(!out.rxPositionSet);
         CHECK(out.rxLatDeg == 0.0);
         CHECK(out.rxLonDeg == 0.0);
+        // A position on one axis of the origin is still a place: the equator
+        // off Ghana, or the prime meridian through Greenwich, are legal.
+        CHECK(writeText(path,
+                        "{\"rxPositionSet\":true,\"rxLatDeg\":0,\"rxLonDeg\":-1.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rxPositionSet);
+        CHECK(out.rxLonDeg == -1.5);
+        CHECK(writeText(path,
+                        "{\"rxPositionSet\":true,\"rxLatDeg\":51.48,\"rxLonDeg\":0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rxPositionSet);
+        CHECK(out.rxLatDeg == 51.48);
 
         // The extremes of the documented range are IN range: the poles and the
         // antimeridian are legal positions, not rounding slop.

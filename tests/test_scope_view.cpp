@@ -66,7 +66,14 @@ using cascade::gui::scopeRingNm;
 using cascade::gui::scopeTracksReadout;
 using cascade::gui::scopeUnavailableNote;
 using cascade::gui::ScopeLatLon;
-using cascade::gui::scopeViewCentre;
+using cascade::gui::scopeViewMoved;
+using cascade::gui::scopeGroundPoint;
+using cascade::gui::scopeTileWindow;
+using cascade::gui::ScopeTileWindow;
+using cascade::gui::scopeTileCells;
+using cascade::gui::receiverPositionAcceptable;
+using cascade::gui::destinationPoint;
+using cascade::gui::LatLon;
 
 namespace {
 
@@ -131,21 +138,26 @@ const double kDegreeNm = 6371.0 * 3.14159265358979323846 / 180.0 / 1.852;
 void testViewCentreAndTargetCull() {
     std::printf("  the middle of a dragged view, and what stays visible in it\n");
 
-    // A scale of 100000 px per world width: one pixel is 0.0036 degrees of
-    // longitude, which keeps the numbers below readable.
-    const double ppw = 100000.0;
+    // Ten pixels to the nautical mile, which keeps the numbers below readable:
+    // kDegreeNm * 10 px is one degree of latitude anywhere, and one of
+    // longitude on the equator.
+    const double ppn = 10.0;
 
-    // NO PAN IS THE ANTENNA, exactly - not nearly.
+    // NO PAN IS THE SAME PLACE, exactly - not nearly.
     {
-        const ScopeLatLon v = scopeViewCentre(51.5, -2.1, 0.0, 0.0, ppw);
+        const ScopeLatLon v = scopeViewMoved(51.5, -2.1, 0.0, 0.0, ppn);
         CHECK(v.latDeg == 51.5);
         CHECK(v.lonDeg == -2.1);
     }
 
-    // NO USABLE SCALE FALLS BACK TO THE ANTENNA rather than dividing by zero.
+    // NO USABLE SCALE, OR NO USABLE PAN, FALLS BACK TO THE SAME PLACE rather
+    // than dividing by zero or moving by NaN.
     {
-        const ScopeLatLon v = scopeViewCentre(51.5, -2.1, 300.0, 200.0, 0.0);
+        const ScopeLatLon v = scopeViewMoved(51.5, -2.1, 300.0, 200.0, 0.0);
         CHECK(v.latDeg == 51.5 && v.lonDeg == -2.1);
+        const ScopeLatLon n = scopeViewMoved(
+            51.5, -2.1, std::numeric_limits<double>::quiet_NaN(), 0.0, ppn);
+        CHECK(n.latDeg == 51.5 && n.lonDeg == -2.1);
     }
 
     // THE SIGNS. Dragging right carries the map right, so the middle of the
@@ -153,19 +165,43 @@ void testViewCentreAndTargetCull() {
     // NORTH. Getting either backwards looks plausible in code and is instantly
     // wrong on screen.
     {
-        const ScopeLatLon r = scopeViewCentre(51.5, -2.1, 1000.0, 0.0, ppw);
+        const ScopeLatLon r = scopeViewMoved(51.5, -2.1, 1000.0, 0.0, ppn);
         CHECK(r.lonDeg < -2.1);
-        const ScopeLatLon d = scopeViewCentre(51.5, -2.1, 0.0, 1000.0, ppw);
+        // Due west is a great circle, not a parallel: it bends a little
+        // towards the equator over a hundred miles, and no more than that.
+        CHECK_NEAR(r.latDeg, 51.5, 0.05);
+        const ScopeLatLon d = scopeViewMoved(51.5, -2.1, 0.0, 1000.0, ppn);
         CHECK(d.latDeg > 51.5);
-        const ScopeLatLon u = scopeViewCentre(51.5, -2.1, 0.0, -1000.0, ppw);
+        CHECK_NEAR(d.lonDeg, -2.1, 1e-9);
+        const ScopeLatLon u = scopeViewMoved(51.5, -2.1, 0.0, -1000.0, ppn);
         CHECK(u.latDeg < 51.5);
     }
 
-    // THE EXACT OFFSET, so a future change cannot quietly rescale the pan.
+    // THE EXACT OFFSET, so a future change cannot quietly rescale the pan: a
+    // degree's worth of pixels moves the middle by exactly one degree.
     {
-        const ScopeLatLon v = scopeViewCentre(0.0, 0.0, 1000.0, 0.0, ppw);
-        // 1000 px of a 100000 px world is a hundredth of it: 3.6 degrees.
-        CHECK(std::fabs(v.lonDeg + 3.6) < 1e-9);
+        const ScopeLatLon w = scopeViewMoved(0.0, 0.0, kDegreeNm * ppn, 0.0, ppn);
+        CHECK_NEAR(w.lonDeg, -1.0, 1e-9);
+        CHECK_NEAR(w.latDeg, 0.0, 1e-9);
+        const ScopeLatLon n = scopeViewMoved(51.5, -2.1, 0.0, kDegreeNm * ppn, ppn);
+        CHECK_NEAR(n.latDeg, 52.5, 1e-9);
+        CHECK_NEAR(n.lonDeg, -2.1, 1e-9);
+    }
+
+    // IN THE SCOPE'S OWN PROJECTION. The point that moved into the middle is
+    // exactly the dragged distance from where the middle was, along the
+    // dragged direction - the same range and bearing scopeRelative reports
+    // for a target there, which is what makes the map and the marks on it
+    // unable to disagree. RED WHEN the pan goes back to Mercator arithmetic:
+    // at 51.5 N a Mercator drag of the same pixels lands a different distance
+    // away.
+    {
+        const ScopeLatLon v = scopeViewMoved(51.5, -2.1, -300.0, 400.0, ppn);
+        const ScopePolar back = scopeRelative(51.5, -2.1, v.latDeg, v.lonDeg);
+        CHECK_NEAR(back.rangeNm, 50.0, 1e-6);  // hypot(300, 400) px at ten a mile
+        // East by 300 and north by 400: the bearing is atan2(300, 400).
+        CHECK_NEAR(back.bearingDeg,
+                   std::atan2(300.0, 400.0) * 180.0 / 3.14159265358979323846, 1e-6);
     }
 
     // AND THE BUG ITSELF. An aircraft placed at the middle of a view that has
@@ -173,8 +209,8 @@ void testViewCentreAndTargetCull() {
     // setting, even though it is far outside that range from the aerial.
     {
         const double rxLat = 51.5, rxLon = -2.1;
-        // Drag far enough that the view centre is about a degree east.
-        const ScopeLatLon v = scopeViewCentre(rxLat, rxLon, -27777.8, 0.0, ppw);
+        // Drag 40 NM east, which at 51.5 N is a little over a degree.
+        const ScopeLatLon v = scopeViewMoved(rxLat, rxLon, -400.0, 0.0, ppn);
         CHECK(v.lonDeg > rxLon + 0.9);
 
         // The contact sits exactly at the middle of that view.
@@ -199,8 +235,8 @@ int main() {
     // four ring radii and four labels from whichever entry is selected, and the
     // stepper's two buttons ARE the ladder.
     {
-        CHECK(asValue(kScopeRangeCount) == 6);
-        const int expect[] = {10, 25, 50, 100, 200, 400};
+        CHECK(asValue(kScopeRangeCount) == 8);
+        const int expect[] = {10, 25, 50, 100, 200, 400, 800, 1600};
         for (int i = 0; i < kScopeRangeCount; ++i) {
             CHECK(scopeRangeNmAt(i) == expect[i]);
         }
@@ -215,8 +251,8 @@ int main() {
         // out-of-bounds read that would usually still "pass".
         CHECK(scopeRangeNmAt(-1) == 10);
         CHECK(scopeRangeNmAt(-99999) == 10);
-        CHECK(scopeRangeNmAt(kScopeRangeCount) == 400);
-        CHECK(scopeRangeNmAt(99999) == 400);
+        CHECK(scopeRangeNmAt(kScopeRangeCount) == 1600);
+        CHECK(scopeRangeNmAt(99999) == 1600);
         // The default has to BE on the ladder, or the very first frame after a
         // fresh install would draw a scale the view has no rings for.
         CHECK(asValue(kScopeDefaultRangeNm) == 200);
@@ -242,8 +278,14 @@ int main() {
         CHECK(clampScopeRangeNm(0) == 10);
         CHECK(clampScopeRangeNm(1) == 10);
         CHECK(clampScopeRangeNm(-5) == 10);
-        CHECK(clampScopeRangeNm(999) == 400);
-        CHECK(clampScopeRangeNm(100000) == 400);
+        CHECK(clampScopeRangeNm(999) == 800);
+        CHECK(clampScopeRangeNm(100000) == 1600);
+        // The two rungs added in 0.78.0 obey the same nearest-and-ties rule:
+        // 600 and 1200 are exact midpoints and go to the smaller range.
+        CHECK(clampScopeRangeNm(600) == 400);
+        CHECK(clampScopeRangeNm(601) == 800);
+        CHECK(clampScopeRangeNm(1200) == 800);
+        CHECK(clampScopeRangeNm(1201) == 1600);
         // NEAREST, not "next one up" and not "back to the default". A user who
         // typed 173 was reaching for the 200 NM scale, and a reset to the
         // default would throw that away in the one case it happens to agree.
@@ -271,7 +313,7 @@ int main() {
         // scan works in long long. RED WHEN it goes back to int - and on this
         // compiler that failure is a wrong answer rather than a crash, so the
         // assertion is the only thing that would catch it.
-        CHECK(clampScopeRangeNm(2000000000) == 400);
+        CHECK(clampScopeRangeNm(2000000000) == 1600);
         CHECK(clampScopeRangeNm(-2000000000) == 10);
         CHECK(scopeRangeIndex(200) == 4);
         CHECK(scopeRangeIndex(-2000000000) == 0);
@@ -287,20 +329,26 @@ int main() {
             CHECK(scopeRangeStepped(kScopeRangesNm[i + 1], -1) == kScopeRangesNm[i]);
         }
         // CLAMPED AT BOTH ENDS, NEVER WRAPPED. RED WHEN someone makes the step
-        // cycle round: a wheel that turns the 400 NM scale into the 10 NM scale
-        // on one accidental notch throws the whole picture away and leaves the
-        // user with no idea what happened.
+        // cycle round: a wheel that turns the 1600 NM scale into the 10 NM
+        // scale on one accidental notch throws the whole picture away and
+        // leaves the user with no idea what happened.
         CHECK(scopeRangeStepped(10, -1) == 10);
         CHECK(scopeRangeStepped(10, -1000) == 10);
-        CHECK(scopeRangeStepped(400, +1) == 400);
-        CHECK(scopeRangeStepped(400, +1000) == 400);
+        CHECK(scopeRangeStepped(1600, +1) == 1600);
+        CHECK(scopeRangeStepped(1600, +1000) == 1600);
+        // 400 is no longer the top: it steps on to 800, which is the whole
+        // reason 0.78.0 exists.
+        CHECK(scopeRangeStepped(400, +1) == 800);
+        CHECK(scopeRangeStepped(800, +1) == 1600);
         // A step of nothing moves nothing.
         for (int i = 0; i < kScopeRangeCount; ++i) {
             CHECK(scopeRangeStepped(kScopeRangesNm[i], 0) == kScopeRangesNm[i]);
         }
         // Several notches at once, which is what a fast wheel produces.
         CHECK(scopeRangeStepped(10, +5) == 400);
+        CHECK(scopeRangeStepped(10, +7) == 1600);
         CHECK(scopeRangeStepped(400, -5) == 10);
+        CHECK(scopeRangeStepped(1600, -7) == 10);
         CHECK(scopeRangeStepped(50, +2) == 200);
         // A CURRENT VALUE OFF THE LADDER still steps somewhere sensible,
         // because the step snaps before it counts. Without that, a config-edited
@@ -309,7 +357,7 @@ int main() {
         CHECK(scopeRangeStepped(173, +1) == 400);
         CHECK(scopeRangeStepped(173, -1) == 100);
         // ...including one that would overflow the index arithmetic.
-        CHECK(scopeRangeStepped(200, 2000000000) == 400);
+        CHECK(scopeRangeStepped(200, 2000000000) == 1600);
         CHECK(scopeRangeStepped(200, -2000000000) == 10);
     }
 
@@ -752,6 +800,124 @@ int main() {
     }
 
     testViewCentreAndTargetCull();
+
+    // --- the ground shares the targets' projection ----------------------------
+    //
+    // Until 0.78.0 the tiles and the coastline were laid under the face in
+    // Mercator, matched to the polar frame at the middle and about 9% out at
+    // the north edge of a 400 NM picture. scopeGroundPoint is the promise that
+    // ended that: a place on the ground goes through EXACTLY the pair a
+    // target goes through, so the coast under a contact is where the contact
+    // is. RED WHEN anyone gives the ground a projection of its own again.
+    {
+        const double cx = 500.0;
+        const double cy = 400.0;
+        const double r = 300.0;
+        const double full = 400.0;
+        const double pts[][2] = {{54.0, -2.0}, {60.5, 1.2}, {49.9, -8.3}, {54.0, 12.0}};
+        for (const auto& p : pts) {
+            const ScopePolar pol = scopeRelative(54.0, -2.0, p[0], p[1]);
+            const ScopePoint a = scopeProject(cx, cy, r, pol.rangeNm, pol.bearingDeg, full);
+            const ScopePoint b = scopeGroundPoint(cx, cy, r, full, 54.0, -2.0, p[0], p[1]);
+            CHECK(a.x == b.x && a.y == b.y);
+        }
+        // The view centre itself is the middle of the glass, exactly.
+        const ScopePoint c = scopeGroundPoint(cx, cy, r, full, 54.0, -2.0, 54.0, -2.0);
+        CHECK(c.x == cx && c.y == cy);
+        // ONE SCALE EVERYWHERE, which is what a Mercator ground could not do at
+        // 54 N: a place 100 NM due north sits a quarter of the radius above
+        // the middle, and one 100 NM due east the same distance to the right.
+        const LatLon nth = destinationPoint(54.0, -2.0, 0.0, 100.0 * kKmPerNm);
+        const ScopePoint pn = scopeGroundPoint(cx, cy, r, full, 54.0, -2.0, nth.latDeg, nth.lonDeg);
+        CHECK_NEAR(pn.x, cx, 1e-6);
+        CHECK_NEAR(pn.y, cy - 75.0, 1e-6);
+        const LatLon est = destinationPoint(54.0, -2.0, 90.0, 100.0 * kKmPerNm);
+        const ScopePoint pe = scopeGroundPoint(cx, cy, r, full, 54.0, -2.0, est.latDeg, est.lonDeg);
+        CHECK_NEAR(pe.x, cx + 75.0, 1e-6);
+        CHECK_NEAR(pe.y, cy, 1e-6);
+    }
+
+    // --- which tiles cover the glass -------------------------------------------
+    {
+        // A 400 NM scope over the north of England, covered out to 580 NM, at
+        // zoom 6: 64 tiles round the world, 5.6 degrees each.
+        const ScopeTileWindow w = scopeTileWindow(54.0, -2.0, 580.0, 6);
+        CHECK(!w.allLongitudes);
+        const auto xTile = [](double lon) {
+            return static_cast<long>(std::floor((lon + 180.0) / 360.0 * 64.0));
+        };
+        const auto yTile = [](double lat) {
+            return static_cast<long>(std::floor(cascade::gui::scopeMercY(lat) * 64.0));
+        };
+        // The tile under the middle is in the window.
+        CHECK(w.x0 <= xTile(-2.0) && xTile(-2.0) <= w.x1);
+        CHECK(w.y0 <= yTile(54.0) && yTile(54.0) <= w.y1);
+        // 580 NM is 9.67 degrees north and south, and 16.5 degrees of
+        // longitude at this latitude: tiles comfortably inside that reach are
+        // in the window...
+        CHECK(w.y0 <= yTile(63.5));
+        CHECK(w.y1 >= yTile(44.5));
+        CHECK(w.x0 <= xTile(-2.0 - 16.0));
+        CHECK(w.x1 >= xTile(-2.0 + 16.0));
+        // ...and the window is not absurdly bigger than the disc - a bounding
+        // box, not the whole world.
+        CHECK(w.x1 - w.x0 <= (xTile(-2.0 + 16.6) - xTile(-2.0 - 16.6)) + 2);
+        CHECK(w.y1 - w.y0 <= (yTile(44.3) - yTile(63.7)) + 2);
+
+        // ACROSS THE ANTIMERIDIAN the window is one continuous UNWRAPPED range
+        // past the last tile, never folded back to the west edge - the
+        // mirror-writing incident, in tile indices. Off New Zealand, at 41 S.
+        const ScopeTileWindow am = scopeTileWindow(-41.0, 178.0, 580.0, 6);
+        CHECK(am.x1 > am.x0);
+        CHECK(am.x0 <= 63);
+        CHECK(am.x1 >= 64);
+
+        // A DISC WITH THE POLE INSIDE covers every longitude and runs to the
+        // top of the Mercator world.
+        const ScopeTileWindow pole = scopeTileWindow(85.0, 10.0, 600.0, 4);
+        CHECK(pole.allLongitudes);
+        CHECK(pole.x0 == 0 && pole.x1 == 15);
+        CHECK(pole.y0 == 0);
+        const ScopeTileWindow south = scopeTileWindow(-88.0, 10.0, 300.0, 3);
+        CHECK(south.allLongitudes);
+        CHECK(south.y1 == 7);
+
+        // Nothing to cover, nothing asked for; a zoom off the end likewise.
+        const ScopeTileWindow none = scopeTileWindow(54.0, -2.0, 0.0, 6);
+        CHECK(none.x1 < none.x0);
+        const ScopeTileWindow deep = scopeTileWindow(54.0, -2.0, 100.0, 31);
+        CHECK(deep.x1 < deep.x0);
+    }
+
+    // --- how finely a tile is cut before it is bent onto the face -------------
+    {
+        CHECK(scopeTileCells(0) == 16);   // a 360-degree tile, capped
+        CHECK(scopeTileCells(4) == 6);    // 22.5 degrees: six cells of 3.75
+        CHECK(scopeTileCells(6) == 2);    // 5.6 degrees: two
+        CHECK(scopeTileCells(7) == 1);    // 2.8 degrees: whole
+        CHECK(scopeTileCells(19) == 1);
+        CHECK(scopeTileCells(-3) == 16);  // treated as zoom 0
+    }
+
+    // --- whether a pair can be the receiver --------------------------------------
+    //
+    // A user's scope was found measuring from 0 N 0 E with the view dragged to
+    // the coast it belonged on. The origin is refused at every door now, and
+    // this is the one predicate every door asks.
+    {
+        CHECK(receiverPositionAcceptable(53.480759, -2.242631));
+        CHECK(receiverPositionAcceptable(0.0, 1.0));
+        CHECK(receiverPositionAcceptable(1.0, 0.0));
+        CHECK(receiverPositionAcceptable(-90.0, 180.0));
+        CHECK(receiverPositionAcceptable(90.0, -180.0));
+        CHECK(!receiverPositionAcceptable(0.0, 0.0));
+        CHECK(!receiverPositionAcceptable(-0.0, 0.0));
+        CHECK(!receiverPositionAcceptable(90.1, 0.0));
+        CHECK(!receiverPositionAcceptable(10.0, 180.5));
+        CHECK(!receiverPositionAcceptable(std::numeric_limits<double>::quiet_NaN(), 0.0));
+        CHECK(!receiverPositionAcceptable(10.0, std::numeric_limits<double>::quiet_NaN()));
+        CHECK(!receiverPositionAcceptable(std::numeric_limits<double>::infinity(), 0.0));
+    }
 
     // --- the middle of the traffic, offered as a starting position --------------
     //
