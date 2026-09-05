@@ -364,6 +364,15 @@ appearing, a bank comes up like a lamp rather than switching in one frame, and
 the rail opens on whichever bank you left it on. Every chip on a row still
 reports what that section is doing without opening it.
 
+The **Radar scope**, under VIEW, is drawn from the receiver's own position —
+every mark on it is a range and a bearing from the antenna — and until that
+position is set there is nothing to draw. Rather than leave two zeroed cells
+on an empty panel, the Radar section and the scope's empty state both offer
+two places the application already knows: the middle of the aircraft it has
+heard, once there are three of them, and the centre of the map a plugin is
+showing. Either key sets the receiver and the scope draws on the same frame;
+the exact figure can still be typed, or taken from a click on a map page.
+
 Every one of those lives in `src/gui/theme.hpp`, in one palette named by role.
 Two things it deliberately does NOT govern, because they are measurements
 rather than decoration: the waterfall's colour ramp, which is built to keep a

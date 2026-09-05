@@ -6398,13 +6398,24 @@ void AppWindow::drawRxPositionEntry() {
     // ONE COPY, drawn by the map pages and by the scope's no-position state.
     // The button does more than assign two numbers, and a second hand-written
     // copy would sooner or later do only some of it.
-    ImGui::SetNextItemWidth(96.0f);
+    //
+    // SIZED TO THE COLUMN IT IS DRAWN IN. On a map page or the scope's empty
+    // state there is room for two 96-px cells and the key; on the rail's
+    // Radar section, which draws the same row above its "Radar scope" key,
+    // there is not, and the fixed widths pushed the key past the edge so it
+    // read "Set RX" with the rest cut off. The key keeps its full label and
+    // the cells give way, never below what five decimals need to be legible.
+    const ImGuiStyle& rxStyle = ImGui::GetStyle();
+    const float rxKeyW = ImGui::CalcTextSize("Set RX here").x + rxStyle.FramePadding.x * 2.0f;
+    const float rxAvail = ImGui::GetContentRegionAvail().x;
+    const float rxCellW = std::clamp((rxAvail - rxKeyW - rxStyle.ItemSpacing.x * 2.0f) * 0.5f, 60.0f, 96.0f);
+    ImGui::SetNextItemWidth(rxCellW);
     ImGui::InputDouble("##homelat", &rxLatInput_, 0.0, 0.0, "%.5f");
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Receiver latitude, degrees north (-90..90)");
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(96.0f);
+    ImGui::SetNextItemWidth(rxCellW);
     ImGui::InputDouble("##homelon", &rxLonInput_, 0.0, 0.0, "%.5f");
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Receiver longitude, degrees east (-180..180)");
@@ -6426,6 +6437,78 @@ void AppWindow::drawRxPositionEntry() {
     }
 }
 
+// THE POSITION IN ONE CLICK, where before it was two numbers to look up.
+//
+// The radar scope refuses to draw until it knows where the antenna is, and it
+// is right to: every mark on it is a range and a bearing from that one place.
+// But a fresh install answered that with two zeroed fields and a sentence, on
+// an otherwise empty panel, and the person who pressed "Radar scope" saw a
+// scope that did nothing. Reported as exactly that - "the radar scope doesn't
+// work" - by a user whose config had never carried a position and whose
+// ADS-B map had been open beside it the whole time.
+//
+// So the two things the application already knows are OFFERED, each as a key
+// that says what it will do and where that would put the receiver:
+//
+//   - THE MIDDLE OF THE TRAFFIC. Reception is roughly a disc about the
+//     antenna; the mean position of the aircraft being heard is near its
+//     centre. Offered once three aircraft with positions are on the books.
+//   - THE MAP'S CENTRE. A user who has been panning a map around their own
+//     town has been saying where they are the whole time.
+//
+// Both are starting points and are said to be. A position set from either
+// goes through applyReceiverPosition like a typed one, so the map pages, the
+// coverage accumulator and the scope all learn it together, and the typed
+// fields below follow it so the exact figure can be corrected afterwards -
+// or set precisely from a map click, which the map pages carry.
+void AppWindow::drawReceiverPositionOffers() {
+    double tLat = 0.0;
+    double tLon = 0.0;
+    const int heard = cascade::gui::scopeTrafficCentre(pluginUi_.tracks(), tLat, tLon);
+    const bool trafficReady = heard >= cascade::gui::kScopeTrafficCentreMinAircraft;
+    char label[96];
+    if (trafficReady) {
+        std::snprintf(label, sizeof(label), "Use the middle of the %d aircraft heard  (%.2f%c %.2f%c)",
+                      heard, std::fabs(tLat), tLat >= 0.0 ? 'N' : 'S', std::fabs(tLon),
+                      tLon >= 0.0 ? 'E' : 'W');
+    } else if (heard > 0) {
+        std::snprintf(label, sizeof(label), "Use the middle of the traffic  (%d heard, need %d)",
+                      heard, cascade::gui::kScopeTrafficCentreMinAircraft);
+    } else {
+        std::snprintf(label, sizeof(label), "Use the middle of the traffic  (none heard yet)");
+    }
+    ImGui::BeginDisabled(!trafficReady);
+    if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) { applyReceiverPosition(tLat, tLon); }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("The mean position of the aircraft with a reported position.\n"
+                          "Reception is roughly a disc about the antenna, so its middle is\n"
+                          "near the receiver - a starting point, not a survey.");
+    }
+
+    // The map's centre: the open page first, because that is the one being
+    // looked at, else any page that has a view.
+    const MapPage* mapPage = nullptr;
+    for (const MapPage& page : mapPages_) {
+        if (page.view == nullptr) { continue; }
+        if (mapPage == nullptr || (page.open && !mapPage->open)) { mapPage = &page; }
+    }
+    if (mapPage != nullptr) {
+        const double mLat = mapPage->view->viewCentreLatDeg();
+        const double mLon = mapPage->view->viewCentreLonDeg();
+        std::snprintf(label, sizeof(label), "Use the %s map's centre  (%.2f%c %.2f%c)",
+                      mapPage->plugin.c_str(), std::fabs(mLat), mLat >= 0.0 ? 'N' : 'S',
+                      std::fabs(mLon), mLon >= 0.0 ? 'E' : 'W');
+        if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) { applyReceiverPosition(mLat, mLon); }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Where that map is looking right now. If you have been panning\n"
+                              "it around your own area, that is close to where you are.");
+        }
+    }
+    benchHint("or type it, or click SET FROM MAP CLICK on a map page:");
+    drawRxPositionEntry();
+}
+
 // THE RADAR SCOPE, ON THE RAIL.
 //
 // Its own key rather than a line inside Decoders: a mode that replaces the
@@ -6445,6 +6528,19 @@ void AppWindow::drawRadarSection() {
 }
 
 void AppWindow::drawScopeModeControl() {
+    // THE POSITION COMES FIRST, HERE ON THE RAIL, when there is none. The
+    // scope cannot draw a range or a bearing from nowhere, and dropping the
+    // user into it to find that out is what "the radar scope doesn't work"
+    // meant. The offers are the same ones the scope's own empty state makes;
+    // once a position is set this block disappears and the key is the whole
+    // section again.
+    if (!rxSet_) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("The scope needs the receiver's position first.");
+        ImGui::PopStyleColor();
+        drawReceiverPositionOffers();
+        ImGui::Spacing();
+    }
     // THE SWITCH. It lives in the Radar section of the rail - the place a user
     // goes looking for a radar - and is a button rather than a checkbox on
     // purpose: turning it on replaces the entire window, which is a place you
@@ -6574,15 +6670,24 @@ void AppWindow::drawScopeMode() {
     // bearing was wrong by the distance from there to the antenna.
     if (!rxSet_) {
         ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextUnformatted("The scope needs the receiver's position.");
+        ImGui::PopStyleColor();
         ImGui::Spacing();
         ImGui::TextWrapped(
             "Everything on a radar scope is a range and a bearing measured from "
             "the antenna, so there is nothing to draw until this receiver knows "
             "where it is. It is the same position the map uses, and setting it "
-            "here sets it there.");
+            "here sets it there. Either key below puts the receiver at a place "
+            "the application already knows; the scope draws the moment one is "
+            "pressed, and the exact figure can be corrected afterwards.");
         ImGui::Spacing();
-        drawRxPositionEntry();
+        // Kept to the width of the rail's own controls: a key the full width
+        // of a 1600 px window is a bar, not a key.
+        ImGui::BeginChild("##scopeoffers", ImVec2(std::min(520.0f, avail.x), 0.0f),
+                          ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar);
+        drawReceiverPositionOffers();
+        ImGui::EndChild();
         return;
     }
 

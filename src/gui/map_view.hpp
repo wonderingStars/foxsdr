@@ -371,6 +371,15 @@ public:
     double homeLatDeg() const { return homeLat_; }
     double homeLonDeg() const { return homeLon_; }
 
+    // Where the view is looking right now. Read by the radar scope's
+    // no-position state: a user who has been panning a map around their own
+    // area has been telling the application where they are the whole time,
+    // and "use the map's centre" is one click where typing a latitude is a
+    // trip to another program. It is offered as a starting point and said to
+    // be one; the antenna is wherever the user then puts it.
+    double viewCentreLatDeg() const { return centreLat_; }
+    double viewCentreLonDeg() const { return centreLon_; }
+
     // Centres the view on everything currently plotted. A map that opens on
     // the Atlantic while every target is over England is a map the user has to
     // fight before it is useful.
