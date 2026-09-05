@@ -182,9 +182,18 @@ module is, what it reaches for, what it costs to fit, and the updates the
 catalogue offers — and **Plugins** opens **Fitted modules**, which is what is
 already installed on this machine, which of them are being fed, which were
 refused and why, and the keys that start, stop, remove and permit them. Each
-is a real window you can drag as large as your screen, and each reopens if you
-left it open; the Fitted modules window comes back at the size and place you
-left it too. The catalogue is contacted only when you
+is a real window you can drag as large as your screen, and each comes back at
+the size and place you left it when you open it again. Neither reopens by
+itself: since 0.79.1 FoxSDR always starts on the main window alone, whatever
+was showing when it was closed - no page, no map, no decoder output, and the
+bench rather than the radar scope. Every one of them is a key on the rail
+away, and nothing opens a window but your own hand. A plugin's own window -
+a decoded picture, a plugin's panel - has a row of its own under DECODE,
+with a chip saying what it holds (WAIT, RX or IMG for a picture, a row count
+for a panel): press the row to open it, its key to close it. (Before 0.79.1
+the pages you left open came back, the decoder output opened itself on a
+decoder's first line, a map page opened itself on its first target, and a
+plugin's window appeared whenever the plugin published one.) The catalogue is contacted only when you
 press **CHECK NOW** inside the store window: nothing is fetched at startup, and
 no plugin ever updates itself.
 

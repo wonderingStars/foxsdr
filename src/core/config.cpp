@@ -684,4 +684,13 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     return true;
 }
 
+AppConfig startupState(AppConfig cfg) {
+    // WHETHER goes; WHERE stays. See the declaration for why.
+    cfg.scopeMode = false;
+    cfg.pluginBrowserOpen = false;
+    cfg.fittedModulesOpen = false;
+    for (AppConfig::MapPage& page : cfg.mapPages) { page.open = false; }
+    return cfg;
+}
+
 }  // namespace cascade::core

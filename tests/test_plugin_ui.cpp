@@ -1175,6 +1175,43 @@ int main() {
     // application with a probe reporting one aircraft at ageMs 0: the close
     // button highlighted under the cursor (152 blue pixels), the click landed,
     // and the map was still on screen at +2 s and +10 s.
+    // --- PluginWindows: nothing is shown until the user asks (0.79.1) -------
+    //
+    // The application starts on the main screen alone, and a plugin's window
+    // - a decoded picture, a plugin's panel - reaches the screen only through
+    // its row on the rail. This is the state behind that rule, and the rule
+    // stated as checks: a fresh instance shows nothing whatever a plugin
+    // publishes; show, hide and toggle do what they say and nothing more; the
+    // identity is exact, so two plugins publishing the same title are two
+    // windows; and a new instance - a new launch - shows nothing whatever the
+    // old one had open.
+    {
+        cascade::core::PluginWindows w;
+        CHECK(w.count() == 0u);
+        CHECK(!w.shown("NOAA APT image###image_NOAA APT"));
+        CHECK(!w.shown("Satellites###panel_Satellites"));
+        w.show("NOAA APT image###image_NOAA APT");
+        CHECK(w.shown("NOAA APT image###image_NOAA APT"));
+        CHECK(!w.shown("Satellites###panel_Satellites"));
+        CHECK(w.count() == 1u);
+        w.show("NOAA APT image###image_NOAA APT");  // showing twice is once
+        CHECK(w.count() == 1u);
+        w.toggle("Satellites###panel_Satellites");
+        CHECK(w.shown("Satellites###panel_Satellites"));
+        w.toggle("Satellites###panel_Satellites");
+        CHECK(!w.shown("Satellites###panel_Satellites"));
+        w.hide("NOAA APT image###image_NOAA APT");
+        CHECK(!w.shown("NOAA APT image###image_NOAA APT"));
+        w.hide("never shown");  // hiding what was never shown is not an error
+        CHECK(w.count() == 0u);
+        w.show("Targets###panel_A");
+        CHECK(w.shown("Targets###panel_A"));
+        CHECK(!w.shown("Targets###panel_B"));
+        cascade::core::PluginWindows fresh;
+        CHECK(fresh.count() == 0u);
+        CHECK(!fresh.shown("Targets###panel_A"));
+    }
+
     using cascade::core::mapSelfOpens;
     {
         // Nothing, and still nothing: the start-up state, no demand.

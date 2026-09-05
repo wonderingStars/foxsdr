@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -259,6 +260,12 @@ bool anyVisibleTarget(const std::vector<HostTrack>& tracks,
 // first target of a session brings the map up without the user hunting for a
 // menu) and gives up nothing else: a user who closes it stays closed until the
 // air genuinely goes quiet and something new arrives.
+//
+// UNUSED BY THE HOST SINCE 0.79.1: the application no longer opens a map
+// page on its first target - the user asked for it to start on the main
+// screen alone and open nothing they did not open. The function and its
+// tests stay as the record of what an edge-driven open has to look like,
+// should a plugin ever want the behaviour behind a switch of its own.
 inline bool mapSelfOpens(bool hadVisibleLastFrame, bool haveVisibleNow) {
     return haveVisibleNow && !hadVisibleLastFrame;
 }
@@ -269,6 +276,33 @@ struct HostPanel {
     std::string title;
     std::vector<std::string> headings;   // 1..CASCADE_PANEL_MAX_COLUMNS
     std::vector<CascadePanelRow> rows;   // refreshed each poll
+};
+
+// WHICH PLUGIN WINDOWS ARE ON SCREEN - a decoder's picture, a plugin's own
+// panel - by ImGui window identity. EMPTY AT EVERY LAUNCH AND NEVER SAVED:
+// the application starts on the main screen alone (the user's instruction,
+// 0.79.1: "if you close the software, that is it for the day"), and a
+// plugin's window opens when the user presses its row on the rail and
+// closes from its own key. Until 0.79.1 the rule ran the other way - every
+// published window appeared by itself and a close was remembered across
+// launches in AppConfig::closedWindows, which the host no longer applies.
+//
+// Pure state, no drawing, so the rule "nothing is shown until asked" can be
+// tested without a window: a fresh instance shows nothing, show/hide/toggle
+// do what they say, and an identity nobody has asked for stays hidden
+// however often a plugin publishes it.
+class PluginWindows {
+public:
+    bool shown(const std::string& id) const { return open_.count(id) != 0u; }
+    void show(const std::string& id) { open_.insert(id); }
+    void hide(const std::string& id) { open_.erase(id); }
+    void toggle(const std::string& id) {
+        if (open_.erase(id) == 0u) { open_.insert(id); }
+    }
+    std::size_t count() const { return open_.size(); }
+
+private:
+    std::set<std::string> open_;
 };
 
 // What the host lets a plugin do to the receiver. Supplied by the owner (the

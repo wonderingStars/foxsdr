@@ -259,6 +259,60 @@ int main() {
         checkEqual(out, AppConfig{});
     }
 
+    // --- startupState: WHETHER a window was open goes, WHERE it sat stays ----
+    //
+    // The application starts on the main screen alone whatever the file
+    // says was showing at the last exit (0.79.1, the user's instruction).
+    // This is the function that makes it so, and the property is stated
+    // both ways: every open flag and the scope mode come out cleared, and
+    // every other field - the scope's range, the rail's bank, each window's
+    // rectangle, the page list itself - comes out exactly as it went in.
+    {
+        AppConfig in;
+        in.scopeMode = true;
+        in.scopeRangeNm = 400;
+        in.railBank = 2;
+        in.pluginBrowserOpen = true;
+        in.fittedModulesOpen = true;
+        in.fittedModulesX = 40;
+        in.fittedModulesY = 50;
+        in.fittedModulesWidth = 900;
+        in.fittedModulesHeight = 700;
+        in.mapPages = {{"ADS-B", 10, 20, 800, 600, true},
+                       {"Satellites", 30, 40, 640, 480, false}};
+        in.volume = 0.25f;
+        const AppConfig out = cascade::core::startupState(in);
+        CHECK(!out.scopeMode);
+        CHECK(!out.pluginBrowserOpen);
+        CHECK(!out.fittedModulesOpen);
+        CHECK(out.mapPages.size() == 2);
+        for (const AppConfig::MapPage& pg : out.mapPages) { CHECK(!pg.open); }
+        // Everything that says WHERE, and everything else, untouched.
+        CHECK(out.scopeRangeNm == 400);
+        CHECK(out.railBank == 2);
+        CHECK(out.fittedModulesX == 40);
+        CHECK(out.fittedModulesY == 50);
+        CHECK(out.fittedModulesWidth == 900);
+        CHECK(out.fittedModulesHeight == 700);
+        CHECK(out.mapPages.size() == 2 && out.mapPages[0].plugin == "ADS-B" &&
+              out.mapPages[0].x == 10 && out.mapPages[0].y == 20 &&
+              out.mapPages[0].width == 800 && out.mapPages[0].height == 600);
+        CHECK(out.mapPages.size() == 2 && out.mapPages[1].plugin == "Satellites" &&
+              out.mapPages[1].width == 640);
+        CHECK(out.volume == 0.25f);
+        // The whole of the difference is those flags: put them back and the
+        // two configs are equal field for field.
+        AppConfig back = out;
+        back.scopeMode = true;
+        back.pluginBrowserOpen = true;
+        back.fittedModulesOpen = true;
+        back.mapPages[0].open = true;
+        checkEqual(back, in);
+        // Idempotent, and a default config is already in its start-up state.
+        checkEqual(cascade::core::startupState(out), out);
+        checkEqual(cascade::core::startupState(AppConfig{}), AppConfig{});
+    }
+
     // --- roundtrip every field through a path needing new directories -------
     {
         AppConfig in;
