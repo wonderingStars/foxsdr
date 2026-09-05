@@ -15,19 +15,29 @@
 // for its system menu, and where the desktop's own conveniences - snapping to
 // an edge, shaking to clear the desktop, the keyboard's Win+arrow - are hooked
 // in. Taking the bar off with GLFW_DECORATED alone loses every one of those.
-// This module keeps them: the window stays a fully decorated one as far as the
-// operating system is concerned, and two messages are answered differently.
-// WM_NCCALCSIZE says the client area is the WHOLE window, so the system draws
-// no caption and no frame; WM_NCHITTEST says which part of that client area is
-// the caption (the cabinet's rail, minus its keys) and which parts are the
-// resize borders. Everything else - the move loop, the snap, the maximise
-// on double-click, the system menu - is the operating system's own and is
-// untouched.
+// This module keeps them: the window keeps its sizing frame, its maximise and
+// minimise boxes and its system menu, and only the CAPTION is taken off its
+// style. The client area is then the ordinary one for that style, computed by
+// the operating system as it computes every window's, and WM_NCHITTEST says
+// which part of it is the caption: the cabinet's rail, minus its keys.
+// Everything else - the move loop, the snap, the resize from the edges, the
+// maximise on double-click, the system menu - is the operating system's own
+// and is untouched.
+//
+// WHY NOT THE TEXTBOOK TRICK. 0.78.0 kept WS_CAPTION and answered
+// WM_NCCALCSIZE with "the client is the whole window". On a user's laptop
+// that came out with the picture shifted up by exactly one caption height and
+// every control hit-tested a caption below where it was drawn: some part of
+// that display path still sized the picture from the window's style, caption
+// and all. A style with no caption in it gives such code nothing to be wrong
+// about, which is a better guarantee than any message can give.
 //
 // THE HIT TEST IS ARITHMETIC, and it is here as a plain function so a test
 // can check it without a window: a corner beats a caption, the keys are never
 // the caption, and a maximised window has no borders (it cannot be resized and
-// its edges are off the screen).
+// its edges are off the screen). The window procedure passes a zero border,
+// since the system's own frame answers for the edges before this is asked;
+// the border arithmetic is kept for a platform that has no such frame.
 //
 // WINDOWS ONLY. GLFW has no portable hook for a caption region, and X11 and
 // Wayland answer the question in ways this application does not yet speak.

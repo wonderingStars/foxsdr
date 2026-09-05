@@ -2005,6 +2005,56 @@ void AppWindow::drawUi() {
     // dragged by (0.78.0 - "put the minimise, maximise and close on the
     // metal").
     drawCabinetRail(rootTL.x, rootTL.y, rootTL.x + rootSize.x, rootTL.y + rootSize.y, cabinetM);
+    // THE INPUT LEDGER, on request. FOXSDR_DEBUG_INPUT=1 prints, on the
+    // bench, every number the pointer's position passes through on its way
+    // from the operating system to a widget: where the OS says the cursor
+    // is, where this window's client origin is, what GLFW reports for the
+    // window and the framebuffer, and what ImGui believes. When a click
+    // lands beside the control it was aimed at, the disagreeing pair is on
+    // screen in one shot instead of being reasoned about.
+    if (const char* dbg = std::getenv("FOXSDR_DEBUG_INPUT"); dbg != nullptr && dbg[0] != '\0') {
+        const ImGuiIO& dio = ImGui::GetIO();
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        int wx = 0, wy = 0, ww = 0, wh = 0, fw = 0, fh = 0;
+        double cx = 0.0, cy = 0.0;
+        if (mainWindow_ != nullptr) {
+            glfwGetWindowPos(mainWindow_, &wx, &wy);
+            glfwGetWindowSize(mainWindow_, &ww, &wh);
+            glfwGetFramebufferSize(mainWindow_, &fw, &fh);
+            glfwGetCursorPos(mainWindow_, &cx, &cy);
+        }
+        char line[512];
+        int n = std::snprintf(line, sizeof(line),
+                              "imgui mouse %.0f,%.0f | viewport pos %.0f,%.0f size %.0fx%.0f | "
+                              "display %.0fx%.0f | glfw win %d,%d %dx%d fb %dx%d cursor %.0f,%.0f",
+                              dio.MousePos.x, dio.MousePos.y, mv->Pos.x, mv->Pos.y, mv->Size.x,
+                              mv->Size.y, dio.DisplaySize.x, dio.DisplaySize.y, wx, wy, ww, wh, fw,
+                              fh, cx, cy);
+#ifdef _WIN32
+        if (n > 0 && n < static_cast<int>(sizeof(line))) {
+            POINT os{0, 0};
+            GetCursorPos(&os);
+            HWND hw = static_cast<HWND>(mv->PlatformHandleRaw);
+            POINT origin{0, 0};
+            RECT cr{0, 0, 0, 0};
+            RECT wr{0, 0, 0, 0};
+            if (hw != nullptr) {
+                ClientToScreen(hw, &origin);
+                GetClientRect(hw, &cr);
+                GetWindowRect(hw, &wr);
+            }
+            std::snprintf(line + n, sizeof(line) - static_cast<std::size_t>(n),
+                          " | os cursor %ld,%ld client origin %ld,%ld client %ldx%ld window %ld,%ld %ldx%ld",
+                          os.x, os.y, origin.x, origin.y, cr.right, cr.bottom, wr.left, wr.top,
+                          wr.right - wr.left, wr.bottom - wr.top);
+        }
+#endif
+        ImDrawList* ddl = ImGui::GetForegroundDrawList();
+        const ImVec2 at(rootTL.x + 300.0f, rootTL.y + 4.0f);
+        ddl->AddRectFilled(ImVec2(at.x - 4.0f, at.y - 2.0f), ImVec2(at.x + 1200.0f, at.y + 16.0f),
+                           IM_COL32(0, 0, 0, 200));
+        ddl->AddText(at, IM_COL32(255, 255, 0, 255), line);
+    }
     const float bodyInset = cabinetM + 3.0f;
     ImGui::SetCursorScreenPos(ImVec2(rootTL.x + bodyInset, rootTL.y + bodyInset));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));

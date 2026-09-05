@@ -394,8 +394,9 @@ the screws, and three brass keys at its right; the rest of the rail is what
 the window is dragged by, a double-click on it fills the screen, and a
 right-click offers the system menu. On Windows the main window keeps every
 convenience a framed one has — snapping to an edge, the keyboard's window
-shortcuts, resizing from its edges — because the frame is only *hidden*: the
-system still owns the window and is told which part of it is the rail. Every
+shortcuts, resizing from its edges — because only the *caption* is taken off
+the window's style: it is still an ordinary resizable window as far as the
+system is concerned, and the system is told which part of it is the rail. Every
 page is drawn the same way, as a cabinet with its name and keys on the rail;
 a page inside the main window rolls up to its rail when minimised and fills
 the main window when maximised, and a page torn off to its own window does

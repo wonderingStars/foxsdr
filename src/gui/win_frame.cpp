@@ -4,6 +4,8 @@
 
 #include <cstdlib>
 
+#include "core/diag_log.hpp"
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -15,7 +17,6 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 
-#include <dwmapi.h>
 #include <windowsx.h>
 #endif
 
@@ -29,66 +30,26 @@ CaptionLayout g_layout;
 HWND g_hwnd = nullptr;
 WNDPROC g_previous = nullptr;
 
-// The resize border, in pixels, at this window's DPI: the frame the system
-// would have drawn, so a borderless window resizes from the same eight or so
-// pixels a framed one does.
-int frameThicknessPx(HWND hwnd) {
-    const UINT dpi = GetDpiForWindow(hwnd);
-    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) +
-           GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-}
-
 LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-    case WM_NCCALCSIZE:
-        // THE CLIENT AREA IS THE WHOLE WINDOW. Answering zero to the
-        // wParam-TRUE form leaves rgrc[0] - the proposed window rectangle -
-        // as the client rectangle, so there is no caption and no frame for
-        // the system to paint. A MAXIMISED window is the one exception: the
-        // system sizes it larger than the monitor by the frame thickness on
-        // every side, so that the invisible frame sits off-screen; with the
-        // frame gone that would put the cabinet's own edges off-screen
-        // instead, so the client is pulled in by the same amount.
-        if (wParam == TRUE) {
-            auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
-            if (IsZoomed(hwnd)) {
-                const int f = frameThicknessPx(hwnd);
-                params->rgrc[0].left += f;
-                params->rgrc[0].top += f;
-                params->rgrc[0].right -= f;
-                params->rgrc[0].bottom -= f;
-            }
-            return 0;
-        }
-        break;
     case WM_NCHITTEST: {
-        // The procs underneath run first: ImGui's answers HTTRANSPARENT for a
-        // viewport that wants no input, and that answer wins.
+        // THE FRAME ANSWERS FIRST. The window keeps a real, if invisible,
+        // sizing frame, so the operating system's own hit test already knows
+        // an edge from a corner, and ImGui's backend underneath it answers
+        // HTTRANSPARENT for a viewport that wants no input. Only a point the
+        // system calls CLIENT is ours to reconsider: on the rail it is the
+        // caption, unless it is on one of the rail's keys.
         const LRESULT below = CallWindowProcW(g_previous, hwnd, msg, wParam, lParam);
-        if (below == HTTRANSPARENT || below == HTNOWHERE) { return below; }
+        if (below != HTCLIENT) { return below; }
         POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(hwnd, &pt);
         RECT rc{};
         GetClientRect(hwnd, &rc);
-        const bool zoomed = IsZoomed(hwnd) != FALSE;
         const Zone zone =
             hitZone(static_cast<float>(pt.x), static_cast<float>(pt.y),
-                    static_cast<float>(rc.right), static_cast<float>(rc.bottom),
-                    zoomed ? 0.0f : static_cast<float>(frameThicknessPx(hwnd)), g_layout,
-                    zoomed);
-        switch (zone) {
-        case Zone::Caption: return HTCAPTION;
-        case Zone::Left: return HTLEFT;
-        case Zone::Right: return HTRIGHT;
-        case Zone::Top: return HTTOP;
-        case Zone::Bottom: return HTBOTTOM;
-        case Zone::TopLeft: return HTTOPLEFT;
-        case Zone::TopRight: return HTTOPRIGHT;
-        case Zone::BottomLeft: return HTBOTTOMLEFT;
-        case Zone::BottomRight: return HTBOTTOMRIGHT;
-        case Zone::Client: break;
-        }
-        return HTCLIENT;
+                    static_cast<float>(rc.right), static_cast<float>(rc.bottom), 0.0f, g_layout,
+                    IsZoomed(hwnd) != FALSE);
+        return zone == Zone::Caption ? HTCAPTION : HTCLIENT;
     }
     case WM_NCLBUTTONDOWN:
         // A DOUBLE-CLICK ON THE RAIL FILLS THE SCREEN, or restores it, as a
@@ -96,13 +57,12 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         // - but only to a window class registered with CS_DBLCLKS, which
         // GLFW's is not, so the second click is recognised here: within the
         // desktop's double-click time and distance of the last press on the
-        // caption.
+        // caption. (`near` is a Windows macro; hence `nearby`.)
         if (wParam == HTCAPTION) {
             static DWORD lastTime = 0;
             static POINT lastAt{0, 0};
             const DWORD now = GetMessageTime();
             const POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            // (`near` is a Windows macro; hence `nearby`.)
             const bool quick = lastTime != 0 && (now - lastTime) <= GetDoubleClickTime();
             const bool nearby = std::abs(at.x - lastAt.x) <= GetSystemMetrics(SM_CXDOUBLECLK) &&
                                 std::abs(at.y - lastAt.y) <= GetSystemMetrics(SM_CYDOUBLECLK);
@@ -177,20 +137,49 @@ bool install(GLFWwindow* window) {
     if (g_hwnd != nullptr) { return true; }
     HWND hwnd = glfwGetWin32Window(window);
     if (hwnd == nullptr) { return false; }
+    // THE CAPTION COMES OFF THE WINDOW'S STYLE, and nothing else changes.
+    //
+    // 0.78.0 kept WS_CAPTION and answered WM_NCCALCSIZE with "the client is
+    // the whole window", which is the textbook way to hide a frame - and on
+    // one user's machine the picture came out shifted up by exactly a
+    // caption's height, every control sitting above the place it was
+    // hit-tested, with a dark band where the caption would have been. Some
+    // part of that machine's display path still sized the picture from the
+    // window's STYLE, caption included, rather than from the client area the
+    // window had declared. That cannot be argued with from here, so it is
+    // not argued with: the style itself no longer says caption. What is left
+    // is a plain resizable window - sizing frame, maximise and minimise
+    // boxes, system menu - whose client area is the standard one for that
+    // style on every driver, and which the system itself keeps consistent:
+    // maximised, it parks the invisible frame off-screen as it does for any
+    // window. The rail is made the caption by WM_NCHITTEST alone.
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    const LONG_PTR wanted = (style & ~static_cast<LONG_PTR>(WS_CAPTION)) | WS_THICKFRAME |
+                            WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+    if (wanted != style) { SetWindowLongPtrW(hwnd, GWL_STYLE, wanted); }
     g_hwnd = hwnd;
     g_previous = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&frameProc)));
-    // One pixel of the system's frame extended into the client keeps the
-    // window's shadow and its rounded corners on a desktop that composites
-    // them; without it a captionless window is drawn as a flat rectangle
-    // with no edge against the desktop.
-    const MARGINS margins{0, 0, 1, 0};
-    DwmExtendFrameIntoClientArea(hwnd, &margins);
-    // Recompute the client area NOW, through the WM_NCCALCSIZE above, rather
-    // than on the next move or resize - otherwise the first frame is drawn
-    // under a caption that is about to vanish.
+    // Recompute the frame NOW, through the system's own WM_NCCALCSIZE for
+    // the new style, rather than on the next move or resize.
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                  SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    // THE GEOMETRY, ON RECORD. A report of controls that do not sit where
+    // they are drawn is a geometry question, and these are the numbers that
+    // answer it: what the window is, what the system says its client is, and
+    // the DPI the frame was sized for.
+    {
+        RECT wr{};
+        RECT cr{};
+        POINT origin{0, 0};
+        GetWindowRect(hwnd, &wr);
+        GetClientRect(hwnd, &cr);
+        ClientToScreen(hwnd, &origin);
+        cascade::core::diagLogf(
+            "frame: caption removed; window %ld,%ld %ldx%ld client %ldx%ld at %ld,%ld dpi %u",
+            wr.left, wr.top, wr.right - wr.left, wr.bottom - wr.top, cr.right, cr.bottom,
+            origin.x, origin.y, GetDpiForWindow(hwnd));
+    }
     return true;
 #else
     (void)window;
