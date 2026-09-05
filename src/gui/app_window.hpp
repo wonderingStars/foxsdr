@@ -1397,6 +1397,43 @@ private:
 
     GLFWwindow* mainWindow_ = nullptr;
 
+    // --- THE WINDOW FRAMES, ON THE METAL (0.78.0) ------------------------------
+    //
+    // The operating system's title bars are gone from the main window and from
+    // every page. The cabinet's own top rail carries the window's name and
+    // three brass keys - minimise, maximise, close - and the rail is what the
+    // window is dragged by. The main window's half of that is native
+    // (gui/win_frame.hpp: the system still moves, resizes and snaps it); a
+    // page's half is beginPage, which draws the cabinet round the page and
+    // makes its rail an ImGui drag handle. A page inside the main window
+    // "minimises" by rolling up to its rail and "maximises" to the main
+    // window's area; a torn-off page does both to the desktop, as any window
+    // does, and has a taskbar button to come back from.
+    struct PageChrome {
+        bool collapsed = false;
+        bool maximised = false;
+        float restoreX = 0.0f;
+        float restoreY = 0.0f;
+        float restoreW = 0.0f;
+        float restoreH = 0.0f;
+        bool pendingMaximise = false;
+        bool pendingRestore = false;
+    };
+    std::map<std::string, PageChrome> pageChrome_;
+    // Whether beginPage opened the well child this frame, so endPage closes it.
+    bool pageBodyOpen_ = false;
+    float pageInset_ = 0.0f;
+    // Begin a page: the window, its cabinet, its rail and keys. Returns whether
+    // the body should be drawn; ALWAYS pair with endPage(), as Begin with End.
+    bool beginPage(const char* id, const char* title, bool* open, int flags = 0);
+    void endPage();
+    // A page that is maximised or rolled up is showing a rectangle the key
+    // chose, not the user: geometry read-backs skip it.
+    bool pageGeometryTransient(const char* id) const;
+    // The main window's rail: name, keys, and the drag region handed to the
+    // native hit test.
+    void drawCabinetRail(float x0, float y0, float x1, float y1, float margin);
+
     bool rxSet_ = false;
     double rxLat_ = 0.0;
     double rxLon_ = 0.0;

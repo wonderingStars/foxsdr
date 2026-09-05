@@ -22,6 +22,10 @@
 #include <utility>
 
 #include <imgui.h>
+// For StartMouseMovingWindow and the window's viewport ownership: a page's
+// rail has to drag the page through the same machinery a title bar uses, or a
+// page could no longer be torn out of the main window and merged back into it.
+#include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -58,6 +62,7 @@
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
 #include "gui/waterfall_view.hpp"
+#include "gui/win_frame.hpp"
 #include "source/iq_file_source.hpp"
 
 #ifdef _WIN32
@@ -838,14 +843,19 @@ int AppWindow::run(int frames) {
     // back.
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    // TORN-OFF WINDOWS GET THE OPERATING SYSTEM'S OWN FRAME. ImGui's viewport
-    // default is a bare undecorated rectangle whose only resize affordances
-    // are its own thin edge zones and corner grip - which on a real desktop
-    // reads as "this window cannot be resized" (reported by a user trying to
-    // grow the Map, 2026-08-30). A native frame gives the map and every
-    // decoded-image window the resize borders, title bar, and
-    // minimise/maximise behaviour every other window on the desktop has.
-    ImGui::GetIO().ConfigViewportsNoDecoration = false;
+    // TORN-OFF WINDOWS GET NO FRAME FROM THE OPERATING SYSTEM (0.78.0). From
+    // 0.66.0 they had one - a native title bar with the desktop's own
+    // minimise, maximise and close, added after a user could not find a way
+    // to resize the map - and the user then asked for every such bar to go
+    // and its three controls to be "on the metal". So a page is a cabinet
+    // now: beginPage draws the brass, the screws and a rail with the page's
+    // name and the three keys, the rail drags the window, and ImGui's own
+    // edge zones resize it. The keys do what the desktop's did, on the
+    // desktop's terms - a torn-off page minimises to the taskbar, which is
+    // why it must HAVE a taskbar button: a minimised window with no button
+    // is a window that has vanished, the lesson the radar unit taught.
+    ImGui::GetIO().ConfigViewportsNoDecoration = true;
+    ImGui::GetIO().ConfigViewportsNoTaskBarIcon = false;
     // THE BENCH, applied once, before the first frame.
     //
     // This replaces ImGui::StyleColorsDark() outright rather than tinting it:
@@ -876,6 +886,13 @@ int AppWindow::run(int frames) {
         glfwTerminate();
         return 1;
     }
+
+    // THE MAIN WINDOW'S OWN TITLE BAR GOES TOO, once the ImGui backend has
+    // hooked the window procedure, so this hook sits above it and sees every
+    // hit test first - see gui/win_frame.hpp. Where it cannot go (every
+    // platform but Windows) the window keeps the frame the desktop gave it
+    // and drawCabinetRail draws no keys.
+    cascade::gui::frame::install(window);
 
     // A previous run() tore the waterfall down with its GL context (see the
     // teardown below); re-create it against the new context so run() stays
@@ -1328,11 +1345,22 @@ namespace {
 // size. Returns the margin it used, so the caller insets its content by a
 // measurement rather than by a guess - the one number the two have to agree on
 // is handed over instead of being written down twice.
-float drawCabinet(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
+//
+// `minMargin` is the least the margin may be. Since 0.78.0 the margin is also
+// the rail the window's name and its three keys sit on - the title bar's
+// stand-in - and a small page (a 720 x 520 decoder output) came out with an
+// eleven-pixel margin, which is no room for a key at all: a window with no
+// close. The main window and every page ask for 22, the size of a legible
+// key; a cabinet drawn as decoration inside a panel keeps the old ten.
+// The least a rail may be when it carries the keys: room for one a finger can
+// find. The main window and every page pass this.
+constexpr float kRailMinMargin = 22.0f;
+
+float drawCabinet(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float minMargin = 10.0f) {
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
     if (dl == nullptr || w < 80.0f || h < 80.0f) { return 0.0f; }
-    const float m = std::clamp(std::min(w, h) * 0.022f, 10.0f, 24.0f);
+    const float m = std::clamp(std::min(w, h) * 0.022f, std::max(10.0f, minMargin), 24.0f);
     const float round = std::max(4.0f, m * 0.45f);
 
     // The brass, lit from above like every other surface on this face.
@@ -1971,7 +1999,12 @@ void AppWindow::drawUi() {
     const ImVec2 rootSize = ImGui::GetWindowSize();
     const float cabinetM =
         drawCabinet(ImGui::GetWindowDrawList(), rootTL,
-                    ImVec2(rootTL.x + rootSize.x, rootTL.y + rootSize.y));
+                    ImVec2(rootTL.x + rootSize.x, rootTL.y + rootSize.y), kRailMinMargin);
+    // THE RAIL STANDS IN FOR THE TITLE BAR: the name engraved at its left, the
+    // three keys at its right, and the rest of it the handle the window is
+    // dragged by (0.78.0 - "put the minimise, maximise and close on the
+    // metal").
+    drawCabinetRail(rootTL.x, rootTL.y, rootTL.x + rootSize.x, rootTL.y + rootSize.y, cabinetM);
     const float bodyInset = cabinetM + 3.0f;
     ImGui::SetCursorScreenPos(ImVec2(rootTL.x + bodyInset, rootTL.y + bodyInset));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -6172,6 +6205,356 @@ void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
     y = mv->Pos.y + 60.0f + stagger;
 }
 
+// --- THE RAIL ACROSS THE TOP OF A CABINET -------------------------------------
+//
+// The operating system's title bar used to sit above the main window and above
+// every torn-off page, in the desktop's own style; it is gone (0.78.0, at the
+// user's request: "remove all the top bars and put the minimise, maximise and
+// close on the metal"), and this is what stands in for it. The window's name
+// is engraved at the left of the cabinet's top rail, between the screws, and
+// three brass keys sit at its right: minimise, maximise (restore, when the
+// window is already full) and close. The rest of the rail is the handle the
+// window is dragged by.
+//
+// ONE DRAWING FOR BOTH KINDS OF WINDOW. The main window's rail is hit-tested
+// by the operating system (gui/win_frame.hpp) and its keys act on the GLFW
+// window; a page's rail is an ImGui item and its keys act on the page. The
+// keys are ImGui buttons in both cases, so hover, press and keyboard focus are
+// the bench's own, and the glyphs are DRAWN rather than lettered because the
+// bundled faces carry no box and no multiplication sign.
+namespace {
+
+struct RailPress {
+    bool minimise = false;
+    bool maximise = false;
+    bool close = false;
+};
+
+// Where the keys sit on a rail `m` tall: right-aligned, clear of the top-right
+// screw (whose countersink reaches 0.91 of the margin in from the edge), and
+// inset from the rail's top and bottom.
+struct RailKeyLayout {
+    float keyW = 0.0f;
+    float keyH = 0.0f;
+    float gap = 0.0f;
+    float top = 0.0f;
+    float left = 0.0f;   // the left edge of the leftmost key
+    float right = 0.0f;  // the right edge of the rightmost
+    bool fits = false;
+};
+
+RailKeyLayout railKeyLayout(const ImVec2& tl, const ImVec2& br, float m, int keys) {
+    RailKeyLayout k;
+    if (m < 12.0f || keys <= 0) { return k; }
+    k.keyH = std::max(10.0f, m - 6.0f);
+    k.keyW = std::floor(k.keyH * 1.45f);
+    k.gap = 4.0f;
+    k.top = tl.y + (m - k.keyH) * 0.5f;
+    k.right = br.x - m * 1.05f;
+    k.left = k.right - static_cast<float>(keys) * k.keyW -
+             static_cast<float>(keys - 1) * k.gap;
+    // Room for the name as well, or the rail is too short to carry keys at all.
+    k.fits = k.left > tl.x + m * 1.05f + 40.0f;
+    return k;
+}
+
+RailPress drawRailChrome(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float m,
+                         const char* title, bool maximised, bool showMinMax,
+                         const char* idPrefix, cascade::gui::frame::Rect* keysOut) {
+    RailPress out;
+    if (keysOut != nullptr) { *keysOut = cascade::gui::frame::Rect{}; }
+    if (dl == nullptr || m < 12.0f) { return out; }
+    const int keyCount = showMinMax ? 3 : 1;
+    const RailKeyLayout k = railKeyLayout(tl, br, m, keyCount);
+
+    // THE NAME, engraved into the brass between the screw and the keys: the
+    // cut in the dark ink with a hairline of light under it, which is how
+    // every caption on this bench is lettered.
+    if (title != nullptr && title[0] != '\0') {
+        ImFont* f = cascade::gui::fonts::legend();
+        const float px = std::clamp(m * 0.62f, 10.0f, cascade::gui::fonts::kLegendSize);
+        const float x = tl.x + m * 1.15f;
+        const float y = tl.y + (m - px) * 0.5f;
+        const float maxX = (k.fits ? k.left : br.x - m) - 8.0f;
+        if (maxX > x + 8.0f) {
+            const ImVec4 clip(x, tl.y, maxX, tl.y + m);
+            dl->AddText(f, px, ImVec2(x, y + 1.0f),
+                        cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.55f),
+                        title, nullptr, 0.0f, &clip);
+            dl->AddText(f, px, ImVec2(x, y), cascade::gui::theme::kEngraved, title, nullptr,
+                        0.0f, &clip);
+        }
+    }
+    if (!k.fits) { return out; }
+
+    const ImU32 ink = cascade::gui::theme::kIvory;
+    // Half the size of a glyph, so the three read as one family.
+    const float g = std::max(3.0f, std::floor(k.keyH * 0.22f));
+    float x = k.left;
+    const auto keyAt = [&](const char* id) {
+        const ImVec2 a(x, k.top);
+        const ImVec2 b(x + k.keyW, k.top + k.keyH);
+        const bool pressed = benchWordKey(dl, a, b, "", true, id);
+        x += k.keyW + k.gap;
+        return std::pair<bool, ImVec2>(pressed, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f));
+    };
+    ImGui::PushID(idPrefix);
+    if (showMinMax) {
+        // MINIMISE: a bar low in the key, the desktop's own sign for it.
+        const std::pair<bool, ImVec2> mn = keyAt("min");
+        dl->AddLine(ImVec2(mn.second.x - g, mn.second.y + g * 0.6f),
+                    ImVec2(mn.second.x + g, mn.second.y + g * 0.6f), ink, 1.5f);
+        out.minimise = mn.first;
+        // MAXIMISE: one pane; RESTORE: two, the back one offset.
+        const std::pair<bool, ImVec2> mx = keyAt("max");
+        if (maximised) {
+            dl->AddRect(ImVec2(mx.second.x - g + 2.0f, mx.second.y - g - 1.0f),
+                        ImVec2(mx.second.x + g + 1.0f, mx.second.y + g - 2.0f), ink, 0.0f, 0,
+                        1.2f);
+            dl->AddRectFilled(ImVec2(mx.second.x - g - 1.0f, mx.second.y - g + 2.0f),
+                              ImVec2(mx.second.x + g - 2.0f, mx.second.y + g + 1.0f),
+                              cascade::gui::theme::kBrassMid);
+            dl->AddRect(ImVec2(mx.second.x - g - 1.0f, mx.second.y - g + 2.0f),
+                        ImVec2(mx.second.x + g - 2.0f, mx.second.y + g + 1.0f), ink, 0.0f, 0,
+                        1.2f);
+        } else {
+            dl->AddRect(ImVec2(mx.second.x - g, mx.second.y - g),
+                        ImVec2(mx.second.x + g, mx.second.y + g), ink, 0.0f, 0, 1.2f);
+        }
+        out.maximise = mx.first;
+    }
+    // CLOSE: the cross.
+    const std::pair<bool, ImVec2> cl = keyAt("close");
+    dl->AddLine(ImVec2(cl.second.x - g, cl.second.y - g), ImVec2(cl.second.x + g, cl.second.y + g),
+                ink, 1.5f);
+    dl->AddLine(ImVec2(cl.second.x - g, cl.second.y + g), ImVec2(cl.second.x + g, cl.second.y - g),
+                ink, 1.5f);
+    out.close = cl.first;
+    ImGui::PopID();
+    if (keysOut != nullptr) {
+        *keysOut = cascade::gui::frame::Rect{k.left - 2.0f, k.top - 2.0f, k.right + 2.0f,
+                                             k.top + k.keyH + 2.0f};
+    }
+    return out;
+}
+
+}  // namespace
+
+// The main window's rail: the application's name, engraved, and the three keys
+// that stand in for the title bar's - each acting on the GLFW window, so the
+// desktop's own minimise, maximise and close happen rather than imitations of
+// them. The rail's height and the keys' rectangle are handed to the native hit
+// test every frame (gui/win_frame.hpp), which is what makes the rail a handle
+// and the keys not.
+void AppWindow::drawCabinetRail(float x0, float y0, float x1, float y1, float margin) {
+    if (!cascade::gui::frame::installed() || mainWindow_ == nullptr) { return; }
+    const ImVec2 tl(x0, y0);
+    const ImVec2 br(x1, y1);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const bool maximised = glfwGetWindowAttrib(mainWindow_, GLFW_MAXIMIZED) != 0;
+    const std::string title =
+        std::string(cascade::appName()) + " " + cascade::versionString();
+    cascade::gui::frame::Rect keys;
+    const RailPress press =
+        drawRailChrome(dl, tl, br, margin, title.c_str(), maximised, true, "##mainrail", &keys);
+    if (press.minimise) { glfwIconifyWindow(mainWindow_); }
+    if (press.maximise) {
+        if (maximised) {
+            glfwRestoreWindow(mainWindow_);
+        } else {
+            glfwMaximizeWindow(mainWindow_);
+        }
+    }
+    // The same path the desktop's close button took: the run loop sees the
+    // window asked to close and shuts the receiver down cleanly.
+    if (press.close) { glfwSetWindowShouldClose(mainWindow_, GLFW_TRUE); }
+    // In client pixels. With viewports on, the main viewport's origin IS the
+    // window's client origin on screen.
+    const ImVec2 origin = ImGui::GetMainViewport()->Pos;
+    cascade::gui::frame::CaptionLayout layout;
+    layout.railHeight = margin;
+    layout.keys = cascade::gui::frame::Rect{keys.x0 - origin.x, keys.y0 - origin.y,
+                                            keys.x1 - origin.x, keys.y1 - origin.y};
+    cascade::gui::frame::setCaptionLayout(layout);
+}
+
+bool AppWindow::pageGeometryTransient(const char* id) const {
+    const auto it = pageChrome_.find(id);
+    return it != pageChrome_.end() && (it->second.collapsed || it->second.maximised);
+}
+
+// A PAGE IS A CABINET. The window is begun without ImGui's title bar; the
+// brass, the screws and the well are drawn over its whole rectangle, the rail
+// carries its name and keys, and the body is laid in a child inset by the
+// margin the cabinet reported. Pages that used to draw a cabinet of their own
+// (the plugin store, the fitted modules, the satellites map) now draw into the
+// well instead, so every page is one object - and the main window is the same
+// object, drawn by the same drawCabinet.
+bool AppWindow::beginPage(const char* id, const char* title, bool* open, int flags) {
+    PageChrome& pc = pageChrome_[id];
+    constexpr float kStripH = 30.0f;
+
+    if (pc.pendingMaximise) {
+        // The work area of whichever monitor the page is on, or the main
+        // window's own area for a page still inside it.
+        const ImGuiViewport* main = ImGui::GetMainViewport();
+        ImVec2 pos = main->WorkPos;
+        ImVec2 size = main->WorkSize;
+        if (ImGuiWindow* w = ImGui::FindWindowByName(id)) {
+            if (w->ViewportOwned) {
+                const ImVec2 c(w->Pos.x + w->Size.x * 0.5f, w->Pos.y + w->Size.y * 0.5f);
+                const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+                for (const ImGuiPlatformMonitor& mon : pio.Monitors) {
+                    if (c.x >= mon.MainPos.x && c.x < mon.MainPos.x + mon.MainSize.x &&
+                        c.y >= mon.MainPos.y && c.y < mon.MainPos.y + mon.MainSize.y) {
+                        pos = mon.WorkPos;
+                        size = mon.WorkSize;
+                        break;
+                    }
+                }
+            }
+        }
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        pc.pendingMaximise = false;
+    }
+    if (pc.pendingRestore) {
+        ImGui::SetNextWindowPos(ImVec2(pc.restoreX, pc.restoreY), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(pc.restoreW, pc.restoreH), ImGuiCond_Always);
+        pc.pendingRestore = false;
+    }
+
+    ImGuiWindowFlags f = static_cast<ImGuiWindowFlags>(flags) | ImGuiWindowFlags_NoTitleBar |
+                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                         ImGuiWindowFlags_NoScrollWithMouse;
+    if (pc.collapsed) {
+        // Rolled up to its rail: a fixed strip, as wide as the page was.
+        f |= ImGuiWindowFlags_NoResize;
+        f &= ~ImGuiWindowFlags_AlwaysAutoResize;
+        ImGui::SetNextWindowSize(ImVec2(std::max(pc.restoreW, 240.0f), kStripH),
+                                 ImGuiCond_Always);
+    }
+    // NO PADDING AND NO BORDER: the brass reaches the window's edge, which on a
+    // torn-off page is the edge of the operating system's window. The resize
+    // grip is made invisible, not removed - the edge zones still resize the
+    // page - because a grey triangle over the bottom-right screw is not a
+    // fastener.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, cascade::gui::theme::kBrassShade);
+    ImGui::PushStyleColor(ImGuiCol_ResizeGrip, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ResizeGripHovered, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ResizeGripActive, IM_COL32(0, 0, 0, 0));
+    const bool visible = ImGui::Begin(id, open, f);
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar(2);
+    pageBodyOpen_ = false;
+    pageInset_ = 0.0f;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 tl = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    const ImVec2 br(tl.x + size.x, tl.y + size.y);
+    float m = 0.0f;
+    if (pc.collapsed || size.y < 80.0f || size.x < 80.0f) {
+        // Too small for a cabinet, or rolled up on purpose: a brass strip.
+        dl->AddRectFilled(tl, br, cascade::gui::theme::kBrassShade, 3.0f);
+        cascade::gui::addBenchBevel(dl, tl, br, 3.0f, true);
+        m = std::min(kStripH, size.y);
+    } else {
+        m = drawCabinet(dl, tl, br, kRailMinMargin);
+    }
+    ImGuiWindow* self = ImGui::GetCurrentWindow();
+    const bool ownWindow = self != nullptr && self->ViewportOwned;
+    cascade::gui::frame::Rect keys;
+    const RailPress press =
+        drawRailChrome(dl, tl, br, m, title, pc.maximised, true, "##pagerail", &keys);
+
+    // THE RAIL DRAGS THE PAGE, through the same machinery a title bar uses, so
+    // a page dragged out of the main window becomes its own window and one
+    // dragged back merges into it again. A double-click on it fills the
+    // screen, as on a title bar.
+    bool toggleMax = false;
+    if (m > 0.0f) {
+        const float railW = std::max(1.0f, (keys.empty() ? br.x - m : keys.x0) - tl.x);
+        ImGui::SetCursorScreenPos(tl);
+        ImGui::InvisibleButton("##pagedrag", ImVec2(railW, m));
+        if (ImGui::IsItemActivated() && self != nullptr) { ImGui::StartMouseMovingWindow(self); }
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            toggleMax = true;
+        }
+    }
+    if (press.close && open != nullptr) { *open = false; }
+    if (press.minimise) {
+        if (ownWindow) {
+            // To the taskbar, which it has a button on (ConfigViewportsNoTaskBarIcon
+            // is off for exactly this).
+            GLFWwindow* w = static_cast<GLFWwindow*>(self->Viewport->PlatformHandle);
+            if (w != nullptr) { glfwIconifyWindow(w); }
+        } else if (pc.collapsed) {
+            pc.collapsed = false;
+            pc.pendingRestore = true;
+            pc.restoreX = tl.x;
+            pc.restoreY = tl.y;
+        } else {
+            pc.collapsed = true;
+            pc.restoreW = size.x;
+            pc.restoreH = size.y;
+        }
+    }
+    if (press.maximise || toggleMax) {
+        if (pc.maximised) {
+            pc.maximised = false;
+            pc.pendingRestore = true;
+        } else {
+            pc.restoreX = tl.x;
+            pc.restoreY = tl.y;
+            pc.restoreW = size.x;
+            pc.restoreH = size.y;
+            pc.maximised = true;
+            pc.pendingMaximise = true;
+        }
+    }
+    if (!visible || pc.collapsed) { return false; }
+
+    // THE WELL: the page's content, inset by the margin the cabinet reported
+    // plus the bevel it drew on the margin's inner boundary. An auto-sizing
+    // page (the target details) gets an auto-sizing well, so the window still
+    // fits its content and the cabinet fits the window.
+    const float inset = m + 3.0f;
+    const ImVec2 wellSize(size.x - inset * 2.0f, size.y - inset * 2.0f);
+    const bool autoSize = (static_cast<ImGuiWindowFlags>(flags) & ImGuiWindowFlags_AlwaysAutoResize) != 0;
+    if (!autoSize && (wellSize.x < 8.0f || wellSize.y < 8.0f)) { return false; }
+    ImGui::SetCursorScreenPos(ImVec2(tl.x + inset, tl.y + inset));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    ImGuiChildFlags cf = ImGuiChildFlags_None;
+    ImVec2 childSize = wellSize;
+    if (autoSize) {
+        cf = ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY |
+             ImGuiChildFlags_AlwaysAutoResize;
+        childSize = ImVec2(0.0f, 0.0f);
+    }
+    ImGui::BeginChild("##pagewell", childSize, cf, ImGuiWindowFlags_None);
+    ImGui::PopStyleColor();
+    pageBodyOpen_ = true;
+    pageInset_ = inset;
+    return true;
+}
+
+void AppWindow::endPage() {
+    if (pageBodyOpen_) {
+        ImGui::EndChild();
+        // The bottom and right margins count towards the window's content,
+        // which is what lets an auto-sizing page size itself to the cabinet
+        // rather than to the well alone.
+        const ImVec2 wellBR = ImGui::GetItemRectMax();
+        ImGui::SetCursorScreenPos(ImVec2(wellBR.x + pageInset_, wellBR.y + pageInset_));
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+        pageBodyOpen_ = false;
+    }
+    ImGui::End();
+}
+
 void AppWindow::placeAsSeparateWindow(int slot) {
     // FirstUseEver throughout, so this is a starting position and never fights
     // the user afterwards.
@@ -6354,9 +6737,8 @@ bool AppWindow::applyReceiverPosition(double latDeg, double lonDeg) {
     // toolbar's button, the satellites window's coordinate cells, a click on
     // that window's map - gets the same refusal, because a check written once
     // per entry point is a check that will eventually be missing from one.
-    if (!(latDeg >= -90.0 && latDeg <= 90.0 && lonDeg >= -180.0 && lonDeg <= 180.0)) {
-        return false;
-    }
+    // The predicate also refuses 0,0 (receiverPositionAcceptable says why).
+    if (!cascade::gui::receiverPositionAcceptable(latDeg, lonDeg)) { return false; }
     rxLat_ = latDeg;
     rxLon_ = lonDeg;
     rxSet_ = true;
@@ -6425,15 +6807,21 @@ void AppWindow::drawRxPositionEntry() {
     // config sanitizer uses, so a typo cannot silently install a receiver at
     // the pole and quietly make every distance wrong. The button simply does
     // not accept the pair.
-    const bool rxInputOk = rxLatInput_ >= -90.0 && rxLatInput_ <= 90.0 &&
-                           rxLonInput_ >= -180.0 && rxLonInput_ <= 180.0;
+    // AND NOT 0,0 - see receiverPositionAcceptable: the pair an untouched
+    // entry holds is the pair a user's scope was found measuring from.
+    const bool rxInputOk = cascade::gui::receiverPositionAcceptable(rxLatInput_, rxLonInput_);
     ImGui::BeginDisabled(!rxInputOk);
     if (ImGui::SmallButton("Set RX here")) {
         applyReceiverPosition(rxLatInput_, rxLonInput_);
     }
     ImGui::EndDisabled();
     if (!rxInputOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("Latitude must be -90..90 and longitude -180..180");
+        if (rxLatInput_ == 0.0 && rxLonInput_ == 0.0) {
+            ImGui::SetTooltip("Type the receiver's position first: 0,0 is a point in the\n"
+                              "Gulf of Guinea, not a receiver.");
+        } else {
+            ImGui::SetTooltip("Latitude must be -90..90 and longitude -180..180");
+        }
     }
 }
 
@@ -6465,7 +6853,8 @@ void AppWindow::drawReceiverPositionOffers() {
     double tLat = 0.0;
     double tLon = 0.0;
     const int heard = cascade::gui::scopeTrafficCentre(pluginUi_.tracks(), tLat, tLon);
-    const bool trafficReady = heard >= cascade::gui::kScopeTrafficCentreMinAircraft;
+    const bool trafficReady = heard >= cascade::gui::kScopeTrafficCentreMinAircraft &&
+                              cascade::gui::receiverPositionAcceptable(tLat, tLon);
     char label[96];
     if (trafficReady) {
         std::snprintf(label, sizeof(label), "Use the middle of the %d aircraft heard  (%.2f%c %.2f%c)",
@@ -6493,7 +6882,13 @@ void AppWindow::drawReceiverPositionOffers() {
         if (page.view == nullptr) { continue; }
         if (mapPage == nullptr || (page.open && !mapPage->open)) { mapPage = &page; }
     }
-    if (mapPage != nullptr) {
+    // NOT OFFERED FROM THE ORIGIN. A map backed out to the whole world sits on
+    // 0,0, and a map never yet looked at can too; offering that as "the map's
+    // centre" is how a receiver ends up in the Gulf of Guinea with the view
+    // dragged to Liverpool - see receiverPositionAcceptable.
+    if (mapPage != nullptr &&
+        cascade::gui::receiverPositionAcceptable(mapPage->view->viewCentreLatDeg(),
+                                                 mapPage->view->viewCentreLonDeg())) {
         const double mLat = mapPage->view->viewCentreLatDeg();
         const double mLon = mapPage->view->viewCentreLonDeg();
         std::snprintf(label, sizeof(label), "Use the %s map's centre  (%.2f%c %.2f%c)",
@@ -7020,7 +7415,7 @@ void AppWindow::drawScopeMode() {
         const float drumW = drumH * 0.68f;
         const float capH = ImGui::GetTextLineHeight() + 4.0f;
         const float drumsY = pBR.y - 16.0f * scale - drumH - capH;
-        if (drumsY > pTL.y + 4.0f && (pBR.x - pTL.x) > drumW * 7.0f) {
+        if (drumsY > pTL.y + 4.0f && (pBR.x - pTL.x) > drumW * 8.5f) {
             // THE COUNTER READS THE RANGE TO THE SELECTED AIRCRAFT, measured
             // from the antenna - the one distance an operator actually wants
             // off a panel, and the number the ALT gauge beside it is already
@@ -7028,7 +7423,7 @@ void AppWindow::drawScopeMode() {
             //
             // WITH NOTHING SELECTED IT SHOWS THE SCOPE'S OWN RANGE SETTING,
             // and the caption says WHICH of the two it is. Two different
-            // distances in the same three digits with one label would be
+            // distances in the same four digits with one label would be
             // unreadable: "100" could be an aircraft a hundred miles out or a
             // face set to a hundred-mile sweep, and nothing on the panel would
             // separate them.
@@ -7049,10 +7444,12 @@ void AppWindow::drawScopeMode() {
                 }
             }
             const float x0 = pTL.x + 18.0f * scale;
-            cascade::gui::drawScopeDrums(dl, ImVec2(x0, drumsY), drumW, drumH, 3,
+            // FOUR DRUMS FOR THE RANGE since the ladder reached 1600 NM; three
+            // would have shown "600" for the longest scale the face offers.
+            cascade::gui::drawScopeDrums(dl, ImVec2(x0, drumsY), drumW, drumH, 4,
                                          drumNm, drumCap);
             cascade::gui::drawScopeDrums(
-                dl, ImVec2(x0 + (drumW + 3.0f) * 3.0f + 26.0f * scale, drumsY), drumW,
+                dl, ImVec2(x0 + (drumW + 3.0f) * 4.0f + 26.0f * scale, drumsY), drumW,
                 drumH, 3, static_cast<int>(aircraft), "TRACKS");
         }
     }
@@ -7279,14 +7676,13 @@ void AppWindow::drawPluginStoreWindow() {
     // reach the frame the operating system drew, and four pixels of ImGui's
     // window ground all the way round it would read as a gap between the
     // instrument and its case.
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     bool open = true;
     // The visible half of the title is the plate's own word; the ### half is
     // the stable identity, and it is NOT "###pluginstore" - that id belongs to
     // the rail row, and two widgets sharing one id is how a window's drag
-    // state and a rail row's press end up in the same hash bucket.
-    const bool drawn = ImGui::Begin("Plugin store###pluginstorewindow", &open);
-    ImGui::PopStyleVar();
+    // state and a rail row's press end up in the same hash bucket. beginPage
+    // draws the cabinet this window is, with its name and keys on the rail.
+    const bool drawn = beginPage("Plugin store###pluginstorewindow", "PLUGIN STORE", &open);
     // The frame's close button is a real close: it puts the key on the rail
     // back to off, and that is the only state either of them reads.
     if (!open) { pluginBrowseOpen_ = false; }
@@ -7408,7 +7804,9 @@ void AppWindow::drawPluginStoreWindow() {
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         if (dl != nullptr && avail.x > 8.0f && avail.y > 8.0f) {
             const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
-            const float margin = drawCabinet(dl, tl, br);
+            // THE CABINET IS THE PAGE'S OWN NOW - beginPage drew it, screws,
+            // rail and keys - so the plate goes straight into the well.
+            const float margin = 0.0f;
             const ImVec2 pTL(tl.x + margin, tl.y + margin);
             const ImVec2 pBR(br.x - margin, br.y - margin);
             float bodyTop = pTL.y;
@@ -7472,7 +7870,7 @@ void AppWindow::drawPluginStoreWindow() {
         // would appear on neither window.
         pluginBrowserDrawnThisFrame_ = viewDrawn;
         if (!viewDrawn) {
-            ImGui::End();
+            endPage();
             return;
         }
         if (pluginStoreView_->checkNowRequested()) { startCatalogFetch(); }
@@ -7510,7 +7908,7 @@ void AppWindow::drawPluginStoreWindow() {
             }
         }
     }
-    ImGui::End();
+    endPage();
 }
 
 void AppWindow::drawFittedModulesWindow() {
@@ -7525,10 +7923,9 @@ void AppWindow::drawFittedModulesWindow() {
     // for the first time does not stack one exactly on the other.
     placeSavedFeatureWindow(7, fittedWinX_, fittedWinY_, fittedWinW_, fittedWinH_,
                             1060.0f, 720.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     bool open = true;
-    const bool drawn = ImGui::Begin("Fitted modules###fittedmoduleswindow", &open);
-    ImGui::PopStyleVar();
+    const bool drawn =
+        beginPage("Fitted modules###fittedmoduleswindow", "FITTED MODULES", &open);
     if (!open) { fittedWindowOpen_ = false; }
     // READ BACK EVERY FRAME, which is the whole of the persistence: ImGui's
     // own .ini is switched off in this application, so unless the rectangle is
@@ -7538,7 +7935,10 @@ void AppWindow::drawFittedModulesWindow() {
     // would lose a move made while it was rolled up - but the SIZE is not,
     // because a collapsed window reports its title-bar-only height and
     // persisting that would corrupt the real one.
-    {
+    // ...and NOT while the window is maximised or rolled up by its own keys:
+    // that rectangle is the key's, and persisting it would reopen the window
+    // filling a monitor it may no longer be on.
+    if (!pageGeometryTransient("Fitted modules###fittedmoduleswindow")) {
         const ImVec2 wpos = ImGui::GetWindowPos();
         fittedWinX_ = static_cast<int>(wpos.x);
         fittedWinY_ = static_cast<int>(wpos.y);
@@ -7602,7 +8002,9 @@ void AppWindow::drawFittedModulesWindow() {
         cascade::gui::FittedModulesAction act;
         if (dl != nullptr && avail.x > 8.0f && avail.y > 8.0f) {
             const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
-            const float margin = drawCabinet(dl, tl, br);
+            // THE CABINET IS THE PAGE'S OWN NOW - beginPage drew it, screws,
+            // rail and keys - so the face goes straight into the well.
+            const float margin = 0.0f;
             const ImVec2 pTL(tl.x + margin, tl.y + margin);
             const ImVec2 pBR(br.x - margin, br.y - margin);
             const float pad = 8.0f;
@@ -7652,7 +8054,7 @@ void AppWindow::drawFittedModulesWindow() {
                 break;
         }
     }
-    ImGui::End();
+    endPage();
 }
 
 void AppWindow::drawPluginWindows() {
@@ -7899,11 +8301,12 @@ void AppWindow::drawPluginWindows() {
         // round it would read as a gap between the instrument and its case.
         // Pushed before Begin, which is what reads it, and popped straight
         // after so nothing nested inherits it.
-        if (page.satellite) {
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        // The page's name on its rail is the plugin's, in the bench's capitals.
+        std::string railName = pageIdent + " MAP";
+        for (char& rc : railName) {
+            rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
-        const bool pageDrawn = ImGui::Begin(pageTitle.c_str(), &page.open);
-        if (page.satellite) { ImGui::PopStyleVar(); }
+        const bool pageDrawn = beginPage(pageTitle.c_str(), railName.c_str(), &page.open);
         if (!pageDrawn) {
             // COLLAPSED, NOT GONE. Begin() answers false for a collapsed
             // window, but the window still exists and can still be DRAGGED —
@@ -7924,12 +8327,16 @@ void AppWindow::drawPluginWindows() {
             // the size is copied out here and into AppConfig it exists only
             // until the process ends. Rounded to whole pixels because that is
             // what a window manager deals in and what the config stores.
-            const ImVec2 wpos = ImGui::GetWindowPos();
-            const ImVec2 wsize = ImGui::GetWindowSize();
-            page.x = static_cast<int>(wpos.x);
-            page.y = static_cast<int>(wpos.y);
-            page.w = static_cast<int>(wsize.x);
-            page.h = static_cast<int>(wsize.y);
+            // ...and NOT while maximised or rolled up by the page's own keys:
+            // that rectangle is the key's, not the user's.
+            if (!pageGeometryTransient(pageTitle.c_str())) {
+                const ImVec2 wpos = ImGui::GetWindowPos();
+                const ImVec2 wsize = ImGui::GetWindowSize();
+                page.x = static_cast<int>(wpos.x);
+                page.y = static_cast<int>(wpos.y);
+                page.w = static_cast<int>(wsize.x);
+                page.h = static_cast<int>(wsize.y);
+            }
             // TWO KINDS OF MAP PAGE, AND THE SATELLITE ONE IS A WHOLE
             // INSTRUMENT. Every control below - fit, the receiver position,
             // the coverage and trail switches, the target list - exists on the
@@ -8122,7 +8529,7 @@ void AppWindow::drawPluginWindows() {
                 ImGui::EndPopup();
             }
         }
-        ImGui::End();
+        endPage();
     }
 
     // OUTSIDE the map pages on purpose, so it is a sibling of them rather
@@ -8183,7 +8590,11 @@ void AppWindow::drawPluginWindows() {
         // moment torn-off windows gained the OS's own title bar.
         if (closedWindows_.count(id) != 0u) { continue; }
         bool imageOpen = true;
-        if (ImGui::Begin(id.c_str(), &imageOpen)) {
+        std::string railName = im.plugin + " IMAGE";
+        for (char& rc : railName) {
+            rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
+        }
+        if (beginPage(id.c_str(), railName.c_str(), &imageOpen)) {
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("Waiting for the first image...");
             } else {
@@ -8262,7 +8673,7 @@ void AppWindow::drawPluginWindows() {
             }
             if (!imageSaveNote_.empty()) { ImGui::TextDisabled("%s", imageSaveNote_.c_str()); }
         }
-        ImGui::End();
+        endPage();
         if (!imageOpen) { closedWindows_.insert(id); }
     }
 
@@ -8278,7 +8689,11 @@ void AppWindow::drawPluginWindows() {
         const std::string id = p.title + "###panel_" + p.plugin;
         if (closedWindows_.count(id) != 0u) { continue; }
         bool panelOpen = true;
-        if (ImGui::Begin(id.c_str(), &panelOpen)) {
+        std::string railName = p.title;
+        for (char& rc : railName) {
+            rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
+        }
+        if (beginPage(id.c_str(), railName.c_str(), &panelOpen)) {
             const int cols = static_cast<int>(p.headings.size());
             if (cols > 0 &&
                 ImGui::BeginTable("##rows", cols,
@@ -8324,7 +8739,7 @@ void AppWindow::drawPluginWindows() {
             }
             if (p.rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
         }
-        ImGui::End();
+        endPage();
         if (!panelOpen) { closedWindows_.insert(id); }
     }
 }
@@ -8360,7 +8775,10 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
     // the sunk well go down and every panel below is drawn into them. The same
     // call the main window's root makes, so the two cases are one object and
     // cannot drift apart.
-    const float margin = drawCabinet(dl, tl, br);
+    // THE CABINET IS THE PAGE'S OWN NOW - beginPage drew it, screws, rail and
+    // keys, the same drawCabinet this used to call - so the plate goes
+    // straight into the well.
+    const float margin = 0.0f;
     const ImVec2 pTL(tl.x + margin, tl.y + margin);
     const ImVec2 pBR(br.x - margin, br.y - margin);
 
@@ -9093,7 +9511,8 @@ void AppWindow::drawTargetDetailsWindow() {
     // requires; the minimum width stops the "no longer being heard" state,
     // which is two short lines, from collapsing to a sliver.
     ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
-    if (ImGui::Begin("Target details", &detailsOpen_, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (beginPage("Target details", "TARGET DETAILS", &detailsOpen_,
+                  ImGuiWindowFlags_AlwaysAutoResize)) {
         const cascade::core::HostTrack* found = findVisibleTrack(detailsTrackId_);
 
         if (found == nullptr) {
@@ -9139,7 +9558,7 @@ void AppWindow::drawTargetDetailsWindow() {
         ImGui::Separator();
         if (ImGui::Button("Close")) { detailsOpen_ = false; }
     }
-    ImGui::End();
+    endPage();
     // Cleared only once the window is actually shut, so the id survives being
     // closed by the title bar's own box as well as by the button.
     if (!detailsOpen_) { detailsTrackId_.clear(); }
@@ -9855,7 +10274,7 @@ void AppWindow::drawDecoderWindow() {
     telemetryNotePanel("decoded");
 
     placeAsSeparateWindow(9);
-    if (ImGui::Begin("Decoder output###decoderout", &decoderWindowOpen_)) {
+    if (beginPage("Decoder output###decoderout", "DECODER OUTPUT", &decoderWindowOpen_)) {
         ImGui::Checkbox("Follow", &decoderAutoScroll_);
         ImGui::SameLine();
         if (ImGui::SmallButton("Clear##declog")) { decoderLog_.clear(); }
@@ -9883,7 +10302,7 @@ void AppWindow::drawDecoderWindow() {
     }
         ImGui::EndChild();
     }
-    ImGui::End();
+    endPage();
 }
 
 void AppWindow::removeBlockedPlugin(const std::string& fileName) {

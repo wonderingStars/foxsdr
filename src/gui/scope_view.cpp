@@ -250,15 +250,13 @@ void addVignette(ImDrawList* dl, const ImVec2& c, float radius) {
 //
 // Web Mercator, normalised so the whole world is 0..1 in both axes - the form
 // the tile grid is defined in, so a tile index is the normalised coordinate
-// times 2^z. Lifted from map_view.cpp rather than shared with it: the scope is
-// its own renderer by design, and a common file underneath both would tie two
-// pictures with different geometries to one set of decisions.
-double mercY(double latDeg) {
-    const double lat = std::clamp(latDeg, -85.05112878, 85.05112878);
-    const double s = std::sin(lat * kPi / 180.0);
-    return 0.5 - std::log((1.0 + s) / (1.0 - s)) / (4.0 * kPi);
-}
-
+// times 2^z. Only the INVERSE is needed here since 0.78.0: the ground is
+// drawn in the scope's own projection, and the one Mercator question left is
+// which latitude a tile row's edge sits at. (The forward form lives in
+// scope_view.hpp as scopeMercY, where the tile window is worked out.) Lifted
+// from map_view.cpp rather than shared with it: the scope is its own renderer
+// by design, and a common file underneath both would tie two pictures with
+// different geometries to one set of decisions.
 double mercLat(double y) {
     return std::atan(std::sinh(kPi * (1.0 - 2.0 * y))) * 180.0 / kPi;
 }
@@ -2148,29 +2146,24 @@ void ScopeView::draw(float width, float height,
 
     // --- the basemap, beneath the face -------------------------------------
     //
-    // SCALE MATCHED AT THE RECEIVER, WHICH IS THE ONLY PLACE IT CAN BE MATCHED.
-    // The scope's own geometry is polar - distance from the middle is
-    // proportional to ground range, which is an azimuthal equidistant picture -
-    // and map tiles are Web Mercator by construction. The two agree exactly at
-    // the centre and diverge with distance (about 8% at the north edge of a
-    // 400 NM scope in British latitudes), so the basemap under this face is a
-    // LOCATING AID and the rings are what a range is read from. Reprojecting
-    // the tiles into the polar frame is not an option: AddImage places an
-    // axis-aligned rectangle, which is exactly what a reprojected tile is not.
-    //
-    // pixPerWorld is how many screen pixels one whole world-width spans, and it
-    // is derived from the scope's own scale rather than chosen: pixels per
-    // kilometre at the receiver, times the length of the equator, divided by
-    // the meridian convergence at this latitude.
+    // ONE SCALE, EVERYWHERE ON THE FACE. The scope's geometry is polar -
+    // distance from the middle is proportional to ground range, an azimuthal
+    // equidistant picture - so a nautical mile is the same number of pixels
+    // at the rim as at the centre, in every direction. Map tiles are Web
+    // Mercator by construction, and until 0.78.0 they were laid under the
+    // face AS Mercator, matched to the polar frame at the middle: right there
+    // and diverging outwards, about 9% at the north edge of a 400 NM picture
+    // in British latitudes - a coast thirty miles from the aircraft over it -
+    // which is why 400 was the ceiling of the range ladder. They are now cut
+    // into cells and each cell's corners are placed by scopeGroundPoint, the
+    // same pair of functions that places an aircraft, so the coast under a
+    // contact is where the contact is at any range the ladder offers.
+    // Reprojecting a whole tile in one piece is not an option (AddImage
+    // places an axis-aligned rectangle); a tile in cells through
+    // AddImageQuad is.
+    const double pxPerNm = static_cast<double>(radius) / static_cast<double>(rangeNm_);
+    const double pxPerKm = pxPerNm / kKmPerNm;
     bool haveTiles = false;
-    const double mercYRx = mercY(rxLat_);
-    const double cosLat = std::cos(rxLat_ * kPi / 180.0);
-    const double pxPerKm =
-        static_cast<double>(radius) / (static_cast<double>(rangeNm_) * kKmPerNm);
-    // A receiver AT a pole has no meridian convergence to divide by, and the
-    // Mercator grid has no tiles there either. The scope still works - range
-    // and bearing are fine at the pole - it simply has no basemap under it.
-    const double pixPerWorld = (cosLat > 1.0e-6) ? (pxPerKm * kWorldKm * cosLat) : 0.0;
 
     // WHERE THE MIDDLE OF THE GLASS IS, in degrees. The antenna until the view
     // is dragged, and somewhere else afterwards.
@@ -2198,12 +2191,12 @@ void ScopeView::draw(float width, float height,
     // edge - cannot pan the face as it passes over it. The pixel delta is
     // turned into degrees HERE, against this frame's scale, and only the
     // result is kept.
-    if (pixPerWorld > 0.0 && ImGui::IsItemActive() &&
+    if (pxPerNm > 0.0 && ImGui::IsItemActive() &&
         ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
         const ImVec2 d = ImGui::GetIO().MouseDelta;
-        const ScopeLatLon moved = scopeViewCentre(viewLat_, viewLon_,
-                                                  static_cast<double>(d.x),
-                                                  static_cast<double>(d.y), pixPerWorld);
+        const ScopeLatLon moved = scopeViewMoved(viewLat_, viewLon_,
+                                                 static_cast<double>(d.x),
+                                                 static_cast<double>(d.y), pxPerNm);
         viewLat_ = moved.latDeg;
         viewLon_ = moved.lonDeg;
         hasView_ = true;
@@ -2224,15 +2217,27 @@ void ScopeView::draw(float width, float height,
     const double viewLat = viewLat_;
     const double viewLon = viewLon_;
     // The antenna's own place on the glass, which is the middle until the view
-    // has been moved off it.
-    float rcx = cx;
-    float rcy = cy;
-    if (pixPerWorld > 0.0) {
-        rcx = cx + static_cast<float>(((rxLon_ - viewLon) / 360.0) * pixPerWorld);
-        rcy = cy + static_cast<float>((mercY(rxLat_) - mercY(viewLat)) * pixPerWorld);
-    }
+    // has been moved off it - and placed by the same projection as everything
+    // else, so its cross sits on the tile it is really on.
+    const ScopePoint rxOnGlass = scopeGroundPoint(cx, cy, radius, static_cast<double>(rangeNm_),
+                                                  viewLat, viewLon, rxLat_, rxLon_);
+    const float rcx = static_cast<float>(rxOnGlass.x);
+    const float rcy = static_cast<float>(rxOnGlass.y);
     const ImVec2 rxCentre(rcx, rcy);
 
+    // HOW FAR OUT THE GROUND IS DRAWN. The clip is the square round the tube
+    // and the corner mask hides what is outside the circle, so the ground has
+    // to reach the square's corners: the circle through them is root two of
+    // the range, and a little over for the stroke of the rim.
+    const double coverNm = static_cast<double>(rangeNm_) * 1.45;
+    const double cosView = std::cos(viewLat * kPi / 180.0);
+    // How many screen pixels one whole world-width spans AT THE VIEW'S
+    // LATITUDE, which is what picks the tile zoom: a tile's ground resolution
+    // shrinks with the cosine of its latitude, and the middle of the glass is
+    // where the resolution is looked at. Zero at a pole, where the Mercator
+    // grid has no tiles anyway - the scope still works there, it simply has
+    // no basemap under it.
+    const double pixPerWorld = (cosView > 1.0e-6) ? (pxPerKm * kWorldKm * cosView) : 0.0;
     if (tiles != nullptr && tiles->active() && pixPerWorld > 0.0) {
         askedTiles_ = true;
         const double want =
@@ -2241,56 +2246,27 @@ void ScopeView::draw(float width, float height,
         z = std::clamp(z, static_cast<int>(tiles->minZoom()),
                        static_cast<int>(tiles->maxZoom()));
         const double n = std::pow(2.0, static_cast<double>(z));
-
-        // TILE EDGES COME FROM A CONTINUOUS LONGITUDE AND ARE NEVER WRAPPED,
-        // and this is not tidiness - it is the fix the map needed after it
-        // rendered in MIRROR WRITING. Wrapping a longitude into +/-180 is
-        // correct for a POINT and wrong for a RECTANGLE, because the two edges
-        // wrap independently: a tile running from +178 to +182 keeps its west
-        // edge at +178 and folds its east edge to -178, AddImage is handed
-        // p_min.x > p_max.x, and it draws the texture back to front. The loop
-        // below therefore works entirely in the unwrapped longitude the tile
-        // index implies, and only the tile INDEX is wrapped.
-        const auto tileX = [&](double lon) {
-            return static_cast<float>(rcx + (lon - rxLon_) / 360.0 * pixPerWorld);
-        };
-        const auto tileY = [&](double lat) {
-            return static_cast<float>(rcy + (mercY(lat) - mercYRx) * pixPerWorld);
-        };
-
-        // The visible square in normalised Mercator, from its own corners.
-        //
-        // MEASURED ABOUT THE MIDDLE OF THE TUBE, not about the antenna. The
-        // antenna is only at the middle while the view is unpanned; taking the
-        // square from it meant that after a drag the tiles fetched were the
-        // ones around the RECEIVER while the glass was showing somewhere else,
-        // so the map simply ran out - most visibly after zooming in, where the
-        // covered area is smallest. The pan is subtracted here, in world
-        // units, which is the same offset the draw uses.
-        const double halfWorldX = static_cast<double>(side) * 0.5 / pixPerWorld;
-        const double xc = (viewLon + 180.0) / 360.0;
-        const double x0 = xc - halfWorldX;
-        const double x1 = xc + halfWorldX;
-        // Same correction on the vertical: the window follows the view, not
-        // the antenna.
-        const double ycView = mercY(viewLat);
-        const double y0 = ycView - static_cast<double>(side) * 0.5 / pixPerWorld;
-        const double y1 = ycView + static_cast<double>(side) * 0.5 / pixPerWorld;
-
-        long tx0 = static_cast<long>(std::floor(x0 * n));
-        long tx1 = static_cast<long>(std::floor(x1 * n));
-        long ty0 = static_cast<long>(std::floor(y0 * n));
-        long ty1 = static_cast<long>(std::floor(y1 * n));
-        ty0 = std::max(ty0, 0L);
-        ty1 = std::min(ty1, static_cast<long>(n) - 1);
+        // The tiles that cover the disc, as a bounding box in the UNWRAPPED
+        // longitude the tile index implies - see scopeTileWindow, and the
+        // mirror-writing incident it descends from: wrapping a rectangle's
+        // two edges separately is how a map is drawn back to front.
+        const ScopeTileWindow win = scopeTileWindow(viewLat, viewLon, coverNm, z);
+        const int cells = scopeTileCells(z);
 
         // A hard cap on tiles per frame. The zoom choice already keeps this
-        // near the square's area divided by the tile size, but a degenerate
+        // near the disc's area divided by the tile size, but a degenerate
         // view must not be able to ask for thousands.
         const long maxSpan = 64;
+        long tx0 = win.x0;
+        long tx1 = win.x1;
+        long ty0 = win.y0;
+        long ty1 = win.y1;
         if (tx1 - tx0 > maxSpan) { tx1 = tx0 + maxSpan; }
         if (ty1 - ty0 > maxSpan) { ty1 = ty0 + maxSpan; }
 
+        const ImU32 tileCol = optPhosphor_ ? kTileTint : IM_COL32(255, 255, 255, 217);
+        const double full = static_cast<double>(rangeNm_);
+        const float clipMargin = 2.0f;
         for (long ty = ty0; ty <= ty1; ++ty) {
             for (long txRaw = tx0; txRaw <= tx1; ++txRaw) {
                 // Wrap the INDEX in x so a receiver near the antimeridian still
@@ -2302,21 +2278,72 @@ void ScopeView::draw(float width, float height,
                                                         static_cast<std::uint32_t>(tx),
                                                         static_cast<std::uint32_t>(ty));
                 if (tex == 0u) { continue; }
-                // Placed from the tile's OWN edges rather than from a computed
-                // size, so rounding cannot leave hairline gaps between
-                // neighbours. a is the top-left and b the bottom-right by
-                // construction (east > west, north > south), which is what
-                // AddImage's implicit texture coordinates require.
-                const double west = static_cast<double>(txRaw) / n * 360.0 - 180.0;
-                const double east = static_cast<double>(txRaw + 1) / n * 360.0 - 180.0;
-                const double north = mercLat(static_cast<double>(ty) / n);
-                const double south = mercLat(static_cast<double>(ty + 1) / n);
-                dl->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
-                             ImVec2(tileX(west), tileY(north)),
-                             ImVec2(tileX(east), tileY(south)),
-                             ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                             optPhosphor_ ? kTileTint : IM_COL32(255, 255, 255, 217));
-                haveTiles = true;
+                const ImTextureID texId =
+                    static_cast<ImTextureID>(static_cast<std::uintptr_t>(tex));
+                // THE TILE GOES DOWN IN CELLS, each placed by its own four
+                // corners through the scope's projection, with the cell's own
+                // share of the texture. Rows are cut in Mercator y, which is
+                // how the texture's rows are spaced; columns are linear in
+                // longitude. A cell whose corners all lie beyond the covered
+                // disc, or all off one side of the clip, is skipped: the
+                // window is a bounding box of a disc, and its corners hold
+                // ground that is nowhere on the glass.
+                for (int j = 0; j < cells; ++j) {
+                    const double north = mercLat(
+                        (static_cast<double>(ty) + static_cast<double>(j) / cells) / n);
+                    const double south = mercLat(
+                        (static_cast<double>(ty) + static_cast<double>(j + 1) / cells) / n);
+                    for (int i = 0; i < cells; ++i) {
+                        const double west =
+                            (static_cast<double>(txRaw) + static_cast<double>(i) / cells) /
+                                n * 360.0 -
+                            180.0;
+                        const double east =
+                            (static_cast<double>(txRaw) + static_cast<double>(i + 1) / cells) /
+                                n * 360.0 -
+                            180.0;
+                        const ScopePolar pNW = scopeRelative(viewLat, viewLon, north, west);
+                        const ScopePolar pNE = scopeRelative(viewLat, viewLon, north, east);
+                        const ScopePolar pSE = scopeRelative(viewLat, viewLon, south, east);
+                        const ScopePolar pSW = scopeRelative(viewLat, viewLon, south, west);
+                        if (!(pNW.rangeNm <= coverNm) && !(pNE.rangeNm <= coverNm) &&
+                            !(pSE.rangeNm <= coverNm) && !(pSW.rangeNm <= coverNm)) {
+                            continue;
+                        }
+                        const ScopePoint a =
+                            scopeProject(cx, cy, radius, pNW.rangeNm, pNW.bearingDeg, full);
+                        const ScopePoint b =
+                            scopeProject(cx, cy, radius, pNE.rangeNm, pNE.bearingDeg, full);
+                        const ScopePoint c =
+                            scopeProject(cx, cy, radius, pSE.rangeNm, pSE.bearingDeg, full);
+                        const ScopePoint d =
+                            scopeProject(cx, cy, radius, pSW.rangeNm, pSW.bearingDeg, full);
+                        const float minX = static_cast<float>(
+                            std::min(std::min(a.x, b.x), std::min(c.x, d.x)));
+                        const float maxX = static_cast<float>(
+                            std::max(std::max(a.x, b.x), std::max(c.x, d.x)));
+                        const float minY = static_cast<float>(
+                            std::min(std::min(a.y, b.y), std::min(c.y, d.y)));
+                        const float maxY = static_cast<float>(
+                            std::max(std::max(a.y, b.y), std::max(c.y, d.y)));
+                        if (maxX < sqTL.x - clipMargin || minX > sqBR.x + clipMargin ||
+                            maxY < sqTL.y - clipMargin || minY > sqBR.y + clipMargin) {
+                            continue;
+                        }
+                        const float u0 = static_cast<float>(i) / static_cast<float>(cells);
+                        const float u1 = static_cast<float>(i + 1) / static_cast<float>(cells);
+                        const float v0 = static_cast<float>(j) / static_cast<float>(cells);
+                        const float v1 = static_cast<float>(j + 1) / static_cast<float>(cells);
+                        dl->AddImageQuad(texId,
+                                         ImVec2(static_cast<float>(a.x), static_cast<float>(a.y)),
+                                         ImVec2(static_cast<float>(b.x), static_cast<float>(b.y)),
+                                         ImVec2(static_cast<float>(c.x), static_cast<float>(c.y)),
+                                         ImVec2(static_cast<float>(d.x), static_cast<float>(d.y)),
+                                         ImVec2(u0, v0), ImVec2(u1, v0), ImVec2(u1, v1),
+                                         ImVec2(u0, v1), tileCol);
+                        haveTiles = true;
+                    }
+                }
             }
         }
     }
@@ -2334,46 +2361,40 @@ void ScopeView::draw(float width, float height,
     // a rendered map already draws its own coastlines, and a 1:110m outline
     // over street-level imagery is a wrong-coloured line a few hundred metres
     // off the real one.
-    if (!haveTiles && pixPerWorld > 0.0) {
-        const double halfLon = static_cast<double>(side) * 0.5 / pixPerWorld * 360.0;
-        const double lonCentre = viewLon;
-        const double west = lonCentre - halfLon;
-        const double east = lonCentre + halfLon;
-        const double ycCoast = mercY(viewLat);
-        const double northLat = mercLat(ycCoast - static_cast<double>(side) * 0.5 / pixPerWorld);
-        const double southLat = mercLat(ycCoast + static_cast<double>(side) * 0.5 / pixPerWorld);
-        const auto project = [&](double lat, double lon) {
-            return ImVec2(
-                static_cast<float>(rcx + (lon - rxLon_) / 360.0 * pixPerWorld),
-                static_cast<float>(rcy + (mercY(lat) - mercYRx) * pixPerWorld));
-        };
+    if (!haveTiles && pxPerNm > 0.0) {
+        const double full = static_cast<double>(rangeNm_);
         for (std::uint32_t r = 0; r < coastline::kRunCount; ++r) {
             const coastline::Run& run = coastline::kRuns[r];
             ImVec2 prev(0.0f, 0.0f);
             bool havePrev = false;
+            bool prevInside = false;
             double prevLon = 0.0;
-            double prevLat = 0.0;
             for (std::uint32_t i = 0; i < run.count; ++i) {
                 const std::size_t k = (static_cast<std::size_t>(run.first) + i) * 2u;
                 const double lon = static_cast<double>(coastline::kCoords[k]) / 100.0;
                 const double lat = static_cast<double>(coastline::kCoords[k + 1]) / 100.0;
+                // Placed by the same pair as a target - see scopeGroundPoint -
+                // and culled by range from the middle of the glass rather than
+                // by a Mercator box. On a scope almost the whole world is
+                // outside, and with 5127 points the point is not frame rate so
+                // much as not asking ImGui to clip thousands of lines nobody
+                // can see.
+                const ScopePolar pol = scopeRelative(viewLat, viewLon, lat, lon);
+                const bool inside = pol.rangeNm <= coverNm;
+                const ScopePoint q =
+                    scopeProject(cx, cy, radius, pol.rangeNm, pol.bearingDeg, full);
+                const ImVec2 here(static_cast<float>(q.x), static_cast<float>(q.y));
                 if (havePrev) {
                     // A segment that jumps more than half the world is a wrap,
                     // not a coast; drawing it streaks a line across the face.
                     const bool wrap = std::fabs(lon - prevLon) > 180.0;
-                    // Cheap reject of everything outside the square. With 5127
-                    // points this is not about frame rate so much as about not
-                    // asking ImGui to clip thousands of lines nobody can see -
-                    // and on a scope almost the whole world is outside.
-                    const bool visible =
-                        !(std::max(lon, prevLon) < west || std::min(lon, prevLon) > east ||
-                          std::max(lat, prevLat) < southLat ||
-                          std::min(lat, prevLat) > northLat);
-                    if (!wrap && visible) { dl->AddLine(prev, project(lat, lon), kCoast, 1.0f); }
+                    if (!wrap && (inside || prevInside)) {
+                        dl->AddLine(prev, here, kCoast, 1.0f);
+                    }
                 }
-                prev = project(lat, lon);
+                prev = here;
+                prevInside = inside;
                 prevLon = lon;
-                prevLat = lat;
                 havePrev = true;
             }
         }
@@ -2598,13 +2619,13 @@ void ScopeView::draw(float width, float height,
     // nothing and moved nothing: a click on an aircraft is a selection, and the
     // release at the end of a drag is the end of a pan. Both would otherwise
     // jump the view out from under the hand that just finished using it.
-    if (clicked && !dragged_ && hit == nullptr && pixPerWorld > 0.0) {
+    if (clicked && !dragged_ && hit == nullptr && pxPerNm > 0.0) {
         const ImVec2 m = ImGui::GetIO().MousePos;
         // The point under the cursor becomes the point under the dot. Computed
         // as a PLACE, so a later range change keeps it there.
-        const ScopeLatLon at = scopeViewCentre(viewLat_, viewLon_,
-                                               static_cast<double>(cx - m.x),
-                                               static_cast<double>(cy - m.y), pixPerWorld);
+        const ScopeLatLon at = scopeViewMoved(viewLat_, viewLon_,
+                                              static_cast<double>(cx - m.x),
+                                              static_cast<double>(cy - m.y), pxPerNm);
         viewLat_ = at.latDeg;
         viewLon_ = at.lonDeg;
         hasView_ = true;

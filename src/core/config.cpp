@@ -445,8 +445,19 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // which is the same rule the preset frequency check follows and the reason
     // no separate isfinite() test is needed here.
     {
-        const bool inRange = out.rxLatDeg >= -90.0 && out.rxLatDeg <= 90.0 &&
-                             out.rxLonDeg >= -180.0 && out.rxLonDeg <= 180.0;
+        // AND NOT THE ORIGIN. 0 N 0 E with the flag set used to load as a set
+        // position, on the argument that the origin is a place and the flag,
+        // not a sentinel, says whether it is meant. A real user's scope was
+        // then found measuring from the Gulf of Guinea, the view dragged three
+        // thousand miles to the coast it belonged on: the pair had been
+        // applied from a control whose fields still read 0.00000. The one
+        // receiver that could honestly sit at 0,0 is a buoy. The application
+        // now refuses the pair at every door (receiverPositionAcceptable in
+        // gui/scope_view.hpp), and a file that carries it opens as UNSET -
+        // which is what puts the one-click offers back on the rail for the
+        // user who has it.
+        const bool inRange =
+            cascade::gui::receiverPositionAcceptable(out.rxLatDeg, out.rxLonDeg);
         if (!out.rxPositionSet || !inRange) {
             out.rxPositionSet = false;
             out.rxLatDeg = 0.0;

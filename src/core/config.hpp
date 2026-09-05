@@ -188,7 +188,7 @@ struct AppConfig {
     //            restoring it can never strand anybody.
     //
     // scopeRangeNm  the scale in nautical miles, and it is one of a fixed
-    //            LADDER of values (10, 25, 50, 100, 200, 400 - see
+    //            LADDER of values (10, 25, 50, 100, 200, 400, 800, 1600 - see
     //            gui/scope_view.hpp, which owns that list). CLAMPED ON LOAD to
     //            the nearest of them, because everything the view draws is
     //            derived from this number: four ring radii, four ring labels
