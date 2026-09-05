@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -666,6 +667,15 @@ private:
     std::vector<HostPath> paths_;
     std::vector<HostPanel> panels_;
 
+    // GUARDED, because a plugin does not only call these from the GUI thread.
+    // The ABI documents the host table for the GUI thread, but Satellites
+    // 1.0.1 read the clock from its own background worker, and the GUI thread
+    // replaces this struct on every rescan and source change
+    // (refreshPluginRunner). A std::function torn mid-move on one thread and
+    // called on another is undefined behaviour, and undefined behaviour
+    // inside a plugin's noexcept thread entry ends in abort(). The trampolines
+    // copy what they need under this lock and call it after releasing it.
+    mutable std::mutex servicesMutex_;
     HostServices services_;
     PluginStopSet stopped_;
     std::vector<std::string> tuneRequesters_;

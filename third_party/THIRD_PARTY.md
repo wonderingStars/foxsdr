@@ -31,7 +31,6 @@ support SoapySDR exists to provide. It therefore stays external by design.
 | nlohmann/json | https://github.com/nlohmann/json | tag `v3.12.0` (release asset `json.hpp` = `single_include/nlohmann/json.hpp`) | `https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp` | `aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63` | MIT (`nlohmann_json/LICENSE.MIT`) | `third_party/nlohmann_json/` |
 | pffft | https://bitbucket.org/jpommier/pffft | tag `v1.0.0` (bitbucket changeset `02fe7715a5bf`) — the exact revision the vcpkg `pffft` 1.0.0 port pins | `https://bitbucket.org/jpommier/pffft/get/v1.0.0.tar.gz` | `9adeb18ac7bb52e9fb921c31c0c6a4e9ae150cc6fcb20a899d4b3a2275176ded` | FFTPACK/BSD-style (`pffft/LICENSE.txt`) | `third_party/pffft/` |
 | cpp-httplib | https://github.com/yhirose/cpp-httplib | tag `v0.53.1` (single header `httplib.h`) | `https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.53.1/httplib.h` | `bc69d53636a8757cb24a1deb9880bf7e2fdae3a80bbc759e145b8c80913cbfa3` | MIT (`cpp_httplib/LICENSE`) | `third_party/cpp_httplib/` |
-| WebView2 SDK | https://www.nuget.org/packages/Microsoft.Web.WebView2 | `1.0.4191.47` (header-and-import-library only; identified by hashing candidate packages, see the note below) | `https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4191.47/microsoft.web.webview2.1.0.4191.47.nupkg` | `f492bbf547d0da329553b6727435b677579b1e9f91cc9e4a1ad029366d5f23d0` | Microsoft WebView2 SDK licence, BSD-3-style (`webview2/LICENSE.txt`) | `third_party/webview2/` |
 | Saira Condensed | https://github.com/google/fonts | commit `eda91bff215c766697fcbbcf836a6425e5c167ac` (`ofl/sairacondensed/`, Medium and SemiBold statics) | `https://raw.githubusercontent.com/google/fonts/eda91bff215c766697fcbbcf836a6425e5c167ac/ofl/sairacondensed/SairaCondensed-{Medium,SemiBold}.ttf` | Medium `a02d8fe45b8b7d952cb0dd341683b02ddc1b55dbd0ed89d9d438868be614b66f`, SemiBold `30f8ed4d078211003a9715c80c51ce031bab5c9a17e8771182e4c4599205634b` | SIL OFL 1.1, reserved name "Saira" (`fonts/OFL-SairaCondensed.txt`) | `third_party/fonts/` |
 | Nova Mono | https://github.com/google/fonts | commit `90abd17b4f97671435798b6147b698aa9087612f` (`ofl/novamono/`) | `https://raw.githubusercontent.com/google/fonts/90abd17b4f97671435798b6147b698aa9087612f/ofl/novamono/NovaMono.ttf` | `648eadb6648c0801b186d3dcef60ee6aa84a791b1e09c726935c0712508b4807` | SIL OFL 1.1, reserved name "NovaMono" (`fonts/OFL-NovaMono.txt`) | `third_party/fonts/` |
 
@@ -146,25 +145,6 @@ exists because a vendored header can be present and correctly hashed while
 still failing to compile under `/W4 /permissive-`, missing an import library,
 or having no working socket layer on this platform — none of which is visible
 from the file on disk.
-
-### WebView2 SDK (`third_party/webview2/`)
-Four files only — `include/WebView2.h`, `include/WebView2EnvironmentOptions.h`,
-`x64/WebView2LoaderStatic.lib` and `LICENSE.txt` — taken from the
-`Microsoft.Web.WebView2` NuGet package. They build `foxsdr-radar.exe`, the
-desktop shell the HTML radar panel runs in. **No runtime is vendored:** the
-WebView2 *runtime* is a Microsoft-serviced component installed on the machine,
-and the loader is linked statically precisely so the shipped executable has no
-`WebView2Loader.dll` to lose.
-
-**How the version was established, since the vendoring commit recorded none.**
-Nothing in the header carries a product version, so `1.0.4191.47` is not read
-off the files — it is the package whose bytes they are. Every stable package
-from `1.0.4022.49` up ships an identical `WebView2.h`, so the header alone
-cannot name a version; the static loader library differs between all of them,
-and only `1.0.4191.47` hashes to the vendored one. All four files were then
-confirmed byte-identical to that package. If a future audit needs to repeat
-this: hash `build/native/x64/WebView2LoaderStatic.lib` inside each candidate
-`.nupkg`, not the header.
 
 ### Saira Condensed and Nova Mono (`third_party/fonts/`)
 The application's three typefaces — Saira Condensed Medium and SemiBold for

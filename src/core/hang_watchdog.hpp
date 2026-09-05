@@ -97,6 +97,21 @@
 //      last minutes. GetGUIThreadInfo reports exactly this state
 //      (GUI_INMOVESIZE / GUI_INMENUMODE / GUI_POPUPMENUMODE) and it is
 //      suppressed.
+//   2c. A NESTED LOOP THAT SETS NONE OF THOSE FLAGS. Pressing and holding a
+//      caption button, or resting the pointer on the maximise button long
+//      enough for Windows 11 to offer its snap layouts, parks the GUI thread
+//      inside uxtheme's own tracking loop - reached through DefWindowProc,
+//      which GLFW falls through to for every non-client message it does not
+//      handle - and GUITHREADINFO has no bit for that state; its five flags
+//      date from Windows 2000. One such stall of 5.4 s was reported and
+//      uploaded as a hang on 2026-09-04, from a 0.75.0 build idling on the
+//      signal generator, with the thread blocked in win32u.dll's message wait
+//      the whole time. So the thread's own instruction pointer is consulted:
+//      the application's frame loop only ever calls the NON-blocking
+//      PeekMessage, and the only way its GUI thread can sit inside win32u's
+//      wait syscalls for seconds is for a loop Windows owns to have taken the
+//      thread over and gone idle in it. A stalled thread whose Rip is inside
+//      win32u.dll is pumping, not hung, whatever the flags say.
 //   2b. BLOCKING WORK THE APPLICATION ENTERS KNOWINGLY, which is WatchdogPause.
 //      One path in this application takes it today, and it is named rather
 //      than described in the abstract because a mitigation nobody calls is not
@@ -290,6 +305,16 @@ public:
     enum class SuppressionForTest { Normal, NeverSuppress, AlwaysSuppress };
     void setSuppressionForTest(SuppressionForTest mode);
 
+    // TEST HOOK for rule 2c. Where a stalled GUI thread's instruction pointer
+    // happens to be cannot be staged from ctest either - a test cannot park
+    // its thread inside Windows' caption-button loop on demand - so this
+    // names the module the peek would have found, and the rule is judged on
+    // that name. It is consulted in every suppression mode, NeverSuppress
+    // included, because that mode exists to switch off the two rules a test
+    // cannot control (the debugger, the modal flags) and this one is the
+    // rule under test. An empty name (the default) means "peek for real".
+    void setStalledModuleForTest(const char* moduleName);
+
     // TEST HOOK, for the incremental-write discipline. A wedged unwinder
     // cannot be staged from ctest - it needs another thread to be inside the
     // loader at the instant of capture - but the property the incremental
@@ -314,6 +339,10 @@ private:
     // the wiring a test CAN reach is the same wiring the debugger and modal
     // checks a test CANNOT reach go through.
     bool suppressed() const;
+    // Rule 2c: whether the stalled GUI thread is parked in the window
+    // manager's own message wait. Answers from the injected module name when
+    // one is set, otherwise from one register read of the GUI thread.
+    bool guiThreadIsPumping() const;
 
     std::thread thread_;
     std::atomic<bool> stop_{false};
@@ -368,6 +397,11 @@ private:
 
     mutable std::mutex pathMutex_;
     std::string lastPath_;
+
+    // Rule 2c's test injection. Guarded for the same reason reportDir_ is: a
+    // test sets it on its own thread and the watchdog thread reads it.
+    mutable std::mutex stalledModuleMutex_;
+    std::string stalledModuleForTest_;
 };
 
 // Scope guard for blocking work: pauses on construction, resumes on

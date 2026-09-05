@@ -109,6 +109,8 @@ AppConfig junkConfig() {
     // leave the mode on and the renderer holding a scale it has no rings for.
     c.scopeMode = true;
     c.scopeRangeNm = 12345;
+    // The rail's bank, off its default of 0 for the same reason.
+    c.railBank = 3;
     // Map geometry, away from the "nothing saved" default and out of range, so
     // a load path that forgets to assign it is caught.
     c.mapWindowWidth = -5;

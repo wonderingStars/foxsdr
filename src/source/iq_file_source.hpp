@@ -95,6 +95,18 @@ public:
 
     const char* lastError() const override { return lastError_.c_str(); }
 
+    // TRUE ONCE A READ HAS FAILED MID-PLAYBACK, until the next open(). read()
+    // zero-fills after an I/O error and keeps returning n, deliberately (a
+    // free-running source that returns 0 reads as "retry" to the pacing
+    // loop) - which meant the pipeline saw a perfectly healthy source
+    // delivering silence for ever: the spectrum kept scrolling, every lamp
+    // stayed green, and the only record was a lastError() nothing polled
+    // during playback. The pipeline's source thread polls THIS, so a file
+    // that vanished or was cut short under the receiver is a fault with a
+    // message on the panel rather than a quiet radio. Atomic because the
+    // source thread sets it and the GUI thread reads it.
+    bool faulted() const override { return faulted_.load(std::memory_order_acquire); }
+
     // How many RIFF chunk headers ONE open() may walk. See the loop's comment:
     // open() runs on the GUI thread and the walk's trip count was set by the
     // file's own contents, so a run of zero-size chunks bought one blocking
@@ -152,6 +164,8 @@ private:
     // polls it from the source thread; everything else is caller-serialized
     // per the threading note on read().
     std::atomic<bool> running_{false};
+    // See faulted(): set by read() on the source thread, read by anyone.
+    std::atomic<bool> faulted_{false};
     std::vector<unsigned char> ioBuf_;  // small streaming buffer, never the file
 };
 

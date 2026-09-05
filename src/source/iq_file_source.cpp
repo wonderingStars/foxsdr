@@ -68,6 +68,7 @@ bool IqFileSource::open(const std::string& wavPath) {
     opened_ = false;
     format_ = SampleFormat::none;
     lastError_.clear();
+    faulted_.store(false, std::memory_order_release);
     name_ = "IQ file";
     if (file_.is_open()) {
         file_.close();
@@ -380,6 +381,10 @@ std::size_t IqFileSource::read(std::complex<float>* dst, std::size_t n) {
             // returning 0 would read as "retry" to the pacing loop.
             lastError_ = "I/O error while reading '" + name_ +
                          "' (file truncated or removed during playback?)";
+            // The flag the pipeline's source thread actually polls - see
+            // faulted() in the header for why the message alone was not
+            // enough.
+            faulted_.store(true, std::memory_order_release);
             for (; delivered < n; ++delivered) {
                 dst[delivered] = std::complex<float>(0.0f, 0.0f);
             }

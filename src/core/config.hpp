@@ -202,6 +202,16 @@ struct AppConfig {
     bool scopeMode = false;
     int scopeRangeNm = 200;
 
+    // railBank   which of the FUNCTION SELECT rail's five banks was showing -
+    //            SIGNAL PATH, DECODE, VIEW, EXTEND, SYSTEM, as 0..4 in that
+    //            order (gui/rail_banks.hpp owns the list). Restored so the
+    //            rail opens where it was left, exactly as a section's own
+    //            open/closed state does; CLAMPED ON LOAD to a bank that exists,
+    //            so a hand-edited 7 opens on the last bank rather than on
+    //            nothing. 0 is the default: the signal path is where a new
+    //            installation has to start.
+    int railBank = 0;
+
     // --- Map window geometry --------------------------------------------------
     // The map is its own operating system window, and ImGui's own .ini
     // persistence is switched off in this application (IniFilename = nullptr,

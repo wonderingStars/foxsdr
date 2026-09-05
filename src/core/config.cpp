@@ -14,6 +14,7 @@
 // wrong. The header is ImGui-free and pulls in no GL, no window and no
 // plugin instance, so nothing about this include reaches the application
 // shell.
+#include "gui/rail_banks.hpp"
 #include "gui/scope_view.hpp"
 
 #include <algorithm>
@@ -250,6 +251,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "scopeMode", out.scopeMode);
     getInt(j, "scopeRangeNm", out.scopeRangeNm);
     out.scopeRangeNm = cascade::gui::clampScopeRangeNm(out.scopeRangeNm);
+    // Same discipline for the rail's bank: read, then clamped to one that
+    // exists, so a file from a build with more or fewer banks opens somewhere.
+    getInt(j, "railBank", out.railBank);
+    out.railBank = static_cast<int>(cascade::gui::railBankFromIndex(out.railBank));
     // LEGACY KEYS, READ AND NEVER WRITTEN. A file saved before the map became
     // one page per plugin carries its single window's rectangle here; it is
     // read so that rectangle can seed the pages' default placement, and save()
@@ -551,6 +556,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
+    j["railBank"] = cfg.railBank;
     // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
     // deliberately NOT written: the map is one page per plugin now, and
     // mapPages below is the rectangle store. The keys are still read (see

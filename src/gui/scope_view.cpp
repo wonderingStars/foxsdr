@@ -49,7 +49,7 @@ constexpr double kWorldKm = 2.0 * kPi * kEarthRadiusKm;
 // above both. The silhouette and the hollow-vs-filled cue carry the same
 // information as the colour for anyone who cannot separate the hues, exactly
 // as they do on the map.
-// EVERY VALUE BELOW IS THE DESIGN'S OWN, taken from resources/web/radar's CSS
+// EVERY VALUE BELOW IS THE DESIGN'S OWN, taken from the design handoff's CSS
 // custom properties rather than chosen here, so the native face and the
 // reference the design was signed off on are the same instrument and not two
 // interpretations of one. --acc #86d64a, --acc-bright #b7f56a, --acc-dim
@@ -152,10 +152,10 @@ void addClippedText(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, Im
 // --- the tube's own optics ----------------------------------------------------
 //
 // Everything below exists because a radar tube is not a map in a circular hole.
-// The design these are taken from (resources/web/radar) expresses them as CSS
-// filters, conic gradients and repeating gradients, none of which Dear ImGui
-// has; each one here is the closest thing the draw list can build, and the
-// comment on each says what it is standing in for.
+// The design handoff these are taken from expresses them as CSS filters,
+// conic gradients and repeating gradients, none of which Dear ImGui has; each
+// one here is the closest thing the draw list can build, and the comment on
+// each says what it is standing in for.
 
 // THE PHOSPHOR WASH. The design runs the basemap through
 // grayscale(1) brightness(.95) sepia(1) hue-rotate(58deg) saturate(1.9) at

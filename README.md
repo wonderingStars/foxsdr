@@ -348,6 +348,22 @@ before you use the application:
 - **Rust is trouble**, and never a reading, so a fault can never be mistaken
   for a figure.
 
+The controls live on the **FUNCTION SELECT** rail down the left, and the rail
+is a bank selector, the way a bench instrument's is: five brass pushbuttons
+under its title - **SIGNAL**, **DECODE**, **VIEW**, **EXTEND**, **SYSTEM** -
+one of them pressed in with a phosphor strip lit beneath it, and the column
+below showing that bank's sections and nothing else. SIGNAL is the receiver
+itself (source, radio, audio filters, sinks, the recorder); DECODE is the
+plugin store, the fitted modules, the decoders, target details and the
+satellites map; VIEW is the display range, the radar scope, bookmarks and the
+scanner; EXTEND is browser access and CAT control; SYSTEM is updates,
+diagnostics and usage reporting. **F1 to F5** press the same five keys from
+the keyboard. Each section still opens and closes with its own key and
+remembers its state across banks and restarts; a section unfolds rather than
+appearing, a bank comes up like a lamp rather than switching in one frame, and
+the rail opens on whichever bank you left it on. Every chip on a row still
+reports what that section is doing without opening it.
+
 Every one of those lives in `src/gui/theme.hpp`, in one palette named by role.
 Two things it deliberately does NOT govern, because they are measurements
 rather than decoration: the waterfall's colour ramp, which is built to keep a
@@ -428,62 +444,6 @@ The coverage ring is worded the same way, because it had the same problem: it
 records how far out a target has been **plotted** on each of 72 bearings, from
 every plugin, and a satellite's position is normally *computed* rather than
 heard — so it does not claim to be a record of what the antenna received.
-
-## The radar unit
-
-**foxsdr-radar.exe** is a second, separate application: a Fox & Schirmer
-instrument panel that shows the aircraft FoxSDR is decoding and nothing else.
-It is a real desktop window with its own taskbar entry — not a browser, and it
-does not open one — and it takes the display over completely: FoxSDR's own
-windows go away while it is up and come back when it closes.
-
-The panel is a round phosphor scope with the map underneath it, drawn from
-whichever basemap plugin is installed and centred on the receiver's position,
-with range rings on the ladder the RANGE knob selects (20, 40, 80, 160 and 200
-nautical miles). Contacts are coloured by altitude using the same bands as the
-desktop map, and each one draws a trail behind it in those same colours, so a
-climb is visible as a change of colour along the track. The right-hand panel
-has three screens — HOME for the counts, FLIGHT for the selected aircraft, SYS
-for the options — and PREV/NEXT step through what is in range.
-
-To use it:
-
-1. Turn on **Web access** in FoxSDR's settings (loopback is enough — the radar
-   runs on the same machine). The radar reads the receiver through it.
-2. Set the receiver's position, or the scope has nothing to measure range
-   from and says so rather than guessing.
-3. Open it from **Radar → Open the radar unit** in the FUNCTION SELECT rail, or
-   run `foxsdr-radar.exe` from the Start menu.
-
-While the radar holds the display FoxSDR **minimises itself**, rather than
-hiding, and that distinction is deliberate. Until 0.76.0 it hid the window,
-which takes it off the taskbar too — so opening the radar removed every trace
-of the receiver at once, and was reported as a crash. It never was one: the
-application went on running and rendering the whole time. A minimised window
-keeps its taskbar button, so FoxSDR is visibly still there.
-
-**Clicking that taskbar button takes the display back** without closing the
-radar, and the radar's next renewal will not snatch it away again — the two
-can sit side by side from then on. Closing the radar window, or switching
-**POWER** to standby on the panel itself, hands the display back the usual
-way. If the radar is killed rather than closed, FoxSDR restores itself on its
-own within about twelve seconds — the arrangement is a lease the radar renews,
-not a switch it can leave flipped, so a crash cannot leave the application
-minimised with no way back to it.
-
-Two things the panel deliberately will not do. It never invents a reading: a
-value the receiver has not reported is drawn as a hatched **NO REPORT**, which
-is why SQUAWK and ROUTE always read that way — the decoder does not publish
-them. And a figure that has stopped updating is marked **STALE** and then
-becomes an unknown, rather than sitting there looking current.
-
-The panel itself is HTML, CSS and JavaScript, authored in
-`resources/web/radar/` and compiled into the binary; FoxSDR serves it at
-`/radar` and `foxsdr-radar.exe` hosts it in an embedded WebView2. Edit those
-files, re-run `py -3.14 tools/embed-radar-assets.py`, and rebuild — a test
-fails the build if the two ever disagree. It needs the Microsoft Edge WebView2
-runtime, which is part of Windows 11 and is installed by Edge on Windows 10;
-the program says so plainly if it is ever missing.
 
 ## Privacy
 

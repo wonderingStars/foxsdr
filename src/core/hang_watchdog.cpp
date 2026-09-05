@@ -222,9 +222,80 @@ void HangWatchdog::setCaptureAbortForTest(CaptureAbortForTest mode) {
     captureAbort_.store(static_cast<int>(mode), std::memory_order_relaxed);
 }
 
+void HangWatchdog::setStalledModuleForTest(const char* moduleName) {
+    std::lock_guard<std::mutex> lk(stalledModuleMutex_);
+    stalledModuleForTest_ = (moduleName != nullptr) ? moduleName : "";
+}
+
+namespace {
+
+// Rule 2c's one fact: the module a stalled GUI thread is executing in when it
+// is inside the window manager's own message wait. Case-insensitive because
+// the loader reports the name as the file system has it, and "win32u.dll" has
+// been seen capitalised both ways in module tables on the same machine.
+bool isMessagePumpModule(const char* name) {
+    if (name == nullptr) { return false; }
+    static constexpr char kPump[] = "win32u.dll";
+    std::size_t i = 0;
+    for (; kPump[i] != '\0'; ++i) {
+        const char a = name[i];
+        if (a == '\0') { return false; }
+        const char la = (a >= 'A' && a <= 'Z') ? static_cast<char>(a - 'A' + 'a') : a;
+        if (la != kPump[i]) { return false; }
+    }
+    return name[i] == '\0';
+}
+
+}  // namespace
+
+bool HangWatchdog::guiThreadIsPumping() const {
+    {
+        std::lock_guard<std::mutex> lk(stalledModuleMutex_);
+        if (!stalledModuleForTest_.empty()) {
+            return isMessagePumpModule(stalledModuleForTest_.c_str());
+        }
+    }
+#if defined(_WIN32) && defined(_M_X64)
+    // ONE REGISTER, READ THE WAY THE CAPTURE READS IT: suspend, GetThreadContext,
+    // resume, and nothing else while the thread is stopped - no allocation and
+    // no loader call, for the reasons captureAllThreads spells out. The module
+    // lookup afterwards walks the table start() snapshotted, which takes no
+    // lock either.
+    const DWORD tid = guiThreadId_.load(std::memory_order_relaxed);
+    if (tid == 0) { return false; }
+    HANDLE h = ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                            FALSE, tid);
+    if (h == nullptr) { return false; }
+    CONTEXT ctx{};
+    ctx.ContextFlags = CONTEXT_CONTROL;
+    bool haveCtx = false;
+    if (::SuspendThread(h) != static_cast<DWORD>(-1)) {
+        haveCtx = ::GetThreadContext(h, &ctx) != 0;
+        ::ResumeThread(h);
+    }
+    ::CloseHandle(h);
+    if (!haveCtx) { return false; }
+    DiagModule m;
+    std::uintptr_t off = 0;
+    if (!resolveAddress(static_cast<std::uintptr_t>(ctx.Rip), m, off)) { return false; }
+    return isMessagePumpModule(m.name);
+#else
+    return false;
+#endif
+}
+
 bool HangWatchdog::suppressed() const {
     const int mode = suppression_.load(std::memory_order_relaxed);
-    if (mode == static_cast<int>(SuppressionForTest::NeverSuppress)) { return false; }
+    if (mode == static_cast<int>(SuppressionForTest::NeverSuppress)) {
+        // The debugger and modal rules are off, as the mode promises; rule 2c
+        // still answers when a test has injected a module, because that mode
+        // is how the rule itself gets tested.
+        std::lock_guard<std::mutex> lk(stalledModuleMutex_);
+        if (!stalledModuleForTest_.empty()) {
+            return isMessagePumpModule(stalledModuleForTest_.c_str());
+        }
+        return false;
+    }
     if (mode == static_cast<int>(SuppressionForTest::AlwaysSuppress)) { return true; }
 #if defined(_WIN32)
     // 1. A break is not a hang.
@@ -241,6 +312,10 @@ bool HangWatchdog::suppressed() const {
         if ((gi.flags & modal) != 0) { return true; }
     }
 #endif
+    // 2c. A nested loop those flags do not cover: the thread is parked in the
+    //     window manager's own wait, which the application's frame loop never
+    //     does on its own (it only ever PeekMessages). See the header.
+    if (guiThreadIsPumping()) { return true; }
     return false;
 }
 

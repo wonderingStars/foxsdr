@@ -217,8 +217,8 @@ struct RadioStatus {
     std::vector<Track> tracks;
 
     // WHERE THE ANTENNA IS. Published because a range-and-bearing display -
-    // the radar unit is one - cannot draw a single ring without it, and
-    // because "the user has not told us" and "the user is at 0N 0E" are
+    // the native radar scope is one - cannot draw a single ring without it,
+    // and because "the user has not told us" and "the user is at 0N 0E" are
     // different answers that must not look the same. rxPositionSet is the
     // one that decides; the two degrees mean nothing while it is false.
     bool rxPositionSet = false;
