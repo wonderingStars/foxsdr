@@ -32,6 +32,7 @@ struct GLFWwindow;
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
+#include "gui/rail_banks.hpp"
 // The ADS-B radar scope. ImGui-free like track_metrics.hpp below, so it can be
 // held by value here without breaking the rule that main() - and the tests -
 // never see a GUI header.
@@ -452,6 +453,20 @@ private:
     void requestClose() { closeRequested_ = true; }
 
     void drawSourceSection();
+    // The three sections that used to be written inline in drawMenuColumn,
+    // and the DECODE bank's list. See gui/rail_banks.hpp for why the rail is
+    // five banks and drawMenuColumn for the dispatch.
+    void drawRadioSection();
+    void drawSinksSection();
+    void drawDisplaySection();
+    void drawDecodeBank();
+    // The five bank keys under the rail's title, at the column's top-left
+    // (colX, colY) and width colW, laid from bodyTop. Returns the y the
+    // sections start at. Reads the keyboard too: F1..F5, one per key.
+    float drawRailBankKeys(float colX, float colY, float colW, float bodyTop);
+    // The fade a newly selected bank comes up with, drawn over the sections
+    // child from inside it, so it covers hand-drawn plates and widgets alike.
+    void drawRailBankCurtain();
     // Runs one SoapySDR enumeration into soapyDevices_ and re-points the
     // combo selection at the active device by args (labels can repeat; a
     // device that vanished from the scan leaves sourceSel_ = -1 and the
@@ -1369,40 +1384,13 @@ private:
     // The two INPUT fields are separate from the applied position on purpose:
     // typing a latitude must not move the range rings until the button is
     // pressed, or every intermediate keystroke would be a different receiver.
-    // THE RADAR UNIT'S LEASE ON THE DISPLAY. foxsdr-radar.exe is a separate
-    // desktop application showing the same receiver, so while it is up this
-    // window puts itself away - and the lease, not a flag, is what decides:
-    // the radar renews it every few seconds, and this window comes back on
-    // its own if the renewals stop. A radar that crashes must not be able to
-    // leave the user with no way back to their receiver.
-    // Three missed renewals at the radar's four-second cadence. Long enough
-    // that a stalled frame or a paused debugger does not pull the desktop
-    // back out from under a running radar; short enough that a crash is a
-    // pause, not a lockout.
-    static constexpr double kRadarLeaseSeconds = 12.0;
-    void setRadarHoldsDisplay(bool held);
-    void applyRadarWindowVisibility();
-    // Set for the one frame that gives the display back, so the torn-off
-    // windows are shown once rather than forced visible for ever.
-    bool radarRestoreWindows_ = false;
-    // Scope mode hides the torn-off windows the same way the radar lease does;
-    // these two carry the edge that puts them back on the way out.
+    void applyScopeWindowVisibility();
+    // Scope mode hides the torn-off windows while it is on; these two carry
+    // the edge that puts them back on the way out.
     bool scopeWasOn_ = false;
     bool scopeLeftThisFrame_ = false;
 
     GLFWwindow* mainWindow_ = nullptr;
-    bool radarHoldsDisplay_ = false;
-    double radarLeaseExpiry_ = 0.0;
-    // Set when the user restores the main window while the radar still holds
-    // the lease - they have taken the display back by hand, and the radar's
-    // next renewal must not snatch it away again. Cleared once the lease has
-    // expired, which is how the application notices the radar has gone.
-    bool radarDisplayTakenBack_ = false;
-    // The frame the hold began on. The iconified attribute is set from a
-    // window message, so it is not safe to read one back in the same frame it
-    // was asked for; a few frames of grace stops the handover being mistaken
-    // for the user undoing it.
-    int radarHoldFrame_ = 0;
 
     bool rxSet_ = false;
     double rxLat_ = 0.0;
@@ -1438,6 +1426,15 @@ private:
     ScopeView scope_;
     bool scopeMode_ = false;
     int scopeRangeNm_ = kScopeDefaultRangeNm;
+
+    // --- THE FUNCTION SELECT RAIL'S BANK -------------------------------------
+    // Which of the five banks (gui/rail_banks.hpp) the rail is showing, as
+    // 0..4; persisted as `railBank`. railBankFade_ is the progress of the
+    // fade a newly selected bank comes up with, 1.0 once it is fully there,
+    // so the swap reads as a lamp coming up rather than the column changing
+    // in one frame.
+    int railBank_ = 0;
+    float railBankFade_ = 1.0f;
     // Whether ANYTHING asked the basemap for a tile this frame - the map pages
     // and, now, the scope. BasemapCache::endFrame() evicts every tile nothing
     // asked for, so it must run exactly once per frame and only AFTER every

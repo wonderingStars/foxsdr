@@ -53,7 +53,7 @@ const char* const kChips[] = {
     "12 TGT",  "REC",    "OFF",   "SCAN",      "PLAIN",     "PLAN",    "ON",
     "MUTED",   "NO DEV", "DEAD",  "RIGCTLD",   "CHECKING",  "STOPPED", "REPORTING",
     "WFM",     "NFM",    "AM",    "USB",       "LSB",       "CW",      "RAW",
-    "DSB",     "B200",   "SIGGEN", "SCOPE",     "UNIT"};
+    "DSB",     "B200",   "SIGGEN", "SCOPE"};
 
 // Every label the main window's rail letters, plus the two that are built at
 // run time from a count and from a plugin's own display name.
@@ -221,6 +221,35 @@ void testAnOverlongLabelIsBounded() {
                0.001);
 }
 
+// --- 4. the five bank keys carry their own words --------------------------------
+//
+// The keys share the plate's width five ways (drawRailBankKeys: an 8 px inset
+// each side, 4 px between keys), and a key's word is lettered at kTinySize in
+// the legend face. A word wider than its key would be clipped or spill onto
+// the next key, and either reads as a design decision rather than a fault -
+// exactly the failure the rest of this file exists to catch for the rows.
+void testBankKeyLabelsFit() {
+    constexpr float kPad = 8.0f;
+    constexpr float kGap = 4.0f;
+    const float keyW = (cascade::gui::kMenuWidth - 2.0f * kPad -
+                        kGap * static_cast<float>(cascade::gui::kRailBankCount - 1)) /
+                       static_cast<float>(cascade::gui::kRailBankCount);
+    std::printf("  a bank key is %.2f px wide\n", static_cast<double>(keyW));
+    for (int i = 0; i < cascade::gui::kRailBankCount; ++i) {
+        const char* word = cascade::gui::railBankLabel(cascade::gui::railBankFromIndex(i));
+        const float w = cascade::gui::fonts::legend()
+                            ->CalcTextSizeA(cascade::gui::fonts::kTinySize, FLT_MAX, 0.0f, word)
+                            .x;
+        // Four pixels of brass either side of the word, or it is touching the
+        // bevel.
+        if (w + 8.0f > keyW) {
+            std::printf("      \"%s\" needs %.2f px and has %.2f\n", word,
+                        static_cast<double>(w + 8.0f), static_cast<double>(keyW));
+        }
+        CHECK(w + 8.0f <= keyW);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -246,6 +275,7 @@ int main() {
     testChipReserveMatchesTheDrawnChip();
     testEveryRailLabelFits();
     testAnOverlongLabelIsBounded();
+    testBankKeyLabelsFit();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");

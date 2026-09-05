@@ -35,7 +35,7 @@ namespace cascade::source {
 namespace {
 
 // cascade is a single-VFO receiver front end: it always streams RX channel 0.
-// Multi-channel devices (B210 etc.) still work â€” they just expose one chain.
+// Multi-channel devices (B210 etc.) still work — they just expose one chain.
 constexpr std::size_t kChannel = 0;
 
 // read() blocking bound. Was 100 ms; 20 ms since the device lock serialised the
@@ -91,8 +91,8 @@ std::atomic<unsigned long long> s_abandonedCalls{0};
 std::atomic<int> s_openDevices{0};
 
 // A stream error the device can plausibly come back from unaided. Overflow is
-// the everyday one â€” the host fell behind, samples were dropped, the next read
-// is fine again â€” and a corrupt packet likewise costs one buffer, not the
+// the everyday one — the host fell behind, samples were dropped, the next read
+// is fine again — and a corrupt packet likewise costs one buffer, not the
 // radio. Every other negative code (SOAPY_SDR_STREAM_ERROR above all, which is
 // what drivers return once the USB endpoint has gone) needs a reopen, so it
 // counts toward the fault threshold instead.
@@ -109,9 +109,9 @@ constexpr int kMaxConsecutiveErrors = 10;
 // Turns a block a driver just delivered into a block the DSP chain can be
 // trusted with, returning whether anything had to be replaced.
 //
-// WHY HERE, IN THE HOT PATH. A NaN or an infinity from a driver â€” a
+// WHY HERE, IN THE HOT PATH. A NaN or an infinity from a driver — a
 // half-initialised buffer, the CF32 converter fed a malformed packet, a device
-// coming apart on the bus â€” is not recoverable further down: it latches the
+// coming apart on the bus — is not recoverable further down: it latches the
 // AGC gain, the squelch/S-meter EMA and the noise reducer's spectrum, and the
 // receiver goes silent while the spectrum display stays alive. This is the
 // hardware path's entry point, the counterpart of the sanitise
@@ -122,9 +122,9 @@ constexpr int kMaxConsecutiveErrors = 10;
 // it costs 26 us per 10 ms block at 2 Msps (0.26% of the real time that block
 // represents; the pipeline reads kChunkSec = 10 ms at a time). What runs here
 // instead is ONE float sum over the block: NaN and either infinity poison a
-// sum they enter, and radio samples are bounded well inside float range â€” a
+// sum they enter, and radio samples are bounded well inside float range — a
 // 61.44 Msps block of 614400 samples of |x| <= 1 sums to at most ~1.2e6
-// against a 3.4e38 ceiling â€” so a non-finite SUM means a non-finite SAMPLE,
+// against a 3.4e38 ceiling — so a non-finite SUM means a non-finite SAMPLE,
 // exactly, with no false positives to explain away. That pass costs 14 us per
 // block, 0.14% of the block's real time, and because both the work and the
 // budget scale with the sample count that fraction is the same at every rate.
@@ -438,7 +438,7 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
 
     // NEVER WHILE A RADIO IS OPEN (adjudicated fix #1 for the 0.62.0 field
     // crashes). The vendor walk opens and closes the very dongle a stream may
-    // be using, through this process's libusb â€” the exact lifecycle overlap
+    // be using, through this process's libusb — the exact lifecycle overlap
     // fingerprinted as the corrupting event behind the freed-and-reused-lock
     // faults. The child-process scan never reaches this gate (a fresh process
     // has no device open); only the in-parent fallback does, and an empty
@@ -650,7 +650,7 @@ bool SoapySource::open(const std::string& args) {
     }
     switch (o.result) {
         case Open::Result::Ok:
-            // Commit the readbacks the guarded body parked in `o` â€” here,
+            // Commit the readbacks the guarded body parked in `o` — here,
             // where taking errorMutex_ for name_ is safe.
             sampleRateHz_.store(o.rateHz, std::memory_order_relaxed);
             centerFrequencyHz_.store(o.freqHz, std::memory_order_relaxed);
@@ -955,10 +955,10 @@ void SoapySource::teardownLocked() noexcept {
         }
     }
     clearDeviceStateLocked(released);
-    // The FAULT state goes with the stream that raised it â€” there is nothing
+    // The FAULT state goes with the stream that raised it — there is nothing
     // left to be faulted about. lastError_ deliberately does NOT: teardown
     // runs immediately after the failures whose reason the GUI still shows
-    // (see closeDevice), and clearing it here would erase every one of them â€”
+    // (see closeDevice), and clearing it here would erase every one of them —
     // including the vendor-fault message noteVendorFault just wrote.
     //
     // AN ABANDONED LINK IS THE EXCEPTION, and it is what makes the abandonment
@@ -1009,7 +1009,7 @@ bool SoapySource::faulted() const {
 
 const char* SoapySource::lastError() const {
     // The returned pointer outlives the lock, so it cannot point into
-    // lastError_ â€” the source thread rewrites that string. A thread_local
+    // lastError_ — the source thread rewrites that string. A thread_local
     // snapshot gives each calling thread its own backing buffer, which is what
     // makes this safe for the two callers that genuinely differ: the GUI, and
     // the pipeline's source loop reading the fault message.
@@ -1144,7 +1144,7 @@ bool SoapySource::start() {
 void SoapySource::stop() {
     // Serialised like every driver entry: a stop no longer interrupts a
     // parked read cross-thread (the SoapySDR stream contract forbids that
-    // concurrent use) â€” it waits out at most one kReadTimeoutUs read quantum,
+    // concurrent use) — it waits out at most one kReadTimeoutUs read quantum,
     // then deactivates with the stream unowned.
     //
     // BOUNDED, BECAUSE THAT "AT MOST ONE READ QUANTUM" IS A PROMISE THE DRIVER
@@ -1153,14 +1153,14 @@ void SoapySource::stop() {
     // simply never returns makes every waiter wait for ever, and this waiter
     // is the GUI thread: Pipeline::stop() calls it straight out of the
     // toolbar. Field report 4214EAE4 (0.64.0) is that hang, captured on a
-    // Mirics device after the user switched sources twice â€” the interface
+    // Mirics device after the user switched sources twice — the interface
     // frozen on this exact lock_guard, which is worse than a crash because
     // the user cannot even restart from it.
     //
     // So the wait is bounded. Losing the race costs a device left activated
-    // in a driver that is not answering â€” which is the same abandonment the
+    // in a driver that is not answering — which is the same abandonment the
     // dead-device policy above already performs deliberately, for the same
-    // reason â€” and the user is told, instead of the window going white.
+    // reason — and the user is told, instead of the window going white.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         // running_ is atomic and is what the read loop actually tests, so
@@ -1192,7 +1192,7 @@ void SoapySource::stopLocked() {
     }
     // Mark stopped before touching the device: even if deactivation faults,
     // this object's state machine must land in "stopped". That ordering is
-    // what makes a fault below safe â€” running_ is already correct when it
+    // what makes a fault below safe — running_ is already correct when it
     // arrives, so nothing has to be repaired on the way out.
     running_.store(false, std::memory_order_relaxed);
     if (deviceDead()) {
@@ -1225,7 +1225,7 @@ void SoapySource::stopLocked() {
         case JobOutcome::Completed:
             break;
         case JobOutcome::Faulted:
-            // stop() is void, so the only reporting channel is lastError() â€”
+            // stop() is void, so the only reporting channel is lastError() —
             // and now also faulted(), which the pipeline polls. The teardown
             // that usually follows will see deviceDead() and let the handle go
             // without touching the driver again.
@@ -1267,7 +1267,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // "never called again" promise be broken.
         if (faulted_ || deviceDead_) { return 0; }
     }
-    // The lock is held across the bounded readStream â€” that is the whole
+    // The lock is held across the bounded readStream — that is the whole
     // serialisation contract (see the header): while samples are being read,
     // no control call can enter the driver, and while a control call is in
     // the driver, this thread waits here instead of entering beside it.
@@ -1327,7 +1327,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
             if (scrubbed) {
                 // Classified like an overflow: recorded so the GUI can show
                 // it, and NOT counted toward the fault threshold. The device
-                // answered â€” a block of it was unusable, which is a reason to
+                // answered — a block of it was unusable, which is a reason to
                 // silence that block, not to stop the radio.
                 lastError_ =
                     "device delivered non-finite samples; that block was "
@@ -1335,7 +1335,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
             }
             return got;
         }
-        // A timeout is the bounded block expiring with nothing ready â€” the
+        // A timeout is the bounded block expiring with nothing ready — the
         // contract's normal "retry" answer, not a failure. Deliberately NOT
         // recorded: an idle device would otherwise leave a permanent
         // "readStream failed" in the GUI. (A literal 0 is not a documented
@@ -1544,7 +1544,7 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
     });
     if (!completed) {
         // False, and the Source panel's gain slider stops agreeing with a
-        // device it can no longer reach â€” which is the truth.
+        // device it can no longer reach — which is the truth.
         noteVendorFault("setting the gain");
         return false;
     }

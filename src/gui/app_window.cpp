@@ -8,6 +8,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -1054,10 +1055,10 @@ int AppWindow::run(int frames) {
             glfwMakeContextCurrent(restore);
         }
 
-        // THE RADAR UNIT COVERS THE WHOLE APPLICATION, NOT JUST THIS WINDOW.
-        // Hiding the main window alone left a user's map page and decoder
-        // output sitting on the desktop beside a radar that is supposed to BE
-        // the interface - seen the first time the two ran together.
+        // SCOPE MODE IS SUPPOSED TO COVER THE WHOLE APPLICATION, NOT JUST
+        // THIS WINDOW. Switching what this window draws alone left a user's
+        // map page and decoder output sitting on the desktop beside a scope
+        // that is supposed to BE the interface while it is on.
         //
         // Applied every frame rather than once, because the torn-off windows
         // are ImGui viewports: UpdatePlatformWindows above re-shows any it
@@ -1066,7 +1067,7 @@ int AppWindow::run(int frames) {
         // decision stick without fighting the backend for ownership of the
         // window - and the geometry read-back that persists their rectangles
         // is unaffected, because a hidden window keeps its position.
-        applyRadarWindowVisibility();
+        applyScopeWindowVisibility();
 
         glfwSwapBuffers(window);
         ++rendered;
@@ -1500,6 +1501,64 @@ void railPlateLabel(ImDrawList* dl, const ImVec2& rowTL, const ImVec2& rowBR,
     dl->AddText(f, labelPx, at, ink, shown, nullptr, 0.0f, &clip);
 }
 
+// --- THE DRAWERS' MOTION -----------------------------------------------------
+//
+// A section that pops from closed to open in one frame reads as the screen
+// glitching; a real drawer unfolds. So a section's content is drawn inside a
+// child whose height runs from nothing to the content's own height over
+// kRailDrawerSeconds (gui/rail_banks.hpp), and back again when it closes -
+// and while it is fully open it is drawn exactly as it always was, inline,
+// with no child at all, so an open section costs nothing it did not before.
+//
+// THE HEIGHT COMES FROM A MEASUREMENT, NOT A GUESS: while a section is open
+// and inline, the distance from its header to the next row is recorded, and
+// that is the height the drawer runs to next time. A section that has never
+// been measured (the first opening after a restart, of one that started
+// closed) simply opens at once - a jump on one frame beats an unfold to a
+// height invented for it.
+//
+// WHY THERE IS A FLUSH. benchSection returns before the content is drawn and
+// has no way to run code after it, so the drawer child begun there is ended by
+// the NEXT rail primitive (a row, a switch, a group caption) and by
+// benchRailFlush() at the end of the column. That is the same linear order the
+// rail has always been drawn in; nothing here can nest, and the GUI thread is
+// the only thread that draws.
+struct RailDrawer {
+    float progress = 0.0f;  // 0 folded .. 1 unfolded
+    float naturalH = 0.0f;  // the content's own height, once measured
+    bool measured = false;
+    bool seen = false;
+};
+
+std::unordered_map<ImGuiID, RailDrawer>& railDrawers() {
+    static std::unordered_map<ImGuiID, RailDrawer> drawers;
+    return drawers;
+}
+
+struct RailPending {
+    bool active = false;
+    bool inChild = false;  // a drawer child is open and must be ended
+    ImGuiID id = 0;
+    float startY = 0.0f;   // where the inline content began, for measuring
+};
+RailPending g_railPending;
+
+void benchRailFlush() {
+    if (!g_railPending.active) { return; }
+    if (g_railPending.inChild) {
+        ImGui::EndChild();
+        ImGui::PopID();
+    } else {
+        RailDrawer& d = railDrawers()[g_railPending.id];
+        const float h = ImGui::GetCursorPosY() - g_railPending.startY;
+        if (h > 0.0f) {
+            d.naturalH = h;
+            d.measured = true;
+        }
+    }
+    g_railPending = RailPending{};
+}
+
 // --- ONE ROW OF THE FUNCTION RAIL --------------------------------------------
 //
 // SAME CONTRACT AS ImGui::CollapsingHeader: it draws the row and returns
@@ -1543,6 +1602,8 @@ void railPlateLabel(ImDrawList* dl, const ImVec2& rowTL, const ImVec2& rowBR,
 bool benchSection(const char* label, bool defaultOpen, const char* chipText = nullptr,
                   ImU32 lampColour = cascade::gui::theme::kPhosphor,
                   bool lampLit = false) {
+    // The previous section's drawer ends where the next row begins.
+    benchRailFlush();
     // The visible name stops at the id suffix: "Plugins###plugins" is a widget
     // called plugins that shows the word Plugins, and the rail must letter the
     // word rather than the plumbing.
@@ -1673,6 +1734,33 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
                     cascade::gui::theme::kKeyRounding + 1.0f, 0,
                     cascade::gui::theme::kHairline);
     }
+
+    // THE DRAWER - see "THE DRAWERS' MOTION" above. `open` is the target; the
+    // section is drawn while any of it is showing, which includes the frames
+    // it spends folding shut.
+    RailDrawer& d = railDrawers()[rowId];
+    if (!d.seen) {
+        d.seen = true;
+        d.progress = open ? 1.0f : 0.0f;  // no motion on the first frame ever
+    }
+    if (open && !d.measured && d.progress < 1.0f) { d.progress = 1.0f; }
+    d.progress = cascade::gui::railDrawerAdvance(d.progress, open, ImGui::GetIO().DeltaTime);
+    const bool moving = d.progress > 0.0f && d.progress < 1.0f;
+    if (moving) {
+        const float drawerH = std::max(1.0f, d.naturalH * cascade::gui::railEase(d.progress));
+        ImGui::PushID(static_cast<int>(rowId));
+        // Transparent, like the sections child itself: the plate's ground
+        // carries the drawer, and a box around a half-open section would be a
+        // box the reference does not have.
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::BeginChild("##drawer", ImVec2(ImGui::GetContentRegionAvail().x, drawerH),
+                          ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleColor();
+        g_railPending = RailPending{true, true, rowId, 0.0f};
+        return true;
+    }
+    if (open) { g_railPending = RailPending{true, false, rowId, ImGui::GetCursorPosY()}; }
     return open;
 }
 
@@ -1704,6 +1792,7 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
 bool benchSwitchRow(const char* label, bool on, const char* chipText,
                     ImU32 lampColour, bool lampLit, bool enabled,
                     const char* tooltip) {
+    benchRailFlush();
     // Same rule as benchSection: the visible name stops at the id suffix, so
     // "Satellites map###satmap:X" letters the words and not the plumbing.
     char shown[96];
@@ -1813,6 +1902,7 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
 // Reserves its own row so the sections below it flow normally; without the
 // Dummy the caption would be painted into space the next row then draws over.
 void benchGroup(const char* caption) {
+    benchRailFlush();
     ImGui::Spacing();
     const float px = cascade::gui::fonts::kTinySize;
     const float w = ImGui::GetContentRegionAvail().x;
@@ -2503,8 +2593,22 @@ void AppWindow::drawStatusColumn() {
         if (audioTaping) { bytes += static_cast<double>(audioRecorder_.bytesWritten()); }
         std::snprintf(l0, sizeof(l0), "%s elapsed", elapsed);
         std::snprintf(l1, sizeof(l1), "%.1f MB written", bytes / (1024.0 * 1024.0));
-        const StatusLine lines[2] = {{l0, kFaint}, {l1, kFaint}};
-        card("RECORDER", cascade::gui::theme::kAlarm, what, lines, 2);
+        // A DISK THAT STOPPED TAKING THE FILE IS SAID, NOT LEFT TO BE NOTICED.
+        // The recorder latches writeFailed() when stdio refuses a write (full,
+        // removed, gone read-only) and stops paying for a dead stream; from
+        // out here that used to look like a take whose MB counter had frozen,
+        // with the card still reading IQ in rust as if all were well.
+        const bool diskFault = (iqTaping && iqRecorder_.writeFailed()) ||
+                               (audioTaping && audioRecorder_.writeFailed());
+        if (diskFault) {
+            const StatusLine lines[2] = {{l1, kFaint},
+                                         {"disk refused the file - nothing more is being kept",
+                                          cascade::gui::theme::kAlarmHot}};
+            card("RECORDER", cascade::gui::theme::kAlarmHot, "STALLED", lines, 2);
+        } else {
+            const StatusLine lines[2] = {{l0, kFaint}, {l1, kFaint}};
+            card("RECORDER", cascade::gui::theme::kAlarm, what, lines, 2);
+        }
     } else {
         const StatusLine lines[1] = {{"no file open", kFaint}};
         card("RECORDER", kMuted, "off", lines, 1);
@@ -3230,8 +3334,12 @@ void AppWindow::drawMenuColumn() {
     ImDrawList* colDl = ImGui::GetWindowDrawList();
     const ImVec2 colTL = ImGui::GetWindowPos();
     const ImVec2 colSize = ImGui::GetWindowSize();
-    const float bodyTop = cascade::gui::addBenchPlate(
+    float bodyTop = cascade::gui::addBenchPlate(
         colDl, colTL, ImVec2(colTL.x + colSize.x, colTL.y + colSize.y), "FUNCTION SELECT");
+    // THE FIVE BANK KEYS, under the title and above the sections - the
+    // function selector a 1960s bench actually has: a row of pushbuttons, one
+    // lit. See gui/rail_banks.hpp for why the rail stopped being one list.
+    bodyTop = drawRailBankKeys(colTL.x, colTL.y, colSize.x, bodyTop);
 
     // The sections scroll inside an inner child sized to leave room for the
     // status footer, so the footer stays pinned to the bottom of the column
@@ -3250,9 +3358,88 @@ void AppWindow::drawMenuColumn() {
     ImGui::PopStyleColor();
     drawUpdateBanner();
 
-    // --- SIGNAL PATH: what the samples pass through, in the order they do ----
-    benchGroup("SIGNAL PATH");
-    drawSourceSection();
+    // ONE BANK AT A TIME. The five captions the rail always carried are now
+    // the five keys drawn above this child (see drawRailBankKeys and
+    // gui/rail_banks.hpp for why), and the column shows the sections of the
+    // selected bank and nothing else. Every section keeps its own
+    // open/closed state across a bank change - the state is ImGui's, keyed
+    // on the row's id, and the id does not change with the bank.
+    switch (cascade::gui::railBankFromIndex(railBank_)) {
+        case cascade::gui::RailBank::SignalPath:
+            // --- SIGNAL PATH: what the samples pass through, in the order
+            // they do. The recorder is here rather than under DECODE because
+            // it captures the signal path's own product - raw I/Q or the
+            // demodulated audio - and has nothing to do with decoding.
+            benchGroup("SIGNAL PATH");
+            drawSourceSection();
+            drawRadioSection();
+            drawAudioFilterSection();
+            drawSinksSection();
+            drawRecorderSection();
+            break;
+        case cascade::gui::RailBank::Decode:
+            drawDecodeBank();
+            break;
+        case cascade::gui::RailBank::View:
+            // --- VIEW: how what was decoded is shown. The radar scope is a
+            // way of LOOKING at the traffic the decoders produce, which is
+            // why it sits beside Display rather than among the decoders.
+            benchGroup("VIEW");
+            drawDisplaySection();
+            drawRadarSection();
+            drawBookmarksSection();
+            drawScannerSection();
+            break;
+        case cascade::gui::RailBank::Extend:
+            benchGroup("EXTEND");
+            drawWebSection();
+            drawCatSection();
+            break;
+        case cascade::gui::RailBank::System:
+            benchGroup("SYSTEM");
+            drawUpdatesSection();
+            drawDiagnosticsSection();
+            drawUsageReportingSection();
+            break;
+    }
+    // The last section's drawer, if it is mid-motion, is closed here rather
+    // than by a next row that does not exist.
+    benchRailFlush();
+    drawRailBankCurtain();
+    ImGui::EndChild();
+
+    // Status footer: active source identity, its sample rate (device readback
+    // for Soapy, nominal otherwise), and the audio sink's cumulative underrun
+    // count — the buffer-health readout the parity spec's status bar calls
+    // for. Two clipped lines rather than one wrapped one: a long device name
+    // must not push the numbers out of the reserved footer space.
+    ImGui::Separator();
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    // Line 1: the active source, and — when a band plan is loaded — the band
+    // the TUNED frequency (source centre + VFO offset, i.e. what the VFO
+    // marker sits on) falls in. BandPlan::at returns the narrowest match, so
+    // this names "ISS Downlink" rather than the 2 m band containing it.
+    const cascade::core::BandEntry* band =
+        bandPlan_.entries().empty() ? nullptr : bandPlan_.at(currentAbsoluteHz());
+    if (band != nullptr) {
+        ImGui::Text("%s | %s", src.name(), band->name.c_str());
+    } else {
+        ImGui::TextUnformatted(src.name());
+    }
+    // Source rate | DSP channel rate (the Vfo's output rate the demodulator
+    // runs at — this is what makes rate-follow visible) | buffer health.
+    ImGui::Text("%.4g MS/s | ch %.4g kHz | underruns %llu",
+                src.sampleRateHz() / 1.0e6, pipeline_.channelRateHz() / 1.0e3,
+                static_cast<unsigned long long>(pipeline_.audio().underruns()));
+}
+
+// The Radio section of the rail: mode keys, VFO, bandwidth, squelch,
+// de-emphasis, the WFM stereo/RDS controls and the S-meter. Moved out of
+// drawMenuColumn unchanged when the rail became five banks (see
+// gui/rail_banks.hpp): the column dispatches a bank, and a bank is a list
+// of section calls, so an inline section would have been the one thing
+// in the list that was not a call.
+void AppWindow::drawRadioSection() {
     // kModeNames is the one table the mode buttons and this chip both read,
     // so the rail cannot claim a mode the buttons do not show.
     const bool radioOpen = benchSection("Radio", true, kModeNames[modeIndex_],
@@ -3328,10 +3515,11 @@ void AppWindow::drawMenuColumn() {
         std::snprintf(overlay, sizeof(overlay), "%.1f dB", static_cast<double>(sDb));
         ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
     }
-    // Between the demodulator and the sinks, because that is where it sits in
-    // the pipeline: notch, auto-notch and noise reduction run on the audio
-    // AFTER the mode above produced it and BEFORE the device below plays it.
-    drawAudioFilterSection();
+}
+
+// The Sinks section: the output device and why there is no sound. Moved out
+// of drawMenuColumn unchanged, for the reason drawRadioSection gives.
+void AppWindow::drawSinksSection() {
     // MUTED is the state worth seeing from the rail without opening it -
         // "why is there no sound" is the question this chip answers - but it
         // is not the only way for the sound to stop, and the lamp beside it
@@ -3420,35 +3608,12 @@ void AppWindow::drawMenuColumn() {
             ImGui::TextDisabled("sound returns when the plugin stops");
         }
     }
-    // --- DECODE: what is made of the samples, and what is kept of it --------
-    //
-    // THE ORDER STILL MATTERS, AND ONE OF ITS TWO REASONS HAS MOVED. The store
-    // and the inventory are WINDOWS now, drawn from drawPluginWindows before
-    // this rail exists at all - so the "store before inventory" rule that
-    // pluginBrowserDrawnThisFrame_ needs is enforced there, by the order of
-    // those two calls, and no longer by the order of these two rows. What
-    // remains here is the reading order of a rail: the two keys that open
-    // those windows, then the decoder controls neither window carries, then
-    // TARGET DETAILS, which is drawn after them because the targets it
-    // describes come from the modules above it.
-    benchGroup("DECODE");
-    drawPluginStoreSection();
-    drawPluginsSection();
-    drawDecodersSection();
-    drawRadarSection();
-    drawTargetDetailsSection();
-    // THE SATELLITES MAP'S ONLY PRESENCE OUT HERE. A switch, not a section:
-    // the window it opens carries every satellite control there is, and the
-    // design's own note in the corner of the mock says as much - it "reopens
-    // from the Windows menu and from its own rocker in DECODE". There is no
-    // Windows menu in this application, so this rocker is the whole of it, and
-    // it is drawn after the plugin inventory because the pages it switches are
-    // created from what that inventory loaded.
-    drawSatelliteMapSection();
-    drawRecorderSection();
+}
 
-    // --- VIEW: how what was decoded is shown -------------------------------
-    benchGroup("VIEW");
+// The Display section: the shared dB window and the band-plan overlay.
+// Moved out of drawMenuColumn unchanged, for the reason drawRadioSection
+// gives.
+void AppWindow::drawDisplaySection() {
     // THE BAND PLAN OVERLAY IS THE ONLY THING IN THIS SECTION THAT IS EITHER
     // ON OR OFF, so it is what the chip reports and the comment says so rather
     // than the chip implying it speaks for the whole of Display. The dB window
@@ -3493,47 +3658,181 @@ void AppWindow::drawMenuColumn() {
             }
         }
     }
-    // Closed by default (unlike the always-needed sections above): both are
-    // occasional-use tools, and opening them by default would push the Display
-    // controls off a 720p column.
-    drawBookmarksSection();
-    drawScannerSection();
+}
 
-    // --- EXTEND: the ways in from outside this window -----------------------
-    benchGroup("EXTEND");
-    drawWebSection();
-    drawCatSection();
+// The DECODE bank of the rail, in the reading order its comment explains.
+// The radar scope and the recorder used to be listed here too; they moved
+// to VIEW and SIGNAL PATH when the rail became five banks, because a bank
+// is chosen by what a control IS, and a scope is a view while a recorder
+// is part of the signal path.
+void AppWindow::drawDecodeBank() {
+    // --- DECODE: what is made of the samples, and what is kept of it --------
+    //
+    // THE ORDER STILL MATTERS, AND ONE OF ITS TWO REASONS HAS MOVED. The store
+    // and the inventory are WINDOWS now, drawn from drawPluginWindows before
+    // this rail exists at all - so the "store before inventory" rule that
+    // pluginBrowserDrawnThisFrame_ needs is enforced there, by the order of
+    // those two calls, and no longer by the order of these two rows. What
+    // remains here is the reading order of a rail: the two keys that open
+    // those windows, then the decoder controls neither window carries, then
+    // TARGET DETAILS, which is drawn after them because the targets it
+    // describes come from the modules above it.
+    benchGroup("DECODE");
+    drawPluginStoreSection();
+    drawPluginsSection();
+    drawDecodersSection();
+    drawTargetDetailsSection();
+    // THE SATELLITES MAP'S ONLY PRESENCE OUT HERE. A switch, not a section:
+    // the window it opens carries every satellite control there is, and the
+    // design's own note in the corner of the mock says as much - it "reopens
+    // from the Windows menu and from its own rocker in DECODE". There is no
+    // Windows menu in this application, so this rocker is the whole of it, and
+    // it is drawn after the plugin inventory because the pages it switches are
+    // created from what that inventory loaded.
+    drawSatelliteMapSection();
+}
 
-    // --- SYSTEM: the application talking about itself -----------------------
-    benchGroup("SYSTEM");
-    drawUpdatesSection();
-    drawDiagnosticsSection();
-    drawUsageReportingSection();
-    ImGui::EndChild();
+// --- THE BANK KEYS -----------------------------------------------------------
+//
+// One pushbutton of the function selector: a lettered brass key that stays
+// PRESSED while its bank is showing, with a phosphor strip lit under it - the
+// lamp a 1960s selector puts beside the button that is in. benchWordKey draws
+// the momentary version of the same part; this one has a latched state, and
+// the two are kept as two functions because a latched key that pops back up
+// under the hand is the one thing a selector must never do.
+//
+// A real ImGui item, so the keys take part in the same input arbitration as
+// every other control and can be reached with Tab; the F-keys are handled by
+// the caller, once for the row, because they are not a property of a key.
+static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
+                         const char* label, bool on, const char* tooltip, int index) {
+    if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
+    ImGui::PushID(index);
+    ImGui::SetCursorScreenPos(tl);
+    const bool pressed = ImGui::InvisibleButton("##bankkey", ImVec2(br.x - tl.x, br.y - tl.y));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    if (hovered && tooltip != nullptr) { ImGui::SetTooltip("%s  (F%d)", tooltip, index + 1); }
+    ImGui::PopID();
 
-    // Status footer: active source identity, its sample rate (device readback
-    // for Soapy, nominal otherwise), and the audio sink's cumulative underrun
-    // count — the buffer-health readout the parity spec's status bar calls
-    // for. Two clipped lines rather than one wrapped one: a long device name
-    // must not push the numbers out of the reserved footer space.
-    ImGui::Separator();
-    cascade::source::IqSource& src = pipeline_.activeSource();
-    // Line 1: the active source, and — when a band plan is loaded — the band
-    // the TUNED frequency (source centre + VFO offset, i.e. what the VFO
-    // marker sits on) falls in. BandPlan::at returns the narrowest match, so
-    // this names "ISS Downlink" rather than the 2 m band containing it.
-    const cascade::core::BandEntry* band =
-        bandPlan_.entries().empty() ? nullptr : bandPlan_.at(currentAbsoluteHz());
-    if (band != nullptr) {
-        ImGui::Text("%s | %s", src.name(), band->name.c_str());
-    } else {
-        ImGui::TextUnformatted(src.name());
+    const float r = cascade::gui::theme::kKeyRounding;
+    const bool down = on || held;
+    // Proud metal casts a shadow and pressed metal does not, which is the
+    // state indication before any colour is used - the same rule as
+    // benchWordKey, so the two parts read as one family.
+    if (!down) {
+        dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
+                          cascade::gui::theme::withAlpha(cascade::gui::theme::kVoid, 0.45f), r);
     }
-    // Source rate | DSP channel rate (the Vfo's output rate the demodulator
-    // runs at — this is what makes rate-follow visible) | buffer health.
-    ImGui::Text("%.4g MS/s | ch %.4g kHz | underruns %llu",
-                src.sampleRateHz() / 1.0e6, pipeline_.channelRateHz() / 1.0e3,
-                static_cast<unsigned long long>(pipeline_.audio().underruns()));
+    const ImU32 top = down      ? cascade::gui::theme::kBrassMid
+                      : hovered ? cascade::gui::theme::kIvory
+                                : cascade::gui::theme::kCream;
+    const ImU32 bot = down ? cascade::gui::theme::kBrassDark : cascade::gui::theme::kBrassBright;
+    dl->AddRectFilled(tl, br, bot, r);
+    if (br.x - tl.x > r * 2.0f) {
+        dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top, top,
+                                    bot, bot);
+    }
+    cascade::gui::addBenchBevel(dl, tl, br, r, !down);
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+                    cascade::gui::theme::kBrassBright, r + 1.0f, 0,
+                    cascade::gui::theme::kHairline);
+    }
+    // THE LAMP STRIP: lit phosphor under the key that is in, dark glass under
+    // the others - so which bank is showing can be read from across the room,
+    // and read in the display's own colour, because "this is what is on" is
+    // closer to a reading than to a control.
+    {
+        const ImVec2 sTL(tl.x + 3.0f, br.y + 3.0f);
+        const ImVec2 sBR(br.x - 3.0f, br.y + 6.0f);
+        dl->AddRectFilled(sTL, sBR, cascade::gui::theme::kWell, 1.0f);
+        if (on) {
+            dl->AddRectFilled(ImVec2(sTL.x - 1.0f, sTL.y - 1.0f),
+                              ImVec2(sBR.x + 1.0f, sBR.y + 1.0f),
+                              cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.25f),
+                              2.0f);
+            dl->AddRectFilled(sTL, sBR, cascade::gui::theme::kPhosphor, 1.0f);
+        }
+    }
+    // The word, cut into the brass: ink on metal, never amber.
+    ImFont* f = cascade::gui::fonts::legend();
+    const float px = cascade::gui::fonts::kTinySize;
+    const ImVec2 ts = f->CalcTextSizeA(px, FLT_MAX, 0.0f, label);
+    dl->AddText(f, px,
+                ImVec2((tl.x + br.x) * 0.5f - ts.x * 0.5f,
+                       (tl.y + br.y) * 0.5f - ts.y * 0.5f + (down ? 1.0f : 0.0f)),
+                on ? cascade::gui::theme::kIvory : cascade::gui::theme::kEnamel, label);
+    return pressed;
+}
+
+float AppWindow::drawRailBankKeys(float colX, float colY, float colW, float bodyTop) {
+    (void)colY;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    constexpr float kPad = 8.0f;    // the plate's own inset, as the sections use
+    constexpr float kGap = 4.0f;
+    constexpr float kStrip = 7.0f;  // the lamp strip and its gap, below the key
+    const float keyH = std::max(22.0f, cascade::gui::fonts::kTinySize + 9.0f);
+    const float x0 = colX + kPad;
+    const float x1 = colX + colW - kPad;
+    const float keyW = (x1 - x0 - kGap * static_cast<float>(cascade::gui::kRailBankCount - 1)) /
+                       static_cast<float>(cascade::gui::kRailBankCount);
+    if (keyW < 24.0f || dl == nullptr) { return bodyTop; }
+
+    // THE KEYBOARD'S ROW OF FUNCTION KEYS IS THE SAME ROW, F1 to F5 left to
+    // right - not while a field is being typed in, where a function key may
+    // mean something to the field.
+    int selected = -1;
+    if (!ImGui::GetIO().WantTextInput) {
+        for (int i = 0; i < cascade::gui::kRailBankCount; ++i) {
+            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_F1 + i), false)) {
+                selected = cascade::gui::railBankForFunctionKey(i);
+            }
+        }
+    }
+    for (int i = 0; i < cascade::gui::kRailBankCount; ++i) {
+        const cascade::gui::RailBank b = cascade::gui::railBankFromIndex(i);
+        const ImVec2 tl(x0 + static_cast<float>(i) * (keyW + kGap), bodyTop);
+        const ImVec2 br(tl.x + keyW, bodyTop + keyH);
+        if (benchBankKey(dl, tl, br, cascade::gui::railBankLabel(b), railBank_ == i,
+                         cascade::gui::railBankCaption(b), i)) {
+            selected = i;
+        }
+    }
+    if (selected >= 0 && selected != railBank_) {
+        railBank_ = selected;
+        // The new bank comes up rather than appearing - see drawRailBankCurtain.
+        railBankFade_ = 0.0f;
+    }
+    // The cursor is left where the sections start, and the caller lays them
+    // from the y handed back.
+    const float below = bodyTop + keyH + kStrip + 6.0f;
+    ImGui::SetCursorScreenPos(ImVec2(x0, below));
+    return below;
+}
+
+void AppWindow::drawRailBankCurtain() {
+    // Drawn INSIDE the sections child, at its end, so it lies over everything
+    // the bank drew - the hand-drawn plates as much as the widgets - and is
+    // clipped to the child. It is the plate's own ground (the same enamel
+    // gradient addBenchPlate lays), fading out over kRailBankFadeSeconds: a
+    // bank that comes up like a lamp rather than a column that changes in one
+    // frame. Nothing is drawn once the fade is done, which is nearly always.
+    if (railBankFade_ >= 1.0f) { return; }
+    railBankFade_ = cascade::gui::railDrawerAdvance(railBankFade_, true, ImGui::GetIO().DeltaTime,
+                                                    cascade::gui::kRailBankFadeSeconds);
+    const float a = 1.0f - cascade::gui::railEase(railBankFade_);
+    if (a <= 0.0f) { return; }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 tl = ImGui::GetWindowPos();
+    const ImVec2 sz = ImGui::GetWindowSize();
+    const ImVec2 br(tl.x + sz.x, tl.y + sz.y);
+    dl->AddRectFilledMultiColor(tl, br,
+                                cascade::gui::theme::withAlpha(cascade::gui::theme::kEnamel, a),
+                                cascade::gui::theme::withAlpha(cascade::gui::theme::kEnamel, a),
+                                cascade::gui::theme::withAlpha(cascade::gui::theme::kEnamelDark, a),
+                                cascade::gui::theme::withAlpha(cascade::gui::theme::kEnamelDark, a));
 }
 
 
@@ -4607,6 +4906,25 @@ void AppWindow::drawCenterPanels() {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         } else if (hit == SpectrumView::VfoHit::Center) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        }
+        // THE GESTURES, SAID ONCE THE HAND HAS RESTED. Every way this panel is
+        // tuned - drag the band, drag its edge, click, wheel, double-click -
+        // was discoverable only by accident; the digit wheel three lines up
+        // the window has had a tooltip from the start. Shown after ImGui's
+        // normal hover delay and only while nothing is being dragged, so it
+        // never sits under a hand that is already working.
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
+            !ImGui::IsMouseDown(0)) {
+            if (hit == SpectrumView::VfoHit::Center) {
+                ImGui::SetTooltip("Drag to move the tuned band | drag an edge to widen it\n"
+                                  "Shift-drag: free, unsnapped | wheel: zoom | double-click: unzoom");
+            } else if (hit == SpectrumView::VfoHit::EdgeLow ||
+                       hit == SpectrumView::VfoHit::EdgeHigh) {
+                ImGui::SetTooltip("Drag to widen or narrow the tuned band");
+            } else {
+                ImGui::SetTooltip("Click to tune here | wheel: zoom about the pointer\n"
+                                  "double-click: unzoom | drag the shaded band to move it");
+            }
         }
         if (ImGui::IsMouseClicked(0) && hit != SpectrumView::VfoHit::None) {
             vfoDrag_ = (hit == SpectrumView::VfoHit::Center)  ? VfoDrag::Center
@@ -6108,91 +6426,22 @@ void AppWindow::drawRxPositionEntry() {
     }
 }
 
-// THE RADAR, ON THE RAIL - both of them.
+// THE RADAR SCOPE, ON THE RAIL.
 //
-// This product ships two things called radar, and a user asking where the
-// radar is should not have to know which one they mean before they can find
-// either:
-//
-//   Radar scope - a mode inside this window, drawn by this application.
-//   Radar unit  - foxsdr-radar.exe, its own program with its own window,
-//                 installed beside this one.
-//
-// Until this key existed the scope was buried inside the Decoders section and
-// the unit was reachable only from the Start menu. It was reported missing
-// from the rail twice, which is twice more than a feature should have to be.
+// Its own key rather than a line inside Decoders: a mode that replaces the
+// entire window is not the same kind of control as a checkbox next to a
+// decoder, and burying it inside that section is what got it reported
+// missing from the rail twice, which is twice more than a feature should
+// have to be.
 void AppWindow::drawRadarSection() {
-    const char* chip = scopeMode_ ? "SCOPE" : (radarHoldsDisplay_ ? "UNIT" : "OFF");
+    const char* chip = scopeMode_ ? "SCOPE" : "OFF";
     if (!benchSection("Radar", false, chip, cascade::gui::theme::kPhosphor,
-                      scopeMode_ || radarHoldsDisplay_)) {
+                      scopeMode_)) {
         return;
     }
     telemetryNotePanel("radar");
 
     drawScopeModeControl();
-
-    ImGui::Spacing();
-
-#ifdef _WIN32
-    // The unit is a separate executable, so the honest states are "here" and
-    // "not here" - and it is genuinely absent from a build that did not make
-    // it, which is not a thing to discover through a button that does nothing.
-    std::error_code ec;
-    std::filesystem::path unit;
-    {
-        std::wstring buf(32768, L'\0');
-        const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(),
-                                             static_cast<DWORD>(buf.size()));
-        if (n > 0 && n < buf.size()) {
-            buf.resize(n);
-            unit = std::filesystem::path(buf).parent_path() / L"foxsdr-radar.exe";
-        }
-    }
-    const bool haveUnit = !unit.empty() && std::filesystem::exists(unit, ec);
-
-    ImGui::BeginDisabled(!haveUnit);
-    if (ImGui::Button("Open the radar unit", ImVec2(-1.0f, 0.0f))) {
-        ::ShellExecuteW(nullptr, L"open", unit.c_str(), nullptr,
-                        unit.parent_path().c_str(), SW_SHOWNORMAL);
-    }
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "The Fox & Schirmer Radar Unit: a separate program with its own\n"
-            "window, drawing this receiver's aircraft. While it is open FoxSDR\n"
-            "minimises itself to leave the screen to it - click FoxSDR in the\n"
-            "taskbar to take the display back without closing the radar.");
-    }
-
-    if (!haveUnit) {
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("foxsdr-radar.exe is not installed beside FoxSDR.");
-        ImGui::PopStyleColor();
-    } else if (!webServer_.running()) {
-        // IT DRAWS EVERYTHING THROUGH THE WEB SERVER. With that off the unit
-        // opens and says it has no link, which reads as a broken program
-        // rather than a switch that is off - so the switch is named here,
-        // before the button is pressed.
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped(
-            "Web access is off. The unit draws its aircraft, its map tiles and "
-            "its signal reading through it, and will report no link until it is "
-            "on - see the Web access section.");
-        ImGui::PopStyleColor();
-    } else if (radarHoldsDisplay_) {
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("The radar unit holds the display.");
-        ImGui::PopStyleColor();
-    }
-#else
-    ImGui::PushStyleColor(ImGuiCol_Text,
-                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("The radar unit is a Windows program; this build has none.");
-    ImGui::PopStyleColor();
-#endif
 }
 
 void AppWindow::drawScopeModeControl() {
@@ -9536,11 +9785,18 @@ void AppWindow::removeBlockedPlugin(const std::string& fileName) {
     installError_.clear();
     installReport_.clear();
 
-    // No unloadAll() is needed for the delete itself — a blocked plugin was
-    // never loaded, which is the entire point of blocking it — but rescan
-    // below reloads everything anyway, and unloading first keeps this path
-    // identical in shape to removeInstalledPlugin rather than subtly different.
-    pluginHost_.unloadAll();
+    // THROUGH detachAndUnloadPlugins(), NEVER unloadAll() DIRECTLY. This used
+    // to call unloadAll() on its own, on the reasoning that a blocked plugin
+    // was never loaded so there was nothing to detach - which is true of the
+    // blocked plugin and false of every OTHER plugin, all of which unloadAll()
+    // unmaps too, with their track-source, panel and decoder instances still
+    // alive. A live handle is memory inside a module that has just been
+    // unmapped, and a plugin whose static state owns a thread (Satellites
+    // 1.0.1) reached std::terminate in its own CRT the moment that happened:
+    // an abort() the crash handler never sees. The ordered sequence exists so
+    // there is exactly one way to take a module down; this was the one caller
+    // that did not use it.
+    detachAndUnloadPlugins();
     std::string err;
     if (pluginRepo_.removeQuarantined(pluginDir_, fileName, pluginQuarantineSuffix(), err)) {
         installReport_ = "Removed " + fileName;
@@ -10563,73 +10819,12 @@ void AppWindow::publishWebSnapshot() {
     }
 }
 
-// Hand the display to the radar unit, or take it back.
+// Hide or show every torn-off window the application owns, following scope
+// mode.
 //
-// Only the MAIN window is hidden. The torn-off windows a user has arranged -
-// map pages, decoder output, plugin panels - are their own operating system
-// windows and are left exactly as they are: hiding them would mean restoring
-// them, and a restore that got their order or their monitor wrong would be a
-// worse fault than leaving them where the user put them. The radar covers the
-// receiver's own window, which is the one it replaces.
-void AppWindow::setRadarHoldsDisplay(bool held) {
-    if (held == radarHoldsDisplay_) { return; }
-    radarHoldsDisplay_ = held;
-    if (mainWindow_ == nullptr) { return; }
-    if (held) {
-        // MINIMISED, NOT HIDDEN - and the difference between those two is the
-        // whole of a bug reported as "when you open it, it crashes".
-        //
-        // glfwHideWindow takes a window off the TASKBAR as well as off the
-        // screen. Handing the display over therefore removed every trace of
-        // FoxSDR at once: no window, no taskbar button, nothing in front of
-        // the user that said the receiver was still running. Measured on
-        // 0.75.0 - the visible windows went from "[Decoder output] [FoxSDR
-        // 0.75.0]" to none, while the process stayed perfectly healthy and
-        // rendered 13,435 more frames. There is no way to tell that apart
-        // from a crash by looking, and a user should not have to.
-        //
-        // A minimised window keeps its taskbar button. The screen is just as
-        // clear for the radar, the application is visibly still there, and
-        // clicking that button takes the display back without closing the
-        // radar first - see the take-back in applyRadarWindowVisibility.
-        radarHoldFrame_ = frameCounter_;
-        glfwIconifyWindow(mainWindow_);
-    } else {
-        radarRestoreWindows_ = true;
-        // Restored AND shown: restore un-minimises, while show covers a
-        // window that an older build of this function left hidden.
-        glfwRestoreWindow(mainWindow_);
-        glfwShowWindow(mainWindow_);
-        // Raised as well as shown: a window restored behind the radar's own
-        // window would look exactly like a restore that did not happen.
-        glfwFocusWindow(mainWindow_);
-    }
-}
-
-// Hide or show every window the application owns, following the radar lease.
-//
-// The main window is hidden by setRadarHoldsDisplay the moment the lease
-// changes so the handover looks immediate; this runs each frame and covers
-// the ImGui viewports, which are created and re-shown by the backend and so
-// cannot be settled once.
-void AppWindow::applyRadarWindowVisibility() {
-    // THE TAKE-BACK. The main window is minimised while the radar holds the
-    // display, so the taskbar button is a real control: clicking it restores
-    // the window, and that is the user saying they want the receiver back.
-    // Honour it - drop the hold, put the torn-off windows back, and remember
-    // it so the radar's next four-second renewal does not minimise them
-    // again. Without the memory this would be a fight the user could not win.
-    //
-    // The frame guard is not decoration: GLFW learns a window is iconified
-    // from a window message, so the attribute cannot be trusted on the frame
-    // the hold was asked for.
-    if (radarHoldsDisplay_ && mainWindow_ != nullptr &&
-        frameCounter_ > radarHoldFrame_ + 8 &&
-        glfwGetWindowAttrib(mainWindow_, GLFW_ICONIFIED) == 0) {
-        radarDisplayTakenBack_ = true;
-        setRadarHoldsDisplay(false);
-    }
-
+// This runs each frame and covers the ImGui viewports, which are created and
+// re-shown by the backend and so cannot be settled once.
+void AppWindow::applyScopeWindowVisibility() {
     // Leaving scope mode is an EDGE, and the frame it happens on is the one
     // that has to show the windows again - after that ImGui owns their
     // visibility once more, and forcing them visible every frame would stop
@@ -10643,46 +10838,31 @@ void AppWindow::applyRadarWindowVisibility() {
     for (int i = 0; i < pio.Viewports.Size; ++i) {
         ImGuiViewport* vp = pio.Viewports[i];
         if (vp == nullptr) { continue; }
-        // The main viewport is the main window, already handled - and hiding
-        // it here as well would fight setRadarHoldsDisplay for it.
+        // The main viewport is the main window: scope mode draws inside it
+        // rather than hiding it, so it is skipped here along with anything
+        // else that is not a torn-off window.
         if ((vp->Flags & ImGuiViewportFlags_IsPlatformWindow) == 0) { continue; }
         GLFWwindow* w = static_cast<GLFWwindow*>(vp->PlatformHandle);
         if (w == nullptr || w == mainWindow_) { continue; }
-        // SCOPE MODE COUNTS TOO. It is a full-screen instrument in the same
-        // sense the radar unit is - the user asked for the panel with as
-        // little around it as possible - and a torn-off decoder window
-        // floating over the middle of the tube is the opposite of that. Seen
-        // the first time the compact cabinet was drawn: the scope was correct
-        // and completely covered.
-        if (radarHoldsDisplay_ || scopeMode_) {
+        // SCOPE MODE HIDES THEM. It is a full-screen instrument - the user
+        // asked for the panel with as little around it as possible - and a
+        // torn-off decoder window floating over the middle of the tube is the
+        // opposite of that. Seen the first time the compact cabinet was
+        // drawn: the scope was correct and completely covered.
+        if (scopeMode_) {
             glfwHideWindow(w);
-        } else if (radarRestoreWindows_ || scopeLeftThisFrame_) {
+        } else if (scopeLeftThisFrame_) {
             glfwShowWindow(w);
         }
     }
     // Showing is a one-shot: after the frame that restores them, ImGui owns
     // their visibility again, and forcing them visible every frame would stop
     // the user ever closing one.
-    radarRestoreWindows_ = false;
     scopeLeftThisFrame_ = false;
     scopeWasOn_ = scopeMode_;
 }
 
 void AppWindow::applyWebControls() {
-    // THE RADAR UNIT'S LEASE, EXPIRED FIRST. Checked before the new requests
-    // are read so an expiry and a renewal arriving in the same frame settle
-    // in the right order - the renewal wins, which is what makes a lease
-    // renewed at the last moment behave like a lease renewed early.
-    if (radarHoldsDisplay_ && glfwGetTime() > radarLeaseExpiry_) {
-        setRadarHoldsDisplay(false);
-    }
-    // A lease that has run out means the radar has stopped renewing, which
-    // means it has gone. That is the moment a hand-back stops applying: the
-    // next radar to open is a fresh request, not the one the user overruled.
-    if (radarDisplayTakenBack_ && glfwGetTime() > radarLeaseExpiry_) {
-        radarDisplayTakenBack_ = false;
-    }
-
     std::vector<cascade::net::ControlRequest> requests =
         webServer_.takePendingControls();
     // CAT requests are the SAME ControlRequest type, so they are appended here
@@ -10813,20 +10993,6 @@ void AppWindow::applyWebControls() {
         // All of this runs on the GUI thread by construction (applyWebControls
         // is called from drawUi), which is what makes it safe to touch the
         // source at all.
-        if (r.radarActive.has_value()) {
-            if (*r.radarActive) {
-                // Renewed, whether or not it was already held: the lease is a
-                // deadline, and every renewal pushes it out.
-                radarLeaseExpiry_ = glfwGetTime() + kRadarLeaseSeconds;
-                // Not if the user has already taken the display back by hand.
-                // The renewal still pushes the deadline out - the radar is
-                // plainly alive - it just no longer claims the screen.
-                if (!radarDisplayTakenBack_) { setRadarHoldsDisplay(true); }
-            } else {
-                setRadarHoldsDisplay(false);
-                radarDisplayTakenBack_ = false;
-            }
-        }
         if (r.scanDevices.value_or(false)) {
             scanSoapy();
         }
@@ -11719,6 +11885,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& cfg) {
     // unrepresentable scale reaches the rings - which is the point of a ladder.
     scopeMode_ = cfg.scopeMode;
     scopeRangeNm_ = clampScopeRangeNm(cfg.scopeRangeNm);
+    // The rail opens on the bank it was left on. Clamped again here even
+    // though load() already did: this is the value a widget indexes with.
+    railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
     scope_.setRangeNm(scopeRangeNm_);
 
     // The map pages' rectangles from the last session, seeded here rather
@@ -12100,6 +12269,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrailStyle = mapTrailStyle_;
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
+    cfg.railBank = railBank_;
     // The pages' rectangles and open flags, via the saved store so an entry
     // for a plugin with no page this session rides through untouched. The
     // legacy fields are copied back purely so the first configsEqual against

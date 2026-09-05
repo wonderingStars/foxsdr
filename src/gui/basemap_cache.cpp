@@ -58,8 +58,14 @@ unsigned int BasemapCache::texture(std::uint32_t z, std::uint32_t x, std::uint32
     const std::uint64_t k = key(z, x, y);
     auto it = tiles_.find(k);
     if (it != tiles_.end()) {
-        it->second.lastUsedFrame = frame_;
-        return it->second.tex;  // 0 when the plugin said MISSING
+        // A MISSING is believed for a while and then asked about again - see
+        // Entry::missingFrame. A texture is kept for as long as it is used.
+        if (it->second.missing && frame_ - it->second.missingFrame >= kMissingRetryFrames) {
+            tiles_.erase(it);
+        } else {
+            it->second.lastUsedFrame = frame_;
+            return it->second.tex;  // 0 when the plugin said MISSING
+        }
     }
 
     CascadeTile t{};
@@ -75,7 +81,9 @@ unsigned int BasemapCache::texture(std::uint32_t z, std::uint32_t x, std::uint32
         Entry e;
         e.missing = true;
         e.lastUsedFrame = frame_;
-        tiles_[k] = e;  // remembered so a tile that cannot exist is asked for once
+        e.missingFrame = frame_;
+        tiles_[k] = e;  // remembered so a tile that cannot exist is asked for
+                        // once per retry window, not once per frame
         return 0u;
     }
     if (got != CASCADE_TILE_READY) { return 0u; }
@@ -117,6 +125,7 @@ unsigned int BasemapCache::texture(std::uint32_t z, std::uint32_t x, std::uint32
     e.tex = tex;
     e.lastUsedFrame = frame_;
     e.missing = (tex == 0u);
+    e.missingFrame = frame_;
     tiles_[k] = e;
     return tex;
 }

@@ -368,6 +368,41 @@ int main() {
         fs::remove_all(dir, ec);
     }
 
+    // --- Rule 2c: a stall spent inside the window manager is not a hang ------
+    //
+    // The 2026-09-04 false report: 5.4 s with the GUI thread parked in
+    // win32u.dll under uxtheme's caption-button loop, none of the four
+    // GUITHREADINFO flags set. The register peek cannot be staged from here,
+    // so the module it would have found is injected, and the rule is judged
+    // on the name alone - in NeverSuppress mode, so nothing else can be what
+    // keeps the report from being written.
+    {
+        const fs::path dir = scratchDir("pumping");
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+
+        HangWatchdog w;
+        w.setSuppressionForTest(HangWatchdog::SuppressionForTest::NeverSuppress);
+        w.setStalledModuleForTest("WIN32U.DLL");  // the loader's own casing varies
+        w.start(dir.string(), 800);
+        beatFor(w, 900);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+        CHECK(w.reportsWritten() == 0u);
+        CHECK(fs::is_empty(dir));
+
+        // The same stall with the thread in the application's own code IS a
+        // hang, and the rule must not have grown into "never report". The
+        // heartbeat resumes first so the watchdog re-arms, then the module
+        // changes under the same stall.
+        beatFor(w, 900);
+        w.setStalledModuleForTest("cascade.exe");
+        std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+        CHECK(w.reportsWritten() == 1u);
+        w.stop();
+        fs::remove_all(dir, ec);
+    }
+
     // --- The switch governs a RUNNING watchdog, in both directions ----------
     //
     // start() is a no-op once running and is called once, before the frame

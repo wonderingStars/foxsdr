@@ -103,6 +103,13 @@ public:
     std::uint64_t samplesWritten() const;
     std::uint64_t bytesWritten() const;
 
+    // True once the disk refused a write during this recording (full, removed,
+    // or gone read-only) - the recording is still "on" in the sense that
+    // stop() has not been called, but nothing more is reaching the file. Read
+    // by the status column so a frozen MB counter is explained rather than
+    // left for the user to notice. Cleared by the next start().
+    bool writeFailed() const { return writeFailed_.load(std::memory_order_acquire); }
+
     // Pure and testable: "iq_20260815_143059_2000000Hz.wav",
     // "audio_20260815_143059_48000Hz.wav". The rate is rounded to the
     // nearest integer Hz (WAV itself stores an integer rate anyway).
@@ -120,7 +127,9 @@ private:
     std::atomic<bool> recording_{false};
     std::atomic<std::uint64_t> frames_{0};
     std::atomic<std::uint64_t> dataBytes_{0};
-    bool writeFailed_ = false;
+    // Atomic because the DSP thread latches it and the GUI thread reads it
+    // through writeFailed() to say so on the RECORDER card.
+    std::atomic<bool> writeFailed_{false};
     std::vector<char> fileBuf_;          // setvbuf storage; must outlive file_
     std::vector<unsigned char> stage_;   // little-endian staging block
 };

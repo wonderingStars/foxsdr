@@ -34,10 +34,10 @@
 
 namespace {
 
-// Read a file EXACTLY. No CRLF normalisation, unlike the radar assets test:
-// these are binary, and a TTF is full of 0x0d 0x0a pairs that mean nothing
-// about line endings. Normalising here would corrupt the comparison and, worse,
-// would make it pass against a corrupted embed.
+// Read a file EXACTLY. No CRLF normalisation: these are binary, and a TTF is
+// full of 0x0d 0x0a pairs that mean nothing about line endings. Normalising
+// here would corrupt the comparison and, worse, would make it pass against a
+// corrupted embed.
 bool readExact(const std::string& path, std::string& out) {
     std::ifstream f(path, std::ios::binary);
     if (!f) { return false; }

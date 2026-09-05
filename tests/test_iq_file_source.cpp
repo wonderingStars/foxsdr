@@ -904,6 +904,53 @@ int main() {
         CHECK(std::string(src.name()) == "IQ file: " + fname);
     }
 
+    // --- a file cut short under the receiver is a FAULT, not a quiet radio --
+    //
+    // read() zero-fills after an I/O error and keeps returning n, by design;
+    // what was missing was any way for the pipeline to learn it had happened.
+    // The file is overwritten with a shorter one WHILE the source has it open
+    // (the handle is opened shared), so the next read runs off the end of the
+    // data chunk open() validated - exactly a recording deleted or truncated
+    // during playback. Before this flag, that session played silence for ever
+    // with every lamp green.
+    {
+        std::vector<std::int16_t> body;
+        for (int i = 0; i < 4000; ++i) { body.push_back(nextI16()); }
+        const std::string path = tmpPath("truncated_midplay");
+        CHECK(writeFile(path, wavBytes(1, 2, 48000, 16, bytesFromI16(body))));
+        IqFileSource src;
+        CHECK(src.open(path));
+        CHECK(src.start());
+        CHECK(!src.faulted());
+        std::complex<float> buf[256];
+        CHECK(src.read(buf, 256) == 256u);
+        CHECK(!src.faulted());
+        CHECK(src.lastError()[0] == '\0');
+
+        // Cut the file down to a header and a handful of frames.
+        std::vector<std::int16_t> stub;
+        for (int i = 0; i < 8; ++i) { stub.push_back(nextI16()); }
+        CHECK(writeFile(path, wavBytes(1, 2, 48000, 16, bytesFromI16(stub))));
+
+        // Reads still answer in full - the pacing contract - but the source
+        // now says so, and keeps saying so.
+        std::size_t got = 0;
+        for (int i = 0; i < 16 && !src.faulted(); ++i) { got = src.read(buf, 256); }
+        CHECK(got == 256u);
+        CHECK(src.faulted());
+        CHECK(errContains(src, "I/O error"));
+        CHECK(src.read(buf, 256) == 256u);
+        CHECK(src.faulted());
+
+        // A fresh open() on a good file clears it: the fault belonged to the
+        // file that went away, not to the source.
+        const std::string good = tmpPath("truncated_midplay_recovered");
+        CHECK(writeFile(good, wavBytes(1, 2, 48000, 16, bytesFromI16(body))));
+        CHECK(src.open(good));
+        CHECK(!src.faulted());
+        CHECK(src.lastError()[0] == '\0');
+    }
+
     const int rc = testSummary("test_iq_file_source");
     if (rc == 0) {
         // Success: remove every temp WAV. On failure they stay for autopsy.

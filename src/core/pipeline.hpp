@@ -1,7 +1,7 @@
 // Real-time render pipeline: a source thread feeds the active IqSource into
-// an SPSC ring â€” pacing it with a real-time clock when the source is
+// an SPSC ring — pacing it with a real-time clock when the source is
 // free-running (the built-in signal generator), letting the device pace when
-// it is self-paced (hardware) â€” a DSP thread drains it through
+// it is self-paced (hardware) — a DSP thread drains it through
 // SpectrumEstimator and publishes the newest spectrum frame for the GUI to
 // poll. The same DSP thread also runs the audio chain (P3/P7): every drained
 // block is duplicated into
@@ -16,7 +16,7 @@
 // the RDS subcarrier outright, and the broadcast standard applies de-emphasis
 // per channel AFTER the stereo matrix because the transmitter pre-emphasises
 // L and R individually before matrixing. So in WFM the Demodulator's own
-// de-emphasis is switched OFF and StereoFm owns it â€” including for MONO
+// de-emphasis is switched OFF and StereoFm owns it — including for MONO
 // output, which is simply StereoFm with its stereo gate closed (L == R
 // exactly). Routing mono through the same object is what makes toggling
 // stereo, or losing pilot lock, inaudible in tone: the de-emphasis and the
@@ -28,7 +28,7 @@
 //
 // AGC AND SQUELCH RUN ON THE INTERLEAVED STEREO STREAM, one instance each,
 // so both channels always receive the identical gain and the identical gate
-// envelope â€” two per-channel instances would each normalise their own channel
+// envelope — two per-channel instances would each normalise their own channel
 // to the target level and destroy the stereo image the matrix just recovered.
 // The blocks are constructed at 2x the channel rate so their per-sample time
 // constants stay correct in real time, and a mono stream (every non-WFM mode)
@@ -39,11 +39,11 @@
 // (dominated by the VFO's FIR at the input rate) against the block's ~0.5 ms
 // real-time budget at 2 MS/s, so a dedicated thread would buy no headroom
 // while adding another ring, its latency, and a shutdown-ordering hazard.
-// Playback itself is already a separate thread â€” PortAudio's callback pulls
+// Playback itself is already a separate thread — PortAudio's callback pulls
 // from AudioOut's internal SPSC ring, so a slow device can never stall DSP.
 //
 // Threading model (per PLAN.md): DSP blocks stay plain objects; the threads
-// and the ring live only here. The GUI never blocks on DSP â€” it polls
+// and the ring live only here. The GUI never blocks on DSP — it polls
 // getLatestFrame(), which hands over at most one frame copy under a mutex.
 // Audio-chain parameter setters serialize against the DSP thread under one
 // internal mutex and take effect at the next block.
@@ -108,13 +108,13 @@ public:
         // When true the constructor opens the default audio output device at
         // kAudioRateHz. When false no device is ever opened, but the audio
         // chain still runs (samples are counted and tapped, then dropped by
-        // the deviceless sink's ring) â€” this is what lets --selftest verify
+        // the deviceless sink's ring) — this is what lets --selftest verify
         // the chain headless on machines with no audio hardware.
         bool audioEnabled = true;
     };
 
     // Throws std::invalid_argument (from SpectrumEstimator/ComplexFFT) if
-    // cfg.fftSize is not a legal FFT size â€” failing at construction beats a
+    // cfg.fftSize is not a legal FFT size — failing at construction beats a
     // dead DSP thread discovered later.
     explicit Pipeline(Config cfg);
 
@@ -123,7 +123,7 @@ public:
     // lock is what makes the call itself safe against a concurrent rescan.
     //
     // The caller must detach BEFORE destroying the runner or unloading the
-    // plugin modules â€” the DSP thread is still running at that moment, and a
+    // plugin modules — the DSP thread is still running at that moment, and a
     // pointer it dereferences must not become dangling underneath it.
     void setPluginRunner(PluginRunner* runner) {
         pluginRunner_.store(runner, std::memory_order_release);
@@ -136,13 +136,13 @@ public:
 
     cascade::source::SigGen& sigGen();            // configure tones before/while running
     void start();                                 // idempotent; spawns source-pacing + DSP threads
-    // Idempotent. The DSP thread is always joined outright â€” it never enters
+    // Idempotent. The DSP thread is always joined outright — it never enters
     // a vendor driver, so its ~1 ms idle-sleep bounds the wait once the flags
     // clear. The SOURCE thread join is BOUNDED (currently 3 s) and can
     // ABANDON (detach) the thread instead of joining it: a vendor driver's
     // read() can ignore its own timeout and never return at all (field
     // report 4214EAE4), and that must not be allowed to freeze whatever
-    // thread called stop() â€” the GUI thread, straight out of the toolbar's
+    // thread called stop() — the GUI thread, straight out of the toolbar's
     // Stop button, in the report that motivated this. See the .cpp for the
     // full abandonment policy (zombieSource_) and its consequences for
     // setSource()/~Pipeline().
@@ -154,7 +154,7 @@ public:
     int abandonedSourceThreads() const {
         return srcThreadsAbandoned_.load(std::memory_order_relaxed);
     }
-    // True when a worker thread aborted on an exception â€” a USB SDR pulled
+    // True when a worker thread aborted on an exception — a USB SDR pulled
     // mid-stream being the case that motivated it. Latched until start().
     bool faulted() const;
     std::string faultMessage() const;             // empty unless faulted()
@@ -163,10 +163,10 @@ public:
     // --- Source selection ----------------------------------------------------
     // Replaces the IQ source feeding the ring; a null pointer restores the
     // built-in SigGenSource (whose generator sigGen() keeps returning either
-    // way). Safe to call while the pipeline runs â€” the swap quiesces the
+    // way). Safe to call while the pipeline runs — the swap quiesces the
     // source thread with this handshake, all under controlMutex_:
     //   1. srcRun_ cleared            (the source loop is told to exit)
-    //   2. outgoing source stop()     (aborts an in-flight bounded read â€”
+    //   2. outgoing source stop()     (aborts an in-flight bounded read —
     //      this is why IqSource::read must be bounded/abortable: a blocked
     //      read with no abort path would stall the swap for its full bound)
     //   3. srcThread_ joined          (after this NO thread can touch the
@@ -174,21 +174,21 @@ public:
     //   4. pointer swapped, outgoing source destroyed
     //   5. incoming source start(), srcRun_ set, source thread respawned
     // The DSP thread keeps running throughout, draining whatever the ring
-    // still holds, so consumers see at worst a brief frame-rate dip â€” never
+    // still holds, so consumers see at worst a brief frame-rate dip — never
     // a stall, a deadlock, or a frame from a half-swapped source.
     //
     // ZOMBIE-SAFETY ADDENDUM. Steps 1-3 assume the outgoing thread is alive
-    // and its driver eventually returns from read() â€” precisely what
+    // and its driver eventually returns from read() — precisely what
     // stop()'s own bounded join can no longer promise (see stop()). When a
     // PRIOR stop() gave up waiting and detached the source thread instead of
     // joining it, srcThread_ is not joinable and steps 1-3 above are skipped
-    // outright â€” there is nothing left to quiesce. What step 4 must NOT do
+    // outright — there is nothing left to quiesce. What step 4 must NOT do
     // in that state is destroy the outgoing source: the detached thread may
     // still be parked inside its read(), or about to write one more block
     // through it before it next tests its own generation's stop token (see
     // sourceThreadBody in the .cpp). So the outgoing source is released
-    // (deliberately leaked) instead of destroyed â€” the same trade
-    // soapy_source.cpp's dead-device policy makes for the identical reason â€”
+    // (deliberately leaked) instead of destroyed — the same trade
+    // soapy_source.cpp's dead-device policy makes for the identical reason —
     // and only THEN is the swap allowed to proceed as normal.
     //
     // Steps 1-3 run whenever the source THREAD exists (joinable), not merely
@@ -201,8 +201,8 @@ public:
     void setSource(std::unique_ptr<cascade::source::IqSource> s);
 
     // The source currently feeding the ring (the built-in generator unless
-    // setSource installed something else). The reference â€” and any const
-    // char* obtained from it, including activeSourceName() â€” stays valid
+    // setSource installed something else). The reference — and any const
+    // char* obtained from it, including activeSourceName() — stays valid
     // only until the next setSource(), which may destroy the object; per the
     // IqSource threading contract both are meant for the GUI/control thread,
     // the same thread that performs swaps.
@@ -243,7 +243,7 @@ public:
 
     // --- Broadcast-FM stereo (P7) --------------------------------------------
     // User switch, not a capability report: false forces mono (StereoFm's own
-    // ramped force-mono gate, so the toggle is click-free). Default true â€”
+    // ramped force-mono gate, so the toggle is click-free). Default true —
     // it only ever changes anything in WFM with a locked pilot, which is
     // exactly when a broadcast receiver is expected to produce stereo.
     void setStereoEnabled(bool on);
@@ -260,7 +260,7 @@ public:
     // --- RDS (P7) -------------------------------------------------------------
     // Snapshot of the decoder fed by the WFM composite. Published by the DSP
     // thread whenever the decoder's counters move (i.e. at most ~11 groups a
-    // second, not once per block), and copied out here under its own mutex â€”
+    // second, not once per block), and copied out here under its own mutex —
     // the GUI never contends with the audio path for audioMutex_ to read it.
     RdsSnapshot rdsSnapshot() const;
 
@@ -276,8 +276,8 @@ public:
     // Chain order after the resampler, per channel:
     //     notch -> auto-notch -> noise reduction
     // Rationale: the notches remove deterministic tones FIRST, so (a) the two
-    // never fight over the same carrier â€” with the manual notch already on it,
-    // the auto-notch's detector no longer sees the tone to chase â€” and (b) the
+    // never fight over the same carrier — with the manual notch already on it,
+    // the auto-notch's detector no longer sees the tone to chase — and (b) the
     // noise-reduction floor tracker gets a spectrum with no surviving
     // heterodyne to mistake for a noise floor. Noise reduction runs last
     // because its output is what the listener hears; anything after it would
@@ -350,11 +350,11 @@ public:
     // Rebuilds the rate-dependent DSP chain for a new input sample rate. The
     // SOURCE is deliberately NOT touched: the caller owns the device side
     // (command the hardware rate through activeSource().setSampleRateHz, or
-    // install a source built at the new rate via setSource â€” the built-in
+    // install a source built at the new rate via setSource — the built-in
     // generator is fixed-rate by its own contract); this call only makes the
     // DSP side follow.
     //
-    // Accepted rates â€” both conditions must hold, otherwise the call returns
+    // Accepted rates — both conditions must hold, otherwise the call returns
     // false and changes NOTHING (the chain keeps running at the old rate):
     //  1. rateHz in [8 kHz, 61.44 MHz] (the range SDR front ends this app
     //     targets can actually deliver);
@@ -363,17 +363,17 @@ public:
     //     resampler exact: RationalResampler takes an integer L/M ratio
     //     (channelRate -> 48 kHz, reduced by gcd internally), so a fractional
     //     channel rate could only be approximated, silently detuning audio.
-    //     Note the bounds are necessary, not sufficient â€” e.g. 61.44 MHz
+    //     Note the bounds are necessary, not sufficient — e.g. 61.44 MHz
     //     itself is refused (decim 307 gives a fractional channel rate).
     // The decim policy lands the channel rate in [150 kHz, 250 kHz] for every
     // accepted rate >= 300 kHz; below 300 kHz decim is 1 and the channel rate
     // equals the input rate.
     //
     // Concurrency (mirrors the setSource quiesce handshake, but for the DSP
-    // thread â€” the source thread keeps running throughout): all under
+    // thread — the source thread keeps running throughout): all under
     // controlMutex_,
     //   1. dspRun_ cleared          (the DSP loop is told to exit; run_ stays
-    //      set, so the source keeps feeding the ring â€” a full ring drops the
+    //      set, so the source keeps feeding the ring — a full ring drops the
     //      overflow by design and never blocks the source)
     //   2. dspThread_ joined        (after this NO thread touches the
     //      estimator or the audio chain, so rebuilding them is race-free)
@@ -392,14 +392,14 @@ public:
     // stay real-time, threshold preserved), RationalResampler (rebuilt
     // channelRate -> 48 kHz), the FM scale, and the AGC/S-meter state (reset:
     // new rate regime). What does not: the spectrum estimator (fftSize is
-    // unchanged and the estimator is rate-agnostic â€” the displayed span
+    // unchanged and the estimator is rate-agnostic — the displayed span
     // simply reinterprets, which is the caller's frequency-axis job), the
     // ring (its capacity stays the construction-time sizing, so headroom in
-    // milliseconds shrinks at higher rates â€” still >= 8 FFT blocks for any
+    // milliseconds shrinks at higher rates — still >= 8 FFT blocks for any
     // accepted rate), seq numbering, and the audio tap/counters.
     //
     // Calling with the CURRENT rate is a cheap no-op returning true. Safe to
-    // call stopped (no threads to quiesce â€” the chain is rebuilt for the next
+    // call stopped (no threads to quiesce — the chain is rebuilt for the next
     // start()) or running, from any control-plane thread.
     bool setInputRateHz(double rateHz);
 
@@ -408,7 +408,7 @@ public:
     double inputRateHz() const;
 
     // The audio-side channel rate (the Vfo's output rate = input rate /
-    // decimation) â€” the rate the Demodulator runs at and the resampler
+    // decimation) — the rate the Demodulator runs at and the resampler
     // converts to 48 kHz. Exposed for the GUI's bandwidth limits and for
     // tests of the rate-follow policy.
     double channelRateHz() const;
@@ -424,8 +424,8 @@ public:
     // Copies the most recent audio samples (a rolling 4096-FRAME tap taken
     // just before AudioOut::write) into dst in chronological order, as the
     // MONO downmix (L + R)/2. Returns the number copied: min(n, 4096, frames
-    // produced so far). The downmix is exact for every mono path â€” L and R
-    // are then bit-identical and (a + a)/2 == a in IEEE arithmetic â€” so the
+    // produced so far). The downmix is exact for every mono path — L and R
+    // are then bit-identical and (a + a)/2 == a in IEEE arithmetic — so the
     // --selftest measurement this backs is unchanged by the stereo work.
     std::size_t audioTap(float* dst, std::size_t n) const;
 
@@ -437,15 +437,15 @@ public:
 
     // --- Recorder taps (P6) ---------------------------------------------------
     // Non-owning recorder hooks fed by the DSP thread; nullptr (the default)
-    // disconnects. The IQ recorder receives every drained block RAW â€” the
-    // ring's baseband samples at inputRateHz(), before the VFO touches them â€”
+    // disconnects. The IQ recorder receives every drained block RAW — the
+    // ring's baseband samples at inputRateHz(), before the VFO touches them —
     // via writeIq, so an IQ recording replayed through IqFileSource
     // reproduces exactly what the spectrum displayed. The audio recorder
     // receives the resampled 48 kHz output via writeAudio at precisely the
     // point audioTap taps: post-squelch, pre-AudioOut, volume-independent.
     //
-    // Both pointers live under audioMutex_ â€” the mutex the DSP thread holds
-    // across every write* call â€” which is what satisfies the Recorder
+    // Both pointers live under audioMutex_ — the mutex the DSP thread holds
+    // across every write* call — which is what satisfies the Recorder
     // threading contract ("start()/stop() must not overlap an in-flight
     // write") without parking the DSP thread: after set*Recorder(nullptr)
     // returns, no write against the old pointer is in flight or can begin,
@@ -466,14 +466,14 @@ private:
     // call under controlMutex_, not read on the thread. setInputRateHz writes
     // that field under controlMutex_ alone and deliberately never joins the
     // source thread, so a read from this thread would be a data race on a
-    // double â€” and the value is only ever consulted when a source reports a
+    // double — and the value is only ever consulted when a source reports a
     // nonsense rate, which is precisely the path that would then act on a torn
     // one. Passing it through the spawn edge needs no lock and no atomic.
     //
     // `stopToken` is THIS generation's dead-man switch (see the members
     // below and stop() in the .cpp): captured by value at spawn, tested
     // alongside run_/srcRun_ at the top of every loop iteration, and never
-    // reassigned for the lifetime of the thread â€” a later generation gets an
+    // reassigned for the lifetime of the thread — a later generation gets an
     // entirely different shared_ptr, which is what lets stop() abandon a
     // stuck thread without that thread ever mistaking a NEW session's flags
     // for permission to keep running.
@@ -486,7 +486,7 @@ private:
     // srcExitFuture_ below) and spawns srcThread_ against them, capturing the
     // token BY VALUE into the thread's own lambda. Caller holds
     // controlMutex_, has already set srcRun_ (start() also sets run_ and
-    // dspRun_) true, and has already called active_->start() â€” used
+    // dspRun_) true, and has already called active_->start() — used
     // identically by start() and the setSource() resume path so the two
     // spawn sites cannot drift apart on this contract.
     void spawnSourceThread(double chainRateHz);
@@ -498,7 +498,7 @@ private:
     // Copies the decoder's state into rdsPublished_ when something moved.
     // Caller holds audioMutex_ (it reads rds_); takes rdsMutex_ internally.
     void publishRds();
-    // The body of resetRds(), for callers that ALREADY hold audioMutex_ â€”
+    // The body of resetRds(), for callers that ALREADY hold audioMutex_ —
     // re-locking it from inside a setter would deadlock instantly.
     void resetDecodersLocked();
 
@@ -515,8 +515,8 @@ private:
     cascade::dsp::SpscRing<std::complex<float>> ring_;
     cascade::dsp::SpectrumEstimator estimator_;   // touched only by the DSP thread while running
 
-    // Single latest-frame slot. seq lives inside latest_ and NEVER resets â€”
-    // not even across stop()/start() â€” so a consumer that kept its last seen
+    // Single latest-frame slot. seq lives inside latest_ and NEVER resets —
+    // not even across stop()/start() — so a consumer that kept its last seen
     // seq keeps receiving frames after a restart. latest_.seq == 0 means
     // "nothing published yet".
     std::mutex frameMutex_;
@@ -572,7 +572,7 @@ private:
     cascade::dsp::RationalResampler resamplerR_;   // right
     // The decoder feed's own resampler. Separate because it is driven from a
     // different point in the chain (before the AGC), and a resampler is a
-    // state machine â€” interleaving two signals through one corrupts both.
+    // state machine — interleaving two signals through one corrupts both.
     cascade::dsp::RationalResampler resamplerD_;
     std::vector<float> preAgcBuf_;
     // Audio post-processing, per channel, all at kAudioRateHz (so a
@@ -631,7 +631,7 @@ private:
     mutable std::mutex rdsMutex_;
     RdsSnapshot rdsPublished_;
     // Recorder taps (P6): non-owning, audioMutex_-guarded like the chain
-    // blocks above â€” see the set*Recorder contract in the public section.
+    // blocks above — see the set*Recorder contract in the public section.
     Recorder* iqRecorder_ = nullptr;
     Recorder* audioRecorder_ = nullptr;
 
@@ -650,7 +650,7 @@ private:
     std::thread srcThread_;
     std::thread dspThread_;
 
-    // Per-generation shutdown state for the source thread â€” zombie-safety
+    // Per-generation shutdown state for the source thread — zombie-safety
     // for stop()'s bounded join (field report 4214EAE4; see stop() and
     // setSource() in the .cpp for the full contract). spawnSourceThread
     // mints a fresh pair at every (re)spawn: srcStopToken_ is captured BY
@@ -658,7 +658,7 @@ private:
     // only ever reach the CURRENT generation, never one already abandoned.
     // srcExitFuture_ is the matching exit latch, fulfilled with
     // set_value_at_thread_exit from inside the same lambda once the OS
-    // thread is genuinely about to end â€” not merely once the loop returns.
+    // thread is genuinely about to end — not merely once the loop returns.
     // See quiesceSourceThreadLocked() in the .cpp: the one bounded
     // stop-the-source-thread policy, shared by stop(), setSource() and
     // start() so no call site can quietly keep the old unbounded join.

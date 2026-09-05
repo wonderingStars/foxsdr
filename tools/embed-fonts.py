@@ -17,9 +17,8 @@ building this repository would have. Bundling the originals verbatim is
 explicitly permitted, needs no rename, and costs about 490 KB. That trade was
 made deliberately; do not "optimise" it by subsetting without renaming.
 
-Byte arrays rather than string literals, for the same reason the radar assets
-are: MSVC caps a single string literal at 16380 bytes, and no escaping scheme
-survives arbitrary binary intact.
+Byte arrays rather than string literals: MSVC caps a single string literal at
+16380 bytes, and no escaping scheme survives arbitrary binary intact.
 
 Run from the repository root:  py -3.14 tools/embed-fonts.py
 """
@@ -67,8 +66,8 @@ FOOTER = '''}  // namespace cascade::gui::fontdata
 def emit(name, path):
     with open(path, 'rb') as f:
         data = f.read()
-    # NO newline normalisation here, unlike the radar assets: this is binary,
-    # and a TTF full of 0x0d 0x0a pairs would be silently corrupted by it.
+    # NO newline normalisation here: this is binary, and a TTF full of
+    # 0x0d 0x0a pairs would be silently corrupted by it.
     out = []
     out.append('// %s, %d bytes\n' % (os.path.basename(path), len(data)))
     out.append('inline constexpr unsigned char %s[] = {\n' % name)

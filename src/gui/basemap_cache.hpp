@@ -92,7 +92,22 @@ private:
         unsigned int tex = 0;
         std::uint64_t lastUsedFrame = 0;
         bool missing = false;  // the plugin said it never will exist
+        // The frame the MISSING was recorded on. "Never will exist" is the
+        // plugin's word, and a fetch that failed because the network was down
+        // for a moment is the same word from the same plugin: the host cannot
+        // tell a tile the server does not have from one it could not reach
+        // just then. So a MISSING is believed for kMissingRetryFrames and then
+        // asked about again. Before this, one dropped connection left a
+        // permanent hole in the map until the next restart - which on a link
+        // that flaps was most of the map, and was reported as "hard to load".
+        std::uint64_t missingFrame = 0;
     };
+
+    // About ten seconds at the frame rate this application runs at. Long
+    // enough that a tile the server genuinely lacks costs one request every
+    // ten seconds and not one per frame; short enough that a map recovers from
+    // a dropped link while the user is still looking at it.
+    static constexpr std::uint64_t kMissingRetryFrames = 600;
 
     static std::uint64_t key(std::uint32_t z, std::uint32_t x, std::uint32_t y) {
         return (static_cast<std::uint64_t>(z) << 58) |

@@ -338,51 +338,6 @@ void testFailureLeavesNothingBehind() {
     CHECK(!r.centerHz.has_value());
 }
 
-// THE RADAR UNIT'S LEASE ON THE DISPLAY.
-//
-// foxsdr-radar.exe is a separate desktop application, and this one field is
-// the whole of what it can say to the receiver: hold the display, or give it
-// back. Three properties are load-bearing and each is checked because losing
-// any of them silently strands a user with a hidden application and no route
-// back to it.
-void testRadarActive() {
-    std::printf("  the radar unit can take and release the display, and nothing more\n");
-    ControlRequest r;
-    std::string error;
-
-    // It parses, both ways round.
-    CHECK(parseControlRequest("{\"radarActive\":true}", r, error));
-    CHECK(r.radarActive.has_value());
-    CHECK(r.radarActive.value_or(false));
-    CHECK(!r.empty());
-
-    ControlRequest off;
-    CHECK(parseControlRequest("{\"radarActive\":false}", off, error));
-    CHECK(off.radarActive.has_value());
-    CHECK(!off.radarActive.value_or(true));
-    // empty() must ACCOUNT for the field: a request carrying only a release
-    // that reported itself empty would be dropped, and the user's application
-    // would stay hidden until the lease timed out.
-    CHECK(!off.empty());
-
-    // It is a bool and only a bool. The field is the one lever a network
-    // client has over the desktop's visibility, so a string or a number must
-    // be refused rather than coerced into something true.
-    ControlRequest bad;
-    CHECK(!parseControlRequest("{\"radarActive\":\"yes\"}", bad, error));
-    CHECK(!error.empty());
-    CHECK(bad.empty());
-    CHECK(!parseControlRequest("{\"radarActive\":1}", bad, error));
-    CHECK(bad.empty());
-
-    // And a near-miss spelling is refused outright rather than ignored, which
-    // is what the allow-list is for: a radar sending radarEnabled would
-    // otherwise appear to work and never hide anything.
-    ControlRequest typo;
-    CHECK(!parseControlRequest("{\"radarEnabled\":true}", typo, error));
-    CHECK(typo.empty());
-}
-
 }  // namespace
 
 int main() {
@@ -398,6 +353,5 @@ int main() {
     testSourceFields();
     testRecorderBookmarkScannerFields();
     testFailureLeavesNothingBehind();
-    testRadarActive();
     return testSummary("test_web_control");
 }

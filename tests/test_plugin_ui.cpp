@@ -7,11 +7,15 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/plugin_ui.hpp"
@@ -1705,6 +1709,98 @@ int main() {
         CHECK(two.keys == bothKeys);
         CHECK(advanceMutePopup(two, false, false, true, aisName, aisKey).names ==
               bothNames);
+    }
+
+    // --- a host service that throws is contained at the trampoline ----------
+    //
+    // The plugin ABI makes plugins promise no exception crosses the boundary;
+    // the host owes the same promise back. A plugin calls these from frames
+    // its own compiler built - the standard library's thread entry among them,
+    // which is noexcept - and an exception arriving there is std::terminate
+    // in the plugin's own CRT: an abort() the crash handler never sees.
+    // Satellites 1.0.1 died twenty-three times in two days that way. Every
+    // trampoline must therefore answer a throwing service with the ABI's own
+    // "nothing" rather than let it out.
+    {
+        resetAll();
+        const CascadeHostClientApi hcApi = makeHostClientApi();
+        LoadedPlugin p = plug("Satellites");
+        p.hostClient = &hcApi;
+        PluginUi ui;
+        HostServices bad;
+        bad.centreHz = []() -> double { throw std::runtime_error("centre"); };
+        bad.sampleRateHz = []() -> double { throw std::runtime_error("rate"); };
+        bad.unixTimeMs = []() -> std::int64_t { throw std::runtime_error("clock"); };
+        bad.tune = [](double) -> std::int32_t { throw std::runtime_error("tune"); };
+        ui.setServices(std::move(bad));
+        // Granted, so the request reaches the throwing tune service rather
+        // than being refused at the permission check in front of it.
+        ui.setTuneAllowed(cascade::core::pluginKey(p), true);
+        ui.rebuild({p});
+        CHECK(g_attached.size() == 1u);
+        if (!g_attached.empty() && g_attached[0] != nullptr) {
+            const CascadeHostApi* h = g_attached[0];
+            CHECK(h->unix_time_ms(h->ctx) == 0);
+            CHECK(h->centre_hz(h->ctx) == 0.0);
+            CHECK(h->sample_rate_hz(h->ctx) == 0.0);
+            CHECK(h->request_tune(h->ctx, 145.8e6) == CASCADE_TUNE_FAILED);
+        }
+    }
+
+    // --- the services can be replaced while a plugin thread is reading them --
+    //
+    // Satellites reads the host clock from its own background worker, and the
+    // GUI thread replaces the whole service table on every rescan and source
+    // change. Unsynchronised, that is a std::function torn mid-move under a
+    // caller on another thread. This drives both sides as hard as a real
+    // session never would and requires every answer to be one of the two
+    // legitimate ones: the clock a service returned, or the zero that means
+    // "no service right now" - never a crash, never garbage.
+    {
+        resetAll();
+        const CascadeHostClientApi hcApi = makeHostClientApi();
+        LoadedPlugin p = plug("Satellites");
+        p.hostClient = &hcApi;
+        PluginUi ui;
+        int tuneCalls = 0;
+        double lastTuned = 0.0;
+        ui.setServices(workingServices(&tuneCalls, &lastTuned));
+        ui.rebuild({p});
+        CHECK(g_attached.size() == 1u);
+        const CascadeHostApi* h = g_attached.empty() ? nullptr : g_attached[0];
+        std::atomic<bool> stop{false};
+        std::atomic<long long> reads{0};
+        std::atomic<long long> odd{0};
+        std::thread worker([&] {
+            while (!stop.load(std::memory_order_relaxed)) {
+                if (h == nullptr) { break; }
+                const std::int64_t t = h->unix_time_ms(h->ctx);
+                const double c = h->centre_hz(h->ctx);
+                ++reads;
+                // 1700000000000 is what workingServices answers; a replacement
+                // below answers 1800000000000; nothing else is legitimate.
+                if (!(t == 0 || t == 1700000000000LL || t == 1800000000000LL)) { ++odd; }
+                if (!(c == 0.0 || c == 1090000000.0 || c == 100000000.0)) { ++odd; }
+            }
+        });
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+        int swaps = 0;
+        while (std::chrono::steady_clock::now() < until) {
+            HostServices alt;
+            alt.centreHz = [] { return 100000000.0; };
+            alt.sampleRateHz = [] { return 2400000.0; };
+            alt.unixTimeMs = [] { return static_cast<std::int64_t>(1800000000000LL); };
+            alt.tune = [](double) { return static_cast<std::int32_t>(CASCADE_TUNE_OK); };
+            ui.setServices(std::move(alt));
+            ui.setServices(workingServices(&tuneCalls, &lastTuned));
+            swaps += 2;
+        }
+        stop.store(true, std::memory_order_relaxed);
+        worker.join();
+        CHECK(h != nullptr);
+        CHECK(reads.load() > 0);
+        CHECK(swaps > 0);
+        CHECK(odd.load() == 0);
     }
 
     return testSummary("test_plugin_ui");

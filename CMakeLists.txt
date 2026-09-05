@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.76.0 LANGUAGES C CXX)
+project(cascade VERSION 0.77.0 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -338,33 +338,6 @@ target_link_libraries(cascade PRIVATE cascade_lib)
 # report matters.
 add_executable(foxsdr-reports tools/report-reader/main.cpp)
 target_link_libraries(foxsdr-reports PRIVATE cascade_lib)
-
-# ---------------------------------------------------------------------------
-# foxsdr-radar - the Fox & Schirmer Radar Unit, as its own desktop application
-# ---------------------------------------------------------------------------
-#
-# A separate Windows program, not a window of the receiver: it hosts the radar
-# panel (resources/web/radar, embedded by tools/embed-radar-assets.py and
-# served by this project's own web server at /radar) inside an embedded
-# WebView2, and puts FoxSDR's window away while it holds the display.
-#
-# WIN32 rather than a console subsystem, so launching it does not flash a
-# console window; the WebView2 loader is linked STATICALLY so the finished
-# program is one file with no DLL to lose beside it. The Evergreen runtime it
-# drives is part of Windows 11 and is installed by Edge on Windows 10 - the
-# program says so plainly if it is ever absent rather than failing to start.
-if(WIN32)
-    add_executable(foxsdr-radar WIN32 src/radar/radar_main.cpp resources/icon/foxsdr.rc)
-    target_include_directories(foxsdr-radar PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/third_party/webview2/include)
-    target_link_libraries(foxsdr-radar PRIVATE
-        cascade_httplib
-        ${CMAKE_SOURCE_DIR}/third_party/webview2/x64/WebView2LoaderStatic.lib
-        version shlwapi shcore shell32 ole32)
-    target_compile_definitions(foxsdr-radar PRIVATE
-        NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-endif()
 
 # Delay-load SoapySDR so a missing or broken hardware runtime cannot stop the
 # app from starting. Without this the Windows loader kills the process before

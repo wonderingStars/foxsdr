@@ -16,6 +16,10 @@
 ; SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #define AppName "FoxSDR"
+; The product's identity across every version and both install scopes. It is
+; the AppId below AND the registry key the [Code] section looks for in the
+; other hive, so it is written once here rather than twice.
+#define AppGuid "B3D4A7E2-6C51-4F8B-9A0D-2E7F5C8B1A64"
 ; Overridable so a nightly can be stamped with its own version:
 ;   ISCC.exe /DAppVersion="0.56.0-nightly.20260819.58fe5a3" installer\cascade.iss
 ; tools/build-nightly.ps1 does exactly that, and passes the SAME string to
@@ -55,12 +59,6 @@
 #if !FileExists(BuildDir + "\cascade.exe")
   #pragma error "cascade.exe not found in build\Release — build the Release configuration first (see README.md)"
 #endif
-; The radar unit is a SECOND shipped program, not an optional extra: the
-; README documents it and the Start Menu offers it, so a setup built without
-; it would install a shortcut to nothing.
-#if !FileExists(BuildDir + "\foxsdr-radar.exe")
-  #pragma error "foxsdr-radar.exe not found in build\Release — build the foxsdr-radar target too (see README.md, 'The radar unit')"
-#endif
 #if !FileExists(VcCrtDir + "\msvcp140.dll")
   #pragma error "VC CRT redist dir not found: " + VcCrtDir + " — pass /DVcCrtDir=<...\Microsoft.VC143.CRT>"
 #endif
@@ -83,7 +81,7 @@
 #endif
 
 [Setup]
-AppId={{B3D4A7E2-6C51-4F8B-9A0D-2E7F5C8B1A64}
+AppId={{{#AppGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -135,9 +133,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Core payload — the runtime binaries the build produces.
 Source: "{#BuildDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\SoapySDR.dll"; DestDir: "{app}"; Flags: ignoreversion
-; The radar unit. Its own program with its own window, and it links the
-; WebView2 loader statically, so it travels as one file with no DLL beside it.
-Source: "{#BuildDir}\foxsdr-radar.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; App-local MSVC runtime (from the VS Redist folder — NEVER from C:\Windows).
 ; cascade.exe and SoapySDR.dll import exactly these three; the UCRT they also
 ; need is an OS component on Windows 10+.
@@ -155,10 +150,6 @@ Source: "POSTINSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"
-; Offered from the Start Menu but NOT on the desktop: it needs FoxSDR running
-; with web access on, so it is a thing you reach for once you have a receiver
-; working, not the first icon a new user clicks.
-Name: "{group}\Radar unit"; Filename: "{app}\foxsdr-radar.exe"; WorkingDir: "{app}"; Comment: "Aircraft radar display — needs {#AppName} running with web access on"
 Name: "{group}\Hardware setup notes"; Filename: "{app}\POSTINSTALL.txt"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon
@@ -169,3 +160,65 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; WorkingDir: "
 [UninstallDelete]
 ; The app never writes into {app} at runtime (config lives under the user
 ; profile), so nothing to purge beyond what the installer placed.
+
+[Code]
+// ONE FoxSDR PER MACHINE, WHICHEVER SCOPE IT WAS INSTALLED IN.
+//
+// Inno keys an upgrade on AppId within ONE registry hive: a machine-wide
+// install (HKLM, Program Files) and a per-user one (HKCU, %LOCALAPPDATA%)
+// never see each other, so a per-user 0.64.0 survived every machine-wide
+// upgrade after it - with its own Start Menu folder, also called "FoxSDR",
+// merged into the same menu as the current one. The two entries look
+// identical, and which version ran depended on which was clicked; the
+// application's own log showed 0.64.0 starting between runs of 0.75.0 on the
+// same afternoon, and every bug fixed in between came back with it (found
+// 2026-09-04). So before installing, the OTHER hive is checked for the same
+// AppId, and the install found there is uninstalled silently first. Its own
+// uninstaller does the removal, so nothing here has to know what it placed.
+//
+// The user's data is untouched: config, plugins, logs and caches live under
+// the profile, not under either install directory.
+
+function OtherScopeUninstaller(): String;
+var
+  Root: Integer;
+  Key: String;
+  Value: String;
+begin
+  Result := '';
+  // The preprocessor pastes the GUID; the braces round it are literal here,
+  // because [Code] strings do not expand constants.
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{{#AppGuid}}_is1';
+  // The hive THIS setup is not writing to.
+  if IsAdminInstallMode then
+    Root := HKEY_CURRENT_USER
+  else
+    Root := HKEY_LOCAL_MACHINE;
+  if RegQueryStringValue(Root, Key, 'UninstallString', Value) then
+    Result := RemoveQuotes(Value)
+  else if RegQueryStringValue(Root, 'WOW6432Node\' + Key, 'UninstallString', Value) then
+    Result := RemoveQuotes(Value);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Uninstaller: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+  Uninstaller := OtherScopeUninstaller();
+  if Uninstaller = '' then
+    exit;
+  Log('Removing the FoxSDR installed in the other scope: ' + Uninstaller);
+  // /SILENT keeps its own progress window; /NORESTART because nothing here
+  // needs one; /SUPPRESSMSGBOXES so a "still running" prompt cannot stall an
+  // unattended install. A failure is logged and does not abort this install:
+  // a stale copy is a nuisance, and refusing to install over it would be
+  // worse than leaving it.
+  if not Exec(Uninstaller, '/SILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_SHOW,
+              ewWaitUntilTerminated, ResultCode) then
+    Log('The other-scope uninstaller could not be started (error ' +
+        IntToStr(ResultCode) + '); continuing.')
+  else
+    Log('The other-scope uninstaller exited with code ' + IntToStr(ResultCode) + '.');
+end;

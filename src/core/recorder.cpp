@@ -152,7 +152,7 @@ bool Recorder::start(RecordKind kind, const std::string& directory,
     }
 
     stage_.assign(kStageFrames * 8u, 0);  // sized for the larger (IQ) frame
-    writeFailed_ = false;
+    writeFailed_.store(false, std::memory_order_relaxed);
     frames_.store(0, std::memory_order_relaxed);
     dataBytes_.store(0, std::memory_order_relaxed);
     kind_.store(kind, std::memory_order_relaxed);
@@ -169,18 +169,18 @@ void Recorder::flushStage(std::size_t bytes, std::size_t bytesPerFrame) {
     dataBytes_.fetch_add(w, std::memory_order_relaxed);
     frames_.fetch_add(w / bytesPerFrame, std::memory_order_relaxed);
     if (w != bytes) {
-        writeFailed_ = true;
+        writeFailed_.store(true, std::memory_order_release);
     }
 }
 
 void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
     if (!recording_.load(std::memory_order_acquire) ||
         kind_.load(std::memory_order_relaxed) != RecordKind::BasebandIq ||
-        s == nullptr || n == 0 || writeFailed_) {
+        s == nullptr || n == 0 || writeFailed_.load(std::memory_order_acquire)) {
         return;
     }
     std::size_t done = 0;
-    while (done < n && !writeFailed_) {
+    while (done < n && !writeFailed_.load(std::memory_order_relaxed)) {
         std::size_t take = n - done;
         if (take > kStageFrames) {
             take = kStageFrames;
@@ -211,11 +211,11 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
 void Recorder::writeAudio(const float* s, std::size_t n) {
     if (!recording_.load(std::memory_order_acquire) ||
         kind_.load(std::memory_order_relaxed) != RecordKind::Audio ||
-        s == nullptr || n == 0 || writeFailed_) {
+        s == nullptr || n == 0 || writeFailed_.load(std::memory_order_acquire)) {
         return;
     }
     std::size_t done = 0;
-    while (done < n && !writeFailed_) {
+    while (done < n && !writeFailed_.load(std::memory_order_relaxed)) {
         std::size_t take = n - done;
         if (take > kStageFrames) {
             take = kStageFrames;

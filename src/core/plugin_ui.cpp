@@ -276,7 +276,10 @@ std::int64_t hostTime(void* ctx);
 
 PluginUi::~PluginUi() { clear(); }
 
-void PluginUi::setServices(HostServices services) { services_ = std::move(services); }
+void PluginUi::setServices(HostServices services) {
+    std::lock_guard<std::mutex> lk(servicesMutex_);
+    services_ = std::move(services);
+}
 
 namespace {
 
@@ -287,28 +290,52 @@ std::vector<std::unique_ptr<HostCtx>>& ctxStore() {
     return store;
 }
 
+// NOTHING THROWS ACROSS THE BOUNDARY IN THIS DIRECTION EITHER. The ABI makes
+// plugins promise that no exception reaches the host; the host owes the same
+// promise back, because the frames above these trampolines belong to a third
+// party's compiler and may well be noexcept - the standard library's thread
+// entry is - and an exception arriving in one of those is std::terminate in
+// the plugin's own CRT, i.e. an abort() this application cannot see or
+// report. Each trampoline therefore answers a failure with the ABI's own
+// "nothing": zero, or CASCADE_TUNE_FAILED.
 double hostCentre(void* ctx) {
-    auto* c = static_cast<HostCtx*>(ctx);
-    if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
-    return c->self->servicesCentreHz();
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
+        return c->self->servicesCentreHz();
+    } catch (...) {
+        return 0.0;
+    }
 }
 
 double hostRate(void* ctx) {
-    auto* c = static_cast<HostCtx*>(ctx);
-    if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
-    return c->self->servicesRateHz();
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
+        return c->self->servicesRateHz();
+    } catch (...) {
+        return 0.0;
+    }
 }
 
 std::int32_t hostTune(void* ctx, double centreHz) {
-    auto* c = static_cast<HostCtx*>(ctx);
-    if (c == nullptr || c->self == nullptr) { return CASCADE_TUNE_FAILED; }
-    return c->self->tuneRequestFromPlugin(c->plugin, centreHz);
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || c->self == nullptr) { return CASCADE_TUNE_FAILED; }
+        return c->self->tuneRequestFromPlugin(c->plugin, centreHz);
+    } catch (...) {
+        return CASCADE_TUNE_FAILED;
+    }
 }
 
 std::int64_t hostTime(void* ctx) {
-    auto* c = static_cast<HostCtx*>(ctx);
-    if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0; }
-    return c->self->servicesUnixTimeMs();
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0; }
+        return c->self->servicesUnixTimeMs();
+    } catch (...) {
+        return 0;
+    }
 }
 
 }  // namespace
@@ -720,26 +747,52 @@ std::int32_t PluginUi::tuneRequestFromPlugin(const std::string& plugin, double c
         lastDenied_ = plugin;
         return CASCADE_TUNE_DENIED;
     }
-    if (!services_.tune) { return CASCADE_TUNE_NO_DEVICE; }
+    // Copied under the lock and called outside it - see servicesMutex_ - so
+    // a rescan replacing the services on the GUI thread can neither tear the
+    // callable nor wait on a tune that is inside the driver.
+    std::function<std::int32_t(double)> tune;
+    {
+        std::lock_guard<std::mutex> lk(servicesMutex_);
+        tune = services_.tune;
+    }
+    if (!tune) { return CASCADE_TUNE_NO_DEVICE; }
     // NaN and absurd frequencies are refused here rather than handed to a
     // driver: written as a positive test, because the negation would accept
     // NaN (every comparison with NaN is false).
     if (!(centreHz > 0.0 && centreHz < 1e12)) { return CASCADE_TUNE_OUT_OF_RANGE; }
-    return services_.tune(centreHz);
+    return tune(centreHz);
 }
 
-bool PluginUi::hasServices() const { return static_cast<bool>(services_.centreHz); }
+bool PluginUi::hasServices() const {
+    std::lock_guard<std::mutex> lk(servicesMutex_);
+    return static_cast<bool>(services_.centreHz);
+}
 
 double PluginUi::servicesCentreHz() const {
-    return services_.centreHz ? services_.centreHz() : 0.0;
+    std::function<double()> f;
+    {
+        std::lock_guard<std::mutex> lk(servicesMutex_);
+        f = services_.centreHz;
+    }
+    return f ? f() : 0.0;
 }
 
 double PluginUi::servicesRateHz() const {
-    return services_.sampleRateHz ? services_.sampleRateHz() : 0.0;
+    std::function<double()> f;
+    {
+        std::lock_guard<std::mutex> lk(servicesMutex_);
+        f = services_.sampleRateHz;
+    }
+    return f ? f() : 0.0;
 }
 
 std::int64_t PluginUi::servicesUnixTimeMs() const {
-    return services_.unixTimeMs ? services_.unixTimeMs() : 0;
+    std::function<std::int64_t()> f;
+    {
+        std::lock_guard<std::mutex> lk(servicesMutex_);
+        f = services_.unixTimeMs;
+    }
+    return f ? f() : 0;
 }
 
 }  // namespace cascade::core
