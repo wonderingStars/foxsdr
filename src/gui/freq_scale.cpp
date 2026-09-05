@@ -11,9 +11,17 @@ namespace cascade::gui {
 
 namespace {
 
-// Labels render ~70 px wide; 80 px of pitch leaves a visible gap between
-// neighbors, so adjacent labels can never touch.
-constexpr double kMinTickSpacingPx = 80.0;
+// The pitch is set by the WIDEST label the axis can produce and by what the
+// panel does with the two END labels. Measured over every band, rate and zoom
+// this product reaches (tests/test_spectrum_waterfall_type.cpp), the widest
+// label is 65.55 px at the 17 px lettering of 0.79.0. A label is centred on
+// its tick, but the panel slides the two end labels inboard so the frame does
+// not slice them - by up to half a label - which can carry an end label into
+// its neighbour. So the pitch has to hold a whole label, half a label of slide
+// and the 3 px gap: 1.5 * 65.55 + 3 = 101.3, and 104 is that with a margin.
+// (80 px was enough for the 54 px labels of 14 px lettering; the 17 px type
+// dropped two labels in 109 of the 6560 measured cases at 80.)
+constexpr double kMinTickSpacingPx = 104.0;
 
 // The zoom floor as a fraction of the full span. Deeper zoom shows single
 // FFT bins as flat plateaus — no extra information, plenty of numeric risk.

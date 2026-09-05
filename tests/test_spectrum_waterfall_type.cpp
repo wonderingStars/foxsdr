@@ -146,11 +146,13 @@ void testFrequencyAxisIsComplete() {
     }
     CHECK(cases > 5000);
     // Zero, at the sizes fonts.hpp currently declares. A future size bump that
-    // pushes the labels past FreqScale's 80 px pitch fails HERE, with the
+    // pushes the labels past FreqScale's 104 px pitch fails HERE, with the
     // offending case printed, instead of shipping an axis with a hole in it.
+    // (It did exactly that for 0.79.0's three-pixel raise: 109 of these cases
+    // dropped a label at the old 80 px pitch, and the pitch was re-derived.)
     CHECK(totalDropped == 0);
     // The headroom, stated rather than assumed: the widest label this axis can
-    // actually produce, against the 80 px pitch it is spaced at.
+    // actually produce, against the 104 px pitch it is spaced at.
     std::printf("  frequency axis: widest label %.2f px at %.0f px type, "
                 "%d cases, %d dropped\n",
                 static_cast<double>(g_widestFreqLabel),

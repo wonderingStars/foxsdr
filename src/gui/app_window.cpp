@@ -6418,6 +6418,67 @@ void AppWindow::drawCabinetRail(float x0, float y0, float x1, float y1, float ma
     // The same path the desktop's close button took: the run loop sees the
     // window asked to close and shuts the receiver down cleanly.
     if (press.close) { glfwSetWindowShouldClose(mainWindow_, GLFW_TRUE); }
+
+    // THE RAIL DRAGS THE WINDOW BY TWO ROUTES, and a machine takes whichever
+    // it offers. On the desk this was built at, WM_NCHITTEST calls the rail
+    // the caption (win_frame.cpp), so a press on it never reaches ImGui: the
+    // operating system moves the window itself, with snap, shake and the
+    // system menu. On one user's laptop, 0.78.1 could not be dragged at all,
+    // and from here the reason cannot be seen - whatever answers that
+    // machine's hit test is not answering CAPTION over the rail. So the press
+    // is caught on THIS side too: an invisible item over the rail, left of the
+    // keys, and while it is held the window follows the pointer through GLFW.
+    // Where the native route works the item never sees a press, so the two
+    // cannot fight; where it does not, this one moves the window - without
+    // snap, but moved. A double-click here fills the screen as it does on the
+    // native route. The route a machine took is written to the diagnostic log
+    // the first time this one engages, so the next report says which.
+    if (margin >= 12.0f) {
+        const float railRight = keys.empty() ? br.x - margin : keys.x0;
+        const float railW = railRight - tl.x;
+        if (railW > 1.0f) {
+            const ImVec2 savedCursor = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(tl);
+            ImGui::InvisibleButton("##maindrag", ImVec2(railW, margin));
+            if (ImGui::IsItemActivated()) {
+                mainDragCarryX_ = 0.0f;
+                mainDragCarryY_ = 0.0f;
+                if (!mainDragSaid_) {
+                    mainDragSaid_ = true;
+                    cascade::core::diagLogf("frame: rail press reached the client (hit test did "
+                                            "not call it the caption); moving the window through "
+                                            "GLFW instead");
+                }
+            }
+            if (ImGui::IsItemActive() && !maximised &&
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
+                // Whole pixels to the window, the fraction carried to the next
+                // frame, so a slow drag does not lose its sub-pixel remainder
+                // every frame and lag the pointer.
+                const ImVec2 d = ImGui::GetIO().MouseDelta;
+                mainDragCarryX_ += d.x;
+                mainDragCarryY_ += d.y;
+                const int dx = static_cast<int>(mainDragCarryX_);
+                const int dy = static_cast<int>(mainDragCarryY_);
+                if (dx != 0 || dy != 0) {
+                    mainDragCarryX_ -= static_cast<float>(dx);
+                    mainDragCarryY_ -= static_cast<float>(dy);
+                    int wx = 0;
+                    int wy = 0;
+                    glfwGetWindowPos(mainWindow_, &wx, &wy);
+                    glfwSetWindowPos(mainWindow_, wx + dx, wy + dy);
+                }
+            }
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                if (maximised) {
+                    glfwRestoreWindow(mainWindow_);
+                } else {
+                    glfwMaximizeWindow(mainWindow_);
+                }
+            }
+            ImGui::SetCursorScreenPos(savedCursor);
+        }
+    }
     // In client pixels. With viewports on, the main viewport's origin IS the
     // window's client origin on screen.
     const ImVec2 origin = ImGui::GetMainViewport()->Pos;

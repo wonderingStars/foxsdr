@@ -404,6 +404,15 @@ both to the desktop, with a taskbar button to come back from. On Linux the
 main window keeps the frame the desktop gives it, and the rail carries the
 name alone.
 
+Since 0.79.0 the main window's rail drags the window by two routes. Where the
+system's hit test accepts the rail as the caption, the system moves the window
+itself, with snapping and the shake gesture. On one laptop it did not, and the
+window could not be moved at all; the application now also catches the press
+on its own side and moves the window through GLFW while the rail is held, so
+the window moves whichever route a machine takes. The first time the second
+route engages, a line saying so goes into the diagnostic log, which is what to
+send with a report of a window that will not move.
+
 Every one of those lives in `src/gui/theme.hpp`, in one palette named by role.
 Two things it deliberately does NOT govern, because they are measurements
 rather than decoration: the waterfall's colour ramp, which is built to keep a
@@ -419,6 +428,14 @@ executable unmodified; `third_party/THIRD_PARTY.md` records exactly which
 release each one is. Nova Mono is used for figures and not for words, which is
 measured rather than fussy: its capital M is three close stems and rasterises
 as a solid block below about 20 pixels.
+
+The sizes live in one place, `src/gui/fonts.hpp`, and 0.79.0 raised every one
+of them by three pixels (controls and prose 21, engraved captions 19, readings
+20, the smallest engraving 17) because the panel was still hard to read at
+arm's length. The rail's column grew eight pixels with them so that every
+shipped word still fits beside the widest status chip; a test measures each
+one against the real typefaces, so a word that stops fitting fails the build
+rather than clipping on the panel.
 
 ## The satellites map
 

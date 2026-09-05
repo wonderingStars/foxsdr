@@ -193,7 +193,13 @@ inline float railLabelRight(float rowRight, float rowH, float chipTextWidth) {
 // inside it. Out here with the rest of the rail's geometry because the test
 // has to know how much room a row actually gets before it can say whether a
 // label fits in one.
-inline constexpr float kMenuWidth = 260.0f;   // left column, per the parity spec
+//
+// 260 per the parity spec until 0.79.0, when every face grew three pixels
+// (fonts.hpp) and "Plugins (12 disabled)" needed 96 px of a 93-px row. Eight
+// more pixels of column keeps every shipped word whole beside the widest
+// chip, with room to spare; test_app_rail.cpp measures it against the real
+// typefaces, so a word that stops fitting fails a test rather than clipping.
+inline constexpr float kMenuWidth = 268.0f;   // left column
 inline constexpr float kRailPlatePad = 8.0f;  // plate inset inside that column
 
 // How wide ONE ROW ends up: the column, less the plate's inset on both sides,
@@ -1431,8 +1437,12 @@ private:
     // chose, not the user: geometry read-backs skip it.
     bool pageGeometryTransient(const char* id) const;
     // The main window's rail: name, keys, and the drag region handed to the
-    // native hit test.
+    // native hit test - and, should a machine's hit test not take it, dragged
+    // from this side through GLFW (drawCabinetRail explains the two routes).
     void drawCabinetRail(float x0, float y0, float x1, float y1, float margin);
+    float mainDragCarryX_ = 0.0f;  // sub-pixel remainder of the GLFW-side drag
+    float mainDragCarryY_ = 0.0f;
+    bool mainDragSaid_ = false;    // the diagnostic line about it, once a run
 
     bool rxSet_ = false;
     double rxLat_ = 0.0;

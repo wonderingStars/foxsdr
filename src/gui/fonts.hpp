@@ -68,10 +68,16 @@ namespace cascade::gui::fonts {
 // apertures, meter faces and card heights all have to be re-checked, because
 // text that no longer fits does not wrap, it clips. Do not raise these again
 // without walking the same surfaces.
-inline constexpr float kUiSize = 18.0f;       // controls, prose, table cells
-inline constexpr float kLegendSize = 16.0f;   // engraved captions, small plates
-inline constexpr float kReadingSize = 17.0f;  // a number on glass
-inline constexpr float kTinySize = 14.0f;     // the smallest engraving that
+//
+// RAISED BY THREE PIXELS ACROSS THE BOARD in 0.79.0, at the user's request
+// ("make the font size larger across the whole software by about 3px"),
+// which was the third such request in a month and the largest. The sweep
+// above was walked again: the rail, the status cards, the plates, the bench
+// engravings and the scope's panels were all screenshotted at the new sizes.
+inline constexpr float kUiSize = 21.0f;       // controls, prose, table cells
+inline constexpr float kLegendSize = 19.0f;   // engraved captions, small plates
+inline constexpr float kReadingSize = 20.0f;  // a number on glass
+inline constexpr float kTinySize = 17.0f;     // the smallest engraving that
                                               // still has to be readable
 
 // --- the faces ---------------------------------------------------------------
