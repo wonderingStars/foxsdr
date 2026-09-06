@@ -84,6 +84,31 @@ ImU32 colourFor(std::uint32_t kind) {
 // ABI says what a thing IS; that is what decides how its altitude is read.
 bool orbitalLadder(std::uint32_t kind) { return kind == CASCADE_TRACK_SATELLITE; }
 
+// THE SAME QUESTION IN track_metrics.hpp's OWN VOCABULARY, for the detail
+// block. That block has to describe a satellite in kilometres and km/s and an
+// aeroplane in feet and knots, which is the decision orbitalLadder above
+// already makes for the map's colours - so it is ASKED THROUGH orbitalLadder
+// rather than beside it. One line decides which kinds are orbital; a second
+// copy of that rule is how the legend and the tooltip come to disagree about
+// what the ISS is.
+//
+// The translation happens here and not in track_metrics.hpp because that header
+// is deliberately free of plugin_abi.h - see its file comment - so the ABI's
+// numbers become names at the call site, exactly as the two altitude ladders
+// already do.
+TrackKind detailTrackKind(std::uint32_t kind) {
+    if (orbitalLadder(kind)) { return TrackKind::Satellite; }
+    switch (kind) {
+        case CASCADE_TRACK_AIRCRAFT: return TrackKind::Aircraft;
+        case CASCADE_TRACK_VESSEL: return TrackKind::Vessel;
+        // A station, and anything a plugin sends that this build does not know
+        // a name for, keep the aviation units they have always been described
+        // in: an APRS station reports its altitude in feet and its speed in
+        // knots, so those are the right units and not a fallback.
+        default: return TrackKind::Other;
+    }
+}
+
 int bandIndexFor(std::uint32_t kind, double altM) {
     return orbitalLadder(kind) ? orbitBandIndex(altM) : altitudeBandIndex(altM);
 }
@@ -1672,8 +1697,18 @@ void MapView::draw(float width, float height,
         // Asking the info cache is non-blocking and cached, so hovering is
         // also what starts the lookup for a target the per-frame sweep has not
         // reached yet - which happens inside makeTrackDetailInput.
+        //
+        // GATHERED AND DRAWN IN TWO STEPS, so the one thing this view knows and
+        // the adapter does not can be said in between: WHAT THE TARGET IS, in
+        // the block's own vocabulary, which is what decides whether its
+        // altitude and speed are read in feet and knots or in kilometres and
+        // km/s. Hovering the ISS used to produce "1381234 ft" and "14890 kt"
+        // from this very tooltip.
         ImGui::BeginTooltip();
-        drawTrackDetail(*best, info, hasHome_, homeLat_, homeLon_);
+        TrackDetailInput detailIn =
+            makeTrackDetailInput(*best, info, hasHome_, homeLat_, homeLon_);
+        detailIn.kind = detailTrackKind(best->t.kind);
+        drawTrackDetailLines(buildTrackDetailLines(detailIn));
         ImGui::EndTooltip();
     }
 
@@ -2293,6 +2328,13 @@ SatelliteCardNotes satelliteCardNotes(bool haveTarget, bool haveReceiverPosition
     SatelliteCardNotes n;
     n.noReceiver = haveTarget && !haveReceiverPosition;
     n.notReported = haveTarget;
+    // AND THE PASSES CARD IS ABOUT A TARGET TOO. Its heading says THIS TARGET
+    // and its note explains why THIS target's passes cannot be computed, so
+    // with nothing selected it is a card about nothing - which is exactly what
+    // a new install saw, directly under a card reading NO TARGET SELECTED.
+    // A receiver position does not enter into it: a pass prediction needs the
+    // orbit, and no amount of position makes a reported latitude into one.
+    n.passes = haveTarget;
     return n;
 }
 
@@ -2370,11 +2412,35 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     formatLat(haveRx ? homeLat_ : 0.0, latText, sizeof latText);
     formatLon(haveRx ? homeLon_ : 0.0, lonText, sizeof lonText);
 
+    // WHAT THIS POSITION IS FOR, AND WHAT IT IS NOT FOR - which is the half
+    // that was missing and the half a user could see was missing. The note read
+    // "Position set. Distance and bearing are computed for every target, and
+    // coverage is measured from here", which is true and which reads as "the
+    // application now knows where I am" - while a tracking plugin's own panel
+    // goes on saying no observer is set and its pass table stays empty. Both
+    // statements are true and together they are baffling.
+    //
+    // THE SPLIT IS REAL AND THIS DECK CANNOT CLOSE IT. A plugin keeps its
+    // observer position in its own configuration because the plugin ABI has no
+    // field through which the host could hand this one over - CascadeHostApi
+    // gives a plugin the centre frequency, the sample rate, a tune request and
+    // the time, and nothing about where the receiver is. Until it has such a
+    // field the honest thing is to name the distances this position actually
+    // measures and to point at the other place, rather than to leave the two
+    // notes contradicting each other.
+    //
+    // AND NO FILE PATH IS NAMED HERE. Which file, and where it is, is the
+    // plugin's own business and its own panel says so; a path written into host
+    // code would be a claim about a plugin the host cannot check and would be
+    // wrong for every other tracker.
     const char* rxNote =
-        haveRx ? "Position set. Distance and bearing are computed for every target, and "
-                 "coverage is measured from here."
-               : "No position set. Distance, bearing and the coverage overlay stay blank "
-                 "until one is - none of them can be computed without it.";
+        haveRx ? "Position set. This window measures every DISTANCE, BEARING and the "
+                 "COVERAGE ring from it. A plugin that predicts passes keeps its own "
+                 "observer position in its own configuration - its panel names the file."
+               : "No position set. DISTANCE, BEARING and the coverage overlay on this "
+                 "window stay blank until one is - none of them can be computed without "
+                 "it. A plugin that predicts passes keeps its observer position "
+                 "separately, in its own configuration.";
     // WHAT THE ACCUMULATOR ACTUALLY HOLDS, decided here rather than at the
     // point it is drawn, because the deck's height is measured from the
     // sentence that will be in it - and a note sized from a different string
@@ -2822,8 +2888,14 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 : (8.0f + uiH + 4.0f +
                    uiF->CalcTextSizeA(tinyPx, FLT_MAX, measureW - 16.0f, noSelPrompt).y +
                    8.0f);
+        // ZERO WHEN THERE IS NO CARD, from the same answer the drawing reads,
+        // so the column cannot reserve a card it does not draw. The 8 px gap
+        // above it goes with it - a gap to a card that is not there is a gap to
+        // the bottom of the well.
         const float passH =
-            8.0f + tinyH + 6.0f + noteHeight(measureW - 16.0f, passNote) + 8.0f;
+            cardNotes.passes
+                ? (8.0f + tinyH + 6.0f + noteHeight(measureW - 16.0f, passNote) + 8.0f)
+                : 0.0f;
         const float footH = tinyH + 4.0f;
         const float rowH = std::max(20.0f, smallH + 8.0f);
 
@@ -2843,7 +2915,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // instead of overlapping.
         const float rowsContent =
             rows.empty() ? rowH * 2.0f : static_cast<float>(rows.size()) * rowH;
-        const float contentNeed = rowsContent + 8.0f + detailH + 8.0f + passH;
+        const float contentNeed =
+            rowsContent + 8.0f + detailH + (cardNotes.passes ? (8.0f + passH) : 0.0f);
         float listH = br.y - kPad - footH - 6.0f - y;
         if (listH < rowH * 3.0f) { listH = rowH * 3.0f; }
 
@@ -3097,7 +3170,31 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                                                     sel->t.lonDeg);
                     const double brg = initialBearingDeg(homeLat_, homeLon_, sel->t.latDeg,
                                                          sel->t.lonDeg);
-                    if (std::isfinite(km)) {
+                    // WHICH DISTANCE THIS IS, NAMED. greatCircleKm measures
+                    // along the GROUND: for an aeroplane that is the distance
+                    // anyone means, and for a satellite it is the distance to
+                    // the SUB-POINT in the cell beside this one - 0 km for the
+                    // ISS directly overhead, on the same window as a hover
+                    // tooltip reading 421 km. The card follows the rule the
+                    // detail block follows, so the two cannot contradict each
+                    // other: with a known altitude the figure is the slant
+                    // range and the key says so, and with no altitude to
+                    // compute one from the key names the ground distance rather
+                    // than leaving a reader to assume the height is in it.
+                    //
+                    // ONLY INSIDE THIS ARM. With no receiver position there is
+                    // no figure of either kind, the cell is hatched, and the
+                    // key stays DISTANCE - which is the word the gold note
+                    // underneath uses to say which cells it is talking about.
+                    const bool orbitalSel = orbitalLadder(sel->t.kind);
+                    const double slantKm = orbitalSel ? slantRangeKm(km, sel->t.altM) : 0.0;
+                    if (orbitalSel && std::isfinite(slantKm)) {
+                        cells[4].key = "SLANT RANGE";
+                        std::snprintf(cells[4].value, sizeof cells[4].value, "%.0f km",
+                                      slantKm);
+                        cells[4].known = true;
+                    } else if (std::isfinite(km)) {
+                        if (orbitalSel) { cells[4].key = "GROUND DIST"; }
                         std::snprintf(cells[4].value, sizeof cells[4].value, "%.0f km", km);
                         cells[4].known = true;
                     }
@@ -3167,8 +3264,14 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         }
 
         // --- next passes, and why the list is empty -------------------------
-        ImGui::Dummy(ImVec2(tableW, 8.0f));
-        {
+        // ONLY WITH A TARGET, from the same answer the height was reserved
+        // from. The heading says THIS TARGET and the note explains why THIS
+        // target's passes cannot be computed, so with nothing selected this
+        // was a whole card about nothing - and it was drawn directly under the
+        // card reading NO TARGET SELECTED, on the one screen a fresh install
+        // opens on.
+        if (cardNotes.passes) {
+            ImGui::Dummy(ImVec2(tableW, 8.0f));
             const ImVec2 cTL = ImGui::GetCursorScreenPos();
             ImGui::Dummy(ImVec2(tableW, passH));
             const ImVec2 cBR(cTL.x + cardW, cTL.y + passH);

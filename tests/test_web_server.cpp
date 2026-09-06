@@ -31,6 +31,7 @@
 #endif
 
 #include <httplib.h>
+#include <nlohmann/json.hpp>
 
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
@@ -1279,6 +1280,280 @@ console.log(out.join(' '));
     }
 }
 
+// The three helpers below all answer with an EMPTY OBJECT rather than a null
+// json when they find nothing, and check is_object() before reading. Both are
+// deliberate: nlohmann's value() THROWS on a null, so a helper that returned
+// one would turn the failing run - the only run with anything to report - into
+// an uncaught exception instead of a named broken expectation.
+
+// How many elements tagged `tag` the subtree at `el` holds, itself included.
+// Recursive because "there is no picture in this tile" has to be true of the
+// WHOLE tile: an <img> one level deeper would be just as broken and invisible
+// to a check on the first child.
+std::size_t countTag(const nlohmann::json& el, const std::string& tag) {
+    if (!el.is_object()) {
+        return 0u;
+    }
+    std::size_t n = (el.value("tag", std::string()) == tag) ? 1u : 0u;
+    const nlohmann::json kids = el.value("kids", nlohmann::json::array());
+    if (kids.is_array()) {
+        for (const nlohmann::json& kid : kids) {
+            n += countTag(kid, tag);
+        }
+    }
+    return n;
+}
+
+// The first child of `tile` with this tag, or an empty object when it has none.
+nlohmann::json childWithTag(const nlohmann::json& tile, const std::string& tag) {
+    if (tile.is_object()) {
+        const nlohmann::json kids = tile.value("kids", nlohmann::json::array());
+        if (kids.is_array()) {
+            for (const nlohmann::json& kid : kids) {
+                if (kid.is_object() && kid.value("tag", std::string()) == tag) {
+                    return kid;
+                }
+            }
+        }
+    }
+    return nlohmann::json::object();
+}
+
+// The first child of `tile` with this class, or an empty object when it has none.
+nlohmann::json childWithClass(const nlohmann::json& tile, const std::string& cls) {
+    if (tile.is_object()) {
+        const nlohmann::json kids = tile.value("kids", nlohmann::json::array());
+        if (kids.is_array()) {
+            for (const nlohmann::json& kid : kids) {
+                if (kid.is_object() && kid.value("cls", std::string()) == cls) {
+                    return kid;
+                }
+            }
+        }
+    }
+    return nlohmann::json::object();
+}
+
+// hasPicture as the status states it, with `fallback` when the entry does not
+// state it at all. Callers pass the OPPOSITE of what they expect, so a status
+// that has dropped the field fails the check rather than reading as whatever
+// the check happened to want.
+bool hasPictureFlag(const nlohmann::json& entry, bool fallback) {
+    if (!entry.is_object() || !entry.contains("hasPicture") ||
+        !entry["hasPicture"].is_boolean()) {
+        return fallback;
+    }
+    return entry["hasPicture"].get<bool>();
+}
+
+// THE PICTURES PANEL MUST NOT CLAIM A PICTURE IT HAS NOT GOT.
+//
+// Every image-decoder instance is published as a slot the moment it is fitted,
+// so a decoder that has decoded nothing is an ordinary state and not an edge
+// case - it is what every one of them looks like until the first frame lands.
+// The panel used to answer it by hanging an <img> on /api/image/<n>, which
+// answers 404 for a slot with no bitmap, under a caption reading
+// "0x0  (receiving)": a broken-image icon and a claim that a picture was
+// arriving, before a single sample had been decoded.
+//
+// Two halves, because the defect spans both. The status has to SAY which slots
+// have pixels behind them, from the same vector the image endpoint serves
+// from, and the page has to ACT on it. Either half alone leaves the icon on
+// the screen.
+void testEmptyImageSlotIsNotDrawnAsAPicture() {
+    WebServer server;
+    RadioStatus withImages = sampleStatus();
+    withImages.images.push_back({"sstv", 3, 2, true, 7});    // decoded something
+    withImages.images.push_back({"apt", 0, 0, false, 0});    // fitted, decoded nothing
+    withImages.images.push_back({"pocsag", 0, 0, false, 0});  // announced, not published
+    server.setStatusProvider([withImages]() { return withImages; });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+
+    // Two slots published against three in the status: the third stands for
+    // the frame in which a new decoder has been announced but its picture not
+    // yet encoded, which must read as "no picture" and not as a missing file.
+    std::vector<WebImage> published(2);
+    published[0].plugin = "sstv";
+    published[0].width = 3;
+    published[0].height = 2;
+    published[0].complete = true;
+    published[0].revision = 7;
+    published[0].bmp = {'B', 'M', 1, 2, 3};
+    published[1].plugin = "apt";
+    server.setImages(published);
+
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+
+    auto status = cli.Get("/api/status");
+    CHECK(static_cast<bool>(status));
+    nlohmann::json images = nlohmann::json::array();
+    if (status) {
+        CHECK(status->status == 200);
+        const nlohmann::json j = nlohmann::json::parse(status->body, nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded() && j.contains("images") && j["images"].is_array()) {
+            images = j["images"];
+        }
+    }
+    CHECK(images.size() == 3);
+    if (images.size() == 3) {
+        CHECK(hasPictureFlag(images[0], false));
+        CHECK(!hasPictureFlag(images[1], true));
+        CHECK(!hasPictureFlag(images[2], true));
+    }
+
+    // The flag and the endpoint are one fact stated twice, so whatever the
+    // status says about a slot, /api/image/<i> must answer the same way.
+    auto served = cli.Get("/api/image/0");
+    CHECK(static_cast<bool>(served) && served->status == 200);
+    auto emptySlot = cli.Get("/api/image/1");
+    CHECK(static_cast<bool>(emptySlot) && emptySlot->status == 404);
+    auto unpublished = cli.Get("/api/image/2");
+    CHECK(static_cast<bool>(unpublished) && unpublished->status == 404);
+    server.stop();
+
+    // --- and now the page, which is where the icon actually appeared --------
+    const std::string js = fetchAppJs();
+    CHECK(js.find("function reflectImages(") != std::string::npos);
+
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP testEmptyImageSlotIsNotDrawnAsAPicture (page half): "
+                    "node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app_images.js";
+    CHECK(writeFile(jsPath, js));
+
+    // Lifts reflectImages out of the served script and runs it against a DOM
+    // small enough to fit here, then prints what it built. Extraction rather
+    // than execution for the same reason the fade driver does it: the script's
+    // top level touches a document node has not got.
+    const char* kDriver = R"NODE(
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+function block(name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing function ' + name);
+  let depth = 0, opened = false;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') { depth++; opened = true; }
+    else if (src[j] === '}') { depth--; if (opened && depth === 0) return src.slice(i, j + 1); }
+  }
+  throw new Error('unterminated function ' + name);
+}
+function letDecl(name) {
+  const m = src.match(new RegExp('^let ' + name + ' = .*;$', 'm'));
+  if (!m) throw new Error('missing let ' + name);
+  return m[0];
+}
+const stub = `
+function El(tag) { this.tag = tag; this.children = []; this.className = ''; }
+El.prototype.appendChild = function (c) { this.children.push(c); };
+Object.defineProperty(El.prototype, 'innerHTML', {
+  set: function (v) { if (v === '') { this.children = []; } },
+  get: function () { return ''; } });
+const wrap = new El('div');
+wrap.hidden = null;
+wrap.classList = { toggle: function (name, on) { wrap.hidden = on; } };
+const box = new El('div');
+function $(id) { return id === 'imagesWrap' ? wrap : box; }
+const document = { createElement: function (t) { return new El(t); } };
+`;
+const api = new Function(stub + '\n' + letDecl('lastImageKey') + '\n' +
+                         block('reflectImages') +
+                         '\nreturn { reflect: reflectImages, box: box, wrap: wrap };')();
+api.reflect({ images: [
+  { plugin: 'sstv', width: 320, height: 256, complete: false, revision: 5, hasPicture: true },
+  { plugin: 'apt', width: 0, height: 0, complete: false, revision: 0, hasPicture: false }
+] });
+function dump(el) {
+  return { tag: el.tag, cls: el.className,
+           src: el.src === undefined ? '' : el.src,
+           text: el.textContent === undefined ? '' : el.textContent,
+           kids: el.children.map(dump) };
+}
+console.log(JSON.stringify({ hidden: api.wrap.hidden, tiles: api.box.children.map(dump) }));
+)NODE";
+    const fs::path driver = dir / "images_driver.js";
+    CHECK(writeFile(driver, kDriver));
+
+    std::string output;
+    const int rc = runCaptured("node \"" + driver.string() + "\" \"" + jsPath.string() + "\"",
+                               dir / "images.txt", output);
+    if (rc != 0) {
+        std::printf("images driver failed:\n%s\n", output.c_str());
+    }
+    CHECK(rc == 0);
+
+    // The driver prints one line of JSON and stderr lands in the same capture,
+    // so take the LAST non-blank line: a node warning ahead of it would fail
+    // the parse and read as a fault in the page.
+    std::string lastLine;
+    {
+        std::istringstream in(output);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.find_first_not_of(" \t\r") != std::string::npos) {
+                lastLine = line;
+            }
+        }
+    }
+    const nlohmann::json built = nlohmann::json::parse(lastLine, nullptr, false);
+    CHECK(!built.is_discarded());
+    if (built.is_discarded()) {
+        std::printf("images driver output was not JSON:\n%s\n", output.c_str());
+        return;
+    }
+    // The panel is still SHOWN: an empty slot is a real decoder waiting, and
+    // hiding it would lose the only sign that one is fitted at all. Read as a
+    // json rather than through value(), which throws on the null this starts
+    // as if the toggle never ran.
+    const nlohmann::json hidden =
+        built.contains("hidden") ? built["hidden"] : nlohmann::json();
+    CHECK(hidden.is_boolean() && hidden.get<bool>() == false);
+
+    nlohmann::json tiles = nlohmann::json::array();
+    if (built.contains("tiles") && built["tiles"].is_array()) {
+        tiles = built["tiles"];
+    }
+    CHECK(tiles.size() == 2);
+    if (tiles.size() == 2) {
+        // The slot with pixels is drawn as a picture, aimed at its own index
+        // and revision, and captioned with the size it really is.
+        CHECK(countTag(tiles[0], "img") == 1u);
+        CHECK(childWithTag(tiles[0], "img").value("src", std::string()) ==
+              "/api/image/0?rev=5");
+        CHECK(childWithClass(tiles[0], "cap").value("text", std::string()) ==
+              "sstv  320x256  (receiving)");
+
+        // The empty slot keeps its place and says what it is. No <img>
+        // anywhere in it - there is nothing at /api/image/1 to put in one -
+        // and its caption names the decoder and stops there. The two absence
+        // checks are the rule itself, written down: no size where there is no
+        // picture, and no claim that anything is being received.
+        CHECK(countTag(tiles[1], "img") == 0u);
+        const std::string emptyCap =
+            childWithClass(tiles[1], "cap").value("text", std::string());
+        CHECK(emptyCap == "apt");
+        CHECK(emptyCap.find("receiving") == std::string::npos);
+        CHECK(emptyCap.find("0x0") == std::string::npos);
+        // And it is not simply blank: the stand-in element is there, saying so
+        // in words. empty(), not is_null() - a missing child comes back as an
+        // empty object from the helper above, and is_null() would pass on it.
+        const nlohmann::json placeholder = childWithClass(tiles[1], "none");
+        CHECK(!placeholder.empty());
+        CHECK(placeholder.value("text", std::string()) == "no picture yet");
+    }
+}
+
 // THE BROWSER'S WATERFALL IS A MEASUREMENT, and until this test it was the
 // only one of the three in this product with nothing holding it to that.
 //
@@ -1431,6 +1706,7 @@ int main() {
     testServedScriptParses();
     testMapPanIsBoundToPointerEvents();
     testTrackFadeMatchesTheDesktopRule();
+    testEmptyImageSlotIsNotDrawnAsAPicture();
     testServedWaterfallRampIsMonotone();
     return testSummary("test_web_server");
 }

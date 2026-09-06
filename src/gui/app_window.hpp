@@ -4,6 +4,8 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <future>
@@ -127,6 +129,56 @@ inline constexpr float kRailRowPadY = 5.0f;
 inline float railRowHeight(float labelPx) {
     const float fromType = labelPx + 2.0f * kRailRowPadY;
     return fromType > kRailRowMinH ? fromType : kRailRowMinH;
+}
+
+// --- the bandwidth the combo offers, and the bandwidth it is actually running
+//
+// OUT HERE SO SOMETHING CAN CHECK THEM. These two were file-private in
+// app_window.cpp, which is why the fault they now close shipped: nothing in
+// the suite can construct an AppWindow, so anything private to that file is
+// reachable only by running the application and looking at it. The pair below
+// is pure arithmetic over a table, so it costs nothing to put where a test can
+// see it - and this is the same reason railRowHeight and railChipReserve are
+// here rather than there.
+//
+// The steps the Bandwidth combo offers, widest first. app_window.cpp letters
+// them from kBwLabels, which must stay in step with this.
+inline constexpr double kBwHz[6] = {200000.0, 150000.0, 12500.0, 10000.0, 6000.0, 3000.0};
+inline constexpr int kBwCount = static_cast<int>(sizeof(kBwHz) / sizeof(kBwHz[0]));
+
+// WHICH OF THE OFFERED STEPS A BANDWIDTH IS, OR -1 FOR NONE OF THEM.
+//
+// A "nearest step" answer was the fault. A plugin preset may ask for a
+// bandwidth this table does not carry - the NOAA APT preset asks for 40 kHz,
+// because an APT signal is about 34 kHz wide and 12.5 kHz slices its video
+// sidebands off - and the nearest step to 40 kHz is 12.5 kHz. Pointing the
+// combo there made it letter a bandwidth the receiver was not running, and
+// because every control that writes this index back writes kBwHz[index] with
+// it, the next touch of any of them really did narrow the receiver to the
+// figure the combo had been wrongly showing.
+//
+// An eighth of a hertz of tolerance because both sides are exact table values,
+// or a config round-trip of one, never a computed quantity.
+inline int bandwidthStepIndex(double hz) {
+    for (int i = 0; i < kBwCount; ++i) {
+        const double d = kBwHz[i] - hz;
+        if ((d < 0.0 ? -d : d) < 0.125) { return i; }
+    }
+    return -1;
+}
+
+// The bandwidth as the combo letters it, in kBwLabels' own shorthand, for a
+// value that may be none of them: "200k", "40k", "12.5k", "3k". Three decimals
+// of a kilohertz is one hertz, and the trailing zeros come off, so a table
+// value reads exactly as its own label does and a preset's own figure reads as
+// itself rather than as the nearest word in the table. Nothing below 3 kHz can
+// arrive - kVfoBwMinHz is the floor every writer clamps to.
+inline void formatBandwidth(double hz, char* out, std::size_t n) {
+    int len = std::snprintf(out, n, "%.3f", hz / 1000.0);
+    if (len < 0 || static_cast<std::size_t>(len) >= n) { return; }
+    while (len > 0 && out[len - 1] == '0') { out[--len] = '\0'; }
+    if (len > 0 && out[len - 1] == '.') { out[--len] = '\0'; }
+    std::snprintf(out + len, n - static_cast<std::size_t>(len), "k");
 }
 
 // The square key at the left of the row, and the plate that starts after it.
@@ -768,12 +820,18 @@ private:
     // purpose, after a user could not find the resize edges on an undecorated
     // one.
     void drawSatelliteMapBody(MapPage& page);
-    // The satellites map's row on the FUNCTION SELECT rail, in DECODE. A
-    // SWITCH, not a section: it opens and closes the window and reports what
-    // that window holds, and it is the whole of the satellite presence in the
-    // main window - every satellite control lives in the window itself, which
-    // is the point of the window.
-    void drawSatelliteMapSection();
+    // ONE ROW ON THE FUNCTION SELECT RAIL PER MAP PAGE, in DECODE. A SWITCH,
+    // not a section: it opens and closes that page's window and reports what
+    // the window holds, and for the satellites page it is the whole of the
+    // satellite presence in the main window - every satellite control lives in
+    // the window itself, which is the point of the window.
+    //
+    // IT USED TO SKIP EVERY PAGE THAT WAS NOT THE SATELLITES ONE, and since
+    // 0.79.1 - when nothing opens a page by itself any more - that left the
+    // ADS-B, AIS and APRS maps reachable only through a preset, which also
+    // retunes the radio. A map is not a thing a user should have to move the
+    // receiver to look at.
+    void drawMapPageSections();
     // One row per window a plugin publishes (a picture, a panel): the only
     // way such a window reaches the screen since 0.79.1.
     void drawPluginWindowRows();
@@ -948,6 +1006,12 @@ private:
     float volume_ = 0.5f;
     int modeIndex_ = 1;                              // WFM
     float vfoOffsetKhz_ = 300.0f;
+    // WHICH OF THE OFFERED BANDWIDTH STEPS THE VFO IS ON, or -1 for none of
+    // them: a plugin preset may ask for a width the list does not carry (the
+    // NOAA APT one asks for 40 kHz), and the combo then letters the real
+    // figure and ticks nothing. It used to be the NEAREST step, which made the
+    // control show 12.5k over a 40 kHz VFO and apply that 12.5k on the next
+    // click. Never used to index kBwHz without a literal step beside it.
     int bandwidthIndex_ = 1;                         // 150k
     float squelchDb_ = -50.0f;
     // Output devices, enumerated once at construction (a hot-plug refresh can
@@ -1526,7 +1590,21 @@ private:
     std::vector<unsigned int> imageTex_;
     std::vector<std::uint64_t> imageTexRev_;
     std::vector<std::string> imageTexPlugin_;
+    // WHAT THE SAVE BUTTON SAID, WHOSE WINDOW SAID IT, AND WHEN.
+    //
+    // It was one AppWindow-wide string drawn inside EVERY image window by the
+    // per-image loop, so saving an APT picture put "Saved ...bmp" underneath
+    // the SSTV picture as well - a filename that has nothing to do with the
+    // window it is lettered in - and nothing ever cleared it, so it sat there
+    // for the rest of the session. The plugin name is what makes it belong to
+    // one window; the timestamp is what makes it a message rather than a
+    // permanent caption.
+    std::string imageSaveNotePlugin_;
     std::string imageSaveNote_;
+    double imageSaveNoteAtS_ = -1.0;
+    // Long enough to read a full path off the window, short enough that it is
+    // plainly about the save that just happened.
+    static constexpr double kImageSaveNoteSeconds = 10.0;
     // Decoded output, newest last, bounded. The panel is a tail, not an
     // archive; the recorder is where a permanent copy belongs.
     std::deque<cascade::core::DecodedLine> decoderLog_;
@@ -1543,6 +1621,14 @@ private:
     std::uint64_t decoderLinesAtWindow_ = 0;
     double decoderRateWindowS_ = -1.0;
     float decoderLinesPerSec_ = -1.0f;
+    // The span the figure above was actually divided by, so the card can
+    // caption it with the mean it really is. It used to letter the nominal
+    // window from a constant while dividing by however long the status column
+    // had been off screen - and scope mode hides that column entirely, so a
+    // spell in the scope produced a figure captioned "2 s mean" that was a
+    // five-minute mean. The guard beside it throws such a window away; this is
+    // what stops the two seconds either side of it from being a claim.
+    double decoderRateSpanS_ = 0.0;
     // WHEN THE MUTE STARTED, as this GUI observed it: the mute subject the
     // status column last saw, and the time it changed to that. Nothing in the
     // pipeline timestamps a mute, so an unobserved one (the window was closed,
@@ -2027,6 +2113,17 @@ private:
     char webPassConfirmBuf_[128] = "";
     std::string webError_;   // red: the policy's refusal, or a bind failure
     std::string webNote_;    // neutral/green: "serving at http://..."
+    // SWITCHED ON AND NOT LISTENING, WHICH IS NOT THE SAME AS SWITCHED OFF.
+    // Set by applyWebSettings when a start is refused - a port already held by
+    // something else is much the commonest cause - and cleared by the next
+    // apply, successful or not. It exists because the status column and the
+    // rail row both used to read "off" for a server the user had deliberately
+    // turned on, with the refusal visible only to somebody who opened the Web
+    // access section; a socket that could not be opened is news, not a
+    // setting. webError_ cannot serve in its place: the password field writes
+    // its own complaints there, and a mistyped password is not a listener that
+    // refused to start.
+    std::string webStartRefusal_;
     // Edits are staged and applied on a button rather than taking effect as
     // they are typed. Two reasons: restarting the listener on every keystroke
     // of the port field is nonsense, and — the real one — a setting that

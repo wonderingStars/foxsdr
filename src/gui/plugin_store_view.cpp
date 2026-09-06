@@ -563,7 +563,17 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         r.push_back({"Can ask to move the receiver", d, true});
     }
     if ((c & CASCADE_CAP_BASEMAP) != 0u) {
-        r.push_back({"Map imagery", "Fetches tiles from a server you point it at.", true});
+        // NOT "a server you point it at", which is what this row used to say.
+        // CascadeBasemapApi carries no server field and there is no setting in
+        // this console that aims a basemap module anywhere: the host asks for
+        // the tile at (z, x, y) and the module answers it from wherever it
+        // likes. Handing the user a control they have not got, on the one row
+        // whose job is to warn them this capability reaches outward, is the
+        // worst place in the console to do it.
+        r.push_back({"Map imagery", "Supplies the map tiles from whatever source it chose "
+                                    "- which may be an online tile server. Nothing here "
+                                    "points it at one.",
+                     true});
     }
     if ((c & CASCADE_CAP_TRACK_INFO) != 0u) {
         r.push_back({"Target look-up", "Looks up who a target is, from whatever source it "
@@ -1007,7 +1017,12 @@ std::string moduleReachSummary(const ModulePlate& m) {
                                                 : "asks to move the receiver";
     }
     if ((m.capabilities & (CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
-        return "fetches from a server you choose";
+        // "a server you choose" was false of both: neither capability takes a
+        // server from this console, so whatever they reach is the module's
+        // choice and the console never learns what it was. "may" because
+        // nothing here can tell whether the source is on the network at all -
+        // the reach list below says the same thing at length.
+        return "may fetch from a server it chose";
     }
     return "publishes to the host only";
 }

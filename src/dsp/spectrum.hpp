@@ -46,6 +46,14 @@ public:
     // ~= -6 dB lower. That is intentional — the estimator reports what the
     // windowed transform actually measured, and a display that wants
     // calibrated tone levels adds -20*log10(coherentGain(window)) itself.
+    // THE GUI DOES NOT ADD IT, and its panel says so: the spectrum well
+    // prints its "PEAK IN PASSBAND" figure in plain dB rather than dBFS,
+    // because that figure, the trace and the dB ladder all come out of this
+    // one array and a correction applied to any one of them alone would make
+    // the panel disagree with itself. The caption used to claim dBFS, and
+    // against the BlackmanHarris window the pipeline runs it therefore
+    // captioned a full-scale tone as 8.9 dB below full scale. Read
+    // gui/spectrum_view.hpp's kPeakUnit before labelling anything dBFS.
     // Averaging runs in the LINEAR power domain (before the dB conversion)
     // because averaging dB values would estimate the mean of the log — a
     // biased-low estimate of mean power for fluctuating signals.

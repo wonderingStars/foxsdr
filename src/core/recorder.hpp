@@ -40,16 +40,28 @@
 // inside one second.
 //
 // Limits: the data chunk is capped so the 32-bit RIFF size field stays
-// valid (just under 4 GiB). Once full — or after the first short fwrite
-// (disk full/removed) — further samples are dropped silently; the counters
-// only ever report bytes stdio actually accepted, so the header patched by
-// stop() never claims samples the disk refused.
+// valid (just under 4 GiB) — about four and a half minutes of the app's
+// default 2 Msps IQ, so it is a length real takes reach rather than an
+// exotic one. Reaching it ENDS the take: the header is patched with the
+// bytes actually written, the file is closed, recording() goes false and
+// sizeLimitReached() latches. It used to drop that block and every block
+// after it and tell nobody, so the panel kept its REC lamp and its climbing
+// clock over a file that had stopped growing minutes earlier and still
+// declared zero samples on disk. A short fwrite (disk full/removed) is the
+// other way a take stops taking: that one leaves the file open for stop()
+// to finalize, and only latches writeFailed(). Either way the counters
+// report bytes stdio actually accepted, so the patched header never claims
+// samples the disk refused.
 //
 // Threading: writeIq()/writeAudio() from one thread only, and start()/stop()
 // must not overlap an in-flight write (the caller parks the DSP thread
 // across record toggles — the same serialization contract IqFileSource
-// documents for its read()). recording(), kind() and both counters are
-// atomic and may be polled from any thread (e.g. the GUI status bar).
+// documents for its read()). That contract is what lets the size-limit end
+// finalize the file from inside a write, on the writing thread: no other
+// thread can be in start()/stop() at that moment, and the parking the caller
+// already does to satisfy the contract publishes the closed file_ to it.
+// recording(), kind(), both counters and both fault flags are atomic and may
+// be polled from any thread (e.g. the GUI status bar).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -90,7 +102,8 @@ public:
     void writeAudio(const float* s, std::size_t n);
 
     // Patches the RIFF/data sizes and closes the file. Idempotent; safe
-    // without a prior start(). Counters keep their final values until the
+    // without a prior start(), and a no-op on a take that already ended
+    // itself at the size limit. Counters keep their final values until the
     // next start() so the GUI can show "recorded N samples" after the fact.
     void stop();
 
@@ -103,12 +116,22 @@ public:
     std::uint64_t samplesWritten() const;
     std::uint64_t bytesWritten() const;
 
-    // True once the disk refused a write during this recording (full, removed,
-    // or gone read-only) - the recording is still "on" in the sense that
-    // stop() has not been called, but nothing more is reaching the file. Read
-    // by the status column so a frozen MB counter is explained rather than
-    // left for the user to notice. Cleared by the next start().
+    // True once nothing more is reaching the file: the disk refused a write
+    // (full, removed, or gone read-only), or the data chunk hit its 4 GiB
+    // ceiling. Read by the status column so a frozen MB counter is explained
+    // rather than left for the user to notice. Cleared by the next start().
+    //
+    // The two causes differ in what follows, and a UI with a sentence for
+    // each must ask sizeLimitReached() FIRST, because this flag is set for
+    // both: a refused write leaves the take "on" until stop() is called,
+    // while the ceiling has already ended and finalized it.
     bool writeFailed() const { return writeFailed_.load(std::memory_order_acquire); }
+
+    // True once this take ended by filling the data chunk. Nothing was lost
+    // when this is seen: the header is patched, the file is closed and
+    // recording() is already false — the recording simply reached the length
+    // a 32-bit RIFF size field can describe. Cleared by the next start().
+    bool sizeLimitReached() const { return sizeLimit_.load(std::memory_order_acquire); }
 
     // Pure and testable: "iq_20260815_143059_2000000Hz.wav",
     // "audio_20260815_143059_48000Hz.wav". The rate is rounded to the
@@ -116,11 +139,27 @@ public:
     static std::string makeFilename(RecordKind kind, double sampleRateHz,
                                     std::tm localTime);
 
+    // TEST HOOK. What happens at the data-chunk ceiling cannot be staged the
+    // honest way — nothing in ctest is going to write 4 GiB to find out — so
+    // this moves the ceiling down to a handful of bytes and the same room
+    // arithmetic and the same end-of-take path run over a few frames. Call it
+    // before start(); lowering it under a take already in progress underflows
+    // the room subtraction. Never called by the application.
+    void setMaxDataBytesForTest(std::uint64_t bytes);
+
 private:
     // fwrite the first `bytes` of stage_ with truthful accounting: counters
     // advance only by what stdio accepted, and the first short write latches
     // writeFailed_ so a dead disk is not hammered once per block forever.
     void flushStage(std::size_t bytes, std::size_t bytesPerFrame);
+
+    // Patch the two RIFF size fields from dataBytes_ and close the file.
+    // Shared by stop() and endAtSizeLimit() so a take that ends by filling
+    // up leaves exactly the file a take the user stopped would have.
+    void finalizeFile();
+
+    // The data chunk is full: finalize the file and end the take.
+    void endAtSizeLimit();
 
     std::FILE* file_ = nullptr;
     std::atomic<RecordKind> kind_{RecordKind::BasebandIq};
@@ -130,6 +169,13 @@ private:
     // Atomic because the DSP thread latches it and the GUI thread reads it
     // through writeFailed() to say so on the RECORDER card.
     std::atomic<bool> writeFailed_{false};
+    // Same reason, and the discriminator between the two ways a take stops
+    // taking — see writeFailed()/sizeLimitReached().
+    std::atomic<bool> sizeLimit_{false};
+    // The data-chunk ceiling in bytes: kMaxDataBytes (just under 4 GiB) in
+    // the product, and only setMaxDataBytesForTest ever moves it. Plain
+    // rather than atomic because nothing changes it while a take runs.
+    std::uint64_t maxDataBytes_;
     std::vector<char> fileBuf_;          // setvbuf storage; must outlive file_
     std::vector<unsigned char> stage_;   // little-endian staging block
 };

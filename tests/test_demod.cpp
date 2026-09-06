@@ -168,6 +168,14 @@ int main() {
         Demodulator d(kFs);
         d.setMode(DemodMode::NFM);
         CHECK(d.mode() == DemodMode::NFM);
+        // De-emphasis OFF, explicitly. This block measures the DISCRIMINATOR
+        // against its analytic 2*pi*dev/fs reference, and NFM now runs the
+        // same one-pole WFM does — at the 50 us default that shades the 1 kHz
+        // tone by 0.40 dB, which would leave the amplitude check below sitting
+        // 4.5% low inside its own 5% tolerance while quietly measuring a
+        // filter it never meant to include. Same discipline as the WFM loop
+        // further down: the default is never what a test silently depends on.
+        d.setDeemphasisUs(0.0);
 
         // Analyze y[1..kN]: sample 0 is the discriminator's absolute-phase
         // startup sample; the remaining kN samples hold an integer number of
@@ -259,6 +267,75 @@ int main() {
         const double r75 = measureRatio(75.0);
         CHECK(r50 > r75);
         CHECK(flat > r50);
+    }
+
+    // --- NFM de-emphasis: the same network, in the mode that had none -------
+    // The De-emph control is offered for NFM as well as WFM, but the filter
+    // ran in the demodulator's WFM case alone: on NFM the combo was enabled,
+    // adjustable and saved to the config while changing nothing whatsoever —
+    // and NFM is what a listener chasing a weather-satellite picture is tuned
+    // to. Measured exactly as WFM is above (one tone below the corner, one
+    // above, at identical deviation, ratio against the closed-form one-pole
+    // derived from tau), so the two FM modes cannot drift apart without one of
+    // them failing here.
+    {
+        const std::size_t warm = 256;  // >> 3.6-sample deemph time constant
+        // 1 kHz sits well below the corner (3.2 kHz at 50 us, 2.1 kHz at
+        // 75 us) and 10 kHz well above it, so the pair straddles the corner at
+        // both settings; equal deviation in both runs makes the ratio the
+        // de-emphasis network's doing and nothing else's.
+        auto measureNfmRatio = [&](double tauUs) {
+            Demodulator d(kFs);
+            d.setMode(DemodMode::NFM);
+            d.setDeemphasisUs(tauUs);
+            CHECK_NEAR(d.deemphasisUs(), tauUs, 1e-9);
+            auto lo = makeFm(1000.0, 2500.0, warm + kN);
+            auto ylo = demodTail(d, lo, warm);
+            CHECK(dominantBin(ylo.data(), kN, 1, kN / 2) == 100);
+            const double a1k = binAmp(ylo.data(), kN, 100);
+            d.reset();
+            d.setDeemphasisUs(tauUs);  // reset() must not silently re-enable it
+            auto hi = makeFm(10000.0, 2500.0, warm + kN);
+            auto yhi = demodTail(d, hi, warm);
+            CHECK(dominantBin(yhi.data(), kN, 1, kN / 2) == 1000);
+            const double a10k = binAmp(yhi.data(), kN, 1000);
+            return a10k / a1k;
+        };
+        // The reference: pole p = exp(-1/(fs*tau)) from the SPEC constant,
+        // |H(w)| = (1-p)/sqrt(1 - 2p cos w + p^2). Derived here, never read
+        // back from the implementation.
+        auto expectRatio = [](double tauUs) {
+            const double p = std::exp(-1.0 / (kFs * tauUs * 1.0e-6));
+            auto mag = [p](double fHz) {
+                const double w = kTwoPi * fHz / kFs;
+                const double den =
+                    std::sqrt(1.0 - 2.0 * p * std::cos(w) + p * p);
+                return (1.0 - p) / den;
+            };
+            return mag(10000.0) / mag(1000.0);
+        };
+
+        const double n50 = measureNfmRatio(50.0);
+        const double n75 = measureNfmRatio(75.0);
+        const double nOff = measureNfmRatio(0.0);
+
+        CHECK(std::fabs(20.0 * std::log10(n50 / expectRatio(50.0))) < 1.0);
+        CHECK(std::fabs(20.0 * std::log10(n75 / expectRatio(75.0))) < 1.0);
+        // Real attenuation — analytically the ratio is 0.34 (-9.3 dB) at 50 us
+        // and 0.25 (-12.2 dB) at 75 us — rather than a flat path, which would
+        // return 1.0 here and satisfy no bound below 0.5.
+        CHECK(n50 < 0.5);
+        CHECK(n75 < 0.5);
+
+        // "Off" must still be a true passthrough: the fix has to honour the
+        // third entry of the control, not de-emphasise unconditionally. This
+        // one assertion is the only part of this block that also held before
+        // the filter reached NFM — it is here to stop the cure overshooting.
+        CHECK_NEAR(nOff, 1.0, 0.05);
+        // And the two constants are distinguishable, in the right order: 50 us
+        // rolls off less at 10 kHz than 75 us does, and both roll off.
+        CHECK(nOff > n50);
+        CHECK(n50 > n75);
     }
 
     // --- AM: 80% modulation, carrier NOT at DC, envelope + DC rejection -----

@@ -231,6 +231,38 @@ public:
     static bool peakInBand(const float* dbBins, int n, double firstBin, double lastBin,
                            const VfoBand& band, float& peakDb);
 
+    // THE UNIT PRINTED BESIDE THAT FIGURE. It is a claim about the scale the
+    // number is on, not decoration, so it lives here beside the number's own
+    // contract instead of as a literal at the draw site — and a test can then
+    // hold the two to each other.
+    //
+    // IT USED TO READ " dBFS" AND THAT WAS AN OVERCLAIM OF ABOUT 8.9 dB.
+    // dBFS is dB relative to full scale. SpectrumEstimator normalizes so that
+    // a unit-amplitude exact-bin tone reads 0 under a RECTANGULAR window and
+    // deliberately does NOT divide out the analysis window's coherent gain
+    // (spectrum.hpp states that, and tests/test_spectrum.cpp pins it), so
+    // under the BlackmanHarris window the pipeline actually runs, a genuinely
+    // full-scale tone reads 20*log10(0.35875) ~= -8.9 — and the caption
+    // underneath it went on calling that a level relative to full scale.
+    //
+    // The unit is what changed, not the number, for two reasons. The figure,
+    // the trace and the dB ladder down the left edge are the SAME array:
+    // peakInBand takes its maximum out of the bins draw() plots and the
+    // ladder measures against, so compensating only the printed figure would
+    // put a marker reading 0.0 on a trace visibly touching the -9 line — one
+    // panel contradicting itself, which is a worse fault than the overclaim.
+    // And compensating the whole array is not this widget's to do: it is
+    // never told which window the estimator ran, and no single scalar
+    // calibrates a tone and a noise floor at once — coherent gain is the
+    // right divisor for a coherent tone, the equivalent noise bandwidth for
+    // broadband noise — so the correction would carry the noise floor 8.9 dB
+    // with it and move the default range off what it was chosen for.
+    //
+    // Bare "dB" is what the ladder itself prints, whose figures carry no unit
+    // at all, so the peak now reads on exactly the scale of the grid it sits
+    // over — which is what it is a maximum of.
+    static constexpr char kPeakUnit[] = " dB";
+
     // Display range in dB. Stored verbatim: a degenerate/inverted pair is not
     // swapped or rejected here because dbToY and gridlineDbs already define
     // safe behavior for it, and silently reordering would hide the caller's
@@ -281,8 +313,11 @@ public:
     static int gridlineDbs(float dbMin, float dbMax, float* out, int cap);
 
 private:
-    // Defaults match the estimator's dBFS scaling (0 dBFS full-scale tone,
-    // ~-100 dB visible noise floor) so an unconfigured view is already usable.
+    // Defaults match the estimator's scaling — 0 dB is a full-scale exact-bin
+    // tone as a RECTANGULAR window would measure it, ~-100 dB is a visible
+    // noise floor — so an unconfigured view is already usable. Deliberately
+    // not called dBFS: the analysis window's coherent gain is still in these
+    // numbers, which is the whole of what kPeakUnit explains.
     float dbMin_ = -100.0f;
     float dbMax_ = 0.0f;
 

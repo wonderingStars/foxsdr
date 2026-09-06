@@ -234,9 +234,9 @@ void testReachSummary() {
 
     // FETCHES FROM A SERVER - the two capabilities that go out over the wire.
     CHECK(moduleReachSummary(fittedRow(CASCADE_CAP_BASEMAP)) ==
-          "fetches from a server you choose");
+          "may fetch from a server it chose");
     CHECK(moduleReachSummary(fittedRow(CASCADE_CAP_TRACK_INFO)) ==
-          "fetches from a server you choose");
+          "may fetch from a server it chose");
 
     // THE TUNE GRANT - the one permission this product actually enforces, and
     // the only place a row states a granted fact rather than a declared one.

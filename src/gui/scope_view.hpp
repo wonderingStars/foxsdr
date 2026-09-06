@@ -530,12 +530,30 @@ inline std::string scopeRingLabel(int fullScaleNm, int ring) {
 // picture it sits on, which is the exact complaint the map's own target count
 // was rewritten to answer.
 //
-// "TRACKS" DOES NOT CONJUGATE. It is a legend on an instrument face, a fixed
-// field of fixed width, and "1 TRACK" would change the readout's shape as the
-// last aircraft leaves. A negative count cannot arise from the draw loop; it
-// is floored anyway, because a readout is the wrong place to discover one.
+// AND IT NO LONGER SAYS "TRACKS", BECAUSE SOMETHING ELSE ON THE SAME MACHINE
+// ALREADY DOES. The odometer drum on the maker's plate is captioned TRACKS and
+// counts every aircraft the host is holding - no age test, no range test, no
+// SYS filter - so two readouts a hand's width apart wore one word over two
+// different numbers, and an operator reading "9 TRACKS" on the plate and
+// "4 TRACKS" in the corner had no way to tell which of them was wrong. Neither
+// was; they were answering different questions under one caption.
+//
+// THE WORD MOVED HERE RATHER THAN THERE, and the numbers were left alone. This
+// readout sits INSIDE the tube, on the glass, where the only honest thing to
+// count is what is drawn beside it - that is what a corner readout on a radar
+// is for, and making it agree with the plate would have put a figure over the
+// picture that no silhouette on the picture supports. The plate keeps TRACKS
+// for the ungated count, which is the same figure the panel already prints as
+// "of N tracked".
+//
+// "PLOTTED" DOES NOT CONJUGATE EITHER, which is half of why it was the word
+// chosen. This is a legend on an instrument face, a fixed field of fixed width,
+// and a readout that changed shape as the last aircraft left would read as the
+// instrument changing rather than the sky. A negative count cannot arise from
+// the draw loop; it is floored anyway, because a readout is the wrong place to
+// discover one.
 inline std::string scopeTracksReadout(int count) {
-    return detail::scopePrintf("%d TRACKS", count < 0 ? 0 : count);
+    return detail::scopePrintf("%d PLOTTED", count < 0 ? 0 : count);
 }
 
 // The top-right readout: the scale the scope is set to, which is what makes
@@ -585,11 +603,13 @@ struct ScopeDetailInput {
     std::string typeName;      // the spelled-out type where known, the code otherwise
     std::string registration;
 
-    // Whether a track-info plugin is installed at all, and whether it has
-    // answered yet. "No plugin" and "the plugin has no entry for this
-    // aircraft" are different facts about different things, and a panel that
-    // showed them identically would send the user looking for a fault in the
-    // wrong place.
+    // Whether a track-info source is attached AND instantiated - which is what
+    // TrackInfoCache::active() reports and is NOT the same question as whether
+    // one is installed - and whether it has answered yet. "Nothing is looking"
+    // and "the source has no entry for this aircraft" are different facts about
+    // different things, and a panel that showed them identically would send the
+    // user looking for a fault in the wrong place. See buildScopeDetailLines
+    // for why the first of those may not be reported as an absent module.
     bool infoActive = false;
     bool infoPending = false;
 
@@ -821,15 +841,33 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
     out.push_back({"FLIGHT", in.flight, true, false});
 
     // --- what the registry knows ----------------------------------------------
-    // THREE STATES, NOT TWO. With no track-info plugin installed these three
+    // THREE STATES, NOT TWO. With nothing looking anything up, these three
     // rows are not "unknown", they are "nothing was asked" - and telling a user
     // their receiver failed to read an operator name it never had a source for
     // would send them debugging the radio. The rows stay present in all three
     // states because their absence would move every row below them as a lookup
     // completed, and a panel that reflows while it is being read is worse than
     // one with a dim row in it.
+    //
+    // AND THE THIRD STATE SAYS NOTHING IS LOOKING, NOT THAT NOTHING IS FITTED.
+    // `infoActive` is TrackInfoCache::active(), which is a module pointer AND
+    // an instance handle: it is equally false for a machine with no track-info
+    // module on it at all, one whose module the user has STOPPED, and one whose
+    // module loaded and then failed to hand back an instance. This row read
+    // "NO REGISTRY PLUGIN" in all three - a claim about what is INSTALLED,
+    // made by a predicate that only proves what is INSTANTIATED, and untrue in
+    // two of the three while the Fitted modules window two keys away letters
+    // that same file STOPPED BY YOU. That is the family of sentence this
+    // product removed five of in 0.75.0 and it had one left here.
+    //
+    // Nothing reachable from this function can separate those three - the cache
+    // does not publish the difference, and the panel is handed the cache and
+    // nothing else - so the row states the one fact all three share and leaves
+    // the diagnosis to the window that owns it. The two states that CAN be told
+    // apart still are: a lookup in flight and a source that answered with
+    // nothing are different facts and keep different words.
     const char* registryMiss = in.infoActive ? (in.infoPending ? "LOOKING UP" : "NO DATA")
-                                             : "NO REGISTRY PLUGIN";
+                                             : "NO LOOKUP RUNNING";
     const auto registryRow = [&](const char* label, const std::string& value) {
         if (in.infoActive && !in.infoPending && !value.empty()) {
             out.push_back({label, value, true, false});

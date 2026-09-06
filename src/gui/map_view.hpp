@@ -203,12 +203,13 @@ char coordApertureGlyph(char shape, bool known);
 float coordCellWidth(char shape);
 float coordCellHeight();
 
-// WHICH NOTES THE SELECTED TARGET'S CARD DRAWS, from the only two facts that
-// decide it. Both the height the card is RESERVED and the card's own drawing
-// read this one answer, so the box can never be reserved for a note that is
-// not drawn - which is what it was doing on the very first screen a new user
-// sees: nothing selected and no position set reserved two notes' worth of
-// space for a card whose whole content is the words NO TARGET SELECTED.
+// WHICH NOTES THE SELECTED TARGET'S CARD DRAWS - AND WHETHER THE PASSES CARD
+// UNDER IT IS THERE AT ALL - from the only two facts that decide them. Both the
+// height each card is RESERVED and each card's own drawing read this one
+// answer, so a box can never be reserved for something that is not drawn -
+// which is what it was doing on the very first screen a new user sees: nothing
+// selected and no position set reserved two notes' worth of space for a card
+// whose whole content is the words NO TARGET SELECTED.
 struct SatelliteCardNotes {
     // "DISTANCE and BEARING are hatched because no receiver position is set."
     // Recoverable: setting a position fills both in.
@@ -217,6 +218,14 @@ struct SatelliteCardNotes {
     // of what a track source reports." Not recoverable by anything the user
     // can click, which is why the two are drawn differently.
     bool notReported = false;
+    // The whole "NEXT PASSES - THIS TARGET" card, its heading included. It was
+    // drawn unconditionally, so a fresh install with nothing selected showed a
+    // card headed THIS TARGET directly under a card reading NO TARGET SELECTED
+    // - a heading about a target that does not exist. Stated as its own fact
+    // rather than read off notReported, which today happens to have the same
+    // value: they are about different cards, and a change to one must have to
+    // be a change to the other.
+    bool passes = false;
 };
 SatelliteCardNotes satelliteCardNotes(bool haveTarget, bool haveReceiverPosition);
 

@@ -150,6 +150,32 @@ void testCardNotes() {
     // A TARGET AND A POSITION: only the one nothing will ever unblock.
     CHECK(satelliteCardNotes(true, true).noReceiver == false);
     CHECK(satelliteCardNotes(true, true).notReported == true);
+
+    // --- AND THE PASSES CARD IS ABOUT A TARGET TOO -------------------------
+    //
+    // It was drawn unconditionally, heading and all, so the first screen a new
+    // install opens on carried a card titled "NEXT PASSES - THIS TARGET"
+    // directly under a card reading NO TARGET SELECTED - a heading about a
+    // target that does not exist, and a paragraph explaining why that
+    // non-existent target's passes cannot be computed.
+    //
+    // A RECEIVER POSITION DOES NOT ENTER INTO IT, which is the second half of
+    // the rule and the half a plausible "fix" would get wrong: the card is not
+    // waiting for a position, it is waiting for something to be selected. A
+    // pass prediction needs the orbit, and no amount of receiver position turns
+    // a reported latitude into one.
+    CHECK(satelliteCardNotes(false, false).passes == false);
+    CHECK(satelliteCardNotes(false, true).passes == false);
+    CHECK(satelliteCardNotes(true, false).passes == true);
+    CHECK(satelliteCardNotes(true, true).passes == true);
+
+    // Stated as a rule over all four inputs as well as case by case, so a later
+    // reading of it off the receiver position cannot pass three of the four.
+    for (int i = 0; i < 4; ++i) {
+        const bool target = (i & 1) != 0;
+        const bool position = (i & 2) != 0;
+        CHECK(satelliteCardNotes(target, position).passes == target);
+    }
 }
 
 // --- the panel, rendered ------------------------------------------------------

@@ -206,11 +206,14 @@ Pipeline::Pipeline(Config cfg)
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     estimator_.setAlpha(cfg.averagingAlpha);
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
-    // WFM de-emphasis belongs to StereoFm, never to the discriminator (see
-    // the ownership note in the header): switched off here once, and kept off
-    // by every rebuild, so the composite handed to RDS and to the stereo
-    // matrix is always flat.
-    demod_.setDeemphasisUs(0.0);
+    // WFM de-emphasis belongs to StereoFm, never to the discriminator (see the
+    // ownership note in the header), so for the default mode this leaves the
+    // demodulator flat — and for any other it hands over the user's constant.
+    // Through the helper rather than a bare "off", because the same decision
+    // is made at four points in this file and stating it four times is how
+    // NFM came to have no de-emphasis at all. It runs before stereo_ exists,
+    // which is why the helper touches demod_ only.
+    applyDemodDeemphasisLocked();
     fmScale_ = static_cast<float>(
         0.5 * (cfg.sampleRateHz / static_cast<double>(vfoDecim_)) /
         (kTwoPi * kFmDeviationHz));
@@ -257,6 +260,24 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     stereo_->setForceMono(!stereoEnabled_);
     rds_ = std::make_unique<cascade::dsp::RdsDecoder>(chanRate);
     resetDecodersLocked();
+}
+
+void Pipeline::applyDemodDeemphasisLocked() {
+    // The rule, in the one place: the DEMODULATOR de-emphasises, except in WFM
+    // where StereoFm does it after the stereo matrix and the composite feeding
+    // RDS must keep its 57 kHz subcarrier (header: "WFM DE-EMPHASIS
+    // OWNERSHIP"). Written out as a bare "off" at each call site, that rule
+    // silently became "nothing ever de-emphasises outside WFM" — the De-emph
+    // combo is enabled for NFM too, and setDeemphasisUs reached StereoFm
+    // alone, so a listener on NFM could change the setting, watch it persist
+    // to their config, and hear no difference at all.
+    //
+    // Modes with no FM discriminator ignore the constant inside the
+    // Demodulator's switch, so there is nothing to special-case for AM or SSB:
+    // the only mode that must NOT carry it is the one with a second network
+    // downstream.
+    const bool wfm = (demod_.mode() == cascade::dsp::DemodMode::WFM);
+    demod_.setDeemphasisUs(wfm ? 0.0 : deemphasisUs_);
 }
 
 void Pipeline::resetDecodersLocked() {
@@ -631,10 +652,14 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
 void Pipeline::setDeemphasisUs(double us) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     deemphasisUs_ = us;
-    // The STEREO decoder owns WFM de-emphasis, for both stereo and mono
-    // output (header: "WFM DE-EMPHASIS OWNERSHIP"); demod_ stays flat so the
-    // composite reaching RDS keeps its 57 kHz subcarrier.
+    // BOTH owners, every time. The STEREO decoder owns WFM de-emphasis, for
+    // both stereo and mono output (header: "WFM DE-EMPHASIS OWNERSHIP"), and
+    // in WFM the helper below keeps demod_ flat so the composite reaching RDS
+    // keeps its 57 kHz subcarrier. In every other mode StereoFm is not in the
+    // audio path at all, so this line alone was the whole of the setter and
+    // NFM never de-emphasised: the missing half is the helper.
     stereo_->setDeemphasisUs(us);
+    applyDemodDeemphasisLocked();
 }
 
 double Pipeline::deemphasisUs() const {
@@ -646,9 +671,12 @@ void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     if (demod_.mode() == m) { return; }  // idempotent: no gratuitous reset
     demod_.setMode(m);  // resets the demod's internal state (its contract)
-    // setMode restores the library default de-emphasis; WFM's belongs to
-    // StereoFm, so switch it straight back off (see the header).
-    demod_.setDeemphasisUs(0.0);
+    // The new mode decides who de-emphasises: off in WFM (StereoFm's job, see
+    // the header), the user's constant everywhere else. Re-applied here rather
+    // than assumed, because setMode does not preserve the setting — and
+    // because leaving it at the bare "off" this line used to be is exactly
+    // what made the De-emph control inert on every mode but WFM.
+    applyDemodDeemphasisLocked();
     agc_.reset();       // new level regime: relearn the gain from neutral
     // Leaving WFM abandons the composite the decoders were tracking, and
     // coming back to it is a fresh acquisition either way.
@@ -932,11 +960,12 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // scale the CW sidetone by oldChannel/newChannel.
         demod_ = cascade::dsp::Demodulator(chanRate);
         demod_.setMode(mode);
-        // A rebuilt demodulator starts at the library default de-emphasis;
-        // WFM's belongs to StereoFm (see the header), so switch it off again
-        // — leaving it on would put a second 50 us pole in the audio and
+        // A rebuilt demodulator starts at the library default de-emphasis,
+        // which is nobody's choice: the helper replaces it with the user's,
+        // or with 0 in WFM where StereoFm owns the network (see the header) —
+        // leaving it on there would put a second 50 us pole in the audio and
         // gut the 57 kHz subcarrier RDS needs.
-        demod_.setDeemphasisUs(0.0);
+        applyDemodDeemphasisLocked();
 
         // Stereo + RDS decoders, rebuilt for the new composite rate (this
         // re-applies the user's de-emphasis and force-mono settings and
@@ -1328,6 +1357,12 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
 
     // Demodulate 1:1 at the channel rate. In WFM this is the COMPOSITE (MPX)
     // with no de-emphasis applied — see the ownership note in the header.
+    //
+    // In NFM the discriminator DOES carry the user's de-emphasis, because
+    // nothing downstream of it would, so everything fed from audioBuf_ carries
+    // it too — the audio decoder feed further down included. A decoder that
+    // wants the flat discriminator is asking for the third entry of the
+    // De-emph control, "Off", which is a setting that now reaches this far.
     audioBuf_.resize(m);
     demod_.process(chanBuf_.data(), m, audioBuf_.data());
 

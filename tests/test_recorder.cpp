@@ -11,6 +11,12 @@
 // process id (ctest runs this from build-<slug>/tests), removed on success
 // and left behind for autopsy on failure.
 //
+// The one behaviour that cannot be reached honestly is the 4 GiB data-chunk
+// ceiling — nothing here is going to write 4 GiB to find out what happens at
+// the end of it — so those cases move the ceiling down to a few frames with
+// Recorder::setMaxDataBytesForTest and run the same room arithmetic and the
+// same end-of-take path over a handful of bytes.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/recorder.hpp"
 
@@ -432,6 +438,10 @@ int main() {
         r.writeIq(tx.data(), tx.size());
         CHECK(r.samplesWritten() == 100000u);
         CHECK(r.bytesWritten() == 800000u);
+        // 800 kB is nowhere near the real ceiling: a take this size must not
+        // trip the end-of-take path that the cases at the bottom exercise.
+        CHECK(!r.sizeLimitReached());
+        CHECK(!r.writeFailed());
         r.stop();
         const std::vector<unsigned char> b = readAll(onlyWavIn(dir));
         checkHeader(b, 3, 2, 1000000, 32, 800000);
@@ -462,6 +472,133 @@ int main() {
         r.writeAudio(a, 3);
         r.stop();
         checkHeader(readAll(onlyWavIn(nested)), 1, 1, 8000, 16, 6);
+    }
+
+    // =======================================================================
+    // The data-chunk ceiling ENDS the take — it used to stall it in silence
+    // =======================================================================
+    //
+    // 83 rather than a round 80 because the product's own ceiling is not a
+    // whole number of frames either (0xFFFFFFFF - 36 leaves 3 bytes over an
+    // 8-byte IQ frame). Those last 3 bytes must be simply unusable, not a
+    // zero-length write the staging loop can spin on.
+    {
+        const std::string dir = tmpDir("cap_iq");
+        Recorder r;
+        r.setMaxDataBytesForTest(83);  // 10 IQ frames fit, 3 bytes spare
+        std::string err;
+        CHECK(r.start(RecordKind::BasebandIq, dir, 250000.0, err));
+        CHECK(!r.sizeLimitReached());
+        CHECK(!r.writeFailed());
+
+        std::vector<std::complex<float>> tx(25);
+        for (std::size_t i = 0; i < tx.size(); ++i) {
+            tx[i] = {nextFloat(), nextFloat()};
+        }
+        // 25 frames offered, 10 of them fit: the block is truncated to what
+        // the chunk can still hold, and that is the end of the take.
+        r.writeIq(tx.data(), tx.size());
+        CHECK(r.samplesWritten() == 10u);
+        CHECK(r.bytesWritten() == 80u);
+        // THE RECORDER MUST STOP SAYING IT IS RECORDING. This is the defect:
+        // a full chunk used to make writeIq return with recording() still
+        // true and no flag set anywhere, so the panel kept its REC lamp and
+        // its climbing clock over a file nothing was reaching any more.
+        CHECK(!r.recording());
+        CHECK(r.sizeLimitReached());
+        CHECK(r.writeFailed());  // the same "nothing reaches the file" flag
+
+        // And the file is FINALIZED without anyone calling stop(): the header
+        // on disk describes the 10 frames that were kept. Before the fix it
+        // was still the zero-length husk start() flushed, with the 80 sample
+        // bytes sitting unflushed in the 256 KiB stdio buffer.
+        const std::string wavPath = onlyWavIn(dir);
+        CHECK(!wavPath.empty());
+        const std::vector<unsigned char> b = readAll(wavPath);
+        checkHeader(b, 3, 2, 250000, 32, 80);
+        if (b.size() == 44u + 80u) {
+            // What fitted is the FIRST 10 frames, in order and bit-exact.
+            CHECK(u32le(&b[44]) == std::bit_cast<std::uint32_t>(tx[0].real()));
+            CHECK(u32le(&b[48]) == std::bit_cast<std::uint32_t>(tx[0].imag()));
+            CHECK(u32le(&b[44 + 8 * 9]) ==
+                  std::bit_cast<std::uint32_t>(tx[9].real()));
+            CHECK(u32le(&b[44 + 8 * 9 + 4]) ==
+                  std::bit_cast<std::uint32_t>(tx[9].imag()));
+        }
+
+        // Writes after the ceiling are inert, and a Stop pressed on a take
+        // that already finalized itself must not re-patch or re-close it.
+        r.writeIq(tx.data(), tx.size());
+        CHECK(r.samplesWritten() == 10u);
+        CHECK(r.bytesWritten() == 80u);
+        r.stop();
+        CHECK(!r.recording());
+        CHECK(r.samplesWritten() == 10u);  // counters survive, as after stop()
+        CHECK(readAll(wavPath) == b);      // byte for byte the same file
+        r.stop();                          // and still idempotent
+
+        // The next take starts clean — both flags belong to the take that
+        // set them, not to the recorder.
+        const std::string dir2 = tmpDir("cap_iq_next");
+        r.setMaxDataBytesForTest(1024);
+        CHECK(r.start(RecordKind::BasebandIq, dir2, 250000.0, err));
+        CHECK(r.recording());
+        CHECK(!r.sizeLimitReached());
+        CHECK(!r.writeFailed());
+        r.writeIq(tx.data(), 3);
+        r.stop();
+        checkHeader(readAll(onlyWavIn(dir2)), 3, 2, 250000, 32, 24);
+    }
+    {
+        // A block that lands EXACTLY on the ceiling runs out of samples and
+        // of room in the same pass, so nothing takes the loop round again to
+        // notice. Ending it after the loop is what stops a full file being
+        // left open until another block arrives — and if the user pressed
+        // Stop on the pipeline first, that block never arrives at all.
+        const std::string dir = tmpDir("cap_exact");
+        Recorder r;
+        r.setMaxDataBytesForTest(83);  // 10 frames again
+        std::string err;
+        CHECK(r.start(RecordKind::BasebandIq, dir, 2000000.0, err));
+        std::vector<std::complex<float>> tx(10);
+        for (std::size_t i = 0; i < tx.size(); ++i) {
+            tx[i] = {nextFloat(), nextFloat()};
+        }
+        r.writeIq(tx.data(), tx.size());  // fills the chunk exactly
+        CHECK(!r.recording());
+        CHECK(r.sizeLimitReached());
+        CHECK(r.writeFailed());
+        CHECK(r.samplesWritten() == 10u);
+        CHECK(r.bytesWritten() == 80u);
+        checkHeader(readAll(onlyWavIn(dir)), 3, 2, 2000000, 32, 80);
+    }
+    {
+        // Audio takes end the same way. At 96 kB/s nobody reaches the real
+        // ceiling in a sitting, but a file that quietly stops growing is not
+        // a behaviour worth keeping for the rare case either.
+        const std::string dir = tmpDir("cap_audio");
+        Recorder r;
+        r.setMaxDataBytesForTest(11);  // 5 int16 samples fit, 1 byte spare
+        std::string err;
+        CHECK(r.start(RecordKind::Audio, dir, 48000.0, err));
+        const float a[12] = {0.5f,  -0.5f, 0.25f, -0.25f, 0.125f, -0.125f,
+                             0.75f, -0.75f, 1.0f, -1.0f,  0.0f,   0.375f};
+        r.writeAudio(a, 12);
+        CHECK(r.samplesWritten() == 5u);
+        CHECK(r.bytesWritten() == 10u);
+        CHECK(!r.recording());
+        CHECK(r.sizeLimitReached());
+        CHECK(r.writeFailed());
+        r.writeAudio(a, 12);  // inert after the ceiling
+        CHECK(r.samplesWritten() == 5u);
+        const std::vector<unsigned char> b = readAll(onlyWavIn(dir));
+        checkHeader(b, 1, 1, 48000, 16, 10);
+        if (b.size() == 44u + 10u) {
+            // The five that fitted are the first five, quantized as usual.
+            CHECK(static_cast<std::int16_t>(u16le(&b[44 + 0])) == 16384);
+            CHECK(static_cast<std::int16_t>(u16le(&b[44 + 2])) == -16384);
+            CHECK(static_cast<std::int16_t>(u16le(&b[44 + 8])) == 4096);
+        }
     }
 
     const int rc = testSummary("test_recorder");

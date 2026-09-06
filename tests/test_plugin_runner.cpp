@@ -34,7 +34,11 @@ struct FakeState {
     std::string queued;    // handed out by poll_text, a chunk at a time
     std::size_t chunk = 0; // 0 = all at once
     bool failCreate = false;
-    bool failPoll = false; // poll_text returns < 0
+    bool failPoll = false; // poll_text returns < 0: failed for good
+    // Every poll_text call, whatever it returned. Counted because the ABI's
+    // answer to a permanent failure is that the host STOPS ASKING, and a count
+    // that stops moving is the only way to see that from outside the plugin.
+    int polls = 0;
 };
 
 FakeState g_fake;
@@ -49,6 +53,7 @@ void* fakeCreate(uint32_t rateHz) {
 void fakeProcess(void*, const float*, size_t count) { g_fake.samples += count; }
 
 int32_t fakePoll(void*, char* buf, size_t cap) {
+    ++g_fake.polls;
     if (g_fake.failPoll) { return -1; }
     if (g_fake.queued.empty()) { return 0; }
     std::size_t n = g_fake.queued.size();
@@ -100,6 +105,8 @@ struct FakeIq {
     std::size_t frames = 0;
     std::string queued;
     bool failCreate = false;
+    bool failPoll = false;  // poll_text returns < 0: failed for good
+    int polls = 0;
 };
 
 FakeIq g_iq;
@@ -116,6 +123,8 @@ void iqProcess(void*, const float*, size_t frames) { g_iq.frames += frames; }
 void iqRetune(void*, double centreHz) { ++g_iq.retunes; g_iq.lastCentre = centreHz; }
 
 int32_t iqPoll(void*, char* buf, size_t cap) {
+    ++g_iq.polls;
+    if (g_iq.failPoll) { return -1; }
     if (g_iq.queued.empty()) { return 0; }
     std::size_t n = g_iq.queued.size();
     if (n > cap) { n = cap; }
@@ -166,7 +175,10 @@ struct FakeImg {
     int polls = 0;
     int releases = 0;
     bool failCreate = false;
-    // What poll_image hands out. offer = 0 -> "nothing pending".
+    // What poll_image hands out. offer = 0 -> "nothing pending"; offer < 0 ->
+    // the ABI's "the decoder has failed permanently", which is a THIRD answer
+    // and not a quiet one - this fake modelled only 0 and 1 while the runner
+    // read the negative as silence, so neither could see the other's mistake.
     int offer = 0;
     uint32_t w = 0, h = 0, fmt = CASCADE_IMAGE_GRAY8, stride = 0;
     uint64_t seq = 0;
@@ -189,6 +201,7 @@ void imgRetune(void*, double centreHz) { ++g_img.retunes; g_img.lastCentre = cen
 
 int32_t imgPollImage(void*, CascadeImage* out) {
     ++g_img.polls;
+    if (g_img.offer < 0) { return g_img.offer; }
     if (g_img.offer == 0) { return 0; }
     // The host is required to fill structSize before the call; a plugin that
     // could not see it would have no way to tell what it is filling.
@@ -253,6 +266,17 @@ template <typename T>
 const T& at(const std::vector<T>& v, std::size_t i) {
     static const T kNone{};
     return i < v.size() ? v[i] : kNone;
+}
+
+// The status row for one module, found by KEY. Returned BY VALUE and
+// default-constructed when there is no such row, for the same reason at()
+// above returns a default element: a missing row must make the checks that
+// follow fail honestly rather than read off the end of the list.
+DecoderStatus rowFor(const std::vector<DecoderStatus>& st, const std::string& key) {
+    for (const DecoderStatus& s : st) {
+        if (s.key == key) { return s; }
+    }
+    return DecoderStatus{};
 }
 
 // Offers a 2x2 GRAY8 image whose rows are PADDED to `stride` bytes, so the
@@ -1072,6 +1096,197 @@ int main() {
 
         // An empty key answers for nobody, the same rule the stop list applies.
         CHECK(!r2.isFeeding(""));
+    }
+
+    // --- A DECODER THAT FAILS PERMANENTLY IS STOPPED, AND SAYS SO ----------
+    //
+    // The ABI defines a NEGATIVE return from poll_text or poll_image as "the
+    // decoder has failed permanently; the host stops polling it". Every poll
+    // site in the runner used to fold that in with 0 - "nothing pending" - so
+    // a decoder that had given up was polled and FED for the rest of the
+    // session while its row went on saying it was decoding. The NOAA APT row
+    // is where it showed: an image that never arrives and a WAIT chip that
+    // never changes look exactly like a decoder still building a picture.
+    {
+        resetFake();
+        g_fake.queued = "one\n";
+        const CascadeDecoderApi api = makeApi(0u);
+        LoadedPlugin p = makePlugin("APRS", &api);
+        p.path = "C:/plugins/aprs-decoder.dll";
+
+        PluginRunner r;
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        std::vector<float> block(256, 0.25f);
+        r.processAudio(block.data(), block.size());
+        CHECK(r.drainText().size() == 1u);
+        CHECK(r.isFeeding("aprs-decoder.dll"));
+        CHECK(r.activeCount() == 1u);
+
+        // It gives up. The samples of THIS round are still delivered, because
+        // the failure is discovered by the poll that follows the feed - so the
+        // counts are taken afterwards and compared against themselves.
+        g_fake.failPoll = true;
+        g_fake.queued = "two\n";
+        r.processAudio(block.data(), block.size());
+        const std::size_t samplesAtFailure = g_fake.samples;
+        const std::size_t fedAtFailure = r.audioFramesFed();
+        const int pollsAtFailure = g_fake.polls;
+
+        // The row the panel draws now says what happened, in words, against
+        // the module it is about.
+        const std::vector<DecoderStatus> st = r.status();
+        CHECK(st.size() == 1u);
+        CHECK(at(st, 0).reason == DecoderIdleReason::PollFailed);
+        CHECK(at(st, 0).key == "aprs-decoder.dll");
+        CHECK(at(st, 0).detail.find("APRS") != std::string::npos);
+        // ...and it no longer holds a claim on the speakers, which is what
+        // isFeeding is asked for, nor a place in the running count.
+        CHECK(!r.isFeeding("aprs-decoder.dll"));
+        CHECK(r.activeCount() == 0u);
+
+        // It is written to the decoder log too, once and tagged like any other
+        // line: a failure that only tints a chip on a panel is one nobody
+        // reads the moment the panel is closed.
+        const std::vector<DecodedLine> said = r.drainText();
+        CHECK(said.size() == 1u);
+        CHECK(at(said, 0).plugin == "APRS");
+        CHECK(at(said, 0).text.find("failed") != std::string::npos);
+
+        // AND IT IS LEFT ALONE FROM THEN ON: not fed, not polled. That is the
+        // half which makes the ABI contract true rather than merely reported.
+        g_fake.queued = "three\n";
+        r.processAudio(block.data(), block.size());
+        r.processAudio(block.data(), block.size());
+        CHECK(g_fake.samples == samplesAtFailure);
+        CHECK(g_fake.polls == pollsAtFailure);
+        CHECK(r.audioFramesFed() == fedAtFailure);
+        CHECK(r.drainText().empty());
+
+        // A rebuild is the way back - a fresh instance, and a row that says so.
+        g_fake.failPoll = false;
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        const std::vector<DecoderStatus> after = r.status();
+        CHECK(g_fake.created == 2);
+        CHECK(r.activeCount() == 1u);
+        CHECK(r.isFeeding("aprs-decoder.dll"));
+        CHECK(at(after, 0).reason == DecoderIdleReason::Running);
+    }
+    {
+        // THE ROW THAT SAID WAIT FOR EVER. An image decoder reporting
+        // permanent failure through poll_image must stop being polled and fed,
+        // and the panel must be able to say so - while the picture it had
+        // already built STAYS, because half a weather image is still the last
+        // thing that decoder saw and losing it would punish the user for the
+        // plugin's fault.
+        resetImg();
+        const CascadeImageDecoderApi api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        LoadedPlugin p = makeImgPlugin("NOAA APT", &api);
+        p.path = "C:/plugins/apt-decoder.dll";
+
+        PluginRunner r;
+        r.rebuild({p}, 48000.0, kIqRate, kCentre);
+        std::vector<cascade::core::HostImage> imgs;
+        std::vector<float> block(256, 0.25f);
+        offerGray2x2(/*stride=*/2, /*seq=*/1);
+        r.processAudio(block.data(), block.size());
+        r.pollImages(imgs);
+        CHECK(at(imgs, 0).width == 2u);
+        CHECK(at(imgs, 0).revision == 1u);
+        CHECK(g_img.releases == 1);
+        CHECK(r.isFeeding("apt-decoder.dll"));
+
+        // It gives up.
+        g_img.offer = -1;
+        r.pollImages(imgs);
+        const int pollsAtFailure = g_img.polls;
+        const std::size_t framesAtFailure = g_img.frames;
+
+        const std::vector<DecoderStatus> st = r.status();
+        CHECK(st.size() == 1u);
+        CHECK(at(st, 0).reason == DecoderIdleReason::PollFailed);
+        CHECK(at(st, 0).output == cascade::core::DecoderOutput::Image);
+        CHECK(at(st, 0).detail.find("NOAA APT") != std::string::npos);
+        CHECK(!r.isFeeding("apt-decoder.dll"));
+        CHECK(r.activeCount() == 0u);
+
+        // NO BORROW IS TAKEN ON A NEGATIVE RETURN, so nothing may be released:
+        // the ABI calls release_image exactly once per SUCCESSFUL poll_image,
+        // and releasing a picture that was never handed over would return a
+        // buffer the plugin still owns.
+        CHECK(g_img.releases == 1);
+        // The picture that did arrive is still on screen.
+        CHECK(at(imgs, 0).width == 2u);
+        CHECK(at(imgs, 0).revision == 1u);
+
+        // The failure reached the decoder log, once.
+        const std::vector<DecodedLine> said = r.drainText();
+        CHECK(said.size() == 1u);
+        CHECK(at(said, 0).plugin == "NOAA APT");
+
+        // ...and it is neither polled nor fed again, even if it changes its
+        // mind and starts offering pictures.
+        g_img.offer = 1;
+        r.pollImages(imgs);
+        r.processAudio(block.data(), block.size());
+        r.pollImages(imgs);
+        CHECK(g_img.polls == pollsAtFailure);
+        CHECK(g_img.frames == framesAtFailure);
+        CHECK(at(imgs, 0).revision == 1u);
+        // Only the block that went in before the failure is counted as fed.
+        CHECK(r.audioFramesFed() == 256u);
+    }
+    {
+        // A FAILURE IS PER INSTANCE, NOT PER RUNNER. Two decoders run side by
+        // side every day, and one of them giving up must not take the samples
+        // away from the other - which is exactly what a flag on the runner
+        // rather than on the instance would have done.
+        resetFake();
+        resetIq();
+        const CascadeDecoderApi tApi = makeApi(0u);
+        const CascadeIqDecoderApi iApi = makeIqApi(0.0, false);
+        LoadedPlugin text = makePlugin("POCSAG", &tApi);
+        text.path = "C:/plugins/pocsag-decoder.dll";
+        LoadedPlugin iq = makeIqPlugin("ADS-B", &iApi);
+        iq.path = "C:/plugins/adsb-decoder.dll";
+
+        PluginRunner r;
+        r.rebuild({text, iq}, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 2u);
+
+        g_iq.failPoll = true;
+        std::vector<float> iqBlock(2 * 128, 0.0f);
+        r.processIq(iqBlock.data(), 128);
+        const std::size_t iqFramesAtFailure = g_iq.frames;
+        const int iqPollsAtFailure = g_iq.polls;
+
+        const std::vector<DecoderStatus> st = r.status();
+        CHECK(st.size() == 2u);
+        CHECK(rowFor(st, "adsb-decoder.dll").reason == DecoderIdleReason::PollFailed);
+        CHECK(rowFor(st, "pocsag-decoder.dll").reason == DecoderIdleReason::Running);
+        CHECK(!r.isFeeding("adsb-decoder.dll"));
+        CHECK(r.isFeeding("pocsag-decoder.dll"));
+        CHECK(r.activeCount() == 1u);
+        const std::vector<DecodedLine> failLine = r.drainText();
+        CHECK(failLine.size() == 1u);
+        CHECK(at(failLine, 0).plugin == "ADS-B");
+
+        // The survivor is still fed and still decodes, which is the half a
+        // too-eager stop would break.
+        g_fake.queued = "POCSAG 1234567 ALPHA\n";
+        std::vector<float> audio(64, 0.0f);
+        r.processAudio(audio.data(), audio.size());
+        CHECK(g_fake.samples == 64u);
+        CHECK(r.audioFramesFed() == 64u);
+        const std::vector<DecodedLine> out = r.drainText();
+        CHECK(out.size() == 1u);
+        CHECK(at(out, 0).text == "POCSAG 1234567 ALPHA");
+
+        // ...while the failed one is left alone, and the I/Q frame count stops
+        // at the block that was already in flight when it gave up.
+        r.processIq(iqBlock.data(), 128);
+        CHECK(g_iq.frames == iqFramesAtFailure);
+        CHECK(g_iq.polls == iqPollsAtFailure);
+        CHECK(r.iqFramesFed() == 128u);
     }
 
     return testSummary("test_plugin_runner");

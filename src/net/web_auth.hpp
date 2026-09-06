@@ -51,10 +51,11 @@
 //     over a LAN that is a practical attack, not a theoretical one.
 //
 //  5. SALTS AND TOKENS COME FROM THE SYSTEM CSPRNG (BCryptGenRandom with
-//     BCRYPT_USE_SYSTEM_PREFERRED_RNG), never from rand(), std::mt19937, or
-//     anything seeded from a clock. randomBytes reports failure rather than
-//     falling back to a weaker source: a session token that is merely hard to
-//     guess is a session token an attacker eventually guesses.
+//     BCRYPT_USE_SYSTEM_PREFERRED_RNG on Windows, RAND_bytes elsewhere — see
+//     PLATFORM below), never from rand(), std::mt19937, or anything seeded
+//     from a clock. randomBytes reports failure rather than falling back to a
+//     weaker source: a session token that is merely hard to guess is a session
+//     token an attacker eventually guesses.
 //
 //  6. SESSIONS LIVE IN MEMORY ONLY and are never written to disk, so stopping
 //     the application ends every session it had issued. The store holds the
@@ -65,13 +66,29 @@
 //     something an unauthenticated caller can cause to be created is a memory
 //     -exhaustion path; when the cap is reached the oldest session is evicted.
 //
-// PLATFORM. The cryptographic entry points (randomBytes, hashPassword,
-// verifyPassword, and the token issuance that depends on them) are implemented
-// on Windows via CNG — the same bcrypt.lib that core/plugin_repo.cpp already
-// links for its SHA-256. On other platforms they return false with a clear
-// error rather than a weaker implementation, mirroring how plugin_repo.cpp
-// treats its HTTPS transport. base64 and constantTimeEquals are portable and
-// are compiled everywhere.
+// PLATFORM. The cryptographic entry points — randomBytes, sha256, the PBKDF2
+// derivation behind hashPassword/verifyPassword, and the token issuance that
+// depends on them — are fully implemented on every platform this builds for,
+// and neither implementation is a degraded stand-in for the other. Windows
+// takes all three from CNG (BCryptGenRandom, BCryptHash,
+// BCryptDeriveKeyPBKDF2) out of the same bcrypt.lib that core/plugin_repo.cpp
+// already links for its SHA-256. Everywhere else takes them from OpenSSL
+// (RAND_bytes, EVP_Digest, PKCS5_PBKDF2_HMAC), which CMakeLists.txt requires
+// on non-Windows builds for exactly this. Nothing here is hand-rolled: our own
+// SHA-256 or PBKDF2 would be the one unacceptable way to close a platform gap.
+//
+// Both paths compute the same thing — PBKDF2 with HMAC-SHA256 over the salt
+// and iteration count carried in the record — so a password set by one build
+// verifies under the other. It is the serialized format in rule 2 that
+// guarantees that, not the call underneath it. base64 and constantTimeEquals
+// are portable and are compiled everywhere.
+//
+// This paragraph used to say that on platforms other than Windows these
+// entry points "return false with a clear error rather than a weaker
+// implementation". That was true of the first version and false from the day
+// the OpenSSL path landed. A header that says a platform cannot hash a
+// password when it demonstrably can is how a working build gets reported, and
+// abandoned, as broken.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once

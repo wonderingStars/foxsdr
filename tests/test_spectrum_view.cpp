@@ -1,17 +1,26 @@
 // Tests for gui/spectrum_view.hpp — pure display math only. draw() needs a
 // live ImGui/GL context, so the testable surface is dbToY, gridlineDbs, the
-// zoom/VFO statics binToXFrac and hitTest, and peakInBand, the figure the
-// panel prints as "PEAK IN PASSBAND"; nothing here touches ImGui.
+// zoom/VFO statics binToXFrac and hitTest, peakInBand, the figure the panel
+// prints as "PEAK IN PASSBAND", and kPeakUnit, the unit printed beside it;
+// nothing here touches ImGui. The unit case drives a real SpectrumEstimator
+// so the number the unit is checked against is the one the panel would
+// actually be handed, not a hand-written stand-in for it.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/spectrum_view.hpp"
 
 #include <cmath>
+#include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <limits>
+#include <vector>
 
+#include "dsp/spectrum.hpp"
+#include "dsp/window.hpp"
 #include "test_check.hpp"
 
 using cascade::gui::SpectrumView;
@@ -641,6 +650,73 @@ int main() {
         CHECK(checkedPairs > 10000);
         CHECK(crowdedAtStrideOne > 1000);
         CHECK(worstStride > 1);
+    }
+
+    // ===================== the peak figure's UNIT ===========================
+    //
+    // THE NUMBER AND THE UNIT ARE ONE CLAIM, AND THIS PINS THEM TOGETHER.
+    // The panel used to caption this figure " dBFS" — dB relative to full
+    // scale — while the figure still had the analysis window's coherent gain
+    // in it, so a genuinely full-scale tone was reported about 8.9 dB below
+    // full scale under the BlackmanHarris window the pipeline runs. The
+    // estimator's scaling is a deliberate contract pinned by
+    // tests/test_spectrum.cpp, so the caption is what had to change.
+    //
+    // Both halves are asserted, and they are a PAIR on purpose: if a later
+    // change makes the estimator divide coherent gain out, the tone
+    // assertion below goes red and the unit has to be reconsidered in the
+    // same edit instead of one of them drifting away from the other.
+    {
+        // The unit is a ratio with no reference, exactly like the figures on
+        // the dB ladder down the left edge, which carry no unit at all — and
+        // the peak is a maximum over the very bins that ladder measures.
+        CHECK(std::strcmp(SpectrumView::kPeakUnit, " dB") == 0);
+        CHECK(std::strcmp(SpectrumView::kPeakUnit, " dBFS") != 0);
+
+        // A full-scale exact-bin tone, through the window the pipeline
+        // actually constructs the estimator with. Unit amplitude at an exact
+        // bin is the loudest thing a complex sample stream can carry, so if
+        // this panel's scale really were dBFS the peak would have to read 0.
+        constexpr std::size_t kFftN = 64;  // 2^6: a legal ComplexFFT size
+        constexpr int kToneBin = 8;
+        constexpr double kTwoPi = 6.283185307179586476925286766559;
+        std::vector<std::complex<float>> x(kFftN);
+        for (std::size_t i = 0; i < kFftN; ++i) {
+            const double ang = kTwoPi * static_cast<double>(kToneBin) *
+                               static_cast<double>(i) / static_cast<double>(kFftN);
+            x[i] = {static_cast<float>(std::cos(ang)),
+                    static_cast<float>(std::sin(ang))};
+        }
+        std::vector<float> db(kFftN);
+        cascade::dsp::SpectrumEstimator est(kFftN,
+                                            cascade::dsp::WindowType::BlackmanHarris);
+        est.process(x.data(), db.data());
+
+        // The estimator's output is fftshifted, so a +kToneBin tone lands at
+        // kFftN/2 + kToneBin. The band spans a bin either side of it, over
+        // the full-range window draw() lays out.
+        const double lastBin = static_cast<double>(kFftN) - 1.0;
+        const double toneIdx = static_cast<double>(kFftN / 2 + kToneBin);
+        float peak = -12345.0f;
+        CHECK(SpectrumView::peakInBand(
+            db.data(), static_cast<int>(kFftN), 0.0, lastBin,
+            VfoBand{(toneIdx - 1.0) / lastBin, (toneIdx + 1.0) / lastBin, false},
+            peak));
+
+        // Expected level from window.hpp's coherentGain, never from the
+        // estimator: the windowed DFT of an exact-bin unit tone is sum(w) at
+        // that bin, and the estimator's 1/N^2 turns that into coherentGain^2,
+        // i.e. 20*log10(coherentGain) in dB.
+        auto w = cascade::dsp::makeWindow(cascade::dsp::WindowType::BlackmanHarris,
+                                          kFftN);
+        const double cg =
+            static_cast<double>(cascade::dsp::coherentGain(w.data(), w.size()));
+        CHECK_NEAR(peak, 20.0 * std::log10(cg), 0.01);
+
+        // And the thing the old caption got wrong, stated without leaning on
+        // a tolerance: this figure is nowhere near the 0 that dBFS would
+        // demand of a full-scale tone, so nothing here may call it dBFS.
+        CHECK(peak < -8.0f);
     }
 
     return testSummary("test_spectrum_view");

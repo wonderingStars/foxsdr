@@ -427,7 +427,12 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
             static const char kPeakCaption[] = "PEAK IN PASSBAND";
             char figure[24];
             std::snprintf(figure, sizeof(figure), "%.1f", static_cast<double>(peakDb));
-            static const char kUnit[] = " dBFS";
+            // The unit comes from the header, where the scale it names is
+            // documented next to peakInBand. It read " dBFS" here as a local
+            // literal, which was an overclaim of about 8.9 dB against the
+            // window the pipeline runs — see SpectrumView::kPeakUnit for why
+            // the caption moved rather than the figure.
+            const char* const kUnit = SpectrumView::kPeakUnit;
 
             char ageLine[32] = {'\0'};
             if (chrome->dataAgeSec >= 0.0 && std::isfinite(chrome->dataAgeSec)) {
@@ -461,7 +466,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
                 y += tinyH + 1.0f;
                 // THE FIGURE IS AMBER AND MONOSPACED, the unit is not. Digits
                 // take reading() so a changing level does not shuffle its own
-                // decimal point sideways; "dBFS" is a word and takes ui(),
+                // decimal point sideways; "dB" is a word and takes ui(),
                 // per the rule at the top of fonts.hpp.
                 dl->AddText(readFont, readPx, ImVec2(right - figW - unitW, y),
                             theme::kAmber, figure);
