@@ -42,7 +42,7 @@ void putU32(unsigned char* p, std::uint32_t x) {
 
 }  // namespace
 
-Recorder::Recorder() = default;
+Recorder::Recorder() : maxDataBytes_(kMaxDataBytes) {}
 
 Recorder::~Recorder() {
     stop();
@@ -153,6 +153,7 @@ bool Recorder::start(RecordKind kind, const std::string& directory,
 
     stage_.assign(kStageFrames * 8u, 0);  // sized for the larger (IQ) frame
     writeFailed_.store(false, std::memory_order_relaxed);
+    sizeLimit_.store(false, std::memory_order_relaxed);
     frames_.store(0, std::memory_order_relaxed);
     dataBytes_.store(0, std::memory_order_relaxed);
     kind_.store(kind, std::memory_order_relaxed);
@@ -181,18 +182,26 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
     }
     std::size_t done = 0;
     while (done < n && !writeFailed_.load(std::memory_order_relaxed)) {
+        // 4 GiB WAV ceiling: `room` is the frames the data chunk can still
+        // hold, and none left is the END of the take, not a reason to drop
+        // this block. It used to set take = 0 and return — so the file stayed
+        // open with the zero-length header start() flushed, recording() went
+        // on saying true, and every sample from there on vanished without a
+        // word. Truncating the last block to `room` still holds: what fits is
+        // written, and the chunk going full closes the file on the spot,
+        // either on the next pass of this loop or in the check after it.
+        const std::uint64_t room =
+            (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 8u;
+        if (room == 0) {
+            endAtSizeLimit();
+            return;
+        }
         std::size_t take = n - done;
         if (take > kStageFrames) {
             take = kStageFrames;
         }
-        // 4 GiB WAV ceiling: truncate rather than corrupt the size fields.
-        const std::uint64_t room =
-            (kMaxDataBytes - dataBytes_.load(std::memory_order_relaxed)) / 8u;
         if (take > room) {
             take = static_cast<std::size_t>(room);
-            if (take == 0) {
-                return;
-            }
         }
         unsigned char* p = stage_.data();
         for (std::size_t i = 0; i < take; ++i) {
@@ -206,6 +215,17 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
         flushStage(take * 8u, 8u);
         done += take;
     }
+    // A block that lands exactly ON the ceiling leaves the loop with the
+    // chunk full and nothing left to write, so end the take here rather than
+    // wait for a next call to notice: the user may stop the pipeline, or tune
+    // away, and that call may never come. A latched writeFailed_ means the
+    // loop stopped for the OTHER reason — the disk refused a write, which can
+    // leave the chunk within a frame of full without it being what happened —
+    // and that case stays a stall for stop() to finalize.
+    if (!writeFailed_.load(std::memory_order_relaxed) &&
+        (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 8u == 0) {
+        endAtSizeLimit();
+    }
 }
 
 void Recorder::writeAudio(const float* s, std::size_t n) {
@@ -216,17 +236,22 @@ void Recorder::writeAudio(const float* s, std::size_t n) {
     }
     std::size_t done = 0;
     while (done < n && !writeFailed_.load(std::memory_order_relaxed)) {
+        // The ceiling ends the take here too — see writeIq. An audio take is
+        // 96 kB/s, so this is a WAV nobody will reach in a sitting; it shares
+        // the path anyway because "the file quietly stopped growing" is not a
+        // behaviour worth keeping for the rare case either.
+        const std::uint64_t room =
+            (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 2u;
+        if (room == 0) {
+            endAtSizeLimit();
+            return;
+        }
         std::size_t take = n - done;
         if (take > kStageFrames) {
             take = kStageFrames;
         }
-        const std::uint64_t room =
-            (kMaxDataBytes - dataBytes_.load(std::memory_order_relaxed)) / 2u;
         if (take > room) {
             take = static_cast<std::size_t>(room);
-            if (take == 0) {
-                return;
-            }
         }
         unsigned char* p = stage_.data();
         for (std::size_t i = 0; i < take; ++i) {
@@ -251,10 +276,43 @@ void Recorder::writeAudio(const float* s, std::size_t n) {
         flushStage(take * 2u, 2u);
         done += take;
     }
+    // See writeIq: a block that lands exactly on the ceiling ends the take
+    // here rather than leaving a full file open for a call that may not come,
+    // and a refused write is the other reason to be here, not this one.
+    if (!writeFailed_.load(std::memory_order_relaxed) &&
+        (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 2u == 0) {
+        endAtSizeLimit();
+    }
 }
 
-void Recorder::stop() {
+void Recorder::endAtSizeLimit() {
+    // THE DATA CHUNK IS FULL, AND THAT IS THE END OF THE TAKE — said out
+    // loud, because the alternative was saying nothing at all. At the app's
+    // default 2 Msps an IQ take fills it in about four and a half minutes,
+    // and until now that moment produced no file change, no state change and
+    // no message: the panel and the status card went on showing REC with the
+    // elapsed clock climbing over a recording that had already stopped.
+    //
+    // Ending it means the three things stop() means. The header is patched
+    // with the bytes actually written, so the file on disk is a complete,
+    // playable WAV of everything that fitted rather than the zero-length husk
+    // start() flushed. recording() goes false, so nothing goes on claiming a
+    // take that is over. And the fault flags latch: writeFailed_ because its
+    // question is "is anything still reaching the file", whose answer is no,
+    // and sizeLimit_ because a UI needs to know the answer is "it is full and
+    // safely closed" rather than "the disk refused it".
+    sizeLimit_.store(true, std::memory_order_relaxed);
+    // recording_ BEFORE writeFailed_: a reader that samples recording() and
+    // then writeFailed() would otherwise have a wide window to catch the pair
+    // as "recording, and the disk refused it" — a sentence about a fault that
+    // did not happen. This order shrinks that window to the gap between the
+    // reader's own two loads.
     recording_.store(false, std::memory_order_release);
+    writeFailed_.store(true, std::memory_order_release);
+    finalizeFile();
+}
+
+void Recorder::finalizeFile() {
     if (file_ == nullptr) {
         return;  // idempotent, and safe without a prior start()
     }
@@ -277,7 +335,19 @@ void Recorder::stop() {
         std::fwrite(sz, 1, 4, f);
     }
     std::fclose(f);
+}
+
+void Recorder::stop() {
+    recording_.store(false, std::memory_order_release);
+    // A no-op when the take already ended at the size limit and closed its
+    // own file, so the Stop button after that still works and still leaves
+    // the counters alone.
+    finalizeFile();
     // Counters deliberately keep their final values until the next start().
+}
+
+void Recorder::setMaxDataBytesForTest(std::uint64_t bytes) {
+    maxDataBytes_ = bytes;
 }
 
 bool Recorder::recording() const {

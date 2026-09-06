@@ -69,10 +69,10 @@ constexpr double kSsbTransitionHz = 1000.0;
 // CW sidetone: a carrier on the VFO center beats at this audio pitch.
 constexpr double kCwToneHz = 700.0;
 
-// --- WFM deemphasis ----------------------------------------------------------
-// Broadcast FM pre-emphasizes highs with a 75 us RC network (Americas; Europe
-// uses 50 us — a future setting, not a different algorithm); the receiver
-// undoes it with the matching one-pole low-pass H(s) = 1/(1 + s*tau).
+// --- FM deemphasis -----------------------------------------------------------
+// Broadcast FM pre-emphasizes highs with an RC network — 75 us in the Americas,
+// 50 us elsewhere, which is what setDeemphasisUs picks between — and the
+// receiver undoes it with the matching one-pole low-pass H(s) = 1/(1 + s*tau).
 // Discretized by pole matching (impulse invariance): the analog pole at
 // s = -1/tau maps to z = p = exp(-T/tau) with T = 1/rate, and the numerator is
 // scaled so DC gain is exactly 1:
@@ -84,6 +84,12 @@ constexpr double kCwToneHz = 700.0;
 // Default de-emphasis: 50 us. That is the standard everywhere except the
 // Americas and South Korea, so it is the correct global default; the setter
 // below makes it a user choice rather than a compile-time assumption.
+//
+// ONE network, shared by NFM. Nothing in the derivation above depends on the
+// channel being wide, and the receiver's De-emph control offers the same two
+// constants for both FM modes — but process() used to apply the filter in its
+// WFM case alone, which is what left that control inert on the narrowband mode
+// a pager, APRS or weather-satellite listener is tuned to.
 constexpr double kDefaultDeemphTauSec = 50e-6;
 
 // --- AM DC blocker -------------------------------------------------------
@@ -191,12 +197,18 @@ std::size_t Demodulator::process(const std::complex<float>* in, std::size_t n,
     if (n == 0) { return 0; }
     switch (mode_) {
         case DemodMode::NFM:
-            quad_.process(in, out, n);
-            break;
-
         case DemodMode::WFM: {
             quad_.process(in, out, n);
             // In-place one-pole deemphasis over the discriminator output.
+            //
+            // BOTH FM modes run it, from the one time constant. NFM used to
+            // fall out of the switch here with no filter at all, so the
+            // De-emph control — which the receiver enables for NFM and WFM
+            // alike, and persists — did nothing whatsoever in NFM. Owners that
+            // de-emphasise downstream instead set 0 us (the pipeline does, for
+            // WFM, where StereoFm applies the network after the stereo matrix):
+            // a pole of exactly 0 makes g == 1 and the loop below an exact
+            // pass-through, so no signal is ever de-emphasised twice.
             const double p = deemphPole_;
             const double g = 1.0 - p;
             double s = deemphState_;

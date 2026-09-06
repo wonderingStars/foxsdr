@@ -514,6 +514,11 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 #images { display:flex; flex-wrap:wrap; gap:.6rem; }
 .img { background:var(--well); border:1px solid var(--edge); border-radius:3px; padding:.35rem; }
 .img img { display:block; max-width:100%; image-rendering:pixelated; background:var(--glass); }
+/* The stand-in for a decoder slot that has produced no pixels. Dashed, and
+   plainly empty, because the one thing it must not resemble is a picture. */
+.img .none { display:flex; align-items:center; justify-content:center;
+             width:10rem; height:6.5rem; background:var(--glass);
+             border:1px dashed var(--edge); color:var(--dim); font-size:.72rem; }
 .img .cap { color:var(--dim); font-size:.72rem; margin-top:.2rem; }
 
 #decoded { background:var(--glass); color:var(--trace);
@@ -1005,9 +1010,20 @@ function reflectTracks(s) {
 // Decoded pictures. The <img> src carries the REVISION, so the browser's own
 // cache does the work: it refetches once per change and not once per poll,
 // which is what keeps a megapixel SSTV frame off the 4 Hz status path.
+//
+// A SLOT WITH NO PICTURE GETS NO <img>. Every image-decoder instance is
+// published as a slot, including one that has decoded nothing yet, and
+// /api/image/<n> answers 404 for a slot the server holds no bitmap for. This
+// used to point an <img> at it regardless and caption it "(receiving)", so a
+// freshly fitted decoder showed a broken-image icon under a line claiming a
+// picture was arriving - two false statements about the same empty slot,
+// before a single sample had been decoded. hasPicture is read from the very
+// vector the image handler serves from, so the tile and the endpoint cannot
+// disagree about whether there is anything to show.
 let lastImageKey = '';
 function reflectImages(s) {
-  const key = s.images.map(i => i.plugin + i.width + 'x' + i.height + '@' + i.revision).join('|');
+  const key = s.images.map(i => i.plugin + i.width + 'x' + i.height + '@' + i.revision +
+                                (i.hasPicture ? '+' : '-')).join('|');
   if (key === lastImageKey) return;
   lastImageKey = key;
   const has = s.images.length > 0;
@@ -1018,15 +1034,32 @@ function reflectImages(s) {
   s.images.forEach((im, i) => {
     const d = document.createElement('div');
     d.className = 'img';
-    const el = document.createElement('img');
-    el.src = '/api/image/' + i + '?rev=' + im.revision;
-    el.alt = im.plugin + ' picture';
-    el.width = Math.min(im.width || 320, 480);
+    if (im.hasPicture) {
+      const el = document.createElement('img');
+      el.src = '/api/image/' + i + '?rev=' + im.revision;
+      el.alt = im.plugin + ' picture';
+      el.width = Math.min(im.width || 320, 480);
+      d.appendChild(el);
+    } else {
+      // The slot is real - a decoder is fitted and waiting - so it keeps its
+      // place in the panel. What it must not do is look like a picture.
+      const wait = document.createElement('div');
+      wait.className = 'none';
+      wait.textContent = 'no picture yet';
+      d.appendChild(wait);
+    }
     const cap = document.createElement('div');
     cap.className = 'cap';
-    cap.textContent = im.plugin + '  ' + im.width + 'x' + im.height +
-                      (im.complete ? '' : '  (receiving)');
-    d.appendChild(el); d.appendChild(cap);
+    // "0x0" is not a size and "(receiving)" is not true of a decoder nothing
+    // has reached, so an empty slot gets neither: its caption names the
+    // decoder and the tile above says what there is to see. Not "decoded
+    // nothing", which would be a claim about the plugin - all the page knows
+    // is that the host has no picture from it.
+    cap.textContent = im.hasPicture
+        ? im.plugin + '  ' + im.width + 'x' + im.height +
+          (im.complete ? '' : '  (receiving)')
+        : im.plugin;
+    d.appendChild(cap);
     box.appendChild(d);
   });
 }
@@ -2345,6 +2378,14 @@ public:
         out = images_[i].bmp;
         return true;
     }
+    // Whether /api/image/<i> would answer with a picture rather than a 404.
+    // The status carries this per slot so the page can tell a decoder that has
+    // produced pixels from one that has not; deriving it from the SAME vector
+    // the handler serves from is what stops the two ever disagreeing.
+    bool haveImage(std::size_t i) const {
+        std::lock_guard<std::mutex> lock(imageMutex_);
+        return i < images_.size() && !images_[i].bmp.empty();
+    }
 
     // --- Basemap tiles (see web_server.hpp for the shape of the whole thing) --
 
@@ -2809,12 +2850,22 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         {
 
             nlohmann::json images = nlohmann::json::array();
-            for (const RadioStatus::Image& im : s.images) {
+            for (std::size_t i = 0; i < s.images.size(); ++i) {
+                const RadioStatus::Image& im = s.images[i];
+                // hasPicture, and NOT width/height, is what says whether there
+                // is anything at /api/image/<i>. Every image-decoder instance
+                // is published as a slot the moment it is fitted, so the list
+                // routinely carries slots with no bitmap behind them at all;
+                // the page used to hang an <img> on one of those and get a
+                // broken icon. This asks the served set directly, which also
+                // covers the frame in which a new slot has been announced in
+                // the status before its picture has been encoded.
                 images.push_back({{"plugin", im.plugin},
                                   {"width", im.width},
                                   {"height", im.height},
                                   {"complete", im.complete},
-                                  {"revision", im.revision}});
+                                  {"revision", im.revision},
+                                  {"hasPicture", haveImage(i)}});
             }
             j["images"] = std::move(images);
         }

@@ -172,13 +172,23 @@ constexpr cascade::dsp::DemodMode kModeMap[8] = {
     cascade::dsp::DemodMode::LSB, cascade::dsp::DemodMode::RAW};
 // Bandwidth options offered in the combo, widest first.
 constexpr const char* kBwLabels[6] = {"200k", "150k", "12.5k", "10k", "6k", "3k"};
-constexpr double kBwHz[6] = {200000.0, 150000.0, 12500.0, 10000.0, 6000.0, 3000.0};
+// kBwHz and kBwCount now live in app_window.hpp beside bandwidthStepIndex and
+// formatBandwidth, so a test can reach the pair that decides what the combo
+// says against what the receiver is running. kBwLabels stays here: it is only
+// ever drawn, and the header has no business carrying words.
+using cascade::gui::kBwCount;
+using cascade::gui::kBwHz;
 // Per-mode default bandwidth (index into kBwHz), applied when a mode button
 // is clicked; the combo still allows any override. Rationale: WFM broadcast
 // channel 150k; NFM two-way channel 12.5k; AM/DSB broadcast channel ~10k
 // (both sidebands); SSB/CW voice/keying fits in 3k; RAW passes the full
 // 200k channel for diagnostics.
 constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
+
+// bandwidthStepIndex and formatBandwidth moved to app_window.hpp - see the
+// comment there for why they had to become reachable from a test.
+using cascade::gui::bandwidthStepIndex;
+using cascade::gui::formatBandwidth;
 
 // Band-snap intervals for dragging the VFO CENTER on the spectrum, indexed
 // in kModeNames order. The snap applies to the ABSOLUTE tuned frequency
@@ -548,6 +558,46 @@ int nearestIndex(const double* arr, int n, double x) {
         if (std::fabs(arr[i] - x) < std::fabs(arr[best] - x)) { best = i; }
     }
     return best;
+}
+
+// WHAT THE TARGET IS, in the vocabulary buildTrackDetailLines reads it in.
+//
+// The detail block decides from this whether an altitude and a speed are
+// lettered in feet and knots or in kilometres and km/s, and every surface here
+// that draws it - the rail's Target details section, the map window's list and
+// the Target details window - handed it nothing, so it took its default and
+// described the ISS at "1381234 ft" doing "14890 kt".
+//
+// The translation lives at the call site rather than in track_metrics.hpp
+// because that header is deliberately free of plugin_abi.h; see its file
+// comment. map_view.cpp carries the same translation for its own tooltip,
+// which is one copy more than this rule should have - the shared home for it
+// is gui/track_detail_view.hpp, beside makeTrackDetailInput, and both of these
+// would then read it from there.
+//
+// A STATION AND ANYTHING THIS BUILD HAS NO NAME FOR KEEP THE AVIATION UNITS.
+// An APRS station reports its altitude in feet and its speed in knots, so
+// those are the right units for it and not a fallback.
+cascade::gui::TrackKind detailTrackKind(std::uint32_t kind) {
+    switch (kind) {
+        case CASCADE_TRACK_SATELLITE: return cascade::gui::TrackKind::Satellite;
+        case CASCADE_TRACK_AIRCRAFT: return cascade::gui::TrackKind::Aircraft;
+        case CASCADE_TRACK_VESSEL: return cascade::gui::TrackKind::Vessel;
+        default: return cascade::gui::TrackKind::Other;
+    }
+}
+
+// The detail block, gathered and drawn in two steps so the kind above can be
+// set in between. track_detail_view.hpp's own drawTrackDetail() makes the same
+// two calls back to back and leaves no room to say it, which is exactly how
+// these three surfaces came to describe a satellite in feet and knots.
+void drawTrackDetailOf(const cascade::core::HostTrack& ht,
+                       cascade::gui::TrackInfoCache* info, bool hasHome,
+                       double homeLatDeg, double homeLonDeg) {
+    cascade::gui::TrackDetailInput in =
+        cascade::gui::makeTrackDetailInput(ht, info, hasHome, homeLatDeg, homeLonDeg);
+    in.kind = detailTrackKind(ht.t.kind);
+    cascade::gui::drawTrackDetailLines(cascade::gui::buildTrackDetailLines(in));
 }
 
 // --- Recorder / Bookmarks / Scanner constants (P6) ---------------------------
@@ -2520,21 +2570,35 @@ void AppWindow::drawStatusColumn() {
         card("AUDIO - UNDERRUNS", cascade::gui::theme::kAmber, v, lines, 1);
     }
 
-    // --- MESSAGE RATE --------------------------------------------------------
+    // --- DECODER OUTPUT ------------------------------------------------------
     //
-    // WHAT IS COUNTED IS SAID ON THE CARD. No decoder plugin reports a message
-    // tally across the ABI and PluginRunner keeps none, so the countable thing a
-    // decoder produces is a LINE of output - one per decoded message for every
-    // text decoder shipped, and status text for the rest. It is DIFFERENCED over
-    // a window rather than sampled: a cumulative counter is not a rate, and
+    // WHAT IS COUNTED IS SAID ON THE CARD, AND THE CARD USED TO BE CALLED
+    // MESSAGE RATE. No decoder plugin reports a message tally across the ABI
+    // and PluginRunner keeps none, so the countable thing a decoder produces is
+    // a LINE of output - one per decoded message for every text decoder
+    // shipped, and status text ("listening", "cannot reach the registry") for
+    // the rest. An image decoder's "waiting for a picture" is not a message,
+    // and a card captioned MESSAGE RATE counted it as one, so the caption is
+    // now the thing that is actually being counted. It is DIFFERENCED over a
+    // window rather than sampled: a cumulative counter is not a rate, and
     // printing one as though it were is the same lie in a shorter form.
-    if (decoderRateWindowS_ < 0.0) {
+    //
+    // A WINDOW LONGER THAN TWICE THE NOMINAL ONE IS THROWN AWAY rather than
+    // averaged, exactly as the waterfall's scroll rate throws its own away.
+    // This column is not drawn at all in scope mode, and is skipped whenever
+    // the window is too narrow for it, so `nowS - decoderRateWindowS_` is not
+    // "two seconds" - it is however long the column has been off screen. A
+    // burst of decodes spread over five minutes of scope mode used to close
+    // the first window back with a figure captioned "2 s mean" that was a
+    // five-minute mean.
+    if (decoderRateWindowS_ < 0.0 || nowS - decoderRateWindowS_ > 2.0 * kRateWindowS) {
         decoderRateWindowS_ = nowS;
         decoderLinesAtWindow_ = decoderLinesTotal_;
     } else if (nowS - decoderRateWindowS_ >= kRateWindowS) {
+        decoderRateSpanS_ = nowS - decoderRateWindowS_;
         decoderLinesPerSec_ = static_cast<float>(
             static_cast<double>(decoderLinesTotal_ - decoderLinesAtWindow_) /
-            (nowS - decoderRateWindowS_));
+            decoderRateSpanS_);
         decoderRateWindowS_ = nowS;
         decoderLinesAtWindow_ = decoderLinesTotal_;
     }
@@ -2556,20 +2620,24 @@ void AppWindow::drawStatusColumn() {
         if (feeding == 0) {
             lines[0] = {rxRunning ? "no decoder is running" : "the receiver is stopped",
                         kFaint};
-            card("MESSAGE RATE", kMuted, "--", lines, 1);
+            card("DECODER OUTPUT", kMuted, "--", lines, 1);
         } else if (decoderLinesPerSec_ < 0.0f) {
             // The first window has not closed yet. "--" rather than 0.0 /s:
             // "we have not measured" and "we measured nothing" are different
             // statements and this panel is not allowed to confuse them.
             lines[0] = {"measuring", kFaint};
-            card("MESSAGE RATE", kMuted, "--", lines, 1);
+            card("DECODER OUTPUT", kMuted, "--", lines, 1);
         } else {
+            // THE SPAN THAT WAS ACTUALLY DIVIDED BY, not the nominal window:
+            // the guard above keeps it between one and two windows, and a
+            // caption that rounds 3.9 s to "2 s mean" would be inventing the
+            // difference.
             std::snprintf(v, sizeof(v), "%.1f /s",
                           static_cast<double>(decoderLinesPerSec_));
-            std::snprintf(l0, sizeof(l0), "decoder output lines, %.0f s mean",
-                          kRateWindowS);
+            std::snprintf(l0, sizeof(l0), "output lines, %.1f s mean",
+                          decoderRateSpanS_);
             lines[0] = {l0, kFaint};
-            card("MESSAGE RATE", cascade::gui::theme::kAmber, v, lines, 1);
+            card("DECODER OUTPUT", cascade::gui::theme::kAmber, v, lines, 1);
         }
     }
 
@@ -2692,6 +2760,29 @@ void AppWindow::drawStatusColumn() {
             const StatusLine lines[2] = {{l0, kFaint}, {l1, kFaint}};
             card("RECORDER", cascade::gui::theme::kAlarm, what, lines, 2);
         }
+    } else if (iqRecorder_.sizeLimitReached() || audioRecorder_.sizeLimitReached()) {
+        // THE TAKE ENDED ITSELF, AND SAYS SO. A WAV's data chunk is a 32-bit
+        // byte count, so a recording stops at 4 GiB or stops being a valid
+        // file - about four and a half minutes of I/Q at 2 MS/s. The recorder
+        // used to reach that ceiling and simply stop accepting samples, with
+        // this card still reading IQ in rust and the elapsed clock still
+        // climbing over a file nothing was going into. It now finalises the
+        // header, closes the file and latches sizeLimitReached(), which lands
+        // here: the take is over, the file on disk is complete and playable,
+        // and the reason is on screen rather than left to be discovered.
+        //
+        // Asked BEFORE writeFailed(), because the ceiling latches that too -
+        // the question that flag answers is "is anything still reaching the
+        // file", and a full file and a refused disk both answer no. Without
+        // this order a finished recording would one day be reported as a
+        // failing disk.
+        const bool iqFull = iqRecorder_.sizeLimitReached();
+        const StatusLine lines[2] = {
+            {iqFull ? "I/Q take reached the 4 GB limit for a WAV file"
+                    : "audio take reached the 4 GB limit for a WAV file",
+             kFaint},
+            {"the file was closed and is complete", kFaint}};
+        card("RECORDER", cascade::gui::theme::kAmber, "FULL", lines, 2);
     } else {
         const StatusLine lines[1] = {{"no file open", kFaint}};
         card("RECORDER", kMuted, "off", lines, 1);
@@ -2708,6 +2799,18 @@ void AppWindow::drawStatusColumn() {
         std::snprintf(l0, sizeof(l0), "%s", webCfg_.bindAddress.c_str());
         const StatusLine lines[1] = {{l0, kFaint}};
         card("WEB ACCESS", cascade::gui::theme::kPhosphor, v, lines, 1);
+    } else if (!webStartRefusal_.empty()) {
+        // SWITCHED ON AND REFUSED IS NOT "OFF". applyWebSettings leaves the
+        // setting enabled on purpose when a start fails - the usual cause is a
+        // port already held by something else, which the user fixes and
+        // retries - and this card drew "off / not listening" over it, which is
+        // the state a user reads as "I never turned that on". The refusal's
+        // own sentence goes on the card, clipped to the well like every other
+        // line here, because naming the thing that refused is worth more than
+        // a tidier word for it.
+        std::snprintf(l0, sizeof(l0), "%s", webStartRefusal_.c_str());
+        const StatusLine lines[1] = {{l0, cascade::gui::theme::kAlarm}};
+        card("WEB ACCESS", cascade::gui::theme::kAlarmHot, "REFUSED", lines, 1);
     } else {
         const StatusLine lines[1] = {{"not listening", kFaint}};
         card("WEB ACCESS", kMuted, "off", lines, 1);
@@ -3564,10 +3667,30 @@ void AppWindow::drawRadioSection() {
         if (ImGui::SliderFloat("VFO", &vfoOffsetKhz_, -500.0f, 500.0f, "%.0f kHz")) {
             pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(vfoOffsetKhz_));
         }
-        if (ImGui::Combo("Bandwidth", &bandwidthIndex_, kBwLabels,
-                         static_cast<int>(sizeof(kBwLabels) / sizeof(kBwLabels[0])))) {
-            vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+        // THE PREVIEW IS THE BANDWIDTH THE RECEIVER IS RUNNING, whether or not
+        // it is one of the steps below. ImGui::Combo can only show one of its
+        // own items, so a preset asking for 40 kHz left this control lettering
+        // "12.5k" over a 40 kHz VFO - and a Combo reports a press even on the
+        // item it is already showing, so one click on it applied the 12.5 kHz
+        // it had been wrongly displaying and gutted the picture. BeginCombo
+        // separates the two: the word comes from the live bandwidth, and only
+        // a deliberate pick from the list changes it.
+        char bwPreview[32];
+        formatBandwidth(vfoBandwidthHz_, bwPreview, sizeof(bwPreview));
+        if (ImGui::BeginCombo("Bandwidth", bwPreview)) {
+            for (int i = 0; i < kBwCount; ++i) {
+                if (ImGui::Selectable(kBwLabels[i], bandwidthIndex_ == i)) {
+                    bandwidthIndex_ = i;
+                    vfoBandwidthHz_ = kBwHz[i];
+                    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+                }
+                // What ImGui::Combo does for its own list, kept so opening
+                // this one from the keyboard still lands on the step in use.
+                // With bandwidthIndex_ at -1 nothing takes the focus, which is
+                // the honest answer when the VFO is on none of them.
+                if (bandwidthIndex_ == i) { ImGui::SetItemDefaultFocus(); }
+            }
+            ImGui::EndCombo();
         }
         if (ImGui::SliderFloat("Squelch", &squelchDb_, -120.0f, 0.0f, "%.0f dB")) {
             pipeline_.setSquelchDb(squelchDb_);
@@ -3765,14 +3888,15 @@ void AppWindow::drawDecodeBank() {
     drawPluginsSection();
     drawDecodersSection();
     drawTargetDetailsSection();
-    // THE SATELLITES MAP'S ONLY PRESENCE OUT HERE. A switch, not a section:
-    // the window it opens carries every satellite control there is, and the
-    // design's own note in the corner of the mock says as much - it "reopens
-    // from the Windows menu and from its own rocker in DECODE". There is no
-    // Windows menu in this application, so this rocker is the whole of it, and
-    // it is drawn after the plugin inventory because the pages it switches are
-    // created from what that inventory loaded.
-    drawSatelliteMapSection();
+    // EVERY MAP PAGE'S ONLY PRESENCE OUT HERE - one switch each, not a
+    // section. The satellites window carries every satellite control there is,
+    // and the design's own note in the corner of the mock says as much: it
+    // "reopens from the Windows menu and from its own rocker in DECODE". There
+    // is no Windows menu in this application, so these rockers are the whole
+    // of it, for the aircraft and vessel maps as much as for that one. Drawn
+    // after the plugin inventory because the pages they switch are created
+    // from what that inventory loaded.
+    drawMapPageSections();
     // THE PLUGIN WINDOWS' ONLY PRESENCE OUT HERE, and their only way onto the
     // screen: one row per picture or panel a plugin publishes (0.79.1).
     drawPluginWindowRows();
@@ -7028,9 +7152,13 @@ void AppWindow::drawReceiverPositionOffers() {
 // missing from the rail twice, which is twice more than a feature should
 // have to be.
 void AppWindow::drawRadarSection() {
-    const char* chip = scopeMode_ ? "SCOPE" : "OFF";
-    if (!benchSection("Radar", false, chip, cascade::gui::theme::kPhosphor,
-                      scopeMode_)) {
+    // THE CHIP HAS ONE STATE BECAUSE THE ROW HAS ONE STATE. It used to read
+    // scopeMode_ ? "SCOPE" : "OFF", with a lamp lit on the same flag - and
+    // neither the word nor the lit lamp could ever be drawn, because scope
+    // mode replaces the whole layout and drawUi only reaches this rail in the
+    // else arm of `if (scopeMode_)`. A state a user can never see is not a
+    // state; it is a claim the rail cannot keep.
+    if (!benchSection("Radar", false, "OFF", cascade::gui::theme::kPhosphor, false)) {
         return;
     }
     telemetryNotePanel("radar");
@@ -8472,9 +8600,17 @@ void AppWindow::drawPluginWindows() {
                 // one says what it has managed to hear from there.
                 ImGui::Checkbox("Coverage", &coverageShow_);
                 if (ImGui::IsItemHovered()) {
+                    // "HEARD" WAS WRONG AND THE ACCUMULATOR SAYS SO. It is fed
+                    // from every visible track of every plugin, which includes
+                    // a satellite tracker's positions - and those are computed
+                    // from orbital elements, not received. A ring drawn from
+                    // them is a record of what was PLOTTED, so that is the
+                    // word.
                     ImGui::SetTooltip(
-                        "Furthest anything has been heard, per 5 degrees of bearing.\n"
-                        "Measured from the receiver position, this session only.");
+                        "Furthest any target has been plotted, per 5 degrees of\n"
+                        "bearing. Measured from the receiver position, this session\n"
+                        "only. A satellite's position is computed from orbital\n"
+                        "elements rather than heard, and counts here too.");
                 }
                 ImGui::SameLine();
                 // THE TRAIL SWITCHES, on this row because they answer the same
@@ -8649,6 +8785,16 @@ void AppWindow::drawPluginWindows() {
     // rewritten only when a decoder produces something new, so redrawing an
     // image the user is looking at costs nothing.
     pluginRunner_.pollImages(pluginImages_);
+    // THE SAVE NOTE EXPIRES, because it is a message about something that just
+    // happened rather than a caption. It used to be written once and never
+    // cleared, so a filename saved in the first minute of a session was still
+    // lettered under a picture an hour later.
+    if (imageSaveNoteAtS_ >= 0.0 &&
+        ImGui::GetTime() - imageSaveNoteAtS_ > kImageSaveNoteSeconds) {
+        imageSaveNote_.clear();
+        imageSaveNotePlugin_.clear();
+        imageSaveNoteAtS_ = -1.0;
+    }
     const std::vector<cascade::core::HostImage>& imgs = pluginImages_;
     // Textures are keyed by SLOT, and a rescan can put a different plugin in a
     // slot - or drop one entirely. A slot whose plugin changed keeps its GL
@@ -8759,6 +8905,12 @@ void AppWindow::drawPluginWindows() {
                     } else {
                         imageSaveNote_ = "Save failed: " + err;
                     }
+                    // WHOSE WINDOW SAID IT, AND WHEN. Without these two the
+                    // note was drawn inside EVERY image window by the loop
+                    // below, so saving the APT picture put its filename under
+                    // the SSTV one as well.
+                    imageSaveNotePlugin_ = im.plugin;
+                    imageSaveNoteAtS_ = ImGui::GetTime();
                 }
 
                 // Fit to the window, preserving aspect: a weather image
@@ -8774,7 +8926,11 @@ void AppWindow::drawPluginWindows() {
                                         static_cast<float>(im.height) * s));
                 }
             }
-            if (!imageSaveNote_.empty()) { ImGui::TextDisabled("%s", imageSaveNote_.c_str()); }
+            // ONLY IN THE WINDOW THAT SAVED IT. A note about a file written
+            // from this picture has nothing to say about any other one.
+            if (!imageSaveNote_.empty() && imageSaveNotePlugin_ == im.plugin) {
+                ImGui::TextDisabled("%s", imageSaveNote_.c_str());
+            }
         }
         endPage();
         if (!imageOpen) { pluginWindows_.hide(id); }
@@ -9120,15 +9276,22 @@ void AppWindow::drawPluginWindowRows() {
     }
 }
 
-void AppWindow::drawSatelliteMapSection() {
-    // THE WHOLE OF THE SATELLITE PRESENCE IN THE MAIN WINDOW: one row per
-    // satellite page, and no satellite controls anywhere else on the rail.
-    // The user asked for the instrument to be self-contained, so this is a
-    // switch that puts the window on screen and reports what is in it - never
-    // a second, smaller copy of the controls that window carries.
+void AppWindow::drawMapPageSections() {
+    // ONE ROW PER MAP PAGE, AND IT USED TO BE ONE ROW PER SATELLITE PAGE.
+    //
+    // The satellites window stays self-contained, which is what was asked for:
+    // every satellite control lives inside it, and its row here is a switch
+    // that puts it on screen and reports what is in it - never a second,
+    // smaller copy of the controls that window carries.
+    //
+    // WHAT WAS WRONG IS THAT THE LOOP SKIPPED EVERY OTHER PAGE. A page whose
+    // tracks are aircraft or vessels got no rail row at all, and since 0.79.1
+    // nothing opens a page by itself and the saved open flag is cleared at
+    // load - so the ADS-B, AIS and APRS maps could be reached only through a
+    // plugin preset, which also retunes the receiver. Wanting to look at a map
+    // is not a reason to move the radio, so every page gets a key.
     bool any = false;
     for (MapPage& pg : mapPages_) {
-        if (!pg.satellite) { continue; }
         any = true;
         // THE CHIP IS THE COUNT THE WINDOW ITSELF SHOWS - MapPage::visibleCount
         // is written where the page's tracks are filtered, so the rail and the
@@ -9138,7 +9301,7 @@ void AppWindow::drawSatelliteMapSection() {
         char chip[24];
         std::snprintf(chip, sizeof chip, "%d TGT", static_cast<int>(pg.visibleCount));
         // The plugin's own display name, which is what its window is titled
-        // with: two satellite sources installed would otherwise give two rows
+        // with: two track sources installed would otherwise give two rows
         // reading the same word.
         //
         // '#' BECOMES '_' IN THE ID HALF, exactly as the window title does it
@@ -9150,24 +9313,39 @@ void AppWindow::drawSatelliteMapSection() {
         for (char& idc : ident) {
             if (idc == '#') { idc = '_'; }
         }
-        const std::string row = ident + " map###satmap:" + ident;
+        const std::string row = ident + " map###mappage:" + ident;
+        // TWO TOOLTIPS, BECAUSE THERE ARE TWO KINDS OF PAGE. The satellites
+        // page is a whole instrument and its key is the only way to any of it;
+        // every other page is a map with a bar of controls along the top. A
+        // single sentence covering both would describe neither.
         if (benchSwitchRow(row.c_str(), pg.open, chip, cascade::gui::theme::kPhosphor,
                            pg.open, true,
-                           "Opens the satellites window: receiver position, overlays,\n"
-                           "trail style, coverage, the target register and the map.\n"
-                           "Everything for satellites is in that one window.")) {
+                           pg.satellite
+                               ? "Opens the satellites window: receiver position, "
+                                 "overlays,\ntrail style, coverage, the target register "
+                                 "and the map.\nEverything for satellites is in that one "
+                                 "window."
+                               : "Opens this plugin's map: its targets and their trails, "
+                                 "the\nreceiver position and the coverage overlay. "
+                                 "Nothing opens\nit for you.")) {
             pg.open = !pg.open;
         }
     }
     if (any) { return; }
 
     // --- blocked, and saying what would unblock it --------------------------
+    // NO PAGES AT ALL MEANS NO TRACK SOURCE AT ALL: a page is created for
+    // every name in trackPluginNames() and pruned when a name leaves it, both
+    // in drawPluginWindows, which runs before this rail every frame. The
+    // branch that used to be here for "a tracker is running but has reported
+    // no SATELLITE yet" went with the satellite-only filter - that tracker now
+    // has a row of its own, which is a better answer than a sentence about it.
+    //
     // SEVERAL DIFFERENT REASONS THE ROW IS DEAD, and they must not read the
-    // same. One is answered by waiting for the tracker already running to
-    // report a satellite; the rest are answered by starting a module, by
-    // reading why the host refused one, or - and only then - by installing
-    // one. A single "unavailable" would send most of those users to the plugin
-    // store for nothing.
+    // same. They are answered by starting a module, by reading why the host
+    // refused one, or - and only then - by installing one. A single
+    // "unavailable" would send most of those users to the plugin store for
+    // nothing.
     //
     // WHAT trackPluginNames() ACTUALLY ANSWERS. It is the list of track
     // sources PluginUi has INSTANTIATED, and rebuild skips an unloaded module
@@ -9176,26 +9354,19 @@ void AppWindow::drawSatelliteMapSection() {
     // user stopped a moment ago. This row said "No track source installed" for
     // both, while the Fitted modules window two keys away lettered that same
     // file STOPPED BY YOU. See gui/module_census.hpp.
-    const bool anyTrackSource = !pluginUi_.trackPluginNames().empty();
-    benchSwitchRow("Satellites map###satmapnone", false, "NONE",
+    benchSwitchRow("Target maps###mapnone", false, "NONE",
                    cascade::gui::theme::kPhosphor, false, false, nullptr);
     ImGui::PushStyleColor(ImGuiCol_Text,
                           ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    if (anyTrackSource) {
-        ImGui::TextWrapped(
-            "No satellite targets reported yet. A tracker that publishes satellite "
-            "positions gets its own window, and this key opens it.");
-    } else {
-        const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
-            pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
-            [this](const std::string& key) { return pluginIsStopped(key); });
-        ImGui::TextWrapped(
-            "%s", cascade::gui::trackSourceAbsenceNote(
-                      census, "satellite positions",
-                      "A satellite tracker plugin reports the positions this window "
-                      "draws - install one from the plugin store above.")
-                      .c_str());
-    }
+    const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
+        pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
+        [this](const std::string& key) { return pluginIsStopped(key); });
+    ImGui::TextWrapped("%s",
+                       cascade::gui::trackSourceAbsenceNote(
+                           census, "target positions",
+                           "A tracker plugin reports the positions a map draws - "
+                           "install one from the plugin store above.")
+                           .c_str());
     ImGui::PopStyleColor();
 }
 
@@ -9428,7 +9599,7 @@ void AppWindow::drawTrackList(MapPage& page,
         // the registry lookup for every listed target.
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            cascade::gui::drawTrackDetail(ht, &trackInfo_, rxSet_, rxLat_, rxLon_);
+            drawTrackDetailOf(ht, &trackInfo_, rxSet_, rxLat_, rxLon_);
             ImGui::EndTooltip();
         }
 
@@ -9594,12 +9765,19 @@ void AppWindow::drawTargetDetailsSection() {
 
     if (found == nullptr) {
         // Same honesty as the details window: said, not silently blanked.
+        //
+        // REPORTED, NOT HEARD. This line said "No longer being heard" for
+        // every kind of target, and a satellite is not heard at all - it is
+        // PROPAGATED from orbital elements by the tracker. What the staleness
+        // rule actually observed is that nothing is publishing this target any
+        // more, which is true of an aeroplane that has flown out of range and
+        // of a tracker that has stopped, and claims neither.
         ImGui::TextUnformatted(id.c_str());
-        ImGui::TextDisabled("No longer being heard.");
+        ImGui::TextDisabled("No longer being reported.");
         return;
     }
 
-    cascade::gui::drawTrackDetail(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
+    drawTrackDetailOf(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
     ImGui::Separator();
     // The same two gestures the details window offers, so acting on what was
     // just read never requires finding the row it came from. Both land on the
@@ -9665,11 +9843,17 @@ void AppWindow::drawTargetDetailsWindow() {
             // the same staleness rule the map and the list use; a window that
             // shut itself at that moment would look like a crash, and one that
             // kept showing the last values would be lying about a live aircraft.
+            //
+            // REPORTED, NOT HEARD, for the reason the rail's copy of this line
+            // gives: a satellite is propagated from orbital elements and was
+            // never heard, and by the time this branch runs the track is gone,
+            // so its kind cannot be looked up to word the sentence two ways.
+            // What was observed is that nothing is publishing it any more.
             ImGui::TextUnformatted(detailsTrackId_.c_str());
             ImGui::Separator();
-            ImGui::TextDisabled("No longer being heard.");
+            ImGui::TextDisabled("No longer being reported.");
         } else {
-            cascade::gui::drawTrackDetail(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
+            drawTrackDetailOf(*found, &trackInfo_, rxSet_, rxLat_, rxLon_);
             ImGui::Separator();
             // The same two gestures the row offers, as named buttons: the
             // details window is reachable from a row, and a user who got here
@@ -9737,8 +9921,23 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
                       ps.label[0] != '\0' ? ps.label : p.name.c_str(), i);
         if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) { applyPluginPreset(p, ps); }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Tune to %.4f MHz and open this plugin's windows",
-                              ps.frequencyHz / 1.0e6);
+            // WHAT THIS BUTTON WILL DO FOR THIS PLUGIN, which is not the same
+            // sentence for all of them. Every preset promised "and open this
+            // plugin's windows" while applyPluginPreset opened a map page and
+            // nothing else - so on a text decoder, which publishes no window
+            // of its own at all, it was a promise about something that does
+            // not exist. The windows are opened for real now, and the clause
+            // is lettered only where the module declares one to open.
+            const bool hasWindow = p.trackSource != nullptr ||
+                                   p.imageDecoder != nullptr || p.panel != nullptr;
+            if (hasWindow) {
+                ImGui::SetTooltip("Tune to %.4f MHz, start this plugin and open its "
+                                  "windows",
+                                  ps.frequencyHz / 1.0e6);
+            } else {
+                ImGui::SetTooltip("Tune to %.4f MHz and start this plugin",
+                                  ps.frequencyHz / 1.0e6);
+            }
         }
     }
 }
@@ -9801,7 +10000,11 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
         vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(ps.bandwidthHz, bwHi));
         pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-        bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+        // -1 WHEN THE PRESET ASKED FOR SOMETHING THE LIST DOES NOT CARRY, and
+        // that is exactly the APT case: 40 kHz is not a step, and the nearest
+        // one is 12.5 kHz. Pointing the combo there made it letter a bandwidth
+        // the receiver was not running and, on the next click, apply it.
+        bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
     }
 
     // WHERE the frequency goes differs by decoder kind, and getting it wrong
@@ -9821,19 +10024,34 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // be configured for wherever the radio used to be.
     refreshPluginRunner();
 
-    // THE PRESET BUTTON OPENS THE MAP PAGE, EXPLICITLY. Pressing it is the
-    // one unambiguous "show me this plugin" gesture the product offers (its
-    // tooltip promises as much), and since 0.79.1 a page opens by such a
-    // gesture and by nothing else - no page opens itself on its first
-    // target any more, so this line is one of the ways a page is reached.
-    // Guarded to track-capable plugins so a preset on a plain decoder does
-    // not conjure an empty map window it never asked for.
+    // THE PRESET BUTTON OPENS THE PLUGIN'S WINDOWS, EXPLICITLY - AND IT USED
+    // TO OPEN ONLY ONE KIND OF THEM. Pressing it is the one unambiguous "show
+    // me this plugin" gesture the product offers, its tooltip has always said
+    // so, and since 0.79.1 a window opens by such a gesture and by nothing
+    // else. A MapPage was all this opened, so pressing the NOAA APT preset
+    // retuned the radio, started the decoder and put nothing on screen: the
+    // picture window the whole plugin exists to fill stayed shut, with its row
+    // further down a rail the user had no reason to scroll.
+    //
+    // DECIDED FROM WHAT THE MODULE DECLARES, not from what it has published
+    // yet. A decoder that has produced no picture still gets its window, which
+    // says it is waiting - the truth, and what was asked to be seen. Each id
+    // is the one drawPluginWindows draws by, built from the same display name.
     {
         const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
             MapPage& pg = ensureMapPage(p.name);
             pg.open = true;
         }
+    }
+    if (p.imageDecoder != nullptr) {
+        pluginWindows_.show(p.name + " image###image_" + p.name);
+    }
+    // A panel's id carries the panel's OWN TITLE, which only the instance
+    // knows, so this asks the instances rebuilt a moment ago rather than the
+    // descriptor. A module may publish more than one.
+    for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
+        if (hp.plugin == p.name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
     }
 
     char note[192];
@@ -10339,11 +10557,16 @@ void AppWindow::pumpDecoderOutput() {
 void AppWindow::drawDecoderStatusRows() {
     const std::vector<cascade::core::DecoderStatus> st = pluginRunner_.status();
 
-    // THE OUTPUT AND THE SCOPE ARE DRAWN WHETHER OR NOT A DECODER IS LOADED.
-    // The radar scope is a way of LOOKING at what a receiver hears, it is the
-    // whole main window while it is on, and a switch that appeared and
-    // vanished with the plugin list is a switch nobody would find twice. The
-    // early returns are branches for the same reason.
+    // THE OUTPUT WINDOW'S KEY IS DRAWN WHETHER OR NOT A DECODER IS RUNNING,
+    // and this comment used to say so while the code did the opposite: the
+    // key sat inside the third branch below, which is reached only while
+    // activeCount() > 0. It is the ONLY thing that toggles decoderWindowOpen_,
+    // so when the last decoder stopped - or the receiver did - the window
+    // could not be opened again, and one closed from its own key stayed closed
+    // for the session, with up to kDecoderLogMax decoded lines still held
+    // behind it. Reading what was decoded after the traffic stops is the
+    // normal case, not an edge one. The key is now drawn after the branches,
+    // on whether there is anything to read or anything producing it.
     //
     // WHY A DECODER IS SILENT IS NO LONGER PRINTED HERE. It is printed in the
     // fitted modules window, against the module it is about, from the same
@@ -10384,15 +10607,40 @@ void AppWindow::drawDecoderStatusRows() {
         // against the module in the Fitted modules window, which is the one
         // place this product answers "why is it silent".
         ImGui::TextDisabled("No decoder is running.");
-    } else {
+    }
+
+    // THE WAY BACK TO THE OUTPUT WINDOW - see the note at the top of this
+    // function for what it used to be. Anything held is enough to earn the
+    // key; so is anything running, because a decoder that has not spoken yet
+    // still deserves a window to speak into.
+    if (!decoderLog_.empty() || pluginRunner_.activeCount() > 0) {
         if (ImGui::Button(decoderWindowOpen_ ? "Hide decoder output"
                                              : "Show decoder output",
                           ImVec2(-1.0f, 0.0f))) {
             decoderWindowOpen_ = !decoderWindowOpen_;
         }
-        if (!decoderLog_.empty()) {
-            ImGui::TextDisabled("%d line%s decoded", static_cast<int>(decoderLog_.size()),
-                                decoderLog_.size() == 1 ? "" : "s");
+        // WHAT WAS DECODED, NOT WHAT IS BEING HELD. This printed
+        // decoderLog_.size(), and decoderLog_ is a display tail trimmed to
+        // kDecoderLogMax every frame - so on any decoder busier than five
+        // hundred lines it read "500 lines decoded" for the rest of the
+        // session, whatever happened afterwards. decoderLinesTotal_ is the
+        // cumulative count pumpDecoderOutput keeps and never resets; when the
+        // tail has dropped anything, the row says what the window holds rather
+        // than letting its contents pass for the whole of it.
+        if (decoderLinesTotal_ > 0u) {
+            const unsigned long long total =
+                static_cast<unsigned long long>(decoderLinesTotal_);
+            ImGui::TextDisabled("%llu line%s decoded", total, total == 1ull ? "" : "s");
+            if (decoderLog_.size() >= kDecoderLogMax) {
+                // WRAPPED, not TextDisabled, and on its own line: this rail is
+                // narrow and a sentence that runs off its edge says nothing at
+                // all.
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("The window holds the newest %d lines.",
+                                   static_cast<int>(kDecoderLogMax));
+                ImGui::PopStyleColor();
+            }
         }
     }
 }
@@ -10900,7 +11148,10 @@ void AppWindow::drawBookmarksSection() {
             const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
             vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
             pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+            // -1 for a bookmark saved at a bandwidth the list does not carry
+            // (one taken while a preset had the VFO at 40 kHz, say): the combo
+            // letters the real figure and ticks nothing.
+            bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
         }
         ImGui::SameLine();
         if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
@@ -11580,7 +11831,9 @@ void AppWindow::applyWebControls() {
             const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
             vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(*r.bandwidthHz, bwHi));
             pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+            // -1 when the browser asked for a width the list does not carry:
+            // the combo shows what the VFO is, and ticks nothing.
+            bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
         }
         if (r.vfoOffsetHz.has_value()) {
             // Clamped against the LIVE rate, the same rule the config restore
@@ -11782,7 +12035,8 @@ void AppWindow::applyWebControls() {
                 const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
                 vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
                 pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-                bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);
+                // -1 for a bookmark whose bandwidth is none of the steps.
+                bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
                 tuneAbsoluteHz(b.freqHz);
             }
         }
@@ -11903,6 +12157,10 @@ void AppWindow::refreshCatServer() {
 void AppWindow::applyWebSettings() {
     webError_.clear();
     webNote_.clear();
+    // Cleared on entry with the rest: whatever the last apply refused is not a
+    // fact about this one, and every path below either sets it again or leaves
+    // the server in a state that has nothing to refuse.
+    webStartRefusal_.clear();
     webDirty_ = false;
 
     if (!webCfg_.enabled) {
@@ -11916,6 +12174,13 @@ void AppWindow::applyWebSettings() {
         // failure's is too. Which of the two it was is available from
         // decision(), but the user only needs the sentence.
         webError_ = error;
+        // KEPT SEPARATELY FOR THE TWO SURFACES THAT SUMMARISE THIS SECTION.
+        // The status column's card and the rail row both used to read "off"
+        // for a server the user had switched on and that had refused to
+        // listen, and webError_ cannot be what they read: the password field
+        // writes its own complaints into it, and a mistyped password is not a
+        // listener that would not start.
+        webStartRefusal_ = error;
         cascade::core::diagWarnf("web: server refused to start (%s)", error.c_str());
         return;
     }
@@ -12031,9 +12296,19 @@ void AppWindow::drawCatSection() {
 }
 
 void AppWindow::drawWebSection() {
-    const bool webOpen =
-        benchSection("Web access", false, webServer_.running() ? "ON" : "OFF",
-                     cascade::gui::theme::kPhosphor, webServer_.running());
+    // THREE STATES, NOT TWO. A server that was switched on and REFUSED to
+    // start is not off: applyWebSettings leaves the setting enabled - the
+    // usual cause is a port something else already holds, which the user fixes
+    // and retries - and this row used to letter OFF over it, so the one
+    // surface that said otherwise was inside the section nobody had opened.
+    // Rust and lit, the rail's own convention for a fault (see the Source and
+    // CAT rows).
+    const bool webRefused = !webServer_.running() && !webStartRefusal_.empty();
+    const bool webOpen = benchSection(
+        "Web access", false,
+        webServer_.running() ? "ON" : (webRefused ? "FAIL" : "OFF"),
+        webRefused ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
+        webServer_.running() || webRefused);
     if (!webOpen) { return; }
     telemetryNotePanel("web");
 
@@ -12182,7 +12457,19 @@ void AppWindow::drawUpdatesSection() {
         if (!updateCheckEnabled_) {
             update_ = cascade::core::UpdateInfo{};
             updateError_.clear();
-        } else if (!updateStarted_) {
+        } else if (!updatePending_) {
+            // A RE-TICK ASKS AGAIN. This was `else if (!updateStarted_)`, and
+            // updateStarted_ - "one check per launch, no retry storm" - is
+            // never cleared, so unticking and re-ticking left the section
+            // reading "up to date" and the chip reading OK about an answer the
+            // untick had just thrown away. Re-arming is what makes the tick
+            // mean anything; the storm the flag guards against cannot come
+            // from here, because only a click reaches this line.
+            //
+            // A check already IN FLIGHT is left alone: startUpdateCheck would
+            // refuse it anyway, and it is about to deliver the very answer the
+            // re-tick is asking for.
+            updateStarted_ = false;
             startUpdateCheck();
         }
     }
@@ -12211,29 +12498,20 @@ void AppWindow::drawUpdatesSection() {
 }
 
 void AppWindow::drawUsageReportingSection() {
-    // ON, OFF, OR NOT BUILT IN. A build with no endpoint compiled in cannot
-    // report at all, and saying OFF there would describe a switch this build
-    // does not have - the same distinction the body below draws when it
-    // refuses to offer the checkbox.
-    const bool usageAvailable = !cascade::core::telemetryEndpoint().empty();
-    if (!benchSection("Usage reporting", false,
-                      usageAvailable ? (telemetryEnabled_ ? "ON" : "OFF") : "N/A",
-                      usageAvailable ? cascade::gui::theme::kPhosphor
-                                     : cascade::gui::theme::kInkFaint,
-                      usageAvailable && telemetryEnabled_)) {
+    // ON OR OFF, AND THERE IS NO THIRD STATE. This row carried an N/A chip and
+    // the body below carried a "Not available in this build." early return,
+    // both decided by telemetryEndpoint() being empty - and it never is.
+    // telemetryEndpoint() returns a compiled-in constant unless
+    // FOXSDR_TELEMETRY_URL overrides it with a NON-EMPTY value, so the state
+    // could not be reached in any build, and the comment claiming a source
+    // build gets it was describing an intention rather than the code. A state
+    // nothing can produce is not a state; where the reports go is a fact about
+    // the endpoint, not about whether the switch exists.
+    if (!benchSection("Usage reporting", false, telemetryEnabled_ ? "ON" : "OFF",
+                      cascade::gui::theme::kPhosphor, telemetryEnabled_)) {
         return;
     }
     telemetryNotePanel("usage reporting");
-
-    // No endpoint compiled in means the feature cannot work, so it is shown as
-    // unavailable rather than offering a switch that would collect into
-    // nowhere. A source build gets this by default: a fork must not start
-    // reporting to us because somebody rebuilt it.
-    const std::string endpoint = cascade::core::telemetryEndpoint();
-    if (endpoint.empty()) {
-        ImGui::TextDisabled("Not available in this build.");
-        return;
-    }
 
     ImGui::TextWrapped(
         "Anonymous counts only: version, operating system, how long sessions "
@@ -12265,7 +12543,19 @@ void AppWindow::drawUsageReportingSection() {
 
     if (telemetryEnabled_) {
         ImGui::TextDisabled("Install id: %s", telemetryInstallId_.c_str());
-        ImGui::TextDisabled("Sent once at start-up, describing the previous session.");
+        // TWO MESSAGES, NOT ONE. This line named only the launch report while
+        // HeartbeatSender has been posting a "still running" beat every five
+        // minutes for as long as it has existed - PRIVACY.md documents both,
+        // field by field, and this panel is what a user reads INSTEAD of that
+        // file. A panel that lists one of two transmissions is the same
+        // omission as an undocumented field.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(
+            "One report at start-up, describing the previous session - and, while "
+            "FoxSDR is open, a \"still running\" beat every five minutes. This switch "
+            "stops both.");
+        ImGui::PopStyleColor();
     } else {
         ImGui::TextDisabled("Off. Nothing is transmitted.");
     }
@@ -12275,10 +12565,26 @@ void AppWindow::drawUsageReportingSection() {
     if (privacyNoticeOpen_) {
         telemetryNotePanel("privacy notice");
         ImGui::Indent();
-        ImGui::TextDisabled(
-            "id (random)  version  os  arch  launches  crashes\n"
-            "session seconds  sdr model  modes used  panels  plugins\n"
-            "See PRIVACY.md for the complete list and what is excluded.");
+        // BOTH PAYLOADS, IN PRIVACY.MD'S OWN ORDER. The beat's three fields
+        // were missing from this list entirely, so the one place in the
+        // application that answers "what exactly is sent" answered it for the
+        // launch report only.
+        //
+        // WRAPPED, not TextDisabled with its own line breaks. This rail is
+        // about two hundred pixels wide and none of these lines has ever fitted
+        // on one; ImGui does not wrap TextDisabled, it CLIPS it, so the list a
+        // user opened this key to read was losing its right-hand half - and a
+        // field nobody can see is a field this panel has not disclosed.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(
+            "Each launch: id (random), version, os, arch, launches, crashes, "
+            "session seconds, sdr model, modes used, panels, plugins.");
+        ImGui::TextWrapped(
+            "Every five minutes while open: id (the same one), version, a beat "
+            "marker.");
+        ImGui::TextWrapped("See PRIVACY.md for the complete list and what is excluded.");
+        ImGui::PopStyleColor();
         ImGui::Unindent();
     }
 }
@@ -12751,7 +13057,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
     vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(cfg.bandwidthHz, bwHi));
     pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-    bandwidthIndex_ = nearestIndex(kBwHz, 6, vfoBandwidthHz_);  // combo display
+    // The combo's tick, and -1 for a saved bandwidth that is none of the steps
+    // - a config written while a plugin preset had the VFO at its own width.
+    // The combo letters vfoBandwidthHz_ itself either way.
+    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
     double off = cfg.vfoOffsetHz;
     const double lim = 0.5 * pipeline_.inputRateHz() - 0.5 * vfoBandwidthHz_;
     off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;

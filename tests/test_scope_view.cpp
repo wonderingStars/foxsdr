@@ -554,16 +554,16 @@ int main() {
 
     // --- the corner readouts and the bearing ticks ----------------------------
     {
-        CHECK(scopeTracksReadout(0) == "0 TRACKS");
-        CHECK(scopeTracksReadout(12) == "12 TRACKS");
+        CHECK(scopeTracksReadout(0) == "0 PLOTTED");
+        CHECK(scopeTracksReadout(12) == "12 PLOTTED");
         // IT DOES NOT CONJUGATE. The readout is a legend on an instrument face,
         // a fixed field whose width must not change as the last aircraft
         // leaves. Stated as a test because it looks like a bug otherwise, and
         // the next reader deserves to find the decision rather than "fix" it.
-        CHECK(scopeTracksReadout(1) == "1 TRACKS");
+        CHECK(scopeTracksReadout(1) == "1 PLOTTED");
         // A negative count cannot come out of the draw loop, and a readout is
         // the wrong place to discover one.
-        CHECK(scopeTracksReadout(-4) == "0 TRACKS");
+        CHECK(scopeTracksReadout(-4) == "0 PLOTTED");
 
         CHECK(scopeRangeReadout(10) == "10 NM");
         CHECK(scopeRangeReadout(200) == "200 NM");
@@ -650,17 +650,25 @@ int main() {
         CHECK(at(lines, 4).known);
         in.emergency = false;
 
-        // NO TRACK-INFO PLUGIN IS NOT "UNKNOWN". Nothing was ever asked, and
+        // NOTHING LOOKING IS NOT "UNKNOWN". Nothing was ever asked, and
         // telling a user their receiver failed to read an operator name it had
         // no source for would send them debugging the radio. RED WHEN the three
         // registry states collapse into two.
+        //
+        // The row says NO LOOKUP RUNNING and no longer says NO REGISTRY
+        // PLUGIN: infoActive is false for a machine with no track-info module,
+        // for one whose module the user STOPPED, and for one whose module
+        // failed to hand back an instance, so the old wording made a claim
+        // about what was INSTALLED from a predicate that only proves what is
+        // INSTANTIATED - and contradicted the Fitted modules window two keys
+        // away. Three states, three sentences, none of them overreaching.
         in.infoActive = false;
         lines = buildScopeDetailLines(in);
         CHECK(labelsOf(lines) == expected);
-        CHECK(at(lines, 1).value == "NO REGISTRY PLUGIN");
+        CHECK(at(lines, 1).value == "NO LOOKUP RUNNING");
         CHECK(!at(lines, 1).known);
-        CHECK(at(lines, 2).value == "NO REGISTRY PLUGIN");
-        CHECK(at(lines, 3).value == "NO REGISTRY PLUGIN");
+        CHECK(at(lines, 2).value == "NO LOOKUP RUNNING");
+        CHECK(at(lines, 3).value == "NO LOOKUP RUNNING");
         // The flight and everything the radio heard are untouched by the
         // registry's absence - they came off the air, not out of a database.
         CHECK(at(lines, 0).value == "BAW123");

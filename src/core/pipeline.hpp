@@ -26,6 +26,14 @@
 // would leave two different de-emphasis paths for mono and stereo audio and
 // pay for a second discriminator; this way there is exactly one.
 //
+// NFM IS THE OTHER HALF OF THAT RULE, and it was missing. StereoFm runs only
+// in WFM, so forwarding the user's setting to StereoFm and nowhere else meant
+// NFM had no de-emphasis at all — the Radio panel's De-emph combo is enabled
+// for both FM modes and is saved to the config, and in NFM it changed nothing.
+// The setting now goes to the Demodulator as well, and one function —
+// applyDemodDeemphasisLocked — decides which of the two owns it: WFM keeps
+// its 0, every other mode carries the user's constant.
+//
 // AGC AND SQUELCH RUN ON THE INTERLEAVED STEREO STREAM, one instance each,
 // so both channels always receive the identical gain and the identical gate
 // envelope — two per-channel instances would each normalise their own channel
@@ -219,8 +227,10 @@ public:
     // would blast or mute the first moments of the new mode.
     void setDemodMode(cascade::dsp::DemodMode m);
     cascade::dsp::DemodMode demodMode() const;
-    // WFM de-emphasis in microseconds: 50 (most of the world) / 75 (Americas,
-    // South Korea) / 0 = off. Survives mode changes and rate switches.
+    // FM de-emphasis in microseconds: 50 (most of the world) / 75 (Americas,
+    // South Korea) / 0 = off. Applies to BOTH FM modes — WFM through StereoFm,
+    // NFM through the Demodulator's own one-pole (see the ownership note at the
+    // top of this header). Survives mode changes and rate switches.
     void setDeemphasisUs(double us);
     double deemphasisUs() const;
 
@@ -501,6 +511,15 @@ private:
     // The body of resetRds(), for callers that ALREADY hold audioMutex_ —
     // re-locking it from inside a setter would deadlock instantly.
     void resetDecodersLocked();
+    // Pushes deemphasisUs_ into the DEMODULATOR, which owns de-emphasis for
+    // every mode except WFM — there StereoFm owns it (see the ownership note
+    // at the top of this header) and the discriminator must stay flat, so this
+    // sends 0 us instead. One rule in one place: it used to be written out as
+    // a bare "off" at three separate call sites, which is how NFM ended up
+    // ignoring the setting entirely. Caller holds audioMutex_ (the constructor
+    // runs it before any thread exists); touches only demod_, so it is safe to
+    // call before stereo_ has been built.
+    void applyDemodDeemphasisLocked();
 
     Config cfg_;
     // Built-in generator source: always alive (a member, not a unique_ptr)

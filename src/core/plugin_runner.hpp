@@ -61,6 +61,17 @@ enum class DecoderIdleReason {
     RateMismatch,   // wants a fixed rate the pipeline is not delivering
     CreateFailed,   // its create() returned NULL
     NoAudioTable,   // declares no capability this runner can drive
+    // A NEGATIVE RETURN FROM poll_text OR poll_image, which the ABI defines as
+    // "the decoder has failed permanently; the host stops polling it"
+    // (plugin_abi.h, CascadeDecoderApi::poll_text and
+    // CascadeImageDecoderApi::poll_image). The runner used to collapse that
+    // into "nothing pending" at every one of the four poll sites: no status
+    // line changed, nothing was written to the decoder log, and the runner
+    // went on feeding samples to a decoder that had given up. An image row
+    // therefore said WAIT for ever, which is the most misleading thing the
+    // panel can say - a decoder that has failed looks exactly like one still
+    // building a picture, and only one of the two is worth waiting for.
+    PollFailed,
 };
 
 // What a running instance produces. Text and image decoders are fed
@@ -210,13 +221,28 @@ private:
         // poll_text writes no NUL and splits only on code-point boundaries,
         // so a line can arrive across two polls. Carried here between calls.
         std::string partial;
+        // WHICH status_ ROW THIS INSTANCE IS REPORTED THROUGH. Fixed when the
+        // instance is created and valid for exactly as long as the instance
+        // is: the only thing that empties status_ is destroyLocked(), which
+        // empties these vectors in the same breath, so the index cannot come
+        // to point at another plugin's row.
+        std::size_t statusIndex = 0;
+        // Set once, when a poll returns negative - the ABI's "failed
+        // permanently". From then on the instance is handed no samples and
+        // polled no further, but its handle is KEPT until the next
+        // rebuild()/clear() so destroy() still runs exactly once, after the
+        // last call of anything else on that handle, as the ABI requires.
+        bool failed = false;
     };
 
+    // Same two trailing fields as Instance above, for the same reasons.
     struct IqInstance {
         const CascadeIqDecoderApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
         std::string partial;
+        std::size_t statusIndex = 0;
+        bool failed = false;
     };
 
     // An image decoder takes EITHER stream (SSTV wants demodulated audio, LRPT
@@ -228,6 +254,11 @@ private:
         std::string name;
         std::string partial;
         std::uint32_t inputKind = CASCADE_INPUT_AUDIO;
+        std::size_t statusIndex = 0;
+        // ONE FLAG FOR BOTH POLLS. A permanent failure is a property of the
+        // instance and not of the call that reported it, so an image decoder
+        // whose poll_text gives up stops being asked for pictures too.
+        bool failed = false;
     };
 
     // A plugin is third-party code: an absurd width/height must not make the
@@ -248,6 +279,12 @@ private:
     // line ends.
     void absorbLocked(const std::string& name, std::string& partial, const char* data,
                       std::size_t bytes);
+    // Records that one instance has failed permanently: the status row it was
+    // built with becomes PollFailed with a sentence the panel already knows how
+    // to draw, and one line goes into the decoder log so the failure is written
+    // where everything else the decoder said is written. Called once per
+    // instance, on the transition, by whichever poll saw the negative return.
+    void failLocked(std::size_t statusIndex, const std::string& name);
 
     mutable std::mutex mutex_;
     // Read only inside rebuild(), under the same lock as everything else, so

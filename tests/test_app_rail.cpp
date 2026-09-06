@@ -32,6 +32,14 @@
  *   typefaces at the current sizes. This is the check that would have caught a
  *   two-point raise clipping "CAT control (rigctld)".
  *
+ * AND THE LISTS THOSE LAST TWO WALK ARE THE WEAK POINT. They are a hand
+ * transcription of what the rail draws, and an audit found them wrong in both
+ * directions at once: three chips that no call site has ever passed, two more
+ * that belong to other panels entirely, one the Radar row computed and could
+ * never draw, a map row spelled in a way the rail has never lettered - and
+ * fifteen chips missing. They are grouped by the row that draws them now, so
+ * an added row shows up as a gap rather than hiding in an alphabet.
+ *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 #include <cstdio>
@@ -46,38 +54,106 @@
 
 namespace {
 
-// Every chip the main window's rail can show, gathered from the call sites in
-// app_window.cpp. The widest of them is what a label has to clear.
+// EVERY CHIP THE MAIN WINDOW'S RAIL CAN SHOW, row by row, gathered from the
+// benchSection and benchSwitchRow call sites in app_window.cpp. The widest of
+// them is what a label has to clear.
+//
+// IT WAS A HAND TRANSCRIPTION AND IT WAS WRONG IN BOTH DIRECTIONS. It carried
+// "RIGCTLD", "CHECKING" and "REPORTING", which no call site anywhere has ever
+// passed; "NO DATA" and "STOPPED", which are drawn by the radar scope's detail
+// panel and the status column and are not rail chips at all; and "SCOPE",
+// which the Radar row computed but could never draw, because scope mode
+// replaces the whole layout and the rail is only reached in the else arm of
+// it. Meanwhile fifteen chips the rail really does letter were missing. A
+// transcription is exactly the thing that drifts, which is why the two lists
+// below are grouped by the row that draws them: an added row with no entry
+// here is visible as a gap rather than hidden in an alphabet.
+//
+// COUNTED CHIPS ARE LISTED AT THEIR WIDEST HONEST READING, not at a tidy
+// single digit. "%d TGT" is bounded by PluginUi::kMaxTracksPerPlugin (4000)
+// and "%d ROW" by kMaxRowsPerPanel (2000), and those two are the widest chips
+// on the whole rail; a one-digit example would have let this check pass on a
+// rail that clips the moment a busy decoder fills a map.
+//
+// THE TWO CHIPS BUILT FROM THIRD-PARTY TEXT ARE DELIBERATELY NOT HERE. The
+// list used to hold "B200" and "SIGGEN" as stand-ins for the Source row's
+// device name, which measured two names this machine happens to produce rather
+// than the ten-character cut the code actually applies; both that row and the
+// Target details row are pinned by testRuntimeChipRowsAreBounded instead.
 const char* const kChips[] = {
-    "OK",      "IDLE",   "BUSY",  "2 UPD",     "0/0",       "NO DATA", "NONE",
-    "12 TGT",  "REC",    "OFF",   "SCAN",      "PLAIN",     "PLAN",    "ON",
-    "MUTED",   "NO DEV", "DEAD",  "RIGCTLD",   "CHECKING",  "STOPPED", "REPORTING",
-    "WFM",     "NFM",    "AM",    "USB",       "LSB",       "CW",      "RAW",
-    "DSB",     "B200",   "SIGGEN", "SCOPE"};
+    // Radio: the demodulator, from kModeNames.
+    "NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW",
+    // Audio filters: how many of the three are in the chain.
+    "OFF", "1 ON", "2 ON", "3 ON",
+    // Sinks: audio leaving, no device ever opened, the stream dead, a plugin
+    // holding the mute.
+    "ON", "NO DEV", "DEAD", "MUTED",
+    // Recorder.
+    "REC",
+    // Plugin store: a transfer running, never asked, updates waiting, nothing
+    // to do.
+    "BUSY", "IDLE", "2 UPD", "999 UPD", "OK",
+    // Plugins: fed, of decoders fitted.
+    "0/0", "99/99",
+    // Decoders: how many are being fed.
+    "0 FED", "99 FED",
+    // Target details with nothing chosen, and the blocked map row.
+    "NONE",
+    // A map page: the targets its window is showing.
+    "12 TGT", "4000 TGT",
+    // A plugin's picture window: no picture yet, one arriving, one complete.
+    "WAIT", "RX", "IMG",
+    // A plugin's own panel: how many rows it holds.
+    "12 ROW", "2000 ROW",
+    // Display: the band-plan overlay.
+    "PLAIN", "PLAN",
+    // Bookmarks: how many are saved.
+    "0", "9999",
+    // Scanner.
+    "SCAN",
+    // Web access, and CAT control: refused, and the clients on the port.
+    "FAIL", "12 CLI", "999 CLI",
+    // Updates: a critical one, an ordinary one, a check in flight.
+    "IMPT", "NEW", "CHECK",
+    // Diagnostics, with the memory dump switched on.
+    "ON+DMP"};
 
-// Every label the main window's rail letters, plus the two that are built at
-// run time from a count and from a plugin's own display name.
+// EVERY LABEL THE MAIN WINDOW'S RAIL LETTERS. The first group is fixed text in
+// app_window.cpp; the last three are built at run time from a PLUGIN'S OWN
+// DISPLAY NAME, which is third-party text with no length bound at all, and are
+// the rows the shipped plugins actually produce ("ADS-B", "NOAA APT"). A name
+// longer than the plate is testAnOverlongLabelIsBounded's business rather than
+// this list's - and so is a plugin panel's row, whose word is the panel's own
+// title and for which there is no shipped example to name honestly.
+//
+// "ADS-B 1090 map" USED TO BE IN HERE AND IS NOT A ROW. The map row is
+// "<display name> map", so the ADS-B plugin's is "ADS-B map"; the old entry
+// was measuring a string the rail has never drawn. "Satellites map" is a real
+// row and stays, as the widest map row the shipped plugins make.
 const char* const kLabels[] = {"Source",
                                "Radio",
                                "Audio filters",
                                "Sinks",
+                               "Recorder",
                                "Plugin store",
                                "Plugins",
                                "Plugins (12 disabled)",
                                "Decoders",
-                               "Radar",
                                "Target details",
-                               "Satellites map",
-                               "ADS-B 1090 map",
-                               "Recorder",
+                               "Target maps",
                                "Display",
+                               "Radar",
                                "Bookmarks",
                                "Scanner",
                                "Web access",
                                "CAT control (rigctld)",
                                "Updates",
+                               "Diagnostics",
                                "Usage reporting",
-                               "Diagnostics"};
+                               // Built from a plugin's own display name.
+                               "Satellites map",
+                               "ADS-B map",
+                               "NOAA APT image"};
 
 float chipWidth(const char* chip) {
     return cascade::gui::fonts::legend()
@@ -223,7 +299,56 @@ void testAnOverlongLabelIsBounded() {
                0.001);
 }
 
-// --- 4. the five bank keys carry their own words --------------------------------
+// --- 4. the two rows whose chip is third-party text --------------------------
+//
+// The Source row's chip is the ACTIVE DEVICE'S OWN NAME and the Target details
+// row's is the SELECTED TARGET'S OWN ID, each cut to ten characters by
+// app_window.cpp and otherwise arbitrary. They are kept out of kChips because
+// a ten-character chip is wider than every state word on the rail, and asking
+// "Plugins (12 disabled)" to fit beside one would be demanding room that row
+// can never need - the two never appear on the same row.
+//
+// WHAT IS PINNED IS THE CUT, NOT THAT EVERY WORD SURVIVES IT. The rail clips a
+// label it cannot fit, deliberately (testAnOverlongLabelIsBounded), so the
+// promise here is that a ten-character chip cannot eat the plate: railPlateLabel
+// draws NOTHING AT ALL once the limit reaches the start of the word, and a
+// Source row with no word on it reads as a fault rather than as a long name.
+//
+// "Target details" IS THE ONE THAT DOES NOT CLEAR IT COMFORTABLY - at the
+// sizes fonts.hpp is set to now it clears ten W's by about a third of a pixel,
+// and a name drawn from glyphs wider than any ASCII one (this face's widest is
+// a Latin digraph, a quarter wider than its W) pushes it into the clip. That
+// margin is PRINTED rather than asserted: the assertion would be a claim about
+// which characters a third party puts in a device name.
+void testRuntimeChipRowsAreBounded() {
+    std::printf("  a ten-character chip still leaves its row a word\n");
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float rowW = cascade::gui::railRowWidth(cascade::gui::kMenuWidth,
+                                                  cascade::gui::kRailPlatePad,
+                                                  st.WindowPadding.x, st.ScrollbarSize);
+    const float rowH = cascade::gui::railRowHeight(cascade::gui::fonts::kUiSize);
+    const float left = cascade::gui::railLabelLeft(0.0f, rowH);
+    // Ten of the widest printable ASCII glyph in the legend face, which is the
+    // worst chip the ten-character cut can produce out of a device name or a
+    // track id written in it.
+    const char* const kWidestTen = "WWWWWWWWWW";
+    const float right = cascade::gui::railLabelRight(rowW, rowH, chipWidth(kWidestTen));
+    std::printf("      chip \"%s\" is %.2f px; the word runs %.2f..%.2f\n", kWidestTen,
+                static_cast<double>(chipWidth(kWidestTen)), static_cast<double>(left),
+                static_cast<double>(right));
+
+    // The row still has a word on it, by the same margin the shipped labels
+    // are held to above.
+    CHECK(right > left + 40.0f);
+    // And the shorter of the two rows keeps its whole name beside it.
+    CHECK(left + labelWidth("Source") <= right);
+    // The longer one, reported rather than asserted - see the note above.
+    std::printf("      \"Target details\" needs %.2f px and has %.2f\n",
+                static_cast<double>(labelWidth("Target details")),
+                static_cast<double>(right - left));
+}
+
+// --- 5. the five bank keys carry their own words --------------------------------
 //
 // The keys share the plate's width five ways (drawRailBankKeys: an 8 px inset
 // each side, 4 px between keys), and a key's word is lettered at kTinySize in
@@ -277,6 +402,7 @@ int main() {
     testChipReserveMatchesTheDrawnChip();
     testEveryRailLabelFits();
     testAnOverlongLabelIsBounded();
+    testRuntimeChipRowsAreBounded();
     testBankKeyLabelsFit();
 
     ImGui::DestroyContext();

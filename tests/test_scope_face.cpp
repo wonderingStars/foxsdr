@@ -32,6 +32,26 @@
 //   classic way "measure your own text" goes wrong, and it is invisible until
 //   somebody changes a font.
 //
+// AND A THIRD GROUP, ADDED LATER: WHAT THE FACE CLAIMS IN WORDS. Three
+// readouts on this instrument said more than the code behind them knew - a
+// heading that promised "in range" over a figure the SYS filter had also cut,
+// a registry row that named an absent plugin when its predicate only proved
+// nothing was instantiated, and two counters wearing the word TRACKS over two
+// different numbers. None of those is a geometry fault and none of them is
+// visible in a vertex buffer, so they are pinned through the pure half of
+// scope_view.hpp, which is where every string on this face is decided.
+//
+// A NOTE ON TWO HELPERS BELOW, because the pattern is worth not repeating:
+// checkTextClearsTheEdge and checkWholeWordDrawn RETURN SILENTLY when their
+// precondition does not hold - no letters emitted, or a caption whose floor
+// size cannot fit, where truncation is the documented answer. Both are
+// legitimate skips, but a skip that says nothing is indistinguishable from a
+// check that passed, and a whole loop of them would report a clean run having
+// asserted nothing at all. They are counted and reported at the end of the run
+// instead of being left invisible, and nothing added since is written that way:
+// lineAt below answers out of range with an empty row that fails its own
+// assertion rather than with a silent return.
+//
 // No GL and no window - ImGui builds its vertex buffers on the CPU, and that
 // is what is measured.
 //
@@ -214,9 +234,19 @@ constexpr float kFloorMargin = 2.0f;
 // The other half of the same claim, for the lines that are CENTRED on their
 // box. A cut lands exactly on the edge; a fit stops short of it by the padding
 // the primitive states. Anything at or past the edge was cut.
+// How many times a check below declined to check anything. See the note at the
+// top of the file: both of the two helpers that follow have a legitimate reason
+// to stand down, and neither may do it quietly - a run of nothing but skips
+// would otherwise print the same clean summary as a run that verified every
+// case.
+int g_skipped = 0;
+
 void checkTextClearsTheEdge(const char* what, const Box& b, float left, float right,
                             float clear, float w) {
-    if (b.textVerts == 0) { return; }
+    if (b.textVerts == 0) {
+        ++g_skipped;
+        return;
+    }
     const bool ok = b.tx0 >= left + clear && b.tx1 <= right - clear;
     CHECK(ok);
     if (!ok) {
@@ -230,7 +260,10 @@ void checkTextClearsTheEdge(const char* what, const Box& b, float left, float ri
 
 void checkWholeWordDrawn(const char* what, const Box& roomy, const Box& tight,
                          float w, bool floorFits) {
-    if (!floorFits) { return; }  // truncation is the documented answer here
+    if (!floorFits) {
+        ++g_skipped;  // truncation is the documented answer here
+        return;
+    }
     const bool ok = tight.textVerts == roomy.textVerts && roomy.textVerts > 0;
     CHECK(ok);
     if (!ok) {
@@ -564,6 +597,194 @@ void testScopeDrawsAtEverySize() {
     CHECK(!none.bad);
 }
 
+// --- and what the face says in words -----------------------------------------
+
+// Bounds-safe row access, and the reason it is not written as a size guard
+// around the assertions. This harness's CHECK records and continues, so an
+// `if (rows.size() == 4) { ...assertions }` skips every assertion in exactly
+// the run that had something to report, while `rows[4]` after a failed CHECK
+// reads off the end and takes the process with it. An out-of-range index comes
+// back as a default row instead, whose empty label and empty value fail the
+// assertion that asked for it - loudly, at the line that cared.
+const cascade::gui::ScopeDetailLine& lineAt(
+    const std::vector<cascade::gui::ScopeDetailLine>& rows, std::size_t i) {
+    static const cascade::gui::ScopeDetailLine kMissing{};
+    return (i < rows.size()) ? rows[i] : kMissing;
+}
+
+// Written out so the assertions below read as the claim being made about a
+// readout rather than as string arithmetic.
+bool says(const std::string& text, const char* word) {
+    return text.find(word) != std::string::npos;
+}
+
+// THE REGISTRY ROWS MAY NOT REPORT AN ABSENT MODULE, because the flag they are
+// drawn from cannot see one. `infoActive` is TrackInfoCache::active(): a module
+// pointer AND a live instance handle, so it is equally false for a machine with
+// no track-info module, one whose module the user stopped, and one whose module
+// loaded and failed to give out an instance. The row lettered
+// "NO REGISTRY PLUGIN" in all three, which was true in one of them.
+//
+// RED WHEN the row goes back to naming a plugin, and red when any two of the
+// three states collapse into one string - which is the other way this gets
+// broken, by a well-meant simplification of a ternary that looks redundant.
+void testRegistryRowClaimsOnlyWhatIsKnown() {
+    cascade::gui::ScopeDetailInput in;
+    in.flight = "BAW123";
+    in.hasRx = true;
+    in.rangeNm = 42.5;
+    in.bearingDeg = 273.4;
+
+    // NOTHING IS LOOKING. All three registry rows carry the same word, and the
+    // labels are asserted rather than assumed so a row inserted above them
+    // fails here instead of quietly moving what the value checks read.
+    in.infoActive = false;
+    in.infoPending = false;
+    const std::vector<cascade::gui::ScopeDetailLine> idle =
+        cascade::gui::buildScopeDetailLines(in);
+    CHECK(lineAt(idle, 1).label == "OPERATOR");
+    CHECK(lineAt(idle, 2).label == "TYPE");
+    CHECK(lineAt(idle, 3).label == "REG");
+    const std::string silent = lineAt(idle, 1).value;
+    CHECK(silent == "NO LOOKUP RUNNING");
+    CHECK(lineAt(idle, 2).value == silent);
+    CHECK(lineAt(idle, 3).value == silent);
+    // None of these is a measurement, so none of them may be lettered as one.
+    CHECK(!lineAt(idle, 1).known);
+    CHECK(!lineAt(idle, 2).known);
+    CHECK(!lineAt(idle, 3).known);
+
+    // The claim the wording is not allowed to make, in each of the shapes it
+    // has worn or could wear again.
+    const char* const forbidden[] = {"PLUGIN", "INSTALL", "FITTED", "NO REGISTRY",
+                                     "NO MODULE"};
+    for (const char* word : forbidden) {
+        const bool claimed = says(silent, word);
+        CHECK(!claimed);
+        if (claimed) {
+            std::printf("      the registry row reads \"%s\" - it says \"%s\" about a "
+                        "module it can only see the INSTANCE of\n",
+                        silent.c_str(), word);
+        }
+    }
+
+    // ASKED, NOTHING BACK YET.
+    in.infoActive = true;
+    in.infoPending = true;
+    const std::vector<cascade::gui::ScopeDetailLine> pending =
+        cascade::gui::buildScopeDetailLines(in);
+    const std::string looking = lineAt(pending, 1).value;
+    CHECK(looking == "LOOKING UP");
+    CHECK(!lineAt(pending, 1).known);
+
+    // ANSWERED, AND THE ANSWER WAS "NOT IN MY DATA".
+    in.infoPending = false;
+    const std::vector<cascade::gui::ScopeDetailLine> answered =
+        cascade::gui::buildScopeDetailLines(in);
+    const std::string empty = lineAt(answered, 1).value;
+    CHECK(empty == "NO DATA");
+    CHECK(!lineAt(answered, 1).known);
+
+    // Three facts, three words. Pairwise, because a collapse of any one pair is
+    // the failure and checking only that the set is non-empty would miss two of
+    // the three ways it can happen.
+    CHECK(silent != looking);
+    CHECK(silent != empty);
+    CHECK(looking != empty);
+
+    // AND THE WORKING PATH IS UNTOUCHED: a source that answered with an entry
+    // still fills the rows, bright, with what it said.
+    in.operatorName = "British Airways";
+    in.typeName = "Airbus A320";
+    in.registration = "G-EUUU";
+    const std::vector<cascade::gui::ScopeDetailLine> known =
+        cascade::gui::buildScopeDetailLines(in);
+    CHECK(lineAt(known, 1).value == "British Airways");
+    CHECK(lineAt(known, 1).known);
+    CHECK(lineAt(known, 2).value == "Airbus A320");
+    CHECK(lineAt(known, 3).value == "G-EUUU");
+}
+
+// TWO COUNTERS, TWO NUMBERS, AND THEY MAY NOT SHARE A WORD. The odometer drum
+// on the maker's plate is captioned TRACKS and counts every aircraft the host
+// holds - no age test, no range test, no filter - while the readout in the
+// corner of the tube counts the silhouettes actually drawn. Both said TRACKS,
+// so the plate and the glass printed different figures under one caption and
+// nothing on the instrument said which question either was answering.
+//
+// The drum captions are the ones this file already draws drums with, above.
+// RED WHEN the corner readout is put back to the plate's word.
+void testCornerCountDoesNotWearThePlateCaption() {
+    const std::string corner = cascade::gui::scopeTracksReadout(4);
+    CHECK(corner == "4 PLOTTED");
+    const char* const drumCaptions[] = {"SET RANGE NM", "TGT RANGE NM", "TRACKS"};
+    for (const char* caption : drumCaptions) {
+        const bool clash = says(corner, caption);
+        CHECK(!clash);
+        if (clash) {
+            std::printf("      the corner readout \"%s\" wears the drum caption "
+                        "\"%s\" - one word over two different counts\n",
+                        corner.c_str(), caption);
+        }
+    }
+    // AND THE FIELD KEEPS ITS SHAPE. A legend on an instrument face does not
+    // conjugate as the last aircraft leaves, and a negative count - which the
+    // draw loop cannot produce - is floored rather than printed.
+    CHECK(cascade::gui::scopeTracksReadout(0) == "0 PLOTTED");
+    CHECK(cascade::gui::scopeTracksReadout(1) == "1 PLOTTED");
+    CHECK(cascade::gui::scopeTracksReadout(12) == "12 PLOTTED");
+    CHECK(cascade::gui::scopeTracksReadout(-4) == "0 PLOTTED");
+}
+
+// AND THE FIGURE THE TWO NEW CAPTIONS NAME IS THE GATED ONE. Both the corner
+// readout and the panel's big count print plottedCount(), which is incremented
+// only after the kind test and the range test, so it is the number of marks on
+// the glass and not the number of aircraft the host is holding. That is the
+// whole reason the captions had to change rather than the numbers, and it is
+// the property that makes the new wording true.
+//
+// Ranges from one place, so the arithmetic is a latitude difference and needs
+// no trigonometry to state: one degree of latitude is 60 nautical miles, so the
+// three aircraft below sit at about 3, 120 and 600 NM from the receiver.
+//
+// RED WHEN the range gate leaves the draw loop, and red when the kind gate
+// does - a vessel parked on the receiver's own coordinates is inside every
+// range on the ladder and must still never be counted.
+void testPlottedCountIsTheGatedFigure() {
+    std::vector<cascade::core::HostTrack> tracks;
+    tracks.push_back(makeAircraft("406A1B", "BAW117", 51.55, -0.12, 10600.0));
+    tracks.push_back(makeAircraft("4CA2D4", "EZY42", 53.50, -0.12, 9500.0));
+    tracks.push_back(makeAircraft("3C6444", "DLH8AK", 61.50, -0.12, 11000.0));
+    cascade::core::HostTrack ship = makeAircraft("2320811", "SEAWAY", 51.50, -0.12, 0.0);
+    ship.t.kind = CASCADE_TRACK_VESSEL;
+    tracks.push_back(ship);
+    // The guard against a vacuous pass: every count below is a count OF this
+    // vector, and an empty one would satisfy the gates without exercising them.
+    CHECK(tracks.size() == 4u);
+
+    // Range on the ladder, and how many of the four belong on the face at it.
+    const int expected[][2] = {{10, 1}, {200, 2}, {800, 3}};
+    for (const auto& step : expected) {
+        cascade::gui::ScopeView view;
+        view.setReceiver(51.5, -0.12);
+        view.setRangeNm(step[0]);
+        CHECK(view.rangeNm() == step[0]);  // a ladder value, so nothing snapped
+        const Box b = drawOne([&](ImDrawList*) {
+            ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
+            view.draw(900.0f, 600.0f, tracks, nullptr, nullptr);
+        });
+        CHECK(!b.bad);
+        const bool ok = view.plottedCount() == step[1];
+        CHECK(ok);
+        if (!ok) {
+            std::printf("      at %d NM the face plotted %d of 4 tracks, expected %d - "
+                        "the count the panel heads \"CONTACTS PLOTTED\" is no longer "
+                        "the gated one\n",
+                        step[0], view.plottedCount(), step[1]);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -593,7 +814,14 @@ int main() {
     testGaugeDoesNotMoveWithTheAmbientFace();
     testMeterDrawsAtTheHeightTheBarAsksFor();
     testScopeDrawsAtEverySize();
+    testRegistryRowClaimsOnlyWhatIsKnown();
+    testCornerCountDoesNotWearThePlateCaption();
+    testPlottedCountIsTheGatedFigure();
 
     ImGui::DestroyContext();
+    // The skips, out loud. A clean summary over a run that declined every check
+    // it was asked to make would be the same summary as a run that made them
+    // all, and this is the only line separating the two.
+    std::printf("test_scope_face: %d checks stood down (nothing to check)\n", g_skipped);
     return testSummary("test_scope_face");
 }

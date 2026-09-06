@@ -53,6 +53,34 @@ double greatCircleKm(double lat1Deg, double lon1Deg, double lat2Deg, double lon2
 // and "000 deg" is a fabricated fact that a user would read as north.
 double initialBearingDeg(double lat1Deg, double lon1Deg, double lat2Deg, double lon2Deg);
 
+// THE STRAIGHT-LINE DISTANCE TO SOMETHING ABOVE THE GROUND: from a receiver on
+// the surface to a target `altM` metres up whose GROUND distance from the
+// receiver - greatCircleKm's answer - is `groundKm`. Metres in for the
+// altitude, kilometres inside and out, exactly as orbitBandIndex does, because
+// the ABI says altM is metres for every track kind and the conversion belongs
+// in one place rather than at each call site.
+//
+// WHY IT EXISTS. greatCircleKm measures ALONG THE GROUND, which for an
+// aeroplane is the range anyone means and for a satellite is not: the ISS 421
+// km up and nearly overhead is 6.6 km away by great circle, and 6.6 km is the
+// distance to the point on the ground UNDERNEATH it. The detail block printed
+// exactly that, called it "range", and said nothing about the 421 km.
+//
+// AND WHY IT IS NOT PYTHAGORAS. sqrt(ground^2 + alt^2) treats the ground
+// distance as a straight line with the altitude at right angles to it - the
+// same flat-earth step destinationPoint exists to avoid. It is tens of metres
+// out for an aeroplane and 59 km out for the ISS low on the horizon (2240 km
+// against the true 2299 km, at 421 km up and 2200 km of ground distance). What
+// is computed instead is the triangle whose apex is the centre of the earth,
+// on the SAME 6371 km sphere greatCircleKm measures on, so the two numbers can
+// be printed side by side without contradicting each other.
+//
+// AN UNKNOWN ALTITUDE GIVES NaN BACK, rather than the ground distance. NaN is
+// what the ABI reports for an altitude a source does not send, the slant range
+// is then genuinely unknown, and quietly answering with the ground distance
+// would be the very confusion this function exists to end.
+double slantRangeKm(double groundKm, double altM);
+
 // A place on the sphere.
 struct LatLon {
     double latDeg;
@@ -401,6 +429,20 @@ struct TrackDetailLine {
     bool heading = false;
 };
 
+// WHAT A TARGET IS, in this header's own vocabulary rather than the ABI's.
+// The numbers a plugin reports are CASCADE_TRACK_* in plugin_abi.h and this
+// header is deliberately free of that file - see the file comment - so the
+// caller translates, exactly as it already does to pick between the two
+// altitude ladders above.
+//
+// FOUR NAMES, ONE BEHAVIOUR TODAY. Only Satellite changes what the detail
+// block says: a vessel reports its speed in knots and an APRS station its
+// altitude in feet, so both read correctly on the aviation units the block has
+// always used. The other names exist so that a caller can state what it
+// actually has instead of defaulting to Aircraft for a ship - which is what
+// makes the default below safe rather than a hidden claim.
+enum class TrackKind { Aircraft, Satellite, Vessel, Other };
+
 // Everything the block can say about one target, already extracted from the
 // host's track and from the track-info cache. A struct rather than fourteen
 // parameters, and plain values rather than pointers into either, so the
@@ -410,6 +452,10 @@ struct TrackDetailInput {
     std::string label;   // callsign where one is decoded, id otherwise
     std::string id;
     std::string source;  // the plugin that reported it
+    // What the target IS, so a satellite is not described in aeroplane
+    // units. Defaults to Aircraft because that is what every existing
+    // caller meant before this field existed.
+    TrackKind kind = TrackKind::Aircraft;
     double latDeg = 0.0;
     double lonDeg = 0.0;
     // NaN means the source does not know, exactly as the ABI says.
@@ -508,6 +554,32 @@ inline double initialBearingDeg(double lat1Deg, double lon1Deg, double lat2Deg,
     if (b < 0.0) { b += 360.0; }
     if (b >= 360.0) { b -= 360.0; }
     return b;
+}
+
+inline double slantRangeKm(double groundKm, double altM) {
+    // Refused at the door rather than propagated: a NaN altitude is the ABI's
+    // "the source does not report this", and an infinity is what a broken
+    // plugin can send. Either way there is no slant range to state.
+    if (!std::isfinite(groundKm) || !std::isfinite(altM)) { return detail::nan(); }
+    const double r = detail::kEarthRadiusKm;
+    const double h = r + altM / 1000.0;  // metres in, kilometres inside
+    // The ground distance re-entered as the ANGLE it subtends at the centre of
+    // the earth, which is the one thing both sides of the triangle are measured
+    // against.
+    const double theta = groundKm / r;
+    // The law of cosines, rearranged the way haversine rearranges its own: the
+    // literal r^2 + h^2 - 2rh*cos(theta) is a difference of two numbers near
+    // 8.1e7 whose answer for an aircraft is near zero, so it loses most of its
+    // significant figures exactly where the altitude is small. This form is the
+    // same quantity written as a sum of two non-negative terms - (h-r)^2 is the
+    // height, 4rh*sin^2(theta/2) is the ground - and cancels nothing.
+    const double s = std::sin(theta * 0.5);
+    double d2 = (h - r) * (h - r) + 4.0 * r * h * s * s;
+    // A sum of squares cannot be negative, but 4rh can be if a plugin reports
+    // an altitude below the centre of the earth. Clamped rather than handed to
+    // sqrt, on the same terms as greatCircleKm's own clamp.
+    if (d2 < 0.0) { d2 = 0.0; }
+    return std::sqrt(d2);
 }
 
 inline LatLon destinationPoint(double latDeg, double lonDeg, double bearingDeg, double km) {
@@ -889,6 +961,16 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     std::vector<TrackDetailLine> out;
     out.reserve(16);
 
+    // WHETHER THIS IS DESCRIBED IN AEROPLANE UNITS, asked once. Three lines
+    // below - the altitude, the speed and the range - are in different units
+    // for something in orbit, and asking the question separately at each of
+    // them is how two of the three come to disagree. What used to happen with
+    // no question asked at all is on the record: the ISS printed
+    // "alt 421000 m (1381234 ft, > 30 kft)" and "14890 kt" - the right numbers
+    // in units nothing in orbit is measured in, under a band whose boundary is
+    // 9 km for something 421 km up.
+    const bool orbital = (in.kind == TrackKind::Satellite);
+
     TrackDetailLine head;
     head.text = in.label;
     head.heading = true;
@@ -941,18 +1023,38 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     if (!std::isnan(in.altM)) {
         // The band is NAMED as well as measured, so the colour on the map and
         // the figure here can be tied together without counting swatches in
-        // the legend.
-        out.push_back({detail::detailPrintf("alt     %.0f m (%.0f ft, %s)", in.altM,
-                                            in.altM * 3.28084,
-                                            altBandStyle(altitudeBandIndex(in.altM)).label),
-                       true, false, false});
+        // the legend. Which ladder names it follows the target, for the reason
+        // the orbital ladder exists at all: "> 30 kft" under a satellite is
+        // not merely the wrong band, it is the wrong QUANTITY.
+        if (orbital) {
+            out.push_back(
+                {detail::detailPrintf("alt     %.0f m (%.0f km, %s)", in.altM,
+                                      in.altM / 1000.0,
+                                      orbitBandStyle(orbitBandIndex(in.altM)).label),
+                 true, false, false});
+        } else {
+            out.push_back({detail::detailPrintf("alt     %.0f m (%.0f ft, %s)", in.altM,
+                                                in.altM * 3.28084,
+                                                altBandStyle(altitudeBandIndex(in.altM)).label),
+                           true, false, false});
+        }
     } else {
         out.push_back({"alt     unknown", false, false, false});
     }
 
     if (!std::isnan(in.speedMps)) {
-        out.push_back({detail::detailPrintf("speed   %.0f kt", in.speedMps * 1.94384), true,
-                       false, false});
+        // KILOMETRES A SECOND FOR AN ORBITAL SPEED, which is what every source
+        // on the subject prints and the unit the satellite card beside this
+        // block already uses. 7660 m/s reads as 14890 kt in knots - a figure
+        // that is correct, that nobody recognises, and that sits in the same
+        // column as an airliner's 370.
+        if (orbital) {
+            out.push_back({detail::detailPrintf("speed   %.2f km/s", in.speedMps / 1000.0),
+                           true, false, false});
+        } else {
+            out.push_back({detail::detailPrintf("speed   %.0f kt", in.speedMps * 1.94384),
+                           true, false, false});
+        }
     } else {
         out.push_back({"speed   unknown", false, false, false});
     }
@@ -967,19 +1069,53 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     // RANGE AND BEARING SURVIVED THE COLUMNS BEING CUT, and this is where they
     // live now: the list has no room for them, so every place that shows a
     // target in detail shows them.
+    //
+    // AND WHAT "RANGE" MEANS DEPENDS ON WHAT THE TARGET IS. greatCircleKm
+    // measures ALONG THE GROUND by its own declaration. For an aeroplane that
+    // IS the range anyone means - it is what the list's distance sort and the
+    // coverage ring both record, and at 7.8 km up and 111 km out the slant
+    // range differs from it by three parts in a thousand, far below what a
+    // receiver position typed into a text box is known to - so that line is
+    // unchanged, word for word.
+    //
+    // FOR A SATELLITE IT IS NOT A DETAIL. The ISS 421 km up and nearly
+    // overhead printed "range 6.6 km", which is the distance to the point on
+    // the ground under it and not the distance to the thing. Both figures are
+    // worth having and neither substitutes for the other - the slant range is
+    // what a link budget is computed from, the ground distance is what says how
+    // near overhead it is - so an orbital target prints both, each named as
+    // what it is.
     if (in.hasHome) {
         const double km =
             greatCircleKm(in.homeLatDeg, in.homeLonDeg, in.latDeg, in.lonDeg);
         const double brg =
             initialBearingDeg(in.homeLatDeg, in.homeLonDeg, in.latDeg, in.lonDeg);
         // A target at the receiver's own coordinates has no bearing from it,
-        // and printing "nan deg" would be worse than saying so.
-        if (std::isnan(brg)) {
-            out.push_back({detail::detailPrintf("range   %.1f km, bearing undefined", km),
-                           true, false, false});
+        // and printing "nan deg" would be worse than saying so. Built once as
+        // a suffix because whichever line carries the bearing carries it the
+        // same way.
+        const std::string dir = std::isnan(brg)
+                                    ? std::string(", bearing undefined")
+                                    : detail::detailPrintf(" at %.0f deg", brg);
+        if (orbital) {
+            const double slantKm = slantRangeKm(km, in.altM);
+            if (std::isfinite(slantKm)) {
+                out.push_back({detail::detailPrintf("range   %.1f km slant%s", slantKm,
+                                                    dir.c_str()),
+                               true, false, false});
+                out.push_back({detail::detailPrintf("ground  %.1f km to sub-point", km),
+                               true, false, false});
+            } else {
+                // An orbital target whose altitude the source did not report.
+                // There is no slant range to state, so the one distance there
+                // is says what it is rather than borrowing the word "range"
+                // and leaving a reader to assume the height is in it.
+                out.push_back({detail::detailPrintf("ground  %.1f km%s", km, dir.c_str()),
+                               true, false, false});
+            }
         } else {
-            out.push_back({detail::detailPrintf("range   %.1f km at %.0f deg", km, brg),
-                           true, false, false});
+            out.push_back({detail::detailPrintf("range   %.1f km%s", km, dir.c_str()), true,
+                           false, false});
         }
     }
 

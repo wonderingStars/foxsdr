@@ -205,8 +205,15 @@ struct AppConfig {
     // railBank   which of the FUNCTION SELECT rail's five banks was showing -
     //            SIGNAL PATH, DECODE, VIEW, EXTEND, SYSTEM, as 0..4 in that
     //            order (gui/rail_banks.hpp owns the list). Restored so the
-    //            rail opens where it was left, exactly as a section's own
-    //            open/closed state does; CLAMPED ON LOAD to a bank that exists,
+    //            rail opens where it was left. It is the ONLY part of the
+    //            rail's state that survives a launch, and the comment here
+    //            used to say it worked "exactly as a section's own
+    //            open/closed state does" - which was never true: the layout is
+    //            code-driven and ImGui's own ini file is disabled outright
+    //            (ImGui::GetIO().IniFilename = nullptr, gui/app_window.cpp),
+    //            so a section that was open when the application closed opens
+    //            at its coded default next time. CLAMPED ON LOAD to a bank
+    //            that exists,
     //            so a hand-edited 7 opens on the last bank rather than on
     //            nothing. 0 is the default: the signal path is where a new
     //            installation has to start.

@@ -24,6 +24,16 @@ std::string rateSentence(const std::string& name, double want, double have,
     return std::string(buf);
 }
 
+// Said in the same voice as the create() failure above, and deliberately
+// says what the user can do about it: the two things that build a fresh
+// instance are stopping and starting the module, and scanning again.
+std::string failureSentence(const std::string& name) {
+    return "\"" + name +
+           "\" has failed and stopped decoding (it reported a permanent error), so it "
+           "is being fed nothing further. Stop and start it, or scan again, to try it "
+           "once more.";
+}
+
 }  // namespace
 
 PluginRunner::~PluginRunner() { clear(); }
@@ -101,6 +111,10 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     inst.api = lp.decoder;
                     inst.handle = h;
                     inst.name = lp.name;
+                    // The row pushed immediately below, taken BEFORE the push
+                    // so the instance can rewrite its own reason later if the
+                    // decoder gives up mid-run.
+                    inst.statusIndex = status_.size();
                     instances_.push_back(std::move(inst));
                     DecoderStatus st;
                     st.plugin = lp.name;
@@ -138,6 +152,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     inst.api = lp.iqDecoder;
                     inst.handle = h;
                     inst.name = lp.name;
+                    inst.statusIndex = status_.size();
                     iqInstances_.push_back(std::move(inst));
                     DecoderStatus st;
                     st.plugin = lp.name;
@@ -185,6 +200,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     inst.handle = h;
                     inst.name = lp.name;
                     inst.inputKind = isIq ? CASCADE_INPUT_IQ : CASCADE_INPUT_AUDIO;
+                    inst.statusIndex = status_.size();
                     imageInstances_.push_back(std::move(inst));
                     if (isIq) { ++iqImageCount_; } else { ++audioImageCount_; }
                     st.reason = DecoderIdleReason::Running;
@@ -231,13 +247,20 @@ void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
     if (interleaved == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
     if (iqInstances_.empty() && iqImageCount_ == 0) { return; }
-    iqFed_ += frames;
+    // Same two rules as processAudio: a permanently failed instance is fed
+    // nothing, and the count only moves when something was actually fed.
+    bool fedAny = false;
     for (IqInstance& i : iqInstances_) {
+        if (i.failed) { continue; }
         i.api->process(i.handle, interleaved, frames);
+        fedAny = true;
     }
     for (ImageInstance& i : imageInstances_) {
-        if (i.inputKind == CASCADE_INPUT_IQ) { i.api->process(i.handle, interleaved, frames); }
+        if (i.failed || i.inputKind != CASCADE_INPUT_IQ) { continue; }
+        i.api->process(i.handle, interleaved, frames);
+        fedAny = true;
     }
+    if (fedAny) { iqFed_ += frames; }
     pollIqLocked();
     pollImageTextLocked(CASCADE_INPUT_IQ);
 }
@@ -291,13 +314,23 @@ void PluginRunner::processAudio(const float* mono, std::size_t frames) {
     if (mono == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
     if (instances_.empty() && audioImageCount_ == 0) { return; }
-    audioFed_ += frames;
+    // NOTHING IS HANDED TO AN INSTANCE THAT HAS FAILED PERMANENTLY, and the
+    // frame count is only raised if something actually took the samples. The
+    // count exists to separate "it was never fed" from "it was fed and found
+    // nothing", so a number that climbed while every decoder was dead would
+    // answer that question with the wrong one of the two.
+    bool fedAny = false;
     for (Instance& i : instances_) {
+        if (i.failed) { continue; }
         i.api->process(i.handle, mono, frames);
+        fedAny = true;
     }
     for (ImageInstance& i : imageInstances_) {
-        if (i.inputKind == CASCADE_INPUT_AUDIO) { i.api->process(i.handle, mono, frames); }
+        if (i.failed || i.inputKind != CASCADE_INPUT_AUDIO) { continue; }
+        i.api->process(i.handle, mono, frames);
+        fedAny = true;
     }
+    if (fedAny) { audioFed_ += frames; }
     pollLocked();
     pollImageTextLocked(CASCADE_INPUT_AUDIO);
 }
@@ -327,12 +360,46 @@ void PluginRunner::absorbLocked(const std::string& name, std::string& partial,
     while (pending_.size() > kMaxPendingLines) { pending_.pop_front(); }
 }
 
+void PluginRunner::failLocked(std::size_t statusIndex, const std::string& name) {
+    const std::string sentence = failureSentence(name);
+
+    // The row this instance was created with. The index cannot go stale -
+    // status_ is only ever emptied together with the instance vectors - but it
+    // is bounds-checked anyway, because the cost of the check is nothing and
+    // the cost of being wrong is a failure sentence written into a different
+    // module's row, blaming a plugin that is working perfectly well.
+    if (statusIndex < status_.size()) {
+        status_[statusIndex].reason = DecoderIdleReason::PollFailed;
+        status_[statusIndex].detail = sentence;
+    }
+
+    // AND SAID OUT LOUD, ONCE, in the decoder log - the same place the
+    // decoder's own text goes, for the same reason image decoders report
+    // their progress there: a failure that only tints a chip on a panel is a
+    // failure nobody reads. This allocates on the real-time path, which is the
+    // trade absorbLocked already makes for every decoded line, and here it is
+    // paid exactly once per instance rather than once per line.
+    pending_.push_back({name, sentence});
+    while (pending_.size() > kMaxPendingLines) { pending_.pop_front(); }
+}
+
 void PluginRunner::pollLocked() {
     for (Instance& i : instances_) {
+        // A DECODER THAT HAS FAILED PERMANENTLY IS NEVER ASKED AGAIN. The
+        // negative return below is the ABI saying so, and this loop used to
+        // read it as "nothing pending" - which left the runner polling and
+        // feeding a dead instance for the rest of the session while every
+        // panel went on describing it as decoding.
+        if (i.failed) { continue; }
         for (;;) {
             const int32_t n =
                 i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
-            if (n <= 0) { break; }  // 0 = nothing pending, <0 = failed for good
+            if (n < 0) {  // failed for good
+                i.failed = true;
+                failLocked(i.statusIndex, i.name);
+                break;
+            }
+            if (n == 0) { break; }  // nothing pending, the ordinary case
             const std::size_t got =
                 std::min(static_cast<std::size_t>(n), pollBuf_.size());
             absorbLocked(i.name, i.partial, pollBuf_.data(), got);
@@ -342,10 +409,17 @@ void PluginRunner::pollLocked() {
 
 void PluginRunner::pollIqLocked() {
     for (IqInstance& i : iqInstances_) {
+        // Same rule as pollLocked: negative is permanent failure, not silence.
+        if (i.failed) { continue; }
         for (;;) {
             const int32_t n =
                 i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
-            if (n <= 0) { break; }
+            if (n < 0) {
+                i.failed = true;
+                failLocked(i.statusIndex, i.name);
+                break;
+            }
+            if (n == 0) { break; }
             const std::size_t got =
                 std::min(static_cast<std::size_t>(n), pollBuf_.size());
             absorbLocked(i.name, i.partial, pollBuf_.data(), got);
@@ -355,11 +429,19 @@ void PluginRunner::pollIqLocked() {
 
 void PluginRunner::pollImageTextLocked(std::uint32_t inputKind) {
     for (ImageInstance& i : imageInstances_) {
-        if (i.inputKind != inputKind) { continue; }
+        // Same rule again, and it stops the pictures as well as the text: the
+        // flag is one per instance because a permanent failure is a property
+        // of the decoder, not of the call that happened to report it.
+        if (i.failed || i.inputKind != inputKind) { continue; }
         for (;;) {
             const int32_t n =
                 i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
-            if (n <= 0) { break; }
+            if (n < 0) {
+                i.failed = true;
+                failLocked(i.statusIndex, i.name);
+                break;
+            }
+            if (n == 0) { break; }
             const std::size_t got =
                 std::min(static_cast<std::size_t>(n), pollBuf_.size());
             absorbLocked(i.name, i.partial, pollBuf_.data(), got);
@@ -388,10 +470,26 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
 
     for (std::size_t i = 0; i < imageInstances_.size(); ++i) {
         ImageInstance& ii = imageInstances_[i];
+        // A decoder that has failed permanently is not polled again. Its entry
+        // in `out` is left exactly as it stands, because half a weather image
+        // is still the last thing that decoder saw and throwing it away would
+        // punish the user for the plugin's fault.
+        if (ii.failed) { continue; }
         CascadeImage img{};
         img.structSize = static_cast<std::uint32_t>(sizeof(CascadeImage));
         const std::int32_t got = ii.api->poll_image(ii.handle, &img);
-        if (got <= 0) { continue; }
+        if (got < 0) {
+            // NEGATIVE IS NOT "NO PICTURE YET". The ABI defines it as the
+            // decoder having failed permanently, and this line used to fold it
+            // in with 0 - so the row said WAIT for ever, nothing reached the
+            // log, and the runner went on handing samples to a decoder that
+            // had given up. No borrow is taken on a negative return, so there
+            // is nothing to release here.
+            ii.failed = true;
+            failLocked(ii.statusIndex, ii.name);
+            continue;
+        }
+        if (got == 0) { continue; }  // nothing new; the last picture stands
 
         // Validate before believing any of it. These are third-party numbers
         // and they are about to size an allocation and bound a read.
@@ -456,7 +554,22 @@ std::size_t PluginRunner::iqFramesFed() const {
 
 std::size_t PluginRunner::activeCount() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return instances_.size() + iqInstances_.size() + imageInstances_.size();
+    // INSTANCES STILL BEING FED, which is what the header promises. One that
+    // reported permanent failure is kept only so its handle can be destroyed
+    // in the right order; counting it would keep "DECODING" on the waterfall
+    // and keep the decoder output button on the rail for a decoder that has
+    // stopped, which is the same lie in a second place.
+    std::size_t n = 0;
+    for (const Instance& i : instances_) {
+        if (!i.failed) { ++n; }
+    }
+    for (const IqInstance& i : iqInstances_) {
+        if (!i.failed) { ++n; }
+    }
+    for (const ImageInstance& i : imageInstances_) {
+        if (!i.failed) { ++n; }
+    }
+    return n;
 }
 
 }  // namespace cascade::core

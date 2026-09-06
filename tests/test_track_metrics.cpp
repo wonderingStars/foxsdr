@@ -1,7 +1,8 @@
 // Tests for gui/track_metrics.hpp - the pure half of the map's three
 // receiver-relative features: the great-circle range and bearing behind the
-// track table's DISTANCE and BEARING columns, the altitude band that decides a
-// marker's colour, and the per-bearing coverage accumulator.
+// track table's DISTANCE and BEARING columns (and the slant range, which for
+// anything in orbit is a different number entirely), the altitude band that
+// decides a marker's colour, and the per-bearing coverage accumulator.
 //
 // WHY THE GEODESY IS CHECKED TWO WAYS. The axis-aligned pairs (due north, due
 // east on the equator, across the antimeridian) have analytic answers - the
@@ -190,6 +191,7 @@ std::pair<double, double> destVectorForm(double latDeg, double lonDeg, double be
 using cascade::gui::buildTrackDetailLines;
 using cascade::gui::TrackDetailInput;
 using cascade::gui::TrackDetailLine;
+using cascade::gui::TrackKind;
 
 std::vector<std::string> detailTexts(const std::vector<TrackDetailLine>& lines) {
     std::vector<std::string> out;
@@ -246,6 +248,33 @@ TrackDetailInput exampleAircraft() {
     in.typeName = "737NG 8K5/W";
     in.operatorName = "Jet2";
     in.country = "United Kingdom";
+    return in;
+}
+
+// THE ISS AS A SATELLITE PLUGIN REPORTS IT, which is the case every unit in
+// the block above is wrong for. Placed one degree of longitude east of a
+// receiver on the equator so that the ground distance is analytic - 6371 km
+// times pi/180 - and the slant range is the one figure that needs geometry the
+// aeroplane never did.
+//
+// NO TRACK-INFO PLUGIN, on purpose: a registry of aircraft registrations has
+// nothing to say about a spacecraft, so the block is the radio half only.
+TrackDetailInput exampleSatellite() {
+    TrackDetailInput in;
+    in.label = "ISS (ZARYA)";
+    in.id = "25544";
+    in.source = "Satellites";
+    in.kind = TrackKind::Satellite;
+    in.latDeg = 0.0;
+    in.lonDeg = 1.0;
+    // 421 km up and 7.66 km/s along, which is where the station actually is.
+    in.altM = 421000.0;
+    in.speedMps = 7660.0;
+    in.courseDeg = 92.0;
+    in.ageMs = 2500u;
+    in.hasHome = true;
+    in.homeLatDeg = 0.0;
+    in.homeLonDeg = 0.0;
     return in;
 }
 
@@ -423,6 +452,121 @@ void testTrackDetailLines() {
         CHECK(!detailHasPrefix(lines, "range   0.0 km at"));
     }
 
+    // --- A SATELLITE IS NOT DESCRIBED IN AEROPLANE UNITS ---------------------
+    //
+    // WHAT THIS BLOCK IS FOR. The block had no idea what it was describing, so
+    // the ISS came out of it in feet, knots and a great-circle distance:
+    // "alt 421000 m (1381234 ft, > 30 kft)", "14890 kt", and a "range" that is
+    // the distance to the point on the ground UNDER the station rather than to
+    // the station. Three correct numbers, not one of them the quantity a reader
+    // takes it for.
+    //
+    // THE STATION IS ONE DEGREE EAST HERE, not overhead, so the ground distance
+    // is a figure - 111.2 km - rather than the zero that several wrong
+    // implementations would also produce. Every line is asserted WHOLE, and the
+    // exact lines that shipped are asserted ABSENT: a block that emitted both
+    // would pass a presence check.
+    {
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(exampleSatellite());
+        const std::vector<std::string> want = {
+            "ISS (ZARYA)",
+            "id      25544",
+            "from    Satellites",
+            "pos     0.00000, 1.00000",
+            // Kilometres and the ORBITAL ladder's own band, not feet and a band
+            // whose boundary is 9 km for something 421 km up.
+            "alt     421000 m (421 km, < 500 km)",
+            "speed   7.66 km/s",
+            "course  92 deg",
+            // 111.2 km along the ground and 436.4 km to the station itself, and
+            // the second is the one the word "range" now names. Both figures
+            // come from the same pair of coordinates, so a wrong geometry
+            // cannot satisfy both.
+            "range   436.4 km slant at 90 deg",
+            "ground  111.2 km to sub-point",
+            "age     2.5 s",
+        };
+        CHECK(detailTexts(lines) == want);
+
+        // THE EXACT LINES THAT SHIPPED, asserted absent by name. Checking only
+        // that the new ones are present would pass a block that emitted both.
+        CHECK(!detailHasText(lines, "alt     421000 m (1381234 ft, > 30 kft)"));
+        CHECK(!detailHasText(lines, "speed   14890 kt"));
+        CHECK(!detailHasText(lines, "range   111.2 km at 90 deg"));
+
+        // AND NO AVIATION UNIT ANYWHERE IN IT, stated over every line rather
+        // than over the three that were noticed.
+        for (const std::string& t : detailTexts(lines)) {
+            CHECK(t.find(" kt") == std::string::npos);
+            CHECK(t.find(" ft") == std::string::npos);
+            CHECK(t.find("kft") == std::string::npos);
+        }
+
+        // One rule, under the heading: an aircraft registry has nothing to say
+        // about a spacecraft, so there is no registry block and no rule under
+        // one that emitted nothing.
+        CHECK(detailSeparatorCount(lines) == 1u);
+    }
+    {
+        // AN ORBITAL TARGET WHOSE SOURCE SENT NO ALTITUDE. There is no slant
+        // range to compute, so the one distance there is says what it is
+        // instead of borrowing the word "range" and letting a reader assume the
+        // height is in it.
+        TrackDetailInput in = exampleSatellite();
+        in.altM = kNaN;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(detailHasText(lines, "alt     unknown"));
+        CHECK(detailHasText(lines, "ground  111.2 km at 90 deg"));
+        CHECK(!detailHasPrefix(lines, "range"));
+        CHECK(!detailHasText(lines, "ground  111.2 km to sub-point"));
+    }
+    {
+        // DIRECTLY OVERHEAD: the slant range is exactly the altitude, the
+        // ground distance is zero, and there is no bearing to a target on top
+        // of the receiver - the same rule the aeroplane case above states,
+        // reaching the slant line rather than the ground one.
+        TrackDetailInput in = exampleSatellite();
+        in.lonDeg = 0.0;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(detailHasText(lines, "range   421.0 km slant, bearing undefined"));
+        CHECK(detailHasText(lines, "ground  0.0 km to sub-point"));
+        CHECK(!detailHasPrefix(lines, "range   0.0 km"));
+    }
+    {
+        // NO RECEIVER POSITION: neither line, for the reason the aeroplane case
+        // gives - a distance from nowhere is a distance from the Gulf of
+        // Guinea.
+        TrackDetailInput in = exampleSatellite();
+        in.hasHome = false;
+        const std::vector<TrackDetailLine> lines = buildTrackDetailLines(in);
+        CHECK(!detailHasPrefix(lines, "range"));
+        CHECK(!detailHasPrefix(lines, "ground"));
+    }
+
+    // --- and every other kind is described exactly as it always was ----------
+    //
+    // THE DEFAULT IS THE AEROPLANE, which is what every caller that predates
+    // the field meant: a block built without saying what its target is must
+    // come out byte for byte as it did before the field existed. A vessel and
+    // an APRS station keep the same units too - both report their speed in
+    // knots and their altitude in feet - so the satellite is the ONE kind that
+    // reads differently, and that is asserted rather than assumed.
+    {
+        TrackDetailInput fresh;
+        CHECK(fresh.kind == TrackKind::Aircraft);
+
+        const std::vector<std::string> aviation =
+            detailTexts(buildTrackDetailLines(exampleAircraft()));
+        for (TrackKind k : {TrackKind::Aircraft, TrackKind::Vessel, TrackKind::Other}) {
+            TrackDetailInput in = exampleAircraft();
+            in.kind = k;
+            CHECK(detailTexts(buildTrackDetailLines(in)) == aviation);
+        }
+        TrackDetailInput sat = exampleAircraft();
+        sat.kind = TrackKind::Satellite;
+        CHECK(detailTexts(buildTrackDetailLines(sat)) != aviation);
+    }
+
     // --- a target with no callsign yet ---------------------------------------
     // An aircraft's ICAO address is known from its first frame and its callsign
     // arrives in a separate message, so the heading falls back to the id - the
@@ -551,6 +695,101 @@ int main() {
         CHECK(std::isnan(initialBearingDeg(51.5, -0.12, 51.5, -0.12)));
         CHECK(std::isnan(initialBearingDeg(-33.87, 151.21, -33.87, 151.21)));
         CHECK(std::isnan(initialBearingDeg(0.0, 0.0, 0.0, 0.0)));
+    }
+
+    // --- the slant range, which is not the ground distance -------------------
+    //
+    // WHAT THIS BLOCK IS FOR. greatCircleKm measures along the GROUND, and the
+    // detail block printed that number under the word "range" for everything.
+    // For an aeroplane the two agree to a third of a kilometre; for the ISS 421
+    // km up and one degree away they are 111 km and 436 km, and the 111 was
+    // what a user was shown. Every assertion below is against a DIFFERENT
+    // derivation of the same quantity or against a case whose answer is known
+    // without any formula at all - the implementation's own half-angle
+    // rearrangement is never used to check itself.
+    {
+        using cascade::gui::slantRangeKm;
+
+        // AN INDEPENDENT DISTANCE, exactly as lawOfCosinesKm is for the
+        // haversine: the plane triangle whose apex is the centre of the earth,
+        // written out as r^2 + h^2 - 2rh cos(theta) rather than as the sum of
+        // squares the implementation uses. The two are the same quantity by
+        // algebra and share no term as written, so a dropped factor or a
+        // swapped side in one cannot hide in the other.
+        const auto refSlantKm = [](double groundKm, double altM) {
+            const double h = kR + altM / 1000.0;
+            const double theta = groundKm / kR;
+            return std::sqrt(kR * kR + h * h - 2.0 * kR * h * std::cos(theta));
+        };
+
+        // DIRECTLY OVERHEAD, where the answer needs no geometry: the slant
+        // range IS the altitude. This is the case that would still pass if the
+        // ground term were dropped entirely, which is why it is not the only
+        // one here.
+        CHECK_NEAR(slantRangeKm(0.0, 421000.0), 421.0, 1e-9);
+        CHECK_NEAR(slantRangeKm(0.0, 11000.0), 11.0, 1e-9);
+        CHECK_NEAR(slantRangeKm(0.0, 0.0), 0.0, 1e-12);
+
+        // ON THE GROUND, where the answer is the CHORD of the arc - shorter
+        // than the arc itself, and the one property a "slant range" that
+        // secretly returned the ground distance could never satisfy.
+        for (double g : {10.0, 111.19492664455873, 1000.0, 5000.0}) {
+            const double chord = 2.0 * kR * std::sin(g / kR * 0.5);
+            CHECK_NEAR(slantRangeKm(g, 0.0), chord, 1e-9);
+            CHECK(slantRangeKm(g, 0.0) < g);
+        }
+
+        // THE ISS, one degree of longitude away on the equator and 421 km up.
+        // The ground distance is 111.2 km and the distance to the satellite is
+        // 436.4 km - the pair the detail block now prints, and the measurement
+        // of the defect it was written for.
+        {
+            const double ground = kKmPerDegree;
+            const double d = slantRangeKm(ground, 421.0e3);
+            CHECK_NEAR(d, refSlantKm(ground, 421.0e3), 1e-6);
+            CHECK_NEAR(d, 436.3737, 1e-3);
+            CHECK(d > 3.9 * ground);
+        }
+
+        // AND WHY IT IS NOT PYTHAGORAS, stated as a number. With the ISS low on
+        // the horizon - 2200 km of ground distance at 421 km up - treating the
+        // arc as a straight line answers 2240 km where the triangle answers
+        // 2299: 59 km of error on the figure a link budget is computed from.
+        {
+            const double ground = 2200.0;
+            const double d = slantRangeKm(ground, 421.0e3);
+            CHECK_NEAR(d, refSlantKm(ground, 421.0e3), 1e-6);
+            const double pythagoras = std::sqrt(ground * ground + 421.0 * 421.0);
+            CHECK(d - pythagoras > 50.0);
+            CHECK_NEAR(d, 2299.13, 0.01);
+        }
+
+        // THE WHOLE RANGE OF BOTH ARGUMENTS, against the independent formula:
+        // every altitude from a mast to geostationary, at every ground distance
+        // from overhead to the far side of the world.
+        for (double altKm : {0.0, 0.05, 7.85, 421.0, 861.0, 35786.0}) {
+            for (double g = 0.0; g <= 20000.0; g += 137.0) {
+                const double d = slantRangeKm(g, altKm * 1000.0);
+                CHECK_NEAR(d, refSlantKm(g, altKm * 1000.0), 1e-6);
+                // It is a distance: real, finite, non-negative, and never less
+                // than the height it has to climb.
+                CHECK(std::isfinite(d));
+                CHECK(d >= altKm - 1e-9);
+            }
+        }
+
+        // METRES IN, KILOMETRES OUT, the same contract orbitBandIndex has. An
+        // implementation that forgot the divide would answer 421000-odd km for
+        // the ISS, which is past the moon.
+        CHECK(slantRangeKm(0.0, 421.0e3) < 500.0);
+
+        // AN UNKNOWN ALTITUDE IS NaN OUT, not the ground distance. This is the
+        // assertion that stops the confusion coming back by another route: a
+        // caller that fell back to the ground figure here would print the
+        // distance to the sub-point under the word "slant".
+        CHECK(std::isnan(slantRangeKm(111.2, kNaN)));
+        CHECK(std::isnan(slantRangeKm(kNaN, 421.0e3)));
+        CHECK(std::isnan(slantRangeKm(111.2, std::numeric_limits<double>::infinity())));
     }
 
     // --- the direct problem: destinationPoint --------------------------------

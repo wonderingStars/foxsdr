@@ -504,12 +504,29 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
 
     // --- HOME: what the whole face is holding -------------------------------
     if (screen == 0) {
-        // HOME IS THE REGISTER: every aircraft the face is plotting, nearest
+        // HOME IS THE REGISTER: every aircraft currently being heard, nearest
         // first, with what is known about each. A screen of counts answers
         // "how many" and leaves "which ones" to hunting round the glass for a
         // silhouette small enough to miss - and on a busy sky that is the
         // question actually being asked.
-        textColoured(kPanelLabel, "CONTACTS IN RANGE");
+        //
+        // WHAT THE FIGURE COUNTS, WHICH IS NOT WHAT THE HEADING USED TO CLAIM.
+        // `plotted` is incremented in the draw loop AFTER the range test and
+        // AFTER the SYS filter, so it is the number of silhouettes on the
+        // glass. The register beneath it is filtered by kind and by
+        // presentation age and by nothing else, so it routinely lists more -
+        // and "CONTACTS IN RANGE" sat over the pair as though it headed both.
+        // A user who counted the rows against it found a receiver that could
+        // not add up, in the one place on this face where two numbers are
+        // printed together to be compared.
+        //
+        // THE NUMBER WAS KEPT AND THE HEADING MOVED. The figure at the top of a
+        // radar's panel has to be the one the picture beside it can be checked
+        // against - that is the whole reason the corner readout exists and this
+        // repeats it - so counting the register here instead would have put a
+        // number on the panel that no mark on the face agrees with. The
+        // register gets a caption of its own further down, saying what IT is.
+        textColoured(kPanelLabel, "CONTACTS PLOTTED");
         {
             char big[16];
             std::snprintf(big, sizeof(big), "%d", plotted);
@@ -520,8 +537,19 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             ImGui::PopStyleColor();
         }
         {
-            char sub[64];
-            std::snprintf(sub, sizeof(sub), "of %d tracked   %d NM", tracked, rangeNm);
+            // AND WHY THE FIGURE IS SHORT, WHEN IT IS. The range is already
+            // here; the filter was not, and it is the other gate the count is
+            // taken behind. A face set to ALERT or NAMED drops aircraft that
+            // are inside the range and still listed below, and a count that
+            // fell with no stated reason reads as a decoder losing targets.
+            // The SYS screen owns the switch - this line only says it is
+            // thrown, and says nothing at all when it is not.
+            static const char* const kFilterSuffix[3] = {"", "   ALERT ONLY",
+                                                         "   NAMED ONLY"};
+            const int f = (opts.filter >= 0 && opts.filter <= 2) ? opts.filter : 0;
+            char sub[96];
+            std::snprintf(sub, sizeof(sub), "of %d tracked   %d NM%s", tracked, rangeNm,
+                          kFilterSuffix[f]);
             textColoured(kPanelDim, sub);
         }
         ImGui::Separator();
@@ -602,6 +630,23 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 ImGui::PopStyleColor();
             }
         } else {
+            // THE REGISTER IS NOT THE COUNT ABOVE IT, AND NOW SAYS SO. These
+            // rows pass a kind test and the presentation age test and nothing
+            // else: an aircraft outside the selected range, or hidden from the
+            // face by the SYS filter, is still listed here. That is deliberate
+            // - the list is how a user finds a contact at all, and a register
+            // that hid what the picture hides would leave nothing anywhere on
+            // the instrument saying the aircraft had been heard. Without a
+            // caption of its own the heading at the top of the screen read as
+            // the heading for these rows too, which is how one screen came to
+            // print a count and then list more contacts than it had counted.
+            //
+            // TWO WORDS, because this panel is 260 px wide at its narrowest and
+            // the child it sits in CLIPS rather than wraps: a caption that ran
+            // past the edge would be cut in the exact configuration it matters
+            // in. "ALL" against the "PLOTTED" above it is the whole distinction
+            // and it survives the trim.
+            textColoured(kPanelDim, "ALL CONTACTS");
             ImGui::BeginChild("##homelist", ImVec2(0.0f, 0.0f), false);
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 const Row& r = rows[i];
@@ -2709,6 +2754,11 @@ void ScopeView::draw(float width, float height,
     // loop, so the number in the corner is exactly the number of silhouettes
     // on the face - not what the plugin reported, which includes stale targets
     // and everything beyond the range.
+    //
+    // AND IT IS LETTERED "PLOTTED", NOT "TRACKS", for exactly that reason: the
+    // odometer drum on the plate below the tube is captioned TRACKS and counts
+    // the ungated figure, so one word over the two would have been one caption
+    // over two numbers that are meant to differ. See scopeTracksReadout.
     {
         // TWO READOUTS TO A CORNER PAIR, AND THEY ARE CHECKED AGAINST EACH
         // OTHER BEFORE BOTH ARE DRAWN. Each is placed from its own end of the

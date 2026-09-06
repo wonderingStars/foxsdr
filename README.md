@@ -81,8 +81,9 @@ are still moving. What is in the current build:
   default; see [Browser access](#browser-access) for the security posture.
 
 **Verification, honestly stated.** The DSP core and every decoder carry unit
-tests (`ctest` runs 51 suites), and the audio chain has been confirmed by ear
-on broadcast FM. Of the decoders, **ADS-B is the one confirmed against real
+tests (`ctest` runs 82 entries: 75 test binaries and seven checks on the
+application itself), and the audio chain has been confirmed by ear on
+broadcast FM. Of the decoders, **ADS-B is the one confirmed against real
 off-air signals** — aircraft decoded live, with ICAO address blocks and
 callsigns agreeing across independent message types. The others (AIS, APRS,
 SSTV, Morse, RTTY, POCSAG) are verified against synthesised signals and
@@ -182,8 +183,10 @@ module is, what it reaches for, what it costs to fit, and the updates the
 catalogue offers — and **Plugins** opens **Fitted modules**, which is what is
 already installed on this machine, which of them are being fed, which were
 refused and why, and the keys that start, stop, remove and permit them. Each
-is a real window you can drag as large as your screen, and each comes back at
-the size and place you left it when you open it again. Neither reopens by
+is a real window you can drag as large as your screen. **Fitted modules**
+comes back at the size and place you left it, because its rectangle is
+written to the configuration file with everything else; the store's is not,
+so it holds what you drag it to only until FoxSDR closes. Neither reopens by
 itself: since 0.79.1 FoxSDR always starts on the main window alone, whatever
 was showing when it was closed - no page, no map, no decoder output, and the
 bench rather than the radar scope. Every one of them is a key on the rail
@@ -368,10 +371,12 @@ satellites map; VIEW is the display range, the radar scope, bookmarks and the
 scanner; EXTEND is browser access and CAT control; SYSTEM is updates,
 diagnostics and usage reporting. **F1 to F5** press the same five keys from
 the keyboard. Each section still opens and closes with its own key and
-remembers its state across banks and restarts; a section unfolds rather than
+keeps that state as you move between banks; a section unfolds rather than
 appearing, a bank comes up like a lamp rather than switching in one frame, and
-the rail opens on whichever bank you left it on. Every chip on a row still
-reports what that section is doing without opening it.
+the rail opens on whichever bank you left it on — the only part of this the
+configuration file records, so a section comes back at its usual state on
+the next launch. Every chip on a row still reports what that section is
+doing without opening it.
 
 The **Radar scope**, under VIEW, is drawn from the receiver's own position —
 every mark on it is a range and a bearing from the antenna — and until that
@@ -471,13 +476,12 @@ a key that would silently do nothing is worse than one that says it cannot.
 way out of a fit onto a single target. While a target is being followed the
 strip says **FOLLOWING** with its id, in gold, and offers **STOP FOLLOWING**;
 when none is, it says outright that the map moves on its own only while a
-target is followed. It remembers whether it was open and the rectangle it sat
-in, and a window you shut stays shut across a restart — a propagator reports a
-full sky on the first frame of every launch, with no radio and no action from
-you, and that must never be allowed to reopen a window you closed. Within a
-session a page does open itself on the arrival edge, when a plugin that had
-nothing plotted starts reporting again; closing it holds until that happens
-afresh.
+target is followed. It remembers the rectangle it sat in, and nothing but your
+own hand puts it on screen: since 0.79.1 it does not come back at a restart,
+and within a session it no longer opens itself when a plugin that had nothing
+plotted starts reporting again. A propagator reports a full sky on the first
+frame of every launch, with no radio and no action from you, which is exactly
+the window that must never appear by itself.
 
 The map here is drawn **equirectangular**, not Web Mercator, and the trade is
 deliberate: the poles are on screen and a polar orbit reads as the sinusoid it
@@ -536,8 +540,9 @@ each says what starts it:
   Updates**; nothing is downloaded or installed unless you press the button.
   It is not the usage report and the two share nothing.
 - **The plugin catalogue.** Fetched only when you press **CHECK NOW** in the
-  Plugin store window. Nothing is fetched at startup, restoring that window
-  open fetches nothing, and no plugin ever updates itself.
+  Plugin store window. Nothing is fetched at startup — since 0.79.1 that
+  window does not even reopen by itself, and opening it by hand fetches
+  nothing either — and no plugin ever updates itself.
 - **A plugin download**, when you press **FIT MODULE** or **UPDATE MODULE** for
   one — always https, sha256-verified against the catalogue, size-capped and
   refused on a cross-host redirect.
