@@ -49,8 +49,17 @@ are still moving. What is in the current build:
 - **Hardware.** Anything SoapySDR reaches, with antenna, sample-rate and
   per-stage gain selection. Developed against an Ettus B200; the built-in
   signal generator and IQ-file playback mean it runs with no radio at all.
-- **Working with signals.** Bookmarks, a band scanner, band plans, and
-  recording of both audio and raw I/Q.
+- **Working with signals.** Bookmarks, a band scanner, and recording of both
+  audio and raw I/Q.
+- **Band plans for the whole world.** Labelled service allocations drawn behind
+  the spectrum, colour-coded by service on a colour-blind-safe palette, with a
+  "what am I tuned to" readout that names the *narrowest* match — 145.800 MHz
+  reads "ISS Downlink", not "2 m Amateur". Pick your region from Display →
+  Region: a baseline for each ITU region plus country refinements that layer on
+  top of it. The default is a worldwide plan holding only the allocations that
+  are identical everywhere, because the ITU regions genuinely disagree — 40 m,
+  mediumwave and the FM broadcast edges all differ — so there is no single plan
+  that is correct globally. Informational only; not a licensing reference.
 - **Map and decoders.** Aircraft, vessels and stations plotted together,
   coloured by altitude band, with optional map imagery from a basemap plugin.
   A target's **trail is coloured along its length** by the same bands, so a

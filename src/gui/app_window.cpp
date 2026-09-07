@@ -399,6 +399,7 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
+           a.bandPlanSelection == b.bandPlanSelection &&
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
@@ -3852,6 +3853,29 @@ void AppWindow::drawDisplaySection() {
         // feature look broken rather than simply idle.
         ImGui::Checkbox("Band plan", &bandPlanOverlay_);
         if (bandPlanOverlay_) {
+            // The REGION PICKER. Allocations genuinely contradict each other
+            // between ITU regions, so this is a choice the user has to make
+            // and not something the application can merge its way out of —
+            // see BandPlan::loadSelection. Only shown when there is more than
+            // one plan to choose between: a single-plan install has no
+            // decision to offer, and an empty combo would read as breakage.
+            if (bandPlanChoices_.size() > 1) {
+                const char* preview = "(all installed)";
+                for (const cascade::core::PlanInfo& p : bandPlanChoices_) {
+                    if (p.id == bandPlanSelection_) { preview = p.name.c_str(); }
+                }
+                if (ImGui::BeginCombo("Region", preview)) {
+                    for (const cascade::core::PlanInfo& p : bandPlanChoices_) {
+                        const bool selected = (p.id == bandPlanSelection_);
+                        if (ImGui::Selectable(p.name.c_str(), selected) && !selected) {
+                            bandPlanSelection_ = p.id;
+                            loadBandPlan();
+                        }
+                        if (selected) { ImGui::SetItemDefaultFocus(); }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
             if (!bandPlanError_.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
                 ImGui::TextWrapped("%s", bandPlanError_.c_str());
@@ -10900,8 +10924,13 @@ void AppWindow::loadBandPlan() {
     // only a directory that is really there can produce an error worth
     // showing.
     if (!std::filesystem::is_directory(std::filesystem::path(dir), ec)) { return; }
+    bandPlanChoices_ = cascade::core::BandPlan::available(dir);
+    // Cleared before every attempt so that picking a working plan after a
+    // failed one actually clears the red text — a stale error would outlive
+    // the condition that caused it and make a healthy overlay look broken.
+    bandPlanError_.clear();
     std::string err;
-    if (!bandPlan_.loadDirectory(dir, err)) { bandPlanError_ = err; }
+    if (!bandPlan_.loadSelection(dir, bandPlanSelection_, err)) { bandPlanError_ = err; }
 }
 
 void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float height) {
@@ -12846,6 +12875,14 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     autoNotch_ = cfg.autoNotch;
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
+    // applyConfig runs AFTER the startup loadBandPlan(), so a restored
+    // selection that differs from the default has to re-load or the user's
+    // chosen region silently reverts to "world" on every launch. Guarded on
+    // change so the common case does not parse the directory twice.
+    if (bandPlanSelection_ != cfg.bandPlanSelection) {
+        bandPlanSelection_ = cfg.bandPlanSelection;
+        loadBandPlan();
+    }
     // The trail switches. Not pushed into any MapView here: a page may not
     // exist yet (they are created as track-capable plugins appear), and the
     // page loop hands both to every view it draws anyway - which is also what
@@ -13246,6 +13283,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.notchQ = static_cast<double>(notchQ_);
     cfg.autoNotch = autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
+    cfg.bandPlanSelection = bandPlanSelection_;
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;

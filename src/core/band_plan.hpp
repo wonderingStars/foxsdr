@@ -91,6 +91,15 @@ struct BandEntry {
     std::uint32_t colorRgba = 0;  // 0xRRGGBBAA, derived from `service`
 };
 
+// One plan file's identity, without its bands — what the picker needs to
+// build a menu without parsing every band in every installed plan.
+struct PlanInfo {
+    std::string id;    // "id" key, else the filename stem. Unique per directory.
+    std::string name;  // display name ("United Kingdom")
+    std::string base;  // id of the plan this REFINES; empty when it is a baseline
+    std::string path;  // the file it came from
+};
+
 class BandPlan {
 public:
     // "<directory of the running executable>/resources/bandplans".
@@ -119,6 +128,47 @@ public:
     // A `dir` that is missing or is not a directory is an error; a directory
     // containing no *.json is not (it yields an empty plan and true).
     bool loadDirectory(const std::string& dir, std::string& error);
+
+    // Every plan installed in `dir`, sorted by display name, WITHOUT loading
+    // any bands — this is what fills the picker.
+    //
+    // Deliberately failure-TOLERANT, unlike loadDirectory's all-or-nothing
+    // merge: a file that will not parse is skipped and the rest are listed.
+    // A menu that vanishes entirely because one hand-edited file lost a brace
+    // would hide every working plan the user has, which is a worse failure
+    // than one absent entry. A missing directory yields an empty vector.
+    static std::vector<PlanInfo> available(const std::string& dir);
+
+    // Loads ONE plan and the chain of plans it refines, instead of merging
+    // everything in the directory.
+    //
+    // WHY THIS EXISTS. loadDirectory merges every file, which is right only
+    // when the files agree. "United Kingdom" refines "ITU Region 1" and the
+    // two are consistent, so merging them is exactly what is wanted. But
+    // Region 1 and Region 2 genuinely CONTRADICT each other — 40 m is
+    // 7.0-7.2 MHz in Region 1 and 7.0-7.3 in Region 2, mediumwave has
+    // different edges, FM broadcast starts at 87.5 rather than 88.0 — and
+    // merging those does not produce a superset, it produces an overlay that
+    // confidently labels the wrong answer. at()'s narrowest-wins rule then
+    // PREFERS the contradicting entry, because the narrower of two disagreeing
+    // bands wins. Shipping plans for the whole world therefore requires
+    // choosing one, and this is that choice.
+    //
+    // `id` names a plan from available(). The chain is walked through `base`
+    // and loaded BASELINE FIRST, so a refinement's narrower bands sort on top
+    // of the region's wider ones. name() becomes the chain's display names
+    // joined with " + ", e.g. "ITU Region 1 + United Kingdom".
+    //
+    // An EMPTY id restores the legacy behaviour and merges the whole
+    // directory, which is what an unset configuration means.
+    //
+    // Errors, all leaving the previous contents intact: `dir` unreadable, no
+    // plan with that id, a file in the chain that will not parse, or a `base`
+    // cycle (self-reference or a loop) — a cycle is reported rather than
+    // silently truncated, because it means the data is wrong and a truncated
+    // chain would quietly drop bands.
+    bool loadSelection(const std::string& dir, const std::string& id,
+                       std::string& error);
 
     // Sorted by startHz ascending, widest-first on ties (see header).
     const std::vector<BandEntry>& entries() const { return entries_; }
@@ -158,11 +208,12 @@ public:
     static std::uint32_t colorForService(const std::string& service);
 
 private:
-    // APPENDS the file's bands to `out` (unsorted) and reports its plan name;
-    // shared by loadFile and the merging loop in loadDirectory. On false,
-    // `out` may hold partial results — both callers discard it in that case.
+    // APPENDS the file's bands to `out` (unsorted) and reports its identity;
+    // shared by loadFile, the merging loop in loadDirectory, and the chain
+    // walk in loadSelection. On false, `out` may hold partial results — every
+    // caller discards it in that case.
     static bool parseInto(const std::string& path, std::vector<BandEntry>& out,
-                          std::string& planName, std::string& error);
+                          PlanInfo& info, std::string& error);
 
     std::vector<BandEntry> entries_;
     std::string name_;

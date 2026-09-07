@@ -232,6 +232,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "notchQ", out.notchQ);
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
+    getString(j, "bandPlanSelection", out.bandPlanSelection);
     // Both default true, so an older config that has never heard of them
     // arrives with trails drawn and coloured - see AppConfig for why the two
     // are separate switches. Neither has a range to clamp: a bool read by
@@ -562,6 +563,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["notchQ"] = cfg.notchQ;
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
+    j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;

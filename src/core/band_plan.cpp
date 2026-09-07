@@ -100,7 +100,7 @@ std::string BandPlan::defaultDir() {
 }
 
 bool BandPlan::parseInto(const std::string& path, std::vector<BandEntry>& out,
-                         std::string& planName, std::string& error) {
+                         PlanInfo& info, std::string& error) {
     std::ifstream f(path, std::ios::binary);
     if (!f) {
         error = "band plan: cannot open \"" + path + "\" for reading";
@@ -119,10 +119,21 @@ bool BandPlan::parseInto(const std::string& path, std::vector<BandEntry>& out,
         return false;
     }
 
-    // Stem first, then let the file override it: a plan always has a name to
-    // show in the menu even when the author forgot the key.
-    planName = fs::path(path).stem().string();
-    getString(j, "name", planName);
+    // Stem first, then let the file override it: a plan always has a name and
+    // an id to show in the menu even when the author forgot the keys.
+    //
+    // The id defaults to the STEM rather than to the name, because it is what
+    // the configuration stores and what `base` points at: a stem is already
+    // unique within a directory and is stable across a display-name reword,
+    // whereas two plans could legitimately share a name.
+    const std::string stem = fs::path(path).stem().string();
+    info.path = path;
+    info.id = stem;
+    getString(j, "id", info.id);
+    info.name = stem;
+    getString(j, "name", info.name);
+    info.base.clear();
+    getString(j, "base", info.base);
 
     const auto bands = j.find("bands");
     if (bands == j.end()) {
@@ -171,13 +182,13 @@ bool BandPlan::loadFile(const std::string& path, std::string& error) {
     // Parse into a scratch vector and commit only on success — that is the
     // whole mechanism behind "contents unchanged on failure".
     std::vector<BandEntry> parsed;
-    std::string planName;
-    if (!parseInto(path, parsed, planName, error)) {
+    PlanInfo info;
+    if (!parseInto(path, parsed, info, error)) {
         return false;
     }
     sortEntries(parsed);
     entries_ = std::move(parsed);
-    name_ = std::move(planName);
+    name_ = std::move(info.name);
     return true;
 }
 
@@ -213,14 +224,127 @@ bool BandPlan::loadDirectory(const std::string& dir, std::string& error) {
     std::vector<BandEntry> merged;
     std::string joined;
     for (const std::string& file : files) {
-        std::string planName;
-        if (!parseInto(file, merged, planName, error)) {
+        PlanInfo info;
+        if (!parseInto(file, merged, info, error)) {
             return false;  // all-or-nothing: nothing committed, error names the file
         }
         if (!joined.empty()) {
             joined += " + ";
         }
-        joined += planName;
+        joined += info.name;
+    }
+
+    sortEntries(merged);
+    entries_ = std::move(merged);
+    name_ = std::move(joined);
+    return true;
+}
+
+std::vector<PlanInfo> BandPlan::available(const std::string& dir) {
+    std::vector<PlanInfo> out;
+
+    std::error_code ec;
+    if (!fs::is_directory(fs::path(dir), ec)) {
+        return out;  // no directory is "no plans installed", not an error
+    }
+    fs::directory_iterator it(fs::path(dir), ec);
+    if (ec) {
+        return out;
+    }
+
+    for (const auto& entry : it) {
+        std::error_code fec;
+        if (!entry.is_regular_file(fec) || fec) {
+            continue;
+        }
+        if (lowerAscii(entry.path().extension().string()) != ".json") {
+            continue;
+        }
+        // The bands are parsed and thrown away. A plan file is a few
+        // kilobytes, and going through the ONE parser means the menu and the
+        // load can never disagree about a file's id or base — a separate
+        // metadata-only reader would be a second set of rules to keep in step.
+        std::vector<BandEntry> discard;
+        PlanInfo info;
+        std::string err;
+        if (!parseInto(entry.path().string(), discard, info, err)) {
+            continue;  // tolerated by contract: one bad file must not empty the menu
+        }
+        out.push_back(std::move(info));
+    }
+
+    // By display name, id breaking ties, so the picker's order does not depend
+    // on the filesystem's directory order.
+    std::sort(out.begin(), out.end(), [](const PlanInfo& a, const PlanInfo& b) {
+        return a.name != b.name ? a.name < b.name : a.id < b.id;
+    });
+    return out;
+}
+
+bool BandPlan::loadSelection(const std::string& dir, const std::string& id,
+                             std::string& error) {
+    error.clear();
+
+    // An unset selection means the legacy whole-directory merge.
+    if (id.empty()) {
+        return loadDirectory(dir, error);
+    }
+
+    std::error_code ec;
+    if (!fs::is_directory(fs::path(dir), ec)) {
+        error = "band plan: \"" + dir + "\" is not a directory";
+        return false;
+    }
+
+    const std::vector<PlanInfo> plans = available(dir);
+
+    // Walk `base` upwards from the selected plan. The chain comes out
+    // refinement-first; it is loaded in reverse below.
+    std::vector<const PlanInfo*> chain;
+    std::string want = id;
+    while (!want.empty()) {
+        const PlanInfo* found = nullptr;
+        for (const PlanInfo& p : plans) {
+            if (p.id == want) {
+                found = &p;
+                break;
+            }
+        }
+        if (found == nullptr) {
+            error = "band plan: no plan with id \"" + want + "\" in \"" + dir + "\"";
+            if (want != id) {
+                error += " (needed as the base of \"" + id + "\")";
+            }
+            return false;
+        }
+        // A cycle is REPORTED, not truncated: silently stopping the walk would
+        // load a partial chain and hide bands, which looks like missing data
+        // rather than like the broken `base` key it actually is.
+        for (const PlanInfo* seen : chain) {
+            if (seen->id == found->id) {
+                error = "band plan: circular base chain at \"" + found->id +
+                        "\" while resolving \"" + id + "\"";
+                return false;
+            }
+        }
+        chain.push_back(found);
+        want = found->base;
+    }
+
+    // BASELINE FIRST. The sort is stable in the sense that matters here: a
+    // refinement's narrower bands end up nested inside the region's wider
+    // ones, which is exactly what at()'s narrowest-wins lookup needs.
+    std::vector<BandEntry> merged;
+    std::string joined;
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        PlanInfo info;
+        if (!parseInto((*it)->path, merged, info, error)) {
+            return false;  // all-or-nothing, as loadDirectory
+        }
+        if (!joined.empty()) {
+            joined += " + ";
+        }
+        joined += info.name;
     }
 
     sortEntries(merged);

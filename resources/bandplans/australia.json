@@ -1,0 +1,30 @@
+{
+    "name": "Australia",
+    "id": "australia",
+    "base": "itu-region3",
+    "note": "Australia-specific refinements over the ITU Region 3 baseline. Sources, all read as registered instruments: the Radiocommunications (Amateur Stations) Class Licence 2023 (F2023L01648, commenced 19 February 2024, unamended) Schedule 2 Tables A/B/C; the Radiocommunications (Citizen Band Radio Stations) Class Licence 2025 (F2025L01088, commenced 1 October 2025) Schedule 1; the Radiocommunications (Maritime Ship Station) Class Licence 2025 (F2025L01131, commenced 1 October 2025); the Radiocommunications (Public Safety and Emergency Response) Class Licence 2023 (F2023L01243); and the Australian Radiofrequency Spectrum Plan (2025 Update) 2021, Compilation No.1 (F2025C01105, compiled 9 October 2025) - its Australian Table of Allocations and footnote AUS98. Corroborated against the WIA Australian Amateur Radio Band Plan Revision 2026-1. Where Australia departs from Region 3: 160 m stops at 1875 kHz, not 2000; 80 m is 3500-3700 kHz plus a separate 3776-3800 kHz segment, with 3700-3776 kHz not available; 40 m runs to 7300 kHz, which Region 3 generally does not; 70 cm is the full 430-450 MHz; and mediumwave broadcasting starts at 535 kHz rather than 526.5 kHz. Australia has NO usable 60 m amateur band - 5351.5-5366.5 kHz is allocated to the amateur service in the Spectrum Plan but is absent from the class licence, so it is not authorised for operation and is deliberately not listed here. Likewise there is no 4 m (70 MHz) and no 220 MHz amateur allocation. Amateur band edges above are the widest available, which for several bands means Advanced qualification only: 2200 m, 630 m, 160 m, 30 m, 17 m, 12 m and 3776-3800 kHz are Advanced-only, and 50-54 MHz needs Standard or Advanced. Some derived numbers: the CB band edges are the first and last channel centre frequencies from the class licence widened by half a channel (UHF 476.425-477.4125 MHz centres on a 12.5 kHz grid, HF 26.965-27.405 MHz centres on a 10 kHz grid); the instrument publishes centres only. The 'Government / Emergency' entries are the eight harmonised 400 MHz ranges quoted verbatim in ARSP footnote AUS98, which names police, fire, ambulance and emergency rescue. Public Safety Broadband is the 809-814 / 854-859 MHz pair reserved for a national PSMB capability - note this is NOT 803-806/848-851 MHz, which is a guard band and fixed links. INFORMATIONAL ONLY - a display aid, not an authoritative or licensing reference; power limits, bandwidth limits, qualification grades, excluded areas and repeater channel roles are not modelled. JSON has no comment syntax, so this note lives in the data; the loader ignores unknown keys.",
+    "bands": [
+        { "start": 535000, "end": 1606500, "name": "Mediumwave Broadcast (AU)", "service": "broadcast" },
+        { "start": 1800000, "end": 1875000, "name": "160 m Amateur (AU)", "service": "amateur" },
+        { "start": 3500000, "end": 3700000, "name": "80 m Amateur (AU)", "service": "amateur" },
+        { "start": 3776000, "end": 3800000, "name": "80 m Amateur (AU)", "service": "amateur" },
+        { "start": 7000000, "end": 7300000, "name": "40 m Amateur (AU)", "service": "amateur" },
+        { "start": 26960000, "end": 27410000, "name": "27 MHz CB", "service": "mobile" },
+        { "start": 27680000, "end": 27980000, "name": "27 MHz Marine", "service": "marine" },
+        { "start": 87500000, "end": 108000000, "name": "FM Broadcast (AU)", "service": "broadcast" },
+        { "start": 156487500, "end": 162037500, "name": "Marine VHF (AU)", "service": "marine" },
+        { "start": 403000000, "end": 403981250, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 405018750, "end": 406000000, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 408643750, "end": 410543750, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 412468750, "end": 413431250, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 414468750, "end": 415443750, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 418093750, "end": 430000000, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 430000000, "end": 450000000, "name": "70 cm Amateur (AU)", "service": "amateur" },
+        { "start": 457506250, "end": 459987500, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 467506250, "end": 469987500, "name": "Government / Emergency", "service": "mobile" },
+        { "start": 476418750, "end": 477418750, "name": "UHF CB (477 MHz)", "service": "mobile" },
+        { "start": 809000000, "end": 814000000, "name": "Public Safety Broadband", "service": "mobile" },
+        { "start": 854000000, "end": 859000000, "name": "Public Safety Broadband", "service": "mobile" },
+        { "start": 4940000000, "end": 4990000000, "name": "Public Safety 4.9 GHz", "service": "mobile" }
+    ]
+}

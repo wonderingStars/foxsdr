@@ -131,6 +131,18 @@ struct AppConfig {
     double notchQ = 30.0;
     bool autoNotch = false;
     bool bandPlanOverlay = true;
+    // Which band plan is active: the `id` of a plan in resources/bandplans,
+    // loaded together with the chain of plans it refines.
+    //
+    // Defaults to "world" — the allocations that are identical in all three
+    // ITU regions — because the alternative defaults are all wrong somewhere.
+    // Merging every installed plan (what an empty string still means, and what
+    // the code did before there were plans for more than one region) overlays
+    // Region 1 on Region 2, which disagree about 40 m, mediumwave and the FM
+    // broadcast edges; and defaulting to any one region is simply incorrect
+    // for most of the planet. "world" is the only choice that is never wrong,
+    // and the picker is one click from the right regional plan.
+    std::string bandPlanSelection = "world";
 
     // --- Map trails -----------------------------------------------------------
     // TWO SWITCHES, because the request behind them was ambiguous and both
