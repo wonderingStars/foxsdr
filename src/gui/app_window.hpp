@@ -1226,6 +1226,13 @@ private:
     // user-visible mistake worth reporting.
     cascade::core::BandPlan bandPlan_;
     std::string bandPlanError_;
+    // The active plan's id and the menu of installed plans. The list is built
+    // ONCE in loadBandPlan() rather than per frame: available() opens and
+    // parses every file in the directory, which is fine at startup and at a
+    // deliberate re-scan, and is not something to do sixty times a second
+    // inside a combo box.
+    std::string bandPlanSelection_ = "world";
+    std::vector<cascade::core::PlanInfo> bandPlanChoices_;
 
     // Plugin host: scanned once at construction and on Rescan. Owns the
     // loaded modules, so it must outlive nothing in particular here — but it

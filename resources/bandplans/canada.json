@@ -1,0 +1,26 @@
+{
+    "name": "Canada",
+    "id": "canada",
+    "base": "itu-region2",
+    "note": "Canadian additions to the ITU Region 2 plan - only the allocations that genuinely differ from Region 2 or from the United States are listed here; everything else comes from the base plan. Sources, all primary: ISED RBR-4 Issue 3 (July 2022) Schedule I and its footnotes C6, C11 and C21, https://ised-isde.canada.ca/site/spectrum-management-telecommunications/sites/default/files/attachments/2022/RBR-4-i3-2022-07EN.pdf (amateur bands); the machine-readable Canadian Table of Frequency Allocations, https://ised-isde.canada.ca/sat-oas/en/lists/ctfa.csv; ISED RIC-18 General Radio Service and RSS-236 (Canadian CB); ISED RSS-210 Issue 11 (2024) Annex E Table E1 and Spectrum Utilization Policy SP 462/467 MHz (licence-exempt FRS/GMRS); ISED RBR-2 Issue 1 Schedule I (marine VHF channels); and Environment and Climate Change Canada's Weatheradio Canada page. Notable Canadian differences: 70 cm is 430-450 MHz, not the US 420-450; the 1.25 m band keeps 220-222 MHz (disaster relief only) and 219-220 MHz (secondary) alongside 222-225 MHz; 60 m is the WRC-15 band 5351.5-5366.5 kHz PLUS four channels at 5332, 5348, 5373 and 5405 kHz - Canada has no 5358.5 kHz channel, unlike the US; FRS/GMRS is licence-exempt but the eight 467 MHz repeater-input channels were withdrawn, so only the seven 467 MHz interstitial channels remain; and Canada has no MURS (deferred by ISED bulletin SAB-002-14). Channel groups (the General Radio Service, FRS/GMRS, Weatheradio) are drawn from the lowest to the highest channel CENTRE frequency, so the outermost half channel falls outside the block and a block spans the gaps between its channels; single channels (the four 60 m channels, marine 21B and 83B) are drawn at their centre plus and minus half the authorised bandwidth. ISED RIC-18 states the General Radio Service band itself as 26.960 to 27.410 MHz; the block here is the 26.965 to 27.405 MHz span of its forty channel centres. INFORMATIONAL ONLY - a display aid, not an authoritative or licensing reference. JSON has no comment syntax, so this note lives in the data; the loader ignores unknown keys.",
+    "bands": [
+        { "start": 5330600, "end": 5333400, "name": "60 m Ch 5332 kHz", "service": "amateur" },
+        { "start": 5346600, "end": 5349400, "name": "60 m Ch 5348 kHz", "service": "amateur" },
+        { "start": 5371600, "end": 5374400, "name": "60 m Ch 5373 kHz", "service": "amateur" },
+        { "start": 5403600, "end": 5406400, "name": "60 m Ch 5405 kHz", "service": "amateur" },
+        { "start": 26965000, "end": 27405000, "name": "General Radio Service (CB)", "service": "mobile" },
+        { "start": 161637500, "end": 161662500, "name": "Marine Ch 21B (CMB)", "service": "marine" },
+        { "start": 161762500, "end": 161787500, "name": "Marine Ch 83B (CMB)", "service": "marine" },
+        { "start": 162400000, "end": 162550000, "name": "Weatheradio Canada", "service": "broadcast" },
+        { "start": 219000000, "end": 220000000, "name": "219 MHz Amateur (Sec.)", "service": "amateur" },
+        { "start": 220000000, "end": 222000000, "name": "220 MHz Amateur (Relief)", "service": "amateur" },
+        { "start": 222000000, "end": 225000000, "name": "1.25 m Amateur", "service": "amateur" },
+        { "start": 430000000, "end": 450000000, "name": "70 cm Amateur", "service": "amateur" },
+        { "start": 462550000, "end": 462725000, "name": "FRS / GMRS 462 MHz", "service": "mobile" },
+        { "start": 467562500, "end": 467712500, "name": "FRS 467 MHz", "service": "mobile" },
+        { "start": 902000000, "end": 928000000, "name": "33 cm Amateur", "service": "amateur" },
+        { "start": 2300000000, "end": 2450000000, "name": "13 cm Amateur", "service": "amateur" },
+        { "start": 3300000000, "end": 3500000000, "name": "9 cm Amateur", "service": "amateur" },
+        { "start": 5650000000, "end": 5925000000, "name": "5 cm Amateur", "service": "amateur" }
+    ]
+}

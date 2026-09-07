@@ -237,12 +237,42 @@ int main() {
         BandPlan merged;
         CHECK(merged.loadDirectory(shipped, err));
         CHECK(err.empty());
-        CHECK(merged.entries().size() == uk.entries().size() + r1.entries().size());
+        // Sum over EVERY shipped plan rather than just these two. The
+        // directory now holds a baseline per ITU region plus the country
+        // refinements, so hard-coding "uk + r1" made this a tripwire that
+        // fired on ADDING DATA instead of a check that the merge keeps every
+        // band. The raw-count sum still catches a silently dropped entry,
+        // which is the property that mattered.
+        std::size_t rawTotal = 0;
+        std::size_t shippedFiles = 0;
+        for (const auto& e : fs::directory_iterator(shipped)) {
+            if (e.path().extension() != ".json") { continue; }
+            rawTotal += rawBandCount(e.path().string());
+            ++shippedFiles;
+        }
+        CHECK(shippedFiles >= 2u);
+        CHECK(merged.entries().size() == rawTotal);
         checkSorted(merged.entries());
-        // Lexicographic file order => deterministic joined name.
-        CHECK(merged.name() == "ITU Region 1 + United Kingdom");
+        // The joined name lists every plan, in lexicographic FILE order.
+        CHECK(merged.name().find("ITU Region 1") != std::string::npos);
+        CHECK(merged.name().find("United Kingdom") != std::string::npos);
         // The narrowest-wins rule still holds across the merge.
-        CHECK(std::string(atName(merged, 145800000.0)) == "ISS Downlink (145.800 MHz)");
+        //
+        // Asserted by SERVICE AND RANGE rather than by label. More than one
+        // plan legitimately names the same designated frequency — world,
+        // itu-region1 and uk all carry the 145.798-145.802 MHz ISS entry — and
+        // when the ranges are identical the documented tie-break takes the
+        // first file in lexicographic order. That makes the winning *label* an
+        // artefact of filenames, so pinning it turned this into a test of
+        // which plans happen to exist rather than of the lookup rule. The
+        // range and the service are what the rule actually has to get right.
+        const BandEntry* iss = merged.at(145800000.0);
+        CHECK(iss != nullptr);
+        if (iss != nullptr) {
+            CHECK(iss->service == "iss");
+            CHECK(iss->startHz == 145798000.0);
+            CHECK(iss->endHz == 145802000.0);
+        }
 
         // clear() empties both halves of the state.
         merged.clear();
@@ -458,6 +488,158 @@ int main() {
         CHECK(keeper.loadDirectory(mixed, err));
         CHECK(keeper.entries().size() == 4u);
         CHECK(keeper.name() == "Overlap Fixture");
+    }
+
+    // --- available(): the picker's menu -------------------------------------
+    {
+        const std::string dir = p("avail");
+        fs::create_directory(dir);
+        CHECK(writeText(dir + "/base.json",
+                        R"({"name":"Base Plan","id":"base","bands":[)"
+                        R"({"start":1000000,"end":2000000,"name":"Wide","service":"other"}]})"));
+        CHECK(writeText(dir + "/leaf.json",
+                        R"({"name":"Leaf Plan","id":"leaf","base":"base","bands":[)"
+                        R"({"start":1400000,"end":1500000,"name":"Narrow","service":"amateur"}]})"));
+        // A file that will not parse must NOT empty the menu — that is the
+        // documented difference between available() and loadDirectory().
+        CHECK(writeText(dir + "/broken.json", "{ this is not json"));
+
+        const std::vector<cascade::core::PlanInfo> got = BandPlan::available(dir);
+        CHECK(got.size() == 2u);
+        if (got.size() == 2u) {
+            CHECK(got[0].name == "Base Plan");  // sorted by display name
+            CHECK(got[0].id == "base");
+            CHECK(got[0].base.empty());
+            CHECK(got[1].name == "Leaf Plan");
+            CHECK(got[1].id == "leaf");
+            CHECK(got[1].base == "base");
+        }
+        // A directory that is not there is "nothing installed", not an error.
+        CHECK(BandPlan::available(p("no_such_dir")).empty());
+    }
+
+    // --- loadSelection(): one plan, plus what it refines --------------------
+    {
+        const std::string dir = p("avail");  // fixture from the block above
+
+        BandPlan plan;
+        std::string err = "stale";
+
+        // A refinement pulls its baseline in with it, baseline FIRST.
+        CHECK(plan.loadSelection(dir, "leaf", err));
+        CHECK(err.empty());
+        CHECK(plan.entries().size() == 2u);
+        CHECK(plan.name() == "Base Plan + Leaf Plan");
+        // Narrowest-wins resolves across the chain, which is the entire point
+        // of loading the baseline underneath rather than instead.
+        CHECK(std::string(atName(plan, 1450000.0)) == "Narrow");
+        CHECK(std::string(atName(plan, 1100000.0)) == "Wide");
+
+        // Selecting the BASELINE alone must not drag the refinement in — this
+        // is what stops Region 2 arriving underneath a Region 1 selection.
+        CHECK(plan.loadSelection(dir, "base", err));
+        CHECK(err.empty());
+        CHECK(plan.entries().size() == 1u);
+        CHECK(plan.name() == "Base Plan");
+        CHECK(std::string(atName(plan, 1450000.0)) == "Wide");
+
+        // An empty id means the legacy whole-directory merge — which here must
+        // REFUSE, because the directory still holds the unparseable file, and
+        // the merge is all-or-nothing.
+        const std::size_t before = plan.entries().size();
+        CHECK(!plan.loadSelection(dir, "", err));
+        CHECK(!err.empty());
+        CHECK(plan.entries().size() == before);  // contents survive a failure
+
+        // An unknown id names itself and changes nothing.
+        CHECK(!plan.loadSelection(dir, "atlantis", err));
+        CHECK(err.find("atlantis") != std::string::npos);
+        CHECK(plan.entries().size() == before);
+    }
+
+    // --- a broken base chain is REPORTED, never silently truncated ----------
+    {
+        const std::string dir = p("cycle");
+        fs::create_directory(dir);
+        CHECK(writeText(dir + "/a.json",
+                        R"({"name":"A","id":"a","base":"b","bands":[)"
+                        R"({"start":1000,"end":2000,"name":"A band","service":"other"}]})"));
+        CHECK(writeText(dir + "/b.json",
+                        R"({"name":"B","id":"b","base":"a","bands":[)"
+                        R"({"start":3000,"end":4000,"name":"B band","service":"other"}]})"));
+        BandPlan plan;
+        std::string err;
+        CHECK(!plan.loadSelection(dir, "a", err));
+        CHECK(err.find("circular") != std::string::npos);
+        CHECK(plan.entries().empty());  // nothing committed
+
+        // Self-reference is the degenerate case of the same fault.
+        const std::string selfDir = p("selfcycle");
+        fs::create_directory(selfDir);
+        CHECK(writeText(selfDir + "/s.json",
+                        R"({"name":"S","id":"s","base":"s","bands":[)"
+                        R"({"start":1000,"end":2000,"name":"S band","service":"other"}]})"));
+        CHECK(!plan.loadSelection(selfDir, "s", err));
+        CHECK(err.find("circular") != std::string::npos);
+
+        // A base that does not exist names the MISSING id, not the selected
+        // one — otherwise the message sends you to the wrong file.
+        const std::string orphanDir = p("orphan");
+        fs::create_directory(orphanDir);
+        CHECK(writeText(orphanDir + "/o.json",
+                        R"({"name":"O","id":"o","base":"ghost","bands":[)"
+                        R"({"start":1000,"end":2000,"name":"O band","service":"other"}]})"));
+        CHECK(!plan.loadSelection(orphanDir, "o", err));
+        CHECK(err.find("ghost") != std::string::npos);
+    }
+
+    // --- EVERY shipped plan must be selectable ------------------------------
+    //
+    // This is the check that guards the DATA rather than the code: a plan file
+    // whose base is misspelled, or whose id collides with another, produces a
+    // picker entry that fails the moment it is chosen. Catching that here beats
+    // catching it in a release.
+    if (!shipped.empty()) {
+        const std::vector<cascade::core::PlanInfo> plans = BandPlan::available(shipped);
+        CHECK(!plans.empty());
+        for (std::size_t i = 0; i < plans.size(); ++i) {
+            CHECK(!plans[i].id.empty());
+            CHECK(!plans[i].name.empty());
+            for (std::size_t k = i + 1; k < plans.size(); ++k) {
+                CHECK(plans[i].id != plans[k].id);  // unique within a directory
+            }
+            if (!plans[i].base.empty()) {
+                bool baseExists = false;
+                for (const cascade::core::PlanInfo& q : plans) {
+                    if (q.id == plans[i].base) { baseExists = true; }
+                }
+                CHECK(baseExists);
+            }
+
+            // The file on its own: nothing dropped by per-entry tolerance.
+            BandPlan one;
+            std::string e2 = "stale";
+            CHECK(one.loadFile(plans[i].path, e2));
+            CHECK(e2.empty());
+            checkDataSane(one, plans[i].path);
+
+            // And selected through the picker, chain and all.
+            BandPlan sel;
+            CHECK(sel.loadSelection(shipped, plans[i].id, e2));
+            CHECK(e2.empty());
+            CHECK(!sel.entries().empty());
+            checkSorted(sel.entries());
+            // A refinement can only ever ADD to its baseline.
+            CHECK(sel.entries().size() >= one.entries().size());
+        }
+
+        // The configured default must exist, or a fresh install opens with a
+        // red error where the overlay should be.
+        bool haveWorld = false;
+        for (const cascade::core::PlanInfo& q : plans) {
+            if (q.id == "world") { haveWorld = true; }
+        }
+        CHECK(haveWorld);
     }
 
     const int rc = testSummary("test_band_plan");

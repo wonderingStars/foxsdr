@@ -147,6 +147,13 @@ Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreve
 ; commercial release exactly as it does to a free one.
 Source: "THIRD-PARTY-LICENSES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "POSTINSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
+; Band plans. BandPlan::defaultDir() looks beside cascade.exe, so these have
+; to land in {app}\resources\bandplans or the whole overlay is inert -- which
+; is what shipped up to 0.80.0, where the feature existed complete and tested
+; and no released build ever carried a single plan file for it to read.
+; Authored from public regulatory allocations; INFORMATIONAL, not a licensing
+; reference. See src/core/band_plan.hpp for the provenance note.
+Source: "..\resources\bandplans\*.json"; DestDir: "{app}\resources\bandplans"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"

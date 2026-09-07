@@ -1,0 +1,31 @@
+{
+    "name": "Japan",
+    "id": "japan",
+    "base": "itu-region3",
+    "note": "Japan-specific refinements over the ITU Region 3 baseline. Sources: the MIC (総務省) 周波数割当計画 (Frequency Assignment Plan, current as at 1 April 2026) domestic allocation tables and its 別表 schedules at tele.soumu.go.jp; the MIC ワイドFM policy page at soumu.go.jp/menu_seisaku/ictseisaku/housou_suishin/fm-seibi.html; the JARL band plan effective 17 July 2025 (jarl.org/Japanese/A_Shiryo/A-3_Band_Plan/bandplan20250717.pdf); the MIC 電波利用ポータル DCR 増波 page at tele.soumu.go.jp/j/others/cr/dcr_zouha/index.htm; and NICT for the JJY standard-frequency stations (nict.go.jp/sts/jjy.html and jjy.nict.go.jp). What makes Japan unusual: FM sound broadcasting sits at 76-99 MHz, not 87.5-108 - the base plan's FM box does NOT apply here. The band began as 76-90 MHz, gained 90-95 MHz in 2014 as ワイドFM / FM補完放送 on spectrum vacated by analogue TV channels 1-3, and was extended again to 99 MHz on 19 May 2025; assigned carriers run 76.1-98.9 MHz. Amateur allocations are narrower than Region 3 in several places: 160 m is two disjoint segments and stops at 1912.5 kHz, 80 m is six disjoint segments, 2 m ends at 146 MHz rather than 148 MHz, and 23 cm starts at 1260 MHz rather than 1240 MHz. 40 m (7000-7200 kHz), 6 m (50-54 MHz) and 70 cm (430-440 MHz) match the Region 3 baseline and are not repeated here. Mediumwave, airband and marine VHF follow the ITU plan with no Japanese deviation and are likewise not repeated. The JJY entries are given a nominal 200 Hz width so they are visible; the transmissions themselves are A1B carriers at exactly 40 kHz and 60 kHz, not bands. INFORMATIONAL ONLY - a display aid, not an authoritative or licensing reference. JSON has no comment syntax, so this note lives in the data; the loader ignores unknown keys.",
+    "bands": [
+        { "start": 39900, "end": 40100, "name": "JJY 40 kHz (Ohtakadoya)", "service": "other" },
+        { "start": 59900, "end": 60100, "name": "JJY 60 kHz (Hagane-yama)", "service": "other" },
+        { "start": 1800000, "end": 1875000, "name": "160 m Amateur (1.8 MHz)", "service": "amateur" },
+        { "start": 1907500, "end": 1912500, "name": "160 m Amateur (1.9 MHz)", "service": "amateur" },
+        { "start": 3500000, "end": 3580000, "name": "80 m Amateur", "service": "amateur" },
+        { "start": 3599000, "end": 3612000, "name": "80 m Amateur", "service": "amateur" },
+        { "start": 3662000, "end": 3687000, "name": "80 m Amateur", "service": "amateur" },
+        { "start": 3702000, "end": 3716000, "name": "80 m Amateur", "service": "amateur" },
+        { "start": 3745000, "end": 3770000, "name": "80 m Amateur", "service": "amateur" },
+        { "start": 3791000, "end": 3805000, "name": "80 m Amateur", "service": "amateur" },
+        { "start": 26968000, "end": 27144000, "name": "CB (Shimin Radio)", "service": "mobile" },
+        { "start": 76000000, "end": 99000000, "name": "FM Broadcast (Japan)", "service": "broadcast" },
+        { "start": 90000000, "end": 99000000, "name": "Wide FM (FM Hokan)", "service": "broadcast" },
+        { "start": 144000000, "end": 146000000, "name": "2 m Amateur (144-146)", "service": "amateur" },
+        { "start": 351031250, "end": 351631250, "name": "Digital Simple Radio (DCR)", "service": "mobile" },
+        { "start": 421575000, "end": 421912500, "name": "Specified Low Power 421", "service": "mobile" },
+        { "start": 422050000, "end": 422300000, "name": "Specified Low Power 422", "service": "mobile" },
+        { "start": 426025000, "end": 426137500, "name": "Low Power Telemetry 426", "service": "mobile" },
+        { "start": 429175000, "end": 429737500, "name": "Low Power Telemetry 429", "service": "mobile" },
+        { "start": 429812500, "end": 429925000, "name": "Low Power Telemetry 429", "service": "mobile" },
+        { "start": 440025000, "end": 440362500, "name": "Specified Low Power 440", "service": "mobile" },
+        { "start": 1260000000, "end": 1300000000, "name": "23 cm Amateur (Japan)", "service": "amateur" },
+        { "start": 2400000000, "end": 2450000000, "name": "13 cm Amateur (Japan)", "service": "amateur" }
+    ]
+}

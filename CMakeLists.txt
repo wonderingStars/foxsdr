@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.80.0 LANGUAGES C CXX)
+project(cascade VERSION 0.81.0 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -366,6 +366,19 @@ if(WIN32 AND TARGET SoapySDR)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:cascade>)
 endif()
+
+# Stage the band plans beside the executable.
+#
+# BandPlan::defaultDir() is deliberately EXECUTABLE-relative, so the overlay
+# can only ever find its data next to cascade.exe. Without this copy the
+# feature is dead in the build tree, which is exactly how it went unnoticed
+# that the installer never packaged the plans either: the model, the palette,
+# the overlay renderer, the "what am I tuned to" readout and a full test file
+# all worked, and no user has ever been able to see any of it.
+add_custom_command(TARGET cascade POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/resources/bandplans"
+            "$<TARGET_FILE_DIR:cascade>/resources/bandplans")
 
 # ARCHIVE THE SYMBOLS, in the same action that produced the binary.
 #

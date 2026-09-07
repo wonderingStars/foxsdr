@@ -1,5 +1,7 @@
 {
     "name": "United Kingdom",
+    "id": "uk",
+    "base": "itu-region1",
     "note": "Derived from public regulatory allocations (ITU Region 1 and the Ofcom UK frequency allocation table) and from standard, widely published broadcast, amateur, aeronautical and maritime ranges. INFORMATIONAL ONLY - a display aid, not an authoritative or licensing reference. Edges are rounded to the published band limits; local licence conditions, notices of variation and channel plans are not modelled. JSON has no comment syntax, so this note lives in the data; the loader ignores unknown keys.",
     "bands": [
         { "start": 148500, "end": 283500, "name": "Longwave Broadcast", "service": "broadcast" },
@@ -37,14 +39,14 @@
         { "start": 137100000, "end": 137925000, "name": "NOAA APT / Meteor LRPT", "service": "satellite" },
         { "start": 144000000, "end": 146000000, "name": "2 m Amateur", "service": "amateur" },
         { "start": 145798000, "end": 145802000, "name": "ISS Downlink (145.800 MHz)", "service": "iss" },
-        { "start": 156000000, "end": 162025000, "name": "Marine VHF", "service": "marine" },
+        { "start": 156000000, "end": 162037500, "name": "Marine VHF", "service": "marine" },
         { "start": 161962500, "end": 162037500, "name": "Marine AIS", "service": "marine" },
-        { "start": 174928000, "end": 239200000, "name": "DAB Band III", "service": "broadcast" },
+        { "start": 174928000, "end": 230000000, "name": "DAB Band III", "service": "broadcast" },
         { "start": 430000000, "end": 440000000, "name": "70 cm Amateur", "service": "amateur" },
         { "start": 433050000, "end": 434790000, "name": "ISM 433 MHz", "service": "mobile" },
         { "start": 446000000, "end": 446200000, "name": "PMR446", "service": "mobile" },
         { "start": 863000000, "end": 870000000, "name": "SRD / ISM 868 MHz", "service": "mobile" },
         { "start": 1089000000, "end": 1091000000, "name": "ADS-B (1090 MHz)", "service": "aviation" },
-        { "start": 1240000000, "end": 1325000000, "name": "23 cm Amateur", "service": "amateur" }
+        { "start": 1240000000, "end": 1300000000, "name": "23 cm Amateur", "service": "amateur" }
     ]
 }
