@@ -143,6 +143,34 @@ void testLoopbackWithoutPasswordServesOpenly() {
     CHECK(static_cast<bool>(cli.Get("/app.css")));
     CHECK(static_cast<bool>(cli.Get("/app.js")));
 
+    // THE THREE FACES, and the policy that lets the browser fetch them.
+    //
+    // Both halves are asserted because BOTH fail SILENTLY. A missing route
+    // gives the page a 404 it never reports; a CSP without font-src blocks the
+    // fetch outright under default-src 'none', and either way the page simply
+    // renders in the visitor's system font and looks almost right. Nothing goes
+    // red, nothing is logged, and the only symptom is that the remote interface
+    // is not lettered like the bench - which is exactly the complaint that led
+    // to this being added, and would be unfindable without these four lines.
+    {
+        const std::string csp = page ? page->get_header_value("Content-Security-Policy") : "";
+        CHECK(csp.find("font-src 'self'") != std::string::npos);
+    }
+    for (const char* path : {"/font/ui.ttf", "/font/legend.ttf", "/font/reading.ttf"}) {
+        auto font = cli.Get(path);
+        CHECK(static_cast<bool>(font));
+        if (font) {
+            CHECK(font->status == 200);
+            // A TrueType file starts with 0x00010000; anything else means the
+            // route answered with something that is not a font.
+            CHECK(font->body.size() > 1024);
+            CHECK(font->body.size() >= 4 && static_cast<unsigned char>(font->body[0]) == 0x00 &&
+                  static_cast<unsigned char>(font->body[1]) == 0x01 &&
+                  static_cast<unsigned char>(font->body[2]) == 0x00 &&
+                  static_cast<unsigned char>(font->body[3]) == 0x00);
+        }
+    }
+
     // No cookie, and the API answers anyway: this binding requires no auth.
     auto status = cli.Get("/api/status");
     CHECK(static_cast<bool>(status));

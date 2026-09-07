@@ -16,6 +16,7 @@
 #include <nlohmann/json.hpp>
 
 #include <httplib.h>
+#include "gui/font_blobs.hpp"
 
 namespace cascade::net {
 namespace {
@@ -129,10 +130,29 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
   <header id="toolbar">
     <span class="brand">FoxSDR</span>
     <button id="playstop" class="primary">Start</button>
+    <div id="master"><span class="cap">Master</span><span class="lampset"
+      ><i class="lamp" id="lampRun"><b>RUN</b></i
+      ><i class="lamp" id="lampDec"><b>DEC</b></i
+      ><i class="lamp" id="lampMute"><b>MUTE</b></i
+      ><i class="lamp" id="lampFail"><b>FAIL</b></i
+    ></span></div>
+    <div id="tuned"><span class="cap">Tuned &middot; Hertz</span>
+      <div class="housing">
+        <div id="freqDigits" title="scroll a digit to tune, like the desktop readout"></div>
+        <span class="unit">Hz</span>
+      </div>
+    </div>
     <button id="listen">Listen</button>
-    <div id="freqDigits" title="scroll a digit to tune, like the desktop readout"></div>
-    <span class="unit">Hz</span>
-    <label class="inline">Vol <input id="vol" type="range" min="0" max="1" step="0.01"><span id="volVal" class="val"></span></label>
+    <div id="volume"><span class="cap">Volume</span>
+      <div class="knobwrap">
+        <div id="volKnob" class="knob" role="slider" tabindex="0"
+             title="drag up or down, or scroll, to set the volume"><i></i></div>
+        <input id="vol" type="range" min="0" max="1" step="0.01" class="offpanel">
+      </div>
+      <span id="volVal" class="val"></span></div>
+    <div id="meters"><div class="meter"><span class="cap">Sample rate</span>
+      <div class="dial"><i id="srNeedle"></i></div>
+      <span id="srMeter" class="val"></span></div></div>
     <span class="spacer"></span>
     <span id="mutedBy" class="badge warn hidden"></span>
     <span id="remote" class="badge hidden">remote access</span>
@@ -296,11 +316,34 @@ constexpr char kAppCss1[] = R"CSS(
   /* Amber is a READING, phosphor is WHAT THE RADIO HEARD, rust is TROUBLE. */
   --read:#f0a840; --read-dim:#8a5a2a; --trace:#8fd9a0;
   --fault:#b8552f; --fault-ink:#e07a4e;
-  --side:310px; --bar:52px; }
+  --side:310px; --bar:78px; }
 * { box-sizing: border-box; }
 html, body { height:100%; }
+/* THE THREE FACES, from src/gui/fonts.hpp, served by this same process from
+   the bytes ImGui already draws with. The roles are the desktop's, one for one:
+   ui is everything a hand operates and all prose, legend is an engraved caption
+   or a section plate, reading is DIGITS and very nearly nothing else - a
+   monospaced face so a counter's figures stop jittering sideways as they
+   change. Until these arrived the page asked for system-ui, so it carried the
+   bench's palette exactly and was still lettered in whatever the visitor's
+   machine happened to have. */
+@font-face { font-family:"FoxSDR UI"; src:url("/font/ui.ttf") format("truetype");
+             font-weight:500; font-display:swap; }
+@font-face { font-family:"FoxSDR Legend"; src:url("/font/legend.ttf") format("truetype");
+             font-weight:600; font-display:swap; }
+@font-face { font-family:"FoxSDR Reading"; src:url("/font/reading.ttf") format("truetype");
+             font-weight:400; font-display:swap; }
+
 body { margin:0; background:var(--bg); color:var(--fg);
-       font:13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; overflow:hidden; }
+       /* 15px, not the desktop's 21: Saira Condensed is CONDENSED, so it buys
+          back the width a larger size costs, but this layout was drawn around
+          a 13px system face and every fixed height in it (--bar, --side) was
+          chosen against that. Raising the face and the size together, blind,
+          is how you overflow a status strip on somebody else's screen. This is
+          the size that changes the lettering without moving the furniture; the
+          rest of the way is a change to make with the page in front of you. */
+       font:15px/1.45 "FoxSDR UI", system-ui, -apple-system, "Segoe UI", sans-serif;
+       overflow:hidden; }
 .hidden { display:none !important; }
 
 /* The desktop's shape: a toolbar across the top, a fixed control column down
@@ -313,7 +356,8 @@ body { margin:0; background:var(--bg); color:var(--fg);
 #toolbar { grid-area:bar; display:flex; align-items:center; gap:.6rem;
            padding:0 .75rem; background:var(--panel);
            border-bottom:1px solid var(--edge); }
-.brand { font-weight:700; letter-spacing:.02em; margin-right:.25rem; }
+.brand { font-family:"FoxSDR Legend", system-ui, sans-serif;
+         font-weight:600; letter-spacing:.02em; margin-right:.25rem; }
 .spacer { flex:1 1 auto; }
 .unit { color:var(--dim); font-size:.75rem; margin-left:-.3rem; }
 label.inline { flex-direction:row; align-items:center; gap:.4rem; color:var(--dim); }
@@ -404,7 +448,8 @@ body[data-view="decoded"] #decoded { flex:1 1 auto; max-height:none; }
 #status .cell { display:flex; gap:.35rem; align-items:baseline; }
 #status .k { color:var(--dim); text-transform:uppercase; letter-spacing:.05em;
              font-size:.68rem; }
-#status .v { color:var(--read); font-variant-numeric:tabular-nums; }
+#status .v { color:var(--read); font-family:"FoxSDR Reading", ui-monospace, monospace;
+             font-variant-numeric:tabular-nums; }
 )CSS";
 
 // The second half: type, form controls, panels and the responsive rules.
@@ -413,7 +458,8 @@ h1 { font-size:1.1rem; margin:0 0 .5rem; }
 h2 { font-size:.95rem; margin:0 0 .6rem; }
 label { display:flex; flex-direction:column; gap:.15rem; color:var(--dim);
         font-size:.75rem; }
-label .val { color:var(--read); font-variant-numeric:tabular-nums; }
+label .val { color:var(--read); font-family:"FoxSDR Reading", ui-monospace, monospace;
+             font-variant-numeric:tabular-nums; }
 input, select { background:var(--well); border:1px solid var(--edge); color:var(--fg);
                 padding:.3rem; border-radius:3px; font:inherit; width:100%;
                 accent-color:var(--read); }
@@ -566,10 +612,220 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 }
 )CSS";
 
+// Third literal for the same reason there is a second: MSVC caps a single
+// string literal at 16380 bytes (C2026), and the bench chrome and its
+// instruments took kAppCss2 past it. The split is a compiler limit, not a
+// grouping - appCss() joins all three and the browser sees one sheet.
+constexpr char kAppCss3[] = R"CSS(
+/* ============================================================================
+   THE BENCH ITSELF, ported from the desktop's chrome.
+   Everything above this point styles CONTROLS. This styles the INSTRUMENT they
+   are mounted in: a milled panel screwed into a dark case, with the displays
+   sunk into it behind bezels. The palette was already exact; what was missing
+   was that the page had no depth - a flat form in the right colours reads as a
+   web page wearing a costume, which is precisely the complaint.
+   ========================================================================= */
+
+:root { --ground:#100d08; --screwhead:#6a6252; --screwslot:#2a251c; }
+
+/* The case the panel is screwed into. */
+html, body { background:var(--ground); }
+body { padding:9px; box-sizing:border-box; }
+
+/* The panel: brass, milled, lit from above, with four screws holding it down.
+   The screws are background layers rather than elements so no markup changes
+   and nothing can catch a pointer. */
+#app { height:calc(100vh - 18px); border-radius:13px;
+       border:1px solid #241f17;
+       background:
+         radial-gradient(circle at 15px 15px, var(--screwslot) 0 1.5px, var(--screwhead) 1.6px 4.2px, transparent 4.6px),
+         radial-gradient(circle at calc(100% - 15px) 15px, var(--screwslot) 0 1.5px, var(--screwhead) 1.6px 4.2px, transparent 4.6px),
+         radial-gradient(circle at 15px calc(100% - 15px), var(--screwslot) 0 1.5px, var(--screwhead) 1.6px 4.2px, transparent 4.6px),
+         radial-gradient(circle at calc(100% - 15px) calc(100% - 15px), var(--screwslot) 0 1.5px, var(--screwhead) 1.6px 4.2px, transparent 4.6px),
+         linear-gradient(180deg, #574e3d 0, #4a4234 46%, #403829 100%);
+       box-shadow: inset 0 1px 0 rgba(255,241,208,.13),
+                   inset 0 -1px 0 rgba(0,0,0,.45),
+                   0 12px 34px rgba(0,0,0,.6);
+       overflow:hidden; }
+
+/* The header is part of the panel, parted from it by a scribed line rather
+   than by a block of different colour. */
+#toolbar { background:transparent; border-bottom:1px solid rgba(0,0,0,.42);
+           box-shadow:0 1px 0 rgba(255,241,208,.07); }
+
+/* The control column likewise: a scribed edge, not a slab. */
+#side { background:transparent; border-right:1px solid rgba(0,0,0,.42);
+        box-shadow:1px 0 0 rgba(255,241,208,.06); }
+
+/* ENGRAVED SECTION PLATES. The desktop letters these small, wide and dim -
+   they are cut into the panel, not printed on it, so they take the engraved
+   ink colour and a highlight below the stroke. */
+#side > details > summary {
+    font-family:"FoxSDR Legend", system-ui, sans-serif;
+    font-size:.72rem; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--faint); text-shadow:0 1px 0 rgba(255,241,208,.06);
+    border-bottom:1px solid rgba(0,0,0,.3); }
+
+/* THE DISPLAYS, SUNK IN. A tube sits behind a bezel with the panel edge
+   catching the light at the top and the glass falling away into shadow. */
+#spectrum, #scope, canvas.wf, #panels canvas, #map {
+    border-radius:5px;
+    box-shadow: inset 0 0 0 1px #241f17,
+                inset 0 2px 7px rgba(0,0,0,.75),
+                0 1px 0 rgba(255,241,208,.08); }
+
+/* THE MAKER'S PLATE. The desktop wears one; this is the same idea, riveted to
+   the foot of the panel where the status strip already runs. */
+#status { position:relative; }
+#status::after {
+    content:"TYPE 71 \00B7 MK II";
+    position:absolute; right:.6rem; top:50%; transform:translateY(-50%);
+    font-family:"FoxSDR Legend", system-ui, sans-serif;
+    font-size:.66rem; letter-spacing:.18em; color:var(--faint);
+    border:1px solid rgba(0,0,0,.4); border-radius:3px;
+    padding:.1rem .45rem;
+    background:linear-gradient(180deg, rgba(255,241,208,.05), rgba(0,0,0,.12));
+    text-shadow:0 1px 0 rgba(255,241,208,.06); }
+
+/* ---- THE HEADER INSTRUMENTS ---------------------------------------------
+   A bench header is not a row of web controls. It is a STOP button you could
+   hit with the heel of your hand, a cluster of lamps that says what the thing
+   is doing, and a counter sunk into the panel behind glass. Each of these is
+   captioned in the engraved face, because on the desktop every instrument is
+   labelled on the metal above it. */
+
+#toolbar { gap:1.1rem; padding:0 1rem; }
+
+/* Every caption on the panel: small, wide, engraved, and sitting ON the brass
+   rather than in a box. */
+#toolbar .cap {
+    display:block; font-family:"FoxSDR Legend", system-ui, sans-serif;
+    font-size:.62rem; letter-spacing:.19em; text-transform:uppercase;
+    color:var(--faint); text-align:center; margin-bottom:.22rem;
+    text-shadow:0 1px 0 rgba(255,241,208,.07); }
+
+/* THE STOP BUTTON. Domed, lacquered, and lit from the upper left the way a
+   real one is - the highlight is off-centre because a sphere's is. */
+#toolbar #playstop.primary {
+    width:56px; height:56px; border-radius:50%; padding:0;
+    font-family:"FoxSDR Legend", system-ui, sans-serif;
+    font-size:.72rem; letter-spacing:.12em; color:#2a1109;
+    border:1px solid #35170c;
+    background:
+      radial-gradient(circle at 36% 30%, rgba(255,225,200,.62) 0 12%, rgba(255,170,130,.20) 26%, transparent 52%),
+      radial-gradient(circle at 50% 118%, rgba(0,0,0,.5) 0 40%, transparent 70%),
+      linear-gradient(180deg, #e2643a 0, #c4472a 52%, #9c3320 100%);
+    box-shadow: inset 0 1px 0 rgba(255,220,190,.5),
+                inset 0 -3px 6px rgba(0,0,0,.42),
+                0 3px 0 #4a1c10, 0 6px 12px rgba(0,0,0,.55);
+    text-shadow:0 1px 0 rgba(255,210,180,.45); }
+#toolbar #playstop.primary:active {
+    box-shadow: inset 0 2px 7px rgba(0,0,0,.55), 0 1px 0 #4a1c10;
+    transform:translateY(2px); }
+
+/* THE MASTER LAMP CLUSTER. Dark glass until it is lit; a lit lamp glows onto
+   the panel around it, which is the whole reason to draw a lamp rather than a
+   coloured square. */
+#master .lampset { display:flex; gap:.62rem; }
+#master .lamp { display:flex; flex-direction:column; align-items:center; gap:.18rem;
+                font-style:normal; }
+#master .lamp::before {
+    content:""; width:11px; height:11px; border-radius:50%;
+    background:radial-gradient(circle at 38% 32%, #3a3428 0 30%, #1b1810 75%);
+    box-shadow: inset 0 1px 1px rgba(0,0,0,.7), 0 1px 0 rgba(255,241,208,.09); }
+#master .lamp b { font-family:"FoxSDR Legend", system-ui, sans-serif;
+                  font-weight:600; font-size:.54rem; letter-spacing:.1em;
+                  color:var(--faint); }
+#master .lamp.on::before { background:radial-gradient(circle at 38% 32%, #d6ffe0 0 22%, var(--trace) 55%, #2f5f38 100%);
+                           box-shadow:0 0 7px rgba(143,217,160,.75), inset 0 1px 1px rgba(255,255,255,.35); }
+#master .lamp.on b { color:var(--trace); }
+#master .lamp.warn::before { background:radial-gradient(circle at 38% 32%, #ffe6b8 0 22%, var(--read) 55%, #7a4a1c 100%);
+                             box-shadow:0 0 7px rgba(240,168,64,.7), inset 0 1px 1px rgba(255,255,255,.35); }
+#master .lamp.warn b { color:var(--read); }
+#master .lamp.bad::before { background:radial-gradient(circle at 38% 32%, #ffcdb8 0 22%, var(--fault-ink) 55%, #5e2513 100%);
+                            box-shadow:0 0 8px rgba(224,122,78,.8), inset 0 1px 1px rgba(255,255,255,.3); }
+#master .lamp.bad b { color:var(--fault-ink); }
+
+/* THE COUNTER. Digits on glass, each in its own milled cell, the whole thing
+   sunk into the panel. The commas sit between the cells on the brass, not in
+   them, exactly as they do on a real counter. */
+#tuned .housing { display:flex; align-items:center; gap:.42rem;
+                  padding:.3rem .5rem; border-radius:5px;
+                  background:linear-gradient(180deg, #0a0d09 0, #0d120e 100%);
+                  box-shadow: inset 0 0 0 1px #241f17,
+                              inset 0 2px 8px rgba(0,0,0,.8),
+                              0 1px 0 rgba(255,241,208,.09); }
+#freqDigits { font-size:1.45rem; gap:3px; }
+#freqDigits span.d {
+    min-width:1.05ch; padding:.05rem .16rem; border-radius:2px; text-align:center;
+    background:linear-gradient(180deg, #1a1b14 0, #101309 100%);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.8), 0 1px 0 rgba(255,241,208,.05);
+    text-shadow:0 0 7px rgba(240,168,64,.5); }
+#freqDigits span.d:hover { background:linear-gradient(180deg,#2b2a1c 0,#1d1c12 100%); }
+#tuned .unit { margin-left:.1rem; font-size:.62rem; letter-spacing:.12em;
+               text-transform:uppercase; color:var(--faint); }
+
+/* ---- KNOB AND METER ------------------------------------------------------
+   The two instruments a bench header has that a web page never does. Both are
+   built from the range input and the status the page already had; the input is
+   moved off-panel rather than removed, so every keyboard and assistive path it
+   carried still works and the knob is the visual on top of it. */
+
+.offpanel { position:absolute; width:1px; height:1px; margin:-1px;
+            clip-path:inset(50%); overflow:hidden; }
+
+#volume { display:flex; flex-direction:column; align-items:center; }
+#volume .knobwrap { position:relative; }
+#volume .val { font-family:"FoxSDR Reading", ui-monospace, monospace;
+               font-size:.62rem; color:var(--read); margin-top:.12rem; }
+
+/* Turned aluminium: a milled edge, a domed face, a lit top-left, and a pointer
+   scribed into it. --turn is degrees, set from the input's value. */
+.knob { --turn:0deg; width:40px; height:40px; border-radius:50%; cursor:ns-resize;
+        background:
+          radial-gradient(circle at 36% 30%, rgba(255,241,208,.30) 0 16%, transparent 46%),
+          conic-gradient(from 0deg, #554c3b, #6e6552 12%, #4a4234 26%, #6e6552 40%,
+                         #514835 54%, #6e6552 68%, #47402f 84%, #554c3b 100%);
+        box-shadow: inset 0 0 0 1px #241f17, inset 0 -2px 5px rgba(0,0,0,.5),
+                    0 2px 5px rgba(0,0,0,.5), 0 1px 0 rgba(255,241,208,.1);
+        position:relative; }
+.knob::after { content:""; position:absolute; inset:7px; border-radius:50%;
+               background:radial-gradient(circle at 38% 30%, #4f4736 0, #3a3327 70%);
+               box-shadow:inset 0 1px 0 rgba(255,241,208,.12); }
+.knob i { position:absolute; left:50%; top:5px; width:2px; height:12px;
+          margin-left:-1px; border-radius:1px; background:var(--ivory,#efe7d2);
+          box-shadow:0 0 4px rgba(239,231,210,.5); z-index:1;
+          transform-origin:50% 15px; transform:rotate(var(--turn)); }
+.knob:focus-visible { outline:1px solid var(--accent); outline-offset:3px; }
+
+/* The meter: a cream dial in a bezel, a red needle, a scale scribed across it.
+   Cream and red because that is what the bench uses and they are the only two
+   colours on it that are not brass, enamel or phosphor. */
+#meters { display:flex; gap:.8rem; margin-left:auto; }
+.meter { display:flex; flex-direction:column; align-items:center; }
+.meter .val { font-family:"FoxSDR Reading", ui-monospace, monospace;
+              font-size:.6rem; color:var(--faint); margin-top:.1rem; }
+.dial { --sweep:0deg; position:relative; width:62px; height:32px; overflow:hidden;
+        border-radius:5px 5px 2px 2px;
+        background:
+          repeating-conic-gradient(from 202deg at 50% 100%,
+            rgba(60,50,35,.55) 0 .7deg, transparent .7deg 13deg),
+          linear-gradient(180deg, #efe7d2 0, #d8cfb4 100%);
+        box-shadow: inset 0 0 0 1px #241f17, inset 0 2px 5px rgba(0,0,0,.28),
+                    0 1px 0 rgba(255,241,208,.1); }
+.dial i { position:absolute; left:50%; bottom:2px; width:1.5px; height:24px;
+          margin-left:-.75px; background:linear-gradient(180deg,#b8552f,#7d2f18);
+          transform-origin:50% 100%; transform:rotate(var(--sweep));
+          transition:transform .35s ease-out; }
+.dial::after { content:""; position:absolute; left:50%; bottom:-3px; width:7px;
+               height:7px; margin-left:-3.5px; border-radius:50%;
+               background:#3b3529; box-shadow:0 0 0 1px rgba(0,0,0,.4); }
+)CSS";
+
 // The joined style sheet, built once on first use - the pieces are
 // compile-time constants, so there is nothing to invalidate.
 const std::string& appCss() {
-    static const std::string joined = std::string(kAppCss1) + kAppCss2;
+    static const std::string joined = std::string(kAppCss1) + kAppCss2 + kAppCss3;
     return joined;
 }
 
@@ -1717,6 +1973,50 @@ function fmtBytes(n) {
 
 let lastBmKey = '', lastDecodedKey = '';
 
+// THE VOLUME KNOB. A range input cannot be made to look like a turned knob, so
+// the input is moved off-panel and this drives it: drag, wheel and the arrow
+// keys all end in the same setter the slider used, and the input stays the one
+// source of the value. Dispatching a real 'input' event means every listener
+// that was already attached to the slider keeps working untouched.
+let knobPaint = null;
+function knobSetup() {
+  const knob = document.getElementById('volKnob');
+  const input = document.getElementById('vol');
+  if (!knob || !input) return;
+  const paint = () => {
+    const f = (parseFloat(input.value) - input.min) / (input.max - input.min);
+    // 270 degrees of travel, centred: the same sweep the meter uses.
+    knob.style.setProperty('--turn', (-135 + f * 270).toFixed(1) + 'deg');
+    knob.setAttribute('aria-valuenow', input.value);
+  };
+  const nudge = (delta) => {
+    const v = Math.max(parseFloat(input.min),
+                       Math.min(parseFloat(input.max), parseFloat(input.value) + delta));
+    input.value = v;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    paint();
+  };
+  knob.addEventListener('wheel', (e) => { e.preventDefault(); nudge(e.deltaY < 0 ? 0.02 : -0.02); },
+                        { passive: false });
+  knob.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { e.preventDefault(); nudge(0.02); }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { e.preventDefault(); nudge(-0.02); }
+  });
+  knob.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    knob.setPointerCapture(e.pointerId);
+    let lastY = e.clientY;
+    const move = (ev) => { nudge((lastY - ev.clientY) * 0.005); lastY = ev.clientY; };
+    const up = () => { knob.removeEventListener('pointermove', move);
+                       knob.removeEventListener('pointerup', up); };
+    knob.addEventListener('pointermove', move);
+    knob.addEventListener('pointerup', up);
+  });
+  input.addEventListener('input', paint);
+  knobPaint = paint;
+  paint();
+}
+
 function reflectExtras(s) {
   // WHY THE STREAM IS SILENT, beside the Listen button that started it. A
   // browser hearing nothing has no other way to tell a muted radio from a
@@ -1726,6 +2026,35 @@ function reflectExtras(s) {
   const mb = $('mutedBy');
   mb.textContent = s.audioMutedBy ? ('muted by ' + s.audioMutedBy) : '';
   mb.classList.toggle('hidden', !s.audioMutedBy);
+
+  // THE MASTER LAMPS. Four states worth reading across a room, driven from the
+  // status the page already has rather than from anything new: is it running,
+  // is anything decoding, is the audio muted, and has something failed. A lamp
+  // is dark glass until its condition is true - the same rule as the bench,
+  // where an unlit lamp means nothing is wrong rather than nothing is known.
+  const lamp = (id, on, cls) => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.toggle('on', !!on && !cls);
+    el.classList.toggle('warn', !!on && cls === 'warn');
+    el.classList.toggle('bad', !!on && cls === 'bad');
+  };
+  lamp('lampRun', s.running);
+  lamp('lampDec', (s.plugins || []).length > 0);
+  lamp('lampMute', !!s.audioMutedBy, 'warn');
+  lamp('lampFail', !!(s.recordError || s.sourceError), 'bad');
+
+  // THE METER. 0 to 10 MS/s across 270 degrees, which covers every rate the
+  // device combo offers with the top of the scale left as headroom - a needle
+  // pinned at full scale tells you nothing about what it is pinned at.
+  const dial = document.querySelector('#meters .dial');
+  if (dial) {
+    const msps = (s.sampleRateHz || 0) / 1e6;
+    const frac = Math.max(0, Math.min(1, msps / 10));
+    dial.style.setProperty('--sweep', (-135 + frac * 270).toFixed(1) + 'deg');
+    const sr = $('srMeter');
+    if (sr) sr.textContent = msps ? msps.toFixed(3) + ' MS/s' : '-';
+  }
 
   // Recorder. The buttons carry their own state, so one control both starts
   // and stops — the same shape the desktop's Record/Stop pair has.
@@ -1815,6 +2144,13 @@ function reflect(s) {
   $('sqVal').textContent = s.squelchDb.toFixed(0) + ' dB';
   syncControl($('vol'), s.volume);
   $('volVal').textContent = Math.round(s.volume * 100) + '%';
+  // syncControl writes the input's value DIRECTLY, without an 'input' event -
+  // deliberately, so a server refresh cannot echo back as a fresh command. The
+  // knob is painted from that same value and would otherwise keep pointing
+  // wherever it was last dragged while the radio was somewhere else, which is
+  // a lying instrument. Found by setting the input and watching the pointer
+  // stay put.
+  if (typeof knobPaint === 'function') knobPaint();
 
   // Display range drives the client-side colour mapping directly.
   viewDbMin = s.dbMin; viewDbMax = s.dbMax;
@@ -2266,6 +2602,9 @@ $('logout').addEventListener('click', async () => {
   await refreshSession();
 });
 
+// The knob is a face over the volume input, so it is wired once here beside
+// everything else the page attaches at load.
+knobSetup();
 refreshSession();
 )JS";
 
@@ -2568,13 +2907,41 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         // no inline style, no external origins of any kind, and no framing.
         res.set_header("Content-Security-Policy",
                        "default-src 'none'; script-src 'self'; style-src 'self'; "
-                       "connect-src 'self'; img-src 'self' data:; "
+                       "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
                        "form-action 'none'; frame-ancestors 'none'; base-uri 'none'");
         res.set_content(kIndexHtml, "text/html; charset=utf-8");
     });
 
     svr.Get("/app.css", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(appCss(), "text/css; charset=utf-8");
+    });
+
+    // THE THREE FACES THE BENCH IS LETTERED IN, served to the browser.
+    //
+    // These are the same bytes the desktop draws with - already in the binary
+    // for ImGui, so serving them costs nothing but a route. Until now the
+    // remote interface asked for system-ui and got whatever the visitor's
+    // machine happened to have, which is how a page carrying the palette
+    // exactly still did not look like the product.
+    //
+    // Both families are SIL Open Font License with a Reserved Font Name:
+    // redistribution is granted, modification while keeping the name is not,
+    // and these are handed on byte for byte. immutable, because a face never
+    // changes without its bytes changing, and re-fetching three files on every
+    // page load over someone's home uplink is a waste of their bandwidth.
+    const auto serveFont = [](const unsigned char* data, std::size_t len,
+                              httplib::Response& res) {
+        res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+        res.set_content(reinterpret_cast<const char*>(data), len, "font/ttf");
+    };
+    svr.Get("/font/ui.ttf", [serveFont](const httplib::Request&, httplib::Response& res) {
+        serveFont(cascade::gui::fonts::uiTtf(), cascade::gui::fonts::uiTtfLen(), res);
+    });
+    svr.Get("/font/legend.ttf", [serveFont](const httplib::Request&, httplib::Response& res) {
+        serveFont(cascade::gui::fonts::legendTtf(), cascade::gui::fonts::legendTtfLen(), res);
+    });
+    svr.Get("/font/reading.ttf", [serveFont](const httplib::Request&, httplib::Response& res) {
+        serveFont(cascade::gui::fonts::readingTtf(), cascade::gui::fonts::readingTtfLen(), res);
     });
 
     svr.Get("/app.js", [](const httplib::Request&, httplib::Response& res) {
