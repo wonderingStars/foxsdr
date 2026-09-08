@@ -157,6 +157,15 @@ public:
     void drawBinRange(const float* dbBins, int n, double firstBin, double lastBin,
                       float width, float height, const Chrome* chrome = nullptr);
 
+    // THE HEADER'S FOOTPRINT from the last draw, in screen pixels: the y
+    // below its last line and the x past its widest one. Anything else that
+    // letters the top-left of the panel - the band-plan ribbon's labels -
+    // asks these before choosing a place, so no second line is ever printed
+    // through "SPECTRUM - 1024 BIN". Both are the panel's own edge until the
+    // first draw.
+    float headerBottom() const { return headerBottom_; }
+    float headerRight() const { return headerRight_; }
+
     // Translucent band fill + edge lines + center line, painted over the
     // panel rectangle recorded by the most recent draw()/drawBinRange() call
     // (that call's layout advance moved the ImGui cursor past the panel, so
@@ -327,6 +336,8 @@ private:
     float panelX_ = 0.0f;
     float panelY_ = 0.0f;
     bool panelValid_ = false;
+    float headerBottom_ = 0.0f;
+    float headerRight_ = 0.0f;
 };
 
 }  // namespace cascade::gui

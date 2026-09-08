@@ -1211,6 +1211,59 @@ int AppWindow::run(int frames) {
                 } else {
                     cascade::core::diagWarnf("shot: %s", err.c_str());
                 }
+
+                // THE TORN-OFF WINDOWS TOO. Each is its own GL window with
+                // its own framebuffer, already presented by
+                // RenderPlatformWindowsDefault above, so their picture is read
+                // from the FRONT buffer of each. One file per viewport,
+                // suffixed -vp<n>, so a store or a map dragged onto another
+                // screen is photographed with the same key as the bench.
+                if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
+                    GLFWwindow* const restore = glfwGetCurrentContext();
+                    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+                    int vpIndex = 0;
+                    for (int i = 0; i < pio.Viewports.Size; ++i) {
+                        ImGuiViewport* vp = pio.Viewports[i];
+                        if (vp == nullptr || vp == ImGui::GetMainViewport() ||
+                            vp->PlatformHandle == nullptr ||
+                            (vp->Flags & ImGuiViewportFlags_IsMinimized) != 0) {
+                            continue;
+                        }
+                        GLFWwindow* vw = static_cast<GLFWwindow*>(vp->PlatformHandle);
+                        int vw_w = 0, vw_h = 0;
+                        glfwGetFramebufferSize(vw, &vw_w, &vw_h);
+                        if (vw_w <= 0 || vw_h <= 0) { continue; }
+                        glfwMakeContextCurrent(vw);
+                        cascade::core::HostImage vimg;
+                        vimg.plugin = "self";
+                        vimg.width = static_cast<std::uint32_t>(vw_w);
+                        vimg.height = static_cast<std::uint32_t>(vw_h);
+                        vimg.format = CASCADE_IMAGE_RGB24;
+                        vimg.complete = true;
+                        std::vector<std::uint8_t> vraw(static_cast<std::size_t>(vw_w) * vw_h * 3u);
+                        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                        glReadBuffer(GL_FRONT);
+                        glReadPixels(0, 0, vw_w, vw_h, GL_RGB, GL_UNSIGNED_BYTE, vraw.data());
+                        glReadBuffer(GL_BACK);
+                        vimg.pixels.resize(vraw.size());
+                        const std::size_t vs = static_cast<std::size_t>(vw_w) * 3u;
+                        for (int y = 0; y < vw_h; ++y) {
+                            std::memcpy(vimg.pixels.data() + static_cast<std::size_t>(y) * vs,
+                                        vraw.data() + static_cast<std::size_t>(vw_h - 1 - y) * vs,
+                                        vs);
+                        }
+                        char vname[64];
+                        std::snprintf(vname, sizeof vname, "shot-%llu-vp%d.bmp",
+                                      static_cast<unsigned long long>(rendered), vpIndex++);
+                        const std::filesystem::path vout = dir / vname;
+                        if (cascade::core::writeBmp24(vimg, vout.string(), err)) {
+                            cascade::core::diagLogf("shot: wrote %s", vout.string().c_str());
+                        } else {
+                            cascade::core::diagWarnf("shot: %s", err.c_str());
+                        }
+                    }
+                    glfwMakeContextCurrent(restore);
+                }
             }
         }
 
@@ -11180,6 +11233,10 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+    // The rectangles the names drawn so far occupy (x0, y0, x1, y1), so a
+    // later name can keep off them. A handful per frame at most.
+    std::vector<ImVec4> placedLabels;
+    placedLabels.reserve(vis.size());
     for (const cascade::core::BandEntry* b : vis) {
         // entries()/visible() are ordered widest-first on a shared start, so
         // walking the vector paints containing bands before the narrower ones
@@ -11219,8 +11276,45 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
                 // Label sits just under its ribbon, in near-white: coloured
                 // text on the coloured ribbon was the least legible part of
                 // the first attempt.
-                drawList->AddText(ImVec2(bx0 + 3.0f, y0 + ribbonH + 1.0f),
-                                  IM_COL32(235, 235, 235, 200), b->name.c_str());
+                //
+                // ...UNLESS THAT IS WHERE THE PANEL'S OWN HEADER IS. The
+                // header ("SPECTRUM - 1024 BIN - EMA 0.50" and its caveat)
+                // occupies the top-left corner, and a band whose ribbon
+                // starts at the left edge put its name straight through it
+                // (seen in 0.84.0: "DAB" printed over the header at the same
+                // height). The spectrum reports the footprint its header
+                // claimed on the last frame; a label that would land inside
+                // it drops below it instead.
+                float labelY = y0 + ribbonH + 1.0f;
+                // A band that runs off the left edge has its name at the
+                // edge, where the dB ladder's figures are lettered; step it
+                // in past them. A band that starts inside the panel keeps
+                // its name at its own start, which is what places it.
+                const bool clippedLeft = bx0 <= x0 + 1.0f;
+                const float labelX = clippedLeft ? x0 + 40.0f : bx0 + 3.0f;
+                if (spectrum_ != nullptr && labelX < spectrum_->headerRight() + 8.0f &&
+                    labelY < spectrum_->headerBottom()) {
+                    labelY = spectrum_->headerBottom();
+                }
+                // AND NOT THROUGH ANOTHER BAND'S NAME. Bands nest - DAB sits
+                // inside VHF Band III - and two that start at the same edge
+                // put their names on the same line. Each name remembers the
+                // room it took; a later one that would land on it steps down
+                // a line instead, as many times as it needs.
+                for (bool moved = true; moved;) {
+                    moved = false;
+                    for (const ImVec4& r : placedLabels) {
+                        const bool overX = labelX < r.z && labelX + sz.x > r.x;
+                        const bool overY = labelY < r.w && labelY + sz.y > r.y;
+                        if (overX && overY) {
+                            labelY = r.w + 2.0f;
+                            moved = true;
+                        }
+                    }
+                }
+                placedLabels.push_back(ImVec4(labelX, labelY, labelX + sz.x, labelY + sz.y));
+                drawList->AddText(ImVec2(labelX, labelY), IM_COL32(235, 235, 235, 200),
+                                  b->name.c_str());
             }
         }
     }
