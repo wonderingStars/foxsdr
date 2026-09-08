@@ -49,8 +49,9 @@ are still moving. What is in the current build:
 - **Hardware.** Anything SoapySDR reaches, with antenna, sample-rate and
   per-stage gain selection. Developed against an Ettus B200; the built-in
   signal generator and IQ-file playback mean it runs with no radio at all.
-- **Working with signals.** Bookmarks, a band scanner, and recording of both
-  audio and raw I/Q.
+- **Working with signals.** Bookmarks, a band scanner with a Skip key and a
+  listen limit so a station that never goes quiet cannot stop it, and
+  recording of both audio and raw I/Q.
 - **Band plans for the whole world.** Labelled service allocations drawn behind
   the spectrum, colour-coded by service on a colour-blind-safe palette, with a
   "what am I tuned to" readout that names the *narrowest* match — 145.800 MHz

@@ -133,6 +133,7 @@ struct ControlRequest {
 
     // --- Scanner --------------------------------------------------------
     std::optional<bool> scannerActive;
+    std::optional<bool> scannerSkip;     // move on from the signal being heard
     std::optional<double> scanStartHz;
     std::optional<double> scanStopHz;
     std::optional<double> scanStepHz;
@@ -169,7 +170,8 @@ struct ControlRequest {
                !soapyArgs && !antenna && !sampleRateHz && !gainName && !gainDb &&
                !agc && !scanDevices && !recordIq && !recordAudio &&
                !bookmarkAdd && !bookmarkTune && !bookmarkRemove &&
-               !scannerActive && !scanStartHz && !scanStopHz && !scanStepHz &&
+               !scannerActive && !scannerSkip && !scanStartHz && !scanStopHz &&
+               !scanStepHz &&
                !pluginFetch && !pluginInstall && !pluginRemove &&
                !pluginTuneName && !pluginTuneAllowed && !pluginPresetName &&
                !pluginPresetIndex;

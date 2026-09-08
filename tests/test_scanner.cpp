@@ -275,5 +275,124 @@ int main() {
         CHECK(stepIs(sc, 20.0, false, true, 100.0e6, St::Scanning, 100.0e6));
     }
 
+    // --- skip(): the operator moves the scan on from a signal that will not
+    //     go quiet (a broadcast station never does). From Paused the NEXT
+    //     tick retunes to the next lattice point and ignores squelch on that
+    //     tick, exactly as the first tune does - the flag still describes the
+    //     frequency just left. The dwell runs fresh from the retune. ----------
+    {
+        Scanner sc;
+        sc.configure(latticeParams());
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 50.0, false, true, 100.2e6, St::Scanning, 100.2e6));
+        CHECK(stepIs(sc, 60.0, true, false, 0, St::Paused, 100.2e6));
+        CHECK(stepIs(sc, 1000.0, true, false, 0, St::Paused, 100.2e6));  // stays put
+        sc.skip();
+        CHECK(sc.state() == St::Scanning);
+        CHECK(stepIs(sc, 1010.0, true, true, 100.4e6, St::Scanning, 100.4e6));
+        CHECK(stepIs(sc, 1020.0, false, false, 0, St::Scanning, 100.4e6));  // 10/50
+        CHECK(stepIs(sc, 1060.0, false, true, 100.0e6, St::Scanning, 100.0e6));  // wraps
+    }
+
+    // --- skip() from Holding, and from the last lattice point (wraps) --------
+    {
+        Scanner sc;
+        sc.configure(latticeParams());
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 50.0, false, true, 100.2e6, St::Scanning, 100.2e6));
+        CHECK(stepIs(sc, 100.0, false, true, 100.4e6, St::Scanning, 100.4e6));
+        CHECK(stepIs(sc, 110.0, true, false, 0, St::Paused, 100.4e6));
+        CHECK(stepIs(sc, 120.0, false, false, 0, St::Holding, 100.4e6));
+        sc.skip();
+        CHECK(stepIs(sc, 130.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+    }
+
+    // --- skip() while Idle is nothing: no state, no retune -------------------
+    {
+        Scanner sc;
+        sc.configure(latticeParams());
+        sc.skip();
+        CHECK(sc.state() == St::Idle);
+        CHECK(!sc.tick(0.0, false).has_value());
+        CHECK(sc.state() == St::Idle);
+    }
+
+    // --- listenMs: an unattended scan moves on by itself after listening to
+    //     one signal for listenMs, quiet or not. The budget starts at the
+    //     tick that found the signal, runs through Paused AND Holding (a
+    //     re-trigger does not refill it), and the retune is emitted on the
+    //     tick the budget runs out, with the threshold met by >=. ------------
+    {
+        Scanner sc;
+        Scanner::Params p = latticeParams();
+        p.listenMs = 300;
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 10.0, true, false, 0, St::Paused, 100.0e6));   // budget starts
+        CHECK(stepIs(sc, 200.0, true, false, 0, St::Paused, 100.0e6));  // 190/300
+        CHECK(stepIs(sc, 309.0, true, false, 0, St::Paused, 100.0e6));  // 299/300
+        CHECK(stepIs(sc, 310.0, true, true, 100.2e6, St::Scanning, 100.2e6));
+        // Squelch is honoured again from the next tick, with a fresh budget.
+        CHECK(stepIs(sc, 320.0, true, false, 0, St::Paused, 100.2e6));
+        CHECK(stepIs(sc, 619.0, true, false, 0, St::Paused, 100.2e6));  // 299/300
+        CHECK(stepIs(sc, 620.0, true, true, 100.4e6, St::Scanning, 100.4e6));
+    }
+    {
+        // Spanning a hold: Paused 90 ms, Holding 100 ms, re-trigger, and the
+        // budget picks up at 190 rather than starting over.
+        Scanner sc;
+        Scanner::Params p = latticeParams();
+        p.listenMs = 300;
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 10.0, true, false, 0, St::Paused, 100.0e6));
+        CHECK(stepIs(sc, 100.0, false, false, 0, St::Holding, 100.0e6));  // 90
+        CHECK(stepIs(sc, 200.0, true, false, 0, St::Paused, 100.0e6));    // 190
+        CHECK(stepIs(sc, 309.0, true, false, 0, St::Paused, 100.0e6));    // 299
+        CHECK(stepIs(sc, 310.0, true, true, 100.2e6, St::Scanning, 100.2e6));
+    }
+    {
+        // A budget that runs out during a HOLD does nothing by itself: the
+        // hold ends the normal way (holdMs of quiet, then resumeMs).
+        Scanner sc;
+        Scanner::Params p = latticeParams();  // hold 200, resume 100
+        p.listenMs = 50;
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 10.0, true, false, 0, St::Paused, 100.0e6));
+        CHECK(stepIs(sc, 20.0, false, false, 0, St::Holding, 100.0e6));
+        CHECK(stepIs(sc, 100.0, false, false, 0, St::Holding, 100.0e6));  // budget gone
+        CHECK(stepIs(sc, 220.0, false, false, 0, St::Scanning, 100.0e6)); // hold 200 met
+        CHECK(stepIs(sc, 320.0, false, true, 100.2e6, St::Scanning, 100.2e6));  // resume
+    }
+
+    // --- listenMs 0 (the default) listens until quiet, however long; a
+    //     negative or NaN value is the same as 0 -----------------------------
+    {
+        Scanner sc;
+        sc.configure(latticeParams());
+        CHECK(Scanner::Params{}.listenMs == 0.0);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 10.0, true, false, 0, St::Paused, 100.0e6));
+        CHECK(stepIs(sc, 1.0e7, true, false, 0, St::Paused, 100.0e6));
+        CHECK(stepIs(sc, 2.0e7, true, false, 0, St::Paused, 100.0e6));
+    }
+    {
+        Scanner sc;
+        Scanner::Params p = latticeParams();
+        p.listenMs = -5;
+        sc.configure(p);
+        sc.start(0.0);
+        CHECK(stepIs(sc, 0.0, false, true, 100.0e6, St::Scanning, 100.0e6));
+        CHECK(stepIs(sc, 10.0, true, false, 0, St::Paused, 100.0e6));
+        CHECK(stepIs(sc, 1.0e7, true, false, 0, St::Paused, 100.0e6));
+    }
+
     return testSummary("test_scanner");
 }

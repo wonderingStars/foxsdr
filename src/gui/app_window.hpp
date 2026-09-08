@@ -2184,6 +2184,7 @@ private:
     double scanDwellMs_ = cascade::core::Scanner::Params{}.dwellMs;
     double scanHoldMs_ = cascade::core::Scanner::Params{}.holdMs;
     double scanResumeMs_ = cascade::core::Scanner::Params{}.resumeMs;
+    double scanListenMs_ = cascade::core::Scanner::Params{}.listenMs;
     // Readback (center + offset) right after the last scanner-commanded
     // retune. Any later frame where the live readback differs is a tune the
     // scanner did not make — a manual tune, and the user wins (scan stops).
