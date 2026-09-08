@@ -51,7 +51,18 @@ are still moving. What is in the current build:
   signal generator and IQ-file playback mean it runs with no radio at all.
 - **Working with signals.** Bookmarks, a band scanner with a Skip key and a
   listen limit so a station that never goes quiet cannot stop it, and
-  recording of both audio and raw I/Q.
+  recording of both audio and raw I/Q. The receiver's own position - what
+  every range and bearing on the map and the radar scope is measured from -
+  can be typed, taken from a map click, or read from a GPS receiver on a
+  serial port: name the port (on a map page's bar, or under the rail's Radar
+  section), press "Read position from GPS", and the first fix (`$GPGGA`,
+  `$GPRMC` or `$GPGLL`, any talker, up to 128 characters for high-precision
+  receivers; dead-reckoned and simulated positions are waited out) sets it
+  exactly as a typed one would; the port is held only until that fix
+  arrives, at most 60 s, and neither the position nor a typed device path is
+  ever written to the diagnostic log. `FOXSDR_GPS_PORT=<port>` (with
+  `FOXSDR_GPS_BAUD`, default 9600) does the same read at start-up, in every
+  run mode, for a bench with a receiver on it.
 - **Band plans for the whole world.** Labelled service allocations drawn behind
   the spectrum, colour-coded by service on a colour-blind-safe palette, with a
   "what am I tuned to" readout that names the *narrowest* match — 145.800 MHz

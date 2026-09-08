@@ -321,6 +321,9 @@ const KnownWait kKnownWaits[] = {
      "SoapySource::stopLocked() - the abandonable deactivateStream, once that lock is held"},
     {"src/core/pipeline.cpp", "kSourceJoinWait", 1,
      "Pipeline::stop() - the wait for the source thread to exit, after both of the above"},
+    {"src/core/gps_reader.hpp", "kOpenAbandonWait", 1,
+     "GpsReader::stop() at the top of the teardown - the wait for a worker parked inside the "
+     "port driver's open, after which the worker is abandoned rather than joined"},
     {"src/gui/app_window.cpp", "kQuitGrace", 0,
      "~AppWindow's future reaps: runs after watchdog_.stop(), outside the budgeted stretch"},
     {"src/gui/app_window.cpp", "kNoWait", 0,

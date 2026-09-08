@@ -110,3 +110,33 @@ ctest --test-dir <root>/build-<slug> -C Release --output-on-failure
 
 Each agent uses its own `build-<slug>` directory (they are gitignored). Agents
 never run git commands; the orchestrator commits reviewed work centrally.
+
+## Requested features (roadmap)
+
+Requests from beta testers, in the order they arrived:
+
+1. **Receiver position from a GPS over a COM port - built in 0.86.0.**
+   Requested 2026-09-08. Shape as built: a pure NMEA parser and line
+   assembler (`core/nmea`), a platform serial port behind a `ByteSource`
+   seam (`core/serial_port`, Win32 overlapped reads / termios + poll), and a
+   `GpsReader` that owns the port on its own thread only until the first fix
+   passing `receiverPositionAcceptable` arrives, then closes it and hands the
+   fix over once; the GUI applies it through `applyReceiverPosition` like a
+   typed one, from a port/baud/"Read position from GPS" row drawn as one
+   copy on the rail's Radar section (the no-position block, then a
+   "Receiver position" fold once one is set, which opens itself on the frame
+   a fix lands), the scope's empty state, and every map page's bar, with the
+   port list read only when its drop-down opens and a typeable name for
+   ports the registry spells oddly. `gpsPort`/`gpsBaud` persist the choice;
+   `FOXSDR_GPS_PORT` (sanitised like the field) starts the read at launch so
+   a named pipe can be the GPS in `tests/test_gps_app.cpp`. The log carries
+   counts and port names - a typed path or a pipe is logged as its kind and
+   length - never a coordinate, a sentence or a path. Stop is bounded even
+   with the worker inside a driver's open (CancelSynchronousIo, then a 1 s
+   wait, then the worker is abandoned to its own block). The assembler takes
+   sentences to 128 bytes (u-blox high-precision GGA is 84, a Trimble BX-960
+   GGA 91), GGA quality 6/7/8 are not fixes, and the timeout line says which
+   of "nothing arrived", "answering but no sky" or "nothing readable" it
+   was. The satellites plugin's own `observer` line stays separate.
+   Real-hardware check: the beta tester (no GPS here).
+

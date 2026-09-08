@@ -51,6 +51,36 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     IsZoomed(hwnd) != FALSE);
         return zone == Zone::Caption ? HTCAPTION : HTCLIENT;
     }
+    case WM_GETMINMAXINFO: {
+        // THE WORK AREA, NOT THE SCREEN. GLFW's handler below fills the
+        // minimum tracking size and, for a window it considers decorated,
+        // nothing else - so the system's own default applied, and for a style
+        // with no caption that default is the whole monitor (measured here:
+        // a client 1440 tall on a 1392 work area, the bottom 48 px under the
+        // taskbar). The box is measured from the window as it stands - the
+        // frame the system actually gave it - so it is exact at any DPI.
+        const LRESULT below = CallWindowProcW(g_previous, hwnd, msg, wParam, lParam);
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        RECT wr{};
+        RECT cr{};
+        POINT origin{0, 0};
+        if (mon != nullptr && GetMonitorInfoW(mon, &mi) && GetWindowRect(hwnd, &wr) &&
+            GetClientRect(hwnd, &cr) && ClientToScreen(hwnd, &origin)) {
+            const Box box = maximisedBox(mi.rcMonitor.left, mi.rcMonitor.top, mi.rcWork.left,
+                                         mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom,
+                                         origin.x - wr.left, origin.y - wr.top,
+                                         wr.right - (origin.x + cr.right),
+                                         wr.bottom - (origin.y + cr.bottom));
+            MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+            mmi->ptMaxPosition.x = box.x;
+            mmi->ptMaxPosition.y = box.y;
+            mmi->ptMaxSize.x = box.w;
+            mmi->ptMaxSize.y = box.h;
+        }
+        return below;
+    }
     case WM_NCLBUTTONDOWN:
         // A DOUBLE-CLICK ON THE RAIL FILLS THE SCREEN, or restores it, as a
         // title bar's does. The system would send WM_NCLBUTTONDBLCLK for that
@@ -129,6 +159,21 @@ Zone hitZone(float x, float y, float width, float height, float border,
         return Zone::Caption;
     }
     return Zone::Client;
+}
+
+Box maximisedBox(long monitorX0, long monitorY0, long workX0, long workY0, long workX1,
+                 long workY1, long frameLeft, long frameTop, long frameRight, long frameBottom) {
+    const auto sane = [](long f) { return (f >= 0 && f <= 64) ? f : 0L; };
+    frameLeft = sane(frameLeft);
+    frameTop = sane(frameTop);
+    frameRight = sane(frameRight);
+    frameBottom = sane(frameBottom);
+    Box b;
+    b.x = workX0 - monitorX0 - frameLeft;
+    b.y = workY0 - monitorY0 - frameTop;
+    b.w = (workX1 - workX0) + frameLeft + frameRight;
+    b.h = (workY1 - workY0) + frameTop + frameBottom;
+    return b;
 }
 
 bool install(GLFWwindow* window) {

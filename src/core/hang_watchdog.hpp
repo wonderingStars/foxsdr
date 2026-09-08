@@ -170,10 +170,13 @@ public:
     // forced it; the three numbers are the arithmetic that report exposed.
     //
     // The bounded waits on the shutdown path, in milliseconds. Traced
-    // through pipeline_.stop(), each spent at most once because the first
-    // abandonment condemns the device and every later call on that path is
-    // skipped rather than attempted:
+    // through gpsReader_.stop() and then pipeline_.stop(), each spent at
+    // most once because the first abandonment condemns the device and every
+    // later call on that path is skipped rather than attempted:
     //
+    //   kOpenAbandonWait (1000, src/core/gps_reader.hpp) - a GPS worker
+    //     still inside the port driver's open, waited for by
+    //     GpsReader::stop() at the top of the teardown and then abandoned;
     //   kControlLockWait (1500, src/source/soapy_source.cpp) - the driver
     //     lock, waited for by SoapySource::stop() on the GUI thread;
     //   kVendorCallWait  (1500, src/source/soapy_source.cpp) - the
@@ -182,8 +185,8 @@ public:
     //   kSourceJoinWait  (3000, src/core/pipeline.cpp) - the source thread,
     //     after both of the above.
     //
-    // Copied rather than included, because all three are file-local
-    // constants of modules this one must not depend on - so
+    // Copied rather than included, because all four are constants of
+    // modules this one must not depend on - so
     // tests/test_shutdown_budget.cpp DISCOVERS every bounded wait declared
     // under src/ and goes red both when this number stops matching their sum
     // and when a wait appears that it has never been introduced to. That
@@ -192,8 +195,9 @@ public:
     // kVendorCallWait, and the sum still came out at the 4500 this constant
     // then held - green, and wrong, on the very first drift. The teardown's
     // cost and the threshold it had to fit inside had already drifted apart
-    // over three releases because nothing related the two.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 6000;
+    // over three releases because nothing related the two. (The GPS wait
+    // was added the way the scan demands: found by name, classified here.)
+    static constexpr unsigned kShutdownBoundedWaitsMs = 7000;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, two config writes, both ImGui shutdowns, glfwDestroyWindow and

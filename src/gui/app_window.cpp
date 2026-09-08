@@ -430,6 +430,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.mapWindowX == b.mapWindowX && a.mapWindowY == b.mapWindowY &&
            a.rxPositionSet == b.rxPositionSet && a.rxLatDeg == b.rxLatDeg &&
            a.rxLonDeg == b.rxLonDeg &&
+           // The GPS port and baud: chosen in a combo, so without them here a
+           // choice would reach the file only when something else changed.
+           a.gpsPort == b.gpsPort && a.gpsBaud == b.gpsBaud &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            // The fitted modules window, open flag AND rectangle, because
@@ -825,6 +828,16 @@ AppWindow::~AppWindow() {
     // SoapySDR::Device::make(). See reapPendingSoapyOpen for the semantics.
     reapPendingSoapyOpen();
 
+    // The GPS reader's thread, if a read is still running when the window is
+    // destroyed without run()'s teardown (a failed backend init, a test that
+    // never entered the frame loop). Its own destructor would join too; this
+    // makes the order explicit and bounded: one port read (200 ms) while it
+    // is reading, GpsReader::kOpenAbandonWait (1 s) while it is still inside
+    // the port driver's open - after which the worker is abandoned to finish
+    // on its own, not joined, so a Bluetooth port whose puck is off cannot
+    // hold this destructor for the length of an RFCOMM connect attempt.
+    gpsReader_.stop();
+
     // And the same again for the lazy device SCAN, which blocks in
     // SoapySDR::Device::enumerate() and is the likelier of the two to be in
     // flight at quit — it starts the moment the source combo is opened.
@@ -1042,6 +1055,42 @@ int AppWindow::run(int frames) {
         pluginStatusHook_ = (status != nullptr && *status != '\0');
     }
 
+    // THE GPS READ AT START-UP, when FOXSDR_GPS_PORT names a device (and
+    // FOXSDR_GPS_BAUD a rate; 9600 otherwise). The same start the rail's key
+    // makes, on the same reader, so tests/test_gps_app.cpp can sit on the
+    // server end of a named pipe and be the GPS for the whole path - bytes on
+    // a device to a persisted receiver position - on a bench with no port and
+    // no GPS, which is this one. Honoured in EVERY run mode, unlike the
+    // bounded-run hooks above, and on purpose: a developer or the beta tester
+    // with a receiver on the desk can then exercise the path without
+    // clicking, and the worst a stray variable can do is set the receiver's
+    // position to where the receiver actually is. It never writes gpsPort or
+    // gpsBaud into the config; those carry only what was chosen in the combo.
+    // The value goes through sanitiseSerialPortName like every other way
+    // into the reader (the field, the config): the first build handed it
+    // over raw, so a trailing tab reached the log and the status line
+    // verbatim and a newline would have forged a second log line that a
+    // crash-report reader could not tell from a real one. A value that
+    // sanitises to nothing starts no read and says so. And the log names
+    // the device by loggableSerialPortName - a pipe or a path is logged as
+    // what kind of thing it is, never by name (gps_reader.hpp, PRIVACY).
+    if (const char* gpsHook = std::getenv("FOXSDR_GPS_PORT");
+        gpsHook != nullptr && gpsHook[0] != '\0') {
+        const std::string hookPort = cascade::core::sanitiseSerialPortName(gpsHook);
+        if (hookPort.empty()) {
+            cascade::core::diagWarnf("gps: FOXSDR_GPS_PORT names no usable port; nothing started");
+        } else {
+            int baud = cascade::core::kDefaultGpsBaud;
+            if (const char* b = std::getenv("FOXSDR_GPS_BAUD"); b != nullptr && b[0] != '\0') {
+                baud = std::atoi(b);
+            }
+            cascade::core::diagLogf("gps: startup read requested by FOXSDR_GPS_PORT on %s at %d",
+                                    cascade::core::loggableSerialPortName(hookPort).c_str(), baud);
+            gpsRefusal_.clear();
+            gpsReader_.start({hookPort, baud, cascade::core::GpsReader::kDefaultTimeoutS});
+        }
+    }
+
     // The update check, on a worker, once, and ONLY in an interactive run.
     //
     // A bounded --frames run stays hermetic: it is what ctest and the smoke
@@ -1119,6 +1168,10 @@ int AppWindow::run(int frames) {
         ImGui::NewFrame();
 
         frameCounter_ = rendered;
+        // The GPS fix, if one landed since the last frame: applied here, on
+        // the GUI thread, through the one door. Before the UI is drawn so the
+        // frame that shows "position set" is the frame the scope has it.
+        pollGpsReader();
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
         // flight. Everything else about the browser is unchanged — this is
@@ -1340,6 +1393,20 @@ int AppWindow::run(int frames) {
     // crosses the budget and is still captured with every thread's stack.
     watchdog_.beginShutdown();
     const auto teardownStart = std::chrono::steady_clock::now();
+
+    // THE GPS READER FIRST: its stop is bounded - one port read (200 ms)
+    // while the worker is reading, GpsReader::kOpenAbandonWait (1 s, counted
+    // in the shutdown budget) while it is still inside the port driver's
+    // open, after which the worker is abandoned rather than joined - and it
+    // has to precede the GL teardown, which is why it is not left to the
+    // member destructor. Then one more poll, because a fix that arrived
+    // during the last frame - or that a stop() just now let through, since a
+    // fix that landed before the stop is kept - has not yet been applied, and
+    // the save below is the one that persists it. This is what makes the
+    // app-level test deterministic at a small frame count: the position is
+    // on disk if the reader had it, whichever frame it arrived on.
+    gpsReader_.stop();
+    pollGpsReader();
 
     // Closing the window mid-take finalizes both recordings cleanly (same
     // contract as the toolbar Stop): taps out, then headers patched — before
@@ -2204,7 +2271,8 @@ void AppWindow::drawUi() {
     // window and the framebuffer, and what ImGui believes. When a click
     // lands beside the control it was aimed at, the disagreeing pair is on
     // screen in one shot instead of being reasoned about.
-    if (const char* dbg = std::getenv("FOXSDR_DEBUG_INPUT"); dbg != nullptr && dbg[0] != '\0') {
+    const char* dbgEnv = std::getenv("FOXSDR_DEBUG_INPUT");
+    if (inputLedger_ || (dbgEnv != nullptr && dbgEnv[0] != '\0')) {
         const ImGuiIO& dio = ImGui::GetIO();
         const ImGuiViewport* mv = ImGui::GetMainViewport();
         int wx = 0, wy = 0, ww = 0, wh = 0, fw = 0, fh = 0;
@@ -7362,6 +7430,204 @@ void AppWindow::drawReceiverPositionOffers() {
     }
     benchHint("or type it, or click SET FROM MAP CLICK on a map page:");
     drawRxPositionEntry();
+    drawGpsPositionControl();
+}
+
+// THE POSITION FROM A GPS RECEIVER, the fourth way to say where the antenna
+// is, and the one a beta tester asked for in a sentence: "if you have a GPS
+// receiver you can pull the location straight from there instead of typing it
+// in." A port, a baud, one key. The reader (core/gps_reader.hpp) opens the
+// port on its own thread, waits for the first fix that passes the same rule
+// a typed position must pass, hands it over ONCE, and closes the port - it is
+// a read, not a tracker, and the user's other GPS software gets the port back
+// the moment the status line says "position set".
+//
+// THE PORT FIELD IS TYPEABLE, with the machine's ports offered beside it
+// rather than instead of it. Dear ImGui has no editable combo, and a
+// list-only control would have failed the tester whose virtual COM port the
+// registry spells oddly, or who is on Linux with a /dev path the enumeration
+// did not think of. The list is read when the arrow is pressed, never per
+// frame: a registry open sixty times a second is the kind of cost a rail
+// row must not carry.
+//
+// WHERE IT IS DRAWN, which is everywhere the typed entry is and NOT only
+// while there is no position. The first build reached this row only through
+// drawReceiverPositionOffers, which both of its callers gate on !rxSet_, and
+// the map pages drew the typed entry alone - so a tester who had typed a
+// position last week (or taken the map's centre, which the code itself calls
+// a starting point) could never find "Read position from GPS", and the
+// tester who watched the satellite count climb on the rail saw the whole row
+// vanish in the frame the fix landed, "Fix: 8 satellites - position set" and
+// all. Now: the scope's empty state and the rail's Radar section while there
+// is no position; the rail's "Receiver position" fold once there is one
+// (opened for the user on the frame a GPS fix is applied, so the Fixed line
+// is seen); and every map page's bar, always.
+//
+// WHAT IS SHOWN, AND WHAT IS NOT. The status line is core::gpsStatusLine, so
+// the wording is tested once and never composes a coordinate; the position
+// itself reaches the screen only through the typed fields above, which
+// applyReceiverPosition already keeps in step. Nothing here logs; the reader
+// logs counts and names, never the fix (its header says why, and a test
+// searches the log ring for the digits).
+void AppWindow::drawGpsPositionControl() {
+    using cascade::core::GpsReader;
+    const bool listening = gpsReader_.listening();
+
+    benchHint("or read it from a GPS receiver on a serial port:");
+
+    // The row: [port name] [v] [baud v], and the key beside them where the
+    // column is wide enough (a map page's bar, the scope's empty state) or
+    // on its own full-width line where it is not (the rail). Sized to the
+    // column it is drawn in, as the typed fields above are, because the
+    // rail's Radar section has the least room of the surfaces this appears
+    // on - and a key the full width of a map page is a bar, not a key.
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float arrowW = ImGui::GetFrameHeight();
+    const float baudW = ImGui::CalcTextSize("115200").x + st.FramePadding.x * 2.0f + arrowW;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float keyW = ImGui::CalcTextSize("Read position from GPS").x + st.FramePadding.x * 2.0f;
+    const bool wide = avail >= 170.0f + arrowW + baudW + keyW + st.ItemSpacing.x * 4.0f;
+    const float portW = std::clamp(avail - baudW - arrowW - st.ItemSpacing.x * 2.0f
+                                       - (wide ? keyW + st.ItemSpacing.x : 0.0f),
+                                   72.0f, 170.0f);
+
+    // The port and baud cannot change under a listen in progress: the reader
+    // was started with a copy of both, and a field that read differently from
+    // the port being listened to would be a status line contradicting itself.
+    ImGui::BeginDisabled(listening);
+    ImGui::SetNextItemWidth(portW);
+    if (ImGui::InputTextWithHint("##gpsport", "COM3", gpsPortInput_, sizeof(gpsPortInput_))) {
+        // The persisted choice is the SANITISED text, by the port layer's own
+        // rule, so what is saved is what the port layer will be asked for.
+        // The field keeps what was typed until the user changes it.
+        gpsPort_ = cascade::core::sanitiseSerialPortName(gpsPortInput_);
+        gpsRefusal_.clear();
+        gpsReader_.clearResult();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("The serial port the GPS receiver is on - COM3, or /dev/ttyUSB0.\n"
+                          "Press the arrow to pick from the ports this machine has.");
+    }
+    ImGui::SameLine(0.0f, 0.0f);
+    if (ImGui::ArrowButton("##gpsports", ImGuiDir_Down)) {
+        // ENUMERATED HERE, on the press, and cached: the list is what the
+        // machine had when the drop-down opened, which is what a person
+        // expects of a drop-down.
+        gpsPorts_ = cascade::core::enumerateSerialPorts();
+        ImGui::OpenPopup("##gpsportlist");
+    }
+    if (ImGui::BeginPopup("##gpsportlist")) {
+        if (gpsPorts_.empty()) {
+            benchHint("no serial ports found");
+        }
+        for (const std::string& name : gpsPorts_) {
+            if (ImGui::Selectable(name.c_str(), name == gpsPort_)) {
+                gpsPort_ = name;
+                std::snprintf(gpsPortInput_, sizeof(gpsPortInput_), "%s", name.c_str());
+                gpsRefusal_.clear();
+                gpsReader_.clearResult();
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
+    char baudLabel[16];
+    std::snprintf(baudLabel, sizeof(baudLabel), "%d", gpsBaud_);
+    ImGui::SetNextItemWidth(baudW);
+    if (ImGui::BeginCombo("##gpsbaud", baudLabel)) {
+        // The sanctioned list and no other: a rate the port cannot be set to
+        // cannot be chosen, so it cannot be persisted either.
+        for (const int baud : cascade::core::kSerialBaudRates) {
+            char item[16];
+            std::snprintf(item, sizeof(item), "%d", baud);
+            if (ImGui::Selectable(item, baud == gpsBaud_)) {
+                gpsBaud_ = baud;
+                gpsRefusal_.clear();
+                gpsReader_.clearResult();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("The receiver's serial rate. Nearly everything ships at 9600;\n"
+                          "old pucks use 4800. Wrong, and the status line will say\n"
+                          "nothing readable arrived.");
+    }
+    ImGui::EndDisabled();
+
+    // THE KEY: the read, or its Stop while one is running. Disabled with no
+    // port named rather than starting and failing, because "no port chosen"
+    // is a thing the user can see from the empty field. Stop is bounded by
+    // the reader (one read, or kOpenAbandonWait if the driver is still
+    // opening), so a frame can afford to call it.
+    if (wide) { ImGui::SameLine(); }
+    const ImVec2 keySize = wide ? ImVec2(keyW, 0.0f) : ImVec2(-1.0f, 0.0f);
+    if (listening) {
+        if (ImGui::Button("Stop", keySize)) {
+            gpsReader_.stop();
+        }
+    } else {
+        ImGui::BeginDisabled(gpsPort_.empty());
+        if (ImGui::Button("Read position from GPS", keySize)) {
+            gpsRefusal_.clear();
+            gpsReader_.start({gpsPort_, gpsBaud_, GpsReader::kDefaultTimeoutS});
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (gpsPort_.empty()) {
+                ImGui::SetTooltip("Name the port the GPS receiver is on first.");
+            } else {
+                ImGui::SetTooltip("Opens the port, waits up to %.0f s for a fix, sets the receiver's\n"
+                                  "position from it exactly as if it had been typed, and closes the\n"
+                                  "port again. The position is never written to the diagnostic log.",
+                                  GpsReader::kDefaultTimeoutS);
+            }
+        }
+    }
+
+    // THE STATUS LINE, in the bench's hint ink while it is news and in the
+    // warning ink when it is a problem the user has to act on. Idle draws
+    // nothing at all - the row is not a place for "ready".
+    const GpsReader::Status status = gpsReader_.status();
+    const std::string line = cascade::core::gpsStatusLine(status);
+    if (!line.empty()) {
+        const bool trouble = status.state == GpsReader::State::Failed ||
+                             status.state == GpsReader::State::TimedOut;
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              trouble ? cascade::gui::theme::warning()
+                                      : cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        ImGui::TextWrapped("%s", line.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (!gpsRefusal_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", gpsRefusal_.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+void AppWindow::pollGpsReader() {
+    cascade::core::NmeaFix fix;
+    if (!gpsReader_.takeFix(fix)) { return; }
+    // THE ONE DOOR. applyReceiverPosition moves every map page's home, tells
+    // the scope, discards the coverage measured from the old origin and puts
+    // the typed fields in step; a GPS fix that bypassed it would set a
+    // position the rest of the application did not know about. It applies
+    // the same predicate the reader already did, so a refusal here means the
+    // two rules have drifted - said on screen and in the log (as a fact, not
+    // a coordinate) rather than swallowed.
+    if (applyReceiverPosition(fix.latDeg, fix.lonDeg)) {
+        gpsRefusal_.clear();
+        // The rail's "Receiver position" fold opens on this frame, because
+        // rxSet_ just flipped and the row the user was watching (on the
+        // rail's no-position block) is about to be replaced by that fold:
+        // the Fixed status line has to be seen somewhere.
+        gpsRowReveal_ = true;
+        cascade::core::diagLogf("gps: fix applied as the receiver position");
+    } else {
+        gpsRefusal_ = "The GPS fix was refused by the position rule (off the globe, or 0,0).";
+        cascade::core::diagWarnf("gps: fix refused by the acceptance rule");
+    }
 }
 
 // THE RADAR SCOPE, ON THE RAIL.
@@ -7391,13 +7657,31 @@ void AppWindow::drawScopeModeControl() {
     // scope cannot draw a range or a bearing from nowhere, and dropping the
     // user into it to find that out is what "the radar scope doesn't work"
     // meant. The offers are the same ones the scope's own empty state makes;
-    // once a position is set this block disappears and the key is the whole
-    // section again.
+    // once a position is set this block gives way to a fold that keeps the
+    // typed entry and the GPS row reachable - the first build dropped both
+    // entirely, so a position could be read from a GPS only on an install
+    // that had never had one, and a tester who had typed a rough position
+    // could never replace it with the receiver's (see drawGpsPositionControl).
     if (!rxSet_) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("The scope needs the receiver's position first.");
         ImGui::PopStyleColor();
         drawReceiverPositionOffers();
+        ImGui::Spacing();
+    } else {
+        // Folded, because the key is what this section is for; opened for
+        // the user on the frame a GPS fix is applied, so the "position set"
+        // line lands where the eye already is instead of vanishing with the
+        // no-position block it was drawn in.
+        if (gpsRowReveal_) {
+            ImGui::SetNextItemOpen(true);
+            gpsRowReveal_ = false;
+        }
+        if (ImGui::TreeNode("Receiver position")) {
+            drawRxPositionEntry();
+            drawGpsPositionControl();
+            ImGui::TreePop();
+        }
         ImGui::Spacing();
     }
     // THE SWITCH. It lives in the Radar section of the rail - the place a user
@@ -8973,6 +9257,14 @@ void AppWindow::drawPluginWindows() {
                                         coverage_.filledBuckets(), CoverageMap::kBuckets,
                                         coverage_.peakKm());
                 }
+
+                // --- the GPS row ---------------------------------------------
+                // A third row, under the typed entry it is the alternative to,
+                // and drawn whether or not a position is set: a map page is
+                // where a user who already has a rough position goes to refine
+                // it, and "from the receiver on the desk" is the best refinement
+                // there is. The row itself is the one copy the rail draws.
+                drawGpsPositionControl();
 
                 // THE FLIGHT LIST, down the left of the map. A map alone answers
                 // "where is everything"; the list answers "what am I hearing" and,
@@ -13072,6 +13364,17 @@ void AppWindow::drawDiagnosticsSection() {
     const std::string crashDir = cascade::core::diagCrashDir();
     ImGui::TextDisabled("Reports: %s", crashDir.empty() ? "(unavailable)" : crashDir.c_str());
 
+    // THE POINTER LEDGER, for the report "my clicks land beside the control".
+    // Every number the pointer passes through on its way from the operating
+    // system to a control, in one yellow line across the top of the window,
+    // so a screenshot of the miss carries the disagreeing pair with it.
+    ImGui::Spacing();
+    ImGui::Checkbox("Show the pointer ledger across the top of the window", &inputLedger_);
+    ImGui::TextDisabled(
+        "For a click that lands away from the control it was aimed at: switch\n"
+        "this on, hold the pointer over the control, take a screenshot and send\n"
+        "it with the log. Nothing is saved or sent by the switch itself.");
+
     ImGui::Spacing();
     if (ImGui::Button("Copy diagnostics")) { copyDiagnosticsBundle(); }
     ImGui::SameLine();
@@ -13307,6 +13610,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     rxLon_ = cfg.rxLonDeg;
     rxLatInput_ = rxLat_;
     rxLonInput_ = rxLon_;
+    // The GPS port and baud the user chose last time, already sanitised by
+    // the store, into the field's buffer as well so the row shows the name
+    // that will be opened. The reader is NOT started: a read is a click.
+    gpsPort_ = cfg.gpsPort;
+    gpsBaud_ = cfg.gpsBaud;
+    std::snprintf(gpsPortInput_, sizeof(gpsPortInput_), "%s", gpsPort_.c_str());
     if (rxSet_) {
         // Every existing page; a page created later gets the position in
         // ensureMapPage. At construction this loop is empty and harmless.
@@ -13677,6 +13986,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.rxPositionSet = rxSet_;
     cfg.rxLatDeg = rxLat_;
     cfg.rxLonDeg = rxLon_;
+    cfg.gpsPort = gpsPort_;
+    cfg.gpsBaud = gpsBaud_;
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.fittedModulesOpen = fittedWindowOpen_;
