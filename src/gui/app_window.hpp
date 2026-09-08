@@ -251,7 +251,18 @@ inline float railLabelRight(float rowRight, float rowH, float chipTextWidth) {
 // more pixels of column keeps every shipped word whole beside the widest
 // chip, with room to spare; test_app_rail.cpp measures it against the real
 // typefaces, so a word that stops fitting fails a test rather than clipping.
-inline constexpr float kMenuWidth = 268.0f;   // left column
+//
+// 384 SINCE 0.84.0, WHEN THE BENCH WENT OVER TO GEORGIA. A serif set at the
+// same sizes runs about 1.6 times the width of Saira Condensed: the same
+// "Plugins (12 disabled)" needed 170 px of the 59 the 268-px column left
+// beside the widest chip, ten of the shipped labels overflowed with it, and
+// the five bank keys could not hold their bold capitals either, until the
+// sizes came down (fonts.hpp): at 17/15 everything fits in 384 with room.
+// The column grew rather than the words being cut, and the spectrum gave up
+// the difference; the size reduction that followed was the user's own call
+// on seeing the serif at 21 px, not a fitting trick. test_app_rail still
+// measures every label against the real face.
+inline constexpr float kMenuWidth = 384.0f;   // left column
 inline constexpr float kRailPlatePad = 8.0f;  // plate inset inside that column
 
 // How wide ONE ROW ends up: the column, less the plate's inset on both sides,

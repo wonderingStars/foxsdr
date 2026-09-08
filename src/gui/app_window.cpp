@@ -892,6 +892,13 @@ int AppWindow::run(int frames) {
                      "cascade: could not load the bundled typefaces; "
                      "falling back to the built-in font\n");
     }
+    // WHICH PAIR, in the log: a machine without Georgia wears the embedded
+    // Saira and looks like a different product, and the log is the first
+    // place anyone will look when a screenshot does not match another's.
+    cascade::core::diagLogf("fonts: %s",
+                            cascade::gui::fonts::usingSystemSerif()
+                                ? "Georgia from the system for controls and captions"
+                                : "Georgia not found; embedded Saira Condensed in use");
     // MULTI-VIEWPORT: the map and each decoded image get a REAL operating
     // system window rather than a panel penned inside this one. A received
     // picture and a target map are things a user wants on a second monitor,
@@ -901,7 +908,17 @@ int AppWindow::run(int frames) {
     // Docking rides along because the same branch provides both, and without
     // it a window dragged out has no way home: docking is how it gets put
     // back.
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    // FOXSDR_SINGLE_VIEWPORT=1 keeps every window inside this one. A
+    // developer switch for the self-capture (F12): a torn-off window is its
+    // own framebuffer, which the capture cannot read, so a sweep of every
+    // page for clipped or overlapping lettering runs with this set and sees
+    // the lot in one picture. Never set in a release.
+    if (const char* single = std::getenv("FOXSDR_SINGLE_VIEWPORT");
+        single == nullptr || single[0] == '\0' || single[0] == '0') {
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    } else {
+        cascade::core::diagLogf("viewports: single (FOXSDR_SINGLE_VIEWPORT set)");
+    }
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // TORN-OFF WINDOWS GET NO FRAME FROM THE OPERATING SYSTEM (0.78.0). From
     // 0.66.0 they had one - a native title bar with the desktop's own
@@ -2976,6 +2993,12 @@ namespace {
 // what the old bar looked like.
 constexpr float kBarH = 160.0f;   // the bar's height, in reference units
 constexpr float kCoreW = 800.0f;  // transport button through volume dial
+// Where the MASTER compartment ends and the counter's begins. 272 in the
+// reference; 320 since 0.84.0, so the four lamps stand in one row under
+// Georgia Bold - the units come out of the frequency well, whose apertures
+// went from 30 to 28 and its side padding from 12 to 8 now the digits are
+// 16 px, so it still ends short of the divider at 684.
+constexpr float kMasterDividerX = 320.0f;
 
 // THE VOLUME DIAL'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the
 // bar's scale floor is a promise about this one control and a promise checked
@@ -3004,11 +3027,11 @@ static_assert((kVolumeCx + kVolumeR + kVolumeEdgePad) * kBarMinScale <=
 // because two copies of this arithmetic is how a well and the digits inside it
 // come to disagree about where they are.
 constexpr int kFreqCells = 10;
-constexpr float kFreqCellW = 30.0f;
+constexpr float kFreqCellW = 28.0f;
 constexpr float kFreqCellH = 44.0f;
 constexpr float kFreqGap = 3.0f;        // between apertures
 constexpr float kFreqGroupGap = 10.0f;  // ...and at a thousands break
-constexpr float kFreqWellPadX = 12.0f;
+constexpr float kFreqWellPadX = 8.0f;
 constexpr float kFreqWellPadY = 6.0f;
 
 // A wider gap BEFORE these cells: after the first digit, and after the fourth
@@ -3232,10 +3255,43 @@ void AppWindow::drawToolbar() {
         // pitch at capPx = 14, leaving over twelve pixels of clear metal
         // between them. capPx keeps its own nine-pixel floor, so a bar shrunk
         // to kBarMinScale still letters them rather than smudging them.
+        // ONE ROW OF FOUR, AS THE REFERENCE DREW THEM, and it is the user's
+        // call ("the four lights next to the red button in one line, not two
+        // over two", 0.84.0). The reference's 28-unit pitch held these words
+        // in a condensed sans; in Georgia Bold they need about 150 units. The
+        // compartment was opened out from 118 to 138 units for them (the
+        // divider and the frequency well moved twenty units right, into
+        // slack the well never used), the row is pitched at its widest word
+        // plus clear metal, and if the four still do not fit the compartment
+        // the caption size gives way - down to nine pixels - rather than a
+        // word walking under the divider. Measured every frame, so a face
+        // change cannot silently bring the collision back.
+        const float roomL = X(150.0f);
+        const float roomR = X(kMasterDividerX - 6.0f);
         ImGui::PushFont(cascade::gui::fonts::legend(), capPx);
+        float lampCapPx = capPx;
+        float widestWord = 0.0f;
+        for (const MasterLamp& l : lamps) {
+            widestWord = std::max(widestWord, ImGui::CalcTextSize(l.word).x);
+        }
+        {
+            const float need = 4.0f * widestWord + 3.0f * S(6.0f);
+            const float room = roomR - roomL;
+            if (need > room && need > 0.0f) {
+                lampCapPx = std::max(9.0f, capPx * room / need);
+                ImGui::PopFont();
+                ImGui::PushFont(cascade::gui::fonts::legend(), lampCapPx);
+                widestWord = 0.0f;
+                for (const MasterLamp& l : lamps) {
+                    widestWord = std::max(widestWord, ImGui::CalcTextSize(l.word).x);
+                }
+            }
+        }
+        const float lampPitch = std::max(S(28.0f), widestWord + S(6.0f));
+        const float firstX = roomL + widestWord * 0.5f;
         for (int i = 0; i < 4; ++i) {
             cascade::gui::drawBenchLamp(
-                dl, ImVec2(X(158.0f + 28.0f * static_cast<float>(i)), Y(86.0f)), S(7.0f),
+                dl, ImVec2(firstX + lampPitch * static_cast<float>(i), Y(86.0f)), S(7.0f),
                 lamps[i].colour, lamps[i].lit, lamps[i].word);
         }
         ImGui::PopFont();
@@ -3244,9 +3300,9 @@ void AppWindow::drawToolbar() {
     // --- the counter --------------------------------------------------------
     // A groove between the master cluster and the tuned figure, then the
     // engraved caption over the well the digits are recessed into.
-    cascade::gui::addBenchDivider(dl, X(272.0f), Y(30.0f), Y(135.0f));
-    barEngrave(dl, ImVec2(X(304.0f), Y(42.0f)), capPx, "TUNED - HERTZ", false);
-    drawFrequencyReadout(X(292.0f), Y(62.0f), scale);
+    cascade::gui::addBenchDivider(dl, X(kMasterDividerX), Y(30.0f), Y(135.0f));
+    barEngrave(dl, ImVec2(X(kMasterDividerX + 24.0f), Y(42.0f)), capPx, "TUNED - HERTZ", false);
+    drawFrequencyReadout(X(kMasterDividerX + 12.0f), Y(62.0f), scale);
     cascade::gui::addBenchDivider(dl, X(684.0f), Y(30.0f), Y(135.0f));
     // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
     // perfectly good control and completely wrong on a bench receiver; this
@@ -8423,25 +8479,41 @@ void drawRowTable(const std::vector<std::string>& headings,
             ImGui::TableNextRow();
             if (r.kind == CASCADE_ROW_HEADING) {
                 ImGui::TableNextColumn();
-                ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, r.cells[0]);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextUnformatted(r.cells[0],
+                                       r.cells[0] + ::strnlen(r.cells[0], CASCADE_PANEL_CELL_CHARS));
+                ImGui::PopStyleColor();
                 continue;
             }
             for (int c = 0; c < cols; ++c) {
                 ImGui::TableNextColumn();
-                // Bounded print: the ABI says the cells are NUL-terminated,
-                // but a plugin that fills every byte must not walk the host
-                // off the end of the array.
+                // BOUNDED, AND UNFORMATTED. The ABI says the cells are
+                // NUL-terminated, but a plugin that fills every byte must
+                // not walk the host off the end of the array, so the end is
+                // measured with strnlen. Measured rather than printed through
+                // "%.*s": under Georgia every cell grew a tail of question
+                // marks the moment the bench went over to it (0.84.0), where
+                // Saira had drawn the same rows clean - the format path
+                // handed the renderer bytes past the terminator, and Georgia
+                // has no silent glyph for them. TextUnformatted with an
+                // explicit end hands it exactly the word and nothing after.
                 const char* cell = r.cells[c];
+                const char* cellEnd = cell + ::strnlen(cell, CASCADE_PANEL_CELL_CHARS);
                 if ((r.flags & CASCADE_ROW_FLAG_WARN) != 0u) {
-                    ImGui::TextColored(cascade::gui::theme::warning(), "%.*s",
-                                       CASCADE_PANEL_CELL_CHARS, cell);
+                    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+                    ImGui::TextUnformatted(cell, cellEnd);
+                    ImGui::PopStyleColor();
                 } else if ((r.flags & CASCADE_ROW_FLAG_GOOD) != 0u) {
-                    ImGui::TextColored(cascade::gui::theme::good(), "%.*s",
-                                       CASCADE_PANEL_CELL_CHARS, cell);
+                    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
+                    ImGui::TextUnformatted(cell, cellEnd);
+                    ImGui::PopStyleColor();
                 } else if ((r.flags & CASCADE_ROW_FLAG_MUTED) != 0u) {
-                    ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::TextUnformatted(cell, cellEnd);
+                    ImGui::PopStyleColor();
                 } else {
-                    ImGui::Text("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
+                    ImGui::TextUnformatted(cell, cellEnd);
                 }
             }
         }
@@ -9242,9 +9314,13 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
     {
         constexpr float kStripPad = 8.0f;
         constexpr float kStripKeyH = 26.0f;
-        constexpr float kFitW = 66.0f;
-        constexpr float kWorldW = 108.0f;
-        constexpr float kStopW = 126.0f;
+        // KEY WIDTHS ARE MEASURED FROM THEIR WORDS, with the reference's
+        // figures as floors: 66, 108 and 126 held FIT, WHOLE WORLD and STOP
+        // FOLLOWING in the condensed face, and a wider face (Georgia, 0.84.0)
+        // would otherwise print a word out over both edges of its key.
+        const float kFitW = std::max(66.0f, ImGui::CalcTextSize("FIT").x + 24.0f);
+        const float kWorldW = std::max(108.0f, ImGui::CalcTextSize("WHOLE WORLD").x + 24.0f);
+        const float kStopW = std::max(126.0f, ImGui::CalcTextSize("STOP FOLLOWING").x + 24.0f);
         const float stripY = bodyTop + 4.0f;
         if (pBR.x > pTL.x + kStripPad * 2.0f + kFitW + kWorldW + 8.0f &&
             pBR.y > stripY + kStripKeyH + 24.0f) {

@@ -342,7 +342,7 @@ body { margin:0; background:var(--bg); color:var(--fg);
           is how you overflow a status strip on somebody else's screen. This is
           the size that changes the lettering without moving the furniture; the
           rest of the way is a change to make with the page in front of you. */
-       font:15px/1.45 "FoxSDR UI", system-ui, -apple-system, "Segoe UI", sans-serif;
+       font:15px/1.45 Georgia, "FoxSDR UI", "Times New Roman", serif;
        overflow:hidden; }
 .hidden { display:none !important; }
 
@@ -356,7 +356,7 @@ body { margin:0; background:var(--bg); color:var(--fg);
 #toolbar { grid-area:bar; display:flex; align-items:center; gap:.6rem;
            padding:0 .75rem; background:var(--panel);
            border-bottom:1px solid var(--edge); }
-.brand { font-family:"FoxSDR Legend", system-ui, sans-serif;
+.brand { font-family:Georgia, "FoxSDR Legend", "Times New Roman", serif;
          font-weight:600; letter-spacing:.02em; margin-right:.25rem; }
 .spacer { flex:1 1 auto; }
 .unit { color:var(--dim); font-size:.75rem; margin-left:-.3rem; }
@@ -661,7 +661,7 @@ body { padding:9px; box-sizing:border-box; }
    they are cut into the panel, not printed on it, so they take the engraved
    ink colour and a highlight below the stroke. */
 #side > details > summary {
-    font-family:"FoxSDR Legend", system-ui, sans-serif;
+    font-family:Georgia, "FoxSDR Legend", "Times New Roman", serif;
     font-size:.72rem; letter-spacing:.16em; text-transform:uppercase;
     color:var(--faint); text-shadow:0 1px 0 rgba(255,241,208,.06);
     border-bottom:1px solid rgba(0,0,0,.3); }
@@ -680,7 +680,7 @@ body { padding:9px; box-sizing:border-box; }
 #status::after {
     content:"TYPE 71 \00B7 MK II";
     position:absolute; right:.6rem; top:50%; transform:translateY(-50%);
-    font-family:"FoxSDR Legend", system-ui, sans-serif;
+    font-family:Georgia, "FoxSDR Legend", "Times New Roman", serif;
     font-size:.66rem; letter-spacing:.18em; color:var(--faint);
     border:1px solid rgba(0,0,0,.4); border-radius:3px;
     padding:.1rem .45rem;
@@ -699,7 +699,7 @@ body { padding:9px; box-sizing:border-box; }
 /* Every caption on the panel: small, wide, engraved, and sitting ON the brass
    rather than in a box. */
 #toolbar .cap {
-    display:block; font-family:"FoxSDR Legend", system-ui, sans-serif;
+    display:block; font-family:Georgia, "FoxSDR Legend", "Times New Roman", serif;
     font-size:.62rem; letter-spacing:.19em; text-transform:uppercase;
     color:var(--faint); text-align:center; margin-bottom:.22rem;
     text-shadow:0 1px 0 rgba(255,241,208,.07); }
@@ -708,7 +708,7 @@ body { padding:9px; box-sizing:border-box; }
    real one is - the highlight is off-centre because a sphere's is. */
 #toolbar #playstop.primary {
     width:56px; height:56px; border-radius:50%; padding:0;
-    font-family:"FoxSDR Legend", system-ui, sans-serif;
+    font-family:Georgia, "FoxSDR Legend", "Times New Roman", serif;
     font-size:.72rem; letter-spacing:.12em; color:#2a1109;
     border:1px solid #35170c;
     background:
@@ -733,7 +733,7 @@ body { padding:9px; box-sizing:border-box; }
     content:""; width:11px; height:11px; border-radius:50%;
     background:radial-gradient(circle at 38% 32%, #3a3428 0 30%, #1b1810 75%);
     box-shadow: inset 0 1px 1px rgba(0,0,0,.7), 0 1px 0 rgba(255,241,208,.09); }
-#master .lamp b { font-family:"FoxSDR Legend", system-ui, sans-serif;
+#master .lamp b { font-family:Georgia, "FoxSDR Legend", "Times New Roman", serif;
                   font-weight:600; font-size:.54rem; letter-spacing:.1em;
                   color:var(--faint); }
 #master .lamp.on::before { background:radial-gradient(circle at 38% 32%, #d6ffe0 0 22%, var(--trace) 55%, #2f5f38 100%);

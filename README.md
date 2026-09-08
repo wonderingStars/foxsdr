@@ -129,7 +129,9 @@ which is what a script wants. This exists because a screen grab cannot always
 see an OpenGL window — on one desktop here PrintWindow returned white and a
 desktop capture showed the icons through the window while it was plainly on
 screen — and the only picture always true to what was drawn is the one the
-application takes of itself.
+application takes of itself. A torn-off window (a map, a picture) is its own
+framebuffer and is not in that picture; set `FOXSDR_SINGLE_VIEWPORT=1` to keep
+every window inside the main one for a sweep.
 
 ## Building (Linux — in development, see the notice at the top)
 
@@ -476,15 +478,23 @@ rather than decoration: the waterfall's colour ramp, which is built to keep a
 stronger signal always brighter than a weaker one, and the map's altitude
 bands, which are a scale an operator reads.
 
-The lettering is part of the same rule. FoxSDR carries its own typefaces rather
-than borrowing the system's, so the panel looks the same on every machine:
-**Saira Condensed** for anything a hand operates and for all prose, and **Nova
-Mono** for counter digits — monospaced so the frequency stops shuffling
-sideways as it changes. Both are SIL Open Font License faces, embedded in the
-executable unmodified; `third_party/THIRD_PARTY.md` records exactly which
-release each one is. Nova Mono is used for figures and not for words, which is
-measured rather than fussy: its capital M is three close stems and rasterises
-as a solid block below about 20 pixels.
+The lettering is part of the same rule. Since 0.84.0 the bench is lettered in
+**Georgia** — Regular for anything a hand operates and for all prose, Bold for
+the engraved captions — read from the Windows font directory at start-up,
+because Georgia is Microsoft's typeface and licensed with Windows rather than
+for redistribution, so it cannot travel inside the executable. On a machine
+without it (Linux, or a Windows with the font removed) both roles fall back
+together to the embedded **Saira Condensed**, so no window ever mixes the two
+pairs; the diagnostics log says which pair loaded. Counter digits stay in
+**Nova Mono** — monospaced so the frequency stops shuffling sideways as it
+changes, and because Georgia's numerals are old-style and proportional, which
+on a counter is exactly the dance an instrument's glass must not do. Saira and
+Nova Mono are SIL Open Font License faces, embedded unmodified;
+`third_party/THIRD_PARTY.md` records exactly which release each one is. Nova
+Mono is used for figures and not for words, which is measured rather than
+fussy: its capital M is three close stems and rasterises as a solid block
+below about 20 pixels. The browser interface names Georgia the same way and
+falls back to the served Saira.
 
 The sizes live in one place, `src/gui/fonts.hpp`, and 0.79.0 raised every one
 of them by three pixels (controls and prose 21, engraved captions 19, readings

@@ -187,11 +187,19 @@ void testRowHeightHoldsTheLabel() {
         const float pad = (rowH - px) * 0.5f > 2.0f ? (rowH - px) * 0.5f : 2.0f;
         CHECK_NEAR(px + 2.0f * pad, rowH, 0.001);
     }
-    // At the size fonts.hpp is set to now - 21 px since 0.79.0 raised every
-    // face by three - the row is the type plus its padding, 31, three above
-    // the reference's own 28. The reference row is still what a 18 px label
-    // gets, which the loop above checks by measurement.
-    CHECK_NEAR(cascade::gui::railRowHeight(cascade::gui::fonts::kUiSize), 31.0f, 0.001);
+    // At whatever size fonts.hpp is set to, the row is the type plus its
+    // padding, never below the floor - DERIVED here rather than pinned to a
+    // number, because that number has now moved three times (28 at the
+    // reference's 18 px, 31 at 0.79.0's 21 px, and down again with Georgia
+    // in 0.84.0) and each move was a test edit that proved nothing. The
+    // reference row is still what an 18 px label gets, which the loop above
+    // checks by measurement.
+    {
+        const float fromType = cascade::gui::fonts::kUiSize + 2.0f * cascade::gui::kRailRowPadY;
+        const float want = fromType > cascade::gui::kRailRowMinH ? fromType
+                                                                 : cascade::gui::kRailRowMinH;
+        CHECK_NEAR(cascade::gui::railRowHeight(cascade::gui::fonts::kUiSize), want, 0.001);
+    }
     CHECK_NEAR(cascade::gui::railRowHeight(18.0f), 28.0f, 0.001);
     // The key stays the reference's 18 at that height.
     CHECK_NEAR(cascade::gui::railKeySize(28.0f), 18.0f, 0.001);
