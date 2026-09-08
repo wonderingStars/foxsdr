@@ -164,6 +164,22 @@ bool install(GLFWwindow* window) {
     // the new style, rather than on the next move or resize.
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                  SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    // AND THEN A REAL RESIZE, one pixel out and back. The frame change above
+    // grows the client into the old caption without moving the window, and
+    // a tester's machine kept presenting the picture where the smaller
+    // client had been until the window was resized by hand - the top of the
+    // picture above the window, every click landing below its control. A
+    // resize is what put it right for them, so a resize is what happens
+    // here, before anything is shown.
+    {
+        RECT wr{};
+        GetWindowRect(hwnd, &wr);
+        const int w = wr.right - wr.left;
+        const int h = wr.bottom - wr.top;
+        const UINT flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+        SetWindowPos(hwnd, nullptr, 0, 0, w, h + 1, flags);
+        SetWindowPos(hwnd, nullptr, 0, 0, w, h, flags);
+    }
     // THE GEOMETRY, ON RECORD. A report of controls that do not sit where
     // they are drawn is a geometry question, and these are the numbers that
     // answer it: what the window is, what the system says its client is, and

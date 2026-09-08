@@ -32,6 +32,19 @@
 //     retune waits resumeMs (a grace period so brief squelch flutter at the
 //     tail does not instantly yank the tuner) and then advances to the NEXT
 //     lattice step — the held frequency already had its chance.
+//   - skip(): the operator's "next", from any active state. The machine
+//     advances to the next lattice point at once and the next tick emits it,
+//     ignoring squelch on that tick as the first tune does (the flag still
+//     describes the frequency just left). A broadcast station never goes
+//     quiet, so without this a scan across the FM band stopped at the first
+//     one and stayed there for good.
+//   - listenMs (0 = no limit): the same "next" taken by the machine itself,
+//     so an unattended scan keeps moving. The budget starts on the tick that
+//     found the signal, runs through Paused AND Holding — a re-trigger does
+//     not refill it, or a chatty repeater with short gaps would hold the scan
+//     as surely as a carrier — and is checked while Paused: the tick it runs
+//     out on emits the retune. Running out during a hold changes nothing;
+//     the hold ends the ordinary way.
 //
 // Timing model (documented because callers depend on every detail)
 // ----------------------------------------------------------------
@@ -99,6 +112,7 @@ public:
         double dwellMs = 50;
         double holdMs = 2000;
         double resumeMs = 500;
+        double listenMs = 0;  // longest stay on one signal; 0 = until quiet
     };
 
     enum class State { Idle, Scanning, Paused, Holding };
@@ -113,6 +127,7 @@ public:
         p.dwellMs = sanitizeTimeMs(p.dwellMs);
         p.holdMs = sanitizeTimeMs(p.holdMs);
         p.resumeMs = sanitizeTimeMs(p.resumeMs);
+        p.listenMs = sanitizeTimeMs(p.listenMs);
         params_ = p;
         stepIndex_ = 0;
         phaseMs_ = 0.0;
@@ -137,6 +152,18 @@ public:
     void stop() {
         state_ = State::Idle;
         firstTunePending_ = false;
+    }
+
+    // Moves on from the current frequency now: the next tick retunes to the
+    // next lattice point (wrapping stop -> start) whatever the squelch says
+    // on that tick. Nothing while Idle.
+    void skip() {
+        if (state_ == State::Idle) { return; }
+        advance();
+        state_ = State::Scanning;
+        firstTunePending_ = true;
+        phaseMs_ = 0.0;
+        advanceAfterMs_ = params_.dwellMs;
     }
 
     bool active() const { return state_ != State::Idle; }
@@ -164,8 +191,10 @@ public:
             }
             if (squelchOpen) {
                 // Signal found: listen, don't step past it — even if the
-                // dwell also expired this very tick.
+                // dwell also expired this very tick. The listen budget
+                // starts here.
                 state_ = State::Paused;
+                listenedMs_ = 0.0;
                 return std::nullopt;
             }
             phaseMs_ += delta;
@@ -181,6 +210,16 @@ public:
             return std::nullopt;
 
         case State::Paused:
+            listenedMs_ += delta;
+            if (params_.listenMs > 0.0 && listenedMs_ >= params_.listenMs) {
+                // Listened long enough: the machine's own skip, emitted on
+                // this tick. The dwell runs fresh from the retune.
+                advance();
+                state_ = State::Scanning;
+                phaseMs_ = 0.0;
+                advanceAfterMs_ = params_.dwellMs;
+                return currentHz();
+            }
             if (!squelchOpen) {
                 // Station went quiet: the hold countdown starts fresh here.
                 state_ = State::Holding;
@@ -189,6 +228,7 @@ public:
             return std::nullopt;
 
         case State::Holding:
+            listenedMs_ += delta;
             if (squelchOpen) {
                 // Re-trigger: the station is live again. Abandoning the
                 // countdown means the next quiet spell earns a full hold.
@@ -238,6 +278,7 @@ private:
     bool firstTunePending_ = false;
     double lastMs_ = 0.0;          // previous tick's nowMs (delta source)
     double phaseMs_ = 0.0;         // elapsed inside the current phase
+    double listenedMs_ = 0.0;      // time on the current signal (Paused + Holding)
     double advanceAfterMs_ = 0.0;  // dwellMs normally, resumeMs after a hold
 };
 

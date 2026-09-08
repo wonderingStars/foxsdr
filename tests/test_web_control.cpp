@@ -320,6 +320,11 @@ void testRecorderBookmarkScannerFields() {
     CHECK(!accepts("{\"scanStartHz\":90000000,\"scanStopHz\":90000000}"));
     CHECK(!accepts("{\"scanStepHz\":0}"));
     CHECK(!accepts("{\"scannerActive\":\"yes\"}"));
+    // Skip is a plain request to move on; it carries no value of its own.
+    CHECK(parseControlRequest("{\"scannerSkip\":true}", r, error));
+    CHECK(r.scannerSkip.value_or(false));
+    CHECK(!accepts("{\"scannerSkip\":\"yes\"}"));
+    CHECK(!accepts("{\"scannerSkip\":1}"));
     // One end alone is fine — the application holds the other.
     CHECK(accepts("{\"scanStartHz\":88000000}"));
 }

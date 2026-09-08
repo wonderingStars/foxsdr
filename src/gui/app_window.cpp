@@ -847,7 +847,17 @@ int AppWindow::run(int frames) {
 
     const std::string title =
         std::string(cascade::appName()) + " " + cascade::versionString();
+    // HIDDEN UNTIL ITS FRAME IS SETTLED. The title bar comes off the window's
+    // style after creation (frame::install below), and a window that has
+    // already been shown - and presented once - with the caption on has
+    // given every layer beneath it a first look at a client area that is
+    // about to change. A tester's 0.84.1 opened with the top of the picture
+    // off the top of the window and every click landing below its control,
+    // until a resize made the layers agree again. Nothing sees this window
+    // until the style it will keep is the style it has.
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     mainWindow_ = window;
     if (window == nullptr) {
         std::fprintf(stderr, "cascade: glfwCreateWindow failed\n");
@@ -970,6 +980,7 @@ int AppWindow::run(int frames) {
     // platform but Windows) the window keeps the frame the desktop gave it
     // and drawCabinetRail draws no keys.
     cascade::gui::frame::install(window);
+    glfwShowWindow(window);
 
     // A previous run() tore the waterfall down with its GL context (see the
     // teardown below); re-create it against the new context so run() stays
@@ -3023,7 +3034,7 @@ void AppWindow::drawStatusColumn() {
         }
         cascade::gui::addBenchBevel(dl, plateTL, plateBR, round, true);
         const float midX = (plateTL.x + plateBR.x) * 0.5f;
-        statusEngrave(dl, midX, plateTL.y + 5.0f, tinyPx, "FOX & SCHIRMER");
+        statusEngrave(dl, midX, plateTL.y + 5.0f, tinyPx, "FOX & SCHIRMYVER");
         statusEngrave(dl, midX, plateTL.y + 5.0f + tinyH + 1.0f, tinyPx,
                       "TYPE 71 - MK II");
     }
@@ -7854,7 +7865,7 @@ void AppWindow::drawScopeMode() {
             const float subPx = std::max(9.0f, 11.0f * scale);
             dl->AddText(ImGui::GetFont(), subPx,
                         ImVec2(pTL.x + padL, pTL.y + padT + side + 8.0f * scale),
-                        IM_COL32(127, 134, 108, 255), "& SCHIRMER INDUSTRIES");
+                        IM_COL32(127, 134, 108, 255), "& SCHIRMYVER INDUSTRIES");
         }
 
         // THE ODOMETER COUNTERS. The range the face is set to and the number of
@@ -11637,6 +11648,7 @@ void AppWindow::drawScannerSection() {
         p.dwellMs = scanDwellMs_;
         p.holdMs = scanHoldMs_;
         p.resumeMs = scanResumeMs_;
+        p.listenMs = scanListenMs_;
         return p;
     };
 
@@ -11663,6 +11675,16 @@ void AppWindow::drawScannerSection() {
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputDouble("Resume ms", &scanResumeMs_, 0.0, 0.0, "%.0f");
     edited |= ImGui::IsItemDeactivatedAfterEdit();
+    // THE LONGEST STAY ON ONE SIGNAL. A scan across the broadcast band found
+    // its first station and stayed there, because the station never went
+    // quiet and "hold until quiet" was the only way on. 0 keeps that rule.
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputDouble("Listen ms", &scanListenMs_, 0.0, 0.0, "%.0f");
+    edited |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Longest stay on one signal before the scan moves on.\n"
+                          "0 = stay until it goes quiet.");
+    }
 
     if (edited && scanner_.active()) {
         scanner_.configure(paramsFromMirrors());
@@ -11678,7 +11700,17 @@ void AppWindow::drawScannerSection() {
             scannerHasExpected_ = false;
         }
     } else {
-        if (ImGui::Button("Stop scan", ImVec2(-FLT_MIN, 0.0f))) { scanner_.stop(); }
+        // STOP AND SKIP SIDE BY SIDE: skip is the operator's "next", for the
+        // signal that is heard and not wanted - the retune comes on the next
+        // frame's tick, so the user-tune baseline re-arms from its readback
+        // exactly as after a reconfigure.
+        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::Button("Stop scan", ImVec2(half, 0.0f))) { scanner_.stop(); }
+        ImGui::SameLine();
+        if (ImGui::Button("Skip", ImVec2(-FLT_MIN, 0.0f))) {
+            scanner_.skip();
+            scannerHasExpected_ = false;
+        }
     }
 
     // State + frequency readout. currentHz() keeps reporting the last scan
@@ -12480,6 +12512,7 @@ void AppWindow::applyWebControls() {
                 p.dwellMs = scanDwellMs_;
                 p.holdMs = scanHoldMs_;
                 p.resumeMs = scanResumeMs_;
+                p.listenMs = scanListenMs_;
                 // configure() sanitizes (swaps a reversed range, floors the
                 // step), so the browser's values get the same treatment the
                 // panel's do.
@@ -12489,6 +12522,10 @@ void AppWindow::applyWebControls() {
             } else {
                 scanner_.stop();
             }
+        }
+        if (r.scannerSkip.value_or(false) && scanner_.active()) {
+            scanner_.skip();
+            scannerHasExpected_ = false;
         }
     }
 }

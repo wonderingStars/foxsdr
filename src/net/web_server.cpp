@@ -232,6 +232,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <div class="row tight">
         <label class="grow">Step (kHz)<input id="scanStep" type="number" step="1"></label>
         <button id="scanToggle">Start scan</button>
+        <button id="scanSkip" hidden>Skip</button>
       </div>
       <span id="scanState" class="dim"></span>
     </div></details>
@@ -2109,6 +2110,7 @@ function reflectExtras(s) {
   $('scanToggle').textContent = s.scannerActive ? 'Stop scan' : 'Start scan';
   $('scanToggle').classList.toggle('on', s.scannerActive);
   $('scanState').textContent = s.scannerActive ? s.scannerState : '';
+  $('scanSkip').hidden = !s.scannerActive;
 
   // Decoder output.
   const decKey = s.decoded.length + '#' + (s.decoded.length ? s.decoded[s.decoded.length-1].text : '');
@@ -2404,6 +2406,7 @@ $('scanToggle').addEventListener('click', () => {
   }
   control(patch);
 });
+$('scanSkip').addEventListener('click', () => control({ scannerSkip: true }));
 
 async function pollStatus() {
   const s = await getJson('/api/status');
