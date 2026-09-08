@@ -282,7 +282,7 @@ constexpr double kMaxDisplayHz = 9999999999.0;
 // beside those constants, so neither can drift away from the other.
 // Both numbers are the CLIENT area, which is what glfwSetWindowSizeLimits
 // takes - GLFW adds the frame itself.
-constexpr int kMinWindowW = 560;
+constexpr int kMinWindowW = 600;  // 560 until 0.84.1: the dial moved right with the counter
 // A minimum height is not needed by the bar and is given anyway: GLFW's Win32
 // backend applies its minimum only when BOTH dimensions are set, so a width
 // limit on its own is no limit at all. This is the height at which the bar and
@@ -3045,18 +3045,22 @@ namespace {
 // express a row of widgets and nothing else, and a row of widgets is exactly
 // what the old bar looked like.
 constexpr float kBarH = 160.0f;   // the bar's height, in reference units
-constexpr float kCoreW = 800.0f;  // transport button through volume dial
+constexpr float kCoreW = 864.0f;  // transport button through volume dial (800 until 0.84.1)
 // Where the MASTER compartment ends and the counter's begins. 272 in the
-// reference; 320 since 0.84.0, so the four lamps stand in one row under
+// reference; 320 in 0.84.0 so the four lamps stand in one row under Georgia,
+// 384 in 0.84.1 ("move the counter and the volume dial over, it looks a
+// little close to the four lights"): the counter, its divider, the dial and
+// kCoreW all moved 64 units right together, into the empty deck before the
+// meters, so the lamps have clear brass on their right. It was 320 so the
 // Georgia Bold - the units come out of the frequency well, whose apertures
 // went from 30 to 28 and its side padding from 12 to 8 now the digits are
 // 16 px, so it still ends short of the divider at 684.
-constexpr float kMasterDividerX = 320.0f;
+constexpr float kMasterDividerX = 384.0f;
 
 // THE VOLUME DIAL'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the
 // bar's scale floor is a promise about this one control and a promise checked
 // against a number typed somewhere else is not checked at all.
-constexpr float kVolumeCx = 745.0f;  // the dial's centre, in reference units
+constexpr float kVolumeCx = 809.0f;  // the dial's centre, in reference units (745 until 0.84.1)
 constexpr float kVolumeR = 26.0f;    // ...and its radius
 constexpr float kVolumeEdgePad = 6.0f;
 
@@ -3356,7 +3360,7 @@ void AppWindow::drawToolbar() {
     cascade::gui::addBenchDivider(dl, X(kMasterDividerX), Y(30.0f), Y(135.0f));
     barEngrave(dl, ImVec2(X(kMasterDividerX + 24.0f), Y(42.0f)), capPx, "TUNED - HERTZ", false);
     drawFrequencyReadout(X(kMasterDividerX + 12.0f), Y(62.0f), scale);
-    cascade::gui::addBenchDivider(dl, X(684.0f), Y(30.0f), Y(135.0f));
+    cascade::gui::addBenchDivider(dl, X(748.0f), Y(30.0f), Y(135.0f));
     // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
     // perfectly good control and completely wrong on a bench receiver; this
     // one turns, carries its own tick arc, and answers the wheel as well as
