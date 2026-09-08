@@ -93,6 +93,25 @@ enum class Zone {
 Zone hitZone(float x, float y, float width, float height, float border,
              const CaptionLayout& layout, bool maximised);
 
+// WHERE A MAXIMISED WINDOW GOES. A window whose style has no caption is
+// maximised by the operating system to the WHOLE monitor, taskbar included -
+// the treatment a borderless game window wants, and the wrong one here: on a
+// screen with the taskbar at the bottom the lowest rows of the picture sat
+// under it, and with the taskbar at the top it was the rail, keys and all,
+// that a tester could not see. This is the box a captioned window gets: the
+// work area, grown by the invisible sizing frame so that frame parks
+// off-screen as it always has. Screen coordinates in, a position relative to
+// the monitor's own origin out (which is what WM_GETMINMAXINFO takes); frame
+// thicknesses outside 0..64 count as none.
+struct Box {
+    long x = 0;
+    long y = 0;
+    long w = 0;
+    long h = 0;
+};
+Box maximisedBox(long monitorX0, long monitorY0, long workX0, long workY0, long workX1,
+                 long workY1, long frameLeft, long frameTop, long frameRight, long frameBottom);
+
 // Take the title bar off `window`, keeping the operating system's own move,
 // resize, snap, maximise and system-menu behaviour. Returns false, changing
 // nothing, where that is not possible - which is every platform but Windows.

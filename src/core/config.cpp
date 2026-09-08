@@ -16,6 +16,11 @@
 // shell.
 #include "gui/rail_banks.hpp"
 #include "gui/scope_view.hpp"
+// sanitiseSerialPortName() and serialBaudSupported(): the GPS port fields are
+// repaired by the port layer's own rules, so a name or a rate this file let
+// through is one the port layer will accept. A second copy of either rule
+// here is how the two would come to disagree.
+#include "core/serial_port.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -301,6 +306,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "rxPositionSet", out.rxPositionSet);
     getDouble(j, "rxLatDeg", out.rxLatDeg);
     getDouble(j, "rxLonDeg", out.rxLonDeg);
+    getString(j, "gpsPort", out.gpsPort);
+    getInt(j, "gpsBaud", out.gpsBaud);
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     // The fitted modules window, open flag and rectangle. Its rectangle is
@@ -465,6 +472,16 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.rxLonDeg = 0.0;
         }
     }
+    // The GPS port and baud, by the port layer's rules and no others (see the
+    // include note at the top). A name that sanitises to nothing loads as "no
+    // port chosen", which is the honest reading of a hand-edit the port layer
+    // could never open; a baud off the list is a rate the port cannot be set
+    // to, so the default is restored rather than a request the driver would
+    // refuse being persisted for every launch to come.
+    out.gpsPort = sanitiseSerialPortName(out.gpsPort);
+    if (!serialBaudSupported(out.gpsBaud)) {
+        out.gpsBaud = defaults.gpsBaud;
+    }
     // An empty catalogue URL is a hand-edit (or a deleted value), not a
     // request for "no catalogue": restore the published default rather than
     // leaving the browser with nothing it could ever fetch. Any non-empty
@@ -606,6 +623,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["rxPositionSet"] = cfg.rxPositionSet;
     j["rxLatDeg"] = cfg.rxLatDeg;
     j["rxLonDeg"] = cfg.rxLonDeg;
+    j["gpsPort"] = cfg.gpsPort;
+    j["gpsBaud"] = cfg.gpsBaud;
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["fittedModulesOpen"] = cfg.fittedModulesOpen;

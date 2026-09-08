@@ -24,6 +24,7 @@ struct GLFWwindow;
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
+#include "core/gps_reader.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
@@ -679,6 +680,21 @@ private:
     // and the centre of a map page the user has been looking at. See the
     // implementation for why each is offered and how it is labelled.
     void drawReceiverPositionOffers();
+    // THE GPS ROW (0.86.0): a port name, a baud, and "Read position from
+    // GPS", as ONE copy drawn from three places: drawReceiverPositionOffers
+    // (the rail's Radar section and the scope's empty state, while there is
+    // no position), the rail's "Receiver position" fold (once there is one -
+    // opened for the user on the frame a GPS fix is applied, so the "position
+    // set" line is seen), and every map page's bar, always. The port list is
+    // read from the machine only when its drop-down is opened, never per
+    // frame. See the definition for what the row promises.
+    void drawGpsPositionControl();
+    // ONCE A FRAME, and once more after the last frame: takes the fix the
+    // reader accepted, if there is one, and hands it to applyReceiverPosition
+    // - the only door a position enters by. The single-shot takeFix() is
+    // what keeps a 60 Hz poll from re-applying it (and resetting the
+    // coverage map) sixty times a second.
+    void pollGpsReader();
     // WHAT "SET RX HERE" ACTUALLY DOES, as a function, because there are now
     // THREE ways to say where the antenna is: the toolbar's fields, the
     // satellites window's coordinate cells, and a click on that window's map
@@ -1516,6 +1532,28 @@ private:
     double rxLon_ = 0.0;
     double rxLatInput_ = 0.0;
     double rxLonInput_ = 0.0;
+    // --- the GPS the position can be read from (0.86.0) ---------------------
+    // The reader owns its thread and joins in its destructor; run() also
+    // stops it at the top of the shutdown path so the join precedes the GL
+    // teardown. gpsPort_ and gpsBaud_ are the persisted choice
+    // (AppConfig::gpsPort / gpsBaud); gpsPortInput_ is the text field's own
+    // buffer, one byte over the port layer's limit for the terminator, so
+    // the field cannot hold a name the sanitiser would cut. gpsPorts_ is the
+    // last enumeration, taken when the drop-down opened. gpsRefusal_ is the
+    // one sentence shown when a fix the reader accepted was refused by
+    // applyReceiverPosition - which cannot happen while both apply the same
+    // predicate, and is shown rather than swallowed precisely so a day it
+    // does happen is visible.
+    cascade::core::GpsReader gpsReader_;
+    std::string gpsPort_;
+    int gpsBaud_ = cascade::core::kDefaultGpsBaud;
+    char gpsPortInput_[cascade::core::kMaxSerialPortNameChars + 1] = "";
+    std::vector<std::string> gpsPorts_;
+    std::string gpsRefusal_;
+    // Set by pollGpsReader when a fix is applied; the rail's "Receiver
+    // position" fold opens itself once on it, so the Fixed status line is
+    // seen rather than lost with the no-position block that held the row.
+    bool gpsRowReveal_ = false;
     // How far anything has been heard, per five-degree bearing bucket. Fed
     // once per frame from the visible tracks - which is every track source at
     // once, not just ADS-B - and drawn over the map when coverageShow_ is on.
@@ -2185,6 +2223,10 @@ private:
     double scanHoldMs_ = cascade::core::Scanner::Params{}.holdMs;
     double scanResumeMs_ = cascade::core::Scanner::Params{}.resumeMs;
     double scanListenMs_ = cascade::core::Scanner::Params{}.listenMs;
+    // The pointer ledger (see the frame loop), switched on from the
+    // Diagnostics section so a tester can read it without setting an
+    // environment variable. Not saved: it is a measurement, not a setting.
+    bool inputLedger_ = false;
     // Readback (center + offset) right after the last scanner-commanded
     // retune. Any later frame where the live readback differs is a tune the
     // scanner did not make — a manual tune, and the user wins (scan stops).

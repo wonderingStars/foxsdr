@@ -22,6 +22,10 @@
 #include "core/config.hpp"
 
 #include "core/plugin_repo.hpp"  // defaultIndexUrl(), the default catalogue URL
+// kSerialBaudRates and kMaxSerialPortNameChars: the GPS port block asserts
+// against the port layer's own list and limit, so a change there is a change
+// this test sees rather than a number it transcribed.
+#include "core/serial_port.hpp"
 // mapGeometryOnScreen(): the SECOND half of validating a saved map window.
 // ConfigStore decides whether the numbers are sane; this decides whether the
 // rectangle they describe still exists on this machine, and the two only make
@@ -128,6 +132,12 @@ AppConfig junkConfig() {
     c.rxPositionSet = true;
     c.rxLatDeg = 999.0;
     c.rxLonDeg = -999.0;
+    // A GPS port that must never survive a load: a config that names no port
+    // has none chosen, and a leftover here would open somebody's hardware on
+    // the first press of the key. The baud is off the list for the same
+    // reason every other clamped field is out of range.
+    c.gpsPort = "junk-port";
+    c.gpsBaud = 1200;
     // P9 fields, both away from their defaults (and the URL empty-adjacent
     // junk, so a load path that forgets to assign it is caught).
     c.pluginCatalogueUrl = "garbage";
@@ -215,6 +225,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.rxPositionSet == b.rxPositionSet);
     CHECK(a.rxLatDeg == b.rxLatDeg);
     CHECK(a.rxLonDeg == b.rxLonDeg);
+    CHECK(a.gpsPort == b.gpsPort);
+    CHECK(a.gpsBaud == b.gpsBaud);
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.fittedModulesOpen == b.fittedModulesOpen);
@@ -381,6 +393,12 @@ int main() {
         in.rxPositionSet = true;
         in.rxLatDeg = 53.480759;
         in.rxLonDeg = -2.242631;
+        // The GPS port and baud: a two-digit port (which needs the "\\.\"
+        // spelling to open, so the name must come back exactly as typed) and
+        // a rate that is on the list but is not the default, so a load path
+        // that fell back to 9600 is caught.
+        in.gpsPort = "COM12";
+        in.gpsBaud = 38400;
         // P9: the enterprise escape hatch. A URL that is neither the default
         // nor junkConfig()'s value, so the roundtrip proves the FILE is what
         // came back rather than either end's fallback.
@@ -1170,6 +1188,120 @@ int main() {
         CHECK(out.rxPositionSet);
         CHECK(out.rxLatDeg == -33.865143);
         CHECK(out.rxLonDeg == 151.209900);
+    }
+
+    // --- the GPS port and baud (documented in config.hpp) ----------------------
+    // Sanitised by the PORT LAYER'S rules (core/serial_port.hpp), not by a
+    // copy of them here: this block pins that the config store actually calls
+    // them, with one case per rule, so a load path that stopped sanitising -
+    // or grew its own second copy of a rule - goes red on the case that rule
+    // owns.
+    {
+        const std::string path = p("gps_port.json");
+        AppConfig out;
+        std::string err;
+
+        // No port chosen and 9600 are the defaults: an empty name is "none",
+        // never a device somebody's hardware happens to answer on.
+        const AppConfig d;
+        CHECK(d.gpsPort.empty());
+        CHECK(d.gpsBaud == 9600);
+
+        // Missing keys load as the defaults, over junk.
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.gpsPort.empty());
+        CHECK(out.gpsBaud == 9600);
+
+        // A plain name and a listed rate survive untouched - including a
+        // Linux device path, which is longer than a COM name and carries
+        // slashes the sanitiser must leave alone.
+        CHECK(writeText(path, "{\"gpsPort\":\"/dev/ttyUSB0\",\"gpsBaud\":4800}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.gpsPort == "/dev/ttyUSB0");
+        CHECK(out.gpsBaud == 4800);
+
+        // Every rate on the list is accepted as itself.
+        for (const int baud : cascade::core::kSerialBaudRates) {
+            CHECK(writeText(path, "{\"gpsBaud\":" + std::to_string(baud) + "}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.gpsBaud == baud);
+        }
+
+        // GARBAGE BAUD -> 9600. A rate the port cannot be set to is a request
+        // the driver would refuse on every launch; the default is restored
+        // rather than the refusal persisted. Includes the one rate that is
+        // plausible (1200, an old NMEA rate) but not on the list, zero, a
+        // negative, an off-by-one, and a string, which getInt treats as
+        // absent and therefore as the default.
+        const char* badBaud[] = {
+            "{\"gpsBaud\":1200}",
+            "{\"gpsBaud\":0}",
+            "{\"gpsBaud\":-9600}",
+            "{\"gpsBaud\":9601}",
+            "{\"gpsBaud\":\"9600\"}",
+        };
+        for (const char* b : badBaud) {
+            CHECK(writeText(path, std::string(b) + "\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.gpsBaud != 9600) { std::printf("  (case: %s)\n", b); }
+            CHECK(out.gpsBaud == 9600);
+        }
+
+        // A 500-CHARACTER PORT NAME is cut at the port layer's limit (64), not
+        // rejected and not kept: a name that long is a hand-edit, and the
+        // limit is what keeps a status line and the log's port field bounded.
+        {
+            const std::string longName(500, 'A');
+            CHECK(writeText(path, "{\"gpsPort\":\"" + longName + "\"}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.gpsPort.size() == cascade::core::kMaxSerialPortNameChars);
+            CHECK(out.gpsPort == std::string(cascade::core::kMaxSerialPortNameChars, 'A'));
+        }
+
+        // CONTROL CHARACTERS ARE STRIPPED and the remainder trimmed: a name
+        // with a tab, a newline or a NUL in it is not a name any port layer
+        // will open, and the printable part is what the user meant.
+        CHECK(writeText(path, "{\"gpsPort\":\"  COM\\t3\\n \"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.gpsPort == "COM3");
+        // Non-ASCII goes the same way (UTF-8 bytes are all >= 0x80).
+        CHECK(writeText(path, "{\"gpsPort\":\"COM\\u00e94\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.gpsPort == "COM4");
+        // A name that is nothing but whitespace and control characters loads
+        // as "no port chosen", over junk.
+        CHECK(writeText(path, "{\"gpsPort\":\" \\t\\r\\n \"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.gpsPort.empty());
+        // The wrong JSON type is treated as absent: load() starts from the
+        // defaults, so the field reads "no port chosen" and the junk it was
+        // handed does not survive.
+        CHECK(writeText(path, "{\"gpsPort\":12}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.gpsPort.empty());
+
+        // And the pair survives a save/load roundtrip exactly, including a
+        // device path with the "\\.\" spelling the port layer passes through.
+        AppConfig in;
+        in.schemaVersion = 1;
+        in.gpsPort = "\\\\.\\COM12";
+        in.gpsBaud = 115200;
+        const std::string rt = p("gps_port_roundtrip.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        out = junkConfig();
+        CHECK(ConfigStore::load(rt, out, err));
+        CHECK(out.gpsPort == "\\\\.\\COM12");
+        CHECK(out.gpsBaud == 115200);
     }
 
     // --- a saved rectangle that no monitor can still show ----------------------

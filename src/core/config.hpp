@@ -328,6 +328,29 @@ struct AppConfig {
     double rxLatDeg = 0.0;
     double rxLonDeg = 0.0;
 
+    // THE GPS THE POSITION CAN BE READ FROM (0.86.0), a beta tester's request:
+    // "if you have a GPS receiver you can pull the location straight from
+    // there instead of typing it in." The port name and the baud the user
+    // chose in the combo are remembered so the second read is one click; the
+    // position the read produced is not stored here but in the three fields
+    // above, through the same door a typed position goes through, so nothing
+    // downstream can tell the two apart.
+    //
+    // An EMPTY port means "none chosen", never a default port: a default of
+    // COM1 would be a real device on many machines - a motherboard header, a
+    // modem, somebody's Arduino - and opening it uninvited is how a GPS read
+    // would start resetting the wrong hardware. The baud defaults to 9600,
+    // which is what nearly every receiver ships at.
+    //
+    // Sanitised on load by the port layer's own rules (core/serial_port.hpp:
+    // printable ASCII, trimmed, at most kMaxSerialPortNameChars) and by its
+    // own baud list, so a name the port layer would refuse and a rate the
+    // port cannot be set to are repaired here rather than discovered on the
+    // first press of "Read position from GPS". The developer hook
+    // FOXSDR_GPS_PORT never writes these; they carry only the GUI's choice.
+    std::string gpsPort;
+    int gpsBaud = 9600;
+
     // --- Plugin browser settings (P9) -----------------------------------------
     // Where the in-app plugin browser looks for its catalogue. Persisted so a
     // user — or an enterprise deploying cascade — can point the browser at

@@ -275,7 +275,16 @@ These are design constraints, not current policy:
   because the failure message used to be logged verbatim, and it contained the
   full path.
 - **Anything decoded** — pager messages, satellite traffic, aircraft, vessels.
-- **Your position**, or the position of anything you receive.
+- **Your position**, or the position of anything you receive. Reading the
+  receiver position from a GPS (0.86.0) logs the port name, the baud rate,
+  sentence and satellite counts and any error — never the position and never
+  the text of an NMEA sentence. Only a port NAME is logged ("COM3",
+  "/dev/ttyUSB0"): the port field accepts any text, and anything that is not
+  shaped like a port — a typed file path, a pipe — is logged as its kind and
+  length ("(a typed device path, 27 chars)"), so a path with your user name in
+  it cannot ride into a report. `tests/test_gps_reader.cpp` asserts both
+  against the log ring and `tests/test_gps_app.cpp` against the log file the
+  real application wrote.
 - **Your IP address or any location derived from it.** A network request
   necessarily reaches the server from an address, because that is how the
   internet works; nothing records or stores it, the receiving endpoint reads no
