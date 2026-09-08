@@ -235,7 +235,8 @@ extern "C" {
 #define CASCADE_CAP_PRESET 0x00000040u
 #define CASCADE_CAP_BASEMAP 0x00000080u
 #define CASCADE_CAP_TRACK_INFO 0x00000100u
-#define CASCADE_CAP_ALL_KNOWN 0x000001FFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_INSTRUMENT 0x00000200u
+#define CASCADE_CAP_ALL_KNOWN 0x000003FFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -755,6 +756,155 @@ typedef struct CascadePanelApi {
 
     void (*destroy)(void *handle);
 } CascadePanelApi;
+
+/* ==========================================================================
+ * CASCADE_CAP_INSTRUMENT - a window drawn as a piece of equipment.
+ *
+ * The "genuinely novel visual" the PANEL section said could come later, and
+ * it comes the same way: the plugin describes WHAT is being shown and the host
+ * decides how it looks, so no plugin is welded to an ImGui build and none
+ * ships a GUI stack. The difference from a panel is that the host has a
+ * drawing for each KIND - a pager's liquid-crystal face for a paging decoder,
+ * a fax machine's paper well for radiofax, a cockpit course indicator for a
+ * VOR - and the plugin fills in the numbers and words that face shows.
+ *
+ * THE SLOT MAP IS THE CONTRACT. Each kind below says which `values[i]` and
+ * `text[i]` it reads and what they mean, exactly as a real instrument's rear
+ * panel says which pin is which. A plugin that fills a slot the kind does not
+ * read wastes nothing; a host that reads a slot the plugin did not fill sees a
+ * zero or an empty string and draws "no reading", never a made-up figure. The
+ * optional row feed (`columns`/`poll_rows`, the panel contract verbatim) is
+ * the instrument's memory - a pager's stored messages, a fax machine's log -
+ * and the host draws it beneath the face.
+ *
+ * `seq` ADVANCES ON EVERY NEW EVENT, and that is how a face knows to ring:
+ * the host compares it with the last one it drew, so a lamp lights and a
+ * message reads "NEW" for exactly the events the plugin says are new, without
+ * the plugin having to know when the window was last looked at.
+ *
+ * A host older than this section IGNORES the bit (that rule is in the loader,
+ * and it is why ABI 3 need not bump): the plugin still decodes, still prints,
+ * and only the instrument window is absent.
+ * ==========================================================================
+ */
+
+#define CASCADE_INSTRUMENT_TITLE_CHARS 40
+#define CASCADE_INSTRUMENT_VALUES 8
+#define CASCADE_INSTRUMENT_TEXTS 8
+#define CASCADE_INSTRUMENT_TEXT_CHARS 64
+
+/* Kinds. A host draws the ones it knows and a plain readout for any other, so
+ * a plugin may declare a kind newer than its host and still be seen. */
+#define CASCADE_INSTRUMENT_GENERIC 0u /* text/value readout, no particular face */
+/* PAGER: a 1990s alphanumeric pager.
+ *   text[0] latest message   text[1] capcode/address   text[2] time (HH:MM)
+ *   text[3] kind (ALPHA/NUMERIC/TONE)   values[0] unread count
+ *   rows: message memory, newest first. */
+#define CASCADE_INSTRUMENT_PAGER 1u
+/* TELEPRINTER: a message printer feeding paper.
+ *   text[0] station/registration   text[1] flight or call   text[2] label
+ *   text[3] mode   text[4] block or sequence   values[0] messages printed
+ *   rows: the paper, oldest first, one row per printed line. */
+#define CASCADE_INSTRUMENT_TELEPRINTER 2u
+/* TONE_ALERT: a two-tone alerting receiver.
+ *   values[0] tone A Hz   values[1] tone B Hz   values[2] A seconds
+ *   values[3] B seconds   text[0] code   text[1] table and group
+ *   text[2] MATCHED / UNMATCHED   flags ALERT while the alert is held
+ *   rows: the call log, newest first. */
+#define CASCADE_INSTRUMENT_TONE_ALERT 3u
+/* NAV_BEARING: a VOR course indicator.
+ *   values[0] bearing degrees (0..360, the radial FROM the station)
+ *   values[1] confidence 0..1
+ *   values[2] reference level 0..1   values[3] variable level 0..1
+ *   text[0] ident letters   flags LOCK while a bearing is valid.
+ * "Level" had no scale, which left the two of them undrawable beside the
+ * confidence they explain: they are the strengths of the two 30 Hz signals the
+ * bearing is the phase difference of, each normalised 0..1 against its own
+ * neighbourhood, so all three sit on one scale and a zero is a slot nobody
+ * filled. */
+#define CASCADE_INSTRUMENT_NAV_BEARING 4u
+/* FAX: a radiofax machine. Drawn around the plugin's IMAGE when it has one.
+ *   values[0] IOC   values[1] lines per minute   values[2] lines received
+ *   values[3] tuning offset Hz   text[0] phase (IDLE/START/PHASING/PICTURE/STOP)
+ *   flags LOCK while phased. */
+#define CASCADE_INSTRUMENT_FAX 5u
+/* BEACON: a distress-beacon receiver.
+ *   text[0] the 15 hexadecimal character beacon identity
+ *   text[1] country   text[2] protocol   text[3] position, or how it is absent
+ *   values[0] CARRIER ERROR in Hz: the measured carrier minus the frequency the
+ *             beacon is assigned, so it is signed and its meaningful reading is
+ *             zero (the host draws it on a centre-zero meter). An offset from
+ *             the receiver's own centre would be a different number, and is not
+ *             what this slot carries.
+ *   values[1] age of the newest burst in seconds, as at the moment of the poll
+ *   flags ALERT while a burst is fresh   rows: burst log, newest first. */
+#define CASCADE_INSTRUMENT_BEACON 6u
+/* METER: a utility meter's display.
+ *   text[0] meter id   text[1] commodity (ELECTRIC/GAS/WATER)
+ *   values[0] reading - the register, a whole count, neither scaled nor
+ *     rounded by the plugin
+ *   values[1] tamper bits - bits 0..1 the physical tamper counter, bits 2..3
+ *     the encoder one, each 0..3; zero means "no tamper reported". A meter
+ *     that has not been heard is reported by poll_state returning 0, not by a
+ *     zero here, so that "no tamper" and "not measured" stay different claims.
+ *   rows: every meter heard, newest first - the roster, and the useful half of
+ *     this instrument, because a neighbourhood has dozens of meters and only
+ *     one of them can be on the face at a time. */
+#define CASCADE_INSTRUMENT_METER 7u
+/* WEATHER_CONSOLE: a home weather station's base unit.
+ *   values[0..2] temperature C, channels 1..3   values[3..5] humidity %
+ *   values[6] channel mask (bit n-1 = channel n has a reading)
+ *   values[7] low-battery mask   text[0..2] sensor model per channel
+ *   A channel OUTSIDE the mask has no reading at all and is drawn blank -
+ *   the dashes a real console shows for a sensor it has not heard - never
+ *   as 0.0 C. A channel INSIDE it always has a temperature; a humidity of
+ *   zero there means that sensor does not measure humidity, not 0% RH.
+ *   rows: readings log, newest first. */
+#define CASCADE_INSTRUMENT_WEATHER_CONSOLE 8u
+
+/* State flags. */
+#define CASCADE_INSTRUMENT_FLAG_ALERT 0x00000001u /* something is ringing */
+#define CASCADE_INSTRUMENT_FLAG_LOCK 0x00000002u  /* a signal is present and locked */
+#define CASCADE_INSTRUMENT_FLAG_LOW_BATT 0x00000004u
+
+typedef struct CascadeInstrumentState {
+    /* sizeof(CascadeInstrumentState) as the HOST filled it in before the call,
+     * so a plugin can tell what it is filling. */
+    uint32_t structSize;
+    uint32_t flags;
+    /* Advances on every new event (message, burst, reading, page). Never
+     * decreases within an instance's lifetime. */
+    uint32_t seq;
+    uint32_t reserved;
+    double values[CASCADE_INSTRUMENT_VALUES];
+    char text[CASCADE_INSTRUMENT_TEXTS][CASCADE_INSTRUMENT_TEXT_CHARS];
+} CascadeInstrumentState;
+
+typedef struct CascadeInstrumentApi {
+    uint32_t structSize;
+
+    /* Window title, e.g. "Pager". Static storage, non-NULL. */
+    const char *title;
+
+    /* One of CASCADE_INSTRUMENT_*. Fixed for the plugin's lifetime. */
+    uint32_t kind;
+
+    void *(*create)(void);
+
+    /* Fills `out` (the host has set structSize and zeroed the rest). Returns 1
+     * when the state is meaningful, 0 when the instrument has nothing yet,
+     * negative on permanent failure. GUI thread, at frame rate: cheap,
+     * non-blocking, no I/O. */
+    int32_t (*poll_state)(void *handle, CascadeInstrumentState *out);
+
+    /* The memory beneath the face, exactly the panel contract. Both may be
+     * NULL together (no memory); if one is set both must be. */
+    uint32_t (*columns)(void *handle,
+                        char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS]);
+    int32_t (*poll_rows)(void *handle, CascadePanelRow *out, uint32_t cap);
+
+    void (*destroy)(void *handle);
+} CascadeInstrumentApi;
 
 /* ==========================================================================
  * CASCADE_CAP_HOST_CLIENT - the only capability that points the other way.
@@ -1297,6 +1447,12 @@ static inline const CascadePresetApi *cascade_plugin_preset(
 
 static inline const CascadePanelApi *cascade_plugin_panel(const CascadePluginDesc *desc) {
     return (const CascadePanelApi *)cascade_plugin_capability(desc, CASCADE_CAP_PANEL);
+}
+
+static inline const CascadeInstrumentApi *cascade_plugin_instrument(
+    const CascadePluginDesc *desc) {
+    return (const CascadeInstrumentApi *)cascade_plugin_capability(desc,
+                                                                   CASCADE_CAP_INSTRUMENT);
 }
 
 static inline const CascadeHostClientApi *cascade_plugin_host_client(

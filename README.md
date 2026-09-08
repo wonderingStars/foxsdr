@@ -121,6 +121,16 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
+**Photographing the window.** Press **F12** in a running FoxSDR and it writes
+what it has just drawn, from its own framebuffer, as `shot-<frame>.bmp` into
+`FOXSDR_SHOT_DIR` (or the current directory), and logs the path. Set
+`FOXSDR_SHOT_AT_FRAME=<n>` to have it take one at that frame without a key,
+which is what a script wants. This exists because a screen grab cannot always
+see an OpenGL window — on one desktop here PrintWindow returned white and a
+desktop capture showed the icons through the window while it was plainly on
+screen — and the only picture always true to what was drawn is the one the
+application takes of itself.
+
 ## Building (Linux — in development, see the notice at the top)
 
 **This is unfinished work.** It builds and the tests pass, but no plugins are
@@ -213,7 +223,31 @@ A plugin may declare several capabilities. Decoders are fed real samples —
 either the tuned, demodulated audio or the raw receiver band — and produce
 either text lines or **images** (slow-scan and weather-satellite pictures,
 shown in their own window and saveable as BMP). A plugin may also put targets
-and tracks on the map, and declare a window of its own.
+and tracks on the map, and declare a window of its own. An audio decoder is
+fed at the rate it asks for: since 0.83.0 the host resamples the tuned audio
+to a decoder's own clock (a 16 kHz tone decoder, a 22.05 kHz pager decoder),
+where before it idled any decoder not built around 48 kHz. A raw-band decoder
+still gets whatever rate the device is running at, because only the device
+can change that.
+
+**Instruments** (0.83.0). A plugin may also declare an *instrument*: it names
+a kind — a pager, a message printer, a tone-alert receiver, a VOR course
+indicator, a fax machine, a distress-beacon receiver, a utility meter, a
+weather-station console — and feeds the host the figures and words that kind
+shows, and the host draws the window as that piece of equipment, in the same
+brass-and-glass as the rest of the bench. The plugin never draws: it fills
+slots whose meaning the ABI fixes per kind, and a host that has no face for a
+kind (an older host, or a newer plugin) draws a plain readout of every filled
+slot instead, so nothing sent is ever hidden. Each instrument has a row under
+DECODE like a panel's, whose chip reads **NEW** while something has arrived
+that the window has not shown — the closed pager still says it has a message
+— and the optional memory beneath the face (a pager's stored messages, a
+meter roster, a burst log) is the plugin's own row feed. Instrument windows
+are desktop-only for now; the browser interface does not carry them yet.
+Developers: `FOXSDR_DEMO_INSTRUMENT=pager` (or any kind name, or `all`) opens
+demonstration instruments fed with sample state, so a face can be worked on
+with no radio and no plugin — the only windows that open by themselves, and
+only under that switch.
 
 **Stop and start.** In the Fitted modules window every loaded module's row
 carries a **STOP** key, and a stopped one carries **START**; the selected

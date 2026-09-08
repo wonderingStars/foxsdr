@@ -271,6 +271,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                     ? static_cast<const CascadePanelApi*>(
                           findCapabilityTable(desc, CASCADE_CAP_PANEL))
                     : nullptr;
+    rec.instrument = (desc->capabilities & CASCADE_CAP_INSTRUMENT) != 0u
+                         ? static_cast<const CascadeInstrumentApi*>(
+                               findCapabilityTable(desc, CASCADE_CAP_INSTRUMENT))
+                         : nullptr;
     rec.hostClient = (desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u
                          ? static_cast<const CascadeHostClientApi*>(
                                findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT))
@@ -485,6 +489,32 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         ++usable;
     }
 
+    if ((desc->capabilities & CASCADE_CAP_INSTRUMENT) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_INSTRUMENT);
+        if (raw == nullptr) {
+            return PluginRejection::MissingInstrumentApi;
+        }
+        const auto* in = static_cast<const CascadeInstrumentApi*>(raw);
+        if (in->structSize != static_cast<uint32_t>(sizeof(CascadeInstrumentApi))) {
+            return PluginRejection::InstrumentStructSizeMismatch;
+        }
+        if (in->create == nullptr || in->poll_state == nullptr || in->destroy == nullptr) {
+            return PluginRejection::MissingInstrumentFunction;
+        }
+        if (!isNonEmpty(in->title)) {
+            return PluginRejection::MissingInstrumentFunction;
+        }
+        // The memory feed is optional as a PAIR. Half of it would be a table
+        // the host cannot shape, or rows it cannot ask for.
+        if ((in->columns == nullptr) != (in->poll_rows == nullptr)) {
+            return PluginRejection::InstrumentHalfMemory;
+        }
+        // The kind is NOT range-checked: a kind this host has no face for is
+        // drawn as a plain readout, so a plugin built for a newer host still
+        // shows its figures here.
+        ++usable;
+    }
+
     if ((desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u) {
         const void* raw = findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT);
         if (raw == nullptr) {
@@ -623,6 +653,14 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "panel declares an impossible number of columns";
         case PluginRejection::MissingPanelFunction:
             return "panel table has a null function pointer or no window title";
+        case PluginRejection::MissingInstrumentApi:
+            return "declares CASCADE_CAP_INSTRUMENT but supplies no instrument table";
+        case PluginRejection::InstrumentStructSizeMismatch:
+            return "instrument table size does not match this host's";
+        case PluginRejection::MissingInstrumentFunction:
+            return "instrument table has a null function pointer or no window title";
+        case PluginRejection::InstrumentHalfMemory:
+            return "instrument supplies only one of columns and poll_rows";
         case PluginRejection::MissingHostClientApi:
             return "declares CASCADE_CAP_HOST_CLIENT but supplies no table";
         case PluginRejection::HostClientStructSizeMismatch:
@@ -835,6 +873,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.imageDecoder = nullptr;
         r.trackSource = nullptr;
         r.panel = nullptr;
+        r.instrument = nullptr;
         r.hostClient = nullptr;
         r.preset = nullptr;
         r.basemap = nullptr;

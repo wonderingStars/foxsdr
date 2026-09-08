@@ -3,6 +3,10 @@
 #include "core/plugin_ui.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -416,6 +420,344 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
                 panelInstances_.push_back(std::move(pi));
             }
         }
+
+        if (lp.instrument != nullptr) {
+            void* h = lp.instrument->create();
+            if (h != nullptr) {
+                HostInstrument hi;
+                hi.plugin = lp.name;
+                hi.title = lp.instrument->title != nullptr ? lp.instrument->title : lp.name;
+                hi.kind = lp.instrument->kind;
+                // The memory feed is a pair (the loader refuses half of one),
+                // and its columns are read once, as a panel's are.
+                if (lp.instrument->columns != nullptr && lp.instrument->poll_rows != nullptr) {
+                    char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS] = {};
+                    std::uint32_t cols = lp.instrument->columns(h, headings);
+                    if (cols == 0u) { cols = 1u; }
+                    if (cols > CASCADE_PANEL_MAX_COLUMNS) { cols = CASCADE_PANEL_MAX_COLUMNS; }
+                    for (std::uint32_t c = 0; c < cols; ++c) {
+                        hi.headings.push_back(bounded(headings[c], CASCADE_PANEL_CELL_CHARS));
+                    }
+                }
+                InstrumentInstance ii;
+                ii.api = lp.instrument;
+                ii.handle = h;
+                ii.name = lp.name;
+                ii.index = instruments_.size();
+                instruments_.push_back(std::move(hi));
+                instrumentInstances_.push_back(std::move(ii));
+            }
+        }
+    }
+
+    // Demonstration faces LAST, so every real instance's index stays valid.
+    if (const char* demo = std::getenv("FOXSDR_DEMO_INSTRUMENT");
+        demo != nullptr && demo[0] != '\0') {
+        addDemoInstruments(demo);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Demonstration instruments. Everything below is sample content, labelled as
+// such in the window title, and exists so a face can be drawn and looked at
+// with no radio and no plugin. The figures are plausible for the kind - a
+// pager message, a radial, a meter reading - so a face is designed against
+// the shape of real data rather than against zeroes.
+
+std::uint32_t PluginUi::demoKindByName(const std::string& name) {
+    struct Entry {
+        const char* n;
+        std::uint32_t k;
+    };
+    static const Entry table[] = {
+        {"generic", CASCADE_INSTRUMENT_GENERIC},
+        {"pager", CASCADE_INSTRUMENT_PAGER},
+        {"teleprinter", CASCADE_INSTRUMENT_TELEPRINTER},
+        {"tone", CASCADE_INSTRUMENT_TONE_ALERT},
+        {"bearing", CASCADE_INSTRUMENT_NAV_BEARING},
+        {"fax", CASCADE_INSTRUMENT_FAX},
+        {"beacon", CASCADE_INSTRUMENT_BEACON},
+        {"meter", CASCADE_INSTRUMENT_METER},
+        {"weather", CASCADE_INSTRUMENT_WEATHER_CONSOLE},
+    };
+    for (const Entry& e : table) {
+        if (name == e.n) { return e.k; }
+    }
+    return ~0u;
+}
+
+namespace {
+
+void setText(CascadeInstrumentState& s, int slot, const char* v) {
+    std::snprintf(s.text[slot], CASCADE_INSTRUMENT_TEXT_CHARS, "%s", v);
+}
+
+void addRow(std::vector<CascadePanelRow>& rows, std::uint32_t flags, const char* a,
+            const char* b = nullptr, const char* c = nullptr, const char* d = nullptr) {
+    CascadePanelRow r{};
+    r.kind = CASCADE_ROW_CELLS;
+    r.flags = flags;
+    const char* cells[4] = {a, b, c, d};
+    for (int i = 0; i < 4; ++i) {
+        if (cells[i] != nullptr) {
+            std::snprintf(r.cells[i], CASCADE_PANEL_CELL_CHARS, "%s", cells[i]);
+        }
+    }
+    rows.push_back(r);
+}
+
+HostInstrument demoInstrument(std::uint32_t kind) {
+    HostInstrument h;
+    h.plugin = "Demonstration";
+    h.kind = kind;
+    h.have = true;
+    h.state.structSize = static_cast<std::uint32_t>(sizeof(CascadeInstrumentState));
+    h.state.seq = 1u;
+    CascadeInstrumentState& s = h.state;
+    switch (kind) {
+        case CASCADE_INSTRUMENT_PAGER:
+            h.title = "Pager DEMO";
+            // LONGER THAN THE SCREEN ON PURPOSE. The face wraps a page into
+            // four rows of twenty characters and flashes an arrow when it runs
+            // past them, and a sample that fitted comfortably would leave both
+            // of those untested by eye.
+            setText(s, 0, "CALL DISPATCH RE UNIT 4 ETA 20 MIN BRING SPARE ANTENNA AND LOG");
+            setText(s, 1, "1234567");
+            setText(s, 2, "14:32");
+            setText(s, 3, "ALPHA");
+            s.values[0] = 3.0;
+            // Ringing, and in frame sync: the two lamps a paging receiver has
+            // to be able to show at once.
+            s.flags = CASCADE_INSTRUMENT_FLAG_ALERT | CASCADE_INSTRUMENT_FLAG_LOCK;
+            h.headings = {"Time", "Capcode", "Message"};
+            addRow(h.rows, CASCADE_ROW_FLAG_GOOD, "14:32", "1234567",
+                   "CALL DISPATCH RE UNIT 4 ETA 20 MIN BRING THE SPARE ANTENNA");
+            addRow(h.rows, 0u, "14:29", "0891122", "MTG MOVED TO RM 3B");
+            addRow(h.rows, 0u, "14:11", "1234567", "PLS CALL 0113 496 0111");
+            addRow(h.rows, 0u, "14:04", "0000077", "5551234");
+            addRow(h.rows, CASCADE_ROW_FLAG_MUTED, "13:58", "2200450", "TEST PAGE");
+            break;
+        case CASCADE_INSTRUMENT_TELEPRINTER:
+            // Sample ACARS traffic in the OLDEST-FIRST order this kind's slot
+            // comment gives for its rows - the paper, in the order it came
+            // off the roll - so the face's "newest is the last row" reading
+            // is exercised by the demonstration rather than only by the
+            // plugin. The text slots carry the newest block's header: the
+            // registration, flight, label, mode and block identifier a real
+            // ACARS downlink block carries, which is what a cockpit printer
+            // prints at the head of a message.
+            h.title = "ACARS printer DEMO";
+            setText(s, 0, "G-EZBX");
+            setText(s, 1, "EZY83U");
+            setText(s, 2, "H1");
+            setText(s, 3, "2");
+            setText(s, 4, "4");
+            s.values[0] = 137.0;
+            h.headings = {"Time", "Reg", "Flight", "Text"};
+            addRow(h.rows, 0u, "14:29:41", "G-XLEA", "BAW1A", "WX REQ EGLL");
+            addRow(h.rows, 0u, "14:30:12", "EI-DWA", "RYR4MK", "OUT 1428 OFF 1440 ETA 1602");
+            addRow(h.rows, 0u, "14:30:40", "G-EUUU", "BAW817", "REQ PDC EGLL RWY 27R");
+            addRow(h.rows, 0u, "14:31:05", "EI-DWA", "RYR4MK", "POS N5340 W00145 FL360 M78");
+            addRow(h.rows, CASCADE_ROW_FLAG_GOOD, "14:31:50", "G-EZBX", "EZY83U",
+                   "ETA EGNM 1455 GATE 12 FUEL 4.1T");
+            break;
+        case CASCADE_INSTRUMENT_TONE_ALERT:
+            // A REAL PAGE OUT OF THE PUBLISHED CHART, not plausible-looking
+            // numbers. 746.8 Hz and 879.0 Hz are Motorola Quick Call II reeds
+            // 125 and 128, both in group 2, which the general encoding plan
+            // makes cap code 258; the 1 s / 3 s timing is the chart's own.
+            // Designing a face against invented figures is how a cell ends up
+            // too narrow for the widest thing that can land in it.
+            h.title = "Tone alert DEMO";
+            s.values[0] = 746.8;
+            s.values[1] = 879.0;
+            s.values[2] = 1.02;
+            s.values[3] = 2.98;
+            setText(s, 0, "258");
+            setText(s, 1, "Motorola Quick Call II group 2");
+            setText(s, 2, "MATCHED");
+            s.flags = CASCADE_INSTRUMENT_FLAG_ALERT;
+            h.headings = {"Time", "Tones", "Code", "Result"};
+            addRow(h.rows, CASCADE_ROW_FLAG_GOOD, "14:32:07", "746.8 / 879.0 Hz", "258",
+                   "Motorola Quick Call II");
+            addRow(h.rows, CASCADE_ROW_FLAG_WARN, "13:05:44", "912.0 / 1011.0 Hz", "-",
+                   "UNMATCHED");
+            addRow(h.rows, CASCADE_ROW_FLAG_MUTED, "12:55:02", "1050.0 Hz single", "-",
+                   "single tone");
+            addRow(h.rows, 0u, "11:48:19", "746.8 / 879.0 Hz", "258",
+                   "Motorola Quick Call II");
+            break;
+        case CASCADE_INSTRUMENT_NAV_BEARING:
+            // Pole Hill (POL, 112.10 MHz), a real Lancashire VOR, on a radial
+            // whose reciprocal is worth reading: 094 out, 274 back. The three
+            // levels are consistent with each other rather than picked to look
+            // busy - the plugin derives confidence as the geometric mean of the
+            // reference and variable qualities, so sqrt(0.91 * 0.97) is the
+            // 0.94 beside them and the face's three bays agree.
+            h.title = "VOR DEMO";
+            s.values[0] = 94.0;
+            s.values[1] = 0.94;
+            s.values[2] = 0.91;
+            s.values[3] = 0.97;
+            setText(s, 0, "POL");
+            s.flags = CASCADE_INSTRUMENT_FLAG_LOCK;
+            break;
+        case CASCADE_INSTRUMENT_FAX:
+            // A chart part way through: the working standard everywhere in
+            // NOAA's schedule is IOC 576 at 120 lines per minute, a receiver
+            // 23 Hz low is realistically mistuned rather than comically so,
+            // and 412 lines is about a third of a ten-minute transmission -
+            // enough paper out of the slot to see it feeding.
+            h.title = "Radiofax DEMO";
+            s.values[0] = 576.0;
+            s.values[1] = 120.0;
+            s.values[2] = 412.0;
+            s.values[3] = -23.0;
+            setText(s, 0, "PICTURE");
+            s.flags = CASCADE_INSTRUMENT_FLAG_LOCK;
+            h.headings = {"Time", "Event"};
+            addRow(h.rows, CASCADE_ROW_FLAG_GOOD, "+03:26", "Line 400");
+            addRow(h.rows, 0u, "+02:41", "Line 300");
+            addRow(h.rows, CASCADE_ROW_FLAG_GOOD, "+00:36",
+                   "Phased, 120 lpm, tuning -23 Hz");
+            addRow(h.rows, 0u, "+00:06", "Start tone, IOC 576");
+            addRow(h.rows, CASCADE_ROW_FLAG_MUTED, "+00:00", "Listening");
+            break;
+        case CASCADE_INSTRUMENT_BEACON:
+            // The identity, the country and the protocol wording are C/S T.001
+            // Annex B's OWN worked example, which is also what the 406 MHz
+            // beacon plugin's tests decode - so the demonstration face shows
+            // the same strings a real burst produces rather than invented ones.
+            // The carrier error is a plausible +430 Hz against a five kilohertz
+            // scale, and the age is twelve seconds into a fifty second burst
+            // period.
+            h.title = "406 MHz beacon DEMO";
+            setText(s, 0, "ADCD00800440401");
+            setText(s, 1, "366 United States of America");
+            setText(s, 2, "Serial User Protocol - float-free EPIRB");
+            setText(s, 3, "none (user protocol)");
+            s.values[0] = 430.0;
+            s.values[1] = 12.0;
+            s.flags = CASCADE_INSTRUMENT_FLAG_ALERT;
+            h.headings = {"Time", "Hex ID", "Country", "Channel"};
+            addRow(h.rows, CASCADE_ROW_FLAG_WARN, "14:31:58", "ADCD00800440401", "366 USA",
+                   "406.0250 MHz (ch B)");
+            addRow(h.rows, 0u, "14:31:08", "ADCD00800440401", "366 USA",
+                   "406.0250 MHz (ch B)");
+            addRow(h.rows, 0u, "14:30:16", "ADCD00800440401", "366 USA",
+                   "406.0250 MHz (ch B)");
+            break;
+        case CASCADE_INSTRUMENT_METER:
+            // A neighbourhood as an ERT receiver actually sees one: several
+            // meters of three commodities, the newest on the face and the
+            // rest on the roster beneath it, and a tamper count standing on
+            // one of them so the face's flag can be seen doing its job
+            // (values[1] = physical 1, encoder 2 -> 1 | (2 << 2) = 9).
+            h.title = "ERT meter DEMO";
+            setText(s, 0, "28394712");
+            setText(s, 1, "ELECTRIC");
+            s.values[0] = 48213.0;
+            s.values[1] = 9.0;
+            h.headings = {"Meter", "Type", "Reading", "Heard"};
+            addRow(h.rows, CASCADE_ROW_FLAG_GOOD, "28394712", "ELECTRIC", "48213", "2 s");
+            addRow(h.rows, 0u, "19002231", "GAS", "3308", "41 s");
+            addRow(h.rows, 0u, "28394881", "ELECTRIC", "10557", "3 min");
+            addRow(h.rows, CASCADE_ROW_FLAG_WARN, "51120044", "ELECTRIC", "722901", "6 min");
+            addRow(h.rows, CASCADE_ROW_FLAG_MUTED, "40011923", "WATER", "9921", "12 min");
+            break;
+        case CASCADE_INSTRUMENT_WEATHER_CONSOLE:
+            // THREE CHANNELS AND ONLY TWO SENSORS, deliberately. The face's
+            // hardest case is the empty compartment - the one that must show
+            // the equipment's dashes and not a zero - and a demonstration that
+            // filled all three would never draw it. Channel 2 is a THN132N,
+            // which is a TEMPERATURE-ONLY sensor: its humidity slot is left at
+            // zero, which the slot map defines as "this sensor does not
+            // measure humidity", so the face's second no-reading case is on
+            // screen as well. The negative reading exercises the minus bar and
+            // the blanked tens digit in one figure.
+            h.title = "Weather station DEMO";
+            s.values[0] = 21.4;
+            s.values[1] = -2.6;
+            s.values[3] = 48.0;
+            s.values[6] = 3.0;  // channels 1 and 2 have a reading; 3 has none
+            s.values[7] = 2.0;  // channel 2's sensor reports a low battery
+            setText(s, 0, "THGR122NX/THGN123N");
+            setText(s, 1, "THN132N/THR238NF");
+            s.flags = CASCADE_INSTRUMENT_FLAG_LOW_BATT;
+            h.headings = {"Time", "Ch", "Sensor", "Reading"};
+            addRow(h.rows, 0u, "14:32:06", "1", "THGR122NX/THGN123N", "21.4 C  48 %RH");
+            addRow(h.rows, CASCADE_ROW_FLAG_WARN, "14:31:48", "2", "THN132N/THR238NF",
+                   "-2.6 C  BATT LOW");
+            addRow(h.rows, 0u, "14:31:26", "1", "THGR122NX/THGN123N", "21.3 C  48 %RH");
+            addRow(h.rows, CASCADE_ROW_FLAG_MUTED, "14:30:52", "?8", "id 9A70",
+                   "heard, not decoded");
+            break;
+        default:
+            h.title = "Instrument DEMO";
+            h.kind = CASCADE_INSTRUMENT_GENERIC;
+            setText(s, 0, "sample text in slot zero");
+            setText(s, 1, "and slot one");
+            s.values[0] = 42.0;
+            s.values[3] = 3.14159;
+            s.flags = CASCADE_INSTRUMENT_FLAG_LOCK;
+            h.headings = {"Column A", "Column B"};
+            addRow(h.rows, 0u, "one", "two");
+            break;
+    }
+    return h;
+}
+
+}  // namespace
+
+void PluginUi::addDemoInstruments(const std::string& spec) {
+    std::size_t start = 0;
+    while (start <= spec.size()) {
+        std::size_t comma = spec.find(',', start);
+        if (comma == std::string::npos) { comma = spec.size(); }
+        std::string name = spec.substr(start, comma - start);
+        // Trim and lower-case, so "Pager, VOR" is accepted as typed.
+        while (!name.empty() && (name.front() == ' ' || name.front() == '\t')) { name.erase(0, 1); }
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) { name.pop_back(); }
+        for (char& c : name) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+        if (name == "all") {
+            for (std::uint32_t k = CASCADE_INSTRUMENT_GENERIC; k <= CASCADE_INSTRUMENT_WEATHER_CONSOLE; ++k) {
+                instruments_.push_back(demoInstrument(k));
+                ++demoCount_;
+            }
+        } else if (!name.empty()) {
+            const std::uint32_t k = demoKindByName(name);
+            if (k != ~0u) {
+                instruments_.push_back(demoInstrument(k));
+                ++demoCount_;
+            }
+        }
+        start = comma + 1;
+    }
+    demoLastStepSec_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void PluginUi::stepDemos(double nowSec) {
+    if (demoCount_ == 0u) { return; }
+    // Every twelve seconds something "arrives": the sequence advances, the
+    // alert toggles, and a figure moves, so the NEW lamp, the ALERT lamp and
+    // a live readout can each be watched doing their job.
+    if (nowSec - demoLastStepSec_ < 12.0) { return; }
+    demoLastStepSec_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    for (std::size_t i = instruments_.size() - demoCount_; i < instruments_.size(); ++i) {
+        HostInstrument& h = instruments_[i];
+        ++h.state.seq;
+        h.state.flags ^= CASCADE_INSTRUMENT_FLAG_ALERT;
+        switch (h.kind) {
+            case CASCADE_INSTRUMENT_PAGER: h.state.values[0] += 1.0; break;
+            case CASCADE_INSTRUMENT_TELEPRINTER: h.state.values[0] += 1.0; break;
+            case CASCADE_INSTRUMENT_NAV_BEARING:
+                h.state.values[0] = std::fmod(h.state.values[0] + 7.0, 360.0);
+                break;
+            case CASCADE_INSTRUMENT_FAX: h.state.values[2] += 60.0; break;
+            case CASCADE_INSTRUMENT_METER: h.state.values[0] += 1.0; break;
+            case CASCADE_INSTRUMENT_WEATHER_CONSOLE: h.state.values[0] += 0.1; break;
+            default: break;
+        }
     }
 }
 
@@ -440,6 +782,12 @@ void PluginUi::destroyInstances() {
         if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
     }
     panelInstances_.clear();
+    for (InstrumentInstance& in : instrumentInstances_) {
+        if (in.api != nullptr && in.handle != nullptr) { in.api->destroy(in.handle); }
+    }
+    instrumentInstances_.clear();
+    instruments_.clear();
+    demoCount_ = 0;
     tracks_.clear();
     paths_.clear();
     panels_.clear();
@@ -452,6 +800,11 @@ void PluginUi::destroyInstances() {
 }
 
 void PluginUi::poll() {
+    if (demoCount_ != 0u) {
+        stepDemos(std::chrono::duration<double>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count());
+    }
     tracks_.clear();
     paths_.clear();
     // ARMED HERE, cleared as each track is seen below, and read after every
@@ -534,6 +887,39 @@ void PluginUi::poll() {
                 std::min(static_cast<std::uint32_t>(n), kMaxRowsPerPanel);
             hp.rows.assign(rowScratch_.begin(),
                            rowScratch_.begin() + static_cast<std::ptrdiff_t>(count));
+        }
+    }
+
+    for (InstrumentInstance& ii : instrumentInstances_) {
+        HostInstrument& hi = instruments_[ii.index];
+        // The host sets the size and ZEROES the rest before every call, so a
+        // plugin that fills three slots leaves the other five empty rather
+        // than holding last frame's figures.
+        CascadeInstrumentState st{};
+        st.structSize = static_cast<std::uint32_t>(sizeof(CascadeInstrumentState));
+        const std::int32_t r = ii.api->poll_state(ii.handle, &st);
+        if (r > 0) {
+            hi.state = st;
+            hi.have = true;
+        } else if (r == 0) {
+            // Nothing yet: keep `have` as it was. A face that had a reading
+            // and momentarily has none keeps showing the last one, which is
+            // what a real instrument does between updates.
+        }
+        // Text slots are NUL-terminated by contract; enforce it so no drawer
+        // can walk off the end of a slot a plugin filled to the brim.
+        for (auto& t : hi.state.text) { t[CASCADE_INSTRUMENT_TEXT_CHARS - 1] = '\0'; }
+        hi.rows.clear();
+        if (ii.api->poll_rows != nullptr) {
+            rowScratch_.assign(kMaxRowsPerPanel, CascadePanelRow{});
+            const std::int32_t n =
+                ii.api->poll_rows(ii.handle, rowScratch_.data(), kMaxRowsPerPanel);
+            if (n > 0) {
+                const std::uint32_t count =
+                    std::min(static_cast<std::uint32_t>(n), kMaxRowsPerPanel);
+                hi.rows.assign(rowScratch_.begin(),
+                               rowScratch_.begin() + static_cast<std::ptrdiff_t>(count));
+            }
         }
     }
 }

@@ -1171,6 +1171,24 @@ CascadeHostClientApi validHostClient() {
     return h;
 }
 
+int32_t instrumentState(void*, CascadeInstrumentState* out) {
+    out->seq = 1u;
+    return 1;
+}
+
+CascadeInstrumentApi validInstrument() {
+    CascadeInstrumentApi in{};
+    in.structSize = static_cast<uint32_t>(sizeof(CascadeInstrumentApi));
+    in.title = "Pager";
+    in.kind = CASCADE_INSTRUMENT_PAGER;
+    in.create = &panelCreate;
+    in.poll_state = &instrumentState;
+    in.columns = &panelColumns;
+    in.poll_rows = &panelPoll;
+    in.destroy = &panelDestroy;
+    return in;
+}
+
 uint32_t presetCount() { return 1u; }
 int32_t presetGet(uint32_t index, CascadePreset* out) {
     if (index != 0u || out == nullptr) { return 0; }
@@ -1291,6 +1309,90 @@ void testUiCapabilities() {
         CascadePluginDesc p = descWith(
             CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_PANEL | CASCADE_CAP_HOST_CLIENT, all, 3);
         CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+
+    // --- CASCADE_CAP_INSTRUMENT ---------------------------------------------
+    // The tenth bit, added like the others without an ABI bump. A plugin may
+    // be NOTHING but an instrument, and its memory feed is optional as a pair.
+    {
+        const CascadeInstrumentApi in = validInstrument();
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_INSTRUMENT, static_cast<uint32_t>(sizeof(CascadeInstrumentApi)), &in};
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+        CHECK(cascade_plugin_instrument(&p) == &in);
+    }
+    {
+        // No memory at all is fine: a course indicator remembers nothing.
+        CascadeInstrumentApi in = validInstrument();
+        in.columns = nullptr;
+        in.poll_rows = nullptr;
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_INSTRUMENT, static_cast<uint32_t>(sizeof(CascadeInstrumentApi)), &in};
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+    {
+        // Half a memory feed is refused: rows the host cannot shape.
+        CascadeInstrumentApi in = validInstrument();
+        in.columns = nullptr;
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_INSTRUMENT, static_cast<uint32_t>(sizeof(CascadeInstrumentApi)), &in};
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::InstrumentHalfMemory);
+    }
+    {
+        CascadeInstrumentApi in = validInstrument();
+        in.poll_state = nullptr;
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_INSTRUMENT, static_cast<uint32_t>(sizeof(CascadeInstrumentApi)), &in};
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::MissingInstrumentFunction);
+    }
+    {
+        CascadeInstrumentApi in = validInstrument();
+        in.title = "";
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_INSTRUMENT, static_cast<uint32_t>(sizeof(CascadeInstrumentApi)), &in};
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::MissingInstrumentFunction);
+    }
+    {
+        CascadeInstrumentApi in = validInstrument();
+        in.structSize = static_cast<uint32_t>(sizeof(CascadeInstrumentApi)) + 8u;
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_INSTRUMENT, static_cast<uint32_t>(sizeof(CascadeInstrumentApi)), &in};
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) ==
+              PluginRejection::InstrumentStructSizeMismatch);
+    }
+    {
+        // Bit declared, table absent.
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &panelEntry, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::MissingInstrumentApi);
+    }
+    {
+        // A kind this host has never heard of is NOT a rejection: it is drawn
+        // as a plain readout, so a plugin built for a newer host still shows.
+        CascadeInstrumentApi in = validInstrument();
+        in.kind = 9999u;
+        const CascadeCapabilityEntry e{
+            CASCADE_CAP_INSTRUMENT, static_cast<uint32_t>(sizeof(CascadeInstrumentApi)), &in};
+        CascadePluginDesc p = descWith(CASCADE_CAP_INSTRUMENT, &e, 1);
+        CHECK(cascade::core::validatePluginDesc(&p) == PluginRejection::None);
+    }
+    {
+        // The state block the host hands a plugin is the size the plugin was
+        // compiled against; pinning it is what makes "add a slot" an ABI event.
+        static_assert(sizeof(CascadeInstrumentState) ==
+                          4u * sizeof(uint32_t) + CASCADE_INSTRUMENT_VALUES * sizeof(double) +
+                              CASCADE_INSTRUMENT_TEXTS * CASCADE_INSTRUMENT_TEXT_CHARS,
+                      "the instrument state block grew or shrank: that is an ABI event");
+        static_assert((CASCADE_CAP_ALL_KNOWN & CASCADE_CAP_INSTRUMENT) != 0u,
+                      "CASCADE_CAP_ALL_KNOWN must carry the instrument bit");
+        CHECK(sizeof(CascadeInstrumentState) == 592u);
     }
 
     // --- CASCADE_CAP_BASEMAP ----------------------------------------------

@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <system_error>
@@ -52,6 +53,7 @@
 // a refused module and a stopped one before they write anything - so the words
 // a surface prints when it is empty are decided by the census in this header
 // and by nothing else. No ImGui in it; it is tested without a graphics context.
+#include "gui/instrument_face.hpp"
 #include "gui/module_census.hpp"
 // The two windows that replaced the plugin store and plugin inventory rail
 // sections. Included here rather than in app_window.hpp because both include
@@ -76,6 +78,13 @@
 #endif
 
 namespace cascade::gui {
+
+// The ImGui identity of an INSTRUMENT window. ImGui hashes only what follows
+// "###", so the plugin name alone would fold two instruments from one module
+// - or two demonstrations - into a single window; the title goes in as well.
+static std::string instrumentWindowId(const cascade::core::HostInstrument& in) {
+    return in.title + "###instrument_" + in.plugin + "|" + in.title;
+}
 
 namespace {
 
@@ -1136,6 +1145,57 @@ int AppWindow::run(int frames) {
         // window - and the geometry read-back that persists their rectangles
         // is unaffected, because a hidden window keeps its position.
         applyScopeWindowVisibility();
+
+        // SELF-CAPTURE, from the framebuffer this frame was drawn into. The
+        // screen-grab routes (PrintWindow, a BitBlt of the desktop) cannot see
+        // an OpenGL surface the driver has put on an overlay plane - on this
+        // machine they returned white and the desktop respectively while the
+        // window was plainly on screen (2026-09-08) - so the only capture that
+        // is always true to what was drawn is the application reading its own
+        // pixels back. F12 writes one; FOXSDR_SHOT_AT_FRAME=<n> writes one at
+        // that frame without a keypress, for a harness. Both go to
+        // FOXSDR_SHOT_DIR (or the current directory) as shot-<n>.bmp, and the
+        // path is logged so a script can find it.
+        {
+            static const char* shotDir = std::getenv("FOXSDR_SHOT_DIR");
+            static const long shotAt = [] {
+                const char* v = std::getenv("FOXSDR_SHOT_AT_FRAME");
+                return (v != nullptr && v[0] != '\0') ? std::strtol(v, nullptr, 10) : -1L;
+            }();
+            const bool byKey = ImGui::IsKeyPressed(ImGuiKey_F12, false);
+            if (byKey || (shotAt >= 0 && static_cast<long>(rendered) == shotAt)) {
+                cascade::core::HostImage img;
+                img.plugin = "self";
+                img.width = static_cast<std::uint32_t>(std::max(fbWidth, 0));
+                img.height = static_cast<std::uint32_t>(std::max(fbHeight, 0));
+                img.format = CASCADE_IMAGE_RGB24;
+                img.complete = true;
+                std::vector<std::uint8_t> raw(static_cast<std::size_t>(img.width) * img.height * 3u);
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glReadPixels(0, 0, fbWidth, fbHeight, GL_RGB, GL_UNSIGNED_BYTE, raw.data());
+                // GL reads bottom-up; the image is top-down.
+                img.pixels.resize(raw.size());
+                const std::size_t stride = static_cast<std::size_t>(img.width) * 3u;
+                for (std::uint32_t y = 0; y < img.height; ++y) {
+                    std::memcpy(img.pixels.data() + static_cast<std::size_t>(y) * stride,
+                                raw.data() + static_cast<std::size_t>(img.height - 1u - y) * stride,
+                                stride);
+                }
+                const std::filesystem::path dir =
+                    (shotDir != nullptr && shotDir[0] != '\0') ? std::filesystem::path(shotDir)
+                                                                : std::filesystem::current_path();
+                char name[64];
+                std::snprintf(name, sizeof name, "shot-%llu.bmp",
+                              static_cast<unsigned long long>(rendered));
+                std::string err;
+                const std::filesystem::path out = dir / name;
+                if (cascade::core::writeBmp24(img, out.string(), err)) {
+                    cascade::core::diagLogf("shot: wrote %s", out.string().c_str());
+                } else {
+                    cascade::core::diagWarnf("shot: %s", err.c_str());
+                }
+            }
+        }
 
         glfwSwapBuffers(window);
         ++rendered;
@@ -6352,6 +6412,18 @@ void AppWindow::refreshPluginRunner() {
     pluginUi_.setServices(std::move(svc));
     pluginUi_.rebuild(pluginHost_.plugins());
 
+    // DEMONSTRATION instruments open their windows by themselves. This is the
+    // one deliberate exception to "nothing opens but by your hand" (0.79.1),
+    // and it is safe because a demonstration exists only when a developer set
+    // FOXSDR_DEMO_INSTRUMENT for this launch: its whole purpose is to put a
+    // face on screen to be looked at, and a switch that then required a
+    // second step would be a switch for nothing.
+    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+        if (in.plugin == "Demonstration") {
+            pluginWindows_.show(instrumentWindowId(in));
+        }
+    }
+
     // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring
     // the capability wins: two basemaps cannot both be the map, and picking
     // silently by load order is more predictable than picking by some quality
@@ -8325,6 +8397,61 @@ void AppWindow::drawFittedModulesWindow() {
     endPage();
 }
 
+namespace {
+
+// The rows a plugin publishes, as a table: a PANEL's whole window and an
+// INSTRUMENT's memory beneath its face are the same feed drawn the same way,
+// so one drawing serves both and the two cannot drift apart.
+void drawRowTable(const std::vector<std::string>& headings,
+                  const std::vector<CascadePanelRow>& rows) {
+    const int cols = static_cast<int>(headings.size());
+    if (cols > 0 &&
+        ImGui::BeginTable("##rows", cols,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
+        for (const std::string& h : headings) {
+            ImGui::TableSetupColumn(h.c_str());
+        }
+        ImGui::TableHeadersRow();
+        for (const CascadePanelRow& r : rows) {
+            if (r.kind == CASCADE_ROW_SEPARATOR) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Separator();
+                continue;
+            }
+            ImGui::TableNextRow();
+            if (r.kind == CASCADE_ROW_HEADING) {
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, r.cells[0]);
+                continue;
+            }
+            for (int c = 0; c < cols; ++c) {
+                ImGui::TableNextColumn();
+                // Bounded print: the ABI says the cells are NUL-terminated,
+                // but a plugin that fills every byte must not walk the host
+                // off the end of the array.
+                const char* cell = r.cells[c];
+                if ((r.flags & CASCADE_ROW_FLAG_WARN) != 0u) {
+                    ImGui::TextColored(cascade::gui::theme::warning(), "%.*s",
+                                       CASCADE_PANEL_CELL_CHARS, cell);
+                } else if ((r.flags & CASCADE_ROW_FLAG_GOOD) != 0u) {
+                    ImGui::TextColored(cascade::gui::theme::good(), "%.*s",
+                                       CASCADE_PANEL_CELL_CHARS, cell);
+                } else if ((r.flags & CASCADE_ROW_FLAG_MUTED) != 0u) {
+                    ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
+                } else {
+                    ImGui::Text("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
+                }
+            }
+        }
+        ImGui::EndTable();
+    }
+    if (rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
+}
+
+}  // namespace
+
 void AppWindow::drawPluginWindows() {
     // THE STORE FIRST, THEN THE INVENTORY, and the order is load-bearing: the
     // store resets pluginBrowserDrawnThisFrame_ and sets it if it draws, and
@@ -8980,53 +9107,63 @@ void AppWindow::drawPluginWindows() {
             rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
         if (beginPage(id.c_str(), railName.c_str(), &panelOpen)) {
-            const int cols = static_cast<int>(p.headings.size());
-            if (cols > 0 &&
-                ImGui::BeginTable("##rows", cols,
-                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                      ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
-                for (const std::string& h : p.headings) {
-                    ImGui::TableSetupColumn(h.c_str());
-                }
-                ImGui::TableHeadersRow();
-                for (const CascadePanelRow& r : p.rows) {
-                    if (r.kind == CASCADE_ROW_SEPARATOR) {
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::Separator();
-                        continue;
-                    }
-                    ImGui::TableNextRow();
-                    if (r.kind == CASCADE_ROW_HEADING) {
-                        ImGui::TableNextColumn();
-                        ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, r.cells[0]);
-                        continue;
-                    }
-                    for (int c = 0; c < cols; ++c) {
-                        ImGui::TableNextColumn();
-                        // Bounded print: the ABI says the cells are
-                        // NUL-terminated, but a plugin that fills every byte
-                        // must not walk the host off the end of the array.
-                        const char* cell = r.cells[c];
-                        if ((r.flags & CASCADE_ROW_FLAG_WARN) != 0u) {
-                            ImGui::TextColored(cascade::gui::theme::warning(), "%.*s",
-                                               CASCADE_PANEL_CELL_CHARS, cell);
-                        } else if ((r.flags & CASCADE_ROW_FLAG_GOOD) != 0u) {
-                            ImGui::TextColored(cascade::gui::theme::good(), "%.*s",
-                                               CASCADE_PANEL_CELL_CHARS, cell);
-                        } else if ((r.flags & CASCADE_ROW_FLAG_MUTED) != 0u) {
-                            ImGui::TextDisabled("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
-                        } else {
-                            ImGui::Text("%.*s", CASCADE_PANEL_CELL_CHARS, cell);
-                        }
-                    }
-                }
-                ImGui::EndTable();
-            }
-            if (p.rows.empty()) { ImGui::TextDisabled("Nothing to show yet."); }
+            drawRowTable(p.headings, p.rows);
         }
         endPage();
         if (!panelOpen) { pluginWindows_.hide(id); }
+    }
+
+    // INSTRUMENT windows: a face drawn as equipment, its memory beneath.
+    std::size_t instrumentIndex = 0;
+    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+        const std::size_t nth = instrumentIndex++;
+        const std::string id = instrumentWindowId(in);
+        if (!pluginWindows_.shown(id)) { continue; }
+        // STAGGERED ON FIRST USE, by the instrument's position in the list,
+        // for the same reason the picture windows are: two instruments
+        // opened together must not land exactly on top of each other, or
+        // the second hides the first and its NEW lamp with it. Only the
+        // first placement is decided here; where the user drags it after
+        // that is the user's.
+        const ImVec2 mainPos = ImGui::GetMainViewport()->Pos;
+        ImGui::SetNextWindowPos(ImVec2(mainPos.x + 90.0f + 36.0f * static_cast<float>(nth),
+                                       mainPos.y + 90.0f + 36.0f * static_cast<float>(nth)),
+                                ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(600.0f, 460.0f), ImGuiCond_FirstUseEver);
+        bool open = true;
+        std::string railName = in.title;
+        for (char& rc : railName) {
+            rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
+        }
+        if (beginPage(id.c_str(), railName.c_str(), &open)) {
+            const double now = ImGui::GetTime();
+            InstrumentSeen& seen = instrumentSeen_[id];
+            if (in.have && in.state.seq != seen.seq) {
+                seen.seq = in.state.seq;
+                seen.atSec = now;
+            }
+            cascade::gui::InstrumentCue cue;
+            cue.unread = in.have && (now - seen.atSec) < kInstrumentNewHoldSec;
+            cue.nowSec = now;
+
+            const bool hasMemory = !in.headings.empty();
+            const ImVec2 tl = ImGui::GetCursorScreenPos();
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            // The face takes the window when there is no memory to show, and
+            // otherwise the upper part, leaving the memory at least a few rows.
+            const float faceH = hasMemory ? std::max(160.0f, std::min(avail.y * 0.6f, 360.0f))
+                                          : avail.y;
+            const ImVec2 br(tl.x + avail.x, tl.y + faceH);
+            const float used =
+                cascade::gui::drawInstrumentFace(ImGui::GetWindowDrawList(), tl, br, in, cue);
+            ImGui::Dummy(ImVec2(avail.x, std::max(used, 1.0f)));
+            if (hasMemory) {
+                ImGui::Spacing();
+                drawRowTable(in.headings, in.rows);
+            }
+        }
+        endPage();
+        if (!open) { pluginWindows_.hide(id); }
     }
 }
 
@@ -9295,6 +9432,27 @@ void AppWindow::drawPluginWindowRows() {
         if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
                            "Opens this plugin's own window. Nothing opens it for you;\n"
                            "close it from its key and it stays closed.")) {
+            pluginWindows_.toggle(id);
+        }
+    }
+    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+        const std::string id = instrumentWindowId(in);
+        const bool on = pluginWindows_.shown(id);
+        // NEW while an event has arrived that the window has not drawn - the
+        // chip is how a closed pager still says it has a message.
+        const auto seen = instrumentSeen_.find(id);
+        const bool unread =
+            in.have && (seen == instrumentSeen_.end() || seen->second.seq != in.state.seq);
+        char chip[24];
+        cascade::gui::instrumentChip(in, unread, chip, sizeof chip);
+        const std::string row =
+            ident(in.title) + "###instrow:" + ident(in.plugin) + ":" + ident(in.title);
+        if (benchSwitchRow(row.c_str(), on, chip,
+                           unread ? cascade::gui::theme::kGold : cascade::gui::theme::kPhosphor,
+                           on || unread, true,
+                           "Opens this plugin's instrument. NEW when something has\n"
+                           "arrived that the window has not shown. Nothing opens it\n"
+                           "for you; close it from its key and it stays closed.")) {
             pluginWindows_.toggle(id);
         }
     }
@@ -10076,6 +10234,11 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // descriptor. A module may publish more than one.
     for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
         if (hp.plugin == p.name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
+    }
+    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+        if (in.plugin == p.name) {
+            pluginWindows_.show(instrumentWindowId(in));
+        }
     }
 
     char note[192];

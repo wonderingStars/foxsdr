@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -42,6 +43,7 @@
 #include "core/host_image.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
+#include "dsp/resampler.hpp"
 
 namespace cascade::core {
 
@@ -111,6 +113,15 @@ class PluginRunner {
 public:
     PluginRunner() = default;
     ~PluginRunner();
+
+    // Per-instance resampling state; public only so the file-local helpers
+    // in plugin_runner.cpp can build and drive it. See the note above
+    // Instance for why it exists.
+    struct AudioResample {
+        std::unique_ptr<cascade::dsp::RationalResampler> resampler;
+        std::vector<float> out;
+        double rateHz = 0.0;  // the decoder's rate; 0 when no resampling
+    };
 
     PluginRunner(const PluginRunner&) = delete;
     PluginRunner& operator=(const PluginRunner&) = delete;
@@ -214,10 +225,21 @@ public:
     std::size_t iqFramesFed() const;
 
 private:
+    // THE RATE A DECODER ASKED FOR IS THE RATE IT GETS. The ABI promises "the
+    // host resamples to it", and until 0.83.0 the host did not: a decoder
+    // asking for anything but the pipeline's own audio rate was idled with a
+    // RateMismatch, which stranded every decoder built around a different
+    // clock (a 16 kHz tone decoder, a 22.05 kHz pager decoder). Now each such
+    // instance owns a rational resampler from the pipeline rate to its own,
+    // fed in processAudio, and a mismatch is a thing the runner does rather
+    // than a thing it reports. The scratch buffer is sized on the first block
+    // and grows only if a larger block ever arrives, so the audio thread does
+    // not allocate per call.
     struct Instance {
         const CascadeDecoderApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        AudioResample resample;
         // poll_text writes no NUL and splits only on code-point boundaries,
         // so a line can arrive across two polls. Carried here between calls.
         std::string partial;
@@ -254,6 +276,7 @@ private:
         std::string name;
         std::string partial;
         std::uint32_t inputKind = CASCADE_INPUT_AUDIO;
+        AudioResample resample;  // audio-input image decoders only
         std::size_t statusIndex = 0;
         // ONE FLAG FOR BOTH POLLS. A permanent failure is a property of the
         // instance and not of the call that reported it, so an image decoder

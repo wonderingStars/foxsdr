@@ -29,6 +29,7 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         {CASCADE_CAP_IMAGE_DECODER, p.imageDecoder},
         {CASCADE_CAP_TRACK_SOURCE, p.trackSource},
         {CASCADE_CAP_PANEL, p.panel},
+        {CASCADE_CAP_INSTRUMENT, p.instrument},
         {CASCADE_CAP_HOST_CLIENT, p.hostClient},
         {CASCADE_CAP_PRESET, p.preset},
         {CASCADE_CAP_BASEMAP, p.basemap},

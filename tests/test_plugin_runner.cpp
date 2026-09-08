@@ -325,19 +325,64 @@ int main() {
         // The case that must NOT silently do nothing: a fixed-rate decoder the
         // pipeline cannot currently feed. It is not created, and the reason is
         // reported in words a user can act on.
+        // UNTIL 0.83.0 THIS CASE WAS IDLED with a RateMismatch, and the test
+        // pinned that. The ABI had promised "the host resamples to it" all
+        // along, and two shipped decoders (a 16 kHz tone decoder, a 22.05 kHz
+        // pager decoder) were stranded by the gap. The expectation below is
+        // the promise, not the limitation.
         resetFake();
         const CascadeDecoderApi wrong = makeApi(8000u);
         std::vector<LoadedPlugin> ps{makePlugin("Fixed8k", &wrong)};
         PluginRunner r;
         r.rebuild(ps, 48000.0, kIqRate, kCentre);
-        CHECK(r.activeCount() == 0u);
-        CHECK(g_fake.created == 0);
+        CHECK(r.activeCount() == 1u);
+        CHECK(g_fake.created == 1);
+        // The decoder is created AT ITS OWN RATE, which is what it will be fed.
+        CHECK(g_fake.lastRate == 8000u);
         const std::vector<DecoderStatus> st = r.status();
         CHECK(st.size() == 1u);
-        CHECK(st[0].reason == DecoderIdleReason::RateMismatch);
-        CHECK(st[0].wantRateHz == 8000.0);
+        CHECK(st[0].reason == DecoderIdleReason::Running);
         CHECK(st[0].detail.find("8000") != std::string::npos);
         CHECK(st[0].detail.find("48000") != std::string::npos);
+        CHECK(st[0].detail.find("resampl") != std::string::npos);
+
+        // And it receives ONE SIXTH of the samples: 48000 -> 8000 is 1/6, so
+        // ten blocks of 4800 at the pipeline rate are 8000 samples at the
+        // decoder's, give or take the resampler's start-up (its history is
+        // empty at first, so the very first block yields a few fewer).
+        std::vector<float> block(4800, 0.25f);
+        for (int k = 0; k < 10; ++k) { r.processAudio(block.data(), block.size()); }
+        CHECK(g_fake.samples >= 7900u);
+        CHECK(g_fake.samples <= 8000u);
+    }
+    {
+        // A NON-INTEGER RATIO, which is the case a decimator alone could not
+        // do: 48000 -> 22050 is 147/320. Twenty blocks of 4800 are 96000 in,
+        // 44100 out.
+        resetFake();
+        const CascadeDecoderApi pager = makeApi(22050u);
+        std::vector<LoadedPlugin> ps{makePlugin("Pager22k", &pager)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        CHECK(r.activeCount() == 1u);
+        CHECK(g_fake.lastRate == 22050u);
+        std::vector<float> block(4800, 0.0f);
+        for (int k = 0; k < 20; ++k) { r.processAudio(block.data(), block.size()); }
+        CHECK(g_fake.samples >= 44000u);
+        CHECK(g_fake.samples <= 44100u);
+    }
+    {
+        // A decoder that asks for the pipeline's own rate is fed straight
+        // through: every sample, no resampler, the plain status sentence.
+        resetFake();
+        const CascadeDecoderApi same = makeApi(48000u);
+        std::vector<LoadedPlugin> ps{makePlugin("Same48k", &same)};
+        PluginRunner r;
+        r.rebuild(ps, 48000.0, kIqRate, kCentre);
+        std::vector<float> block(1000, 0.0f);
+        r.processAudio(block.data(), block.size());
+        CHECK(g_fake.samples == 1000u);
+        CHECK(r.status()[0].detail.find("resampl") == std::string::npos);
     }
 
     // --- Samples actually reach the decoder ------------------------------
