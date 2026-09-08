@@ -150,6 +150,44 @@ int32_t pnRows(void*, CascadePanelRow* out, uint32_t cap) {
     return static_cast<int32_t>(n);
 }
 
+// --- fake instrument ------------------------------------------------------
+
+struct FakeInstrument {
+    int created = 0, destroyed = 0, stateCalls = 0;
+    int32_t answer = 0;  // what poll_state returns
+    uint32_t seq = 0;
+    const char* message = "";
+};
+FakeInstrument g_in;
+
+void* inCreate() { ++g_in.created; return &g_in; }
+void inDestroy(void*) { ++g_in.destroyed; }
+int32_t inState(void*, CascadeInstrumentState* out) {
+    ++g_in.stateCalls;
+    if (g_in.answer <= 0) { return g_in.answer; }
+    out->seq = g_in.seq;
+    out->flags = CASCADE_INSTRUMENT_FLAG_ALERT;
+    out->values[0] = 3.0;
+    // Deliberately fill the slot to the brim with no terminator: the host
+    // must cap it rather than trust the plugin.
+    std::memset(out->text[0], 'M', CASCADE_INSTRUMENT_TEXT_CHARS);
+    std::snprintf(out->text[1], CASCADE_INSTRUMENT_TEXT_CHARS, "%s", g_in.message);
+    return 1;
+}
+
+CascadeInstrumentApi makeInstrumentApi(bool withMemory) {
+    CascadeInstrumentApi a{};
+    a.structSize = static_cast<uint32_t>(sizeof(CascadeInstrumentApi));
+    a.title = "Pager";
+    a.kind = CASCADE_INSTRUMENT_PAGER;
+    a.create = &inCreate;
+    a.poll_state = &inState;
+    a.columns = withMemory ? &pnColumns : nullptr;
+    a.poll_rows = withMemory ? &pnRows : nullptr;
+    a.destroy = &inDestroy;
+    return a;
+}
+
 CascadePanelApi makePanelApi() {
     CascadePanelApi a{};
     a.structSize = static_cast<uint32_t>(sizeof(CascadePanelApi));
@@ -691,6 +729,119 @@ int main() {
         g_pn.rows.clear();
         ui.poll();
         CHECK(ui.panels()[0].rows.empty());
+    }
+
+    // --- instrument: state polled each frame, memory rows like a panel ----
+    {
+        resetAll();
+        g_in = FakeInstrument{};
+        const CascadeInstrumentApi api = makeInstrumentApi(true);
+        LoadedPlugin p = plug("FLEX");
+        p.instrument = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+        CHECK(ui.instruments().size() == 1u);
+        CHECK(g_in.created == 1);
+        CHECK(ui.instruments()[0].title == "Pager");
+        CHECK(ui.instruments()[0].kind == CASCADE_INSTRUMENT_PAGER);
+        CHECK(ui.instruments()[0].headings.size() == 2u);
+        CHECK(g_pn.columnCalls == 1);
+
+        // Nothing yet: `have` stays false and no figures are invented.
+        g_in.answer = 0;
+        ui.poll();
+        CHECK(!ui.instruments()[0].have);
+        CHECK(ui.instruments()[0].state.values[0] == 0.0);
+
+        // A reading arrives.
+        g_in.answer = 1;
+        g_in.seq = 7u;
+        g_in.message = "1234567 CALL HOME";
+        ui.poll();
+        CHECK(ui.instruments()[0].have);
+        CHECK(ui.instruments()[0].state.seq == 7u);
+        CHECK(ui.instruments()[0].state.values[0] == 3.0);
+        CHECK((ui.instruments()[0].state.flags & CASCADE_INSTRUMENT_FLAG_ALERT) != 0u);
+        CHECK(std::string(ui.instruments()[0].state.text[1]) == "1234567 CALL HOME");
+        // The brim-filled slot was capped, so reading it as a string stops
+        // inside the slot.
+        CHECK(std::strlen(ui.instruments()[0].state.text[0]) ==
+              CASCADE_INSTRUMENT_TEXT_CHARS - 1u);
+        CHECK(g_pn.columnCalls == 1);
+
+        // A frame with nothing new keeps the last reading: a real instrument
+        // does not blank between updates.
+        g_in.answer = 0;
+        ui.poll();
+        CHECK(ui.instruments()[0].have);
+        CHECK(ui.instruments()[0].state.seq == 7u);
+
+        // Memory rows follow the panel contract, replacing each poll.
+        CascadePanelRow r{};
+        r.kind = CASCADE_ROW_CELLS;
+        std::snprintf(r.cells[0], CASCADE_PANEL_CELL_CHARS, "CALL HOME");
+        g_pn.rows = {r};
+        ui.poll();
+        CHECK(ui.instruments()[0].rows.size() == 1u);
+        g_pn.rows.clear();
+        ui.poll();
+        CHECK(ui.instruments()[0].rows.empty());
+
+        ui.rebuild({});
+        CHECK(g_in.destroyed == 1);
+        CHECK(ui.instruments().empty());
+    }
+    {
+        // No memory feed: no headings, no rows, and poll_rows is never asked.
+        resetAll();
+        g_in = FakeInstrument{};
+        const CascadeInstrumentApi api = makeInstrumentApi(false);
+        LoadedPlugin p = plug("VOR");
+        p.instrument = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+        CHECK(ui.instruments().size() == 1u);
+        CHECK(ui.instruments()[0].headings.empty());
+        CHECK(g_pn.columnCalls == 0);
+        ui.poll();
+        CHECK(ui.instruments()[0].rows.empty());
+    }
+    {
+        // Demonstration instruments: named kinds, tolerant of case and
+        // spacing, unknown names ignored, titles say DEMO, and they sit
+        // AFTER every real instrument so no instance index moves.
+        resetAll();
+        g_in = FakeInstrument{};
+        g_in.answer = 1;
+        g_in.seq = 3u;
+        const CascadeInstrumentApi api = makeInstrumentApi(false);
+        LoadedPlugin p = plug("VOR");
+        p.instrument = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+        ui.addDemoInstruments("Pager, BEARING ,bogus,");
+        CHECK(ui.instruments().size() == 3u);
+        CHECK(ui.instruments()[0].plugin == "VOR");
+        CHECK(ui.instruments()[1].kind == CASCADE_INSTRUMENT_PAGER);
+        CHECK(ui.instruments()[2].kind == CASCADE_INSTRUMENT_NAV_BEARING);
+        CHECK(ui.instruments()[1].have);
+        CHECK(ui.instruments()[1].title.find("DEMO") != std::string::npos);
+        CHECK(!ui.instruments()[1].rows.empty());
+        CHECK(ui.instruments()[1].headings.size() == 3u);
+        CHECK(ui.instruments()[2].rows.empty());
+        // Polling feeds the real one and leaves the demos standing.
+        ui.poll();
+        CHECK(ui.instruments()[0].state.seq == 3u);
+        CHECK(ui.instruments().size() == 3u);
+        CHECK(ui.instruments()[1].state.values[0] == 3.0);
+        CHECK(PluginUi::demoKindByName("weather") == CASCADE_INSTRUMENT_WEATHER_CONSOLE);
+        CHECK(PluginUi::demoKindByName("nothing") == ~0u);
+        // "all" is every kind this host draws, generic included.
+        ui.addDemoInstruments("all");
+        CHECK(ui.instruments().size() == 3u + 9u);
+        // A rebuild clears them like everything else.
+        ui.rebuild({});
+        CHECK(ui.instruments().empty());
     }
 
     // --- host services: attach happens, and BEFORE create() --------------

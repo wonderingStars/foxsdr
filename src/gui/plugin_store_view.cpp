@@ -544,6 +544,11 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         r.push_back({"A window of its own", "Rows and controls the host draws for it.",
                      false});
     }
+    if ((c & CASCADE_CAP_INSTRUMENT) != 0u) {
+        r.push_back({"An instrument of its own",
+                     "A face the host draws as a piece of equipment, fed by the module.",
+                     false});
+    }
     if ((c & CASCADE_CAP_PRESET) != 0u) {
         // Worth its own row precisely because it looks like tuning and is not.
         r.push_back({"Presets", "Publishes where it listens. A suggestion - pressing one "
@@ -979,7 +984,7 @@ const char* moduleKindTag(const ModulePlate& m) {
         0u) {
         return "MAP";
     }
-    if ((c & CASCADE_CAP_PANEL) != 0u) { return "PANEL"; }
+    if ((c & (CASCADE_CAP_PANEL | CASCADE_CAP_INSTRUMENT)) != 0u) { return "PANEL"; }
     if ((c & (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_PRESET)) != 0u) { return "CONTROL"; }
     return "MODULE";
 }

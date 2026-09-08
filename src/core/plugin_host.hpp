@@ -123,6 +123,10 @@ enum class PluginRejection {
     MissingTrackInfoApi,
     TrackInfoStructSizeMismatch,
     MissingTrackInfoFunction,
+    MissingInstrumentApi,
+    InstrumentStructSizeMismatch,
+    MissingInstrumentFunction,     // create/poll_state/destroy NULL, or no title
+    InstrumentHalfMemory,          // columns and poll_rows must be both set or both NULL
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -168,6 +172,7 @@ struct LoadedPlugin {
     const CascadeImageDecoderApi* imageDecoder = nullptr;  // CASCADE_CAP_IMAGE_DECODER
     const CascadeTrackSourceApi* trackSource = nullptr;    // CASCADE_CAP_TRACK_SOURCE
     const CascadePanelApi* panel = nullptr;                // CASCADE_CAP_PANEL
+    const CascadeInstrumentApi* instrument = nullptr;      // CASCADE_CAP_INSTRUMENT
     const CascadeHostClientApi* hostClient = nullptr;      // CASCADE_CAP_HOST_CLIENT
     const CascadePresetApi* preset = nullptr;              // CASCADE_CAP_PRESET
     const CascadeBasemapApi* basemap = nullptr;            // CASCADE_CAP_BASEMAP

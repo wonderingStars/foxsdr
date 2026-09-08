@@ -1578,6 +1578,17 @@ private:
     // because every published window used to appear by itself. See
     // core::PluginWindows for the rule and its test.
     cascade::core::PluginWindows pluginWindows_;
+    // What each INSTRUMENT window has shown: the plugin's event sequence when
+    // the face last drew it, and when that happened. An event the window has
+    // not drawn is NEW on the rail's chip; one it drew within the last few
+    // seconds still lights the face's NEW lamp, because a lamp lit for one
+    // frame is a lamp nobody saw. Keyed by the window id, never saved.
+    struct InstrumentSeen {
+        std::uint32_t seq = 0;
+        double atSec = -1.0e9;
+    };
+    std::map<std::string, InstrumentSeen> instrumentSeen_;
+    static constexpr double kInstrumentNewHoldSec = 4.0;
     // Decoded images, refreshed from PluginRunner once per frame. Owned HERE
     // rather than by the runner because it is written only when a decoder
     // produces a new picture: keeping the GUI's copy out of the runner is what

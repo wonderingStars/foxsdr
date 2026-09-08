@@ -24,6 +24,41 @@ std::string rateSentence(const std::string& name, double want, double have,
     return std::string(buf);
 }
 
+std::string rateWord(double hz) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.0f Hz", hz);
+    return std::string(buf);
+}
+
+// The Running sentence for a decoder that is fed through a resampler. It
+// names both rates, because "is decoding the tuned audio" would hide the one
+// fact that separates this instance from a plain one when a decode goes
+// wrong: the samples it sees are not the samples the pipeline made.
+std::string resampleSentence(const std::string& name, double have, double want) {
+    return "\"" + name + "\" is decoding the tuned audio, resampled from " + rateWord(have) +
+           " to " + rateWord(want) + ".";
+}
+
+// Builds the resampler from the pipeline's audio rate to the decoder's.
+// Rates are integers by the ABI (Hz), so the ratio is exact and the
+// resampler reduces it by the gcd itself: 48000 -> 22050 becomes 147/320.
+// The scratch buffer is sized for a generous first block up front, so the
+// audio thread does not allocate on its first call either.
+void setUpResample(PluginRunner::AudioResample& r, double haveHz, double wantHz) {
+    r.rateHz = wantHz;
+    r.resampler = std::make_unique<cascade::dsp::RationalResampler>(
+        static_cast<unsigned>(wantHz), static_cast<unsigned>(haveHz));
+    r.out.resize(r.resampler->maxOut(8192));
+}
+
+// Resamples one pipeline block into r.out and returns how many samples are
+// there. Grows the buffer only when a block larger than any before arrives.
+std::size_t resampleBlock(PluginRunner::AudioResample& r, const float* in, std::size_t n) {
+    const std::size_t need = r.resampler->maxOut(n);
+    if (r.out.size() < need) { r.out.resize(need); }
+    return r.resampler->process(in, n, r.out.data(), r.out.size());
+}
+
 // Said in the same voice as the create() failure above, and deliberately
 // says what the user can do about it: the two things that build a fresh
 // instance are stopping and starting the module, and scanning again.
@@ -81,21 +116,15 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
         bool started = false;
 
         if (lp.decoder != nullptr) {
-            // requiredRateHz == 0 means "any rate"; anything else must match
-            // what the pipeline actually delivers. Feeding a 48 kHz decoder
-            // 44.1 kHz audio and hoping is how a bit clock drifts, so a
-            // mismatch idles it loudly. Per-decoder resampling would retire
-            // this case.
+            // requiredRateHz == 0 means "any rate"; anything else is the rate
+            // the decoder is BUILT around, and the host resamples the pipeline's
+            // audio to it (plugin_abi.h promises exactly that). Feeding a
+            // 48 kHz decoder 44.1 kHz audio and hoping is how a bit clock
+            // drifts; feeding it 44.1 kHz audio resampled to 48 kHz is how a
+            // decoder written for one clock runs on any receiver.
             const double want = static_cast<double>(lp.decoder->requiredRateHz);
-            if (want != 0.0 && want != audioRateHz) {
-                DecoderStatus st;
-                st.plugin = lp.name;
-                st.reason = DecoderIdleReason::RateMismatch;
-                st.stream = DecoderStream::Audio;
-                st.wantRateHz = want;
-                st.detail = rateSentence(lp.name, want, audioRateHz, "audio");
-                status_.push_back(std::move(st));
-            } else {
+            const bool resample = want != 0.0 && want != audioRateHz;
+            {
                 void* h = lp.decoder->create(want != 0.0 ? static_cast<uint32_t>(want)
                                                          : static_cast<uint32_t>(audioRateHz));
                 if (h == nullptr) {
@@ -111,6 +140,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     inst.api = lp.decoder;
                     inst.handle = h;
                     inst.name = lp.name;
+                    if (resample) { setUpResample(inst.resample, audioRateHz, want); }
                     // The row pushed immediately below, taken BEFORE the push
                     // so the instance can rewrite its own reason later if the
                     // decoder gives up mid-run.
@@ -120,7 +150,8 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     st.plugin = lp.name;
                     st.reason = DecoderIdleReason::Running;
                     st.stream = DecoderStream::Audio;
-                    st.detail = "\"" + lp.name + "\" is decoding the tuned audio.";
+                    st.detail = resample ? resampleSentence(lp.name, audioRateHz, want)
+                                         : "\"" + lp.name + "\" is decoding the tuned audio.";
                     status_.push_back(std::move(st));
                     started = true;
                 }
@@ -174,11 +205,15 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
             const bool isIq = lp.imageDecoder->inputKind == CASCADE_INPUT_IQ;
             const double have = isIq ? iqRateHz : audioRateHz;
             const double want = lp.imageDecoder->requiredRateHz;
+            // Audio is resampled to what the decoder asked for, as for the
+            // text decoders above; raw I/Q is not - the band is what the
+            // device produces, and only the device can change it.
+            const bool resample = !isIq && want != 0.0 && want != have;
             DecoderStatus st;
             st.plugin = lp.name;
             st.output = DecoderOutput::Image;
             st.stream = isIq ? DecoderStream::Iq : DecoderStream::Audio;
-            if (want != 0.0 && want != have) {
+            if (isIq && want != 0.0 && want != have) {
                 st.reason = DecoderIdleReason::RateMismatch;
                 st.wantRateHz = want;
                 st.detail = rateSentence(lp.name, want, have, isIq ? "raw I/Q" : "audio");
@@ -200,13 +235,17 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     inst.handle = h;
                     inst.name = lp.name;
                     inst.inputKind = isIq ? CASCADE_INPUT_IQ : CASCADE_INPUT_AUDIO;
+                    if (resample) { setUpResample(inst.resample, have, want); }
                     inst.statusIndex = status_.size();
                     imageInstances_.push_back(std::move(inst));
                     if (isIq) { ++iqImageCount_; } else { ++audioImageCount_; }
                     st.reason = DecoderIdleReason::Running;
                     st.detail = "\"" + lp.name + "\" is building an image from the " +
-                                (isIq ? "raw receiver band (it ignores the VFO)."
-                                      : "tuned audio.");
+                                (isIq ? std::string("raw receiver band (it ignores the VFO).")
+                                      : resample ? "tuned audio, resampled from " +
+                                                       rateWord(have) + " to " +
+                                                       rateWord(want) + "."
+                                                 : std::string("tuned audio."));
                     status_.push_back(std::move(st));
                     started = true;
                 }
@@ -322,12 +361,22 @@ void PluginRunner::processAudio(const float* mono, std::size_t frames) {
     bool fedAny = false;
     for (Instance& i : instances_) {
         if (i.failed) { continue; }
-        i.api->process(i.handle, mono, frames);
+        if (i.resample.resampler) {
+            const std::size_t n = resampleBlock(i.resample, mono, frames);
+            if (n != 0) { i.api->process(i.handle, i.resample.out.data(), n); }
+        } else {
+            i.api->process(i.handle, mono, frames);
+        }
         fedAny = true;
     }
     for (ImageInstance& i : imageInstances_) {
         if (i.failed || i.inputKind != CASCADE_INPUT_AUDIO) { continue; }
-        i.api->process(i.handle, mono, frames);
+        if (i.resample.resampler) {
+            const std::size_t n = resampleBlock(i.resample, mono, frames);
+            if (n != 0) { i.api->process(i.handle, i.resample.out.data(), n); }
+        } else {
+            i.api->process(i.handle, mono, frames);
+        }
         fedAny = true;
     }
     if (fedAny) { audioFed_ += frames; }

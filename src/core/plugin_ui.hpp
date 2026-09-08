@@ -278,6 +278,22 @@ struct HostPanel {
     std::vector<CascadePanelRow> rows;   // refreshed each poll
 };
 
+// One plugin-declared INSTRUMENT: a face the host draws as equipment, fed
+// by the plugin's state (see CASCADE_CAP_INSTRUMENT). `have` is false until
+// the plugin has answered poll_state with 1 at least once, and the face is
+// then drawn with no reading rather than with zeroes - the distinction this
+// product has been bitten by before. The memory rows are optional and follow
+// the panel contract exactly.
+struct HostInstrument {
+    std::string plugin;
+    std::string title;
+    std::uint32_t kind = 0;
+    bool have = false;
+    CascadeInstrumentState state{};
+    std::vector<std::string> headings;   // empty when the plugin has no memory feed
+    std::vector<CascadePanelRow> rows;   // refreshed each poll
+};
+
 // WHICH PLUGIN WINDOWS ARE ON SCREEN - a decoder's picture, a plugin's own
 // panel - by ImGui window identity. EMPTY AT EVERY LAUNCH AND NEVER SAVED:
 // the application starts on the main screen alone (the user's instruction,
@@ -529,6 +545,20 @@ public:
     // host-client capability. Destroys whatever existed before.
     void rebuild(const std::vector<LoadedPlugin>& plugins);
 
+    // DEMONSTRATION INSTRUMENTS, for designing faces without a radio. `spec`
+    // is a comma-separated list of kind names (pager, teleprinter, tone,
+    // bearing, fax, beacon, meter, weather, generic) or "all"; each named
+    // kind gets a HostInstrument fed with plausible, plainly-labelled sample
+    // state that poll() advances every few seconds so the NEW and ALERT
+    // lamps can be seen working. rebuild() calls this with the value of the
+    // FOXSDR_DEMO_INSTRUMENT environment variable, so a developer runs
+    //   FOXSDR_DEMO_INSTRUMENT=pager cascade.exe
+    // and gets a pager window on the rail with nothing plugged in. Unknown
+    // names are ignored. Never set in a release, and the window title says
+    // DEMO so a screenshot cannot pass for a reading.
+    void addDemoInstruments(const std::string& spec);
+    static std::uint32_t demoKindByName(const std::string& name);  // ~0u = unknown
+
     // The plugins the user has STOPPED, by module file name (see
     // PluginStopSet). Applied by the next rebuild(): a stopped plugin is not
     // attached, gets no track source and no panel, and its targets, trails and
@@ -562,6 +592,7 @@ public:
     const std::vector<HostTrack>& tracks() const { return tracks_; }
     const std::vector<HostPath>& paths() const { return paths_; }
     const std::vector<HostPanel>& panels() const { return panels_; }
+    const std::vector<HostInstrument>& instruments() const { return instruments_; }
 
     // THE ALTITUDE THIS HOST OBSERVED AT A POSITION, for the track `id`
     // published by `plugin`. True and `outAltM` filled when an observation
@@ -650,6 +681,12 @@ private:
         std::string name;
         std::size_t panelIndex = 0;  // into panels_
     };
+    struct InstrumentInstance {
+        const CascadeInstrumentApi* api = nullptr;
+        void* handle = nullptr;
+        std::string name;
+        std::size_t index = 0;  // into instruments_
+    };
 
     // One thing the host saw, exactly as the plugin reported it.
     struct AltObservation {
@@ -694,6 +731,13 @@ private:
 
     std::vector<TrackInstance> trackInstances_;
     std::vector<PanelInstance> panelInstances_;
+    std::vector<InstrumentInstance> instrumentInstances_;
+    std::vector<HostInstrument> instruments_;
+    // Demonstration entries sit at the END of instruments_ (after every real
+    // one, whose instances index into it); this many of them.
+    std::size_t demoCount_ = 0;
+    double demoLastStepSec_ = 0.0;
+    void stepDemos(double nowSec);
     // Mirror of trackInstances_'s names, kept so trackPluginNames() can hand
     // out a reference every frame instead of building a vector per call.
     std::vector<std::string> trackPluginNames_;
