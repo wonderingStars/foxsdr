@@ -48,6 +48,8 @@
 #ifndef CASCADE_GUI_FONTS_HPP
 #define CASCADE_GUI_FONTS_HPP
 
+#include <string>
+
 #include "imgui.h"
 
 namespace cascade::gui::fonts {
@@ -74,10 +76,17 @@ namespace cascade::gui::fonts {
 // which was the third such request in a month and the largest. The sweep
 // above was walked again: the rail, the status cards, the plates, the bench
 // engravings and the scope's panels were all screenshotted at the new sizes.
-inline constexpr float kUiSize = 21.0f;       // controls, prose, table cells
-inline constexpr float kLegendSize = 19.0f;   // engraved captions, small plates
-inline constexpr float kReadingSize = 20.0f;  // a number on glass
-inline constexpr float kTinySize = 17.0f;     // the smallest engraving that
+//
+// BROUGHT BACK DOWN IN 0.84.0, WITH GEORGIA. The three-pixel raise above was
+// made for a condensed sans; a serif at the same pixel size is a much
+// larger-looking thing, wider by half again and heavier on the page, and the
+// first sight of it at 21 px drew "drop the size down, it's too big". These
+// are the pre-0.79.0 figures, which on Georgia read about as large as the
+// raised ones did on Saira.
+inline constexpr float kUiSize = 17.0f;       // controls, prose, table cells
+inline constexpr float kLegendSize = 15.0f;   // engraved captions, small plates
+inline constexpr float kReadingSize = 16.0f;  // a number on glass
+inline constexpr float kTinySize = 14.0f;     // the smallest engraving that
                                               // still has to be readable
 
 // --- the faces ---------------------------------------------------------------
@@ -102,6 +111,29 @@ ImFont* reading();
 // in that case, wearing ImGui's own font, and callers should say so rather
 // than abort.
 bool load();
+
+// --- Georgia, from the operating system (0.84.0) ----------------------------
+//
+// THE UI AND LEGEND ROLES ARE LETTERED IN GEORGIA when the machine has it,
+// which every Windows does: Georgia Regular for everything a hand operates
+// and for prose, Georgia Bold for the engraved captions. It is read from the
+// system's font directory at start-up and is NOT in the binary, because
+// Georgia is Microsoft's and licensed with Windows rather than for
+// redistribution - the embedded OFL faces above stay in the binary as the
+// fallback for a desktop without it (Linux, or a stripped Windows), and the
+// two roles fall back TOGETHER so no window ever mixes the pairs. Figures
+// keep Nova Mono: Georgia's numerals are old-style and proportional, and a
+// counter whose digits dance and dip is the one thing an instrument's glass
+// must never do.
+//
+// systemFontPath: where the named file would be on this platform - the
+// Windows font directory (honouring %WINDIR%), or empty where there is no
+// such convention. Pure, so a test can pin it without an atlas.
+std::string systemFontPath(const char* file);
+
+// True after load() when both Georgia faces were found and are in use; false
+// on the embedded fallback. The diagnostics log says which at start-up.
+bool usingSystemSerif();
 
 }  // namespace cascade::gui::fonts
 

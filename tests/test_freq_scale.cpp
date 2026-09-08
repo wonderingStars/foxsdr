@@ -232,16 +232,16 @@ int main() {
         double hz[128];
         char labels[128][16];
 
-        // THE WORKED EXAMPLES ARE 1100 PX WIDE. Each puts ten divisions on the
-        // axis, and ten divisions of 1100 px are 110 px apart - over the
-        // 104 px floor freq_scale.cpp sets for the current lettering. At the
+        // THE WORKED EXAMPLES ARE 1600 PX WIDE. Each puts ten divisions on the
+        // axis, and ten divisions of 1600 px are 160 px apart - over the
+        // 152 px floor freq_scale.cpp sets for the current lettering. At the
         // 1000 px they were written for, the divisions were 100 px apart,
         // which the old 80 px floor accepted and the current one does not:
         // the step would double and every pinned label below would move.
         //
-        // MHz axis, integer labels: [95, 105] MHz at 1100 px -> 1 MHz step.
+        // MHz axis, integer labels: [95, 105] MHz at 1600 px -> 1 MHz step.
         fs.setSpan(100e6, 10e6);
-        int n = fs.ticks(1100.0, hz, labels, 128);
+        int n = fs.ticks(1600.0, hz, labels, 128);
         CHECK(n == 11);
         for (int i = 0; i < n; ++i) {
             CHECK_NEAR(hz[i], 95e6 + 1e6 * i, 1e-3);
@@ -251,33 +251,33 @@ int main() {
         CHECK(std::strcmp(labels[10], "105 MHz") == 0);
 
         // MHz axis, one decimal (the task's "100.3 MHz" example): full span
-        // [100, 101] MHz at 1100 px -> 100 kHz step, unit MHz, 1 decimal.
+        // [100, 101] MHz at 1600 px -> 100 kHz step, unit MHz, 1 decimal.
         fs.setSpan(100.5e6, 1e6);
-        n = fs.ticks(1100.0, hz, labels, 128);
+        n = fs.ticks(1600.0, hz, labels, 128);
         CHECK(n == 11);
         CHECK_NEAR(hz[3], 100.3e6, 1e-3);
         CHECK(std::strcmp(labels[0], "100.0 MHz") == 0);
         CHECK(std::strcmp(labels[3], "100.3 MHz") == 0);
         CHECK(std::strcmp(labels[10], "101.0 MHz") == 0);
 
-        // kHz axis: [400, 600] kHz at 1100 px -> 20 kHz step, integer kHz.
+        // kHz axis: [400, 600] kHz at 1600 px -> 20 kHz step, integer kHz.
         fs.setSpan(500e3, 200e3);
-        n = fs.ticks(1100.0, hz, labels, 128);
+        n = fs.ticks(1600.0, hz, labels, 128);
         CHECK(n == 11);
         CHECK(std::strcmp(labels[0], "400 kHz") == 0);
         CHECK(std::strcmp(labels[1], "420 kHz") == 0);
         CHECK(std::strcmp(labels[10], "600 kHz") == 0);
 
-        // Hz axis: [300, 700] Hz at 500 px -> 100 Hz step.
+        // Hz axis: [300, 700] Hz at 800 px -> 100 Hz step.
         fs.setSpan(500.0, 400.0);
-        n = fs.ticks(500.0, hz, labels, 128);
+        n = fs.ticks(800.0, hz, labels, 128);
         CHECK(n == 5);
         CHECK(std::strcmp(labels[0], "300 Hz") == 0);
         CHECK(std::strcmp(labels[4], "700 Hz") == 0);
 
-        // GHz axis, decimals from a 2 MHz step: [5.89, 5.91] GHz at 1100 px.
+        // GHz axis, decimals from a 2 MHz step: [5.89, 5.91] GHz at 1600 px.
         fs.setSpan(5.9e9, 20e6);
-        n = fs.ticks(1100.0, hz, labels, 128);
+        n = fs.ticks(1600.0, hz, labels, 128);
         CHECK(n == 11);
         CHECK(std::strcmp(labels[0], "5.890 GHz") == 0);
         CHECK(std::strcmp(labels[1], "5.892 GHz") == 0);
@@ -285,7 +285,7 @@ int main() {
 
         // Axis straddling zero: negative labels, and 0 must not print -0.0.
         fs.setSpan(0.0, 2e6);  // [-1, 1] MHz -> 200 kHz step
-        n = fs.ticks(1100.0, hz, labels, 128);
+        n = fs.ticks(1600.0, hz, labels, 128);
         CHECK(n == 11);
         CHECK(std::strcmp(labels[0], "-1.0 MHz") == 0);
         CHECK(std::strcmp(labels[5], "0.0 MHz") == 0);
@@ -297,7 +297,7 @@ int main() {
         fs.setSpan(100e6, 10e6);
         hz[5] = 777.0;
         std::strcpy(labels[5], "sentinel");
-        n = fs.ticks(1100.0, hz, labels, 5);
+        n = fs.ticks(1600.0, hz, labels, 5);
         CHECK(n == 5);
         for (int i = 0; i < n; ++i) {
             CHECK_NEAR(hz[i], 95e6 + 1e6 * i, 1e-3);
@@ -319,7 +319,7 @@ int main() {
     // ------------------------------------------------------------------
     // Tick properties under random spans/zooms: exact step multiples, step
     // from {1,2,5}*10^k and matching the documented smallest-fitting rule,
-    // label pitch >= 104 px (FreqScale's kMinTickSpacingPx, sized for the
+    // label pitch >= 152 px (FreqScale's kMinTickSpacingPx, sized for the
     // widest label at the current lettering plus an end label's slide), every
     // tick inside the view, count <= cap, and the view invariant holds after
     // every mutation.
@@ -348,7 +348,7 @@ int main() {
             CHECK(n <= 128);
             if (n == 0) { continue; }
 
-            const double step = refNiceStep(span * 104.0 / width);
+            const double step = refNiceStep(span * 152.0 / width);
             CHECK(isNiceStep(step));
             for (int i = 0; i < n; ++i) {
                 // Inside the view (to FP noise) and an exact step multiple.
@@ -357,9 +357,9 @@ int main() {
                 const double r = hz[i] / step;
                 CHECK(std::fabs(r - std::floor(r + 0.5)) < 1e-6);
                 if (i > 0) {
-                    // Consecutive pitch >= 104 px (to FP noise), and no
+                    // Consecutive pitch >= 152 px (to FP noise), and no
                     // skipped multiples.
-                    CHECK((hz[i] - hz[i - 1]) * width / span >= 104.0 * (1.0 - 1e-9));
+                    CHECK((hz[i] - hz[i - 1]) * width / span >= 152.0 * (1.0 - 1e-9));
                     CHECK_NEAR(hz[i] - hz[i - 1], step, step * 1e-9);
                 }
             }

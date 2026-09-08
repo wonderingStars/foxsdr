@@ -472,7 +472,25 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const int cols = fx::kPhaseCount + statusCols;
         const float pitch = leftW / static_cast<float>(cols);
         const float lampR = std::min(7.0f, pitch * 0.16f);
-        const float capPx = std::max(9.0f, std::min(fonts::kTinySize, pitch * 0.30f));
+        float capPx = std::max(9.0f, std::min(fonts::kTinySize, pitch * 0.30f));
+        // THE WIDEST WORD MUST FIT ITS PITCH. pitch * 0.30 was a proportion
+        // fitted to a condensed face; in Georgia (0.84.0) PHASING at that
+        // size ran into PICTURE on either side. Measure the longest phase
+        // name at the chosen size and take the size down, never below the
+        // nine-pixel floor, until it sits inside the pitch with clear metal.
+        {
+            ImGui::PushFont(fonts::ui(), capPx);
+            float widest = 0.0f;
+            for (int i = 0; i < fx::kPhaseCount; ++i) {
+                widest = std::max(widest, ImGui::CalcTextSize(fx::phaseName(i)).x);
+            }
+            widest = std::max(widest, ImGui::CalcTextSize("LOCK").x);
+            ImGui::PopFont();
+            const float room = pitch - 6.0f;
+            if (widest > room && widest > 0.0f) {
+                capPx = std::max(9.0f, capPx * room / widest);
+            }
+        }
         const float rowH = lampR * 2.0f + capPx * 1.40f + 4.0f;
         ImGui::PushFont(fonts::ui(), capPx);
         for (int i = 0; i < fx::kPhaseCount; ++i) {
