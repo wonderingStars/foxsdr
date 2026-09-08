@@ -348,7 +348,7 @@ namespace {
 // branch in this function that invents a number when an input is missing.
 void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float* dbBins,
                 int n, double firstBin, double lastBin, const SpectrumView::Chrome* chrome,
-                float& headerBottom, float& axisTop) {
+                float& headerBottom, float& headerRightOut, float& axisTop) {
     const float w = p1.x - p0.x;
     const float h = p1.y - p0.y;
     if (w < chromeMinWidth() || h < chromeMinHeight()) { return; }
@@ -414,6 +414,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
         headY += tinyH;
     }
     headerBottom = headY + 3.0f;
+    headerRightOut = headRight;
 
     // --- peak in the passband, top right -------------------------------------
     // Measured over the bins the caller's VFO band covers, and drawn only if
@@ -673,9 +674,12 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     // The lettering, over the trace so it stays readable, and it hands back
     // the two horizontal bands it has claimed so the dB axis can avoid them.
     float headerBottom = p0.y;
+    float headerRight = p0.x;
     float axisTop = p1.y;
     drawChrome(drawList, p0, p1, dbBins, n, firstBin, lastBin, chrome, headerBottom,
-               axisTop);
+               headerRight, axisTop);
+    headerBottom_ = headerBottom;
+    headerRight_ = headerRight;
 
     // The dB axis, down the left edge, from the view range this widget already
     // holds. Each label sits just below its own line so the topmost (dbMax)
