@@ -3,6 +3,7 @@
 
 #include "core/diag_log.hpp"
 #include "source/soapy_enum_proc.hpp"
+#include "source/soapy_log_bridge.hpp"
 #include "source/soapy_modules.hpp"
 #include "source/vendor_guard.hpp"
 
@@ -158,6 +159,14 @@ std::string describe(const std::exception& e, const char* context) {
         msg = "unknown error";
     }
     return std::string(context) + ": " + msg;
+}
+
+// "2000000 S/s" - the rate as the user reads it on the counter, for the
+// messages setSampleRateHz leaves about what the stream is doing now.
+std::string rateWords(double hz) {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%.0f S/s", hz);
+    return buf;
 }
 
 // EVERY CALL THAT CROSSES INTO A VENDOR MODULE GOES THROUGH HERE.
@@ -322,6 +331,13 @@ bool SoapySource::runtimeAvailable() {
     // loaded for the process lifetime anyway once anything uses it.
     static const bool available = []() {
         if (::LoadLibraryA("SoapySDR.dll") == nullptr) { return false; }
+        // THE DRIVER'S OWN VOICE, from the first moment it can be heard: the
+        // library is now loaded, and no vendor module has been, so nothing a
+        // module says on the way in is lost. The 0.88.0 field crash reached
+        // the store with a log that carried none of what SoapyRTLSDR had
+        // logged about the stream it was about to lose. Safe to repeat, and
+        // must come after the LoadLibrary probe because of the delay-load.
+        installSoapyLogBridge();
         // THE MODULE SEARCH PATH, fixed here because this is the first moment
         // it can be: the library is loaded (so its ABI version can be asked
         // for) and no module has been loaded yet (the search path is read once,
@@ -352,6 +368,7 @@ bool SoapySource::runtimeAvailable() {
     // POSIX links it normally, but the module search path still has to cover
     // wherever the distribution put the vendor modules.
     static const bool ready = []() {
+        installSoapyLogBridge();  // same reason as the Windows branch above
         ensureVendorModulesVisible(SoapySDR::getABIVersion());
         return true;
     }();
@@ -1095,44 +1112,16 @@ bool SoapySource::start() {
     // CRASH [1] OF THE THREE UPLOADED FROM 0.62.0 lands here: the user pressed
     // Play and activateStream faulted through SoapySDR -> rtlsdrSupport ->
     // rtlsdr -> libusb. On our own call frame, so the guard sees it.
-    struct Activate {
-        SoapySource* self;
-        int ret = 0;
-        bool threw = false;
-        std::string message;
-    } a{this};
-
-    const bool completed = guardedVendorCall([&a]() noexcept {
-        try {
-            a.ret = a.self->link_->dev->activateStream(a.self->link_->stream);
-        } catch (const std::exception& e) {
-            a.threw = true;
-            a.message = describe(e, "activateStream failed");
-        } catch (...) {
-            a.threw = true;
-            a.message = "activateStream failed: non-standard exception";
-        }
-    });
-    if (!completed) {
-        // FALSE, and faulted() is now true. Pipeline::start ignores this return
-        // by design ("a failed start is not fatal to the pipeline") and spawns
-        // the source thread anyway; that thread's first read() returns 0 on the
-        // fault latch and its faulted() poll turns this into the pipeline fault
-        // the Source panel already renders as "Device stopped: ...". So the
-        // user sees the driver crash instead of the application disappearing,
-        // through the path that already existed for an unplugged radio.
-        noteVendorFault("starting the stream");
-        return false;
-    }
-    if (a.threw) {
-        setError(std::move(a.message));
-        return false;
-    }
-    if (a.ret != 0) {
-        // errToStr is a pure code->string lookup: no device handle, no
-        // hardware, nothing a vendor module can reach. Deliberately outside
-        // the guarded body, where allocating a message is safe.
-        setError(std::string("activateStream failed: ") + SoapySDR::errToStr(a.ret));
+    //
+    // On a fault this returns FALSE with faulted() now true. Pipeline::start
+    // ignores this return by design ("a failed start is not fatal to the
+    // pipeline") and spawns the source thread anyway; that thread's first
+    // read() returns 0 on the fault latch and its faulted() poll turns this
+    // into the pipeline fault the Source panel already renders as "Device
+    // stopped: ...". So the user sees the driver crash instead of the
+    // application disappearing, through the path that already existed for an
+    // unplugged radio.
+    if (!activateLocked("starting the stream")) {
         return false;
     }
     // CONDEMNED MID-START? The same race as open()'s commit: an escape
@@ -1232,18 +1221,65 @@ void SoapySource::stopLocked() {
     if (deviceDead()) {
         return;  // never call a driver that has already faulted
     }
+    // THE 0.70.0 FIELD FREEZE IS THIS CALL - see deactivateLocked for the
+    // stack and for why it runs where it can be abandoned. running_ is
+    // already false above, so a call that has to be left behind still leaves
+    // the object in "stopped" - the only thing it costs is the device, which
+    // is condemned rather than freed. stop() is void, so the only reporting
+    // channels are lastError() and faulted(), which the pipeline polls, and
+    // the helper writes both; the teardown that usually follows sees
+    // deviceDead() and lets the handle go without touching the driver again.
+    (void)deactivateLocked("stopping the stream");
+}
+
+bool SoapySource::activateLocked(const char* what) {
+    struct Activate {
+        SoapySource* self;
+        int ret = 0;
+        bool threw = false;
+        std::string message;
+    } a{this};
+
+    const bool completed = guardedVendorCall([&a]() noexcept {
+        try {
+            a.ret = a.self->link_->dev->activateStream(a.self->link_->stream);
+        } catch (const std::exception& e) {
+            a.threw = true;
+            a.message = describe(e, "activateStream failed");
+        } catch (...) {
+            a.threw = true;
+            a.message = "activateStream failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        noteVendorFault(what);
+        return false;
+    }
+    if (a.threw) {
+        setError(std::move(a.message));
+        return false;
+    }
+    if (a.ret != 0) {
+        // errToStr is a pure code->string lookup: no device handle, no
+        // hardware, nothing a vendor module can reach. Deliberately outside
+        // the guarded body, where allocating a message is safe.
+        setError(std::string("activateStream failed: ") + SoapySDR::errToStr(a.ret));
+        return false;
+    }
+    return true;
+}
+
+bool SoapySource::deactivateLocked(const char* what) {
     // THE 0.70.0 FIELD FREEZE IS THIS CALL. The stack was symbolised to the
     // one _Thrd_join call site in rtlsdrSupport.dll, inside a function that
     // calls rtlsdr_cancel_async, _Thrd_id and _Thrd_join in that order -
     // SoapyRTLSDR::deactivateStream cancelling its async transfer and then
     // joining its own RX thread. That join never returned. Called inline on
-    // the GUI thread, as this was, there is nothing left to give up: the
+    // the GUI thread, as it was, there is nothing left to give up: the
     // interface froze for good and the user killed the process.
     //
     // So it runs where it can be abandoned, and this thread waits
-    // kVendorCallWait for it. running_ is already false above, so a call that
-    // has to be left behind still leaves the object in "stopped" - the only
-    // thing it costs is the device, which is condemned rather than freed.
+    // kVendorCallWait for it.
     const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
         try {
             j.ret = j.link->dev->deactivateStream(j.link->stream);
@@ -1259,27 +1295,25 @@ void SoapySource::stopLocked() {
         case JobOutcome::Completed:
             break;
         case JobOutcome::Faulted:
-            // stop() is void, so the only reporting channel is lastError() —
-            // and now also faulted(), which the pipeline polls. The teardown
-            // that usually follows will see deviceDead() and let the handle go
-            // without touching the driver again.
-            noteVendorFault("stopping the stream");
-            return;
+            noteVendorFault(what);
+            return false;
         case JobOutcome::Abandoned:
-            // Same destination by a different road: the teardown that follows
-            // sees deviceDead() and releases the handle without a driver call,
-            // which is the only safe thing to do with a device that still has
-            // one of our threads inside it.
-            abandonWedgedDriverLocked("stopping the stream");
-            return;
+            // Same destination by a different road: whatever follows sees
+            // deviceDead() and never touches the driver again, which is the
+            // only safe thing to do with a device that still has one of our
+            // threads inside it.
+            abandonWedgedDriverLocked(what);
+            return false;
     }
     if (job->threw) {
         setError(std::move(job->message));
-        return;
+        return false;
     }
     if (job->ret != 0) {
         setError(std::string("deactivateStream failed: ") + SoapySDR::errToStr(job->ret));
+        return false;
     }
+    return true;
 }
 
 std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
@@ -1353,6 +1387,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
     try {
         const int ret = link_->dev->readStream(link_->stream, buffs, n, flags, timeNs,
                                                kReadTimeoutUs);
+        noteRead(ret, ret > 0 ? static_cast<std::size_t>(ret) : 0u);
         if (ret > 0) {
             const std::size_t got = static_cast<std::size_t>(ret);
             const bool scrubbed = sanitizeNonFinite(dst, got);
@@ -1393,6 +1428,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // exactly the case that used to be swallowed here. Reporting it as a
         // bare 0 made it indistinguishable from an idle radio, so the pipeline
         // retried forever and the user watched a frozen spectrum.
+        noteRead(SOAPY_SDR_STREAM_ERROR, 0u);
         std::lock_guard<std::mutex> lk(errorMutex_);
         lastError_ = describe(e, "readStream failed");
         faulted_ = true;
@@ -1403,6 +1439,81 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         faulted_ = true;
         return 0;
     }
+}
+
+// The tally behind streamHealthLine(), taken on every read. Classification
+// follows the read loop's own: samples, the bounded block expiring (a timeout
+// or a literal 0), the transient codes the loop forgives (overflow and
+// corruption), and everything else - including a driver that threw - as an
+// error. The gap is the longest stretch inside the window during which no
+// read returned samples, measured whenever samples do arrive and again at
+// the moment the line is written, so a stall still in progress is counted.
+void SoapySource::noteRead(int ret, std::size_t got) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!health_.windowOpen) {
+        health_.windowOpen = true;
+        health_.windowStart = now;
+        health_.lastSamples = now;
+    }
+    ++health_.reads;
+    if (ret > 0) {
+        ++health_.withSamples;
+        health_.samples += got;
+        const auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now - health_.lastSamples).count();
+        if (gap > health_.longestGapMs) { health_.longestGapMs = gap; }
+        health_.lastSamples = now;
+    } else if (ret == SOAPY_SDR_TIMEOUT || ret == 0) {
+        ++health_.timeouts;
+    } else if (transientStreamError(ret)) {
+        ++health_.overflows;
+    } else {
+        ++health_.errors;
+    }
+    if (now - health_.windowStart < healthWindow_) { return; }
+
+    // ON THE MINUTE. The first line after a start is written whatever it
+    // says, so a healthy radio leaves a line that proves it; after that only
+    // a minute with something to report is written, because a line every
+    // minute forever would bury the rest of the log.
+    const bool nominal = health_.timeouts == 0 && health_.overflows == 0 &&
+                         health_.errors == 0 && health_.longestGapMs < 250;
+    const bool first = !healthEverWritten_;
+    const bool worrying = health_.errors > 0 || health_.longestGapMs >= 1000;
+    const std::string line = streamHealthLine();
+    if (line.empty()) { return; }
+    if (worrying) {
+        core::diagWarnf("%s", line.c_str());
+        healthEverWritten_ = true;
+    } else if (first || !nominal) {
+        core::diagLogf("%s", line.c_str());
+        healthEverWritten_ = true;
+    }
+}
+
+std::string SoapySource::streamHealthLine() {
+    if (!health_.windowOpen || health_.reads == 0) { return std::string(); }
+    const auto now = std::chrono::steady_clock::now();
+    // A stall still in progress at the moment of writing is part of the story.
+    const auto openGap = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now - health_.lastSamples).count();
+    if (openGap > health_.longestGapMs) { health_.longestGapMs = openGap; }
+    const auto windowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              now - health_.windowStart).count();
+    char buf[192];
+    std::snprintf(buf, sizeof(buf),
+                  "source: stream health - reads %llu, with samples %llu, timeouts %llu, "
+                  "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s",
+                  static_cast<unsigned long long>(health_.reads),
+                  static_cast<unsigned long long>(health_.withSamples),
+                  static_cast<unsigned long long>(health_.timeouts),
+                  static_cast<unsigned long long>(health_.overflows),
+                  static_cast<unsigned long long>(health_.errors),
+                  static_cast<long long>(health_.longestGapMs),
+                  static_cast<unsigned long long>(health_.samples),
+                  static_cast<long long>((windowMs + 500) / 1000));
+    health_ = StreamHealth{};
+    return std::string(buf);
 }
 
 bool SoapySource::setSampleRateHz(double hz) {
@@ -1421,6 +1532,67 @@ bool SoapySource::setSampleRateHz(double hz) {
         return false;
     }
     if (deviceDead()) { return false; }
+
+    // ALREADY THERE: nothing to do, and above all no stream restart to pay
+    // for. The last readback is the device's rate (open() and every
+    // successful change below store what the driver reported, not what was
+    // asked), so a preset re-applied at the rate the radio is already running
+    // costs no driver call at all. Within 1 Hz, because a readback is a
+    // double the driver computed from its own clock division and a caller
+    // hands back the integer it displayed.
+    const double before = sampleRateHz_.load(std::memory_order_relaxed);
+    if (before > 0.0 && std::fabs(hz - before) < 1.0) {
+        return true;
+    }
+
+    // CRASH [4], the one this register did not have: signature 235E46B5D39DED8D
+    // again, but from 0.88.0 and on a thread of the DRIVER'S. A NESDR SMArt v5
+    // restored at 2,000,000 S/s; fourteen seconds later the ADS-B window
+    // opened and applied its preset, 1090 MHz and 2,400,000 S/s - this call,
+    // on a live stream. The audio ring faltered for a minute (2162 priming
+    // callbacks, 64 starved), and 45 s after the change the process died in
+    // ntdll's RtlEnterCriticalSection on a lock libusb had already freed,
+    // called from librtlsdr's async read loop, on SoapyRTLSDR's own reader
+    // thread: stack bottom ucrtbase's thread start, no cascade.exe frame
+    // anywhere. The vendor guard covers a fault on a thread we made; it
+    // cannot absorb one on a thread we did not, so that report was fatal.
+    //
+    // WHY A LIVE RATE CHANGE DOES THAT, from SoapyRTLSDR's source.
+    // setSampleRate calls rtlsdr_set_sample_rate on the device WHILE its
+    // rx_async_operation thread is inside rtlsdr_read_async with bulk
+    // transfers in flight, and merely sets resetBuffer for the next read.
+    // deactivateStream cancels the async read and JOINS that thread;
+    // activateStream resets the device buffer and starts a fresh thread with
+    // fresh transfers. So a rate change made BETWEEN the two lands on a
+    // quiescent device with nothing in flight - which is what every RTL-SDR
+    // application that survives a rate change does, and what this now does.
+    //
+    // All of it under the one device lock already held: the source thread's
+    // next read() queues behind it, and the deactivate-set-activate sequence
+    // is one transition to everything outside this call. running_ is left
+    // TRUE across the quiescent window on purpose - to the pipeline the
+    // stream never stopped - and is cleared only on the paths below where the
+    // stream really did not come back.
+    const bool wasRunning = running_.load(std::memory_order_relaxed);
+    const auto t0 = std::chrono::steady_clock::now();
+    if (wasRunning) {
+        if (!deactivateLocked("stopping the stream for a sample-rate change")) {
+            if (deviceDead()) {
+                // Faulted or abandoned: the existing rules applied (the
+                // device is condemned, lastError says so) and the rate was
+                // never touched. The stream is gone with the device.
+                running_.store(false, std::memory_order_relaxed);
+                return false;
+            }
+            // The driver answered and said no. It has not been told a new
+            // rate, and nothing here can claim to know whether its stream
+            // still runs, so the honest report is the driver's own words plus
+            // the state this object still holds.
+            setError(std::string("sample rate not changed: ") + lastError() +
+                     "; the stream is still running at " + rateWords(before));
+            return false;
+        }
+    }
 
     struct Rate {
         SoapySource* self;
@@ -1448,15 +1620,64 @@ bool SoapySource::setSampleRateHz(double hz) {
         // sampleRateHz_ is NOT updated. Same reasoning as the retune below: a
         // rate we never read back is a rate we do not know, and the DSP chain
         // running at a number the hardware may not be using is worse than it
-        // running at the last one that was actually confirmed.
+        // running at the last one that was actually confirmed. And the stream
+        // stays down: a device that has just faulted is never called again,
+        // so there is no reactivate to attempt.
         noteVendorFault("setting the sample rate");
+        running_.store(false, std::memory_order_relaxed);
         return false;
     }
     if (r.threw) {
-        setError(std::move(r.message));
+        // A REJECTED RATE MUST NOT SILENTLY STOP THE RADIO. SoapyRTLSDR throws
+        // for a rate the dongle cannot make; the user asked for a preset, not
+        // for silence, so the stream goes back up at the rate it had. Only a
+        // driver that refuses that too leaves it stopped - and then the
+        // message says so, because a false return alone cannot.
+        if (!wasRunning) {
+            setError(std::move(r.message));
+            return false;
+        }
+        if (activateLocked("restarting the stream after a rejected sample rate")) {
+            setError(r.message + "; the stream is still running at " + rateWords(before));
+            return false;
+        }
+        running_.store(false, std::memory_order_relaxed);
+        if (!deviceDead()) {
+            setError(r.message + "; and the stream could not be restarted (" +
+                     lastError() + ") - it is stopped");
+        }
         return false;
     }
     sampleRateHz_.store(r.got, std::memory_order_relaxed);
+    if (wasRunning) {
+        if (!activateLocked("restarting the stream after a sample-rate change")) {
+            // The rate DID change - the readback above is the device's clock
+            // now, and sampleRateHz() has to say so or the DSP chain runs at
+            // the wrong number the moment someone presses Play. The stream is
+            // the casualty, and lastError names it; a condemned device has
+            // already written its own message and keeps it.
+            running_.store(false, std::memory_order_relaxed);
+            if (!deviceDead()) {
+                setError(std::string("sample rate changed to ") + rateWords(r.got) +
+                         " but the stream could not be restarted (" + lastError() +
+                         ") - it is stopped");
+            }
+            return false;
+        }
+    }
+    // THE LINE THE FIELD REPORT WAS MISSING. Its ring showed the restore and
+    // the ADS-B window opening, and then a minute of the sound path faltering
+    // with nothing in between to say the radio's clock had just been changed
+    // under a live stream.
+    const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - t0)
+                             .count();
+    if (wasRunning) {
+        core::diagLogf("source: sample rate %.0f -> %.0f S/s (stream restarted, %lld ms)",
+                       before, r.got, ms);
+    } else {
+        core::diagLogf("source: sample rate %.0f -> %.0f S/s (stream idle)", before, r.got);
+    }
     return true;
 }
 

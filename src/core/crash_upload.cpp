@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/crash_upload.hpp"
 
+#include "core/diag_log.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -36,6 +38,15 @@ constexpr std::size_t kMaxReportBytes = 1024 * 1024;
 constexpr std::size_t kMaxThreads = 32;
 constexpr std::size_t kMaxFramesPerThread = 64;
 constexpr std::size_t kMaxLogLines = 256;
+// The 0.88.0 RTL-SDR field report carried a tail too short to show the rate
+// change 45 s before the fault, let alone the driver's minute of complaints
+// before that. Now that driver and vendor lines are recorded too, no rung of
+// the trimming ladder that carries a log may carry fewer than this, and the
+// ring the writers copy from must hold at least this many.
+constexpr std::size_t kMinUsefulLogLines = 80;
+static_assert(kMaxLogLines >= kMinUsefulLogLines, "the full payload must carry the useful tail");
+static_assert(DiagLog::kRingLines >= static_cast<int>(kMinUsefulLogLines),
+              "the ring must hold the tail the report is meant to carry");
 constexpr std::size_t kMaxPlugins = 32;
 constexpr std::size_t kMaxModules = 256;
 // A report nobody could send in a fortnight is not going to become sendable.
@@ -176,7 +187,7 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     if (text.empty()) { return false; }
 
     const std::vector<std::string> lines = splitLines(text);
-    enum class Section { Header, Context, Modules, Stack, Log, Ignore };
+    enum class Section { Header, Context, Process, Modules, Stack, Log, Ignore };
     Section section = Section::Header;
     std::string addressText;
     bool sawKind = false;
@@ -185,6 +196,8 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
         if (raw.rfind("--- ", 0) == 0) {
             if (raw.rfind("--- context ---", 0) == 0) {
                 section = Section::Context;
+            } else if (raw.rfind("--- process ---", 0) == 0) {
+                section = Section::Process;
             } else if (raw.rfind("--- modules ---", 0) == 0) {
                 section = Section::Modules;
             } else if (raw.rfind("--- log", 0) == 0) {
@@ -207,11 +220,20 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
             continue;
         }
 
-        if (section == Section::Header || section == Section::Context) {
+        if (section == Section::Header || section == Section::Context ||
+            section == Section::Process) {
             const std::size_t colon = raw.find(':');
             if (colon == std::string::npos) { continue; }
             const std::string k = trimSpace(raw.substr(0, colon));
             const std::string v = trimSpace(raw.substr(colon + 1));
+            if (section == Section::Process) {
+                if (k == "uptime-sec") {
+                    out.uptimeSec = static_cast<std::uint64_t>(std::strtoull(v.c_str(), nullptr, 10));
+                } else if (k == "fault-thread-own") {
+                    out.faultThreadOwn = v;
+                }
+                continue;
+            }
             if (section == Section::Header) {
                 if (k == "kind") {
                     out.kind = v;
@@ -397,6 +419,15 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     ctx["sampleRate"] = r.sampleRateHz;
     ctx["deviceOpen"] = r.deviceOpen;
     ctx["sdrModel"] = r.sdrModel;
+    // Seconds from process start to the fault; 0 means the report predates
+    // the process block. Whether the faulting thread was one of ours, as the
+    // three-way answer the writer gave: "true", "false", or "" for a freeze
+    // report or a stack that could not be walked. A boolean would have had
+    // to invent an answer for the last two.
+    ctx["uptimeSec"] = r.uptimeSec;
+    ctx["faultThreadOwn"] = (r.faultThreadOwn == "yes")  ? "true"
+                            : (r.faultThreadOwn == "no") ? "false"
+                                                         : "";
     j["context"] = std::move(ctx);
 
     nlohmann::json log = nlohmann::json::array();
@@ -450,9 +481,13 @@ std::string uploadJson(const ParsedReport& r, const std::string& installId) {
         std::size_t threads;
         std::size_t frames;
     };
+    // Every rung that carries a log carries at least kMinUsefulLogLines; the
+    // rung below that drops to a token 16 and the rest drop the log entirely,
+    // because a stack with a build id still names the bug and a log alone
+    // does not.
     static const Level kLevels[] = {
         {kMaxLogLines, kMaxThreads, kMaxFramesPerThread},
-        {64, 16, 48},
+        {kMinUsefulLogLines, 16, 48},
         {16, 8, 32},
         {0, 4, 24},
         {0, 1, 16},
@@ -481,8 +516,9 @@ const std::vector<std::string>& uploadFieldNames() {
 }
 
 const std::vector<std::string>& uploadContextFieldNames() {
-    static const std::vector<std::string> names = {"mode", "source", "sampleRate", "deviceOpen",
-                                                   "sdrModel"};
+    static const std::vector<std::string> names = {"mode",     "source",    "sampleRate",
+                                                   "deviceOpen", "sdrModel", "uptimeSec",
+                                                   "faultThreadOwn"};
     return names;
 }
 

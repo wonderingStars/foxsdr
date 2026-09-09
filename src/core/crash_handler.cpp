@@ -80,6 +80,10 @@ char g_dumpPath[kPathBytes] = {};
 #if defined(_WIN32)
 unsigned long long g_frames[kMaxFrames] = {};
 CONTEXT g_walkContext;  // ditto: 1.2 KiB, and unwinding mutates it
+// The base of the main executable image, read at install time, so the fault
+// path can ask "does any frame of the faulting stack lie in our own code"
+// with a table walk and no loader call.
+std::uintptr_t g_selfBase = 0;
 using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
                                           PMINIDUMP_EXCEPTION_INFORMATION,
                                           PMINIDUMP_USER_STREAM_INFORMATION,
@@ -314,7 +318,14 @@ void stderrAttribution(unsigned long code, std::uintptr_t addr) {
     }
     buf[at++] = '\n';
     DWORD written = 0;
-    ::WriteFile(::GetStdHandle(STD_ERROR_HANDLE), buf, static_cast<DWORD>(at), &written, nullptr);
+    // While the stderr capture is on, STD_ERROR_HANDLE is the pipe that feeds
+    // the log - and this line, written there, would be read back and logged
+    // as "vendor: cascade: fatal exception" by a thread racing the report's
+    // own ring copy. It goes to the stderr the process had before the capture
+    // instead, which is where a terminal user would have seen it anyway.
+    HANDLE h = static_cast<HANDLE>(originalStderrHandle());
+    if (h == nullptr) { h = ::GetStdHandle(STD_ERROR_HANDLE); }
+    ::WriteFile(h, buf, static_cast<DWORD>(at), &written, nullptr);
 }
 
 void writeMinidump(EXCEPTION_POINTERS* ep, const char* txtPath) {
@@ -450,6 +461,37 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         e.addr(static_cast<std::uintptr_t>(g_frames[i]));
         e.str("\n");
     }
+
+    // THE PROCESS BLOCK: two facts a reader asked for and the report could
+    // not answer. "uptime-sec" is how long the session had run - a fault 45 s
+    // after a rate change and one three hours in are different bugs at the
+    // same address. "fault-thread-own" is whether the faulting thread was one
+    // of ours: any frame of the walked stack inside the main executable
+    // means our code is somewhere beneath the fault; none means a thread a
+    // vendor driver created and ran entirely in its own code, which is where
+    // the 0.88.0 RTL-SDR report could not be placed. Written AFTER the stack
+    // because it is derived from it, and the header must reach disk before
+    // the walk (see the file header); it is parsed by crash_upload.cpp and
+    // sent as `uptimeSec` and `faultThreadOwn`.
+    e.str("--- process ---\nuptime-sec: ");
+    e.dec(processUptimeSec());
+    e.str("\nfault-thread-own: ");
+    if (nFrames == 0) {
+        // A walk that could not be taken answers neither yes nor no.
+        e.str("unknown");
+    } else {
+        bool own = false;
+        for (int i = 0; i < nFrames && !own; ++i) {
+            DiagModule m;
+            std::uintptr_t off = 0;
+            if (resolveAddress(static_cast<std::uintptr_t>(g_frames[i]), m, off) &&
+                m.base == g_selfBase) {
+                own = true;
+            }
+        }
+        e.str(own ? "yes" : "no");
+    }
+    e.str("\n");
 
     writeModules(e);
     writeRing(e);
@@ -615,6 +657,9 @@ void installCrashHandlers(const CrashHandlerConfig& cfg) {
     // The module snapshot the fault path searches. Refreshed again by the
     // application after anything that loads code; this is just the floor.
     if (moduleCount() == 0) { refreshModuleTable(); }
+    // Our own image, for the process block's fault-thread-own line. A module
+    // handle IS its base address; read here on the healthy path.
+    g_selfBase = reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));
 
     if (g_minidump && g_miniDumpWriteDump == nullptr) {
         // Resolved NOW. LoadLibrary from a fault handler takes the loader lock.

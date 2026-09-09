@@ -147,6 +147,14 @@ struct ParsedReport {
     bool deviceOpen = false;
     std::vector<std::string> plugins;  // "name version", as the report writes them
 
+    // The `--- process ---` block both writers add since 0.89.0. `uptimeSec`
+    // is seconds from process start to the fault (0 when the report predates
+    // the block). `faultThreadOwn` is the crash writer's "yes"/"no"/"unknown"
+    // verbatim - whether any frame of the faulting stack lies in our own
+    // executable - and empty for a freeze report, which has no such line.
+    std::uint64_t uptimeSec = 0;
+    std::string faultThreadOwn;
+
     // The report's own --- modules --- block: file name -> build id, with an
     // empty build id where the report said "(none)". This is what puts a build
     // id on every frame, and it is kept rather than folded away because it is

@@ -56,6 +56,75 @@ every distinct bug inside that plugin collapses into a single group, since
 every plugin stack passes through the same host dispatch on its way down. The client signature
 stays in the payload as transport identity and the client-side dedup key.
 
+### What the log carries since 0.89.0 — the driver's own words
+
+The 0.88.0 field crash from an RTL-SDR user reached the crash store with a
+21-line log tail that said nothing about the radio. Not because the ring was
+short — it holds 256 lines — but because nothing that mattered had been
+written to it: the sample-rate change 45 s before the fault was a
+`setSampleRate` call the log never saw, the minute of stalled USB delivery
+before that showed only as the audio ring's starvation counter climbing, and
+the driver's own account of it — librtlsdr's `rtlsdr_read_async: dev_lost`,
+printed with `fprintf(stderr, …)`, and SoapyRTLSDR's warnings, sent through
+SoapySDR's logger to its **default handler, which prints to stderr** — went to
+a console nobody was reading. Three things changed, none of them the fault:
+
+**The stream-health line.** Once a minute the radio's read loop writes what the driver answered: `source: stream health - reads 612, with samples 598, timeouts 14, overflows 0, errors 0, longest gap 38 ms, 1434880 samples in 60 s`. The first minute after a start is always written, so a healthy radio leaves one line proving it; after that a minute is written only when something was not nominal (any timeout, overflow or error, or a gap of 250 ms or more without samples), and as a warning when there was an error or a gap of a second or more. A minute of stalled USB delivery before a driver fault - what the 0.88.0 field crash had, visible then only through the sound path's starvation counter - now reads as a line in the report's tail.
+
+- **SoapySDR's logger is bridged into ours.** `source/soapy_log_bridge.cpp`
+  registers a `SoapySDR::registerLogHandler` handler; FATAL/CRITICAL/ERROR/
+  WARNING become `warn` lines, NOTICE/INFO (and the `O`/`U`/`D` stream
+  indicators) become `info` lines, all prefixed `soapy:`. DEBUG and TRACE are
+  dropped unless `FOXSDR_SOAPY_DEBUG=1` is set, which also lowers SoapySDR's own
+  threshold to TRACE. The registration is the only line that touches SoapySDR,
+  and `cascade.exe` delay-loads `SoapySDR.dll`, so it must run only after
+  `SoapySource::runtimeAvailable()` has answered yes; the classification, the
+  prefix and the limit are pure and tested without a runtime
+  (`tests/test_soapy_log_bridge.cpp`).
+- **The process's stderr is captured** (`core::installStderrCapture`, Windows
+  only). An anonymous pipe replaces fd 2 and `STD_ERROR_HANDLE`; a reader
+  thread logs each line as `vendor: <line>`. It is installed only for an
+  interactive session — never `--frames`, `--selftest`, `--soapy-check` or the
+  other tools — and only when nobody is watching stderr. `cascade.exe` is a
+  console-subsystem binary, so a Start Menu launch has a console too, one
+  Windows created with nothing else attached; the test that separates that
+  from a developer's terminal is `GetConsoleProcessList` reporting more than
+  this one process. The write end is inheritable on purpose, so the
+  device-enumeration child's stderr (which UHD's discovery errors go to) lands
+  here as well. The diagnostic log itself never writes to stderr, so nothing
+  it does can loop back; the crash handler's one stderr line goes to the
+  handle the process had before the capture. Our own `cascade: …` stderr
+  lines from the GUI (a GLFW error, a failed backend init) now reach the log
+  too, prefixed `vendor: cascade:`, which is a gain: in a windowed session
+  they used to go nowhere. Linux is unchanged (the call returns false).
+- **Both are rate-limited and scrubbed.** Twenty lines a second per source,
+  then one `N more lines suppressed` per second, because a driver that has
+  lost its device says so on every failed read and would otherwise push every
+  state-change line out of the ring in seconds. Before anything is kept,
+  `core::scrubVendorLine` replaces the value after the word "serial" with
+  `<stripped>` and masks every digit on a line that mentions a frequency,
+  tuning or hertz — SoapyRTLSDR's `Setting center freq: N` is exactly the
+  thing PRIVACY.md promises a report never carries.
+
+And the report itself carries two more facts, in a `--- process ---` block
+after the stack (before the stacks, in a freeze report): `uptime-sec`, the
+session's age at the fault, and — crash reports only — `fault-thread-own`,
+whether any frame of the walked stack lies in the main executable. `no` means
+a thread a vendor driver created and ran entirely in its own code, which is
+where the 0.88.0 report could not be placed; `unknown` means the walk could
+not be taken. The uploader forwards them as `uptimeSec` and `faultThreadOwn`
+(`"true"`/`"false"`/`""`), and no rung of its trimming ladder that carries a
+log now carries fewer than 80 lines (`kMinUsefulLogLines`, with static asserts
+that the payload cap and the ring are at least that).
+
+What none of this proves: that a real librtlsdr or UHD line arrives. The
+bridge and the capture are exercised with synthetic lines
+(`tests/test_vendor_lines.cpp` writes through both the CRT and the Win32
+handle in-process); a driver with its own statically linked CRT reads
+`STD_ERROR_HANDLE` when it is loaded, which is after the capture is installed,
+and that reasoning is what puts its lines in the pipe — a bench with an
+RTL-SDR is the check.
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it
@@ -424,7 +493,10 @@ never be re-derived from a later build.
   files kept — `foxsdr.log`, `foxsdr.1.log`, `foxsdr.2.log`, so at most ~3 MiB
   and never a `foxsdr.3.log`. The count is asserted after three rotations in
   `tests/test_diagnostics.cpp`; it used to keep four, which nothing noticed
-  because the first two rotations look identical either way.
+  because the first two rotations look identical either way. Since 0.89.0 it
+  also carries the radio driver's messages (`soapy:` lines) and whatever the
+  driver's libraries printed to stderr (`vendor:` lines) — see *What the log
+  carries since 0.89.0* above.
 - **Reports:** `%LOCALAPPDATA%\FoxSDR\crashes\`.
 - **Settings → Diagnostics** shows both paths, has the on/off switch and the
   minidump switch, and has **Copy diagnostics** — one click that puts the whole
