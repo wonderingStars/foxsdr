@@ -19,9 +19,35 @@
 
 using cascade::gui::autoPresetIndexOnStart;
 using cascade::gui::autoPresetTriggersOnWindowClick;
+using cascade::gui::clickIsPress;
+using cascade::gui::cycleTuneStep;
+using cascade::gui::digitPlaceHz;
+using cascade::gui::freqCellLeftX;
+using cascade::gui::FreqRect;
+using cascade::gui::kFreqBezelH;
+using cascade::gui::kFreqBezelPadX;
+using cascade::gui::kFreqBezelPadY;
+using cascade::gui::kFreqBezelW;
+using cascade::gui::kFreqBezelY;
+using cascade::gui::kFreqCellW;
+using cascade::gui::kFreqDigitCells;
+using cascade::gui::kFreqPlateH;
+using cascade::gui::kFreqPlatePadX;
+using cascade::gui::kFreqPlateW;
+using cascade::gui::kFreqSwitchH;
+using cascade::gui::kFreqSwitchHalfH;
+using cascade::gui::kFreqTubeH;
+using cascade::gui::kFreqTubeSwitchGap;
+using cascade::gui::switchRectForCell;
+using cascade::gui::tubeRectForCell;
 using cascade::gui::kTuneMismatchToleranceHz;
+using cascade::gui::kTuneStepsHz;
+using cascade::gui::knobStepsFromAngle;
+using cascade::gui::KnobPoint;
 using cascade::gui::presetVfoOffsetHz;
+using cascade::gui::stepDigit;
 using cascade::gui::tuneMismatchMessage;
+using cascade::gui::tuneStepLabel;
 
 namespace {
 // A minimal audio preset (no CASCADE_PRESET_DEVICE_CENTRE): frequencyHz and
@@ -256,6 +282,299 @@ int main() {
         // click, but if it were, "already shown, nobody clicked" must still
         // say no rather than retuning on every frame a window stays open.
         CHECK(autoPresetTriggersOnWindowClick(false, true) == false);
+    }
+
+    // --- kTuneStepsHz: the table itself, pinned -------------------------------
+    // The four sizes the knob's chip, its engraving, and cycleTuneStep's wrap
+    // all read from - a change here is a change to what "step 2" MEANS
+    // everywhere at once, so it is pinned rather than left to whatever the
+    // knob code happens to assume.
+    {
+        CHECK(cascade::gui::kTuneStepCount == 5);
+        CHECK(kTuneStepsHz[0] == 1.0e2);
+        CHECK(kTuneStepsHz[1] == 1.0e3);
+        CHECK(kTuneStepsHz[2] == 1.0e4);
+        CHECK(kTuneStepsHz[3] == 1.0e5);
+        CHECK(kTuneStepsHz[4] == 1.0e6);
+        // A decade ladder: every step is ten times its neighbour, so one notch
+        // moves exactly one digit of the counter.
+        for (int i = 1; i < cascade::gui::kTuneStepCount; ++i) {
+            CHECK(kTuneStepsHz[i] == 10.0 * kTuneStepsHz[i - 1]);
+        }
+        CHECK(cascade::gui::kTuneStepDefaultIndex == 2);
+        CHECK(kTuneStepsHz[cascade::gui::kTuneStepDefaultIndex] == 1.0e4);
+    }
+
+    // --- cycleTuneStep: both directions, and the wrap ------------------------
+    {
+        // RIGHT CLICK cycles UP (coarser) through 100 Hz, 1 kHz, 10 kHz,
+        // 100 kHz, 1 MHz - index increases.
+        CHECK(cycleTuneStep(0, true) == 1);
+        CHECK(cycleTuneStep(1, true) == 2);
+        CHECK(cycleTuneStep(2, true) == 3);
+        CHECK(cycleTuneStep(3, true) == 4);
+        // ...AND WRAPS: "press again" from 1 MHz always does something.
+        // RED WHEN this stays at 4 instead of wrapping to 0.
+        CHECK(cycleTuneStep(4, true) == 0);
+
+        // LEFT CLICK cycles DOWN (finer) - index decreases.
+        CHECK(cycleTuneStep(4, false) == 3);
+        CHECK(cycleTuneStep(3, false) == 2);
+        CHECK(cycleTuneStep(2, false) == 1);
+        CHECK(cycleTuneStep(1, false) == 0);
+        // ...AND WRAPS THE OTHER WAY. RED WHEN this stays at 0.
+        CHECK(cycleTuneStep(0, false) == 4);
+
+        // A full lap either direction returns to where it started.
+        int idx = 2;
+        for (int i = 0; i < 5; ++i) { idx = cycleTuneStep(idx, true); }
+        CHECK(idx == 2);
+        idx = 2;
+        for (int i = 0; i < 5; ++i) { idx = cycleTuneStep(idx, false); }
+        CHECK(idx == 2);
+    }
+
+    // --- knobStepsFromAngle: whole steps, remainder kept for the next call ---
+    {
+        // 14 degrees is short of the first 15-degree step: no step yet, and
+        // the whole 14 is carried forward as the remainder.
+        float acc = 0.0f;
+        CHECK(knobStepsFromAngle(acc, 14.0f) == 0);
+        CHECK_NEAR(acc, 14.0f, 1.0e-5f);
+        // ...and two more degrees crosses it: one step, one degree left over
+        // (14 + 2 = 16, one 15-degree step, remainder 1).
+        CHECK(knobStepsFromAngle(acc, 2.0f) == 1);
+        CHECK_NEAR(acc, 1.0f, 1.0e-5f);
+    }
+    {
+        // A single 15-degree turn the other way: exactly one step down, no
+        // remainder. RED WHEN this rounds instead of truncating (would read
+        // as 0 or -2 depending on the direction of the rounding error).
+        float acc = 0.0f;
+        CHECK(knobStepsFromAngle(acc, -15.0f) == -1);
+        CHECK_NEAR(acc, 0.0f, 1.0e-5f);
+    }
+    {
+        // A single big jump - a fast drag reported once - covers many steps
+        // at once and keeps the exact remainder for the next frame.
+        float acc = 0.0f;
+        CHECK(knobStepsFromAngle(acc, 400.0f) == 26);
+        CHECK_NEAR(acc, 10.0f, 1.0e-5f);
+    }
+    {
+        // SLOW DRAGS STILL ADD UP. A sequence of 5-degree deltas (below one
+        // step each) accumulates to the same total as one big jump would -
+        // this is the whole reason the remainder is carried rather than
+        // discarded every frame it falls short.
+        float acc = 0.0f;
+        int totalSteps = 0;
+        for (int i = 0; i < 9; ++i) { totalSteps += knobStepsFromAngle(acc, 5.0f); }
+        // 9 * 5 = 45 degrees = exactly 3 steps, no remainder.
+        CHECK(totalSteps == 3);
+        CHECK_NEAR(acc, 0.0f, 1.0e-4f);
+    }
+
+    // --- clickIsPress: drag vs. tap, at the 4 px tolerance --------------------
+    {
+        // Same point: always a press.
+        CHECK(clickIsPress(KnobPoint{100.0f, 100.0f}, KnobPoint{100.0f, 100.0f}, 4.0f));
+        // A 3-4-5 triangle scaled to a 4 px hypotenuse (2.4, 3.2): exactly AT
+        // the tolerance counts as a press - "within" is documented as
+        // inclusive. RED WHEN the comparison becomes strictly less-than.
+        CHECK(clickIsPress(KnobPoint{0.0f, 0.0f}, KnobPoint{2.4f, 3.2f}, 4.0f));
+        // The same triangle at its natural 5 px hypotenuse: a drag, not a
+        // press.
+        CHECK(!clickIsPress(KnobPoint{0.0f, 0.0f}, KnobPoint{3.0f, 4.0f}, 4.0f));
+        // Comfortably inside, and comfortably outside, on a single axis.
+        CHECK(clickIsPress(KnobPoint{50.0f, 50.0f}, KnobPoint{51.0f, 50.0f}, 4.0f));
+        CHECK(!clickIsPress(KnobPoint{50.0f, 50.0f}, KnobPoint{60.0f, 50.0f}, 4.0f));
+    }
+
+    // --- tuneStepLabel: the exact text the chip and engraving show -----------
+    {
+        CHECK(tuneStepLabel(0) == "100 Hz");
+        CHECK(tuneStepLabel(1) == "1 kHz");
+        CHECK(tuneStepLabel(2) == "10 kHz");
+        CHECK(tuneStepLabel(3) == "100 kHz");
+        CHECK(tuneStepLabel(4) == "1 MHz");
+        // Out of range falls back to the same default AppConfig sanitises to,
+        // rather than reading past kTuneStepsHz.
+        CHECK(tuneStepLabel(-1) == "10 kHz");
+        CHECK(tuneStepLabel(5) == "10 kHz");
+    }
+
+    // --- digitPlaceHz: the ten cells, most significant first ------------------
+    {
+        CHECK(kFreqDigitCells == 10);
+        CHECK(digitPlaceHz(0) == 1.0e9);   // leftmost cell: 1 GHz
+        CHECK(digitPlaceHz(1) == 1.0e8);
+        CHECK(digitPlaceHz(2) == 1.0e7);
+        CHECK(digitPlaceHz(3) == 1.0e6);
+        CHECK(digitPlaceHz(4) == 1.0e5);
+        CHECK(digitPlaceHz(5) == 1.0e4);
+        CHECK(digitPlaceHz(6) == 1.0e3);
+        CHECK(digitPlaceHz(7) == 1.0e2);
+        CHECK(digitPlaceHz(8) == 1.0e1);
+        CHECK(digitPlaceHz(9) == 1.0e0);   // rightmost cell: 1 Hz
+        // A decade ladder, most to least significant.
+        for (int i = 1; i < kFreqDigitCells; ++i) {
+            CHECK(digitPlaceHz(i) == digitPlaceHz(i - 1) / 10.0);
+        }
+    }
+
+    // --- stepDigit: one step, either way, clamped at 0 Hz ----------------------
+    {
+        // AN ORDINARY STEP, most and least significant cell alike.
+        CHECK(stepDigit(1000.0, 0, true) == 1000.0 + 1.0e9);
+        CHECK(stepDigit(1000.0, 9, true) == 1001.0);
+        CHECK(stepDigit(1000.0, 9, false) == 999.0);
+
+        // A STEP DOWN BELOW ZERO CLAMPS TO 0 - a tune may never ask the
+        // source for a negative centre. RED WHEN this goes negative instead.
+        CHECK(stepDigit(0.0, 9, false) == 0.0);
+        CHECK(stepDigit(5.0, 6, false) == 0.0);  // 5 Hz down a whole kHz place
+
+        // A STEP UP FROM 999,999,999 INTO THE 1 GHz CELL: the rightmost
+        // cell's own step still carries into the next figure - this is plain
+        // double arithmetic, not per-digit carrying, so it works the same as
+        // any other addition.
+        CHECK(stepDigit(999999999.0, 9, true) == 1000000000.0);
+
+        // A STEP UP AT THE TOP CELL has nowhere to clamp - it simply grows.
+        CHECK(stepDigit(9000000000.0, 0, true) == 10000000000.0);
+    }
+
+    // --- the plate's own pinned size -----------------------------------------
+    // Ten 28-unit tubes with nine 6-unit gaps (280 + 54) inside a bezel padded
+    // 5 a side, on a plate padded 10 a side: 364 wide - which is what fits
+    // between the counter's divider and the TUNING caption WITHOUT moving
+    // the knob (the owner: "we don't want to affect the size of the top bar -
+    // it's perfect the way we have it"). Top to bottom: 5 of padding, the
+    // 12-unit name plate strip, a 4 gap, the bezel (4 + 40 tube + 4 + 30
+    // switch + 4 = 82), a 4 gap, the 9-unit footer and 5 of padding: 121
+    // tall, inside the 160-unit bar the deck has always had. drawToolbar's
+    // static_asserts check the plate against the knob and the bar from these
+    // two numbers, so a change here shows up here first.
+    {
+        CHECK_NEAR(kFreqTubeH, 40.0f, 1.0e-4f);
+        CHECK_NEAR(kFreqBezelW, 344.0f, 1.0e-4f);
+        CHECK_NEAR(kFreqBezelH, 82.0f, 1.0e-4f);
+        CHECK_NEAR(kFreqPlateW, 364.0f, 1.0e-4f);
+        CHECK_NEAR(kFreqPlateH, 121.0f, 1.0e-4f);
+    }
+
+    // --- freqCellLeftX: one column, shared by the tube and its switch ---------
+    {
+        // Cell 0 sits one plate padding and one bezel padding in from the
+        // plate's own left edge: 10 + 5.
+        CHECK_NEAR(freqCellLeftX(0.0f, 0, 1.0f), 15.0f, 1.0e-4f);
+        // Cell 9 (the last), at scale 1: 15 + 9 * (28 + 6) = 321.
+        CHECK_NEAR(freqCellLeftX(0.0f, 9, 1.0f), 321.0f, 1.0e-4f);
+        // The whole row translates with the plate's own origin.
+        CHECK_NEAR(freqCellLeftX(100.0f, 0, 1.0f), 115.0f, 1.0e-4f);
+        // And scales with the bar - every term above times 0.8.
+        CHECK_NEAR(freqCellLeftX(0.0f, 9, 0.8f), 256.8f, 1.0e-3f);
+        // The last tube ends one bezel padding short of the bezel's right
+        // edge, which is one plate padding short of the plate's - the row
+        // and the plate agree on where the plate ends.
+        CHECK_NEAR(freqCellLeftX(0.0f, 9, 1.0f) + kFreqCellW + kFreqBezelPadX + kFreqPlatePadX,
+                   kFreqPlateW, 1.0e-4f);
+    }
+
+    // --- tubeRectForCell: the glass, in its column ---------------------------
+    {
+        // CELL 0 at scale 1: the bezel's top-left (10, 21) plus its own
+        // padding (5, 4), kFreqCellW wide and kFreqTubeH tall.
+        const FreqRect t0 = tubeRectForCell(0.0f, 0.0f, 0, 1.0f);
+        CHECK_NEAR(t0.x0, 15.0f, 1.0e-4f);
+        CHECK_NEAR(t0.y0, 25.0f, 1.0e-4f);
+        CHECK_NEAR(t0.x1 - t0.x0, kFreqCellW, 1.0e-4f);
+        CHECK_NEAR(t0.y1 - t0.y0, kFreqTubeH, 1.0e-4f);
+        // CELL 9: the same row, the last column.
+        const FreqRect t9 = tubeRectForCell(0.0f, 0.0f, 9, 1.0f);
+        CHECK_NEAR(t9.x0, 321.0f, 1.0e-4f);
+        CHECK_NEAR(t9.y0, t0.y0, 1.0e-4f);
+        // At scale 0.8 everything scales together.
+        const FreqRect s9 = tubeRectForCell(0.0f, 0.0f, 9, 0.8f);
+        CHECK_NEAR(s9.x0, 256.8f, 1.0e-3f);
+        CHECK_NEAR(s9.y0, 25.0f * 0.8f, 1.0e-3f);
+        CHECK_NEAR(s9.x1 - s9.x0, kFreqCellW * 0.8f, 1.0e-4f);
+        CHECK_NEAR(s9.y1 - s9.y0, kFreqTubeH * 0.8f, 1.0e-4f);
+        // The plate's own origin carries through unchanged (396, 20 is where
+        // drawToolbar actually puts it at scale 1).
+        const FreqRect o0 = tubeRectForCell(396.0f, 20.0f, 0, 1.0f);
+        CHECK_NEAR(o0.x0, 396.0f + 15.0f, 1.0e-4f);
+        CHECK_NEAR(o0.y0, 20.0f + 25.0f, 1.0e-4f);
+    }
+
+    // --- switchRectForCell: the layout fact behind the toggle switches --------
+    //
+    // An earlier cut of the digit keys got exactly this wrong once (a click on
+    // the visible key did nothing; a click elsewhere fired a different cell's
+    // key), because the button and the ink beside it were two separate
+    // calculations that had drifted apart. switchRectForCell is ONE
+    // calculation, called for both the InvisibleButton and the drawing that
+    // follows it, so a half's ink and its hit box cannot disagree.
+    {
+        // CELL 0, UPPER HALF, scale 1: kFreqTubeSwitchGap below the tube's own
+        // bottom edge, the full cell width, kFreqSwitchHalfH tall.
+        const FreqRect t0 = tubeRectForCell(0.0f, 0.0f, 0, 1.0f);
+        const FreqRect r0u = switchRectForCell(0.0f, 0.0f, 0, true, 1.0f);
+        CHECK_NEAR(r0u.x0, t0.x0, 1.0e-4f);  // the SAME column as its tube
+        CHECK_NEAR(r0u.x1, t0.x1, 1.0e-4f);
+        CHECK_NEAR(r0u.y0, t0.y1 + kFreqTubeSwitchGap, 1.0e-4f);
+        CHECK_NEAR(r0u.y0, 69.0f, 1.0e-4f);  // 25 + 40 + 4
+        CHECK_NEAR(r0u.y1, r0u.y0 + kFreqSwitchHalfH, 1.0e-4f);
+
+        // CELL 0, LOWER HALF: same column, directly beneath - the two tile the
+        // whole switch area with NO GAP and NO OVERLAP: the lower half's top
+        // edge is exactly the upper half's bottom edge.
+        const FreqRect r0l = switchRectForCell(0.0f, 0.0f, 0, false, 1.0f);
+        CHECK_NEAR(r0l.x0, r0u.x0, 1.0e-4f);
+        CHECK_NEAR(r0l.x1, r0u.x1, 1.0e-4f);
+        CHECK_NEAR(r0l.y0, r0u.y1, 1.0e-4f);  // RED WHEN a gap or overlap opens up
+        CHECK_NEAR(r0l.y1, r0u.y1 + kFreqSwitchHalfH, 1.0e-4f);
+        // The whole switch (both halves) is exactly kFreqSwitchH tall.
+        CHECK_NEAR(r0l.y1 - r0u.y0, kFreqSwitchH, 1.0e-4f);
+        // ...and ends one bezel padding above the bezel's own foot, which is
+        // the plate's foot less the footer and its gap and the bottom padding.
+        CHECK_NEAR(r0l.y1 + kFreqBezelPadY, kFreqBezelY + kFreqBezelH, 1.0e-4f);
+
+        // TUBE AND SWITCH SHARE ONE CENTRE LINE: the lever stands directly
+        // under the digit it steps.
+        CHECK_NEAR((r0u.x0 + r0u.x1) * 0.5f, (t0.x0 + t0.x1) * 0.5f, 1.0e-4f);
+
+        // CELL 9 (the last; "the 10 kHz cell" is cell 5 between these two):
+        // same Y as cell 0's halves (the whole row runs at one Y), but the
+        // LAST column's X, centred on ITS tube.
+        const FreqRect t9 = tubeRectForCell(0.0f, 0.0f, 9, 1.0f);
+        const FreqRect r9u = switchRectForCell(0.0f, 0.0f, 9, true, 1.0f);
+        const FreqRect r9l = switchRectForCell(0.0f, 0.0f, 9, false, 1.0f);
+        CHECK_NEAR(r9u.x0, 321.0f, 1.0e-4f);
+        CHECK_NEAR((r9u.x0 + r9u.x1) * 0.5f, (t9.x0 + t9.x1) * 0.5f, 1.0e-4f);
+        CHECK_NEAR(r9u.y0, r0u.y0, 1.0e-4f);  // same upper row
+        CHECK_NEAR(r9l.y0, r0l.y0, 1.0e-4f);  // same lower row
+        CHECK(r9u.x0 > r0u.x0);               // a different column from cell 0
+        CHECK_NEAR(r9l.y0, r9u.y1, 1.0e-4f);  // tiles here too - no gap, no overlap
+
+        // AT SCALE 0.8: every one of the above scales together - width,
+        // height and both halves' Y all move by the same factor, so a shrunk
+        // bar cannot separate a switch's ink from its own hit box either, and
+        // the halves still tile with no gap.
+        const FreqRect s0u = switchRectForCell(0.0f, 0.0f, 0, true, 0.8f);
+        const FreqRect s0l = switchRectForCell(0.0f, 0.0f, 0, false, 0.8f);
+        CHECK_NEAR(s0u.x1 - s0u.x0, kFreqCellW * 0.8f, 1.0e-4f);
+        CHECK_NEAR(s0u.y1 - s0u.y0, kFreqSwitchHalfH * 0.8f, 1.0e-4f);
+        CHECK_NEAR(s0u.y0, 69.0f * 0.8f, 1.0e-4f);
+        CHECK_NEAR(s0l.y0, s0u.y1, 1.0e-4f);  // still tiles at scale 0.8
+        CHECK_NEAR(s0l.y1 - s0u.y0, kFreqSwitchH * 0.8f, 1.0e-4f);
+
+        // THE PLATE'S OWN ORIGIN CARRIES THROUGH UNCHANGED - a switch on a
+        // plate drawn away from (0,0) sits at the plate's origin plus the same
+        // offsets measured above, never at those offsets alone.
+        const FreqRect o0u = switchRectForCell(396.0f, 20.0f, 0, true, 1.0f);
+        CHECK_NEAR(o0u.x0, 396.0f + 15.0f, 1.0e-4f);
+        CHECK_NEAR(o0u.y0, 20.0f + 69.0f, 1.0e-4f);
     }
 
     return testSummary("test_tune_control");

@@ -1168,6 +1168,13 @@ private:
     bool freqEditFocus_ = false;   // request keyboard focus on the first frame
     bool freqEditWasActive_ = false;  // field has held focus at least once
     char freqEditBuf_[32] = {0};
+    // WHICH WAY EACH DIGIT'S TOGGLE SWITCH WAS LAST FLICKED. The lever under
+    // a tube points up after a flick up and down after a flick down and
+    // stays there - it is a memory of the last direction, not a momentary
+    // spring return (the design reference's own rule). All down at start.
+    // Cosmetic only: the tuned frequency lives in the pipeline, not here.
+    bool freqLeverUp_[10] = {false, false, false, false, false,
+                             false, false, false, false, false};
 
     std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;
     bool soapyScanned_ = false;  // one lazy scan done (scanSoapy())
@@ -1703,6 +1710,53 @@ private:
     // in one frame.
     int railBank_ = 0;
     float railBankFade_ = 1.0f;
+
+    // --- THE TUNING KNOB (on the deck, beside the frequency counter) --------
+    // Moved off the SIGNAL rail and onto the top bar itself - the owner's
+    // correction on the first cut of this feature, verbatim: "the knob
+    // needs to go next to the frequency counter and it needs to be small".
+    // drawToolbar draws it at the volume dial's own size; the gesture state
+    // below is unchanged by the move.
+    //
+    // Which of gui::kTuneStepsHz the knob is on; persisted as `tuneStepIndex`.
+    int tuneStepIndex_ = 2;  // 10 kHz, the middle of the ladder
+    // Which button started the current press - decides whether a tap (not a
+    // drag) cycles the step UP (right) or DOWN (left) on release.
+    bool tuneKnobPressWasLeft_ = true;
+    // Screen position of the press, in plain floats rather than an ImVec2 for
+    // the same reason drawFrequencyReadout's parameters are: this header is
+    // deliberately free of ImGui types. Compared against the release position
+    // through gui::clickIsPress to tell a tap from a drag.
+    float tuneKnobPressX_ = 0.0f;
+    float tuneKnobPressY_ = 0.0f;
+    // The mouse's angle about the knob's centre as of the last frame of an
+    // active left-button drag - the same running reference
+    // drawBrassVolumeKnob's own static lastAngle keeps, carried on the
+    // window instead of in a local static because knobStepsFromAngle needs
+    // its OWN remainder (accumDeg below) held across frames too.
+    float tuneKnobDragAngleDeg_ = 0.0f;
+    // The fractional remainder knobStepsFromAngle carries between frames of
+    // one drag, so a slow turn still adds up to a step - reset to zero at
+    // the start of every new press.
+    float tuneKnobAccumDeg_ = 0.0f;
+    // The knob's OWN drawn angle: unlike the volume dial this control has no
+    // bounded value to point at (it is a rotary encoder, not a fader), so the
+    // pointer simply turns 15 degrees for every step actually applied -
+    // whichever of drag, wheel or the keys drove it - and wraps freely rather
+    // than clamping to a scale.
+    float tuneKnobVisualAngleDeg_ = 0.0f;
+    // Applies `steps` whole tuning steps (positive = up) at the current step
+    // size, through tuneAbsoluteHz - the same path presets and the scanner
+    // use - clamped at 0 Hz, and turns the knob's own pointer to match.
+    void applyTuneSteps(int steps);
+    // Draws the knob itself, on the top bar's own brass - the four
+    // already-mapped screen positions (caption, knob centre, step value) are
+    // handed in by drawToolbar, plain floats for the same reason
+    // drawFrequencyReadout's are; this function fetches its own draw list
+    // from the current ImGui window exactly as drawFrequencyReadout does.
+    void drawTuningKnob(float cx, float capY, float knobCy, float valueY, float radius,
+                        float capPx, float scale);
+
     // Whether ANYTHING asked the basemap for a tile this frame - the map pages
     // and, now, the scope. BasemapCache::endFrame() evicts every tile nothing
     // asked for, so it must run exactly once per frame and only AFTER every

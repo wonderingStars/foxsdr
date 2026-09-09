@@ -1591,6 +1591,40 @@ void drawFreqDrumCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char d
     dl->AddText(font, fontPx, at, bright ? kAmber : kAmberDim, txt);
 }
 
+// THE FACE EVERY BENCH ROTARY CONTROL SHARES: the drop shadow, the dark
+// disc, its off-centre highlight (what makes a flat fill read as a turned
+// surface), the brass ring skirt, and a pointer needle at `angleDeg` (0 =
+// straight up, positive = clockwise). Pulled out of drawBrassVolumeKnob so
+// the tuning knob (gui/app_window.cpp's drawTuningKnob) draws with
+// exactly the same primitives rather than a second, drifting copy of them -
+// the volume dial keeps its own tick arc and value-to-angle mapping, because
+// those are properties of a BOUNDED control this one is not.
+//
+// SEGMENT COUNTS ARE LEFT TO IMGUI rather than pinned at 32. This is drawn
+// at whatever radius the caller works out - the volume dial's bar can shrink
+// it, the tuning knob draws it twice over - and a fixed 32-gon that passes
+// for a circle at radius 14 is visibly a polygon at 60, most of all on the
+// brass ring where the facets catch the eye.
+void drawBenchKnobFace(ImDrawList* dl, const ImVec2& centre, float radius, float angleDeg) {
+    if (dl == nullptr || radius < 6.0f) { return; }
+    dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.10f), radius * 1.02f,
+                        IM_COL32(0, 0, 0, 110), 0);
+    dl->AddCircleFilled(centre, radius, IM_COL32(13, 11, 7, 255), 0);
+    dl->AddCircleFilled(ImVec2(centre.x - radius * 0.14f, centre.y - radius * 0.22f),
+                        radius * 0.80f, IM_COL32(25, 21, 16, 255), 0);
+    dl->AddCircleFilled(ImVec2(centre.x - radius * 0.22f, centre.y - radius * 0.30f),
+                        radius * 0.48f, IM_COL32(47, 42, 33, 255), 0);
+    // The brass ring, which is the whole character of this control.
+    dl->AddCircle(centre, radius - 1.0f, kBrass, 0, std::max(2.0f, radius * 0.14f));
+
+    const float a = angleDeg * 3.14159265f / 180.0f;
+    const float sx = std::sin(a);
+    const float sy = -std::cos(a);
+    dl->AddLine(ImVec2(centre.x + sx * radius * 0.18f, centre.y + sy * radius * 0.18f),
+                ImVec2(centre.x + sx * radius * 0.78f, centre.y + sy * radius * 0.78f),
+                kIvory, std::max(2.0f, radius * 0.16f));
+}
+
 float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
                           float value) {
     if (dl == nullptr || radius < 6.0f) { return -1.0f; }
@@ -1619,7 +1653,9 @@ float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
         if (wheel != 0.0f) { out = std::clamp(value + wheel * 0.05f, 0.0f, 1.0f); }
     }
 
-    // Nine ticks on the same 270-degree arc the pointer sweeps.
+    // Nine ticks on the same 270-degree arc the pointer sweeps - the volume
+    // dial's OWN decoration, because only a bounded control has a full-scale
+    // arc to mark; drawBenchKnobFace below draws none.
     for (int i = 0; i < 9; ++i) {
         const float deg = -135.0f + 270.0f * static_cast<float>(i) / 8.0f;
         const float a = deg * 3.14159265f / 180.0f;
@@ -1630,31 +1666,11 @@ float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
                     kBenchInk, 1.4f);
     }
 
-    // SEGMENT COUNTS ARE LEFT TO IMGUI rather than pinned at 32. This knob is
-    // drawn at whatever radius the bar it sits in works out to - the reference
-    // panel is half again the height this started at - and a fixed 32-gon that
-    // passes for a circle at radius 14 is visibly a polygon at 26, most of all
-    // on the brass ring where the facets catch the eye.
-    dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.10f), radius * 1.02f,
-                        IM_COL32(0, 0, 0, 110), 0);
-    dl->AddCircleFilled(centre, radius, IM_COL32(13, 11, 7, 255), 0);
-    dl->AddCircleFilled(ImVec2(centre.x - radius * 0.14f, centre.y - radius * 0.22f),
-                        radius * 0.80f, IM_COL32(25, 21, 16, 255), 0);
-    dl->AddCircleFilled(ImVec2(centre.x - radius * 0.22f, centre.y - radius * 0.30f),
-                        radius * 0.48f, IM_COL32(47, 42, 33, 255), 0);
-    // The brass ring, which is the whole character of this control.
-    dl->AddCircle(centre, radius - 1.0f, kBrass, 0, std::max(2.0f, radius * 0.14f));
-
     float f = value;
     if (!(f >= 0.0f)) { f = 0.0f; }
     if (f > 1.0f) { f = 1.0f; }
     const float deg = -135.0f + 270.0f * f;
-    const float a = deg * 3.14159265f / 180.0f;
-    const float sx = std::sin(a);
-    const float sy = -std::cos(a);
-    dl->AddLine(ImVec2(centre.x + sx * radius * 0.18f, centre.y + sy * radius * 0.18f),
-                ImVec2(centre.x + sx * radius * 0.78f, centre.y + sy * radius * 0.78f),
-                kIvory, std::max(2.0f, radius * 0.16f));
+    drawBenchKnobFace(dl, centre, radius, deg);
     return out;
 }
 

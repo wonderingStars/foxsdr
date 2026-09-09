@@ -67,6 +67,10 @@
 //     the plugins whose "mute audio while running" setting DIFFERS from the
 //     default their capabilities imply, so a duplicate would be a preference
 //     that flipped twice and an empty name a preference for nothing.
+//   - tuneStepIndex: out of [0, 4] resets to 2 (10 kHz) — the same "reset to
+//     the default" rule mapTrailStyle follows, because unlike deemphasisIndex
+//     there is no natural nearest bound to clamp to: a hand-edited 99 is not
+//     "closer to 1 MHz than to 100 Hz", it is simply not a step the knob has.
 //
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
@@ -230,6 +234,16 @@ struct AppConfig {
     //            nothing. 0 is the default: the signal path is where a new
     //            installation has to start.
     int railBank = 0;
+
+    // tuneStepIndex  which of the tuning knob's five step sizes is selected -
+    //            0..4 indexing gui::kTuneStepsHz (100 Hz, 1 kHz, 10 kHz,
+    //            100 kHz, 1 MHz), the same table the knob's engraving reads,
+    //            so a press or a scroll always lands on the value shown.
+    //            Default 2 = 10 kHz. SANITISED ON LOAD: a hand-edited value
+    //            outside 0..4 cannot select a step the knob has, so it resets
+    //            to the default rather than reaching the draw loop as a bogus
+    //            index.
+    int tuneStepIndex = 2;
 
     // --- Map window geometry --------------------------------------------------
     // The map is its own operating system window, and ImGui's own .ini

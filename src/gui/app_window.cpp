@@ -258,9 +258,10 @@ constexpr double kConfigDebounceS = 2.0;
 constexpr ImU32 kTickGridColor = IM_COL32(255, 255, 255, 18);
 constexpr ImU32 kWfMarkerColor = IM_COL32(255, 170, 60, 200);
 
-// The frequency readout's 10 digit places, most significant first
-// (digit i steps by kPlaceHz[i] on a wheel tick over it).
-constexpr double kPlaceHz[10] = {1e9, 1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e0};
+// The frequency readout's 10 digit places, most significant first (digit i
+// steps by cascade::gui::digitPlaceHz(i) on a wheel tick over its tube, or a
+// flick of the 0.88.0 toggle switch beneath it — gui/tune_control.hpp, so the
+// wheel and the switches share one table rather than each carrying a copy).
 
 // Largest value the fixed 10-digit field can show; the display clamps here
 // (a device readback cannot exceed it in practice — 9.99 GHz).
@@ -283,7 +284,7 @@ constexpr double kMaxDisplayHz = 9999999999.0;
 // beside those constants, so neither can drift away from the other.
 // Both numbers are the CLIENT area, which is what glfwSetWindowSizeLimits
 // takes - GLFW adds the frame itself.
-constexpr int kMinWindowW = 600;  // 560 until 0.84.1: the dial moved right with the counter
+constexpr int kMinWindowW = 694;  // 560 until 0.84.1, 600 before the tuning knob moved the dial 70 units right again, 670 before 0.88.0 shifted the knob/volume/coreW cluster 24 for the keys beneath the counter (the tuner plate that followed was sized to fit that deck, not given more of it)
 // A minimum height is not needed by the bar and is given anyway: GLFW's Win32
 // backend applies its minimum only when BOTH dimensions are set, so a width
 // limit on its own is no limit at all. This is the height at which the bar and
@@ -419,6 +420,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // than the one it opened with - would survive a restart only if
            // something else happened to trigger a save.
            a.scopeMode == b.scopeMode && a.scopeRangeNm == b.scopeRangeNm &&
+           // The tuning knob's step: without it here, cycling it (a click,
+           // not a value edit widget) would reach the file only when
+           // something else happened to change in the same session.
+           a.tuneStepIndex == b.tuneStepIndex &&
            // Map page geometry takes part, which is what makes a resize save
            // at all. The debounce restarts on every change, so a drag writes
            // once when it stops rather than once per frame while it is
@@ -3170,8 +3175,46 @@ namespace {
 // the value it reads at 126, all three in one column. ImGui's cursor flow can
 // express a row of widgets and nothing else, and a row of widgets is exactly
 // what the old bar looked like.
-constexpr float kBarH = 160.0f;   // the bar's height, in reference units
-constexpr float kCoreW = 864.0f;  // transport button through volume dial (800 until 0.84.1)
+// 0.88.0: THE COUNTER IS A TUNER PLATE BOLTED ONTO THE FRONT OF THE DECK.
+// The owner handed over a design reference (a 1950s-60s military frequency
+// tuner - olive-drab riveted plate, engraved name plate, Nixie tubes in a
+// black bezel, a chrome toggle switch under every tube) and asked for it
+// "bolted on to the front" of the deck; every measurement of the plate
+// itself lives in gui/tune_control.hpp (kFreqPlateW/H and the rest), where
+// a test can pin it.
+//
+// THE BAR DID NOT GROW FOR IT. The first cut let the bar grow 69 units to
+// hold a 207-tall plate; the owner's words on that, both binding: it
+// "need[s] to be smaller", and "we don't want to affect the size of the top
+// bar - it's perfect the way we have it". So the bar is the 160 units it
+// has been since the reference, and the plate was compacted to stand inside
+// it (gui/tune_control.hpp says what was shrunk). It sits kPlateTopY below
+// the bar's top edge - centred on the same line the old drum well and its
+// caption were (42 to 118) - and the static_assert holds it off the bar's
+// foot rail, so a plate that grows again stops compiling rather than
+// quietly pushing the bar taller.
+constexpr float kBarH = 160.0f;  // the bar's height, in reference units
+constexpr float kPlateTopY = 20.0f;
+constexpr float kPlateFootMarginY = 10.0f;
+static_assert(kPlateTopY + cascade::gui::kFreqPlateH + kPlateFootMarginY <= kBarH,
+              "the tuner plate must stand inside the 160-unit bar - the bar does not grow "
+              "for it (the owner: it's perfect the way we have it)");
+
+// 0.88.0: THE OWNER'S OWN WORDS, on the digit keys that used to live here -
+// "keep the dial for now but move the volume and the frequency dial along a
+// little bit". The counter's well grew taller to hold those keys for one
+// cut, and the knob, the volume dial and kCoreW kept the 24 units that move
+// opened up - the same "move the fixed cluster, do not squeeze it" rule
+// 0.84.1 used to clear the four master lamps. THE TUNER PLATE DID NOT MOVE
+// THEM AGAIN: the first cut of the plate shifted the whole cluster a further
+// 64 right for a 408-wide plate, and the owner's answer was that the bar is
+// perfect as it is. The plate is now sized to the room between the
+// counter's divider and the knob's rim (kFreqPlateW, checked against the
+// knob below), and the knobs stand where they stood before it.
+constexpr float kFreqWellWBeforePlate = 344.0f;  // the drum well's width, for the record
+constexpr float kDialShiftV088 = 24.0f;
+
+constexpr float kCoreW = 934.0f + kDialShiftV088;  // transport button through volume dial (800 until 0.84.1, then 864 before the tuning knob moved onto the deck, +24 in 0.88.0 for the keys beneath the counter)
 // Where the MASTER compartment ends and the counter's begins. 272 in the
 // reference; 320 in 0.84.0 so the four lamps stand in one row under Georgia,
 // 384 in 0.84.1 ("move the counter and the volume dial over, it looks a
@@ -3183,10 +3226,23 @@ constexpr float kCoreW = 864.0f;  // transport button through volume dial (800 u
 // 16 px, so it still ends short of the divider at 684.
 constexpr float kMasterDividerX = 384.0f;
 
+// THE TUNING KNOB'S FOOTPRINT. The owner's correction on the first
+// cut of this feature, verbatim: "no the knob needs to go next to the
+// frequency counter and it needs to be small" - not a rail section, ON THE
+// DECK, at the volume dial's own size. It stands in the brass after the
+// counter's well, so the second divider, the volume dial and kCoreW all move
+// right by this one number together - the same "move the fixed cluster, do
+// not squeeze it" rule 0.84.1 used to clear the four master lamps. The
+// counter and ITS OWN divider (kMasterDividerX) do not move; only the empty
+// deck after the well is spent.
+constexpr float kTuneKnobFootprint = 70.0f;  // diameter (2*kVolumeR) plus the clear brass either side
+
 // THE VOLUME DIAL'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the
 // bar's scale floor is a promise about this one control and a promise checked
 // against a number typed somewhere else is not checked at all.
-constexpr float kVolumeCx = 809.0f;  // the dial's centre, in reference units (745 until 0.84.1)
+constexpr float kVolumeCx =
+    809.0f + kTuneKnobFootprint +
+    kDialShiftV088;  // the dial's centre, in reference units (745 until 0.84.1, then 809 before the tuning knob moved in beside it, +24 in 0.88.0 for the keys beneath the counter)
 constexpr float kVolumeR = 26.0f;    // ...and its radius
 constexpr float kVolumeEdgePad = 6.0f;
 
@@ -3207,33 +3263,65 @@ static_assert((kVolumeCx + kVolumeR + kVolumeEdgePad) * kBarMinScale <=
 
 // THE COUNTER, CELL BY CELL, AND SHARED WITH drawFrequencyReadout. The bar
 // sizes its middle section from the same numbers the readout draws with,
-// because two copies of this arithmetic is how a well and the digits inside it
-// come to disagree about where they are.
-constexpr int kFreqCells = 10;
-constexpr float kFreqCellW = 28.0f;
-constexpr float kFreqCellH = 44.0f;
-constexpr float kFreqGap = 3.0f;        // between apertures
-constexpr float kFreqGroupGap = 10.0f;  // ...and at a thousands break
-constexpr float kFreqWellPadX = 8.0f;
-constexpr float kFreqWellPadY = 6.0f;
+// because two copies of this arithmetic is how a plate and the tubes inside
+// it come to disagree about where they are.
+//
+// kFreqCellW, kFreqTubeH, the gaps, the paddings, freqCellLeftX,
+// tubeRectForCell, switchRectForCell and kFreqPlateW/H all live in
+// gui/tune_control.hpp - that header has no ImGui dependency, so it is the
+// only place a live click test's own arithmetic can be pinned in a test
+// without an open frame. Only the constants this file still reads directly
+// are pulled in by name below. kFreqCells keeps its short local name rather
+// than every call site below spelling out kFreqDigitCells.
+constexpr int kFreqCells = cascade::gui::kFreqDigitCells;
+using cascade::gui::kFreqCellW;
+using cascade::gui::kFreqPlateH;
+using cascade::gui::kFreqPlateW;
+using cascade::gui::kFreqTubeH;
 
-// A wider gap BEFORE these cells: after the first digit, and after the fourth
-// and the seventh, which is where a mechanical counter's thousands breaks
-// fall. The reference calls out the break after the seventh; the other two are
-// the same rule carried up the scale, and dropping them would make ten
-// undifferentiated digits harder to read rather than easier.
-constexpr bool freqGroupBreak(int i) { return i == 1 || i == 4 || i == 7; }
+// Where the drum well drawFrequencyReadout USED to be asked to draw at
+// (X(kMasterDividerX + 12.0f) in drawToolbar) ended - the frame the tuning
+// knob's centring below is measured in (see kTuneKnobCx), so the knob stays
+// exactly where the well's own cut put it. kFreqPlateRightX is where the
+// plate actually ends today - 20 units further than the well did, into the
+// clear brass the well left before the knob, stopping a few units short of
+// the TUNING caption's first letter - and the static_assert beside the knob
+// checks the knob's rim still clears it.
+constexpr float kFreqWellRightX = kMasterDividerX + 12.0f + kFreqWellWBeforePlate;
+constexpr float kFreqPlateRightX = kMasterDividerX + 12.0f + kFreqPlateW;
 
-constexpr float freqRowWidth() {
-    float w = 0.0f;
-    for (int i = 0; i < kFreqCells; ++i) {
-        if (i > 0) { w += freqGroupBreak(i) ? kFreqGroupGap : kFreqGap; }
-        w += kFreqCellW;
-    }
-    return w;
-}
-constexpr float kFreqWellW = freqRowWidth() + kFreqWellPadX * 2.0f;
-constexpr float kFreqWellH = kFreqCellH + kFreqWellPadY * 2.0f;
+// --- THE TUNING KNOB'S OWN GEOMETRY, THE SAME WAY THE VOLUME DIAL'S IS ------
+// Same radius as the volume dial - the owner's rule, literally ("the same
+// size") - and the second divider, moved kTuneKnobFootprint right of where it
+// used to sit directly after the well.
+constexpr float kTuneKnobR = kVolumeR;
+// Where the divider sat BEFORE 0.88.0's shift - kept as its own name only so
+// the knob's own centring below still measures "the room between the well
+// and the divider" the way it always has, rather than kDialShiftV088
+// quietly entering that arithmetic twice (once in the divider, again halved
+// into the midpoint).
+constexpr float kTuneKnobDividerBaseX =
+    748.0f + kTuneKnobFootprint;  // the second divider, moved off 748 for the knob
+constexpr float kTuneKnobDividerX =
+    kTuneKnobDividerBaseX + kDialShiftV088;  // +24 in 0.88.0 for the keys beneath the counter
+// Centred in the room the divider's move opened up, not offset a fixed
+// distance from the well - so a change to the divider's own position keeps
+// the knob centred rather than silently drifting toward one side - and then
+// carried the same 24 units right as the rest of the cluster, so the knob
+// and the volume dial keep their spacing. The midpoint is measured in the
+// pre-shift frame (the old well's right edge and the base divider) and
+// shifted once, which is why kFreqWellRightX still exists.
+constexpr float kTuneKnobCx =
+    (kFreqWellRightX + kTuneKnobDividerBaseX) * 0.5f + kDialShiftV088;
+// THE PLATE IS SIZED TO THE KNOB, NOT THE KNOB TO THE PLATE: the plate may
+// spend the clear brass the well left before the knob's rim, and no more.
+// This stops compiling if a plate change ever puts the knob's rim on the
+// plate or the divider - the fix is a narrower plate, never a moved knob.
+static_assert(kTuneKnobCx - kTuneKnobR >= kFreqPlateRightX + 8.0f,
+              "the tuning knob must clear the tuner plate's right edge - narrow the plate, "
+              "do not move the knob (the owner: the top bar is perfect the way we have it)");
+static_assert(kTuneKnobCx + kTuneKnobR <= kTuneKnobDividerX - 8.0f,
+              "the tuning knob must clear its own divider");
 
 // LETTER-SPACING, WHICH DEAR IMGUI HAS NOT, and which is most of what
 // separates an engraved legend from a word in a label. ASCII only and
@@ -3481,12 +3569,18 @@ void AppWindow::drawToolbar() {
     }
 
     // --- the counter --------------------------------------------------------
-    // A groove between the master cluster and the tuned figure, then the
-    // engraved caption over the well the digits are recessed into.
+    // A groove between the master cluster and the tuner plate. The plate
+    // carries its own engraved "TUNED - HERTZ" name plate, so the deck no
+    // longer cuts that caption into the brass above it. The dividers run the
+    // reference's own 30 to 135: the plate stands a few units proud of them
+    // at either end, the way a plate bolted over a panel's grooves would.
     cascade::gui::addBenchDivider(dl, X(kMasterDividerX), Y(30.0f), Y(135.0f));
-    barEngrave(dl, ImVec2(X(kMasterDividerX + 24.0f), Y(42.0f)), capPx, "TUNED - HERTZ", false);
-    drawFrequencyReadout(X(kMasterDividerX + 12.0f), Y(62.0f), scale);
-    cascade::gui::addBenchDivider(dl, X(748.0f), Y(30.0f), Y(135.0f));
+    drawFrequencyReadout(X(kMasterDividerX + 12.0f), Y(kPlateTopY), scale);
+    // THE TUNING KNOB, ON THE SAME BRASS AS THE COUNTER IT STEPS - see
+    // kTuneKnobFootprint's own comment for why the second divider now sits
+    // that much further right than it used to.
+    drawTuningKnob(X(kTuneKnobCx), Y(42.0f), Y(82.0f), Y(118.0f), S(kTuneKnobR), capPx, scale);
+    cascade::gui::addBenchDivider(dl, X(kTuneKnobDividerX), Y(30.0f), Y(135.0f));
     // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
     // perfectly good control and completely wrong on a bench receiver; this
     // one turns, carries its own tick arc, and answers the wheel as well as
@@ -3615,18 +3709,590 @@ void AppWindow::drawToolbar() {
     ImGui::PopStyleColor();
 }
 
-void AppWindow::drawFrequencyReadout(float wellX, float wellY, float scale) {
-    // Fixed 10-digit field grouped in thousands ("0.100.000.000" at 100 MHz).
-    // The field width is constant so digits never shift as the tuned
-    // frequency changes; the zeros (and separators) ahead of the first
-    // significant digit are dimmed so the eye reads only the live value.
+// --- THE TUNER PLATE ---------------------------------------------------------
+//
+// 0.88.0: THE COUNTER IS A PLATE BOLTED ONTO THE FRONT OF THE DECK. The owner
+// handed over a design reference - a 1950s-60s military frequency tuner: an
+// olive-drab plate with four rivets, an engraved name plate reading
+// "TUNED - HERTZ" between two screws, a status cluster (RCVR lamp and a MHz
+// readout) at the right, a black bezel holding ten Nixie tubes with a chrome
+// toggle switch under each, and a footer line - and asked for it "bolted on
+// to the front" of the deck, reproduced as faithfully as draw-list
+// primitives allow. Every colour below is the reference's own token; the
+// gradients it draws with CSS are stacked here as concentric discs, ellipses
+// and banded rectangles, and its text-shadow glows as offset translucent
+// copies of the glyph, because ImDrawList has no blur and no radial fill.
+//
+// THE GEOMETRY IS NOT HERE. Where the plate, the bezel, each tube and each
+// switch half sit is cascade::gui::tubeRectForCell / switchRectForCell
+// (gui/tune_control.hpp), pinned in a test without an open frame; these
+// functions are handed rectangles and paint inside them.
+//
+// TWO FACES STAND IN FOR THE REFERENCE'S TWO. It names Oswald for its labels
+// and Nixie One for its figures; no new typeface is added for one plate, so
+// the engraved caption face (fonts::legend, Georgia Bold) letters the name
+// plate, the UI face (fonts::ui) the small labels and stencils, and the
+// counter's own monospaced digit face (fonts::reading, Nova Mono) the tubes
+// and the readout - the same face the drum counter this plate replaces used,
+// so a digit still cannot dance sideways as it changes.
+namespace {
+
+// The reference's hex tokens, as ImGui colours.
+constexpr ImU32 hexCol(unsigned rgb, unsigned a = 255u) {
+    return IM_COL32((rgb >> 16) & 0xFFu, (rgb >> 8) & 0xFFu, rgb & 0xFFu, a);
+}
+ImU32 lerpCol(ImU32 a, ImU32 b, float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    const auto ch = [&](int shift) {
+        const float x = static_cast<float>((a >> shift) & 0xFFu);
+        const float y = static_cast<float>((b >> shift) & 0xFFu);
+        return static_cast<ImU32>(x + (y - x) * t + 0.5f) & 0xFFu;
+    };
+    return (ch(IM_COL32_R_SHIFT) << IM_COL32_R_SHIFT) | (ch(IM_COL32_G_SHIFT) << IM_COL32_G_SHIFT) |
+           (ch(IM_COL32_B_SHIFT) << IM_COL32_B_SHIFT) | (ch(IM_COL32_A_SHIFT) << IM_COL32_A_SHIFT);
+}
+
+// A CSS gradient's colour at position t in [0, 1], from its stops.
+struct GradStop {
+    float t;
+    ImU32 c;
+};
+ImU32 gradAt(const GradStop* st, int n, float t) {
+    if (n <= 0) { return 0u; }
+    if (t <= st[0].t) { return st[0].c; }
+    for (int i = 1; i < n; ++i) {
+        if (t <= st[i].t) {
+            const float span = st[i].t - st[i - 1].t;
+            return lerpCol(st[i - 1].c, st[i].c, span > 0.0f ? (t - st[i - 1].t) / span : 1.0f);
+        }
+    }
+    return st[n - 1].c;
+}
+
+// A RADIAL GRADIENT AS CONCENTRIC DISCS. CSS's "radial-gradient(circle at
+// 40% 35%, ...)" lights a disc from a point above and left of its centre;
+// here the outermost disc is the whole circle in the gradient's rim colour
+// and each smaller disc slides toward the light spot as it shrinks, so the
+// highlight ends up where the reference puts it and every disc stays inside
+// the circle. rimT is how far along the gradient the rim is drawn - CSS
+// measures its stops to the farthest corner of the box, so a disc's own edge
+// sits partway down the ramp, not at its end.
+void radialDisc(ImDrawList* dl, const ImVec2& centre, float r, const ImVec2& spotFrac,
+                const GradStop* st, int n, float rimT, int rings = 12) {
+    if (dl == nullptr || r < 0.5f) { return; }
+    const ImVec2 spot(centre.x + spotFrac.x * r, centre.y + spotFrac.y * r);
+    for (int k = rings; k >= 1; --k) {
+        const float t = static_cast<float>(k) / static_cast<float>(rings);
+        const ImVec2 c(centre.x + (spot.x - centre.x) * (1.0f - t),
+                       centre.y + (spot.y - centre.y) * (1.0f - t));
+        dl->AddCircleFilled(c, r * t, gradAt(st, n, t * rimT), 0);
+    }
+}
+
+// Letter-spaced text that understands UTF-8, for the footer's middle dots -
+// barTrackedWidth/barEngrave above are ASCII by design and the footer is the
+// one legend on the deck that is not. Returns the width drawn (or measured,
+// when dl is null).
+float plateTrackedText(ImDrawList* dl, ImFont* f, float px, const ImVec2& at, ImU32 col,
+                       const char* text, float track) {
+    if (f == nullptr || text == nullptr) { return 0.0f; }
+    float x = at.x;
+    bool any = false;
+    for (const char* p = text; *p != '\0';) {
+        unsigned int cp = 0;
+        const int bytes = std::max(1, ImTextCharFromUtf8(&cp, p, nullptr));
+        const float adv = f->CalcTextSizeA(px, FLT_MAX, 0.0f, p, p + bytes).x;
+        if (dl != nullptr) { dl->AddText(f, px, ImVec2(x, at.y), col, p, p + bytes); }
+        x += adv + track;
+        p += bytes;
+        any = true;
+    }
+    return any ? x - at.x - track : 0.0f;
+}
+
+// The tube's outline: rounded 14 at the top corners and 6 at the bottom in
+// the reference, which ImGui's one-radius rounded rect cannot draw, so the
+// glass is walked as a path. Leaves the path open for PathFillConvex or
+// PathStroke.
+void tubePath(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float rTop, float rBot) {
+    constexpr float kPi = 3.14159265f;
+    dl->PathArcTo(ImVec2(tl.x + rTop, tl.y + rTop), rTop, kPi, kPi * 1.5f);
+    dl->PathArcTo(ImVec2(br.x - rTop, tl.y + rTop), rTop, kPi * 1.5f, kPi * 2.0f);
+    dl->PathArcTo(ImVec2(br.x - rBot, br.y - rBot), rBot, 0.0f, kPi * 0.5f);
+    dl->PathArcTo(ImVec2(tl.x + rBot, br.y - rBot), rBot, kPi * 0.5f, kPi);
+}
+
+// --- the plate itself ------------------------------------------------------
+// The olive body, its edge, the inset lip and shadow, the drop shadow that
+// lifts it off the brass, and the four rivets. tl/br is the plate's own
+// rectangle in screen pixels, s the bar's scale.
+void drawTunerPlateBody(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float s) {
+    // Every token here is the reference's, brought down with the plate: its
+    // 6-unit corner is 4, its 3-unit edge 2, its 18/40 drop shadow four
+    // 2-unit steps - a plate 121 tall carrying the shadow of a 330-tall one
+    // would read as floating, not bolted.
+    const float r = 4.0f * s;
+    const float edge = 2.0f * s;
+    // DROP SHADOW ("0 18px 40px rgba(0,0,0,.6)"): a bolted-on plate stands
+    // proud of the deck, and the shadow beneath it is what says so. Four
+    // grown, translucent rounded rects offset downward stand in for the blur.
+    for (int i = 4; i >= 1; --i) {
+        const float grow = static_cast<float>(i) * 2.0f * s;
+        const float drop = static_cast<float>(i) * 1.5f * s;
+        dl->AddRectFilled(ImVec2(tl.x - grow, tl.y - grow + drop),
+                          ImVec2(br.x + grow, br.y + grow + drop), IM_COL32(0, 0, 0, 34),
+                          r + grow);
+    }
+    // THE EDGE ("0 0 0 3px #22251a"), then the body in the mid tone with the
+    // rounded corners, then the two gradient halves laid over it square -
+    // AddRectFilledMultiColor has no rounding, so the gradient stops short
+    // of the corner radius and the corners keep the mid tone, which at four
+    // units is not a thing an eye can find.
+    dl->AddRectFilled(ImVec2(tl.x - edge, tl.y - edge), ImVec2(br.x + edge, br.y + edge),
+                      hexCol(0x22251a), r + edge);
+    dl->AddRectFilled(tl, br, hexCol(0x4b4f39), r);
+    const float midY = (tl.y + br.y) * 0.5f;
+    dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, midY), hexCol(0x5d6247),
+                                hexCol(0x5d6247), hexCol(0x4b4f39), hexCol(0x4b4f39));
+    dl->AddRectFilledMultiColor(ImVec2(tl.x, tl.y + r), ImVec2(tl.x + r, midY),
+                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
+                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
+                                hexCol(0x4b4f39), hexCol(0x4b4f39));
+    dl->AddRectFilledMultiColor(ImVec2(br.x - r, tl.y + r), ImVec2(br.x, midY),
+                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
+                                lerpCol(hexCol(0x5d6247), hexCol(0x4b4f39), r / (midY - tl.y)),
+                                hexCol(0x4b4f39), hexCol(0x4b4f39));
+    dl->AddRectFilledMultiColor(ImVec2(tl.x + r, midY), ImVec2(br.x - r, br.y), hexCol(0x4b4f39),
+                                hexCol(0x4b4f39), hexCol(0x3e422f), hexCol(0x3e422f));
+    dl->AddRectFilledMultiColor(ImVec2(tl.x, midY), ImVec2(tl.x + r, br.y - r), hexCol(0x4b4f39),
+                                hexCol(0x4b4f39),
+                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)),
+                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)));
+    dl->AddRectFilledMultiColor(ImVec2(br.x - r, midY), ImVec2(br.x, br.y - r), hexCol(0x4b4f39),
+                                hexCol(0x4b4f39),
+                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)),
+                                lerpCol(hexCol(0x4b4f39), hexCol(0x3e422f), 1.0f - r / (br.y - midY)));
+    // THE INSET LIP ("0 2px 0 #6f745a inset") along the top and the inset
+    // shadow ("0 -2px 0 #262a1c inset") along the bottom: the two hairlines
+    // that make a flat fill read as a plate with a thickness.
+    const float lip = std::max(1.0f, 1.5f * s);
+    dl->AddRectFilled(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, tl.y + lip), hexCol(0x6f745a));
+    dl->AddRectFilled(ImVec2(tl.x + r, br.y - lip), ImVec2(br.x - r, br.y), hexCol(0x262a1c));
+
+    // THE FOUR RIVETS, radial "#a9ad93, #5a5d47 60%, #2b2d20" lit from 35%/30%,
+    // each with its one-pixel shadow beneath.
+    const GradStop rivet[3] = {{0.0f, hexCol(0xa9ad93)}, {0.6f, hexCol(0x5a5d47)},
+                               {1.0f, hexCol(0x2b2d20)}};
+    const float inset = cascade::gui::kFreqPlateRivetInset * s;
+    const float rr = cascade::gui::kFreqPlateRivetR * s;
+    const ImVec2 at[4] = {ImVec2(tl.x + inset, tl.y + inset), ImVec2(br.x - inset, tl.y + inset),
+                          ImVec2(tl.x + inset, br.y - inset), ImVec2(br.x - inset, br.y - inset)};
+    for (const ImVec2& c : at) {
+        dl->AddCircleFilled(ImVec2(c.x, c.y + 1.0f * s), rr + 0.5f * s, IM_COL32(0, 0, 0, 150), 0);
+        radialDisc(dl, c, rr, ImVec2(-0.3f, -0.4f), rivet, 3, 0.85f, 8);
+    }
+}
+
+// --- the engraved name plate -------------------------------------------------
+// The brass-cream strip at the head of the plate: two screw dots and
+// "TUNED - HERTZ" cut into it. Returns the strip's right edge so the status
+// cluster can be checked against it.
+float drawTunerNamePlate(ImDrawList* dl, const ImVec2& plateTL, float s) {
+    ImFont* f = cascade::gui::fonts::legend();
+    // Nine, the smallest lettering this deck allows - the strip is 12 units
+    // tall and the title has to sit inside it with a lip either side.
+    const float px = std::max(9.0f, 9.0f * s);
+    const float track = px * 0.24f;
+    const char* title = "TUNED - HERTZ";
+    const float textW = plateTrackedText(nullptr, f, px, ImVec2(0.0f, 0.0f), 0u, title, track);
+    const float pad = 5.0f * s;
+    const float dot = 3.0f * s;
+    const float gap = 5.0f * s;
+    const float w = pad + dot + gap + textW + gap + dot + pad;
+    const float h = cascade::gui::kFreqPlateHeaderH * s;
+    const ImVec2 tl(plateTL.x + cascade::gui::kFreqPlatePadX * s,
+                    plateTL.y + cascade::gui::kFreqPlatePadTop * s);
+    const ImVec2 br(tl.x + w, tl.y + h);
+    // Its drop shadow ("0 2px 3px rgba(0,0,0,.5)"), then the strip's own
+    // gradient (#c9c3ab to #a9a38b), then the lit top lip (#e6e0c8) and the
+    // dark bottom lip (#7d785f) that give it an edge.
+    dl->AddRectFilled(ImVec2(tl.x - 1.0f * s, tl.y + 1.0f * s), ImVec2(br.x + 1.0f * s, br.y + 3.0f * s),
+                      IM_COL32(0, 0, 0, 70), 2.0f * s);
+    dl->AddRectFilled(ImVec2(tl.x, tl.y + 1.0f * s), ImVec2(br.x, br.y + 2.0f * s), IM_COL32(0, 0, 0, 90),
+                      2.0f * s);
+    dl->AddRectFilledMultiColor(tl, br, hexCol(0xc9c3ab), hexCol(0xc9c3ab), hexCol(0xa9a38b),
+                                hexCol(0xa9a38b));
+    dl->AddLine(ImVec2(tl.x, tl.y + 0.5f), ImVec2(br.x, tl.y + 0.5f), hexCol(0xe6e0c8), 1.0f);
+    dl->AddLine(ImVec2(tl.x, br.y - 0.5f), ImVec2(br.x, br.y - 0.5f), hexCol(0x7d785f), 1.0f);
+    // The two screw dots (#4a4634, lit beneath with #ddd8c0).
+    const float cy = (tl.y + br.y) * 0.5f;
+    const float dr = dot * 0.5f;
+    for (const float cx : {tl.x + pad + dr, br.x - pad - dr}) {
+        dl->AddCircleFilled(ImVec2(cx, cy + 1.0f), dr, hexCol(0xddd8c0), 0);
+        dl->AddCircleFilled(ImVec2(cx, cy), dr, hexCol(0x4a4634), 0);
+    }
+    // The engraving: ink #2b2a20 over a light shadow one pixel down
+    // (text-shadow 0 1px 0 rgba(255,255,255,.35)) - the cut and the lit lip
+    // of the cut, the same treatment barEngrave gives the deck's captions.
+    const float textH = f->CalcTextSizeA(px, FLT_MAX, 0.0f, "T").y;
+    const ImVec2 textAt(tl.x + pad + dot + gap, cy - textH * 0.5f);
+    plateTrackedText(dl, f, px, ImVec2(textAt.x, textAt.y + 1.0f), IM_COL32(255, 255, 255, 90), title,
+                     track);
+    plateTrackedText(dl, f, px, textAt, hexCol(0x2b2a20), title, track);
+    return br.x;
+}
+
+// --- the status cluster ------------------------------------------------------
+// RCVR, its power lamp, the MHz label and the readout, right-aligned in the
+// header row and laid out from the right so the readout's last figure sits
+// at the plate's inner edge whatever the labels measure. lit is the receiver
+// running; mhz is the tuned frequency in MHz to four decimals.
+void drawTunerStatusCluster(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateBR, float s,
+                            bool lit, const char* mhz) {
+    ImFont* lf = cascade::gui::fonts::ui();
+    ImFont* rf = cascade::gui::fonts::reading();
+    // Labels at nine, the readout at eleven: the reference's 11/15 brought
+    // down to a 12-unit header row, with the readout still the larger of the
+    // two so the figure reads before its unit.
+    const float lpx = std::max(9.0f, 9.0f * s);
+    const float rpx = std::max(11.0f, 11.0f * s);
+    const float ltrack = lpx * 0.2f;
+    const float rtrack = rpx * 0.06f;
+    const float gap = 5.0f * s;
+    const float cy = plateTL.y + (cascade::gui::kFreqPlatePadTop + cascade::gui::kFreqPlateHeaderH * 0.5f) * s;
+    float x = plateBR.x - cascade::gui::kFreqPlatePadX * s;
+
+    // The readout (#e8c98a).
+    const float readW = plateTrackedText(nullptr, rf, rpx, ImVec2(0.0f, 0.0f), 0u, mhz, rtrack);
+    const float readH = rf->CalcTextSizeA(rpx, FLT_MAX, 0.0f, "0").y;
+    x -= readW;
+    plateTrackedText(dl, rf, rpx, ImVec2(x, cy - readH * 0.5f), hexCol(0xe8c98a), mhz, rtrack);
+    x -= gap;
+
+    // "MHz" (#c9c9b0).
+    const float labelH = lf->CalcTextSizeA(lpx, FLT_MAX, 0.0f, "M").y;
+    const float mhzW = plateTrackedText(nullptr, lf, lpx, ImVec2(0.0f, 0.0f), 0u, "MHz", ltrack);
+    x -= mhzW;
+    plateTrackedText(dl, lf, lpx, ImVec2(x, cy - labelH * 0.5f), hexCol(0xc9c9b0), "MHz", ltrack);
+    x -= gap;
+
+    // THE POWER LAMP: 14 units in the reference, radial "#ffb04a, #c4451a
+    // 60%, #5a1a08" lit from 40%/35%, in a dark ring (#2a2c20) inside a
+    // brass-green one (#6a6e55), with a 10-unit amber glow when it is on.
+    // Off, it keeps the same rings and the lens goes down to its own dark
+    // end, so a cold panel still reads as a lamp and not as a hole. A
+    // 3.5-unit lens with its two rings is 11 across, inside the 12-unit
+    // header row.
+    const float lr = 3.5f * s;
+    const float ringDark = std::max(1.0f, 1.2f * s);
+    const float ringLite = std::max(1.0f, 1.0f * s);
+    x -= lr;
+    const ImVec2 lc(x - lr - ringDark - ringLite, cy);
+    if (lit) {
+        for (int i = 4; i >= 1; --i) {
+            dl->AddCircleFilled(lc, lr + ringDark + ringLite + static_cast<float>(i) * 1.5f * s,
+                                IM_COL32(255, 120, 40, 22), 0);
+        }
+    }
+    dl->AddCircleFilled(lc, lr + ringDark + ringLite, hexCol(0x6a6e55), 0);
+    dl->AddCircleFilled(lc, lr + ringDark, hexCol(0x2a2c20), 0);
+    const GradStop lampOn[3] = {{0.0f, hexCol(0xffb04a)}, {0.6f, hexCol(0xc4451a)},
+                                {1.0f, hexCol(0x5a1a08)}};
+    const GradStop lampOff[3] = {{0.0f, hexCol(0x7a3a1a)}, {0.6f, hexCol(0x3a1208)},
+                                 {1.0f, hexCol(0x1a0804)}};
+    radialDisc(dl, lc, lr, ImVec2(-0.2f, -0.3f), lit ? lampOn : lampOff, 3, 0.9f, 10);
+    x = lc.x - lr - ringDark - ringLite - gap;
+
+    // "RCVR".
+    const float rcvrW = plateTrackedText(nullptr, lf, lpx, ImVec2(0.0f, 0.0f), 0u, "RCVR", ltrack);
+    x -= rcvrW;
+    plateTrackedText(dl, lf, lpx, ImVec2(x, cy - labelH * 0.5f), hexCol(0xc9c9b0), "RCVR", ltrack);
+}
+
+// --- the bezel ----------------------------------------------------------------
+// The black window the tubes sit in: "#0b0b09" with a dark ring (#2a2c20)
+// and a brass-green ring (#6a6e55) outside it, radius 4 in the reference and
+// 3 here, the rings 1.5 each - the whole trim is 3 units, which is what the
+// 5-unit plate padding around it has room for beside the rivets. The
+// reference's inset shadow at its top is black on black and is not drawn.
+void drawTunerBezel(ImDrawList* dl, const ImVec2& plateTL, float s) {
+    const ImVec2 tl(plateTL.x + cascade::gui::kFreqBezelX * s, plateTL.y + cascade::gui::kFreqBezelY * s);
+    const ImVec2 br(tl.x + cascade::gui::kFreqBezelW * s, tl.y + cascade::gui::kFreqBezelH * s);
+    const float r = 3.0f * s;
+    const float ring = std::max(1.0f, 1.5f * s);
+    dl->AddRectFilled(ImVec2(tl.x - ring * 2.0f, tl.y - ring * 2.0f),
+                      ImVec2(br.x + ring * 2.0f, br.y + ring * 2.0f), hexCol(0x6a6e55), r + ring * 2.0f);
+    dl->AddRectFilled(ImVec2(tl.x - ring, tl.y - ring), ImVec2(br.x + ring, br.y + ring), hexCol(0x2a2c20),
+                      r + ring);
+    dl->AddRectFilled(tl, br, hexCol(0x0b0b09), r);
+}
+
+// --- the footer line ---------------------------------------------------------
+// "GHz . MHz . kHz . Hz" at the left and "TYPE R-390   SER. 1157" at the
+// right, in the label cream (#b9b99f), letter-spaced .22em.
+void drawTunerFooter(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateBR, float s) {
+    ImFont* f = cascade::gui::fonts::ui();
+    // Nine - the reference's 10 brought down to the 9-unit footer row, and
+    // the smallest lettering this deck allows.
+    const float px = std::max(9.0f, 9.0f * s);
+    const float track = px * 0.22f;
+    const float h = f->CalcTextSizeA(px, FLT_MAX, 0.0f, "G").y;
+    const float cy = plateBR.y - (cascade::gui::kFreqPlatePadBottom + cascade::gui::kFreqPlateFooterH * 0.5f) * s;
+    const char* left = "GHz  \xC2\xB7  MHz  \xC2\xB7  kHz  \xC2\xB7  Hz";
+    const char* right = "TYPE R-390   SER. 1157";
+    plateTrackedText(dl, f, px, ImVec2(plateTL.x + cascade::gui::kFreqPlatePadX * s, cy - h * 0.5f),
+                     hexCol(0xb9b99f), left, track);
+    const float rw = plateTrackedText(nullptr, f, px, ImVec2(0.0f, 0.0f), 0u, right, track);
+    plateTrackedText(dl, f, px,
+                     ImVec2(plateBR.x - cascade::gui::kFreqPlatePadX * s - rw, cy - h * 0.5f),
+                     hexCol(0xb9b99f), right, track);
+}
+
+// --- one Nixie tube ------------------------------------------------------------
+// The glass (rounded 14 at the top, 6 at the bottom), its dark radial
+// interior, the two faint mesh line sets, the ghost of the unlit "8" cathode
+// behind the lit figure, and the lit figure itself with its glow. tl/br is
+// the tube's rectangle - GetItemRectMin/Max of the InvisibleButton the
+// caller just placed there, so the glass a hand sees is the glass the wheel
+// tunes. bright is false for a leading zero, which is drawn as a barely-lit
+// figure with no glow: the deck's own rule that the zeros ahead of the first
+// significant digit carry no value and are dimmed.
+void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digit, bool bright,
+                   float s) {
+    const float w = br.x - tl.x;
+    const float h = br.y - tl.y;
+    if (w < 4.0f || h < 4.0f) { return; }
+    const float rTop = std::min(7.0f * s, w * 0.45f);
+    const float rBot = std::min(3.0f * s, w * 0.45f);
+
+    // THE RIM ("0 0 0 2px #3a2c1c, 0 0 0 3px #1a1510"): two strokes outside
+    // the glass, the outer one darker.
+    tubePath(dl, ImVec2(tl.x - 2.5f * s, tl.y - 2.5f * s), ImVec2(br.x + 2.5f * s, br.y + 2.5f * s),
+             rTop + 2.5f * s, rBot + 2.5f * s);
+    dl->PathStroke(hexCol(0x1a1510), ImDrawFlags_Closed, std::max(1.0f, 1.0f * s));
+    tubePath(dl, ImVec2(tl.x - 1.0f * s, tl.y - 1.0f * s), ImVec2(br.x + 1.0f * s, br.y + 1.0f * s),
+             rTop + 1.0f * s, rBot + 1.0f * s);
+    dl->PathStroke(hexCol(0x3a2c1c), ImDrawFlags_Closed, std::max(1.0f, 2.0f * s));
+
+    // THE INTERIOR: the glass filled in the gradient's outer colour, then the
+    // "ellipse at 50% 20%" gradient as concentric ellipses clipped to the
+    // glass - "#2a1d10 0%, #120c06 60%, #050403 100%".
+    tubePath(dl, tl, br, rTop, rBot);
+    dl->PathFillConvex(hexCol(0x050403));
+    dl->PushClipRect(tl, br, true);
+    {
+        const GradStop glass[3] = {{0.0f, hexCol(0x2a1d10)}, {0.6f, hexCol(0x120c06)},
+                                   {1.0f, hexCol(0x050403)}};
+        const ImVec2 gc(tl.x + w * 0.5f, tl.y + h * 0.2f);
+        const float rx = w * 0.71f;
+        const float ry = h * 1.13f;
+        constexpr int rings = 10;
+        for (int k = rings; k >= 1; --k) {
+            const float t = static_cast<float>(k) / static_cast<float>(rings);
+            dl->AddEllipseFilled(gc, ImVec2(rx * t, ry * t), gradAt(glass, 3, t), 0.0f, 0);
+        }
+        // THE MESH: the anode grid a real tube's figure sits behind - a 5-unit
+        // pitch of hairlines each way, rgba(255,180,90,.06) vertical and .05
+        // horizontal.
+        const float pitch = std::max(3.0f, 5.0f * s);
+        for (float x = tl.x + pitch; x < br.x; x += pitch) {
+            dl->AddLine(ImVec2(x, tl.y), ImVec2(x, br.y), IM_COL32(255, 180, 90, 15), 1.0f);
+        }
+        for (float y = tl.y + pitch; y < br.y; y += pitch) {
+            dl->AddLine(ImVec2(tl.x, y), ImVec2(br.x, y), IM_COL32(255, 180, 90, 13), 1.0f);
+        }
+        // The inset top highlight ("0 2px 0 rgba(255,255,255,.08) inset").
+        dl->AddLine(ImVec2(tl.x + rTop, tl.y + 1.0f), ImVec2(br.x - rTop, tl.y + 1.0f),
+                    IM_COL32(255, 255, 255, 20), std::max(1.0f, 2.0f * s));
+
+        // THE FIGURES. Nova Mono, centred - the monospaced digit face the
+        // counter has always used, so a 1 sits where a 8 did.
+        ImFont* font = cascade::gui::fonts::reading();
+        // 0.635 of a 40-unit tube is 25.4 px at scale 1 - the size the digit
+        // face had in the 41-unit tube of the first cut (0.62 of 41), kept
+        // when the plate was compacted: the digit is the one thing on the
+        // plate that was not made smaller.
+        const float fontPx = std::max(12.0f, cascade::gui::kFreqTubeH * s * 0.635f);
+        const char txt[2] = {digit, '\0'};
+        const ImVec2 sz8 = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, "8");
+        const ImVec2 sz = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, txt);
+        const ImVec2 at8(tl.x + (w - sz8.x) * 0.5f, tl.y + (h - sz8.y) * 0.5f);
+        const ImVec2 at(tl.x + (w - sz.x) * 0.5f, tl.y + (h - sz.y) * 0.5f);
+        // The ghost cathode: every tube carries all ten figures stacked, and
+        // the unlit ones show faintly - rgba(120,70,30,.28).
+        dl->AddText(font, fontPx, at8, IM_COL32(120, 70, 30, 71), "8");
+        if (bright) {
+            // THE GLOW, three text-shadows in the reference ("0 0 6px #ff8a1f,
+            // 0 0 14px #ff6a00, 0 0 28px rgba(255,90,0,.6)"): the widest as a
+            // soft disc behind the figure, the two tighter ones as rings of
+            // offset translucent copies of the glyph.
+            const ImVec2 gc2(at.x + sz.x * 0.5f, at.y + sz.y * 0.5f);
+            for (int i = 5; i >= 1; --i) {
+                const float t = static_cast<float>(i) / 5.0f;
+                dl->AddEllipseFilled(gc2, ImVec2(sz.x * 0.45f + 10.0f * s * t, sz.y * 0.45f + 10.0f * s * t),
+                                     IM_COL32(255, 90, 0, 14), 0.0f, 0);
+            }
+            const float o2 = std::max(1.5f, 3.0f * s);
+            const float o1 = std::max(1.0f, 1.5f * s);
+            const ImU32 wide = IM_COL32(255, 106, 0, 36);
+            const ImU32 tight = IM_COL32(255, 138, 31, 70);
+            const float diag = 0.7071f;
+            const ImVec2 ring[8] = {ImVec2(1, 0), ImVec2(-1, 0), ImVec2(0, 1), ImVec2(0, -1),
+                                    ImVec2(diag, diag), ImVec2(-diag, diag), ImVec2(diag, -diag),
+                                    ImVec2(-diag, -diag)};
+            for (const ImVec2& d : ring) {
+                dl->AddText(font, fontPx, ImVec2(at.x + d.x * o2, at.y + d.y * o2), wide, txt);
+            }
+            for (const ImVec2& d : ring) {
+                dl->AddText(font, fontPx, ImVec2(at.x + d.x * o1, at.y + d.y * o1), tight, txt);
+            }
+            dl->AddText(font, fontPx, at, hexCol(0xffb347), txt);
+        } else {
+            // A leading zero: lit only enough to be read as a figure that is
+            // there, with none of the glow that says it carries value.
+            dl->AddText(font, fontPx, at, hexCol(0xffb347, 96), txt);
+        }
+    }
+    dl->PopClipRect();
+}
+
+// --- one toggle switch ---------------------------------------------------------
+// The chrome collar on the bezel, its bore, the lever with its ball tip
+// standing up or hanging down, and the UP / DN stencils. tl/br is the whole
+// switch area - the union of the two halves' InvisibleButton rectangles the
+// caller just read back, so what is drawn here is exactly what the two
+// halves hit-test. up is the lever's position: the last direction it was
+// flicked.
+void drawToggleSwitch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool up, float s) {
+    const float w = br.x - tl.x;
+    const float h = br.y - tl.y;
+    if (w < 4.0f || h < 8.0f) { return; }
+    const float cx = (tl.x + br.x) * 0.5f;
+
+    // THE STENCILS, Oswald 8 in the reference; nine is the smallest lettering
+    // this deck allows, so they are drawn at nine, flush with the top and
+    // the foot of the 30-unit switch area. The ball at the end of its throw
+    // sits over the stencil it points at - exactly what the reference's own
+    // ball does, and the other stencil stays clear to name the other way.
+    ImFont* f = cascade::gui::fonts::ui();
+    const float spx = std::max(9.0f, 8.0f * s);
+    const float strack = spx * 0.15f;
+    const float sh = f->CalcTextSizeA(spx, FLT_MAX, 0.0f, "U").y;
+    const float upW = plateTrackedText(nullptr, f, spx, ImVec2(0.0f, 0.0f), 0u, "UP", strack);
+    const float dnW = plateTrackedText(nullptr, f, spx, ImVec2(0.0f, 0.0f), 0u, "DN", strack);
+    plateTrackedText(dl, f, spx, ImVec2(cx - upW * 0.5f, tl.y), hexCol(0xd8d3b8), "UP", strack);
+    plateTrackedText(dl, f, spx, ImVec2(cx - dnW * 0.5f, br.y - sh), hexCol(0xd8d3b8), "DN",
+                     strack);
+
+    // THE COLLAR, 26 units across in the reference and 14 here, centred on
+    // the switch area: radial "#d9d9d2 0%, #8f9088 45%, #4a4b45 75%,
+    // #262722 100%" lit from 40%/35%, with its shadow beneath and a
+    // brass-green ring (#6b6f54) outside it.
+    const ImVec2 cc(cx, tl.y + h * 0.5f);
+    const float collarR = 7.0f * s;
+    const float ring = std::max(1.0f, 1.5f * s);
+    dl->AddCircleFilled(ImVec2(cc.x, cc.y + 1.0f * s), collarR + ring + 1.0f * s, IM_COL32(0, 0, 0, 120), 0);
+    dl->AddCircleFilled(cc, collarR + ring, hexCol(0x6b6f54), 0);
+    const GradStop chrome[4] = {{0.0f, hexCol(0xd9d9d2)}, {0.45f, hexCol(0x8f9088)},
+                                {0.75f, hexCol(0x4a4b45)}, {1.0f, hexCol(0x262722)}};
+    radialDisc(dl, cc, collarR, ImVec2(-0.2f, -0.3f), chrome, 4, 0.85f, 12);
+    // THE BORE the lever comes out of: "#0f0f0c" with a lit top edge inside.
+    const float boreR = collarR * (6.0f / 13.0f);
+    dl->AddCircleFilled(cc, boreR, hexCol(0x0f0f0c), 0);
+    dl->AddLine(ImVec2(cc.x - boreR * 0.6f, cc.y - boreR + 1.0f), ImVec2(cc.x + boreR * 0.6f, cc.y - boreR + 1.0f),
+                IM_COL32(255, 255, 255, 60), 1.0f);
+
+    // THE LEVER: 8 x 30 in the reference, turning about a point 4 below the
+    // collar's centre, 0 degrees hanging down and 180 standing up. Here it
+    // is 4 wide with a 12-unit throw and an 8-unit ball, turning about a
+    // point 1 below the collar's centre, and only ever at those two angles,
+    // so it is a vertical bar from just past the pivot to its throw, with
+    // the ball tip at its end. The ball's far edge lands exactly on the
+    // switch area's own edge (15 + 1 + 10 + 4 = 30 hanging down, 15 - 1 -
+    // 10 - 4 = 0 standing up), so the whole switch stays inside the two
+    // rectangles a click can land on.
+    const float pivotY = cc.y + 1.0f * s;
+    const float leverW = std::max(3.0f, 4.0f * s);
+    const float back = 2.0f * s;    // how far the bar reaches past the pivot
+    const float throwLen = 12.0f * s;
+    const float ballAt = 10.0f * s;  // ball centre from the pivot, so a length
+                                     // of shaft shows between collar and ball
+    const float ballR = std::max(2.5f, 4.0f * s);
+    const float dir = up ? -1.0f : 1.0f;
+    const float y0 = std::min(pivotY - dir * back, pivotY + dir * throwLen);
+    const float y1 = std::max(pivotY - dir * back, pivotY + dir * throwLen);
+    const float lx0 = cx - leverW * 0.5f;
+    const float lx1 = cx + leverW * 0.5f;
+    // Shadow ("0 2px 3px rgba(0,0,0,.6)"), then the steel: "#3a3a35, #8a8a82
+    // 45%, #3a3a35" across its width, as two banded rects.
+    dl->AddRectFilled(ImVec2(lx0 - 1.0f, y0 + 2.0f * s), ImVec2(lx1 + 1.0f, y1 + 2.0f * s),
+                      IM_COL32(0, 0, 0, 110), leverW * 0.5f);
+    const float lmid = lx0 + leverW * 0.45f;
+    dl->AddRectFilledMultiColor(ImVec2(lx0, y0), ImVec2(lmid, y1), hexCol(0x3a3a35), hexCol(0x8a8a82),
+                                hexCol(0x8a8a82), hexCol(0x3a3a35));
+    dl->AddRectFilledMultiColor(ImVec2(lmid, y0), ImVec2(lx1, y1), hexCol(0x8a8a82), hexCol(0x3a3a35),
+                                hexCol(0x3a3a35), hexCol(0x8a8a82));
+    // THE BALL TIP: radial "#fff, #b9b9b1 45%, #5a5a54 80%, #2a2a26" lit
+    // from 35%/30%, with its own shadow.
+    const ImVec2 bc(cx, pivotY + dir * ballAt);
+    dl->AddCircleFilled(ImVec2(bc.x, bc.y + 2.0f * s), ballR + 0.5f * s, IM_COL32(0, 0, 0, 120), 0);
+    const GradStop ball[4] = {{0.0f, hexCol(0xffffff)}, {0.45f, hexCol(0xb9b9b1)},
+                              {0.8f, hexCol(0x5a5a54)}, {1.0f, hexCol(0x2a2a26)}};
+    radialDisc(dl, bc, ballR, ImVec2(-0.3f, -0.4f), ball, 4, 0.9f, 10);
+}
+
+// ONE SWITCH HALF'S BUTTON. The label carries the cell and the half, the
+// same way the tube cells beside them build "##fd" + i - no PushID needed.
+// THE HIT RECTANGLE IS THE DRAWN RECTANGLE: the caller draws the switch from
+// the rectangles this returns through GetItemRectMin/Max - the actual
+// rectangle ImGui just registered as hoverable, not the tl/br it was handed
+// - so the switch a hand sees and the half a click lands on cannot be two
+// different rectangles. An earlier cut of the digit keys had exactly that
+// bug once (a click on the visible key did nothing; a click well away from
+// it fired a different cell's key).
+//
+// HOLDING REPEATS via ImGuiItemFlags_ButtonRepeat - ImGui's own held-button
+// repeat, rather than a hand-rolled timer: the counter's own wheel already
+// lets one gesture cross more than a single unit, and a lone Hz tap to walk
+// from one end of the counter to the other would be a joke next to it.
+//
+// FOXSDR_DEBUG_INPUT outlines the exact rectangle ImGui just treated as
+// hoverable, on the foreground list so it paints over the switch rather
+// than under it - a self-capture with this set shows whether the ink and
+// the hit box still agree without a live mouse anywhere near the app.
+bool switchHalfButton(const ImVec2& tl, const ImVec2& br, bool upperHalf, int cellIndex,
+                      bool debugOutline, ImVec2& outTL, ImVec2& outBR) {
+    const std::string label =
+        "##fs" + std::string(upperHalf ? "u" : "d") + std::to_string(cellIndex);
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
+    const bool fired = ImGui::InvisibleButton(label.c_str(), ImVec2(br.x - tl.x, br.y - tl.y));
+    ImGui::PopItemFlag();
+    outTL = ImGui::GetItemRectMin();
+    outBR = ImGui::GetItemRectMax();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(upperHalf ? "Step this digit up" : "Step this digit down");
+    }
+    if (debugOutline) {
+        ImGui::GetForegroundDrawList()->AddRect(outTL, outBR, IM_COL32(255, 255, 0, 255), 0.0f,
+                                                1.0f, 0);
+    }
+    return fired;
+}
+}  // namespace
+
+void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
+    // Fixed 10-digit field ("0100300000" at 100.3 MHz), one Nixie tube per
+    // figure. The field width is constant so digits never shift as the tuned
+    // frequency changes; the zeros ahead of the first significant digit are
+    // dimmed so the eye reads only the live value.
     //
     // WHAT THE COUNTER SHOWS IS THE TUNED STATION - the source centre readback
-    // PLUS the VFO offset - and the bar letters it "TUNED - HERTZ". Those two
-    // used to disagree: the counter drew the bare centre, so with the VFO
-    // parked 5 kHz down a live capture read 1090.000000 MHz here while the
-    // waterfall's own footer read 1089.9950 MHz for the same instant. One of
-    // them had to give, and it is the value that gives, for three reasons.
+    // PLUS the VFO offset - and the plate's name plate says "TUNED - HERTZ".
+    // Those two used to disagree: the counter drew the bare centre, so with
+    // the VFO parked 5 kHz down a live capture read 1090.000000 MHz here while
+    // the waterfall's own footer read 1089.9950 MHz for the same instant. One
+    // of them had to give, and it is the value that gives, for three reasons.
     //
     // FIRST, EVERYTHING ELSE IN THE APPLICATION ALREADY MEANS TUNED. The band
     // plan lookup, the bookmark this counter's neighbour saves, the scanner's
@@ -3635,7 +4301,7 @@ void AppWindow::drawFrequencyReadout(float wellX, float wellY, float scale) {
     // with the caption on it.
     //
     // SECOND, THE TYPED EDITOR DID NOT ROUND-TRIP. It seeds itself from the
-    // figure on the drums and commits through tuneAbsoluteHz(), so with any
+    // figure on the tubes and commits through tuneAbsoluteHz(), so with any
     // VFO offset at all, opening the editor and pressing Enter without typing
     // anything moved the radio by that offset. Seeding from the same quantity
     // the commit path applies is what makes an unchanged edit a no-op.
@@ -3649,43 +4315,150 @@ void AppWindow::drawFrequencyReadout(float wellX, float wellY, float scale) {
     // tuner actually did. What it now also cannot do is disagree with the
     // rest of the window.
     //
-    // Tuning: the mouse wheel over a digit steps the TUNED frequency by that
+    // Tuning: the mouse wheel over a tube steps the TUNED frequency by that
     // digit's place value through tuneAbsoluteHz(), which commands the source
     // centre and leaves the offset where the user put it, so the digit under
-    // the cursor is the digit that moves. activeSource() is a GUI/control-
-    // thread call per the IqSource contract, and this IS that thread — the
-    // same one that performs source swaps.
+    // the cursor is the digit that moves; the toggle switch beneath the tube
+    // does the same on a flick. activeSource() is a GUI/control-thread call
+    // per the IqSource contract, and this IS that thread — the same one that
+    // performs source swaps.
     const double hz = std::max(0.0, currentAbsoluteHz());
     // A tune may never ask the source for a negative centre, so the lowest
     // TUNED frequency the wheel can reach is the offset itself when that
     // offset is positive.
     const double minTunedHz = std::max(0.0, pipeline_.vfoOffsetHz());
 
-    // THE WELL FIRST, because everything else in the counter sits inside it -
-    // the ten apertures when the figure is being shown, the typed field when
-    // it is being set. Its size comes from the cells it holds, so the bar that
-    // placed it and the readout that fills it cannot disagree about where the
-    // counter ends.
+    // THE PLATE FIRST, because everything else in the counter sits on it -
+    // the name plate and the status cluster across its head, the bezel with
+    // the ten tubes and their switches, the footer line. Its size comes from
+    // gui/tune_control.hpp, so the bar that placed it and the readout that
+    // fills it cannot disagree about where the counter ends.
     ImDrawList* fdl = ImGui::GetWindowDrawList();
-    const ImVec2 wtl(wellX, wellY);
-    const ImVec2 wbr(wellX + kFreqWellW * scale, wellY + kFreqWellH * scale);
-    cascade::gui::drawFreqDrumWell(fdl, wtl, wbr);
+    const float s = scale;
+    const ImVec2 ptl(plateX, plateY);
+    const ImVec2 pbr(plateX + kFreqPlateW * s, plateY + kFreqPlateH * s);
+    drawTunerPlateBody(fdl, ptl, pbr, s);
+    drawTunerNamePlate(fdl, ptl, s);
+    // The readout is the same TUNED quantity the tubes show, in MHz to four
+    // decimals - the reference's own rule (Hz / 1,000,000, toFixed(4)).
+    char mhz[32];
+    std::snprintf(mhz, sizeof(mhz), "%.4f", std::min(hz, kMaxDisplayHz) / 1.0e6);
+    drawTunerStatusCluster(fdl, ptl, pbr, s, pipeline_.running(), mhz);
+    drawTunerBezel(fdl, ptl, s);
+    drawTunerFooter(fdl, ptl, pbr, s);
 
-    // --- Typed entry (click the readout) ------------------------------------
+    char digits[16];
+    std::snprintf(digits, sizeof(digits), "%010llu",
+                  static_cast<unsigned long long>(
+                      std::llround(std::min(hz, kMaxDisplayHz))));
+
+    // THE TUBES AND THEIR SWITCHES ARE PLACED, NOT FLOWED. Each tube's
+    // rectangle and each switch half's rectangle come from the plate's own
+    // origin through gui/tune_control.hpp, so the row cannot drift with
+    // ImGui's item spacing and the bar can put the whole plate wherever its
+    // own geometry says.
+    //
+    // WHICH DIGITS ARE DIM IS A MEASUREMENT, NOT A STYLE. The zeros ahead of
+    // the first significant figure are the dark ones, because they carry no
+    // value; the reference lights all ten, which would say a leading zero is
+    // as real as the MHz.
+    //
+    // FOXSDR_DEBUG_INPUT: read once per frame, not once per switch half - see
+    // switchHalfButton's own comment for what it draws when this is set.
+    const char* dbgInputEnv = std::getenv("FOXSDR_DEBUG_INPUT");
+    const bool debugSwitchOutline = dbgInputEnv != nullptr && dbgInputEnv[0] != '\0';
+    bool significant = false;
+    bool hoveredDigit = false;
+    for (int i = 0; i < kFreqCells; ++i) {
+        if (digits[i] != '0') { significant = true; }
+        // THE TUBE, a real item first: the wheel over it tunes this digit and
+        // a click opens the typed editor, exactly as the drum aperture it
+        // replaces did. Drawn from the rectangle ImGui just registered.
+        const cascade::gui::FreqRect tube = cascade::gui::tubeRectForCell(ptl.x, ptl.y, i, s);
+        ImGui::SetCursorScreenPos(ImVec2(tube.x0, tube.y0));
+        ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
+                               ImVec2(tube.x1 - tube.x0, tube.y1 - tube.y0));
+        drawNixieTube(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i], significant, s);
+
+        // Per-digit wheel tuning. Fractional wheel deltas (touchpads) below
+        // one notch still step once, in the delta's direction. Not while the
+        // typed editor is open over the tubes - the field owns the row then.
+        if (!freqEditing_ && ImGui::IsItemHovered()) {
+            const float wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f) {
+                double ticks = static_cast<double>(static_cast<long long>(wheel));
+                if (ticks == 0.0) { ticks = (wheel > 0.0f) ? 1.0 : -1.0; }
+                const double next =
+                    std::max(minTunedHz, hz + ticks * cascade::gui::digitPlaceHz(i));
+                // THE SAME QUANTITY THE TUBES SHOW. tuneAbsoluteHz commands
+                // the source centre at (next - VFO offset), so the tuned
+                // figure moves by exactly this digit's place value and the
+                // offset the user set is left alone. Failure (a tune the
+                // driver refuses) needs no handling here: the display follows
+                // the readback, which won't move.
+                tuneAbsoluteHz(next);
+            }
+            hoveredDigit = true;  // tooltip is drawn after the loop (see below)
+            // SINGLE click opens the editor. Double-click was tried first and
+            // is a trap here: a synthetic or fast double-click can collapse
+            // into one registered click, so it silently did nothing. Single
+            // click also matches what SDR++ does, and wheel tuning is
+            // unaffected because that needs only hover, never a click.
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                // Seeded from the TUNED figure the tubes are showing, which is
+                // the quantity the commit above applies - so opening the
+                // editor and pressing Enter unchanged tunes nowhere.
+                std::snprintf(freqEditBuf_, sizeof(freqEditBuf_), "%.6f", hz / 1.0e6);
+                freqEditing_ = true;
+                freqEditFocus_ = true;
+                freqEditWasActive_ = false;
+            }
+        }
+
+        // THE TOGGLE SWITCH BENEATH THIS TUBE: the same tune the wheel above
+        // just took, through cascade::gui::stepDigit (gui/tune_control.hpp)
+        // rather than a second copy of the arithmetic - and clamped the same
+        // way at the call site, to minTunedHz rather than stepDigit's own
+        // floor of 0, because a positive VFO offset still means the source
+        // itself may never be asked for less than that. The upper half is a
+        // flick UP, the lower a flick DN, and the lever remembers which came
+        // last (the reference's own rule: a memory of direction, not a
+        // spring return). Both rectangles are switchRectForCell's own answer
+        // for this cell and this half; the switch is then drawn from the
+        // union of what ImGui registered for the two, so the switch a hand
+        // sees and the halves a click lands on cannot be different
+        // rectangles.
+        const cascade::gui::FreqRect swUp = cascade::gui::switchRectForCell(ptl.x, ptl.y, i, true, s);
+        const cascade::gui::FreqRect swDn = cascade::gui::switchRectForCell(ptl.x, ptl.y, i, false, s);
+        ImVec2 upTL, upBR, dnTL, dnBR;
+        if (switchHalfButton(ImVec2(swUp.x0, swUp.y0), ImVec2(swUp.x1, swUp.y1), true, i,
+                             debugSwitchOutline, upTL, upBR)) {
+            tuneAbsoluteHz(std::max(minTunedHz, cascade::gui::stepDigit(hz, i, true)));
+            freqLeverUp_[i] = true;
+        }
+        if (switchHalfButton(ImVec2(swDn.x0, swDn.y0), ImVec2(swDn.x1, swDn.y1), false, i,
+                             debugSwitchOutline, dnTL, dnBR)) {
+            tuneAbsoluteHz(std::max(minTunedHz, cascade::gui::stepDigit(hz, i, false)));
+            freqLeverUp_[i] = false;
+        }
+        drawToggleSwitch(fdl, ImVec2(std::min(upTL.x, dnTL.x), upTL.y),
+                         ImVec2(std::max(upBR.x, dnBR.x), dnBR.y), freqLeverUp_[i], s);
+    }
+
+    // --- Typed entry (click a tube) ------------------------------------------
     // Enter commits, Escape or clicking away cancels. The field is seeded in
     // MHz because that is how frequencies are spoken; parseFrequencyHz still
-    // accepts Hz, kHz and GHz with an explicit suffix.
+    // accepts Hz, kHz and GHz with an explicit suffix. IT IS SUBMITTED AFTER
+    // THE TUBES so it sits over them and takes the hover: typing a frequency
+    // belongs in the counter's own row, at the size the row has room for.
     if (freqEditing_) {
-        // IN THE WELL THE DIGITS CAME OUT OF. The editor used to open wherever
-        // the cursor happened to be, which on a bar laid out by position is
-        // nowhere in particular; typing a frequency belongs in the counter's
-        // own aperture, at the size the aperture has room for.
-        ImGui::PushFont(cascade::gui::fonts::ui(),
-                        std::max(14.0f, kFreqCellH * scale * 0.60f));
+        const cascade::gui::FreqRect t0 = cascade::gui::tubeRectForCell(ptl.x, ptl.y, 0, s);
+        const cascade::gui::FreqRect t9 =
+            cascade::gui::tubeRectForCell(ptl.x, ptl.y, kFreqCells - 1, s);
+        ImGui::PushFont(cascade::gui::fonts::ui(), std::max(14.0f, kFreqTubeH * s * 0.60f));
         const float inputH = ImGui::GetFrameHeight();
-        ImGui::SetCursorScreenPos(
-            ImVec2(wtl.x + 6.0f, wtl.y + (wbr.y - wtl.y - inputH) * 0.5f));
-        ImGui::SetNextItemWidth(wbr.x - wtl.x - 12.0f);
+        ImGui::SetCursorScreenPos(ImVec2(t0.x0, t0.y0 + (t0.y1 - t0.y0 - inputH) * 0.5f));
+        ImGui::SetNextItemWidth(t9.x1 - t0.x0);
         if (freqEditFocus_) { ImGui::SetKeyboardFocusHere(); }
         const bool commit = ImGui::InputText(
             "##freq_edit", freqEditBuf_, sizeof(freqEditBuf_),
@@ -3715,98 +4488,15 @@ void AppWindow::drawFrequencyReadout(float wellX, float wellY, float scale) {
         return;
     }
 
-    char digits[16];
-    std::snprintf(digits, sizeof(digits), "%010llu",
-                  static_cast<unsigned long long>(
-                      std::llround(std::min(hz, kMaxDisplayHz))));
-
-    // THE COUNTER IS A ROW OF DRUMS, in the handoff's 1960s bench: amber
-    // digits in machined apertures, recessed into a dark well, grouped in
-    // thousands by a wider gap rather than by a printed separator - which is
-    // what a mechanical counter actually does.
-    //
-    // The behaviour underneath is unchanged and must stay that way: the wheel
-    // over a digit still steps that digit's place value, and a click still
-    // opens the typed editor. Those are the reasons this readout is worth
-    // having at all, and a restyle that lost them would be a downgrade
-    // wearing better clothes.
-    //
-    // THE CELLS ARE PLACED, NOT FLOWED. Each aperture's left edge is computed
-    // from the well's, so the row cannot drift with ImGui's item spacing and
-    // the bar can put the whole counter wherever its own geometry says.
-    //
-    // WHICH DIGITS ARE DIM IS A MEASUREMENT, NOT A STYLE. The zeros ahead of
-    // the first significant figure are the dark ones, because they carry no
-    // value; the reference dims its three trailing digits instead, which would
-    // say the Hz are somehow less real than the MHz.
-    const float cellW = kFreqCellW * scale;
-    const float cellH = kFreqCellH * scale;
-    const float fontPx = cellH * 0.66f;
-    const float cellY = wtl.y + kFreqWellPadY * scale;
-    const auto cellLeft = [&](int i) {
-        float x = wtl.x + kFreqWellPadX * scale;
-        for (int k = 1; k <= i; ++k) {
-            x += (kFreqCellW + (freqGroupBreak(k) ? kFreqGroupGap : kFreqGap)) * scale;
-        }
-        return x;
-    };
-    bool significant = false;
-    bool hoveredDigit = false;
-    for (int i = 0; i < kFreqCells; ++i) {
-        if (digits[i] != '0') { significant = true; }
-        const ImVec2 ctl(cellLeft(i), cellY);
-        ImGui::SetCursorScreenPos(ctl);
-        ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
-                               ImVec2(cellW, cellH));
-        cascade::gui::drawFreqDrumCell(fdl, ctl, ImVec2(ctl.x + cellW, ctl.y + cellH),
-                                       digits[i], significant, fontPx);
-
-        // Per-digit wheel tuning. A trailing separator belongs to the digit
-        // cell it follows, so hovering it tunes that digit — the natural
-        // reading. Fractional wheel deltas (touchpads) below one notch still
-        // step once, in the delta's direction.
-        if (ImGui::IsItemHovered()) {
-            const float wheel = ImGui::GetIO().MouseWheel;
-            if (wheel != 0.0f) {
-                double ticks = static_cast<double>(static_cast<long long>(wheel));
-                if (ticks == 0.0) { ticks = (wheel > 0.0f) ? 1.0 : -1.0; }
-                const double next = std::max(minTunedHz, hz + ticks * kPlaceHz[i]);
-                // THE SAME QUANTITY THE DRUMS SHOW. tuneAbsoluteHz commands
-                // the source centre at (next - VFO offset), so the tuned
-                // figure moves by exactly this digit's place value and the
-                // offset the user set is left alone. Failure (a tune the
-                // driver refuses) needs no handling here: the display follows
-                // the readback, which won't move.
-                tuneAbsoluteHz(next);
-            }
-            hoveredDigit = true;  // tooltip is drawn after PopFont (see below)
-            // SINGLE click opens the editor. Double-click was tried first and
-            // is a trap here: the digits are Text items, and a synthetic or
-            // fast double-click can collapse into one registered click, so it
-            // silently did nothing. Single click also matches what SDR++
-            // does, and wheel tuning is unaffected because that needs only
-            // hover, never a click.
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                // Seeded from the TUNED figure the drums are showing, which is
-                // the quantity the commit above applies - so opening the
-                // editor and pressing Enter unchanged tunes nowhere.
-                std::snprintf(freqEditBuf_, sizeof(freqEditBuf_), "%.6f", hz / 1.0e6);
-                freqEditing_ = true;
-                freqEditFocus_ = true;
-                freqEditWasActive_ = false;
-            }
-        }
-    }
-
-    // Tooltip AFTER PopFont: raised inside the 2.2x scope it inherited that
-    // scale and painted a banner across the spectrum.
+    // Tooltip after the loop, outside any scaled font: raised inside the 2.2x
+    // scope it once inherited that scale and painted a banner across the
+    // spectrum.
     if (hoveredDigit) {
         // "click", not "double-click": the handler above is IsMouseClicked and
-        // has been since double-click was abandoned as unreliable on Text
-        // items. A user who follows the tooltip literally double-clicks, the
-        // first click opens the editor and the second lands outside it and
-        // cancels — so the tooltip was teaching the one gesture that looks
-        // broken.
+        // has been since double-click was abandoned as unreliable. A user who
+        // follows the tooltip literally double-clicks, the first click opens
+        // the editor and the second lands outside it and cancels — so the
+        // tooltip was teaching the one gesture that looks broken.
         ImGui::SetTooltip("Scroll a digit to tune  |  click to type");
     }
 }
@@ -4022,6 +4712,144 @@ void AppWindow::drawRadioSection() {
         std::snprintf(overlay, sizeof(overlay), "%.1f dB", static_cast<double>(sDb));
         ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
     }
+}
+
+// --- Tuning knob -------------------------------------------------------------
+//
+// A turn-and-click dial for stepping the TUNED frequency (device centre +
+// VFO offset - the same sum currentAbsoluteHz() and the counter both read)
+// up and down, ON THE DECK beside the frequency counter (drawTuningKnob,
+// called from drawToolbar) - not a rail section: the owner's correction on
+// the first cut of this feature, verbatim, was "the knob needs to go next
+// to the frequency counter and it needs to be small". Every
+// gesture on it - drag, wheel, a tap that cycles the step, the arrow keys -
+// is arithmetic pinned in gui/tune_control.hpp with no ImGui dependency;
+// this function only wires ImGui's mouse and keyboard onto that arithmetic
+// and draws the result.
+//
+// Applies through tuneAbsoluteHz(), the SAME path presets and the scanner
+// use, so the scanner's user-tune detection and the mismatch check see a
+// knob-driven tune exactly as they would see a click on a bookmark.
+void AppWindow::applyTuneSteps(int steps) {
+    if (steps == 0) { return; }
+    const double stepHz = cascade::gui::kTuneStepsHz[tuneStepIndex_];
+    // CLAMPED AT 0 Hz — a rapid spin down through the step table must stop at
+    // the floor rather than commanding a negative frequency no source can
+    // honour.
+    const double next =
+        std::max(0.0, currentAbsoluteHz() + static_cast<double>(steps) * stepHz);
+    tuneAbsoluteHz(next);
+    // PURE COSMETIC FEEDBACK: this knob is a rotary encoder, not a fader - it
+    // has no bounded value to point at - so the pointer simply turns 15
+    // degrees for every step actually applied, whichever gesture drove it,
+    // and wraps with fmod rather than growing without bound over a long
+    // session.
+    tuneKnobVisualAngleDeg_ = std::fmod(
+        tuneKnobVisualAngleDeg_ + static_cast<float>(steps) * 15.0f, 360.0f);
+}
+
+// Drawn from drawToolbar, at the four screen positions it has already worked
+// out (TUNING's caption, the knob's own centre, and the step's baseline) -
+// the same "handed the geometry, not the lambdas" contract
+// drawFrequencyReadout keeps. radius and capPx arrive pre-scaled (S(...) and
+// the bar's own capPx) so this function never has to know the bar's scale
+// beyond what the step text's font size needs it for.
+void AppWindow::drawTuningKnob(float cx, float capY, float knobCy, float valueY, float radius,
+                               float capPx, float scale) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    barEngrave(dl, ImVec2(cx, capY), capPx, "TUNING", true);
+
+    constexpr float kClickTolerancePx = 4.0f;
+    const ImVec2 centre(cx, knobCy);
+    ImGui::SetCursorScreenPos(ImVec2(centre.x - radius, centre.y - radius));
+    ImGui::InvisibleButton("##tune_knob", ImVec2(radius * 2.0f, radius * 2.0f),
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    const ImGuiIO& io = ImGui::GetIO();
+
+    if (ImGui::IsItemActivated()) {
+        // A FRESH PRESS: remember where it started (clickIsPress reads this
+        // on release), which button started it (decides which way a tap
+        // cycles the step - see the release handling below), and the mouse's
+        // own angle about the centre, so the first frame of a drag reports a
+        // delta of zero rather than a jump from wherever the last drag left
+        // off.
+        tuneKnobPressX_ = io.MousePos.x;
+        tuneKnobPressY_ = io.MousePos.y;
+        tuneKnobPressWasLeft_ = io.MouseDown[ImGuiMouseButton_Left];
+        tuneKnobDragAngleDeg_ = std::atan2(io.MousePos.x - centre.x, centre.y - io.MousePos.y) *
+                                180.0f / 3.14159265f;
+        tuneKnobAccumDeg_ = 0.0f;
+    }
+
+    // DRAG, LEFT BUTTON ONLY. A right-button press never turns the knob - it
+    // only cycles the step on release, in the OTHER direction a left tap
+    // does (see below).
+    const bool dragging = active && tuneKnobPressWasLeft_;
+    if (dragging) {
+        const float a = std::atan2(io.MousePos.x - centre.x, centre.y - io.MousePos.y) *
+                        180.0f / 3.14159265f;
+        float d = a - tuneKnobDragAngleDeg_;
+        while (d > 180.0f) { d -= 360.0f; }
+        while (d < -180.0f) { d += 360.0f; }
+        tuneKnobDragAngleDeg_ = a;
+        const int steps = cascade::gui::knobStepsFromAngle(tuneKnobAccumDeg_, d);
+        if (steps != 0) { applyTuneSteps(steps); }
+    }
+
+    if (hovered) {
+        // WHEEL: one notch is one step. Fractional deltas (a touchpad) below
+        // one notch still step once, in the delta's direction - the same
+        // rule the frequency drum's own per-digit wheel handling applies.
+        const float wheel = io.MouseWheel;
+        if (wheel != 0.0f) {
+            long long notches = static_cast<long long>(wheel);
+            if (notches == 0) { notches = (wheel > 0.0f) ? 1 : -1; }
+            applyTuneSteps(static_cast<int>(notches));
+        }
+        // KEYBOARD, hovered only - this is a deck control with no other
+        // claim on the keyboard. Repeat left on: holding the key is a fast
+        // spin, not one tap per press.
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) { applyTuneSteps(1); }
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) { applyTuneSteps(-1); }
+        if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) { applyTuneSteps(10); }
+        if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) { applyTuneSteps(-10); }
+        ImGui::SetTooltip("Tune by the step. Drag or wheel to tune, click to "
+                          "change the step (right-click the other way).");
+    }
+
+    if (ImGui::IsItemDeactivated()) {
+        // RELEASE: a TAP - within tolerance of the press - cycles the step
+        // rather than being read as a zero-length drag that turned nothing.
+        // LEFT cycles it down, RIGHT up: "press again" always does
+        // something, whichever button it was (gui::cycleTuneStep wraps both
+        // ways).
+        const cascade::gui::KnobPoint pressPt{tuneKnobPressX_, tuneKnobPressY_};
+        const cascade::gui::KnobPoint releasePt{io.MousePos.x, io.MousePos.y};
+        if (cascade::gui::clickIsPress(pressPt, releasePt, kClickTolerancePx)) {
+            tuneStepIndex_ = cascade::gui::cycleTuneStep(tuneStepIndex_, !tuneKnobPressWasLeft_);
+        }
+    }
+
+    // THE FACE: the same primitive the volume dial draws with
+    // (drawBenchKnobFace, gui/scope_face.hpp), so the two knobs read as one
+    // family of control standing on the same brass. No bounded value to
+    // point at here - this is a rotary encoder, not a fader - so the pointer
+    // simply turns with whatever actually moved it (applyTuneSteps) and
+    // wraps freely.
+    cascade::gui::drawBenchKnobFace(dl, centre, radius, tuneKnobVisualAngleDeg_);
+
+    // THE STEP, IN CREAM BELOW THE KNOB - the way "0.50" sits under VOLUME.
+    // This is where the hand has put the control, not a reading, so it takes
+    // the same reading face and cream ink the volume dial's own figure does,
+    // not the engraved caption's treatment.
+    const std::string stepText = cascade::gui::tuneStepLabel(tuneStepIndex_);
+    ImFont* sf = cascade::gui::fonts::reading();
+    const float spx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale);
+    const ImVec2 ssz = sf->CalcTextSizeA(spx, FLT_MAX, 0.0f, stepText.c_str());
+    dl->AddText(sf, spx, ImVec2(cx - ssz.x * 0.5f, valueY), cascade::gui::theme::kCream,
+               stepText.c_str());
 }
 
 // The Sinks section: the output device and why there is no sound. Moved out
@@ -12115,7 +12943,7 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // a repeated command cannot keep the decoders permanently reset.
     cascade::source::IqSource& src = pipeline_.activeSource();
     if (src.centerFrequencyHz() == centerHz) { return; }
-    src.setCenterFrequencyHz(centerHz);
+    const bool applied = src.setCenterFrequencyHz(centerHz);
     // Out-of-band applies (a device open's carry-across) pace the next burst
     // off this moment too, so the coalescer's clock never lags an apply.
     retuneCoalescer_.noteApplied(steadyNowMs());
@@ -12135,7 +12963,15 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // and the wording live in gui/tune_control.hpp so they are testable
     // without an open device; this call site only supplies what the device
     // actually said.
-    noteTuneMismatch(centerHz, landedHz, isPluginPreset);
+    //
+    // ONLY A TUNE THAT WAS APPLIED CAN HAVE BEEN COERCED. A source that
+    // refused the call - the driver busy behind its control lock during a
+    // fast VFO drag, a vendor fault, an exception - leaves its readback where
+    // it was and says so through sourceError; comparing that stale readback
+    // with the request logged "asked for 124.19 MHz, the B200 answered
+    // 124.69 MHz", a coercion that never happened (seen on the desk the day
+    // this check was added).
+    if (applied) { noteTuneMismatch(centerHz, landedHz, isPluginPreset); }
 }
 
 void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset) {
@@ -13938,6 +14774,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // though load() already did: this is the value a widget indexes with.
     railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
     scope_.setRangeNm(scopeRangeNm_);
+    // The tuning knob's step. Not re-clamped here the way railBank is: the
+    // loader's own [0,3]-or-default rule already leaves nothing else this
+    // field could be.
+    tuneStepIndex_ = cfg.tuneStepIndex;
 
     // The map pages' rectangles from the last session, seeded here rather
     // than read at draw time so the very first Begin of each page already has
@@ -14329,6 +15169,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
     cfg.railBank = railBank_;
+    cfg.tuneStepIndex = tuneStepIndex_;
     // The pages' rectangles and open flags, via the saved store so an entry
     // for a plugin with no page this session rides through untouched. The
     // legacy fields are copied back purely so the first configsEqual against
