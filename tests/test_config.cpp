@@ -115,10 +115,6 @@ AppConfig junkConfig() {
     c.scopeRangeNm = 12345;
     // The rail's bank, off its default of 0 for the same reason.
     c.railBank = 3;
-    // The tuning knob's step, off its default of 1 AND out of the table's
-    // 0..3 range, so a load path that forgets to assign it or forgets to
-    // sanitise it is caught by the same field.
-    c.tuneStepIndex = 99;
     // Map geometry, away from the "nothing saved" default and out of range, so
     // a load path that forgets to assign it is caught.
     c.mapWindowWidth = -5;
@@ -221,7 +217,6 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mapWindowHeight == b.mapWindowHeight);
     CHECK(a.mapWindowX == b.mapWindowX);
     CHECK(a.mapWindowY == b.mapWindowY);
-    CHECK(a.tuneStepIndex == b.tuneStepIndex);
     // One whole-container compare, the same way the three plugin-name lists
     // are checked below: indexing into a possibly-shorter vector inside a
     // record-and-continue harness is an out-of-bounds read in exactly the run
@@ -379,10 +374,6 @@ int main() {
         // value the user had actually selected.
         in.scopeMode = true;
         in.scopeRangeNm = 25;
-        // The tuning knob's step: a legal index (50 kHz) that is neither the
-        // default (2) nor junkConfig()'s value (99, which resets to 2), so
-        // the roundtrip proves the FILE is what came back.
-        in.tuneStepIndex = 4;
         // Map pages: two, in an order the roundtrip must preserve, each with a
         // rectangle nobody would arrive at by accident and one with a NEGATIVE
         // x, because a second monitor to the left of the primary one is the
@@ -477,13 +468,18 @@ int main() {
     // --- unknown keys ignored; known keys still load; ints accepted as reals
     {
         const std::string path = p("unknown_keys.json");
+        // tuneStepIndex is a RETIRED key: every config saved by 0.88.0 and
+        // 0.89.0 carries it (the tuning knob's step), and the loader must
+        // walk past it the same way it walks past a key from the future.
         CHECK(writeText(path,
                         "{\"schemaVersion\":1,\"futureFeature\":{\"a\":[1,2]},"
+                        "\"tuneStepIndex\":4,"
                         "\"colorTheme\":\"neon\",\"centerHz\":144000000,"
                         "\"mode\":\"NFM\"}\n"));
         AppConfig out = junkConfig();
         std::string err;
         CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
         CHECK(out.centerHz == 144000000.0);  // JSON integer -> double field
         CHECK(out.mode == "NFM");
         CHECK(out.volume == 0.5f);  // untouched default
@@ -684,34 +680,6 @@ int main() {
         CHECK(d.deemphasisIndex == 0);
         CHECK(d.stereoEnabled);
         CHECK(d.bandPlanOverlay);
-    }
-
-    // --- tuneStepIndex: RESET to the default out of range, not clamped -------
-    {
-        const std::string path = p("tune_step_index.json");
-        AppConfig out;
-        std::string err;
-
-        // Out of range EITHER side resets to the default (1, 10 kHz) - there
-        // is no "nearest" step for an index the table does not have, unlike
-        // deemphasisIndex's clamp-to-bound rule above. RED WHEN this clamps
-        // to the nearest bound instead of resetting.
-        CHECK(writeText(path, "{\"tuneStepIndex\":7}\n"));
-        CHECK(ConfigStore::load(path, out, err));
-        CHECK(out.tuneStepIndex == 2);
-        CHECK(writeText(path, "{\"tuneStepIndex\":-3}\n"));
-        CHECK(ConfigStore::load(path, out, err));
-        CHECK(out.tuneStepIndex == 2);
-
-        // Every in-range index survives untouched.
-        for (int i = 0; i <= 4; ++i) {
-            CHECK(writeText(path, "{\"tuneStepIndex\":" + std::to_string(i) + "}\n"));
-            CHECK(ConfigStore::load(path, out, err));
-            CHECK(out.tuneStepIndex == i);
-        }
-
-        const AppConfig d;
-        CHECK(d.tuneStepIndex == 2);
     }
 
     // --- the two map trail switches (documented in config.hpp) ---------------

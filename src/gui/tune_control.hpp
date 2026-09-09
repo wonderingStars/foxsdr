@@ -187,97 +187,6 @@ inline bool autoPresetTriggersOnWindowClick(bool clicked, bool wasShownBeforeCli
     return clicked && !wasShownBeforeClick;
 }
 
-// --- The tuning knob's own arithmetic ---------------------------------------
-//
-// The knob itself is drawn by ImGui and driven by a live mouse, but WHICH
-// step it is on, WHERE the step table wraps, WHEN a drag has covered another
-// whole 15 degrees and WHETHER a mouse-up was a click rather than a drag are
-// all arithmetic with no ImGui dependency - exactly what a test can pin
-// without a window, the same reason every other decision in this file lives
-// here rather than inline in AppWindow::drawTuningKnob.
-
-// The five step sizes the knob's own engraving reads, in Hz and in
-// ascending order - index 0 is 100 Hz, 4 is 1 MHz. A DECADE LADDER, chosen
-// for the whole band the receiver covers rather than one corner of it:
-// 100 Hz is the fine step a sideband or CW signal needs, 1 kHz walks the HF
-// bands, 10 kHz is the everyday step on VHF and UHF, 100 kHz crosses the FM
-// broadcast band, and 1 MHz hops between bands. Every step is ten times its
-// neighbour, so the counter's digits move by exactly one place per notch and
-// nothing lands off a round figure. cycleTuneStep indexes this same table
-// both directions so the UI and the tests can never disagree about what
-// "step 2" means, and AppConfig::tuneStepIndex is a 0..4 index into it.
-inline constexpr int kTuneStepCount = 5;
-inline constexpr double kTuneStepsHz[kTuneStepCount] = {1.0e2, 1.0e3, 1.0e4, 1.0e5, 1.0e6};
-// The step a fresh install starts on: 10 kHz, the middle of the ladder.
-inline constexpr int kTuneStepDefaultIndex = 2;
-
-// LEFT CLICK cycles DOWN (up=false) - finer: 1 MHz, 100 kHz, 10 kHz, 1 kHz,
-// 100 Hz - and wraps from 100 Hz back to 1 MHz; RIGHT CLICK cycles UP
-// (up=true) - coarser - and wraps from 1 MHz back to 100 Hz, so "press
-// again" always does something, whichever button pressed it. index must
-// already be in range (AppConfig sanitises it on load; the knob never holds
-// anything else).
-inline int cycleTuneStep(int index, bool up) {
-    constexpr int kCount = kTuneStepCount;
-    return up ? (index + 1) % kCount : (index + kCount - 1) % kCount;
-}
-
-// A point in screen pixels - deliberately not ImVec2, so this header keeps
-// the "no ImGui" property the rest of the file already has; the call site
-// hands in an ImVec2's x and y.
-struct KnobPoint {
-    float x = 0.0f;
-    float y = 0.0f;
-};
-
-// DRAG VS. CLICK. The knob's InvisibleButton reports a mouse-up every time
-// the button comes up over it, whether the hand turned the dial or just
-// tapped it - this is what tells the two apart, measured in screen pixels
-// between the press and the release rather than in knob-angle degrees,
-// because a tap is a hand gesture and a hand does not measure itself in
-// degrees. "Within" is inclusive: exactly tolerancePx away still counts as a
-// press, the same way kTuneMismatchToleranceHz above treats its own boundary.
-inline bool clickIsPress(KnobPoint pressPos, KnobPoint releasePos, float tolerancePx) {
-    const float dx = releasePos.x - pressPos.x;
-    const float dy = releasePos.y - pressPos.y;
-    return std::sqrt(dx * dx + dy * dy) <= tolerancePx;
-}
-
-// ONE STEP EVERY 15 DEGREES OF ROTATION, clockwise (a positive deltaDeg) is
-// up. accumulatedDeg carries the fractional remainder between calls, so a
-// slow drag - a handful of degrees a frame - still adds up to a step instead
-// of being discarded every frame it falls short of 15; a fast drag reported
-// as one big delta returns the same total a sequence of small ones would.
-// Truncated toward zero on both signs (not rounded, and not floor()), which
-// is what makes a small delta on either side of zero read as "no step yet"
-// rather than one direction's small drags stepping early.
-inline int knobStepsFromAngle(float& accumulatedDeg, float deltaDeg) {
-    constexpr float kDegPerStep = 15.0f;
-    accumulatedDeg += deltaDeg;
-    const float stepsF = std::trunc(accumulatedDeg / kDegPerStep);
-    accumulatedDeg -= stepsF * kDegPerStep;
-    return static_cast<int>(stepsF);
-}
-
-// THE ENGRAVING TEXT for one of the five steps - "100 Hz" through "1 MHz",
-// each in the unit that makes it a one- or three-digit figure, the way a
-// dial is lettered. An out-of-range index (should never reach here -
-// AppConfig sanitises tuneStepIndex on load) falls back to the same default
-// the config does, rather than reading past the table.
-inline std::string tuneStepLabel(int index) {
-    if (index < 0 || index >= kTuneStepCount) { index = kTuneStepDefaultIndex; }
-    const double hz = kTuneStepsHz[index];
-    char buf[16];
-    if (hz >= 1.0e6) {
-        std::snprintf(buf, sizeof(buf), "%.0f MHz", hz / 1.0e6);
-    } else if (hz >= 1.0e3) {
-        std::snprintf(buf, sizeof(buf), "%.0f kHz", hz / 1.0e3);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.0f Hz", hz);
-    }
-    return buf;
-}
-
 // --- Per-digit tuning: the tubes' own arithmetic, shared with the switches --
 //
 // The counter has ten cells, most significant first - 1 GHz down to 1 Hz -
@@ -321,15 +230,14 @@ inline double stepDigit(double currentHz, int cellIndex, bool up) {
 //
 // THE PLATE IS SIZED TO THE DECK, NOT THE DECK TO THE PLATE. The first cut
 // scaled the reference down to the deck's 28-wide digit face and let the
-// bar grow 69 units to hold the 207-tall result, with the tuning knob, the
-// volume dial and the window's minimum width all shifted right for its
-// 408 of width. The owner's words on that cut, both binding: it "need[s] to
-// be smaller", and "we don't want to affect the size of the top bar - it's
-// perfect the way we have it". So the bar stays 160 tall and the knobs stay
-// where they were, and the plate is compacted to fit: 364 wide, which is
-// what stands between the counter's divider and the TUNING caption's first
-// letter with a few units of brass clear on either side, and 121 tall
-// inside the bar.
+// bar grow 69 units to hold the 207-tall result, with the volume dial and
+// the window's minimum width shifted right for its 408 of width. The
+// owner's words on that cut, both binding: it "need[s] to be smaller", and
+// "we don't want to affect the size of the top bar - it's perfect the way
+// we have it". So the bar stays 160 tall and the plate is compacted to fit:
+// 364 wide, standing between the counter's two dividers with 12 units of
+// brass clear on either side (kCounterDividerX in app_window.cpp is placed
+// from this width), and 121 tall inside the bar.
 //
 // WHAT WAS SHRUNK, AND WHAT WAS NOT. The digit face keeps its size (the
 // tube is 28 x 40, a hair under the reference's 3:4.4); every element of
@@ -380,9 +288,8 @@ inline constexpr float kFreqBezelX = kFreqPlatePadX;
 inline constexpr float kFreqBezelY =
     kFreqPlatePadTop + kFreqPlateHeaderH + kFreqPlateHeaderGap;  // 21
 
-// A rectangle in screen pixels - deliberately not ImVec2, for the same reason
-// KnobPoint above is a bare struct: this header has no ImGui dependency, and
-// none of its callers need one to check it.
+// A rectangle in screen pixels - deliberately not ImVec2: this header has no
+// ImGui dependency, and none of its callers need one to check it.
 struct FreqRect {
     float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
 };
@@ -426,6 +333,79 @@ inline FreqRect switchRectForCell(float plateTLx, float plateTLy, int cellIndex,
         plateTLy + (kFreqBezelY + kFreqBezelPadY + kFreqTubeH + kFreqTubeSwitchGap) * scale;
     const float y0 = upperHalf ? areaTopY : areaTopY + kFreqSwitchHalfH * scale;
     return FreqRect{x0, y0, x0 + kFreqCellW * scale, y0 + kFreqSwitchHalfH * scale};
+}
+
+// --- The deck's fixed cluster, and the two meters at the bar's right --------
+//
+// kDeckCoreW is the width of the fixed cluster on the top bar - transport
+// button through the volume dial - in the deck's reference units at scale 1.
+// It is the number the bar shrinks against on a narrow window and the number
+// the meters must clear on a wide one; app_window.cpp reads it as kCoreW and
+// places the dial from the same figure. Kept here, with no ImGui dependency,
+// so the meters rule below can be checked against it without an open frame.
+// 958 with the tuning knob on the deck; 888 since 0.90.0 removed it.
+inline constexpr float kDeckCoreW = 888.0f;
+
+// The narrowest client area run() lets the OS window reach. The bar's floor
+// scale (kBarMinScale in app_window.cpp) is a promise about the volume dial
+// that only holds if the window cannot go narrower than the dial needs, and
+// the static_assert beside that scale ties the two together. 694 with the
+// tuning knob on the deck; 624 since 0.90.0 removed it.
+inline constexpr int kDeckMinWindowW = 624;
+
+// THE BAR AT FIRST LAUNCH. run() creates a 1280 x 720 window and then takes
+// the caption off its style (win_frame), which leaves a client area of
+// 1282 x 745 (the diagnostic log's "frame: caption removed; ... client
+// 1282x745"); the cabinet keeps a 22-unit rail (kRailMinMargin - the
+// fraction-of-height margin comes out smaller than that at this size) plus
+// the 3 px its bevel takes, each side, before the bar is drawn. So the bar a
+// fresh install opens with is 1232 wide, and the meters rule is asked to
+// pass at exactly that width: the owner's complaint on 0.89.0 was that the
+// SAMPLE RATE and FRAME TIME meters were not on the deck until the window
+// was widened or maximised, because the rule then wanted 1320.
+inline constexpr float kFirstLaunchClientW = 1282.0f;
+inline constexpr float kFirstLaunchBodyInset = 22.0f + 3.0f;
+inline constexpr float kFirstLaunchBarW = kFirstLaunchClientW - 2.0f * kFirstLaunchBodyInset;
+
+// The two bench meters, SAMPLE RATE and FRAME TIME, in bar pixels: they are
+// pinned to the bar's right edge and do not scale, so these are screen
+// pixels as well as reference units.
+inline constexpr float kMeterW = 126.0f;
+inline constexpr float kMeterGap = 16.0f;           // brass between the two meters
+inline constexpr float kMeterRightMargin = 34.0f;   // the second meter to the bar's right edge
+inline constexpr float kMeterCoreClearance = 12.0f; // the fixed cluster's end to the first meter
+
+// Where each meter's left edge sits, measured from the bar's own left edge.
+inline constexpr float meter2XOnBar(float barW) { return barW - kMeterRightMargin - kMeterW; }
+inline constexpr float meter1XOnBar(float barW) { return meter2XOnBar(barW) - kMeterGap - kMeterW; }
+
+// WHETHER THE METERS ARE DRAWN AT ALL. They are dropped on a narrow window
+// rather than allowed to slide left into the volume dial (they are the least
+// load-bearing things on the bar - both figures are also in the status
+// column), and the rule is exactly "the first meter clears the fixed
+// cluster by kMeterCoreClearance": nothing more, because the slack the old
+// rule carried (110 units beyond the two meters) is what kept them off the
+// deck at the default window.
+inline constexpr bool metersFitOnBar(float barW, float coreW) {
+    return meter1XOnBar(barW) >= coreW + kMeterCoreClearance;
+}
+
+// THE MUTE BANNER'S STRIP. The banner takes the bar's open middle - from the
+// fixed cluster to the first meter, or to the bar's right edge when the
+// meters are not drawn - when that strip is at least kMuteBannerMinW wide,
+// and the strip under the counter otherwise. Both are inside the bar and
+// neither can reach the dial or the meters, which is the whole point: a
+// warning that overlaps a control is a warning the user cannot act on.
+inline constexpr float kMuteBannerMinW = 220.0f;
+inline constexpr float kMuteBannerEdgeClearance = 12.0f;
+inline constexpr float muteBannerMiddleW(float barW, float coreW) {
+    const float from = coreW + kMuteBannerEdgeClearance;
+    const float to = metersFitOnBar(barW, coreW) ? meter1XOnBar(barW) - kMeterGap
+                                                 : barW - kMuteBannerEdgeClearance;
+    return to - from;
+}
+inline constexpr bool muteBannerTakesTheMiddle(float barW, float coreW) {
+    return muteBannerMiddleW(barW, coreW) >= kMuteBannerMinW;
 }
 
 }  // namespace cascade::gui

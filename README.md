@@ -64,18 +64,16 @@ are still moving. What is in the current build:
   device path is ever written to the diagnostic log. `FOXSDR_GPS_PORT=<port>`
   (with `FOXSDR_GPS_BAUD`, default 9600) does the same read at start-up, in
   every run mode, for a bench with a receiver on it.
-- **A tuning knob**, on the top bar beside the frequency counter: drag it,
-  scroll over it, or use the arrow/page keys while it is hovered to step the
-  tuned frequency up or down by 100 Hz, 1 kHz, 10 kHz, 100 kHz or 1 MHz, and
-  click it (left finer, right coarser) to change the step. The counter itself
-  is a tuner plate bolted onto the front of the deck, after a 1950s military
-  receiver: an olive-drab riveted plate with an engraved "TUNED - HERTZ" name
-  plate, a receiver lamp and a MHz readout across its head, and a black bezel
-  holding ten Nixie tubes - one per digit, 1 GHz down to 1 Hz - each with a
-  chrome toggle switch beneath it. Scroll a tube to step that digit, click one
-  to type a frequency, or flick the switch: the upper half steps the digit up,
-  the lower half down, holding either repeats, and the lever stays pointing the
-  way it was last flicked.
+- **A tuner plate for a counter**, bolted onto the front of the deck after a
+  1950s military receiver: an olive-drab riveted plate with an engraved
+  "TUNED - HERTZ" name plate, a receiver lamp and a MHz readout across its
+  head, and a black bezel holding ten Nixie tubes - one per digit, 1 GHz down
+  to 1 Hz - each with a chrome toggle switch beneath it. Scroll a tube to step
+  that digit, click one to type a frequency, or flick the switch: the upper
+  half steps the digit up, the lower half down, holding either repeats, and
+  the lever stays pointing the way it was last flicked. The SAMPLE RATE and
+  FRAME TIME meters at the deck's right are on the bar at the window size the
+  application first opens with, not only once it is widened.
 - **Band plans for the whole world.** Labelled service allocations drawn behind
   the spectrum, colour-coded by service on a colour-blind-safe palette, with a
   "what am I tuned to" readout that names the *narrowest* match — 145.800 MHz
