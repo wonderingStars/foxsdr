@@ -328,6 +328,9 @@ const KnownWait kKnownWaits[] = {
      "~AppWindow's future reaps: runs after watchdog_.stop(), outside the budgeted stretch"},
     {"src/gui/app_window.cpp", "kNoWait", 0,
      "zero by construction - a ready-poll on a std::future, not a wait"},
+    {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the length of the window the read loop tallies before it writes "
+     "its stream-health line; nothing ever sleeps or blocks on it"},
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {

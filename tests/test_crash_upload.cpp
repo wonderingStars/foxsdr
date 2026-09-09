@@ -215,6 +215,11 @@ std::string crashReportText(const std::string& signature = "0123456789ABCDEF",
            "  cascade.exe+0x1A2B\n"
            "  cascade.exe+0x5C10\n"
            "  0x00007FFAB0001234\n"
+           // The process block (0.89.0), written after the stack because the
+           // fault-thread answer is derived from it.
+           "--- process ---\n"
+           "uptime-sec: 45\n"
+           "fault-thread-own: no\n"
            "--- modules ---\n"
            "  cascade.exe base=0x00007FF700000000 size=0x2C8000 pdb=cascade.pdb "
            "build=651FD5EB776649E7B91461B1EB1EB8C525\n"
@@ -481,6 +486,27 @@ int main() {
         CHECK(at(at(r.threads, 0).frames, 1).buildId == "651FD5EB776649E7B91461B1EB1EB8C525");
         CHECK(r.log.size() == 2);
         CHECK(at(r.log, 0) == "source opened");
+        // The process block: how long the session had run, and whether the
+        // faulting thread was one of ours - the two questions the 0.88.0
+        // RTL-SDR report could not answer.
+        CHECK(r.uptimeSec == 45u);
+        CHECK(r.faultThreadOwn == "no");
+        // ...and the shape they take on the wire: seconds as a number, the
+        // three-way answer as "true"/"false"/"".
+        const nlohmann::json cj = parseOrEmpty(uploadJson(r, std::string()));
+        CHECK(cj.contains("context"));
+        CHECK(cj["context"].value("uptimeSec", 0ull) == 45ull);
+        CHECK(cj["context"].value("faultThreadOwn", std::string("x")) == "false");
+        ParsedReport own = r;
+        own.faultThreadOwn = "yes";
+        CHECK(parseOrEmpty(uploadJson(own, std::string()))["context"].value(
+                  "faultThreadOwn", std::string("x")) == "true");
+        own.faultThreadOwn = "unknown";
+        CHECK(parseOrEmpty(uploadJson(own, std::string()))["context"].value(
+                  "faultThreadOwn", std::string("x")).empty());
+        // The process block lives after the stack, and the stack must not
+        // have swallowed its lines as frames.
+        CHECK(at(r.threads, 0).frames.size() == 3);
     }
 
     // --- A freeze report is the same payload from a different writer --------
@@ -510,6 +536,13 @@ int main() {
         CHECK(hj.contains("reason"));
         CHECK(hj.value("reason", std::string("x")).empty());
         CHECK(hj.value("code", std::string("x")).empty());
+        // A report with no process block - this fixture, and every report
+        // written before 0.89.0 - answers 0 and "" rather than inventing.
+        CHECK(r.uptimeSec == 0u);
+        CHECK(r.faultThreadOwn.empty());
+        CHECK(hj.contains("context"));
+        CHECK(hj["context"].value("uptimeSec", 99ull) == 0ull);
+        CHECK(hj["context"].value("faultThreadOwn", std::string("x")).empty());
     }
 
     // --- Rubbish is refused rather than posted ------------------------------

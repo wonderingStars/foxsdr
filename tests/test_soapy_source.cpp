@@ -28,6 +28,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/soapy_source.hpp"
 
+#include "core/diag_log.hpp"
 #include "source/soapy_enum_proc.hpp"
 
 #include <SoapySDR/Device.hpp>
@@ -48,6 +49,8 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
+#include <algorithm>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -247,6 +250,62 @@ SoapySDR::KwargsList findStall(const SoapySDR::Kwargs& args) {
 
 SoapySDR::Device* makeStall(const SoapySDR::Kwargs&) { return new StallingDevice(); }
 
+// A device that answers reads from a script: a positive count delivers that
+// many zero samples, anything else is returned to the caller as the driver's
+// answer. Past the end of the script it delivers a full block, so a test that
+// over-reads still sees a live radio rather than a hang.
+std::vector<int> g_healthScript;
+std::size_t g_healthAt = 0;
+class HealthDevice : public SoapySDR::Device {
+public:
+    std::string getDriverKey() const override { return "fakehealth"; }
+    std::string getHardwareKey() const override { return "fake scripted source"; }
+    size_t getNumChannels(const int) const override { return 1; }
+    SoapySDR::Stream* setupStream(const int, const std::string&,
+                                  const std::vector<size_t>&,
+                                  const SoapySDR::Kwargs&) override {
+        return reinterpret_cast<SoapySDR::Stream*>(this);
+    }
+    void closeStream(SoapySDR::Stream*) override {}
+    int activateStream(SoapySDR::Stream*, const int, const long long,
+                       const size_t) override {
+        return 0;
+    }
+    int deactivateStream(SoapySDR::Stream*, const int, const long long) override {
+        return 0;
+    }
+    double getSampleRate(const int, const size_t) const override { return 2.4e6; }
+    void setFrequency(const int, const size_t, const double f,
+                      const SoapySDR::Kwargs&) override {
+        freq_ = f;
+    }
+    double getFrequency(const int, const size_t) const override { return freq_; }
+    int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
+                   int&, long long&, const long) override {
+        int answer = static_cast<int>(numElems);
+        if (g_healthAt < g_healthScript.size()) { answer = g_healthScript[g_healthAt++]; }
+        if (answer > 0) {
+            const size_t n = std::min(static_cast<size_t>(answer), numElems);
+            float* p = static_cast<float*>(buffs[0]);
+            for (size_t i = 0; i < 2 * n; ++i) { p[i] = 0.0f; }
+            return static_cast<int>(n);
+        }
+        return answer;
+    }
+
+private:
+    double freq_ = 100.0e6;
+};
+SoapySDR::KwargsList findHealth(const SoapySDR::Kwargs& args) {
+    const auto driver = args.find("driver");
+    if (driver != args.end() && driver->second != "fakehealth") { return {}; }
+    SoapySDR::Kwargs k;
+    k["driver"] = "fakehealth";
+    k["label"] = "fake scripted source";
+    return SoapySDR::KwargsList{k};
+}
+SoapySDR::Device* makeHealth(const SoapySDR::Kwargs&) { return new HealthDevice(); }
+
 // ---------------------------------------------------------------------------
 // A DRIVER WHOSE ESCAPE-PATH CALLS NEVER COME BACK, which is the 0.70.0 field
 // freeze reduced to something reproducible.
@@ -406,6 +465,128 @@ SoapySDR::KwargsList findNonFinite(const SoapySDR::Kwargs& args) {
 
 SoapySDR::Device* makeNonFinite(const SoapySDR::Kwargs&) {
     return new NonFiniteDevice();  // owned by SoapySDR, released by unmake()
+}
+
+// ---------------------------------------------------------------------------
+// A DRIVER THAT RECORDS THE ORDER OF ITS STREAM AND RATE CALLS, which is the
+// 0.88.0 field crash (signature 235E46B5D39DED8D, an RTL-SDR NESDR SMArt v5)
+// reduced to the one fact that decides it.
+//
+// The user's radio was streaming at 2 MS/s; the ADS-B preset asked for
+// 2.4 MS/s, and SoapySource set it on the running device. SoapyRTLSDR's
+// setSampleRate then reprograms the dongle while its own async reader thread
+// is inside rtlsdr_read_async with USB transfers in flight, and 45 s later
+// that thread died in ntdll on a lock libusb had already freed. No frame of
+// ours was on the stack, so nothing of ours could absorb it. The driver's
+// deactivateStream joins that thread and activateStream starts a fresh one,
+// so a rate set BETWEEN them lands on a quiescent device - which is what this
+// fake asserts SoapySource now does, by recording what it was told and in
+// what order.
+//
+// The fake keeps a running flag of its own and reads it back through the
+// stream: setSampleRate while active is recorded as "setSampleRate(LIVE)" so
+// the order assertion fails on the exact fault rather than on a count, and
+// readStream delivers nothing while inactive so a stream that was never
+// reactivated is caught by the read that follows the change, not by trust.
+// ---------------------------------------------------------------------------
+std::vector<std::string> g_rateCalls;   // every stream/rate call, in order
+bool g_rateRejectNext = false;          // setSampleRate throws once, as
+                                        // SoapyRTLSDR does for a rate the
+                                        // dongle cannot make
+bool g_rateRefuseActivate = false;      // activateStream answers an error
+                                        // code instead of 0
+
+class RateOrderDevice : public SoapySDR::Device {
+public:
+    std::string getDriverKey() const override { return "fakerateorder"; }
+    std::string getHardwareKey() const override { return "fake rate-order source"; }
+    size_t getNumChannels(const int) const override { return 1; }
+    SoapySDR::Stream* setupStream(const int, const std::string&,
+                                  const std::vector<size_t>&,
+                                  const SoapySDR::Kwargs&) override {
+        return reinterpret_cast<SoapySDR::Stream*>(this);
+    }
+    void closeStream(SoapySDR::Stream*) override {}
+    int activateStream(SoapySDR::Stream*, const int, const long long,
+                       const size_t) override {
+        g_rateCalls.push_back(active_ ? "activateStream(ALREADY)" : "activateStream");
+        if (g_rateRefuseActivate) {
+            g_rateRefuseActivate = false;
+            return SOAPY_SDR_STREAM_ERROR;
+        }
+        active_ = true;
+        return 0;
+    }
+    int deactivateStream(SoapySDR::Stream*, const int, const long long) override {
+        g_rateCalls.push_back(active_ ? "deactivateStream" : "deactivateStream(IDLE)");
+        active_ = false;
+        return 0;
+    }
+    double getSampleRate(const int, const size_t) const override { return rate_; }
+    void setSampleRate(const int, const size_t, const double hz) override {
+        g_rateCalls.push_back(active_ ? "setSampleRate(LIVE)" : "setSampleRate");
+        if (g_rateRejectNext) {
+            g_rateRejectNext = false;
+            throw std::runtime_error(
+                "setSampleRate failed: RTL-SDR does not support this sample rate");
+        }
+        // COERCED, not echoed, the way a real tuner lands on its nearest
+        // clock division: whole kilohertz. The readback assertion below is
+        // then a readback and not an echo of the request.
+        rate_ = std::round(hz / 1000.0) * 1000.0;
+    }
+    void setFrequency(const int, const size_t, const double f,
+                      const SoapySDR::Kwargs&) override {
+        freq_ = f;
+    }
+    double getFrequency(const int, const size_t) const override { return freq_; }
+    int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
+                   int&, long long&, const long) override {
+        if (!active_) { return SOAPY_SDR_TIMEOUT; }  // nothing flows when stopped
+        float* p = static_cast<float*>(buffs[0]);
+        for (size_t i = 0; i < 2 * numElems; ++i) { p[i] = 0.5f; }
+        return static_cast<int>(numElems);
+    }
+
+private:
+    bool active_ = false;
+    double rate_ = 2.0e6;   // the field radio's rate at the moment of the crash
+    double freq_ = 100.0e6;
+};
+
+SoapySDR::KwargsList findRateOrder(const SoapySDR::Kwargs& args) {
+    const auto driver = args.find("driver");
+    if (driver != args.end() && driver->second != "fakerateorder") { return {}; }
+    SoapySDR::Kwargs k;
+    k["driver"] = "fakerateorder";
+    k["label"] = "fake rate-order source";
+    return SoapySDR::KwargsList{k};
+}
+
+SoapySDR::Device* makeRateOrder(const SoapySDR::Kwargs&) { return new RateOrderDevice(); }
+
+// True when the NEWEST line in the diagnostics ring carries `text`. The ring
+// is what a crash report is flushed from, so "newest" is exactly the line the
+// next report of this shape would show last before the fault.
+bool lastDiagLine(const char* text) {
+    const std::vector<std::string> ring = cascade::core::DiagLog::instance().ringSnapshot();
+    if (ring.empty()) {
+        std::printf("  diag ring is empty\n");
+        return false;
+    }
+    const bool hit = ring.back().find(text) != std::string::npos;
+    if (!hit) { std::printf("  newest diag line: \"%s\"\n", ring.back().c_str()); }
+    return hit;
+}
+
+// The recorded sequence as one line, for the failure printout.
+std::string joinCalls(const std::vector<std::string>& calls) {
+    std::string out;
+    for (const std::string& c : calls) {
+        if (!out.empty()) { out += ", "; }
+        out += c;
+    }
+    return out.empty() ? std::string("(none)") : out;
 }
 
 }  // namespace
@@ -747,6 +928,141 @@ int main() {
             if (d.args.find("fakenonfinite") != std::string::npos) { sawFake = true; }
         }
         CHECK(sawFake);
+    }
+
+    // --- a sample-rate change on a live stream happens on a QUIESCENT one ---
+    //
+    // THE 0.88.0 FIELD CRASH (235E46B5D39DED8D, NESDR SMArt v5): the ADS-B
+    // preset set 2.4 MS/s on a radio streaming at 2 MS/s, and SoapyRTLSDR's
+    // reader thread died 45 s later on a freed libusb lock - see the fake's
+    // comment for the mechanism. The fix is an ORDER: deactivate, set, activate,
+    // under the one device lock, and that order is what this block pins.
+    // Red-green: with the restart removed (the rate set on the live stream, as
+    // 0.88.0 did) the recorded sequence is a single "setSampleRate(LIVE)" and
+    // the first order CHECK below fails.
+    {
+        std::printf("--- sample rate change on a live stream ---\n");
+        SoapySDR::Registry reg("fakerateorder", &findRateOrder, &makeRateOrder,
+                               SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        CHECK(src.open("driver=fakerateorder"));
+        CHECK(src.sampleRateHz() == 2.0e6);  // the readback at open
+
+        // (a) RUNNING: deactivate, set, activate - exactly, and in that order.
+        CHECK(src.start());
+        CHECK(src.running());
+        g_rateCalls.clear();
+        // 2,400,400 asked, 2,400,000 read back: proves the mirror follows the
+        // device's coerced answer and not the request.
+        const bool changed = src.setSampleRateHz(2.4004e6);
+        std::printf("  running change: %s, calls=[%s], lastError=\"%s\"\n",
+                    changed ? "true" : "false", joinCalls(g_rateCalls).c_str(),
+                    src.lastError());
+        CHECK(changed);
+        CHECK(g_rateCalls == (std::vector<std::string>{
+                                 "deactivateStream", "setSampleRate", "activateStream"}));
+        CHECK(src.running());
+        CHECK(src.sampleRateHz() == 2.4e6);
+        CHECK(!src.faulted());
+        // THE LOG LINE THE FIELD REPORT DID NOT HAVE. Its ring showed the
+        // restore, then the ADS-B window opening, then a minute of the sound
+        // path faltering - and nothing saying the radio's clock had been
+        // changed under a live stream in between. Pinned here so the next
+        // report of this shape names the transition and how long it took.
+        CHECK(lastDiagLine("source: sample rate 2000000 -> 2400000 S/s (stream restarted, "));
+
+        // (e) ...and samples still flow afterwards. The fake answers a read
+        // only while ITS stream is active, so a change that forgot the
+        // reactivate (or reactivated before it set the rate) comes back empty
+        // here rather than being taken on trust.
+        std::vector<std::complex<float>> buf(256);
+        CHECK(src.read(buf.data(), buf.size()) == buf.size());
+        CHECK(buf[0] == std::complex<float>(0.5f, 0.5f));
+
+        // (c) THE SAME RATE AGAIN, while running: no driver call at all. A
+        // preset re-applied at the rate the radio already has must not cost a
+        // stream restart, and the fake would record one if it happened.
+        g_rateCalls.clear();
+        CHECK(src.setSampleRateHz(2.4e6));
+        CHECK(g_rateCalls.empty());
+        CHECK(src.running());
+        CHECK(src.sampleRateHz() == 2.4e6);
+
+        // (d) A REJECTED RATE LEAVES THE RADIO RUNNING AT THE OLD ONE. The
+        // driver throws the way SoapyRTLSDR does for a rate the dongle cannot
+        // make; the user asked for a preset, not for silence, so the stream
+        // is put back at 2.4 MS/s and the message says so.
+        g_rateCalls.clear();
+        g_rateRejectNext = true;
+        const bool rejected = src.setSampleRateHz(3.2e6);
+        std::printf("  rejected change: %s, calls=[%s], lastError=\"%s\"\n",
+                    rejected ? "true" : "false", joinCalls(g_rateCalls).c_str(),
+                    src.lastError());
+        CHECK(!rejected);
+        CHECK(g_rateCalls == (std::vector<std::string>{
+                                 "deactivateStream", "setSampleRate", "activateStream"}));
+        CHECK(src.running());
+        CHECK(src.sampleRateHz() == 2.4e6);            // unchanged
+        CHECK(!src.faulted());                         // a refusal, not a fault
+        CHECK(std::strstr(src.lastError(), "does not support") != nullptr);
+        CHECK(std::strstr(src.lastError(), "still running at 2400000 S/s") != nullptr);
+        CHECK(src.read(buf.data(), buf.size()) == buf.size());  // and it really is
+
+        // (f) THE RATE TOOK BUT THE STREAM WOULD NOT COME BACK: running() must
+        // say stopped, the mirror must carry the rate the device now has (the
+        // DSP chain runs at the device's clock, not at the last one that
+        // worked), and the message must say which.
+        g_rateCalls.clear();
+        g_rateRefuseActivate = true;
+        const bool halfway = src.setSampleRateHz(1.024e6);
+        std::printf("  activate refused: %s, calls=[%s], lastError=\"%s\"\n",
+                    halfway ? "true" : "false", joinCalls(g_rateCalls).c_str(),
+                    src.lastError());
+        CHECK(!halfway);
+        CHECK(g_rateCalls == (std::vector<std::string>{
+                                 "deactivateStream", "setSampleRate", "activateStream"}));
+        CHECK(!src.running());
+        CHECK(src.sampleRateHz() == 1.024e6);
+        CHECK(!src.faulted());
+        CHECK(std::strstr(src.lastError(), "could not be restarted") != nullptr);
+        CHECK(std::strstr(src.lastError(), "it is stopped") != nullptr);
+        // The next Play brings it back: the object really is in "stopped",
+        // not in some third state start() refuses.
+        g_rateCalls.clear();
+        CHECK(src.start());
+        CHECK(g_rateCalls == (std::vector<std::string>{"activateStream"}));
+        CHECK(src.running());
+        CHECK(src.read(buf.data(), buf.size()) == buf.size());
+        src.stop();
+        CHECK(!src.running());
+
+        // (b) STOPPED: the rate call alone. There is no stream to quiesce, and
+        // an activate here would start a radio the user has stopped.
+        g_rateCalls.clear();
+        CHECK(src.setSampleRateHz(1.0e6));
+        CHECK(g_rateCalls == (std::vector<std::string>{"setSampleRate"}));
+        CHECK(!src.running());
+        CHECK(src.sampleRateHz() == 1.0e6);
+        CHECK(lastDiagLine("source: sample rate 1024000 -> 1000000 S/s (stream idle)"));
+
+        // (c) again, stopped: same rate, no call.
+        g_rateCalls.clear();
+        CHECK(src.setSampleRateHz(1.0e6));
+        CHECK(g_rateCalls.empty());
+        CHECK(!src.running());
+
+        // (d) again, stopped: a rejection is just a rejection - nothing is
+        // activated to "restore" a stream that was not running.
+        g_rateCalls.clear();
+        g_rateRejectNext = true;
+        CHECK(!src.setSampleRateHz(3.2e6));
+        CHECK(g_rateCalls == (std::vector<std::string>{"setSampleRate"}));
+        CHECK(!src.running());
+        CHECK(src.sampleRateHz() == 1.0e6);
+
+        src.closeDevice();
+        CHECK(!src.isOpen());
+        CHECK(!SoapySource::anyDeviceOpen());
     }
 
     // --- OPT-IN REAL-HARDWARE SOAK: CASCADE_TEST_B200_SOAK=1 -----------------
@@ -1198,6 +1514,65 @@ int main() {
         releaseWedge();
         CHECK(waitForWedgedReturn(1));
         std::printf("  the abandoned deactivate returned; the read never went in\n");
+    }
+
+    // ----------------------------------------------------------------
+    // THE STREAM-HEALTH LINE. The 0.88.0 field crash arrived with a log that
+    // said nothing about the radio for the minute before the driver died;
+    // the read loop now tallies what the driver answers and writes one line
+    // a minute. A scripted fake answers samples, timeouts, an overflow and a
+    // hard error in a known order; the line must classify each one exactly,
+    // and the loop must write it on its own once the window has passed.
+    {
+        std::printf("-- stream health line --\n");
+        SoapySDR::Registry reg("fakehealth", &findHealth, &makeHealth,
+                               SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        CHECK(src.open("driver=fakehealth"));
+        CHECK(src.start());
+        std::vector<std::complex<float>> buf(64);
+        // samples, timeout, timeout, overflow, samples, hard error, samples
+        g_healthScript = {64, SOAPY_SDR_TIMEOUT, SOAPY_SDR_TIMEOUT, SOAPY_SDR_OVERFLOW,
+                          64, SOAPY_SDR_STREAM_ERROR, 64};
+        g_healthAt = 0;
+        for (std::size_t i = 0; i < g_healthScript.size(); ++i) {
+            (void)src.read(buf.data(), buf.size());
+        }
+        const std::string line = src.streamHealthLine();
+        std::printf("  %s\n", line.c_str());
+        CHECK(line.find("source: stream health - reads 7, with samples 3, timeouts 2, "
+                        "overflows 1, errors 1, longest gap ") != std::string::npos);
+        CHECK(line.find(", 192 samples in ") != std::string::npos);
+        // The window starts again: nothing to say until the next read.
+        CHECK(src.streamHealthLine().empty());
+
+        // THE LOOP WRITES IT ITSELF once the window has passed - shortened
+        // here so the test does not wait a minute. A window with a timeout in
+        // it is not nominal, so it must be written whatever came before.
+        // The line is written BY THE READ THAT CROSSES THE WINDOW, so it
+        // carries that read and the ones before it: two reads, one timeout.
+        src.setStreamHealthWindowForTest(std::chrono::milliseconds(40));
+        g_healthScript = {64, SOAPY_SDR_TIMEOUT, 64};
+        g_healthAt = 0;
+        (void)src.read(buf.data(), buf.size());
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        (void)src.read(buf.data(), buf.size());
+        (void)src.read(buf.data(), buf.size());
+        CHECK(lastDiagLine("source: stream health - reads 2, with samples 1, timeouts 1, "));
+
+        // AND A NOMINAL MINUTE AFTER THAT IS NOT WRITTEN: the log must not
+        // carry a line a minute for a radio that is simply working. The count
+        // of lines written is the honest probe - the newest line alone cannot
+        // tell "not written" from "written again".
+        const std::uint64_t before = cascade::core::DiagLog::instance().linesWritten();
+        g_healthScript = {64, 64, 64};
+        g_healthAt = 0;
+        (void)src.read(buf.data(), buf.size());
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        (void)src.read(buf.data(), buf.size());
+        (void)src.read(buf.data(), buf.size());
+        CHECK(cascade::core::DiagLog::instance().linesWritten() == before);
+        src.stop();
     }
 
     return testSummary("test_soapy_source");

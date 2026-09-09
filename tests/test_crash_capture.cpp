@@ -205,6 +205,17 @@ void checkReportContent(const CaughtReport& r, const char* what) {
     CHECK(r.text.find("build=") != std::string::npos);
     CHECK(r.text.find("pdb=") != std::string::npos);
 
+    // The process block, after the stack: the session's age, and whether the
+    // faulting thread was one of ours. The child faulted from this test's own
+    // code (raiseTestFault, linked into this executable), so the walked stack
+    // has a frame in the main image and the answer is yes.
+    const std::size_t processAt = r.text.find("--- process ---");
+    const std::size_t stackAt = r.text.find("--- stack");
+    CHECK(processAt != std::string::npos);
+    CHECK(stackAt != std::string::npos && processAt > stackAt);
+    CHECK(r.text.find("uptime-sec: ") != std::string::npos);
+    CHECK(r.text.find("fault-thread-own: yes") != std::string::npos);
+
     // Application context: which plugin was loaded has already been the
     // answer to real faults in this product.
     CHECK(r.text.find("plugin: ADS-B 1.1.0") != std::string::npos);

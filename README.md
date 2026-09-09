@@ -669,7 +669,20 @@ holds the request, the code and that document to each other in both directions.
   was judged by the same five, and a slow but perfectly healthy close could
   file a freeze report against an application that had already exited. The
   report says which clock it was measured against.
-- A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`.
+- A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
+  0.89.0 it records what the **radio driver** says as well as what FoxSDR
+  does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a
+  windowed session the standard error stream — where librtlsdr and UHD print
+  warnings such as `rtlsdr_read_async: dev_lost` — is captured into it (lines
+  beginning `vendor:`). A radio going quiet is diagnosed from those lines and
+  nothing else, and until now they went to a console nobody was reading. Both
+  are limited to twenty lines a second, serial numbers are stripped and the
+  digits of any line that mentions a frequency are masked before a line is
+  kept, and a developer running from a terminal keeps their stderr untouched.
+  A crash report also now says how long the session had been running
+  (`uptime-sec`) and whether the thread that faulted was one of FoxSDR's own
+  or one a driver created (`fault-thread-own`), and the uploaded copy carries
+  at least 80 log lines wherever it carries any.
 - Each report that has been sent — or could not be — carries a small `.upload`
   file beside it saying which, in plain words. At most five reports a day leave
   one machine, and the same fault only once a day, so a machine stuck in a crash

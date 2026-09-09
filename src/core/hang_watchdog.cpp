@@ -561,6 +561,12 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
             out << line;
         }
     }
+    // The same process block crash_handler.cpp writes after its stack, minus
+    // the fault-thread line a freeze has no meaning for: how long the session
+    // had run when it stopped. Before the walk, like everything else that is
+    // known before the walk.
+    out << "--- process ---\n";
+    out << "uptime-sec: " << processUptimeSec() << "\n";
     out.flush();
 
     {

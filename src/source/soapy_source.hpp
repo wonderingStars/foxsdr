@@ -78,6 +78,7 @@
 #include <atomic>
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -262,6 +263,18 @@ public:
     // Forwards to the device, then re-reads the ACTUAL rate into
     // sampleRateHz(). False (with lastError) if there is no device, the
     // rate is not positive, or the driver refused it.
+    //
+    // ON A RUNNING STREAM THE CHANGE IS MADE ON A QUIESCENT DEVICE: the
+    // stream is deactivated, the rate set, and the stream activated again,
+    // all under the one device lock, and running() reads true throughout on
+    // the success path. That is what every RTL-SDR application that does not
+    // crash on a rate change does, and it is how the ADS-B preset (2.4 MS/s
+    // onto a radio streaming at 2 MS/s) stopped killing the process on the
+    // driver's own reader thread - see the .cpp for the field report. A rate
+    // the driver rejects leaves the stream running at the old rate; only a
+    // driver that also refuses to reactivate leaves it stopped, and
+    // lastError() says which. Already at that rate (within 1 Hz of the last
+    // readback): true, and the driver is not touched at all.
     bool setSampleRateHz(double hz) override;
 
     // Same actual-readback scheme as the sample rate. 0.0 until open.
@@ -415,6 +428,31 @@ private:
     // never do.
     void stopLocked();
 
+    // THE TWO STREAM TRANSITIONS, each in exactly one place. start() and
+    // stopLocked() used to carry their own copies of these bodies; a sample-
+    // rate change on a live stream needs both of them in sequence (see
+    // setSampleRateHz), and three copies of a guarded vendor call is how one
+    // of them ends up unguarded. Both assume the link's mutex is HELD.
+    //
+    // activateLocked: activateStream on the calling thread, under the vendor
+    // guard (CRASH [1] lands here). True when the driver answered 0. False
+    // with lastError() set when it threw or refused, or with the device
+    // condemned (noteVendorFault) when it faulted. Does NOT touch running_ -
+    // the caller decides what the transition means for its own state.
+    //
+    // deactivateLocked: deactivateStream on an abandonable worker (the 0.70.0
+    // freeze), the caller waiting kVendorCallWait. Same true/false contract;
+    // a call that never came back condemns the device through
+    // abandonWedgedDriverLocked. Read deviceDead() after a false to tell a
+    // driver that said no from a driver that is gone.
+    //
+    // `what` is the wording noteVendorFault / abandonWedgedDriverLocked put
+    // in the log and in lastError() ("starting the stream", "stopping the
+    // stream for a sample-rate change", ...), so the report says which of
+    // the three sites the driver failed at.
+    bool activateLocked(const char* what);
+    bool deactivateLocked(const char* what);
+
     // Releases whatever half-built state exists, swallowing every Soapy
     // exception: teardown runs inside catch blocks and destructors, where a
     // second throw would terminate the process.
@@ -507,6 +545,49 @@ private:
     bool faulted_ = false;
     bool deviceDead_ = false;
     int consecutiveErrors_ = 0;
+
+public:
+    // STREAM HEALTH, written down once a minute. The 0.88.0 field crash
+    // (signature 235E46B5D39DED8D) reached the store with a log that said
+    // nothing about the radio for the whole minute before the driver's own
+    // reader thread died: the only hint that USB delivery had been faltering
+    // was the SOUND path's starvation counter. The read loop is the one place
+    // that sees every timeout, overflow and error the driver answers, so it
+    // keeps the tally and, on the minute, writes one line - always for the
+    // first minute after a start (so a healthy radio leaves one line proving
+    // it), and after that only when something was not nominal.
+    //
+    // streamHealthLine() is public for two callers: the read loop on its own
+    // thread, and a test that wants the summary without waiting a minute.
+    // The counters are touched only from the thread that calls read(), so
+    // they need no lock; a test drives read() itself and then asks.
+    struct StreamHealth {
+        std::uint64_t reads = 0;
+        std::uint64_t withSamples = 0;
+        std::uint64_t samples = 0;
+        std::uint64_t timeouts = 0;
+        std::uint64_t overflows = 0;
+        std::uint64_t errors = 0;
+        std::int64_t longestGapMs = 0;
+        bool windowOpen = false;
+        std::chrono::steady_clock::time_point windowStart{};
+        std::chrono::steady_clock::time_point lastSamples{};
+    };
+    static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
+    // The line for the window so far, and the window starts again. Empty when
+    // no read has happened since the last line.
+    std::string streamHealthLine();
+    // Tests only: shorten the minute so the read loop's own reporting can be
+    // seen without waiting for it.
+    void setStreamHealthWindowForTest(std::chrono::milliseconds w) { healthWindow_ = w; }
+
+private:
+    void noteRead(int ret, std::size_t got);
+    StreamHealth health_;
+    // Set by the read loop's own write, and only by it, so a caller that took
+    // the summary early (a test) does not use up the first minute's line.
+    bool healthEverWritten_ = false;
+    std::chrono::milliseconds healthWindow_ = kStreamHealthWindow;
 };
 
 }  // namespace cascade::source

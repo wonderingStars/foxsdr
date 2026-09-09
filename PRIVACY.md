@@ -136,7 +136,7 @@ A report contains these fields and no others:
 | `last-run-unclean` | `yes` | Whether the previous session ended without shutting down. |
 | `launches`, `crashes` | `12`, `1` | The same two counters the usage report already keeps. |
 | `log-lines-total` | `4011` | How much of the log the report is *not* carrying. |
-| the log | the last 256 lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. When an I/Q file fails to reopen the log records that it did not reopen; the file name stays on screen, where you already know it. |
+| the log | the last 256 lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. When an I/Q file fails to reopen the log records that it did not reopen; the file name stays on screen, where you already know it. Since 0.89.0 the log also records what the radio driver said (`soapy:` lines) and what its libraries printed to the standard error stream (`vendor:` lines), with serial numbers stripped and the digits of any line mentioning a frequency masked — see the `log` row under *What is sent when a report is uploaded* for the exact rule. |
 
 A crash or freeze report written by the application itself carries the same
 context block as the table above — the same bytes, so the two cannot drift —
@@ -181,6 +181,16 @@ faulting one for a crash — and the list of loaded modules with their build
 identifiers. Those are addresses inside program code and identifiers of
 compiled files. They describe FoxSDR, not you.
 
+Since 0.89.0 both also carry a short **process** block, after the stack in a
+crash report and before the stacks in a freeze report:
+
+| Field | Example | Why |
+|---|---|---|
+| `uptime-sec` | `2731` | How many seconds the application had been running. A fault forty seconds after a rate change and one three hours in are different bugs at the same address. |
+| `fault-thread-own` | `yes`, `no` or `unknown` | Crash reports only. Whether any frame of the faulting thread's stack lies in FoxSDR's own executable: `no` means a thread a radio driver created and ran entirely in its own code, which a report could not previously say. `unknown` when the stack could not be walked. |
+
+Both are about the program. Neither is about you.
+
 Every one of those three lists — the bundle, the crash header and the freeze
 header — is asserted field-by-field by an automated test, in **both**
 directions: a field added to a report fails the test just as loudly as a field
@@ -219,8 +229,8 @@ One request per report, on the **next** start after the failure, to
 | `code` | `0xC0000005` | The Windows exception code, verbatim from the report. A code, not content. Empty for a freeze report. |
 | `installId` | `4f9c…`, **or empty** | The same anonymous identifier the usage report uses, so the receiving end can stop one machine flooding it. **If usage reporting is off there is no identifier and this is sent empty** — a crash report never creates one. |
 | `plugins` | `[{name, version, buildId}]` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |
-| `context` | `mode`, `source`, `sampleRate`, `deviceOpen`, `sdrModel` | What the receiver was doing. **`sampleRate` is the sample rate, not a tuned frequency.** Serial numbers are stripped from `sdrModel`, exactly as in the usage report. |
-| `log` | the last log lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. |
+| `context` | `mode`, `source`, `sampleRate`, `deviceOpen`, `sdrModel`, `uptimeSec`, `faultThreadOwn` | What the receiver was doing. **`sampleRate` is the sample rate, not a tuned frequency.** Serial numbers are stripped from `sdrModel`, exactly as in the usage report. `uptimeSec` (since 0.89.0) is how many seconds the application had been running — a fault forty seconds in and one three hours in are different bugs. `faultThreadOwn` is `"true"` when the thread that faulted was running FoxSDR's own code, `"false"` when it was a thread a radio driver created and ran entirely in its own code, and empty for a freeze report or a stack that could not be walked. Neither says anything about you. |
+| `log` | the last log lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. Since 0.89.0 this also includes what the **radio driver** said (lines beginning `soapy:`) and what the driver's libraries printed to the standard error stream (lines beginning `vendor:`), because a radio going quiet is diagnosed from those lines and from nothing else. They are recorded as the driver wrote them, with two exceptions applied before anything is kept: a serial number after the word "serial" is replaced by `<stripped>`, and every digit on a line that mentions a frequency, tuning or hertz is replaced by `#`, so a driver's own "setting center frequency" line cannot carry what you were listening to. At most twenty such lines a second are kept; the rest are counted and the count is logged. |
 | `threads` | `[{id, frames:[{module, buildId, offset}]}]` | The call stacks, as file names and offsets. Addresses inside program code; they describe FoxSDR, not you. |
 
 That is the complete list. It is asserted **in both directions** by

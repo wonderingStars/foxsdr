@@ -1123,6 +1123,16 @@ int main(int argc, char** argv) {
         configPath = cascade::core::ConfigStore::defaultPath();
     }
 
+    // THE STDERR CAPTURE, and only here: a real session, after every tool
+    // mode has returned and after the argument errors above have had their
+    // stderr. librtlsdr, libusb and UHD print their warnings with
+    // fprintf(stderr, ...) - "rtlsdr_read_async: dev_lost" is the whole
+    // diagnosis of a radio going quiet, and until 0.89.0 it went to a window
+    // nobody was reading. A --frames run is a test and keeps its stderr for
+    // the harness; a developer at a terminal keeps theirs (the capture
+    // declines a console someone else is attached to - see diag_log.hpp).
+    if (frames < 0) { cascade::core::installStderrCapture(); }
+
     cascade::gui::AppWindow app(configPath, announceConfig);
     // Empty unless this run is ALLOWED to write - which is not the same as
     // whether the user wants it. run() gates the writing on the stored switch;
