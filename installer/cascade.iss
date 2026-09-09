@@ -19,7 +19,17 @@
 ; The product's identity across every version and both install scopes. It is
 ; the AppId below AND the registry key the [Code] section looks for in the
 ; other hive, so it is written once here rather than twice.
-#define AppGuid "B3D4A7E2-6C51-4F8B-9A0D-2E7F5C8B1A64"
+;
+; OVERRIDABLE FOR ONE REASON ONLY: a test build that must not be able to touch
+; the real product's registration. The data cleaner below deletes a user's
+; whole FoxSDR profile, and the only honest way to test that is to install and
+; uninstall a REAL setup.exe - which, with the product's own AppId, would find
+; the machine's actual FoxSDR in the other hive and silently uninstall it
+; (PrepareToInstall does exactly that, by design). A test build passes its own
+; GUID, so it is a different product to Windows and to this script.
+#ifndef AppGuid
+  #define AppGuid "B3D4A7E2-6C51-4F8B-9A0D-2E7F5C8B1A64"
+#endif
 ; Overridable so a nightly can be stamped with its own version:
 ;   ISCC.exe /DAppVersion="0.56.0-nightly.20260819.58fe5a3" installer\cascade.iss
 ; tools/build-nightly.ps1 does exactly that, and passes the SAME string to
@@ -128,6 +138,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+; A CLEAN INSTALL, offered rather than assumed. An upgrade keeps the user's
+; settings, plugins and caches - that is what an upgrade is for - but a user
+; who is reinstalling BECAUSE something in that data is wrong has, until now,
+; had to find two folders in their profile by hand. Unchecked by default: it
+; throws away work (installed plugins, bookmarks, the receiver position), so
+; it is never the quiet default. Recordings are never in scope, here or in the
+; uninstaller: they are the user's captured signals, not the program's state.
+Name: "cleaninstall"; Description: "Delete existing FoxSDR settings, plugins, caches and logs first"; GroupDescription: "Clean install:"; Flags: unchecked
 
 [Files]
 ; Core payload — the runtime binaries the build produces.
@@ -178,7 +196,9 @@ Type: files; Name: "{group}\Radar unit.lnk"
 
 [UninstallDelete]
 ; The app never writes into {app} at runtime (config lives under the user
-; profile), so nothing to purge beyond what the installer placed.
+; profile), so nothing to purge beyond what the installer placed. The user's
+; profile data is removed by CurUninstallStepChanged below, on a yes/no
+; question - not from here, because [UninstallDelete] cannot ask.
 
 [Code]
 // ONE FoxSDR PER MACHINE, WHICHEVER SCOPE IT WAS INSTALLED IN.
@@ -217,6 +237,162 @@ begin
     Result := RemoveQuotes(Value)
   else if RegQueryStringValue(Root, 'WOW6432Node\' + Key, 'UninstallString', Value) then
     Result := RemoveQuotes(Value);
+end;
+
+// --- THE USER'S OWN DATA, AND THE TWO PLACES IT LIVES -----------------------
+//
+// Everything FoxSDR keeps about a user is under exactly two roots:
+//
+//   %APPDATA%\foxsdr        config.json - the settings, bookmarks, the
+//                           receiver position, the plugin permissions
+//   %LOCALAPPDATA%\FoxSDR   plugins\ (installed plugins and their manifest),
+//                           logs\, crashes\, and the caches each plugin keeps
+//                           (satellite\, tiles\, aircraft\, surveyengine\)
+//
+// RECORDINGS ARE NOT IN EITHER, and that is deliberate: they default to
+// Documents\SDR-recordings and are the user's captured signals, not the
+// program's state. Nothing here touches them, and both prompts say so.
+//
+// A note on which profile: in an administrative install elevated with a
+// DIFFERENT account's credentials, Windows gives Setup that account's
+// profile, so these constants resolve to the elevating user's folders rather
+// than the ones the program actually used. The prompt therefore PRINTS the
+// two paths it is about to delete, so a user in that situation can see that
+// they are not theirs and answer No.
+//
+// The /DATAROOTS= switch exists for the installer's own test: it moves both
+// roots under a scratch directory so an end-to-end install-and-uninstall run
+// can prove the deletion without a real profile being anywhere near it.
+
+function RoamingDataDir(): String;
+var
+  Base: String;
+begin
+  Base := ExpandConstant('{param:dataroots|}');
+  if Base <> '' then
+    Result := AddBackslash(Base) + 'Roaming\foxsdr'
+  else
+    Result := ExpandConstant('{userappdata}\foxsdr');
+end;
+
+function LocalDataDir(): String;
+var
+  Base: String;
+begin
+  Base := ExpandConstant('{param:dataroots|}');
+  if Base <> '' then
+    Result := AddBackslash(Base) + 'Local\FoxSDR'
+  else
+    Result := ExpandConstant('{localappdata}\FoxSDR');
+end;
+
+// DelTree on a path built from a constant is a loaded gun: if a constant ever
+// expands to empty, '{userappdata}\foxsdr' becomes '\foxsdr' and the tree
+// removed is not the one intended. So every delete goes through here, and
+// here refuses anything whose last component is not the exact folder name
+// this installer created. A guard that can never fire in normal use is the
+// point: it is the one that matters when something else has gone wrong.
+function DeleteDataTree(const Dir: String; const ExpectedLeaf: String): Boolean;
+var
+  Trimmed: String;
+begin
+  Result := False;
+  if Dir = '' then begin
+    Log('Data cleanup: refused an empty path.');
+    exit;
+  end;
+  Trimmed := RemoveBackslashUnlessRoot(Dir);
+  if CompareText(ExtractFileName(Trimmed), ExpectedLeaf) <> 0 then begin
+    Log('Data cleanup: refused "' + Dir + '" - it does not end in "' + ExpectedLeaf + '".');
+    exit;
+  end;
+  if Length(Trimmed) < 8 then begin
+    Log('Data cleanup: refused "' + Dir + '" - too short to be a profile folder.');
+    exit;
+  end;
+  if not DirExists(Trimmed) then begin
+    Log('Data cleanup: nothing at "' + Trimmed + '".');
+    Result := True;
+    exit;
+  end;
+  Result := DelTree(Trimmed, True, True, True);
+  if Result then
+    Log('Data cleanup: removed "' + Trimmed + '".')
+  else
+    Log('Data cleanup: could NOT remove "' + Trimmed + '" (a file may be in use).');
+end;
+
+// Both roots, in one place, so the install-time clean and the uninstall-time
+// clean cannot come to disagree about what "the user's data" means.
+function RemoveUserData(): Boolean;
+var
+  RoamingOk: Boolean;
+  LocalOk: Boolean;
+begin
+  RoamingOk := DeleteDataTree(RoamingDataDir(), 'foxsdr');
+  LocalOk := DeleteDataTree(LocalDataDir(), 'FoxSDR');
+  Result := RoamingOk and LocalOk;
+end;
+
+function DataPathsSentence(): String;
+begin
+  Result := RoamingDataDir() + #13#10 + LocalDataDir();
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // BEFORE the files go down, so the program never runs once against a
+  // half-cleared profile. /CLEANINSTALL does the same thing unattended, for a
+  // scripted reinstall.
+  if CurStep <> ssInstall then
+    exit;
+  if WizardIsTaskSelected('cleaninstall') or (ExpandConstant('{param:cleaninstall|0}') = '1') then begin
+    Log('Clean install requested: removing the existing FoxSDR data.');
+    if not RemoveUserData() then
+      SuppressibleMsgBox('Some FoxSDR settings could not be removed, most likely because a file is ' +
+                         'still open. The installation will continue with what is left.' + #13#10#13#10 +
+                         DataPathsSentence(), mbInformation, MB_OK, IDOK);
+  end;
+end;
+
+// UNINSTALL. Asked, never assumed: a user removing a version to install
+// another one keeps their settings by answering No, and one who is leaving -
+// or starting again - answers Yes. An unattended uninstall (/SILENT from a
+// script, or the one PrepareToInstall runs to clear the other scope) NEVER
+// deletes data unless it is told to with /CLEANDATA, because an upgrade path
+// runs exactly that command and must not take a user's plugins with it.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Answer: Integer;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    exit;
+  if ExpandConstant('{param:keepdata|0}') = '1' then begin
+    Log('Uninstall: /KEEPDATA given; the settings stay.');
+    exit;
+  end;
+  if ExpandConstant('{param:cleandata|0}') = '1' then begin
+    Log('Uninstall: /CLEANDATA given; removing the settings without asking.');
+    RemoveUserData();
+    exit;
+  end;
+  if UninstallSilent then begin
+    Log('Uninstall: silent and no /CLEANDATA; the settings stay.');
+    exit;
+  end;
+  Answer := MsgBox('Also remove your FoxSDR settings and data?' + #13#10#13#10 +
+                   DataPathsSentence() + #13#10#13#10 +
+                   'That is your configuration, the plugins you installed, the map and ' +
+                   'satellite caches, and the logs and crash reports.' + #13#10#13#10 +
+                   'Your recordings are NOT touched. Choose No to keep everything for a ' +
+                   'future install.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2);
+  if Answer = IDYES then begin
+    if not RemoveUserData() then
+      MsgBox('Some FoxSDR settings could not be removed, most likely because a file is still ' +
+             'open. What is left is here:' + #13#10#13#10 + DataPathsSentence(),
+             mbInformation, MB_OK);
+  end else
+    Log('Uninstall: the user chose to keep the settings.');
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

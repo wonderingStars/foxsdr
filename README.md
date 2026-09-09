@@ -487,7 +487,11 @@ system is concerned, and the system is told which part of it is the rail. Every
 page is drawn the same way, as a cabinet with its name and keys on the rail;
 a page inside the main window rolls up to its rail when minimised and fills
 the main window when maximised, and a page torn off to its own window does
-both to the desktop, with a taskbar button to come back from. On Linux the
+both to the desktop, with a taskbar button to come back from. Since 0.88.2 no
+page can be dragged smaller than 240 x 140, which is the size below which its
+body stopped being drawn at all and left a rail with nothing under it, and
+**RESET WINDOW SIZES** in the Fitted modules window puts every decoder, panel,
+instrument and map window back to its default size and position. On Linux the
 main window keeps the frame the desktop gives it, and the rail carries the
 name alone.
 
@@ -695,6 +699,18 @@ installs `cascade.exe`, the SoapySDR runtime, the app-local Microsoft C runtime,
 the licence and post-install notes; it writes nothing outside the install
 directory and your own user profile, and it uninstalls cleanly from
 Add/Remove Programs.
+
+Your settings, the plugins you install and the caches and logs live in two
+folders in your profile: `%APPDATA%\foxsdr` and `%LOCALAPPDATA%\FoxSDR`.
+Recordings are not among them; they go to `Documents\SDR-recordings` and are
+never touched by setup. The installer offers **a clean install** ("Delete
+existing FoxSDR settings, plugins, caches and logs first", unchecked by
+default) for reinstalling over a profile that has gone wrong, and the
+uninstaller ASKS whether to remove those two folders, so leaving and
+upgrading are not the same thing. For a scripted install or removal:
+`/CLEANINSTALL=1` on setup, `/CLEANDATA=1` or `/KEEPDATA=1` on the
+uninstaller; an unattended uninstall keeps your data unless it is told
+otherwise, because that is the command an upgrade runs.
 
 **The setup executable is not code-signed yet**, so Windows SmartScreen will
 show "Windows protected your PC". Choose **More info → Run anyway** if you are

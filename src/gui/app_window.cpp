@@ -7806,9 +7806,22 @@ bool AppWindow::pageGeometryTransient(const char* id) const {
 // (the plugin store, the fitted modules, the satellites map) now draw into the
 // well instead, so every page is one object - and the main window is the same
 // object, drawn by the same drawCabinet.
-bool AppWindow::beginPage(const char* id, const char* title, bool* open, int flags) {
+bool AppWindow::beginPage(const char* id, const char* title, bool* open, int flags,
+                          float defaultW, float defaultH) {
     PageChrome& pc = pageChrome_[id];
     constexpr float kStripH = 30.0f;
+    // THE SIZE A PAGE CANNOT BE DRAGGED UNDER, from gui/page_geometry.hpp.
+    // Below 80 px in either direction the body is not drawn at all (the strip
+    // branch further down, and the 8 px well guard at the end), so a page
+    // dragged shorter than that is a title strip with nothing under it - and
+    // the resize grip here is fully transparent by design, which leaves almost
+    // nothing to take hold of to undo it. 240 x 140 is that cut-off plus room
+    // to grab an edge. The same pair clamps the remembered restore rectangle,
+    // so a maximise and a restore cannot put the user back in the trap.
+    constexpr float kMinW = cascade::gui::kPageMinW;
+    constexpr float kMinH = cascade::gui::kPageMinH;
+    const bool autoSizePage =
+        (static_cast<ImGuiWindowFlags>(flags) & ImGuiWindowFlags_AlwaysAutoResize) != 0;
 
     if (pc.pendingMaximise) {
         // The work area of whichever monitor the page is on, or the main
@@ -7839,6 +7852,31 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
         ImGui::SetNextWindowSize(ImVec2(pc.restoreW, pc.restoreH), ImGuiCond_Always);
         pc.pendingRestore = false;
     }
+    // A WAY BACK FOR A PAGE THAT IS ALREADY WRONG. "Reset window sizes" on the
+    // fitted-modules window bumps pageResetGen_; a page whose counter is
+    // behind takes its opening rectangle again, exactly once, on its next
+    // frame - which is what lets it reach a window that was not even being
+    // drawn when the key was pressed.
+    //
+    // TWO HALVES, because the two facts live in different places. The SIZE is
+    // the one the call site hands over as defaultW/defaultH, applied with
+    // ImGuiCond_Always so it overrides the FirstUseEver the call site has
+    // already queued this frame. The POSITION is not passed at all - several
+    // call sites compute it from the monitor, the saved config or a stagger
+    // slot - so instead the window's own FirstUseEver permission is re-armed
+    // and the call site's placement applies again by itself.
+    if (cascade::gui::pageNeedsReset(pc.seenResetGen, pageResetGen_)) {
+        if (ImGuiWindow* w = ImGui::FindWindowByName(id)) {
+            w->SetWindowPosAllowFlags |= ImGuiCond_FirstUseEver;
+            w->SetWindowSizeAllowFlags |= ImGuiCond_FirstUseEver;
+        }
+        if (defaultW > 0.0f && defaultH > 0.0f) {
+            float rw = defaultW;
+            float rh = defaultH;
+            cascade::gui::clampPageSize(rw, rh);
+            ImGui::SetNextWindowSize(ImVec2(rw, rh), ImGuiCond_Always);
+        }
+    }
 
     ImGuiWindowFlags f = static_cast<ImGuiWindowFlags>(flags) | ImGuiWindowFlags_NoTitleBar |
                          ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
@@ -7847,8 +7885,17 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
         // Rolled up to its rail: a fixed strip, as wide as the page was.
         f |= ImGuiWindowFlags_NoResize;
         f &= ~ImGuiWindowFlags_AlwaysAutoResize;
-        ImGui::SetNextWindowSize(ImVec2(std::max(pc.restoreW, 240.0f), kStripH),
+        ImGui::SetNextWindowSize(ImVec2(std::max(pc.restoreW, kMinW), kStripH),
                                  ImGuiCond_Always);
+    } else if (!autoSizePage) {
+        // THE FLOOR, and only while the page is a page. The rolled-up strip
+        // above is a deliberate state with its own key to come back out of, so
+        // it keeps its 30 px exactly; an AlwaysAutoResize page (the target
+        // details) sets its own constraints and cannot be dragged smaller by
+        // hand anyway, so this would only fight it. Everything else is held
+        // above the size at which its body stops being drawn.
+        ImGui::SetNextWindowSizeConstraints(ImVec2(kMinW, kMinH),
+                                            ImVec2(FLT_MAX, FLT_MAX));
     }
     // NO PADDING AND NO BORDER: the brass reaches the window's edge, which on a
     // torn-off page is the edge of the operating system's window. The resize
@@ -7916,6 +7963,11 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
             pc.collapsed = true;
             pc.restoreW = size.x;
             pc.restoreH = size.y;
+            // CLAMPED AS IT IS REMEMBERED, never only as it is applied: a page
+            // that was already too small when it was rolled up would otherwise
+            // unroll just as small, and the rolled-up strip is one of the two
+            // ways to arrive at a window with nothing under its rail.
+            cascade::gui::clampPageSize(pc.restoreW, pc.restoreH);
         }
     }
     if (press.maximise || toggleMax) {
@@ -7927,6 +7979,8 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
             pc.restoreY = tl.y;
             pc.restoreW = size.x;
             pc.restoreH = size.y;
+            // ...and the same clamp on the other route out of a live window.
+            cascade::gui::clampPageSize(pc.restoreW, pc.restoreH);
             pc.maximised = true;
             pc.pendingMaximise = true;
         }
@@ -7939,7 +7993,7 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
     // fits its content and the cabinet fits the window.
     const float inset = m + 3.0f;
     const ImVec2 wellSize(size.x - inset * 2.0f, size.y - inset * 2.0f);
-    const bool autoSize = (static_cast<ImGuiWindowFlags>(flags) & ImGuiWindowFlags_AlwaysAutoResize) != 0;
+    const bool autoSize = autoSizePage;
     if (!autoSize && (wellSize.x < 8.0f || wellSize.y < 8.0f)) { return false; }
     ImGui::SetCursorScreenPos(ImVec2(tl.x + inset, tl.y + inset));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
@@ -7955,6 +8009,21 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
     pageBodyOpen_ = true;
     pageInset_ = inset;
     return true;
+}
+
+void AppWindow::resetPageWindows() {
+    // TWO THINGS, and both of them matter. Clearing the chrome map takes every
+    // page out of collapsed and maximised - the two states that hold a window
+    // at a rectangle the user did not choose - and bumping the generation
+    // makes each page take its opening rectangle again on its next frame.
+    //
+    // The map is CLEARED rather than walked because a page's whole entry is
+    // derived state: collapsed, maximised, the restore rectangle and the seen
+    // generation are all rebuilt by the next beginPage. And clearing it sets
+    // every seen generation back to 0 while pageResetGen_ moves forward, which
+    // is exactly the "this page owes a re-placement" condition.
+    pageChrome_.clear();
+    ++pageResetGen_;
 }
 
 void AppWindow::endPage() {
@@ -7978,7 +8047,7 @@ void AppWindow::placeAsSeparateWindow(int slot) {
     float y = 0.0f;
     separateWindowAnchor(slot, x, y);
     ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(kSeparatePageW, kSeparatePageH), ImGuiCond_FirstUseEver);
 }
 
 void AppWindow::mapDefaultSize(float& widthPx, float& heightPx) {
@@ -9326,7 +9395,8 @@ void AppWindow::drawPluginStoreWindow() {
     // the rail row, and two widgets sharing one id is how a window's drag
     // state and a rail row's press end up in the same hash bucket. beginPage
     // draws the cabinet this window is, with its name and keys on the rail.
-    const bool drawn = beginPage("Plugin store###pluginstorewindow", "PLUGIN STORE", &open);
+    const bool drawn = beginPage("Plugin store###pluginstorewindow", "PLUGIN STORE", &open,
+                                 0, 1180.0f, 780.0f);
     // The frame's close button is a real close: it puts the key on the rail
     // back to off, and that is the only state either of them reads.
     if (!open) { pluginBrowseOpen_ = false; }
@@ -9568,8 +9638,8 @@ void AppWindow::drawFittedModulesWindow() {
     placeSavedFeatureWindow(7, fittedWinX_, fittedWinY_, fittedWinW_, fittedWinH_,
                             1060.0f, 720.0f);
     bool open = true;
-    const bool drawn =
-        beginPage("Fitted modules###fittedmoduleswindow", "FITTED MODULES", &open);
+    const bool drawn = beginPage("Fitted modules###fittedmoduleswindow", "FITTED MODULES",
+                                 &open, 0, 1060.0f, 720.0f);
     if (!open) { fittedWindowOpen_ = false; }
     // READ BACK EVERY FRAME, which is the whole of the persistence: ImGui's
     // own .ini is switched off in this application, so unless the rectangle is
@@ -9693,6 +9763,11 @@ void AppWindow::drawFittedModulesWindow() {
                 break;
             case cascade::gui::FittedModulesAction::Kind::SetTune:
                 setPluginTuneAllowed(act.file, act.flag);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::ResetWindows:
+                // Safe from inside this page's own body: beginPage has already
+                // returned, and endPage reads none of the state this clears.
+                resetPageWindows();
                 break;
             case cascade::gui::FittedModulesAction::Kind::None:
                 break;
@@ -9946,6 +10021,20 @@ void AppWindow::drawPluginWindows() {
             workAreas.push_back(
                 ScreenRect{mv->WorkPos.x, mv->WorkPos.y, mv->WorkSize.x, mv->WorkSize.y});
         }
+        // THE DEFAULT RECTANGLE, COMPUTED WHICHEVER BRANCH IS TAKEN. A page
+        // with a usable saved rectangle does not need it to OPEN - but "reset
+        // window sizes" does, and the size it must put the page back to is the
+        // one the page would open at with nothing saved, not the saved one it
+        // is being reset away from.
+        float dx = 0.0f;
+        float dy = 0.0f;
+        // The page's index is the anchor slot, so several fresh pages cascade
+        // instead of stacking exactly on top of one another.
+        separateWindowAnchor(static_cast<int>(pageIndex), dx, dy);
+        float dw = 0.0f;
+        float dh = 0.0f;
+        mapDefaultSize(dw, dh);
+        mapPlaceDefaultRect(dx, dy, dw, dh, workAreas);
         if (page.w > 0 && page.h > 0 &&
             mapGeometryOnScreen(page.x, page.y, page.w, page.h, workAreas)) {
             // ...AND NO BIGGER THAN WHAT FITS WHERE IT SITS. A rectangle saved
@@ -9972,16 +10061,8 @@ void AppWindow::drawPluginWindows() {
             // the resize grip with it - fell off the work area whenever the
             // main window sat low, and that rectangle was then persisted and
             // restored verbatim. Measured at (1248,491) 1120x1168 against a
-            // 1392 px work area. See mapPlaceDefaultRect.
-            float dx = 0.0f;
-            float dy = 0.0f;
-            // The page's index is the anchor slot, so several fresh pages
-            // cascade instead of stacking exactly on top of one another.
-            separateWindowAnchor(static_cast<int>(pageIndex), dx, dy);
-            float dw = 0.0f;
-            float dh = 0.0f;
-            mapDefaultSize(dw, dh);
-            mapPlaceDefaultRect(dx, dy, dw, dh, workAreas);
+            // 1392 px work area. See mapPlaceDefaultRect. Computed above,
+            // because a reset needs the same rectangle.
             ImGui::SetNextWindowPos(ImVec2(dx, dy), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(ImVec2(dw, dh), ImGuiCond_FirstUseEver);
         }
@@ -10009,7 +10090,8 @@ void AppWindow::drawPluginWindows() {
         for (char& rc : railName) {
             rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
-        const bool pageDrawn = beginPage(pageTitle.c_str(), railName.c_str(), &page.open);
+        const bool pageDrawn =
+            beginPage(pageTitle.c_str(), railName.c_str(), &page.open, 0, dw, dh);
         if (!pageDrawn) {
             // COLLAPSED, NOT GONE. Begin() answers false for a collapsed
             // window, but the window still exists and can still be DRAGGED —
@@ -10322,7 +10404,8 @@ void AppWindow::drawPluginWindows() {
         for (char& rc : railName) {
             rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
-        if (beginPage(id.c_str(), railName.c_str(), &imageOpen)) {
+        if (beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, kSeparatePageW,
+                      kSeparatePageH)) {
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("Waiting for the first image...");
             } else {
@@ -10428,13 +10511,15 @@ void AppWindow::drawPluginWindows() {
         // (0.79.1). The size hint is given AFTER that decision: a hint left
         // behind by a skipped window would land on whatever Begin came next.
         if (!pluginWindows_.shown(id)) { continue; }
-        ImGui::SetNextWindowSize(ImVec2(520.0f, 300.0f), ImGuiCond_FirstUseEver);
+        constexpr float kPanelW = 520.0f;
+        constexpr float kPanelH = 300.0f;
+        ImGui::SetNextWindowSize(ImVec2(kPanelW, kPanelH), ImGuiCond_FirstUseEver);
         bool panelOpen = true;
         std::string railName = p.title;
         for (char& rc : railName) {
             rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
-        if (beginPage(id.c_str(), railName.c_str(), &panelOpen)) {
+        if (beginPage(id.c_str(), railName.c_str(), &panelOpen, 0, kPanelW, kPanelH)) {
             drawRowTable(p.headings, p.rows);
         }
         endPage();
@@ -10457,13 +10542,15 @@ void AppWindow::drawPluginWindows() {
         ImGui::SetNextWindowPos(ImVec2(mainPos.x + 90.0f + 36.0f * static_cast<float>(nth),
                                        mainPos.y + 90.0f + 36.0f * static_cast<float>(nth)),
                                 ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(600.0f, 460.0f), ImGuiCond_FirstUseEver);
+        constexpr float kInstrumentW = 600.0f;
+        constexpr float kInstrumentH = 460.0f;
+        ImGui::SetNextWindowSize(ImVec2(kInstrumentW, kInstrumentH), ImGuiCond_FirstUseEver);
         bool open = true;
         std::string railName = in.title;
         for (char& rc : railName) {
             rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
-        if (beginPage(id.c_str(), railName.c_str(), &open)) {
+        if (beginPage(id.c_str(), railName.c_str(), &open, 0, kInstrumentW, kInstrumentH)) {
             const double now = ImGui::GetTime();
             InstrumentSeen& seen = instrumentSeen_[id];
             if (in.have && in.state.seq != seen.seq) {
@@ -12315,7 +12402,8 @@ void AppWindow::drawDecoderWindow() {
     telemetryNotePanel("decoded");
 
     placeAsSeparateWindow(9);
-    if (beginPage("Decoder output###decoderout", "DECODER OUTPUT", &decoderWindowOpen_)) {
+    if (beginPage("Decoder output###decoderout", "DECODER OUTPUT", &decoderWindowOpen_, 0,
+                  kSeparatePageW, kSeparatePageH)) {
         ImGui::Checkbox("Follow", &decoderAutoScroll_);
         ImGui::SameLine();
         if (ImGui::SmallButton("Clear##declog")) { decoderLog_.clear(); }
