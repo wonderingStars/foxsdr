@@ -36,6 +36,10 @@ struct GLFWwindow;
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
 #include "gui/basemap_cache.hpp"
+// The floor a torn-off page cannot be dragged under, and the reset generation
+// that puts an already-wrong one back. ImGui-free for the same reason as the
+// headers below it - the tests include it without a graphics context.
+#include "gui/page_geometry.hpp"
 #include "gui/rail_banks.hpp"
 // The ADS-B radar scope. ImGui-free like track_metrics.hpp below, so it can be
 // held by value here without breaking the rule that main() - and the tests -
@@ -926,6 +930,12 @@ private:
     // several of them. See the definition for why the position is what decides
     // this — ImGui has no flag for it.
     void placeAsSeparateWindow(int slot);
+    // The size it opens at. Named rather than written twice because the same
+    // pair is what beginPage is handed as the page's default size, and a
+    // "reset window sizes" that put a window back to a DIFFERENT rectangle
+    // than the one it opens at would be a third size nobody asked for.
+    static constexpr float kSeparatePageW = 720.0f;
+    static constexpr float kSeparatePageH = 520.0f;
     // The same, at a size the caller asks for and MOVED so all of it - the
     // resize grip in the bottom-right corner included - lands on the monitor
     // it opens on (mapPlaceDefaultRect). placeAsSeparateWindow's fixed
@@ -1612,14 +1622,34 @@ private:
         float restoreH = 0.0f;
         bool pendingMaximise = false;
         bool pendingRestore = false;
+        // The value of pageResetGen_ this page last acted on. Behind it means
+        // "Reset window sizes" has been pressed since this page was last
+        // drawn, so its next frame re-places it - see gui/page_geometry.hpp.
+        std::uint32_t seenResetGen = 0;
     };
     std::map<std::string, PageChrome> pageChrome_;
+    // Bumped by resetPageWindows(). One counter for the whole application
+    // rather than a flag pushed at every window, because the windows that most
+    // need putting back are often the ones that are not being drawn.
+    std::uint32_t pageResetGen_ = 0;
+    // "Reset window sizes" on the fitted-modules window: no page is collapsed
+    // or maximised any more, and every page takes its opening rectangle again
+    // on its next frame.
+    void resetPageWindows();
     // Whether beginPage opened the well child this frame, so endPage closes it.
     bool pageBodyOpen_ = false;
     float pageInset_ = 0.0f;
     // Begin a page: the window, its cabinet, its rail and keys. Returns whether
     // the body should be drawn; ALWAYS pair with endPage(), as Begin with End.
-    bool beginPage(const char* id, const char* title, bool* open, int flags = 0);
+    //
+    // defaultW/defaultH are THE SIZE THIS PAGE OPENS AT - the same pair the
+    // call site hands ImGui as its FirstUseEver size - and they are applied
+    // again, once, by a reset. Left at 0 by a caller with no opening size of
+    // its own (the auto-resizing target details), which is then left alone.
+    // Plain floats rather than an ImVec2 for the reason the rest of this
+    // header gives: it is compiled into the tests and must not need imgui.h.
+    bool beginPage(const char* id, const char* title, bool* open, int flags = 0,
+                   float defaultW = 0.0f, float defaultH = 0.0f);
     void endPage();
     // A page that is maximised or rolled up is showing a rectangle the key
     // chose, not the user: geometry read-backs skip it.

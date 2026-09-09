@@ -601,6 +601,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // word hangs out over both machined edges and, here, over the engraved
     // caption to its left.
     const float rescanW = std::max(96.0f, textW(uf, tiny, "SCAN AGAIN") + 22.0f);
+    const float resetW = std::max(96.0f, textW(uf, tiny, "RESET WINDOW SIZES") + 22.0f);
     const float stripNoteW = stripInner;
     constexpr int kGroups = 5;
     const float groupW = stripInner / static_cast<float>(kGroups);
@@ -644,7 +645,8 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float ty = tl.y + 12.0f;
-        addBenchGroupCaption(dl, ImVec2(tl.x + 12.0f, ty), stripInner - rescanW - 10.0f,
+        addBenchGroupCaption(dl, ImVec2(tl.x + 12.0f, ty),
+                             std::max(0.0f, stripInner - rescanW - resetW - 20.0f),
                              "WHAT IS FITTED");
 
         // SCAN AGAIN, on the strip because it is the one action that is about
@@ -653,6 +655,23 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         if (drawDeckKey(dl, rtl, ImVec2(rtl.x + rescanW, rtl.y + oneLineKeyH()), "SCAN AGAIN",
                         true, "rescan")) {
             act.kind = FittedModulesAction::Kind::Rescan;
+        }
+
+        // RESET WINDOW SIZES, beside it for the same reason: it is about every
+        // window at once rather than about one module. It is here because a
+        // page dragged down to its rail has an invisible resize grip and
+        // almost nothing left to take hold of - the way a beta tester lost the
+        // ACARS printer - and this window is reachable from the rail whatever
+        // state the others are in. The tooltip names the four kinds of window
+        // it moves, because "reset" on its own could mean the modules.
+        const ImVec2 wtl(rtl.x - 10.0f - resetW, ty - 4.0f);
+        if (drawDeckKey(dl, wtl, ImVec2(wtl.x + resetW, wtl.y + oneLineKeyH()),
+                        "RESET WINDOW SIZES", true, "resetwindows")) {
+            act.kind = FittedModulesAction::Kind::ResetWindows;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Puts every decoder, panel, instrument and map window back "
+                              "to its default size and position.");
         }
         ty += capH + 8.0f;
 

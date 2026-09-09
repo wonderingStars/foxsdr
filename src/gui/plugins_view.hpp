@@ -218,6 +218,14 @@ struct FittedModulesAction {
         Stop,      // AppWindow::setPluginStopped(file, true)
         Remove,    // AppWindow::removeInstalledPlugin(file)
         SetTune,   // AppWindow::setPluginTuneAllowed(file, flag)
+        // AppWindow::resetPageWindows(). THE WAY BACK FROM A WINDOW DRAGGED
+        // TOO SMALL TO USE. A page's resize grip is invisible by design, so a
+        // decoder window pulled down to its rail leaves almost nothing to take
+        // hold of - reported by a beta tester who could not get the ACARS
+        // printer back. It is on THIS window because it is the one panel that
+        // is about every fitted module at once, and because it is reachable
+        // from the rail whatever state the other windows are in.
+        ResetWindows,
     };
     Kind kind = Kind::None;
     std::string file;   // empty for Rescan

@@ -7,6 +7,23 @@ The app runs fully with zero radio hardware attached: use the built-in
 signal generator source or IQ file playback to explore every feature
 (spectrum, waterfall, demodulators, audio).
 
+WHERE YOUR SETTINGS LIVE, AND HOW TO CLEAR THEM
+-----------------------------------------------
+Two folders in your own profile hold everything FoxSDR remembers:
+
+  %APPDATA%\foxsdr        your settings, bookmarks and the receiver
+                          position
+  %LOCALAPPDATA%\FoxSDR   the plugins you installed, their caches, and
+                          the logs and crash reports
+
+Recordings are NOT in either: they go to Documents\SDR-recordings and
+nothing in setup or uninstall touches them.
+
+Setup offers a clean install - "Delete existing FoxSDR settings, plugins,
+caches and logs first" - which is off unless you tick it, so an upgrade
+keeps everything. Uninstalling ASKS whether to remove those two folders;
+answer No to keep them for a future install.
+
 RADIO HARDWARE SUPPORT (SoapySDR vendor modules)
 ------------------------------------------------
 Hardware support arrives through SoapySDR vendor modules, which are
