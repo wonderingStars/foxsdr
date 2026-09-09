@@ -186,9 +186,9 @@ void drawFreqDrumWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br);
 // The FACE every bench rotary control shares: drop shadow, dark disc, its
 // off-centre highlight, the brass ring skirt, and a pointer needle at
 // `angleDeg` (0 = straight up, positive = clockwise). drawBrassVolumeKnob
-// below draws this after its own tick arc; the tuning knob
-// (AppWindow::drawTuningKnob) draws it directly, since it has no bounded
-// scale to mark.
+// below draws this after its own tick arc; it stands on its own so any
+// further rotary control on the bench draws the same face rather than a
+// second, drifting copy of it.
 void drawBenchKnobFace(ImDrawList* dl, const ImVec2& centre, float radius, float angleDeg);
 
 // The VOLUME dial: brass ring, cream pointer, and a tick arc. Returns the new

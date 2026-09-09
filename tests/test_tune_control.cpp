@@ -19,8 +19,6 @@
 
 using cascade::gui::autoPresetIndexOnStart;
 using cascade::gui::autoPresetTriggersOnWindowClick;
-using cascade::gui::clickIsPress;
-using cascade::gui::cycleTuneStep;
 using cascade::gui::digitPlaceHz;
 using cascade::gui::freqCellLeftX;
 using cascade::gui::FreqRect;
@@ -41,13 +39,22 @@ using cascade::gui::kFreqTubeSwitchGap;
 using cascade::gui::switchRectForCell;
 using cascade::gui::tubeRectForCell;
 using cascade::gui::kTuneMismatchToleranceHz;
-using cascade::gui::kTuneStepsHz;
-using cascade::gui::knobStepsFromAngle;
-using cascade::gui::KnobPoint;
 using cascade::gui::presetVfoOffsetHz;
 using cascade::gui::stepDigit;
 using cascade::gui::tuneMismatchMessage;
-using cascade::gui::tuneStepLabel;
+using cascade::gui::kDeckCoreW;
+using cascade::gui::kDeckMinWindowW;
+using cascade::gui::kFirstLaunchBarW;
+using cascade::gui::kMeterCoreClearance;
+using cascade::gui::kMeterGap;
+using cascade::gui::kMeterRightMargin;
+using cascade::gui::kMeterW;
+using cascade::gui::kMuteBannerMinW;
+using cascade::gui::meter1XOnBar;
+using cascade::gui::meter2XOnBar;
+using cascade::gui::metersFitOnBar;
+using cascade::gui::muteBannerMiddleW;
+using cascade::gui::muteBannerTakesTheMiddle;
 
 namespace {
 // A minimal audio preset (no CASCADE_PRESET_DEVICE_CENTRE): frequencyHz and
@@ -284,125 +291,6 @@ int main() {
         CHECK(autoPresetTriggersOnWindowClick(false, true) == false);
     }
 
-    // --- kTuneStepsHz: the table itself, pinned -------------------------------
-    // The four sizes the knob's chip, its engraving, and cycleTuneStep's wrap
-    // all read from - a change here is a change to what "step 2" MEANS
-    // everywhere at once, so it is pinned rather than left to whatever the
-    // knob code happens to assume.
-    {
-        CHECK(cascade::gui::kTuneStepCount == 5);
-        CHECK(kTuneStepsHz[0] == 1.0e2);
-        CHECK(kTuneStepsHz[1] == 1.0e3);
-        CHECK(kTuneStepsHz[2] == 1.0e4);
-        CHECK(kTuneStepsHz[3] == 1.0e5);
-        CHECK(kTuneStepsHz[4] == 1.0e6);
-        // A decade ladder: every step is ten times its neighbour, so one notch
-        // moves exactly one digit of the counter.
-        for (int i = 1; i < cascade::gui::kTuneStepCount; ++i) {
-            CHECK(kTuneStepsHz[i] == 10.0 * kTuneStepsHz[i - 1]);
-        }
-        CHECK(cascade::gui::kTuneStepDefaultIndex == 2);
-        CHECK(kTuneStepsHz[cascade::gui::kTuneStepDefaultIndex] == 1.0e4);
-    }
-
-    // --- cycleTuneStep: both directions, and the wrap ------------------------
-    {
-        // RIGHT CLICK cycles UP (coarser) through 100 Hz, 1 kHz, 10 kHz,
-        // 100 kHz, 1 MHz - index increases.
-        CHECK(cycleTuneStep(0, true) == 1);
-        CHECK(cycleTuneStep(1, true) == 2);
-        CHECK(cycleTuneStep(2, true) == 3);
-        CHECK(cycleTuneStep(3, true) == 4);
-        // ...AND WRAPS: "press again" from 1 MHz always does something.
-        // RED WHEN this stays at 4 instead of wrapping to 0.
-        CHECK(cycleTuneStep(4, true) == 0);
-
-        // LEFT CLICK cycles DOWN (finer) - index decreases.
-        CHECK(cycleTuneStep(4, false) == 3);
-        CHECK(cycleTuneStep(3, false) == 2);
-        CHECK(cycleTuneStep(2, false) == 1);
-        CHECK(cycleTuneStep(1, false) == 0);
-        // ...AND WRAPS THE OTHER WAY. RED WHEN this stays at 0.
-        CHECK(cycleTuneStep(0, false) == 4);
-
-        // A full lap either direction returns to where it started.
-        int idx = 2;
-        for (int i = 0; i < 5; ++i) { idx = cycleTuneStep(idx, true); }
-        CHECK(idx == 2);
-        idx = 2;
-        for (int i = 0; i < 5; ++i) { idx = cycleTuneStep(idx, false); }
-        CHECK(idx == 2);
-    }
-
-    // --- knobStepsFromAngle: whole steps, remainder kept for the next call ---
-    {
-        // 14 degrees is short of the first 15-degree step: no step yet, and
-        // the whole 14 is carried forward as the remainder.
-        float acc = 0.0f;
-        CHECK(knobStepsFromAngle(acc, 14.0f) == 0);
-        CHECK_NEAR(acc, 14.0f, 1.0e-5f);
-        // ...and two more degrees crosses it: one step, one degree left over
-        // (14 + 2 = 16, one 15-degree step, remainder 1).
-        CHECK(knobStepsFromAngle(acc, 2.0f) == 1);
-        CHECK_NEAR(acc, 1.0f, 1.0e-5f);
-    }
-    {
-        // A single 15-degree turn the other way: exactly one step down, no
-        // remainder. RED WHEN this rounds instead of truncating (would read
-        // as 0 or -2 depending on the direction of the rounding error).
-        float acc = 0.0f;
-        CHECK(knobStepsFromAngle(acc, -15.0f) == -1);
-        CHECK_NEAR(acc, 0.0f, 1.0e-5f);
-    }
-    {
-        // A single big jump - a fast drag reported once - covers many steps
-        // at once and keeps the exact remainder for the next frame.
-        float acc = 0.0f;
-        CHECK(knobStepsFromAngle(acc, 400.0f) == 26);
-        CHECK_NEAR(acc, 10.0f, 1.0e-5f);
-    }
-    {
-        // SLOW DRAGS STILL ADD UP. A sequence of 5-degree deltas (below one
-        // step each) accumulates to the same total as one big jump would -
-        // this is the whole reason the remainder is carried rather than
-        // discarded every frame it falls short.
-        float acc = 0.0f;
-        int totalSteps = 0;
-        for (int i = 0; i < 9; ++i) { totalSteps += knobStepsFromAngle(acc, 5.0f); }
-        // 9 * 5 = 45 degrees = exactly 3 steps, no remainder.
-        CHECK(totalSteps == 3);
-        CHECK_NEAR(acc, 0.0f, 1.0e-4f);
-    }
-
-    // --- clickIsPress: drag vs. tap, at the 4 px tolerance --------------------
-    {
-        // Same point: always a press.
-        CHECK(clickIsPress(KnobPoint{100.0f, 100.0f}, KnobPoint{100.0f, 100.0f}, 4.0f));
-        // A 3-4-5 triangle scaled to a 4 px hypotenuse (2.4, 3.2): exactly AT
-        // the tolerance counts as a press - "within" is documented as
-        // inclusive. RED WHEN the comparison becomes strictly less-than.
-        CHECK(clickIsPress(KnobPoint{0.0f, 0.0f}, KnobPoint{2.4f, 3.2f}, 4.0f));
-        // The same triangle at its natural 5 px hypotenuse: a drag, not a
-        // press.
-        CHECK(!clickIsPress(KnobPoint{0.0f, 0.0f}, KnobPoint{3.0f, 4.0f}, 4.0f));
-        // Comfortably inside, and comfortably outside, on a single axis.
-        CHECK(clickIsPress(KnobPoint{50.0f, 50.0f}, KnobPoint{51.0f, 50.0f}, 4.0f));
-        CHECK(!clickIsPress(KnobPoint{50.0f, 50.0f}, KnobPoint{60.0f, 50.0f}, 4.0f));
-    }
-
-    // --- tuneStepLabel: the exact text the chip and engraving show -----------
-    {
-        CHECK(tuneStepLabel(0) == "100 Hz");
-        CHECK(tuneStepLabel(1) == "1 kHz");
-        CHECK(tuneStepLabel(2) == "10 kHz");
-        CHECK(tuneStepLabel(3) == "100 kHz");
-        CHECK(tuneStepLabel(4) == "1 MHz");
-        // Out of range falls back to the same default AppConfig sanitises to,
-        // rather than reading past kTuneStepsHz.
-        CHECK(tuneStepLabel(-1) == "10 kHz");
-        CHECK(tuneStepLabel(5) == "10 kHz");
-    }
-
     // --- digitPlaceHz: the ten cells, most significant first ------------------
     {
         CHECK(kFreqDigitCells == 10);
@@ -446,15 +334,15 @@ int main() {
 
     // --- the plate's own pinned size -----------------------------------------
     // Ten 28-unit tubes with nine 6-unit gaps (280 + 54) inside a bezel padded
-    // 5 a side, on a plate padded 10 a side: 364 wide - which is what fits
-    // between the counter's divider and the TUNING caption WITHOUT moving
-    // the knob (the owner: "we don't want to affect the size of the top bar -
-    // it's perfect the way we have it"). Top to bottom: 5 of padding, the
-    // 12-unit name plate strip, a 4 gap, the bezel (4 + 40 tube + 4 + 30
-    // switch + 4 = 82), a 4 gap, the 9-unit footer and 5 of padding: 121
-    // tall, inside the 160-unit bar the deck has always had. drawToolbar's
-    // static_asserts check the plate against the knob and the bar from these
-    // two numbers, so a change here shows up here first.
+    // 5 a side, on a plate padded 10 a side: 364 wide - the compact cut the
+    // owner asked for ("we don't want to affect the size of the top bar -
+    // it's perfect the way we have it"), which app_window.cpp places its
+    // second divider from. Top to bottom: 5 of padding, the 12-unit name
+    // plate strip, a 4 gap, the bezel (4 + 40 tube + 4 + 30 switch + 4 =
+    // 82), a 4 gap, the 9-unit footer and 5 of padding: 121 tall, inside the
+    // 160-unit bar the deck has always had. drawToolbar's static_asserts
+    // check the plate against its divider and the bar from these two
+    // numbers, so a change here shows up here first.
     {
         CHECK_NEAR(kFreqTubeH, 40.0f, 1.0e-4f);
         CHECK_NEAR(kFreqBezelW, 344.0f, 1.0e-4f);
@@ -575,6 +463,77 @@ int main() {
         const FreqRect o0u = switchRectForCell(396.0f, 20.0f, 0, true, 1.0f);
         CHECK_NEAR(o0u.x0, 396.0f + 15.0f, 1.0e-4f);
         CHECK_NEAR(o0u.y0, 20.0f + 69.0f, 1.0e-4f);
+    }
+
+    // --- the meters are on the deck at first launch ---------------------------
+    // The owner's complaint on 0.89.0: "on first launch you don't see the
+    // sample rate or the frame time meters". The bar a fresh install opens
+    // with is kFirstLaunchBarW (1282 client, 25 of cabinet a side), and the
+    // old rule wanted kCoreW + 2 meters + 110 of slack - 1320 with the knob's
+    // 958-unit cluster - so the meters were dropped until the window was
+    // widened. RED WHEN the slack comes back: put the rule's 110 back and
+    // the first assertion fails.
+    {
+        std::printf("  the two meters fit the bar a fresh install opens with\n");
+        CHECK_NEAR(kDeckCoreW, 888.0f, 1.0e-4f);
+        CHECK(kDeckMinWindowW == 624);
+        CHECK_NEAR(kFirstLaunchBarW, 1232.0f, 1.0e-4f);
+        CHECK(metersFitOnBar(kFirstLaunchBarW, kDeckCoreW));
+
+        // ...and not at the narrowest window run() allows, where the bar is at
+        // most the client less the cabinet's minimum inset: the meters would
+        // have to stand on the volume dial.
+        const float minBarW = static_cast<float>(kDeckMinWindowW) - 2.0f * 25.0f;
+        CHECK(!metersFitOnBar(minBarW, kDeckCoreW));
+        CHECK(!metersFitOnBar(static_cast<float>(kDeckMinWindowW), kDeckCoreW));
+
+        // THE EXACT THRESHOLD: the narrowest bar that shows them is the one
+        // where the first meter's left edge clears the cluster by exactly
+        // kMeterCoreClearance; one unit narrower and they go.
+        const float threshold =
+            kDeckCoreW + kMeterCoreClearance + 2.0f * kMeterW + kMeterGap + kMeterRightMargin;
+        CHECK_NEAR(threshold, 1202.0f, 1.0e-4f);
+        CHECK(metersFitOnBar(threshold, kDeckCoreW));
+        CHECK(!metersFitOnBar(threshold - 1.0f, kDeckCoreW));
+        CHECK(threshold <= kFirstLaunchBarW);
+
+        // NO OVERLAP WITH THE VOLUME DIAL at that narrowest showing width: the
+        // first meter starts at or past the cluster's end plus its clearance,
+        // and the second meter keeps the right margin behind it.
+        CHECK(meter1XOnBar(threshold) >= kDeckCoreW + kMeterCoreClearance);
+        CHECK_NEAR(meter1XOnBar(threshold), kDeckCoreW + kMeterCoreClearance, 1.0e-4f);
+        CHECK_NEAR(meter2XOnBar(threshold) - meter1XOnBar(threshold), kMeterW + kMeterGap,
+                   1.0e-4f);
+        CHECK_NEAR(threshold - (meter2XOnBar(threshold) + kMeterW), kMeterRightMargin, 1.0e-4f);
+        // At the first-launch width the meters sit further right, never closer.
+        CHECK(meter1XOnBar(kFirstLaunchBarW) >= kDeckCoreW + kMeterCoreClearance);
+    }
+
+    // --- the mute banner: the middle when there is room, under the counter otherwise
+    // Same terms as the meters rule, so the banner cannot be told the middle
+    // is free while the meters are standing in it.
+    {
+        std::printf("  the mute banner takes the middle only when 220 units of it are free\n");
+        CHECK_NEAR(kMuteBannerMinW, 220.0f, 1.0e-4f);
+        // At first launch the meters are on the bar and the middle between
+        // the cluster and the first meter is only a few units wide: the
+        // banner falls back under the counter rather than onto a meter.
+        CHECK(muteBannerMiddleW(kFirstLaunchBarW, kDeckCoreW) < kMuteBannerMinW);
+        CHECK(!muteBannerTakesTheMiddle(kFirstLaunchBarW, kDeckCoreW));
+        // Just under the meters threshold there are no meters and the middle
+        // runs to the bar's edge: 1201 - 12 - 888 - 12 = 289, enough.
+        CHECK(muteBannerTakesTheMiddle(1201.0f, kDeckCoreW));
+        CHECK_NEAR(muteBannerMiddleW(1201.0f, kDeckCoreW), 289.0f, 1.0e-4f);
+        // A wide bar with the meters on it: the strip runs from the cluster
+        // plus 12 (900) to the first meter less one meter gap (barW - 318),
+        // and takes the middle again once that reaches 220 - at 1438 exactly.
+        CHECK(!muteBannerTakesTheMiddle(1437.0f, kDeckCoreW));
+        CHECK(muteBannerTakesTheMiddle(1438.0f, kDeckCoreW));
+        CHECK_NEAR(muteBannerMiddleW(1438.0f, kDeckCoreW), 220.0f, 1.0e-4f);
+        CHECK(metersFitOnBar(1438.0f, kDeckCoreW));
+        // The narrowest window: no meters, no room - under the counter.
+        CHECK(!muteBannerTakesTheMiddle(static_cast<float>(kDeckMinWindowW) - 50.0f,
+                                        kDeckCoreW));
     }
 
     return testSummary("test_tune_control");

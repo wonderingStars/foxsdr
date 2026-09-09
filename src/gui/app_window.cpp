@@ -284,7 +284,9 @@ constexpr double kMaxDisplayHz = 9999999999.0;
 // beside those constants, so neither can drift away from the other.
 // Both numbers are the CLIENT area, which is what glfwSetWindowSizeLimits
 // takes - GLFW adds the frame itself.
-constexpr int kMinWindowW = 694;  // 560 until 0.84.1, 600 before the tuning knob moved the dial 70 units right again, 670 before 0.88.0 shifted the knob/volume/coreW cluster 24 for the keys beneath the counter (the tuner plate that followed was sized to fit that deck, not given more of it)
+// The figure itself lives in gui/tune_control.hpp (kDeckMinWindowW) beside
+// the deck's core width, so the meters rule test can read both.
+constexpr int kMinWindowW = cascade::gui::kDeckMinWindowW;
 // A minimum height is not needed by the bar and is given anyway: GLFW's Win32
 // backend applies its minimum only when BOTH dimensions are set, so a width
 // limit on its own is no limit at all. This is the height at which the bar and
@@ -420,10 +422,6 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // than the one it opened with - would survive a restart only if
            // something else happened to trigger a save.
            a.scopeMode == b.scopeMode && a.scopeRangeNm == b.scopeRangeNm &&
-           // The tuning knob's step: without it here, cycling it (a click,
-           // not a value edit widget) would reach the file only when
-           // something else happened to change in the same session.
-           a.tuneStepIndex == b.tuneStepIndex &&
            // Map page geometry takes part, which is what makes a resize save
            // at all. The debounce restarts on every change, so a drag writes
            // once when it stops rather than once per frame while it is
@@ -3200,51 +3198,45 @@ static_assert(kPlateTopY + cascade::gui::kFreqPlateH + kPlateFootMarginY <= kBar
               "the tuner plate must stand inside the 160-unit bar - the bar does not grow "
               "for it (the owner: it's perfect the way we have it)");
 
-// 0.88.0: THE OWNER'S OWN WORDS, on the digit keys that used to live here -
-// "keep the dial for now but move the volume and the frequency dial along a
-// little bit". The counter's well grew taller to hold those keys for one
-// cut, and the knob, the volume dial and kCoreW kept the 24 units that move
-// opened up - the same "move the fixed cluster, do not squeeze it" rule
-// 0.84.1 used to clear the four master lamps. THE TUNER PLATE DID NOT MOVE
-// THEM AGAIN: the first cut of the plate shifted the whole cluster a further
-// 64 right for a 408-wide plate, and the owner's answer was that the bar is
-// perfect as it is. The plate is now sized to the room between the
-// counter's divider and the knob's rim (kFreqPlateW, checked against the
-// knob below), and the knobs stand where they stood before it.
-constexpr float kFreqWellWBeforePlate = 344.0f;  // the drum well's width, for the record
-constexpr float kDialShiftV088 = 24.0f;
-
-constexpr float kCoreW = 934.0f + kDialShiftV088;  // transport button through volume dial (800 until 0.84.1, then 864 before the tuning knob moved onto the deck, +24 in 0.88.0 for the keys beneath the counter)
+// THE FIXED CLUSTER'S WIDTH, transport button through the volume dial. The
+// figure lives in gui/tune_control.hpp (kDeckCoreW) so the meters rule can
+// be checked against it without an open frame; it is the bar's scale
+// reference below and the left limit of the meters and the mute banner.
+constexpr float kCoreW = cascade::gui::kDeckCoreW;
 // Where the MASTER compartment ends and the counter's begins. 272 in the
 // reference; 320 in 0.84.0 so the four lamps stand in one row under Georgia,
 // 384 in 0.84.1 ("move the counter and the volume dial over, it looks a
 // little close to the four lights"): the counter, its divider, the dial and
 // kCoreW all moved 64 units right together, into the empty deck before the
-// meters, so the lamps have clear brass on their right. It was 320 so the
-// Georgia Bold - the units come out of the frequency well, whose apertures
-// went from 30 to 28 and its side padding from 12 to 8 now the digits are
-// 16 px, so it still ends short of the divider at 684.
+// meters, so the lamps have clear brass on their right.
 constexpr float kMasterDividerX = 384.0f;
 
-// THE TUNING KNOB'S FOOTPRINT. The owner's correction on the first
-// cut of this feature, verbatim: "no the knob needs to go next to the
-// frequency counter and it needs to be small" - not a rail section, ON THE
-// DECK, at the volume dial's own size. It stands in the brass after the
-// counter's well, so the second divider, the volume dial and kCoreW all move
-// right by this one number together - the same "move the fixed cluster, do
-// not squeeze it" rule 0.84.1 used to clear the four master lamps. The
-// counter and ITS OWN divider (kMasterDividerX) do not move; only the empty
-// deck after the well is spent.
-constexpr float kTuneKnobFootprint = 70.0f;  // diameter (2*kVolumeR) plus the clear brass either side
+// THE PLATE, AND THE DIVIDER AFTER IT. The plate is drawn 12 units past the
+// master divider (drawToolbar), and its own divider stands the same 12 units
+// past its right edge, so the plate sits in the middle of its compartment
+// with the same brass clear on either side. Between 0.88.0 and 0.89.0 a
+// tuning knob stood in the brass after the plate and pushed this divider,
+// the volume dial and kCoreW 70 units right; 0.90.0 took the knob off the
+// deck (the owner: "remove the tuning dial") and the cluster closed back up
+// by the same 70.
+constexpr float kFreqPlateRightX = kMasterDividerX + 12.0f + cascade::gui::kFreqPlateW;
+constexpr float kCounterDividerX = kFreqPlateRightX + 12.0f;
+static_assert(kCounterDividerX >= kFreqPlateRightX + 8.0f,
+              "the counter's divider must clear the tuner plate's right edge - narrow the "
+              "plate or move the divider, never let the groove cross the plate");
 
 // THE VOLUME DIAL'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the
 // bar's scale floor is a promise about this one control and a promise checked
-// against a number typed somewhere else is not checked at all.
-constexpr float kVolumeCx =
-    809.0f + kTuneKnobFootprint +
-    kDialShiftV088;  // the dial's centre, in reference units (745 until 0.84.1, then 809 before the tuning knob moved in beside it, +24 in 0.88.0 for the keys beneath the counter)
+// against a number typed somewhere else is not checked at all. The dial keeps
+// the 61 units it has always stood past its divider.
+constexpr float kVolumeCx = kCounterDividerX + 61.0f;  // the dial's centre, in reference units
 constexpr float kVolumeR = 26.0f;    // ...and its radius
 constexpr float kVolumeEdgePad = 6.0f;
+// The cluster ends past the dial, never inside it: kCoreW is what the meters
+// and the mute banner keep clear of, so a dial reaching past it would be a
+// dial the meters could be drawn over.
+static_assert(kVolumeCx + kVolumeR + kVolumeEdgePad <= kCoreW,
+              "the volume dial must stand inside the fixed cluster (kCoreW)");
 
 // The bar only ever shrinks, and it stops here: below this the counter's
 // digits stop being figures and the dial stops being a control (its primitive
@@ -3278,50 +3270,6 @@ using cascade::gui::kFreqCellW;
 using cascade::gui::kFreqPlateH;
 using cascade::gui::kFreqPlateW;
 using cascade::gui::kFreqTubeH;
-
-// Where the drum well drawFrequencyReadout USED to be asked to draw at
-// (X(kMasterDividerX + 12.0f) in drawToolbar) ended - the frame the tuning
-// knob's centring below is measured in (see kTuneKnobCx), so the knob stays
-// exactly where the well's own cut put it. kFreqPlateRightX is where the
-// plate actually ends today - 20 units further than the well did, into the
-// clear brass the well left before the knob, stopping a few units short of
-// the TUNING caption's first letter - and the static_assert beside the knob
-// checks the knob's rim still clears it.
-constexpr float kFreqWellRightX = kMasterDividerX + 12.0f + kFreqWellWBeforePlate;
-constexpr float kFreqPlateRightX = kMasterDividerX + 12.0f + kFreqPlateW;
-
-// --- THE TUNING KNOB'S OWN GEOMETRY, THE SAME WAY THE VOLUME DIAL'S IS ------
-// Same radius as the volume dial - the owner's rule, literally ("the same
-// size") - and the second divider, moved kTuneKnobFootprint right of where it
-// used to sit directly after the well.
-constexpr float kTuneKnobR = kVolumeR;
-// Where the divider sat BEFORE 0.88.0's shift - kept as its own name only so
-// the knob's own centring below still measures "the room between the well
-// and the divider" the way it always has, rather than kDialShiftV088
-// quietly entering that arithmetic twice (once in the divider, again halved
-// into the midpoint).
-constexpr float kTuneKnobDividerBaseX =
-    748.0f + kTuneKnobFootprint;  // the second divider, moved off 748 for the knob
-constexpr float kTuneKnobDividerX =
-    kTuneKnobDividerBaseX + kDialShiftV088;  // +24 in 0.88.0 for the keys beneath the counter
-// Centred in the room the divider's move opened up, not offset a fixed
-// distance from the well - so a change to the divider's own position keeps
-// the knob centred rather than silently drifting toward one side - and then
-// carried the same 24 units right as the rest of the cluster, so the knob
-// and the volume dial keep their spacing. The midpoint is measured in the
-// pre-shift frame (the old well's right edge and the base divider) and
-// shifted once, which is why kFreqWellRightX still exists.
-constexpr float kTuneKnobCx =
-    (kFreqWellRightX + kTuneKnobDividerBaseX) * 0.5f + kDialShiftV088;
-// THE PLATE IS SIZED TO THE KNOB, NOT THE KNOB TO THE PLATE: the plate may
-// spend the clear brass the well left before the knob's rim, and no more.
-// This stops compiling if a plate change ever puts the knob's rim on the
-// plate or the divider - the fix is a narrower plate, never a moved knob.
-static_assert(kTuneKnobCx - kTuneKnobR >= kFreqPlateRightX + 8.0f,
-              "the tuning knob must clear the tuner plate's right edge - narrow the plate, "
-              "do not move the knob (the owner: the top bar is perfect the way we have it)");
-static_assert(kTuneKnobCx + kTuneKnobR <= kTuneKnobDividerX - 8.0f,
-              "the tuning knob must clear its own divider");
 
 // LETTER-SPACING, WHICH DEAR IMGUI HAS NOT, and which is most of what
 // separates an engraved legend from a word in a label. ASCII only and
@@ -3576,11 +3524,7 @@ void AppWindow::drawToolbar() {
     // at either end, the way a plate bolted over a panel's grooves would.
     cascade::gui::addBenchDivider(dl, X(kMasterDividerX), Y(30.0f), Y(135.0f));
     drawFrequencyReadout(X(kMasterDividerX + 12.0f), Y(kPlateTopY), scale);
-    // THE TUNING KNOB, ON THE SAME BRASS AS THE COUNTER IT STEPS - see
-    // kTuneKnobFootprint's own comment for why the second divider now sits
-    // that much further right than it used to.
-    drawTuningKnob(X(kTuneKnobCx), Y(42.0f), Y(82.0f), Y(118.0f), S(kTuneKnobR), capPx, scale);
-    cascade::gui::addBenchDivider(dl, X(kTuneKnobDividerX), Y(30.0f), Y(135.0f));
+    cascade::gui::addBenchDivider(dl, X(kCounterDividerX), Y(30.0f), Y(135.0f));
     // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
     // perfectly good control and completely wrong on a bench receiver; this
     // one turns, carries its own tick arc, and answers the wheel as well as
@@ -3632,20 +3576,19 @@ void AppWindow::drawToolbar() {
     // something invented, which is the artboard's own fault repeated in our
     // code. It keeps the name of the thing it actually measures.
     const float lineH = ImGui::GetTextLineHeight();
-    constexpr float kMeterW = 126.0f;
+    using cascade::gui::kMeterW;
     constexpr float kMeterFaceH = 66.0f;
     // drawBenchMeter spends one text line above the face on the caption and
     // one below it on the value, so the height asked for is the face the
     // reference measures plus both of them.
     const float meterH = kMeterFaceH + lineH * 2.0f + 8.0f;
-    const float meter2X = barTL.x + barW - 34.0f - kMeterW;
-    const float meter1X = meter2X - 16.0f - kMeterW;
+    const float meter2X = barTL.x + cascade::gui::meter2XOnBar(barW);
+    const float meter1X = barTL.x + cascade::gui::meter1XOnBar(barW);
     // DROPPED ENTIRELY ON A NARROW WINDOW rather than allowed to slide left
-    // into the volume dial. They are the least load-bearing things on this bar
-    // - both figures are also in the status column - and the alternative is
-    // two instruments overlapping a control, or two drawn off the right edge
-    // where they render perfectly and are never seen.
-    const bool showMeters = (barW >= kCoreW + kMeterW * 2.0f + 110.0f);
+    // into the volume dial - the rule, and why it is as tight as it is, are
+    // metersFitOnBar's in gui/tune_control.hpp, where a test holds it to the
+    // bar a fresh install opens with.
+    const bool showMeters = cascade::gui::metersFitOnBar(barW, kCoreW);
     if (showMeters) {
         const float my = barTL.y + 28.0f;
 
@@ -3683,14 +3626,14 @@ void AppWindow::drawToolbar() {
     // the reason there is no sound.
     //
     // It takes the bar's open middle where there is one, and the strip under
-    // the counter where there is not. Both are inside the bar, and neither can
-    // reach the dial or the meters - a warning that overlaps a control is a
-    // warning the user cannot act on.
+    // the counter where there is not - muteBannerTakesTheMiddle in
+    // gui/tune_control.hpp decides which, in the same terms the meters rule
+    // uses, so the two cannot disagree about where the middle ends.
     {
-        const float from = X(kCoreW) + 12.0f;
-        const float to = showMeters ? meter1X - 16.0f : barTL.x + barW - 12.0f;
-        ImVec2 at(from, Y(62.0f));
-        if (to - from < 220.0f) { at = ImVec2(X(300.0f), Y(124.0f)); }
+        ImVec2 at(X(kCoreW) + cascade::gui::kMuteBannerEdgeClearance, Y(62.0f));
+        if (!cascade::gui::muteBannerTakesTheMiddle(barW, kCoreW)) {
+            at = ImVec2(X(300.0f), Y(124.0f));
+        }
         ImGui::SetCursorScreenPos(at);
         // A zero-sized item so the SameLine drawMuteBanner opens with has a
         // line to resume: the banner lays itself out and this is the only way
@@ -4712,144 +4655,6 @@ void AppWindow::drawRadioSection() {
         std::snprintf(overlay, sizeof(overlay), "%.1f dB", static_cast<double>(sDb));
         ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
     }
-}
-
-// --- Tuning knob -------------------------------------------------------------
-//
-// A turn-and-click dial for stepping the TUNED frequency (device centre +
-// VFO offset - the same sum currentAbsoluteHz() and the counter both read)
-// up and down, ON THE DECK beside the frequency counter (drawTuningKnob,
-// called from drawToolbar) - not a rail section: the owner's correction on
-// the first cut of this feature, verbatim, was "the knob needs to go next
-// to the frequency counter and it needs to be small". Every
-// gesture on it - drag, wheel, a tap that cycles the step, the arrow keys -
-// is arithmetic pinned in gui/tune_control.hpp with no ImGui dependency;
-// this function only wires ImGui's mouse and keyboard onto that arithmetic
-// and draws the result.
-//
-// Applies through tuneAbsoluteHz(), the SAME path presets and the scanner
-// use, so the scanner's user-tune detection and the mismatch check see a
-// knob-driven tune exactly as they would see a click on a bookmark.
-void AppWindow::applyTuneSteps(int steps) {
-    if (steps == 0) { return; }
-    const double stepHz = cascade::gui::kTuneStepsHz[tuneStepIndex_];
-    // CLAMPED AT 0 Hz — a rapid spin down through the step table must stop at
-    // the floor rather than commanding a negative frequency no source can
-    // honour.
-    const double next =
-        std::max(0.0, currentAbsoluteHz() + static_cast<double>(steps) * stepHz);
-    tuneAbsoluteHz(next);
-    // PURE COSMETIC FEEDBACK: this knob is a rotary encoder, not a fader - it
-    // has no bounded value to point at - so the pointer simply turns 15
-    // degrees for every step actually applied, whichever gesture drove it,
-    // and wraps with fmod rather than growing without bound over a long
-    // session.
-    tuneKnobVisualAngleDeg_ = std::fmod(
-        tuneKnobVisualAngleDeg_ + static_cast<float>(steps) * 15.0f, 360.0f);
-}
-
-// Drawn from drawToolbar, at the four screen positions it has already worked
-// out (TUNING's caption, the knob's own centre, and the step's baseline) -
-// the same "handed the geometry, not the lambdas" contract
-// drawFrequencyReadout keeps. radius and capPx arrive pre-scaled (S(...) and
-// the bar's own capPx) so this function never has to know the bar's scale
-// beyond what the step text's font size needs it for.
-void AppWindow::drawTuningKnob(float cx, float capY, float knobCy, float valueY, float radius,
-                               float capPx, float scale) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    barEngrave(dl, ImVec2(cx, capY), capPx, "TUNING", true);
-
-    constexpr float kClickTolerancePx = 4.0f;
-    const ImVec2 centre(cx, knobCy);
-    ImGui::SetCursorScreenPos(ImVec2(centre.x - radius, centre.y - radius));
-    ImGui::InvisibleButton("##tune_knob", ImVec2(radius * 2.0f, radius * 2.0f),
-                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-    const bool hovered = ImGui::IsItemHovered();
-    const bool active = ImGui::IsItemActive();
-    const ImGuiIO& io = ImGui::GetIO();
-
-    if (ImGui::IsItemActivated()) {
-        // A FRESH PRESS: remember where it started (clickIsPress reads this
-        // on release), which button started it (decides which way a tap
-        // cycles the step - see the release handling below), and the mouse's
-        // own angle about the centre, so the first frame of a drag reports a
-        // delta of zero rather than a jump from wherever the last drag left
-        // off.
-        tuneKnobPressX_ = io.MousePos.x;
-        tuneKnobPressY_ = io.MousePos.y;
-        tuneKnobPressWasLeft_ = io.MouseDown[ImGuiMouseButton_Left];
-        tuneKnobDragAngleDeg_ = std::atan2(io.MousePos.x - centre.x, centre.y - io.MousePos.y) *
-                                180.0f / 3.14159265f;
-        tuneKnobAccumDeg_ = 0.0f;
-    }
-
-    // DRAG, LEFT BUTTON ONLY. A right-button press never turns the knob - it
-    // only cycles the step on release, in the OTHER direction a left tap
-    // does (see below).
-    const bool dragging = active && tuneKnobPressWasLeft_;
-    if (dragging) {
-        const float a = std::atan2(io.MousePos.x - centre.x, centre.y - io.MousePos.y) *
-                        180.0f / 3.14159265f;
-        float d = a - tuneKnobDragAngleDeg_;
-        while (d > 180.0f) { d -= 360.0f; }
-        while (d < -180.0f) { d += 360.0f; }
-        tuneKnobDragAngleDeg_ = a;
-        const int steps = cascade::gui::knobStepsFromAngle(tuneKnobAccumDeg_, d);
-        if (steps != 0) { applyTuneSteps(steps); }
-    }
-
-    if (hovered) {
-        // WHEEL: one notch is one step. Fractional deltas (a touchpad) below
-        // one notch still step once, in the delta's direction - the same
-        // rule the frequency drum's own per-digit wheel handling applies.
-        const float wheel = io.MouseWheel;
-        if (wheel != 0.0f) {
-            long long notches = static_cast<long long>(wheel);
-            if (notches == 0) { notches = (wheel > 0.0f) ? 1 : -1; }
-            applyTuneSteps(static_cast<int>(notches));
-        }
-        // KEYBOARD, hovered only - this is a deck control with no other
-        // claim on the keyboard. Repeat left on: holding the key is a fast
-        // spin, not one tap per press.
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) { applyTuneSteps(1); }
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) { applyTuneSteps(-1); }
-        if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) { applyTuneSteps(10); }
-        if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) { applyTuneSteps(-10); }
-        ImGui::SetTooltip("Tune by the step. Drag or wheel to tune, click to "
-                          "change the step (right-click the other way).");
-    }
-
-    if (ImGui::IsItemDeactivated()) {
-        // RELEASE: a TAP - within tolerance of the press - cycles the step
-        // rather than being read as a zero-length drag that turned nothing.
-        // LEFT cycles it down, RIGHT up: "press again" always does
-        // something, whichever button it was (gui::cycleTuneStep wraps both
-        // ways).
-        const cascade::gui::KnobPoint pressPt{tuneKnobPressX_, tuneKnobPressY_};
-        const cascade::gui::KnobPoint releasePt{io.MousePos.x, io.MousePos.y};
-        if (cascade::gui::clickIsPress(pressPt, releasePt, kClickTolerancePx)) {
-            tuneStepIndex_ = cascade::gui::cycleTuneStep(tuneStepIndex_, !tuneKnobPressWasLeft_);
-        }
-    }
-
-    // THE FACE: the same primitive the volume dial draws with
-    // (drawBenchKnobFace, gui/scope_face.hpp), so the two knobs read as one
-    // family of control standing on the same brass. No bounded value to
-    // point at here - this is a rotary encoder, not a fader - so the pointer
-    // simply turns with whatever actually moved it (applyTuneSteps) and
-    // wraps freely.
-    cascade::gui::drawBenchKnobFace(dl, centre, radius, tuneKnobVisualAngleDeg_);
-
-    // THE STEP, IN CREAM BELOW THE KNOB - the way "0.50" sits under VOLUME.
-    // This is where the hand has put the control, not a reading, so it takes
-    // the same reading face and cream ink the volume dial's own figure does,
-    // not the engraved caption's treatment.
-    const std::string stepText = cascade::gui::tuneStepLabel(tuneStepIndex_);
-    ImFont* sf = cascade::gui::fonts::reading();
-    const float spx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale);
-    const ImVec2 ssz = sf->CalcTextSizeA(spx, FLT_MAX, 0.0f, stepText.c_str());
-    dl->AddText(sf, spx, ImVec2(cx - ssz.x * 0.5f, valueY), cascade::gui::theme::kCream,
-               stepText.c_str());
 }
 
 // The Sinks section: the output device and why there is no sound. Moved out
@@ -14862,10 +14667,6 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // though load() already did: this is the value a widget indexes with.
     railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
     scope_.setRangeNm(scopeRangeNm_);
-    // The tuning knob's step. Not re-clamped here the way railBank is: the
-    // loader's own [0,3]-or-default rule already leaves nothing else this
-    // field could be.
-    tuneStepIndex_ = cfg.tuneStepIndex;
 
     // The map pages' rectangles from the last session, seeded here rather
     // than read at draw time so the very first Begin of each page already has
@@ -15257,7 +15058,6 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
     cfg.railBank = railBank_;
-    cfg.tuneStepIndex = tuneStepIndex_;
     // The pages' rectangles and open flags, via the saved store so an entry
     // for a plugin with no page this session rides through untouched. The
     // legacy fields are copied back purely so the first configsEqual against

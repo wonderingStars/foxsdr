@@ -1595,16 +1595,16 @@ void drawFreqDrumCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char d
 // disc, its off-centre highlight (what makes a flat fill read as a turned
 // surface), the brass ring skirt, and a pointer needle at `angleDeg` (0 =
 // straight up, positive = clockwise). Pulled out of drawBrassVolumeKnob so
-// the tuning knob (gui/app_window.cpp's drawTuningKnob) draws with
-// exactly the same primitives rather than a second, drifting copy of them -
-// the volume dial keeps its own tick arc and value-to-angle mapping, because
-// those are properties of a BOUNDED control this one is not.
+// any other rotary control on the bench draws with exactly the same
+// primitives rather than a second, drifting copy of them - the volume dial
+// keeps its own tick arc and value-to-angle mapping, because those are
+// properties of a BOUNDED control this face is not.
 //
 // SEGMENT COUNTS ARE LEFT TO IMGUI rather than pinned at 32. This is drawn
 // at whatever radius the caller works out - the volume dial's bar can shrink
-// it, the tuning knob draws it twice over - and a fixed 32-gon that passes
-// for a circle at radius 14 is visibly a polygon at 60, most of all on the
-// brass ring where the facets catch the eye.
+// it - and a fixed 32-gon that passes for a circle at radius 14 is visibly a
+// polygon at 60, most of all on the brass ring where the facets catch the
+// eye.
 void drawBenchKnobFace(ImDrawList* dl, const ImVec2& centre, float radius, float angleDeg) {
     if (dl == nullptr || radius < 6.0f) { return; }
     dl->AddCircleFilled(ImVec2(centre.x, centre.y + radius * 0.10f), radius * 1.02f,
