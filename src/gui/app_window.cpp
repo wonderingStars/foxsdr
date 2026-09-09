@@ -63,6 +63,7 @@
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
+#include "gui/tune_control.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/win_frame.hpp"
 #include "source/iq_file_source.hpp"
@@ -2457,11 +2458,46 @@ void AppWindow::pollAudioHealth() {
     // once a second forever would be noise.
     if (!out.everOpened()) { return; }
 
+    // Ring low-water sampling happens EVERY frame — not gated behind the 1 Hz
+    // probe below. At 48 kHz a ring can dip toward empty and refill well
+    // inside a second, and a mark that was only ever read once a second would
+    // miss most of what it exists to catch.
+    const std::size_t ringFrames = out.ringFrames();
+    if (ringFrames < audioRingLowWaterFrames_) { audioRingLowWaterFrames_ = ringFrames; }
+
+    const double now = ImGui::GetTime();
+
+    // Once-a-minute starvation digest. Silent unless something actually
+    // starved in the window just closed — same "quiet unless it has news"
+    // posture as the recorder's own status lines, and the only way a number
+    // nobody watches (this goes to the log, not the screen) stays worth
+    // reading when it does fire.
+    if (now - lastAudioLogSec_ >= 60.0) {
+        const std::uint64_t underrunsNow = out.underruns();
+        const std::uint64_t primingNow = out.primingCallbacks();
+        if (underrunsNow > audioUnderrunsAtLogStart_) {
+            const double rateHz = cascade::core::Pipeline::kAudioRateHz;
+            const double lowWaterMs =
+                1000.0 * static_cast<double>(audioRingLowWaterFrames_) / rateHz;
+            const double capacityMs =
+                1000.0 * static_cast<double>(out.ringCapacityFrames()) / rateHz;
+            cascade::core::diagLogf(
+                "audio: %llu starved callbacks in the last minute (%llu priming), "
+                "ring low water %.0f ms of %.0f ms",
+                static_cast<unsigned long long>(underrunsNow - audioUnderrunsAtLogStart_),
+                static_cast<unsigned long long>(primingNow - audioPrimingAtLogStart_),
+                lowWaterMs, capacityMs);
+        }
+        audioUnderrunsAtLogStart_ = underrunsNow;
+        audioPrimingAtLogStart_ = primingNow;
+        audioRingLowWaterFrames_ = ringFrames;  // next minute's mark starts here
+        lastAudioLogSec_ = now;
+    }
+
     // 1 Hz. Fast enough that a dropout is a hiccup rather than an outage,
     // slow enough that a genuinely absent device is not hammered with open
     // attempts. ImGui's clock is the frame clock, which is what "once per
     // second of running UI" should mean here.
-    const double now = ImGui::GetTime();
     if (now - lastAudioProbeSec_ < 1.0) { return; }
     lastAudioProbeSec_ = now;
 
@@ -2764,20 +2800,31 @@ void AppWindow::drawStatusColumn() {
     // --- AUDIO ---------------------------------------------------------------
     //
     // THE REFERENCE ARTBOARD LETTERS THIS CARD "AUDIO BUFFER" AND PRINTS "41
-    // ms". NOTHING IN THIS APPLICATION MEASURES THAT. AudioOut keeps its ring
-    // private and publishes no fill level, no depth and no latency; the single
-    // number it does publish about the health of the sound path is a count of
-    // STARVED CALLBACKS. So that is the figure, and the caption names it. A
-    // millisecond number here would have had to be invented, and an invented
+    // ms". For a long time nothing in this application measured that, so the
+    // figure this card led with was a count of STARVED CALLBACKS instead — a
+    // millisecond reading would have had to be invented, and an invented
     // reading on an instrument face is the one fault this panel may not have.
+    // AudioOut now publishes its own ring level (ringFrames() /
+    // ringCapacityFrames()), added alongside the priming fix for the "radio
+    // keeps going silent" reports — so the second line finally prints the
+    // real number the artboard always wanted, instead of leaving it invented
+    // or absent.
+    cascade::sink::AudioOut& audioSink = pipeline_.audio();
     const unsigned long long under =
-        static_cast<unsigned long long>(pipeline_.audio().underruns());
+        static_cast<unsigned long long>(audioSink.underruns());
     std::snprintf(v, sizeof(v), "%llu", under);
     {
-        const StatusLine lines[1] = {
+        const double rateHz = cascade::core::Pipeline::kAudioRateHz;
+        const double ringMs =
+            1000.0 * static_cast<double>(audioSink.ringFrames()) / rateHz;
+        const double capMs =
+            1000.0 * static_cast<double>(audioSink.ringCapacityFrames()) / rateHz;
+        std::snprintf(l1, sizeof(l1), "ring %.0f of %.0f ms", ringMs, capMs);
+        const StatusLine lines[2] = {
             {under == 0 ? "no callback has starved yet" : "starved callbacks, since start",
-             under == 0 ? kFaint : cascade::gui::theme::kAlarm}};
-        card("AUDIO - UNDERRUNS", cascade::gui::theme::kAmber, v, lines, 1);
+             under == 0 ? kFaint : cascade::gui::theme::kAlarm},
+            {l1, kFaint}};
+        card("AUDIO - UNDERRUNS", cascade::gui::theme::kAmber, v, lines, 2);
     }
 
     // --- DECODER OUTPUT ------------------------------------------------------
@@ -3837,6 +3884,7 @@ void AppWindow::drawMenuColumn() {
         case cascade::gui::RailBank::System:
             benchGroup("SYSTEM");
             drawUpdatesSection();
+            drawSerialPortsSection();
             drawDiagnosticsSection();
             drawUsageReportingSection();
             break;
@@ -4751,6 +4799,18 @@ void AppWindow::drawSourceSection() {
     if (!sourceError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
         ImGui::TextWrapped("%s", sourceError_.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    // THE TUNE DID NOT LAND WHERE IT WAS ASKED. A device coercing to its
+    // nearest step is a few Hz and never reaches here (see
+    // kTuneMismatchToleranceHz in gui/tune_control.hpp) — this is the radio
+    // refusing the band outright, which used to retune silently and leave the
+    // counter looking wrong with no explanation anywhere. See
+    // AppWindow::noteTuneMismatch.
+    if (!tuneMismatchNote_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", tuneMismatchNote_.c_str());
         ImGui::PopStyleColor();
     }
 }
@@ -6132,7 +6192,8 @@ void AppWindow::drawPluginsSection() {
                        cascade::gui::theme::kPhosphor, fedPlugins > 0, true,
                        "Opens the fitted modules window: what is installed, which\n"
                        "modules are being fed, which were refused and why, and the\n"
-                       "keys that start, stop and remove them.")) {
+                       "keys that start, stop and remove them. Start tunes the radio\n"
+                       "to the decoder's first preset unless it is already there.")) {
         fittedWindowOpen_ = !fittedWindowOpen_;
     }
 
@@ -7431,6 +7492,13 @@ void AppWindow::drawReceiverPositionOffers() {
     benchHint("or type it, or click SET FROM MAP CLICK on a map page:");
     drawRxPositionEntry();
     drawGpsPositionControl();
+    // POINTS AT THE ONE PLACE ALL OF IT ALSO LIVES, because this row is drawn
+    // three times over (the scope's empty state, this section, every map
+    // page's bar) and none of those three is a good place to also hold a
+    // table of the machine's ports - a rail row already the least roomy
+    // surface this appears on (drawGpsPositionControl's own comment) is not
+    // getting wider for a feature most of its readings never need.
+    benchHint("All serial-port settings are also under SYSTEM > Serial ports.");
 }
 
 // THE POSITION FROM A GPS RECEIVER, the fourth way to say where the antenna
@@ -9845,6 +9913,24 @@ void AppWindow::drawPluginWindowRows() {
         }
         return out;
     };
+    // A CLICK THAT JUST SHOWED THE WINDOW gets the same auto-preset the
+    // Fitted Modules Start key gives (maybeAutoPresetOnShow, sharing its
+    // decision with maybeAutoPresetOnStart) - "the user has to do nothing"
+    // applies to opening a decoder's picture exactly as it does to starting
+    // it. The three loops below only carry the plugin's DISPLAY name
+    // (HostImage::plugin etc., same as applyPluginPreset's own window-opening
+    // code), so pluginKeyForDisplayName translates it back to the module file
+    // key maybeAutoPresetOnShow needs; an empty result (module unloaded since
+    // this row was drawn) is silently skipped rather than risking a
+    // path-less-plugin match. A helper local to this function so all three
+    // window kinds and the map-page rows below dispatch through one line.
+    auto autoPresetOnClick = [this](bool wasShown, const std::string& displayName) {
+        if (!cascade::gui::autoPresetTriggersOnWindowClick(/*clicked=*/true, wasShown)) {
+            return;
+        }
+        const std::string key = pluginKeyForDisplayName(displayName);
+        if (!key.empty()) { maybeAutoPresetOnShow(key); }
+    };
     for (const cascade::core::HostImage& im : pluginImages_) {
         const std::string id = im.plugin + " image###image_" + im.plugin;
         const bool on = pluginWindows_.shown(id);
@@ -9854,8 +9940,10 @@ void AppWindow::drawPluginWindowRows() {
         if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
                            "Opens this decoder's picture window. WAIT until the first\n"
                            "picture arrives, RX while one is coming in, IMG when it is\n"
-                           "complete. Nothing opens this window for you.")) {
+                           "complete. Nothing opens this window for you - opening it\n"
+                           "also tunes and starts the decoder, just like its preset.")) {
             pluginWindows_.toggle(id);
+            autoPresetOnClick(on, im.plugin);
         }
     }
     for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
@@ -9867,8 +9955,10 @@ void AppWindow::drawPluginWindowRows() {
             ident(p.title) + "###panelrow:" + ident(p.plugin) + ":" + ident(p.title);
         if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
                            "Opens this plugin's own window. Nothing opens it for you;\n"
-                           "close it from its key and it stays closed.")) {
+                           "close it from its key and it stays closed - opening it also\n"
+                           "tunes and starts the decoder, just like its preset.")) {
             pluginWindows_.toggle(id);
+            autoPresetOnClick(on, p.plugin);
         }
     }
     for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
@@ -9888,8 +9978,10 @@ void AppWindow::drawPluginWindowRows() {
                            on || unread, true,
                            "Opens this plugin's instrument. NEW when something has\n"
                            "arrived that the window has not shown. Nothing opens it\n"
-                           "for you; close it from its key and it stays closed.")) {
+                           "for you; close it from its key and it stays closed - opening\n"
+                           "it also tunes and starts the decoder, just like its preset.")) {
             pluginWindows_.toggle(id);
+            autoPresetOnClick(on, in.plugin);
         }
     }
 }
@@ -9936,17 +10028,32 @@ void AppWindow::drawMapPageSections() {
         // page is a whole instrument and its key is the only way to any of it;
         // every other page is a map with a bar of controls along the top. A
         // single sentence covering both would describe neither.
+        const bool wasOpen = pg.open;
         if (benchSwitchRow(row.c_str(), pg.open, chip, cascade::gui::theme::kPhosphor,
                            pg.open, true,
                            pg.satellite
                                ? "Opens the satellites window: receiver position, "
                                  "overlays,\ntrail style, coverage, the target register "
                                  "and the map.\nEverything for satellites is in that one "
-                                 "window."
+                                 "window. Opening it also tunes and\nstarts the plugin, "
+                                 "just like its preset."
                                : "Opens this plugin's map: its targets and their trails, "
                                  "the\nreceiver position and the coverage overlay. "
-                                 "Nothing opens\nit for you.")) {
+                                 "Nothing opens\nit for you - opening it also tunes and "
+                                 "starts the\nplugin, just like its preset.")) {
             pg.open = !pg.open;
+            // SAME RULE AS THE DECODE ROWS ABOVE: a click that just showed
+            // this page (hidden -> shown, never a hide) gets the plugin's
+            // preset applied through the one shared decision
+            // (maybeAutoPresetOnShow / autoPresetTriggersOnWindowClick).
+            // pg.plugin is the DISPLAY name (see the struct's own comment),
+            // so pluginKeyForDisplayName translates it to the module file
+            // key; an empty result (module unloaded since this row was
+            // drawn) is silently skipped.
+            if (cascade::gui::autoPresetTriggersOnWindowClick(/*clicked=*/true, wasOpen)) {
+                const std::string key = pluginKeyForDisplayName(pg.plugin);
+                if (!key.empty()) { maybeAutoPresetOnShow(key); }
+            }
         }
     }
     if (any) { return; }
@@ -10630,10 +10737,23 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // the whole raw device band and tunes inside it, so the BAND must contain
     // its signal - hence the device centre. An audio decoder wants its signal
     // in the tuned channel, so the VFO goes there and the offset is preserved.
+    //
+    // A DEVICE-CENTRE PRESET ALSO ZEROES THE VFO OFFSET, through the exact
+    // setter path the VFO slider uses (so the slider follows). Without this a
+    // remembered offset walked the device off the centre the decoder asked
+    // for — see gui/tune_control.hpp's presetVfoOffsetHz for the measurement
+    // this fixes (a -12 kHz offset put the ADS-B preset's counter at
+    // 1089.988 MHz, not 1090.000 MHz). isPluginPreset=true on both branches:
+    // the frequency this button asked for is the whole reason a mismatch
+    // notice needs to say "this preset needs a receiver that covers that
+    // band" rather than leaving it as an unexplained tune.
     if ((ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u) {
-        retuneSourceHz(ps.frequencyHz);
+        const double off = cascade::gui::presetVfoOffsetHz(ps.flags, pipeline_.vfoOffsetHz());
+        pipeline_.setVfoOffsetHz(off);
+        vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+        retuneSourceHz(ps.frequencyHz, /*isPluginPreset=*/true);
     } else {
-        tuneAbsoluteHz(ps.frequencyHz);
+        tuneAbsoluteHz(ps.frequencyHz, /*isPluginPreset=*/true);
     }
 
     // Rebuild the decoders against the receiver they are now pointed at: the
@@ -10770,6 +10890,89 @@ void AppWindow::setPluginStopped(const std::string& pluginKey, bool stopped) {
     // action that happens seconds apart at worst.
     recordPluginStopped(pluginKey, stopped);
     refreshPluginRunner();
+
+    // ONLY ON A START, and only through THIS path. This is the "Start" key on
+    // the fitted-modules row (drawFittedModulesWindow's FittedModulesAction::
+    // Kind::Start), which is presently the sole place a plugin transitions
+    // from stopped to running — a preset BUTTON also starts a stopped plugin
+    // (applyPluginPreset's own recordPluginStopped(..., false)) but calls
+    // recordPluginStopped directly rather than through here, precisely so an
+    // explicit preset press is never second-guessed by this. See
+    // maybeAutoPresetOnStart's own comment for what "already inside" means.
+    if (!stopped) { maybeAutoPresetOnStart(pluginKey); }
+}
+
+void AppWindow::maybeAutoPresetOnStart(const std::string& pluginKey) {
+    maybeAutoPreset(pluginKey, "started");
+}
+
+void AppWindow::maybeAutoPresetOnShow(const std::string& pluginKey) {
+    maybeAutoPreset(pluginKey, "window opened");
+}
+
+void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) {
+    // FIND THE PLUGIN THIS KEY NAMES. Both callers only carry a file name —
+    // the same identity recordPluginStopped and the tune grant use — never a
+    // LoadedPlugin, so the object with its preset table has to be looked back
+    // up here, the same way the web control's remote preset apply does it
+    // (this file's r.pluginPresetIndex handling).
+    const cascade::core::LoadedPlugin* found = nullptr;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (cascade::core::pluginKey(p) == pluginKey) {
+            found = &p;
+            break;
+        }
+    }
+    if (found == nullptr || found->preset == nullptr) { return; }
+
+    // THE SAME VALIDITY FILTER drawPluginPresets applies before ever putting
+    // a preset in front of a user: bounded, and each frequency positively
+    // tested so third-party garbage (NaN included) never reaches the
+    // decision below.
+    std::uint32_t n = found->preset->count();
+    if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
+    std::vector<CascadePreset> presets;
+    presets.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        CascadePreset ps{};
+        ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+        if (found->preset->get(i, &ps) != 1) { continue; }
+        if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
+        presets.push_back(ps);
+    }
+    if (presets.empty()) { return; }
+
+    // WHAT THE RECEIVER IS DOING RIGHT NOW — the same three numbers
+    // applyPluginPreset itself moves, read back rather than assumed, so
+    // "already inside" means the same thing here as it does to the button.
+    const double deviceCentreHz = pipeline_.activeSource().centerFrequencyHz();
+    const double vfoOffsetHz = pipeline_.vfoOffsetHz();
+    const double deviceRateHz = pipeline_.activeSource().sampleRateHz();
+
+    const int idx = cascade::gui::autoPresetIndexOnStart(presets, deviceCentreHz, vfoOffsetHz,
+                                                          deviceRateHz);
+    if (idx < 0) { return; }
+
+    const CascadePreset& ps = presets[static_cast<std::size_t>(idx)];
+    // THE IDENTICAL PATH THE BUTTON TAKES: mode, bandwidth, device rate, the
+    // tune itself and the plugin's own windows. Starting a decoder (or
+    // opening its window) is meant to feel like pressing its preset for it,
+    // not a cut-down copy of doing so.
+    applyPluginPreset(*found, ps);
+
+    char label[CASCADE_PRESET_LABEL_CHARS + 1];
+    std::snprintf(label, sizeof(label), "%.*s", CASCADE_PRESET_LABEL_CHARS,
+                  ps.label[0] != '\0' ? ps.label : found->name.c_str());
+    cascade::core::diagLogf("plugin: %s %s - applied its preset %s", found->name.c_str(), verb,
+                            label);
+}
+
+std::string AppWindow::pluginKeyForDisplayName(const std::string& displayName) const {
+    if (displayName.empty()) { return {}; }
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (p.name == displayName) { return cascade::core::pluginKey(p); }
+    }
+    return {};
 }
 
 // --- Audio mute while a data decoder is running -------------------------------
@@ -11850,13 +12053,15 @@ void AppWindow::saveBookmarks() {
 
 // --- Shared absolute tuning (P6) -----------------------------------------------
 
-void AppWindow::tuneAbsoluteHz(double absHz) {
+void AppWindow::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     // The same setter + readback path the toolbar digit wheel uses, with the
     // VFO offset preserved: command the SOURCE center so the VFO band lands
     // on absHz. A refusal (a tune the driver rejects) needs no handling —
     // every display, and the scanner's user-tune baseline, follows the
-    // readback, which simply won't move.
-    retuneSourceHz(absHz - pipeline_.vfoOffsetHz());
+    // readback, which simply won't move. isPluginPreset is only ever true from
+    // applyPluginPreset, forwarded so a mismatch this produces can say which
+    // plugin's button asked for it — see applyRetuneNow.
+    retuneSourceHz(absHz - pipeline_.vfoOffsetHz(), isPluginPreset);
 }
 
 namespace {
@@ -11869,7 +12074,7 @@ double steadyNowMs() {
 }
 }  // namespace
 
-void AppWindow::retuneSourceHz(double centerHz) {
+void AppWindow::retuneSourceHz(double centerHz, bool isPluginPreset) {
     // Hardware tunes are PACED (see the header declaration): a burst becomes
     // one device call per interval with the latest value. Everything without
     // a USB control path underneath applies immediately.
@@ -11880,22 +12085,28 @@ void AppWindow::retuneSourceHz(double centerHz) {
     // stale — the scanner would then see its own deferred retune land a frame
     // later and stop itself, misreading it as the user's hand. The scanner is
     // a control loop paced by its own dwell, not a human gesture burst.
+    //
+    // pendingRetuneIsPreset_ carries isPluginPreset across the coalescer the
+    // same way retuneCoalescer_ itself carries centerHz: overwritten on every
+    // call, so whichever value was requested LAST is the one a deferred
+    // apply sees — "latest wins" for the context, not just the frequency.
+    pendingRetuneIsPreset_ = isPluginPreset;
     if (soapy_ == nullptr || scanner_.active()) {
-        applyRetuneNow(centerHz);
+        applyRetuneNow(centerHz, isPluginPreset);
         return;
     }
     if (retuneCoalescer_.request(centerHz, steadyNowMs())) {
-        applyRetuneNow(centerHz);
+        applyRetuneNow(centerHz, isPluginPreset);
     }
 }
 
 void AppWindow::pollPendingRetune() {
     if (const std::optional<double> hz = retuneCoalescer_.due(steadyNowMs())) {
-        applyRetuneNow(*hz);
+        applyRetuneNow(*hz, pendingRetuneIsPreset_);
     }
 }
 
-void AppWindow::applyRetuneNow(double centerHz) {
+void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // ONE place where the source centre moves. The pipeline cannot observe a
     // device retune (the source owns the tuner), so the RDS/stereo decoders
     // have to be told explicitly — otherwise the previous station's PS name
@@ -11914,7 +12125,43 @@ void AppWindow::applyRetuneNow(double centerHz) {
     // the frequency they need. Reading back from the source rather than
     // trusting the requested value, because a device may land on a nearby
     // tuning step and the decoder should be told where it actually is.
-    pluginRunner_.retune(src.centerFrequencyHz());
+    const double landedHz = src.centerFrequencyHz();
+    pluginRunner_.retune(landedHz);
+
+    // SAY WHEN THE RADIO CANNOT TUNE THERE. Measured on a USRP B200: a request
+    // for 7.000 MHz landed at 30.800 MHz with sourceError_, faultMessage and
+    // the log all silent — the counter simply showed the wrong figure and the
+    // plugin it was for looked broken instead of the hardware. The comparison
+    // and the wording live in gui/tune_control.hpp so they are testable
+    // without an open device; this call site only supplies what the device
+    // actually said.
+    noteTuneMismatch(centerHz, landedHz, isPluginPreset);
+}
+
+void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset) {
+    double rangeLoHz = 0.0;
+    double rangeHiHz = 0.0;
+    // soapy_ is null for the generator and the IQ file — neither has a range
+    // to ask about, and tuneMismatchMessage already knows what an absent one
+    // means (drop the range sentence rather than print a sentinel as if it
+    // were a fact).
+    const bool hasRange = soapy_ != nullptr && soapy_->frequencyRangeHz(rangeLoHz, rangeHiHz);
+    tuneMismatchNote_ = cascade::gui::tuneMismatchMessage(requestHz, answeredHz, hasRange,
+                                                          rangeLoHz, rangeHiHz, isPluginPreset);
+    if (tuneMismatchNote_.empty()) { return; }
+    // ONCE PER DISTINCT REQUEST. A repeated identical command (a user pressing
+    // the same preset twice, or the scanner dwelling on a frequency the radio
+    // refuses) lands on the same wrong answer every time; logging it again on
+    // every occurrence would fill the diagnostics bundle with one repeated
+    // line and push everything else out of it.
+    if (requestHz == lastMismatchRequestHz_ && answeredHz == lastMismatchAnswerHz_) {
+        return;
+    }
+    lastMismatchRequestHz_ = requestHz;
+    lastMismatchAnswerHz_ = answeredHz;
+    cascade::core::diagLogf("source: asked for %.6f MHz, the %s answered %.6f MHz",
+                            requestHz / 1.0e6, pipeline_.activeSource().name(),
+                            answeredHz / 1.0e6);
 }
 
 double AppWindow::currentAbsoluteHz() {
@@ -12239,6 +12486,15 @@ void AppWindow::publishWebSnapshot() {
     // The same names the Sinks panel shows, from the same source, so the two
     // clients cannot disagree about why the radio is quiet.
     s.audioMutedBy = muteSubjectText();
+    {
+        const cascade::sink::AudioOut& sink = pipeline_.audio();
+        const double rateHz = cascade::core::Pipeline::kAudioRateHz;
+        s.audioUnderruns = sink.underruns();
+        s.audioPrimingCallbacks = sink.primingCallbacks();
+        s.audioRingMs = 1000.0 * static_cast<double>(sink.ringFrames()) / rateHz;
+        s.audioRingCapacityMs =
+            1000.0 * static_cast<double>(sink.ringCapacityFrames()) / rateHz;
+    }
     s.audioRecording = audioRecorder_.recording();
     s.iqBytes = iqRecorder_.bytesWritten();
     s.audioBytes = audioRecorder_.bytesWritten();
@@ -13282,6 +13538,106 @@ void AppWindow::drawUsageReportingSection() {
         ImGui::PopStyleColor();
         ImGui::Unindent();
     }
+}
+
+// "PUT A MENU IN WHERE ALL THE COM PORT STUFF CAN BE SET UP" - a beta tester's
+// own words. The GPS row (drawGpsPositionControl) has been reachable since
+// 0.86.0, but only from the rail's Radar section, the scope's empty state and
+// a map page's bar - three places nobody would call "the settings for a
+// serial port", and none of them lists what the machine actually has. This is
+// that list, with the same GPS row underneath it rather than a second copy of
+// it: see drawGpsPositionControl's own header for why there is only one.
+void AppWindow::drawSerialPortsSection() {
+    // ENUMERATED ONCE, UNCONDITIONALLY, so the row's OWN CHIP - drawn by
+    // benchSection whether the section is open or not - is never a stale
+    // "NONE" on a machine that has ports, for however long it takes someone
+    // to open the row for the first time. After this one seed, the only
+    // triggers are the two named below: the section's own open edge, and
+    // Refresh.
+    if (!serialPortsListLoaded_) {
+        serialPortsList_ = cascade::core::enumerateSerialPorts();
+        serialPortsListLoaded_ = true;
+    }
+    char chip[16];
+    cascade::gui::formatSerialPortsChip(serialPortsList_.size(), chip, sizeof(chip));
+
+    // VERIFICATION ONLY, same house rule as FOXSDR_GPS_PORT above: this row's
+    // open/closed state is ImGui's own in-memory storage, not AppConfig - so
+    // unlike railBank_ (config.json's own field) nothing in a config file can
+    // open it for a headless self-capture. ImGuiCond_Once, so a real session
+    // that closes the row again is not fought every frame.
+    if (std::getenv("FOXSDR_OPEN_SERIAL_PORTS") != nullptr) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+    }
+
+    const bool listening = gpsReader_.listening();
+    const bool open =
+        benchSection("Serial ports", false, chip, cascade::gui::theme::kPhosphor, listening);
+    // THE SECOND TRIGGER: the row's own OPEN EDGE - closed last frame, open
+    // this one, which is a person asking to see this right now. Not "every
+    // frame it is open": a registry read (or a /dev scan) at frame rate is
+    // exactly the cost the GPS row's own drop-down already refuses to pay
+    // (drawGpsPositionControl), and this row has no drop-down to hide it
+    // behind - it IS the drop-down's list, made visible.
+    const bool justOpened = open && !serialPortsSectionWasOpen_;
+    serialPortsSectionWasOpen_ = open;
+    if (!open) { return; }
+    if (justOpened) { serialPortsList_ = cascade::core::enumerateSerialPorts(); }
+    telemetryNotePanel("serial ports");
+
+    ImGui::TextWrapped(
+        "Every serial port this machine has right now - the same ports the "
+        "GPS row below offers, gathered in one place rather than left "
+        "findable only from the rail's Radar section.");
+    ImGui::Spacing();
+
+    if (ImGui::Button("Refresh")) {
+        serialPortsList_ = cascade::core::enumerateSerialPorts();
+    }
+    ImGui::Spacing();
+
+    if (serialPortsList_.empty()) {
+        // DEVICE MANAGER, NAMED EXACTLY, because "no ports found" leaves a
+        // beta tester with a USB-serial adapter plugged in nowhere to look
+        // next - and the one place Windows will say whether the OPERATING
+        // SYSTEM sees it at all (a driver problem shows up there before it
+        // ever reaches this list) is Ports (COM & LPT).
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(
+            "No serial ports found. If a device is plugged in, check Device "
+            "Manager under \"Ports (COM & LPT)\" - if it is not listed there "
+            "either, this application cannot see it yet.");
+        ImGui::PopStyleColor();
+    } else if (ImGui::BeginTable("##serialportslist", 1,
+                                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg,
+                                 ImVec2(-1.0f, 0.0f))) {
+        ImGui::TableSetupColumn("Port");
+        ImGui::TableHeadersRow();
+        for (const std::string& name : serialPortsList_) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(name.c_str());
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("GPS receiver");
+    // THE SAME ROW, NOT A SECOND COPY OF IT - see drawGpsPositionControl's own
+    // header comment for the full list of where else this appears and why a
+    // hand-written second copy would sooner or later do only some of what it
+    // does.
+    drawGpsPositionControl();
+    // WRAPPED, not one long disabled line: the rail is 384 units wide and a
+    // TextDisabled of this length ran off its right edge (seen in the first
+    // self-capture of the section).
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped(
+        "Sets the receiver's position - what every range and bearing on the "
+        "map and the radar scope is measured from. The same control also "
+        "appears on the rail's Radar section (while there is no position), "
+        "the scope's empty state, and every map page's bar.");
+    ImGui::PopStyleColor();
 }
 
 void AppWindow::applyDiagnosticsEnabled(bool on) {

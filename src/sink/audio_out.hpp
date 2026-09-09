@@ -138,10 +138,30 @@ public:
     std::size_t writeStereo(const float* interleaved, std::size_t frames);
 
     // Cumulative count of starved callbacks (one per pullBlock that could
-    // not fully fill its buffer), monotonic over the object's lifetime.
+    // not fully fill its buffer), monotonic over the object's lifetime. A
+    // starved callback only counts once PRIMED playback has actually begun —
+    // see kPrimeFrames below — so this is "audible stutters", not every
+    // callback that ever touched an empty ring.
     std::uint64_t underruns() const {
         return underruns_.load(std::memory_order_relaxed);
     }
+
+    // Cumulative count of callbacks served while NOT primed (silence, no
+    // underrun charged). Exposed so the priming gap is visible on its own
+    // terms rather than hiding inside a flat underrun count: a device that
+    // reopens often shows a climbing priming count with underruns barely
+    // moving, which is a different story from one that is actually
+    // starving in steady state.
+    std::uint64_t primingCallbacks() const {
+        return primingCallbacks_.load(std::memory_order_relaxed);
+    }
+
+    // How many frames the ring currently holds / can hold, in FRAMES (a
+    // stereo frame is one L+R pair). For the status card and the remote
+    // JSON, which both want "ring X of Y ms" rather than a raw sample count
+    // the caller would have to divide by channels() itself.
+    std::size_t ringFrames() const;
+    std::size_t ringCapacityFrames() const;
 
     // Output gain, clamped to [0, 1]. Stored in an atomic and applied inside
     // the callback, so the GUI thread can move a slider while audio runs
@@ -151,26 +171,55 @@ public:
     void setVolume(float v01);
 
     // The callback core. `frames` is what PortAudio hands the callback, so
-    // the buffer it fills is frames * channels() floats: the ring is pulled
-    // for that many samples, they are scaled by the current volume, and on
-    // starvation the remainder is zero-filled (silence, not stale buffer
-    // garbage — both channels of every unfilled frame) with the underrun
-    // counter bumped once for the callback. Returns the number of SAMPLES
-    // that came from the ring, which for a mono sink equals the frame count
-    // (so the original mono contract is unchanged).
+    // the buffer it fills is frames * channels() floats.
+    //
+    // PRIMING. Playback starts on the first callback with an empty ring —
+    // steady state then hovers near-empty, and ordinary producer jitter (the
+    // DSP thread is not a hard-realtime source) starves a callback every
+    // time it runs late by more than what's left in the ring. So pullBlock
+    // keeps a "primed" latch: while not primed, every callback plays SILENCE
+    // and charges NO underrun (there was never a promise of audio yet), and
+    // primes the instant the ring holds kPrimeFrames or more — at which point
+    // THAT SAME callback plays real audio (the lead is already there to
+    // support it). Once primed, a starved callback zero-fills the shortfall,
+    // charges exactly one underrun as before, and drops back to unprimed:
+    // rather than keep stuttering against a ring that is still catching up,
+    // it takes one short silent gap to rebuild the lead before playback
+    // resumes. See primingCallbacks() for how often the silent side of this
+    // fires.
+    //
+    // Returns the number of SAMPLES that came from the ring (0 while
+    // unprimed), which for a mono sink equals the frame count when the ring
+    // kept up (so the original mono contract is unchanged in that case).
     // Static + void* so it is callable both from the C callback and from
     // tests; it must stay lock-free and allocation-free (see file header).
     static std::size_t pullBlock(void* self, float* dst, std::size_t frames);
 
+    // 120 ms of frames at the sink rate (Pipeline::kAudioRateHz = 48 kHz):
+    // the lead pullBlock demands before it starts playing. Chosen to clear
+    // the ~64 ms worst-case producer gap measured against a USRP B200 with
+    // margin, while staying well inside the ring (see kRingCapacity below —
+    // the ring must hold the prime plus a full callback's worth with room to
+    // spare, and 5760 of 16384 stereo frames leaves plenty). Public so tests
+    // can prime a ring to the exact threshold instead of guessing at it.
+    static constexpr std::size_t kPrimeFrames = 5760;
+
 private:
-    // 32768 samples ≈ 0.68 s at 48 kHz: deep enough to ride out GUI-thread
-    // hiccups on the producer side, shallow enough that a full ring is well
-    // under a second of latency. Power of two as SpscRing requires.
+    // 32768 samples: 32768 mono frames (682 ms at 48 kHz) or 16384 STEREO
+    // frames (341 ms — a stereo frame is one L+R pair, so it costs two
+    // samples). Deep enough to ride out GUI-thread hiccups on the producer
+    // side and hold a full kPrimeFrames lead with room to spare; shallow
+    // enough that a full ring is well under a second of latency even for the
+    // narrower stereo case. Power of two as SpscRing requires.
     static constexpr std::size_t kRingCapacity = std::size_t{1} << 15;
 
     dsp::SpscRing<float> ring_;
     std::atomic<float> volume_{1.0f};
     std::atomic<std::uint64_t> underruns_{0};
+    // Starts false: playback is unprimed until the first callback observes
+    // kPrimeFrames or more in the ring, exactly as a fresh stream should be.
+    std::atomic<bool> primed_{false};
+    std::atomic<std::uint64_t> primingCallbacks_{0};
     // PaStream*, stored as void* so this public header does not force
     // portaudio.h onto every includer; audio_out.cpp casts at the API line.
     void* stream_ = nullptr;

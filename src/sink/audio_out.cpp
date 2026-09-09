@@ -16,6 +16,8 @@ static_assert(std::atomic<float>::is_always_lock_free,
               "volume atomic must be lock-free for the audio callback");
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "underrun counter must be lock-free for the audio callback");
+static_assert(std::atomic<bool>::is_always_lock_free,
+              "primed latch must be lock-free for the audio callback");
 
 namespace {
 
@@ -217,8 +219,27 @@ std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
     auto* ao = static_cast<AudioOut*>(self);
     // The device buffer holds frames * channels interleaved floats; the ring
     // already stores them in that exact order, so this stays one flat read.
-    const std::size_t n =
-        frames * static_cast<std::size_t>(ao->channels_ == 2 ? 2 : 1);
+    const std::size_t chan = static_cast<std::size_t>(ao->channels_ == 2 ? 2 : 1);
+    const std::size_t n = frames * chan;
+
+    if (!ao->primed_.load(std::memory_order_relaxed)) {
+        // Charged as a priming callback whether or not this is the one that
+        // crosses the threshold — the count is "how many callbacks ran while
+        // building the lead", and the last of them is one of those too.
+        ao->primingCallbacks_.fetch_add(1, std::memory_order_relaxed);
+        if (ao->ring_.size() < kPrimeFrames * chan) {
+            // Still short of the lead: silence, and NOT an underrun — nothing
+            // has failed to arrive, because playback was never promised yet.
+            std::memset(dst, 0, n * sizeof(float));
+            return 0;
+        }
+        // The lead is there. Latch primed and fall through into the same
+        // real read below — the ring already holds the prime PLUS whatever
+        // this callback is about to take, so the callback that crosses the
+        // threshold is the first one that actually plays.
+        ao->primed_.store(true, std::memory_order_relaxed);
+    }
+
     // Read straight into the device buffer, then scale in place — one pass,
     // no intermediate storage, nothing the realtime thread must wait on. The
     // same `vol` multiplies every sample, so both channels are scaled
@@ -235,8 +256,24 @@ std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
         // cannot starve.
         std::memset(dst + got, 0, (n - got) * sizeof(float));
         ao->underruns_.fetch_add(1, std::memory_order_relaxed);
+        // Drop back to unprimed rather than keep riding a ring that just ran
+        // dry: the next callback plays silence until the lead rebuilds, which
+        // trades one short gap for what would otherwise be a stutter of many
+        // small starvations while the producer catches up one block at a
+        // time.
+        ao->primed_.store(false, std::memory_order_relaxed);
     }
     return got;
+}
+
+std::size_t AudioOut::ringFrames() const {
+    const std::size_t chan = static_cast<std::size_t>(channels_ == 2 ? 2 : 1);
+    return ring_.size() / chan;
+}
+
+std::size_t AudioOut::ringCapacityFrames() const {
+    const std::size_t chan = static_cast<std::size_t>(channels_ == 2 ? 2 : 1);
+    return ring_.capacity() / chan;
 }
 
 }  // namespace cascade::sink

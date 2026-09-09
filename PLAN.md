@@ -140,3 +140,12 @@ Requests from beta testers, in the order they arrived:
    was. The satellites plugin's own `observer` line stays separate.
    Real-hardware check: the beta tester (no GPS here).
 
+   Follow-up: "put a menu in where all the com port stuff can be set up"
+   (a beta tester's own words) - the port/baud/Read row was reachable only
+   from Radar, the scope's empty state and a map page's bar, none of which
+   read as "serial port settings", and none listed what the machine actually
+   has. A SYSTEM > Serial ports section now does: a table of the machine's
+   ports (enumerated when the section opens and on its own Refresh, never
+   per frame), a chip naming the count ("3 PORTS"/"NONE"), and the same GPS
+   row underneath rather than a second copy of it.
+

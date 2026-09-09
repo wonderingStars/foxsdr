@@ -154,6 +154,16 @@ struct RadioStatus {
     // panel does, so the two clients cannot tell different stories about the
     // same radio.
     std::string audioMutedBy;
+    // Sink health, the same figures the desktop's AUDIO - UNDERRUNS card
+    // shows: a cumulative starved-callback count, how many callbacks ran
+    // while the ring was still building its priming lead (see AudioOut's
+    // kPrimeFrames), and the ring's current level against its capacity in
+    // milliseconds — the number the desktop side had to leave uninvented for
+    // years because nothing measured it (see the card's own comment).
+    std::uint64_t audioUnderruns = 0;
+    std::uint64_t audioPrimingCallbacks = 0;
+    double audioRingMs = 0.0;
+    double audioRingCapacityMs = 0.0;
     bool audioRecording = false;
     std::uint64_t iqBytes = 0;
     std::uint64_t audioBytes = 0;

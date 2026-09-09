@@ -3241,6 +3241,10 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         }
         j["iqRecording"] = s.iqRecording;
         j["audioMutedBy"] = s.audioMutedBy;
+        j["audioUnderruns"] = s.audioUnderruns;
+        j["audioPrimingCallbacks"] = s.audioPrimingCallbacks;
+        j["audioRingMs"] = s.audioRingMs;
+        j["audioRingCapacityMs"] = s.audioRingCapacityMs;
         j["audioRecording"] = s.audioRecording;
         j["iqBytes"] = s.iqBytes;
         j["audioBytes"] = s.audioBytes;
