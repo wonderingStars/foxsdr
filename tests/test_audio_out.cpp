@@ -2,12 +2,21 @@
 //
 // Two layers, matching the module's design:
 //   1. pullBlock() headless — the exact code the PortAudio callback runs
-//      (ring pull, volume scaling, starvation zero-fill + underrun count) is
-//      exercised without any device, against expectations computed in-test.
+//      (priming, ring pull, volume scaling, starvation zero-fill + underrun
+//      count) is exercised without any device, against expectations computed
+//      in-test.
 //   2. The real machine surface — device enumeration and an actual
 //      open/write/close round trip on the system default output device.
 //      This machine has audio, so failures are asserted loudly (with the
 //      PortAudio error text), never silently skipped.
+//
+// PRIMING. A fresh AudioOut starts unprimed, and pullBlock plays silence
+// (uncounted) until the ring holds AudioOut::kPrimeFrames. Most of the tests
+// below are not ABOUT that mechanic — they are about volume, ordering,
+// starvation accounting once the ring IS primed — so they call
+// primeAndDrain() first to reach "primed, empty ring" without re-deriving
+// priming in every one of them. Priming itself gets its own tests, grouped
+// together, further down.
 //
 // Volume checks use exact float equality on purpose: the test computes
 // sample * volume with the same single multiplication the implementation
@@ -40,6 +49,21 @@ std::uint32_t g_lcg = 0x13572468u;
 float nextSample() {
     g_lcg = g_lcg * 1664525u + 1013904223u;
     return static_cast<float>(g_lcg >> 8) * (2.0f / 16777216.0f) - 1.0f;
+}
+
+// Gets a fresh AudioOut from "never fed" to "primed, ring empty" in one
+// shot: write a throwaway block sized to reach kPrimeFrames, then drain
+// exactly that much in a single pullBlock call. The call that crosses the
+// threshold is defined (see pullBlock's own comment) to play for real on the
+// same callback, so this one read empties the ring again — the object comes
+// back primed with nothing queued, ready for a test to write its OWN data
+// and measure real playback without also having to prove priming works.
+void primeAndDrain(AudioOut& ao, int channels) {
+    const std::size_t chan = channels == 2 ? 2 : 1;
+    std::vector<float> pad(AudioOut::kPrimeFrames * chan, 0.0f);
+    CHECK(ao.write(pad.data(), pad.size()) == pad.size());
+    std::vector<float> junk(pad.size());
+    CHECK(AudioOut::pullBlock(&ao, junk.data(), AudioOut::kPrimeFrames) == pad.size());
 }
 
 // On an open(-1, ...) failure, re-derive the reason straight from PortAudio
@@ -85,6 +109,7 @@ int main() {
     // --- pullBlock: exact volume scaling and FIFO order, headless -----------
     {
         AudioOut ao;
+        primeAndDrain(ao, 1);  // this test is about volume/order, not priming
         float src[64];
         for (float& s : src) { s = nextSample(); }
         CHECK(ao.write(src, 64) == 64u);
@@ -107,6 +132,7 @@ int main() {
     // --- pullBlock: unity and zero volume are exact end points --------------
     {
         AudioOut ao;
+        primeAndDrain(ao, 1);
         float src[16];
         for (float& s : src) { s = nextSample(); }
 
@@ -125,6 +151,7 @@ int main() {
     // --- setVolume clamps to [0, 1] (and NaN mutes rather than poisons) -----
     {
         AudioOut ao;
+        primeAndDrain(ao, 1);
         const float s = 0.625f;  // dyadic: survives any [0,1] multiply exactly
         float d = 0.0f;
 
@@ -144,32 +171,40 @@ int main() {
         CHECK(d == 0.0f);
     }
 
-    // --- pullBlock: starvation zero-fills and counts one event --------------
+    // --- pullBlock: a starvation counts ONE event and unprimes --------------
     {
         AudioOut ao;
+        primeAndDrain(ao, 1);  // primed, ring empty
         ao.setVolume(1.0f);
         float dst[64];
         for (float& d : dst) { d = 123.0f; }  // sentinel = stale device buffer
 
-        // Empty ring: nothing pulled, EVERY sample silenced, one underrun.
+        // Primed, ring empty: EVERY sample silenced, one underrun charged,
+        // and the latch drops back to unprimed (see pullBlock's own comment
+        // for why: a ring that just ran dry should get one short silent gap
+        // to rebuild its lead, not keep stuttering while it does).
         CHECK(AudioOut::pullBlock(&ao, dst, 64) == 0u);
         for (int i = 0; i < 64; ++i) { CHECK(dst[i] == 0.0f); }
         CHECK(ao.underruns() == 1u);
 
-        // Each starved callback counts exactly once (event count, not
-        // missing-sample count).
+        // THE POINT OF UNPRIMING. The ring is still empty and nothing has
+        // been written, so these next calls run the UNPRIMED silent path —
+        // silence, but NOT a second and third underrun. A stutter costs one
+        // event, not one per callback until the producer catches up.
         CHECK(AudioOut::pullBlock(&ao, dst, 64) == 0u);
         CHECK(AudioOut::pullBlock(&ao, dst, 64) == 0u);
-        CHECK(ao.underruns() == 3u);
+        CHECK(ao.underruns() == 1u);
+        CHECK(ao.primingCallbacks() >= 2u);  // those two were priming callbacks
 
-        // A zero-length request cannot starve: no bump.
+        // A zero-length request still cannot add an underrun.
         CHECK(AudioOut::pullBlock(&ao, dst, 0) == 0u);
-        CHECK(ao.underruns() == 3u);
+        CHECK(ao.underruns() == 1u);
     }
 
-    // --- pullBlock: partial fill boundary ------------------------------------
+    // --- pullBlock: partial fill boundary, then refilling past the prime ----
     {
         AudioOut ao;
+        primeAndDrain(ao, 1);  // primed, ring empty
         ao.setVolume(0.5f);
         float src[10];
         for (float& s : src) { s = nextSample(); }
@@ -177,17 +212,114 @@ int main() {
 
         float dst[16];
         for (float& d : dst) { d = 123.0f; }
-        // Ask for 16, ring holds 10: the 10 real samples arrive scaled, the
-        // 6-sample tail is silence, and the event counts as ONE underrun.
+        // Primed with only 10 real samples queued: ask for 16, the 10 real
+        // samples arrive scaled, the 6-sample tail is silence, ONE underrun —
+        // and (new) the latch drops back to unprimed, same as the dedicated
+        // starvation test above.
         CHECK(AudioOut::pullBlock(&ao, dst, 16) == 10u);
         for (int i = 0; i < 10; ++i) { CHECK(dst[i] == src[i] * 0.5f); }
         for (int i = 10; i < 16; ++i) { CHECK(dst[i] == 0.0f); }
         CHECK(ao.underruns() == 1u);
 
-        // Exact fill afterwards: no underrun.
+        // A SMALL top-up is not enough to resume on its own: unprimed now
+        // means the FULL lead is required again, not merely "enough for the
+        // next callback". This is the part of the mechanic that actually
+        // stops a marginal producer from stuttering forever — a small write
+        // that arrives just as the previous callback starved must not
+        // immediately hand back real (and possibly still-too-thin) audio.
         CHECK(ao.write(src, 8) == 8u);
+        CHECK(AudioOut::pullBlock(&ao, dst, 8) == 0u);  // still short: silence
+        CHECK(ao.underruns() == 1u);                    // not a second underrun
+
+        // Refilling PAST the prime resumes real playback, and the resuming
+        // callback plays — exactly as priming from a cold start does. Top up
+        // with silence so the ring reaches kPrimeFrames; the 8 real samples
+        // already queued sit at the FRONT (FIFO), so the resuming callback
+        // reads them first, in order, still scaled.
+        std::vector<float> pad(AudioOut::kPrimeFrames - 8, 0.0f);
+        CHECK(ao.write(pad.data(), pad.size()) == pad.size());
         CHECK(AudioOut::pullBlock(&ao, dst, 8) == 8u);
+        for (int i = 0; i < 8; ++i) { CHECK(dst[i] == src[i] * 0.5f); }
+        CHECK(ao.underruns() == 1u);  // resumed cleanly, no new underrun
+    }
+
+    // --- priming: the full sequence from the defect write-up ----------------
+    // Cold start, short of the lead (silent, uncounted), topped up past it
+    // (the crossing callback plays for real), then drained all the way to a
+    // genuine starvation — exercising kPrimeFrames, primingCallbacks() and
+    // ringFrames() together against exact numbers rather than a helper.
+    {
+        AudioOut ao;
+        ao.setVolume(1.0f);
+        std::vector<float> chunk(1000);
+        for (float& s : chunk) { s = nextSample(); }
+        CHECK(ao.write(chunk.data(), chunk.size()) == chunk.size());
+        CHECK(ao.ringFrames() == 1000u);
+
+        // 1000 < kPrimeFrames (5760): silent, and NOT an underrun — but it IS
+        // a priming callback.
+        float dst[480];
+        for (float& d : dst) { d = 123.0f; }
+        const std::uint64_t primingBefore = ao.primingCallbacks();
+        CHECK(AudioOut::pullBlock(&ao, dst, 480) == 0u);
+        for (float d : dst) { CHECK(d == 0.0f); }
+        CHECK(ao.underruns() == 0u);
+        CHECK(ao.primingCallbacks() == primingBefore + 1);
+        // Nothing was consumed by the silent callback: the 1000 real samples
+        // are still queued, untouched, at the front.
+        CHECK(ao.ringFrames() == 1000u);
+
+        // Top up past the threshold (1000 + 5000 = 6000 >= 5760): the NEXT
+        // callback is the one that crosses it, and plays for real.
+        std::vector<float> more(5000);
+        for (float& s : more) { s = nextSample(); }
+        CHECK(ao.write(more.data(), more.size()) == more.size());
+        CHECK(ao.ringFrames() == 6000u);
+
+        float playDst[200];
+        CHECK(AudioOut::pullBlock(&ao, playDst, 200) == 200u);
+        for (int i = 0; i < 200; ++i) { CHECK(playDst[i] == chunk[static_cast<std::size_t>(i)]); }
+        CHECK(ao.underruns() == 0u);
+        CHECK(ao.ringFrames() == 6000u - 200u);
+
+        // Drain the rest until the ring runs dry: the one callback that
+        // straddles empty is the single starvation this sequence produces.
+        std::size_t remaining = 6000 - 200;
+        float drainDst[997];
+        bool starved = false;
+        for (int iter = 0; iter < 100 && !starved; ++iter) {
+            const std::size_t got = AudioOut::pullBlock(&ao, drainDst, 997);
+            if (got < 997u) { starved = true; }
+            remaining -= got;
+        }
+        CHECK(starved);
+        CHECK(remaining == 0u);
         CHECK(ao.underruns() == 1u);
+        CHECK(ao.ringFrames() == 0u);
+    }
+
+    // --- ringFrames() / ringCapacityFrames(): mono, then stereo after open --
+    {
+        AudioOut ao;
+        CHECK(ao.ringCapacityFrames() == (std::size_t{1} << 15));  // mono: 32768
+        CHECK(ao.ringFrames() == 0u);
+        float one = 0.25f;
+        CHECK(ao.write(&one, 1) == 1u);
+        CHECK(ao.ringFrames() == 1u);
+
+        // A real open()'s own drain empties the ring first (see AudioOut::
+        // open's comment), so this checks the CAPACITY figure, which is what
+        // changes with the layout — 32768 samples is 16384 stereo FRAMES,
+        // half the mono figure because a frame costs two samples.
+        const bool ok = ao.open(-1, 48000.0, 2);
+        CHECK(ok);
+        if (ok) {
+            ao.close();
+            CHECK(ao.channels() == 2);
+            CHECK(ao.ringCapacityFrames() == (std::size_t{1} << 14));  // stereo: 16384
+        } else {
+            printOpenFailureDiagnostics(48000.0);
+        }
     }
 
     // --- write() is bounded (non-blocking) and loses nothing it accepted -----
@@ -324,6 +456,16 @@ int main() {
             CHECK(!ao.running());
             CHECK(ao.channels() == 2);  // layout of the ring, not of the stream
 
+            // Nothing was ever WRITTEN before close(), so the ring cannot
+            // have reached kPrimeFrames no matter how many real callbacks ran
+            // in the open/close window — it is guaranteed unprimed here.
+            // Prime it deterministically (see primeAndDrain) so the real
+            // subject of this block — pullBlock's playback/starvation
+            // accounting — is measured from "primed, empty" rather than
+            // hitting the silent unprimed path on the first small write below.
+            primeAndDrain(ao, 2);
+            CHECK(ao.ringFrames() == 0u);  // ringFrames() in STEREO frames, not samples
+
             // Baseline, because the open above was REAL: between open and
             // close the device callback ran against a still-empty ring and
             // legitimately counted starvation. Windows happened not to fire a
@@ -342,6 +484,7 @@ int main() {
                 frames[2 * i + 1] = nextSample();
             }
             CHECK(ao.writeStereo(frames, 32) == 32u);
+            CHECK(ao.ringFrames() == 32u);  // 32 FRAMES (64 samples) queued
 
             ao.setVolume(0.5f);
             float dst[64];
@@ -350,6 +493,7 @@ int main() {
             CHECK(AudioOut::pullBlock(&ao, dst, 16) == 32u);
             for (int i = 0; i < 32; ++i) { CHECK(dst[i] == frames[i] * 0.5f); }
             CHECK(ao.underruns() - base == 0u);
+            CHECK(ao.ringFrames() == 16u);  // 16 frames consumed, 16 remain
 
             // Starvation covers BOTH channels of every unfilled frame and
             // still counts one event: 16 frames left in the ring, 24 asked

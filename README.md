@@ -54,15 +54,16 @@ are still moving. What is in the current build:
   recording of both audio and raw I/Q. The receiver's own position - what
   every range and bearing on the map and the radar scope is measured from -
   can be typed, taken from a map click, or read from a GPS receiver on a
-  serial port: name the port (on a map page's bar, or under the rail's Radar
-  section), press "Read position from GPS", and the first fix (`$GPGGA`,
-  `$GPRMC` or `$GPGLL`, any talker, up to 128 characters for high-precision
-  receivers; dead-reckoned and simulated positions are waited out) sets it
-  exactly as a typed one would; the port is held only until that fix
-  arrives, at most 60 s, and neither the position nor a typed device path is
-  ever written to the diagnostic log. `FOXSDR_GPS_PORT=<port>` (with
-  `FOXSDR_GPS_BAUD`, default 9600) does the same read at start-up, in every
-  run mode, for a bench with a receiver on it.
+  serial port: name the port (on a map page's bar, under the rail's Radar
+  section, or under the rail's SYSTEM > Serial ports, which also lists every
+  port the machine currently has), press "Read position from GPS", and the
+  first fix (`$GPGGA`, `$GPRMC` or `$GPGLL`, any talker, up to 128 characters
+  for high-precision receivers; dead-reckoned and simulated positions are
+  waited out) sets it exactly as a typed one would; the port is held only
+  until that fix arrives, at most 60 s, and neither the position nor a typed
+  device path is ever written to the diagnostic log. `FOXSDR_GPS_PORT=<port>`
+  (with `FOXSDR_GPS_BAUD`, default 9600) does the same read at start-up, in
+  every run mode, for a bench with a receiver on it.
 - **Band plans for the whole world.** Labelled service allocations drawn behind
   the spectrum, colour-coded by service on a colour-blind-safe palette, with a
   "what am I tuned to" readout that names the *narrowest* match — 145.800 MHz
@@ -143,7 +144,10 @@ desktop capture showed the icons through the window while it was plainly on
 screen — and the only picture always true to what was drawn is the one the
 application takes of itself. A torn-off window (a map, a picture) is its own
 framebuffer and is not in that picture; set `FOXSDR_SINGLE_VIEWPORT=1` to keep
-every window inside the main one for a sweep.
+every window inside the main one for a sweep. A rail section's open/closed
+state is not in the config a script can pre-write (only which BANK is showing
+is); `FOXSDR_OPEN_SERIAL_PORTS=1` opens SYSTEM's Serial ports section on the
+first frame it is drawn, for a shot that needs to show its contents.
 
 ## Building (Linux — in development, see the notice at the top)
 

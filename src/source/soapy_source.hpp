@@ -270,6 +270,16 @@ public:
     }
     bool setCenterFrequencyHz(double hz) override;
 
+    // The device's tunable RX range (SoapySDR getFrequencyRange, overall
+    // min/max across every sub-band the driver reports), queried once at
+    // open() and cached — a retune must not pay for a vendor call it does
+    // not need. False, with loHz/hiHz left untouched, when there is no
+    // device open or the driver answered no range at all: the caller (the
+    // tune-mismatch notice) treats that exactly like the signal generator
+    // and the IQ file, which never call this because they have no tuner to
+    // ask about.
+    bool frequencyRangeHz(double& loHz, double& hiHz) const;
+
     // readStream with a 20 ms timeout (kReadTimeoutUs — short so a control
     // call waiting on devMutex_ behind a parked read never stalls the GUI
     // noticeably). Returns the sample count delivered; 0 on timeout — the
@@ -474,6 +484,12 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<double> sampleRateHz_{0.0};
     std::atomic<double> centerFrequencyHz_{0.0};
+    // "No range" is lo > hi, not a separate bool — one sentinel pair instead
+    // of a flag that could disagree with it. Reset to this exact pair by
+    // clearDeviceStateLocked on every path that lets go of the device, and
+    // written only on a successful open (see frequencyRangeHz).
+    std::atomic<double> rangeLoHz_{0.0};
+    std::atomic<double> rangeHiHz_{-1.0};
 
     // Whether THIS source is counted in the process-wide open-device count —
     // set exactly at the successful-open commit, cleared exactly once on the

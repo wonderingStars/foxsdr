@@ -588,6 +588,11 @@ bool SoapySource::open(const std::string& args) {
         // Committed after the guard returns, on the Ok path only.
         double rateHz = 0.0;
         double freqHz = 0.0;
+        // "No range" defaults — see rangeLoHz_/rangeHiHz_ in the header. Left
+        // exactly here when the query below fails or is never reached, which
+        // commits them as "no range" on the Ok path same as everywhere else.
+        double rangeLoHz = 0.0;
+        double rangeHiHz = -1.0;
         std::string label;
     } o{this, &args};
 
@@ -620,6 +625,27 @@ bool SoapySource::open(const std::string& args) {
             // display must agree with the hardware from the first frame.
             o.rateHz = s->link_->dev->getSampleRate(SOAPY_SDR_RX, kChannel);
             o.freqHz = s->link_->dev->getFrequency(SOAPY_SDR_RX, kChannel);
+
+            // ADVISORY, and deliberately its OWN try/catch inside the guarded
+            // body: a driver that cannot answer getFrequencyRange (or throws
+            // asking) must not fail the whole open over a query the tune-
+            // mismatch notice can simply do without - it just omits the range
+            // sentence, exactly as it does for the generator and the IQ file,
+            // which never call this at all. o.rangeLoHz/o.rangeHiHz keep their
+            // "no range" defaults on any failure here.
+            try {
+                const SoapySDR::RangeList rl =
+                    s->link_->dev->getFrequencyRange(SOAPY_SDR_RX, kChannel);
+                if (!rl.empty()) {
+                    // Overall span across every sub-band the driver reports -
+                    // the documented reading (SoapySDR/Types.hpp): front's
+                    // minimum to back's maximum.
+                    o.rangeLoHz = rl.front().minimum();
+                    o.rangeHiHz = rl.back().maximum();
+                }
+            } catch (...) {
+                // Left at the "no range" defaults.
+            }
 
             o.label = s->link_->dev->getHardwareKey();
             if (o.label.empty()) {
@@ -654,6 +680,8 @@ bool SoapySource::open(const std::string& args) {
             // where taking errorMutex_ for name_ is safe.
             sampleRateHz_.store(o.rateHz, std::memory_order_relaxed);
             centerFrequencyHz_.store(o.freqHz, std::memory_order_relaxed);
+            rangeLoHz_.store(o.rangeLoHz, std::memory_order_relaxed);
+            rangeHiHz_.store(o.rangeHiHz, std::memory_order_relaxed);
             {
                 std::lock_guard<std::mutex> lk(errorMutex_);
                 name_ = "SoapySDR: " + o.label;
@@ -812,6 +840,12 @@ void SoapySource::clearDeviceStateLocked(bool deviceReleased) noexcept {
     running_.store(false, std::memory_order_relaxed);
     sampleRateHz_.store(0.0, std::memory_order_relaxed);
     centerFrequencyHz_.store(0.0, std::memory_order_relaxed);
+    // Back to the "no range" sentinel — see rangeLoHz_/rangeHiHz_ in the
+    // header. A stale range surviving a close would let a later query on an
+    // unopened source (or a different device's answer) leak into the
+    // mismatch notice.
+    rangeLoHz_.store(0.0, std::memory_order_relaxed);
+    rangeHiHz_.store(-1.0, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lk(errorMutex_);
         name_ = kNoDeviceName;
@@ -1481,6 +1515,18 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
         return false;
     }
     centerFrequencyHz_.store(t.got, std::memory_order_relaxed);
+    return true;
+}
+
+bool SoapySource::frequencyRangeHz(double& loHz, double& hiHz) const {
+    // Lock-free, like centerFrequencyHz() — this is read on the GUI thread
+    // from every retune (see AppWindow::noteTuneMismatch) and must never wait
+    // behind a control call or a parked read.
+    const double lo = rangeLoHz_.load(std::memory_order_relaxed);
+    const double hi = rangeHiHz_.load(std::memory_order_relaxed);
+    if (!(hi >= lo)) { return false; }  // the "no range" sentinel (lo > hi)
+    loHz = lo;
+    hiHz = hi;
     return true;
 }
 

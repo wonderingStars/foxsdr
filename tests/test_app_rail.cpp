@@ -43,6 +43,7 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 
 #include "gui/app_window.hpp"
@@ -115,6 +116,10 @@ const char* const kChips[] = {
     "FAIL", "12 CLI", "999 CLI",
     // Updates: a critical one, an ordinary one, a check in flight.
     "IMPT", "NEW", "CHECK",
+    // Serial ports: one found, and a plausible few - "NONE" is already in
+    // this list from Target details above, and formatSerialPortsChip never
+    // produces a chip wider than these two.
+    "1 PORT", "12 PORTS",
     // Diagnostics, with the memory dump switched on.
     "ON+DMP"};
 
@@ -148,6 +153,7 @@ const char* const kLabels[] = {"Source",
                                "Web access",
                                "CAT control (rigctld)",
                                "Updates",
+                               "Serial ports",
                                "Diagnostics",
                                "Usage reporting",
                                // Built from a plugin's own display name.
@@ -385,6 +391,25 @@ void testBankKeyLabelsFit() {
     }
 }
 
+// --- 6. the Serial ports row's chip names what it counts ---------------------
+//
+// "0" alone would read as "off"; this row is never off, it just sometimes
+// finds nothing. And "1 PORTS" is the kind of grammar a screenshot gets
+// reported over, so singular and plural are pinned separately rather than
+// trusting "%zu PORTS" to read right at both.
+void testSerialPortsChipNamesItsCount() {
+    std::printf("  the Serial ports chip says NONE, 1 PORT, or N PORTS\n");
+    char out[16];
+    cascade::gui::formatSerialPortsChip(0, out, sizeof(out));
+    CHECK(std::strcmp(out, "NONE") == 0);
+    cascade::gui::formatSerialPortsChip(1, out, sizeof(out));
+    CHECK(std::strcmp(out, "1 PORT") == 0);
+    cascade::gui::formatSerialPortsChip(3, out, sizeof(out));
+    CHECK(std::strcmp(out, "3 PORTS") == 0);
+    cascade::gui::formatSerialPortsChip(12, out, sizeof(out));
+    CHECK(std::strcmp(out, "12 PORTS") == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -412,6 +437,7 @@ int main() {
     testAnOverlongLabelIsBounded();
     testRuntimeChipRowsAreBounded();
     testBankKeyLabelsFit();
+    testSerialPortsChipNamesItsCount();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");

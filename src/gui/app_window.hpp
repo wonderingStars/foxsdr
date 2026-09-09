@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -180,6 +181,23 @@ inline void formatBandwidth(double hz, char* out, std::size_t n) {
     while (len > 0 && out[len - 1] == '0') { out[--len] = '\0'; }
     if (len > 0 && out[len - 1] == '.') { out[--len] = '\0'; }
     std::snprintf(out + len, n - static_cast<std::size_t>(len), "k");
+}
+
+// THE "SERIAL PORTS" ROW'S CHIP: how many the machine has right now, in the
+// rail's own idiom of naming what a count IS rather than leaving a bare
+// number ("12 TGT", "2000 ROW") - a bare "0" here would read as "off",
+// which this row never is; it always reports, it just sometimes reports
+// nothing found. Singular/plural rather than always "PORTS" because "1
+// PORTS" is the kind of thing a person notices and a test can pin without
+// a registry in the room.
+inline void formatSerialPortsChip(std::size_t count, char* out, std::size_t n) {
+    if (count == 0) {
+        std::snprintf(out, n, "NONE");
+    } else if (count == 1) {
+        std::snprintf(out, n, "1 PORT");
+    } else {
+        std::snprintf(out, n, "%zu PORTS", count);
+    }
 }
 
 // The square key at the left of the row, and the plate that starts after it.
@@ -770,6 +788,42 @@ private:
     // lifecycle path everything else uses, so a stop tears the plugin's
     // instances down and a start builds them against the CURRENT receiver.
     void setPluginStopped(const std::string& pluginKey, bool stopped);
+    // "WE WANT THE USER TO HAVE TO DO NOTHING" (the owner's words). Called
+    // from setPluginStopped's own START branch only: looks the plugin back up
+    // by key, and if it carries presets and the receiver is not already
+    // sitting inside one of them (gui/tune_control.hpp's
+    // autoPresetIndexOnStart), applies the first exactly as if its own button
+    // had been pressed. A no-op for a plugin with no preset table, and never
+    // called on a stop or from config load — see the call site in
+    // setPluginStopped and core::startupState for why neither reaches here.
+    void maybeAutoPresetOnStart(const std::string& pluginKey);
+    // THE SAME RULE, for the gesture the DECODE rail actually offers: opening
+    // a plugin's own window. Since 0.79.1 a window is shown ONLY by a row's
+    // click (never restored at start-up, never self-opened - PluginWindows
+    // starts empty every launch and MapPage::open is cleared by
+    // core::startupState), so that click is exactly as deliberate an "I want
+    // this plugin now" as pressing START. Call ONLY when
+    // cascade::gui::autoPresetTriggersOnWindowClick says this frame's click
+    // just turned a window from hidden to shown - never on a click that hides
+    // one. Shares its decision and apply path with maybeAutoPresetOnStart
+    // through the private maybeAutoPreset() below; only the log line's verb
+    // differs ("window opened" here, "started" there).
+    void maybeAutoPresetOnShow(const std::string& pluginKey);
+    // The body both of the above call: find the plugin by key, decide via
+    // autoPresetIndexOnStart, apply through applyPluginPreset, and log with
+    // `verb` standing in for what just happened ("started" / "window
+    // opened"). `verb` is a string literal from the two call sites, never
+    // plugin-supplied text.
+    void maybeAutoPreset(const std::string& pluginKey, const char* verb);
+    // THE REVERSE OF cascade::core::pluginKey(): HostImage/HostPanel/
+    // HostInstrument/MapPage all carry a plugin's DISPLAY name (LoadedPlugin::
+    // name), the same identity drawPluginWindowRows and drawMapPageSections
+    // build their window ids from - never the module FILE NAME
+    // maybeAutoPresetOnShow needs to look the plugin back up by, the same
+    // key setPluginStopped/recordPluginStopped use. Empty when no loaded
+    // plugin answers to `displayName` (an unloaded or since-removed module),
+    // which the two callers below treat as "nothing to auto-preset".
+    std::string pluginKeyForDisplayName(const std::string& displayName) const;
 
     // --- Audio mute while a data decoder is running (see plugin_ui.hpp) -------
     // The EFFECTIVE "mute audio while running" setting for one plugin: the
@@ -918,14 +972,27 @@ private:
     // winning — the gesture that produced the most frequent 0.62.0 field
     // crash. A single tune still applies immediately. The generator and IQ
     // file sources apply immediately always (no USB to pace).
-    void retuneSourceHz(double centerHz);
+    //
+    // isPluginPreset: true only from applyPluginPreset, and only so a
+    // mismatch this retune produces (see noteTuneMismatch) can say the
+    // PRESET needs a receiver that covers that band, rather than leaving an
+    // unexplained tune. Every other caller takes the default.
+    void retuneSourceHz(double centerHz, bool isPluginPreset = false);
     // The unpaced apply: setCenterFrequencyHz + decoder resets + readback.
     // Call directly only where the readback must be valid on return (the
     // carry-across on a fresh device open); everything else goes through
     // retuneSourceHz.
-    void applyRetuneNow(double centerHz);
+    void applyRetuneNow(double centerHz, bool isPluginPreset = false);
     // Frame-loop poll releasing a held retune once its interval has passed.
     void pollPendingRetune();
+    // Compares what applyRetuneNow asked for against what the source actually
+    // landed on (SoapySDR devices coerce; the generator and IQ file never
+    // do) and, past kTuneMismatchToleranceHz, sets tuneMismatchNote_ (shown
+    // in the Source section) and logs once per distinct request. Pulled out
+    // of applyRetuneNow only so its one non-trivial decision — the wording,
+    // in gui/tune_control.hpp's tuneMismatchMessage — stays testable without
+    // a device.
+    void noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset);
 
     // Uninstalls the matching pipeline tap, THEN stops the recorder — the
     // order the Recorder contract requires (see Pipeline::set*Recorder).
@@ -939,7 +1006,7 @@ private:
     // activeSource().setCenterFrequencyHz — the same setter + readback path
     // the toolbar digit wheel uses — so the VFO band (whose offset is
     // preserved) lands on absHz and the display follows the readback.
-    void tuneAbsoluteHz(double absHz);
+    void tuneAbsoluteHz(double absHz, bool isPluginPreset = false);
     // The tuned station: source center readback + VFO offset (what the VFO
     // band marks on the spectrum). This is what a bookmark captures and what
     // the scanner's user-tune detection compares.
@@ -1053,6 +1120,16 @@ private:
     double lastAudioProbeSec_ = 0.0;
     int audioRecoveries_ = 0;
     std::string audioHealthNote_;
+    // Once-a-minute starvation digest (see pollAudioHealth). Sampled every
+    // frame — not gated behind the 1 Hz watchdog above — because a ring can
+    // dip and recover well inside a second at 48 kHz, and a low-water mark
+    // read only once a second would miss most of the dips it exists to
+    // report. SIZE_MAX so the very first frame's real reading always beats
+    // the sentinel instead of needing a separate "have we sampled yet" flag.
+    double lastAudioLogSec_ = 0.0;
+    std::size_t audioRingLowWaterFrames_ = SIZE_MAX;
+    std::uint64_t audioUnderrunsAtLogStart_ = 0;
+    std::uint64_t audioPrimingAtLogStart_ = 0;
     float splitRatio_ = 0.4f;  // spectrum's share of the center area
 
     // --- Source menu state (P4) ---------------------------------------------
@@ -1125,6 +1202,22 @@ private:
     // Paces hardware retunes — see retuneSourceHz. 50 ms: invisible against
     // the wheel gesture, one apply per notch burst instead of one per frame.
     cascade::core::RetuneCoalescer retuneCoalescer_{50.0};
+    // The isPluginPreset a retune was requested with, carried across the
+    // coalescer alongside its frequency — see retuneSourceHz. Overwritten on
+    // every request, so a deferred apply reads the LATEST caller's context,
+    // never a stale one from an earlier request the coalescer already
+    // superseded.
+    bool pendingRetuneIsPreset_ = false;
+
+    // Set by noteTuneMismatch when a retune's readback disagreed with what it
+    // asked for by more than kTuneMismatchToleranceHz; drawn in warning
+    // colour under the Source controls, "" = the last retune landed where it
+    // was asked. NaN so the very first mismatch this session sees is always
+    // logged (NaN != NaN), never suppressed by an uninitialised zero that
+    // happens to equal a real request.
+    std::string tuneMismatchNote_;
+    double lastMismatchRequestHz_ = std::numeric_limits<double>::quiet_NaN();
+    double lastMismatchAnswerHz_ = std::numeric_limits<double>::quiet_NaN();
 
     // Source-selection sequence number, incremented by EVERY install of a
     // source into the pipeline (generator, IQ file, or a resolved device).
@@ -1436,6 +1529,11 @@ private:
     bool crashUploadSwept_ = false;
     void crashUploadStart();
     void crashUploadFinish();
+    // "Serial ports" settings section: the machine's ports as a table, and
+    // the GPS row (drawGpsPositionControl) that used to be findable only
+    // under the rail's Radar section. Drawn before Diagnostics, on the SYSTEM
+    // bank.
+    void drawSerialPortsSection();
     // "Diagnostics" settings section: where the log is, what a report carries,
     // and the one-click bundle.
     void drawDiagnosticsSection();
@@ -1554,6 +1652,19 @@ private:
     // position" fold opens itself once on it, so the Fixed status line is
     // seen rather than lost with the no-position block that held the row.
     bool gpsRowReveal_ = false;
+    // --- SYSTEM > Serial ports: the machine's ports gathered in one place,
+    // so a person is not sent hunting through Radar to find the GPS row.
+    // A SEPARATE cache from gpsPorts_ above, on a DIFFERENT trigger: this one
+    // is read when the SECTION opens (and on its own Refresh key), not when a
+    // combo inside it is pressed - a table that re-read the registry every
+    // frame it was open would be the same cost drawGpsPositionControl's own
+    // comment warns against, paid by a row with no combo to hide it behind.
+    std::vector<std::string> serialPortsList_;
+    bool serialPortsListLoaded_ = false;
+    // Last frame's open/closed state, so drawSerialPortsSection can tell
+    // "just opened" (enumerate) from "still open" (use the cache) from one
+    // benchSection() call that only ever reports the current state.
+    bool serialPortsSectionWasOpen_ = false;
     // How far anything has been heard, per five-degree bearing bucket. Fed
     // once per frame from the visible tracks - which is every track source at
     // once, not just ADS-B - and drawn over the map when coverageShow_ is on.
