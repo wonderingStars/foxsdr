@@ -187,4 +187,245 @@ inline bool autoPresetTriggersOnWindowClick(bool clicked, bool wasShownBeforeCli
     return clicked && !wasShownBeforeClick;
 }
 
+// --- The tuning knob's own arithmetic ---------------------------------------
+//
+// The knob itself is drawn by ImGui and driven by a live mouse, but WHICH
+// step it is on, WHERE the step table wraps, WHEN a drag has covered another
+// whole 15 degrees and WHETHER a mouse-up was a click rather than a drag are
+// all arithmetic with no ImGui dependency - exactly what a test can pin
+// without a window, the same reason every other decision in this file lives
+// here rather than inline in AppWindow::drawTuningKnob.
+
+// The five step sizes the knob's own engraving reads, in Hz and in
+// ascending order - index 0 is 100 Hz, 4 is 1 MHz. A DECADE LADDER, chosen
+// for the whole band the receiver covers rather than one corner of it:
+// 100 Hz is the fine step a sideband or CW signal needs, 1 kHz walks the HF
+// bands, 10 kHz is the everyday step on VHF and UHF, 100 kHz crosses the FM
+// broadcast band, and 1 MHz hops between bands. Every step is ten times its
+// neighbour, so the counter's digits move by exactly one place per notch and
+// nothing lands off a round figure. cycleTuneStep indexes this same table
+// both directions so the UI and the tests can never disagree about what
+// "step 2" means, and AppConfig::tuneStepIndex is a 0..4 index into it.
+inline constexpr int kTuneStepCount = 5;
+inline constexpr double kTuneStepsHz[kTuneStepCount] = {1.0e2, 1.0e3, 1.0e4, 1.0e5, 1.0e6};
+// The step a fresh install starts on: 10 kHz, the middle of the ladder.
+inline constexpr int kTuneStepDefaultIndex = 2;
+
+// LEFT CLICK cycles DOWN (up=false) - finer: 1 MHz, 100 kHz, 10 kHz, 1 kHz,
+// 100 Hz - and wraps from 100 Hz back to 1 MHz; RIGHT CLICK cycles UP
+// (up=true) - coarser - and wraps from 1 MHz back to 100 Hz, so "press
+// again" always does something, whichever button pressed it. index must
+// already be in range (AppConfig sanitises it on load; the knob never holds
+// anything else).
+inline int cycleTuneStep(int index, bool up) {
+    constexpr int kCount = kTuneStepCount;
+    return up ? (index + 1) % kCount : (index + kCount - 1) % kCount;
+}
+
+// A point in screen pixels - deliberately not ImVec2, so this header keeps
+// the "no ImGui" property the rest of the file already has; the call site
+// hands in an ImVec2's x and y.
+struct KnobPoint {
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+// DRAG VS. CLICK. The knob's InvisibleButton reports a mouse-up every time
+// the button comes up over it, whether the hand turned the dial or just
+// tapped it - this is what tells the two apart, measured in screen pixels
+// between the press and the release rather than in knob-angle degrees,
+// because a tap is a hand gesture and a hand does not measure itself in
+// degrees. "Within" is inclusive: exactly tolerancePx away still counts as a
+// press, the same way kTuneMismatchToleranceHz above treats its own boundary.
+inline bool clickIsPress(KnobPoint pressPos, KnobPoint releasePos, float tolerancePx) {
+    const float dx = releasePos.x - pressPos.x;
+    const float dy = releasePos.y - pressPos.y;
+    return std::sqrt(dx * dx + dy * dy) <= tolerancePx;
+}
+
+// ONE STEP EVERY 15 DEGREES OF ROTATION, clockwise (a positive deltaDeg) is
+// up. accumulatedDeg carries the fractional remainder between calls, so a
+// slow drag - a handful of degrees a frame - still adds up to a step instead
+// of being discarded every frame it falls short of 15; a fast drag reported
+// as one big delta returns the same total a sequence of small ones would.
+// Truncated toward zero on both signs (not rounded, and not floor()), which
+// is what makes a small delta on either side of zero read as "no step yet"
+// rather than one direction's small drags stepping early.
+inline int knobStepsFromAngle(float& accumulatedDeg, float deltaDeg) {
+    constexpr float kDegPerStep = 15.0f;
+    accumulatedDeg += deltaDeg;
+    const float stepsF = std::trunc(accumulatedDeg / kDegPerStep);
+    accumulatedDeg -= stepsF * kDegPerStep;
+    return static_cast<int>(stepsF);
+}
+
+// THE ENGRAVING TEXT for one of the five steps - "100 Hz" through "1 MHz",
+// each in the unit that makes it a one- or three-digit figure, the way a
+// dial is lettered. An out-of-range index (should never reach here -
+// AppConfig sanitises tuneStepIndex on load) falls back to the same default
+// the config does, rather than reading past the table.
+inline std::string tuneStepLabel(int index) {
+    if (index < 0 || index >= kTuneStepCount) { index = kTuneStepDefaultIndex; }
+    const double hz = kTuneStepsHz[index];
+    char buf[16];
+    if (hz >= 1.0e6) {
+        std::snprintf(buf, sizeof(buf), "%.0f MHz", hz / 1.0e6);
+    } else if (hz >= 1.0e3) {
+        std::snprintf(buf, sizeof(buf), "%.0f kHz", hz / 1.0e3);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%.0f Hz", hz);
+    }
+    return buf;
+}
+
+// --- Per-digit tuning: the tubes' own arithmetic, shared with the switches --
+//
+// The counter has ten cells, most significant first - 1 GHz down to 1 Hz -
+// and the mouse wheel over one of them has always stepped the TUNED
+// frequency by that digit's place value. 0.88.0 adds a toggle switch
+// beneath every cell that does the same thing on a flick or a held repeat;
+// this is that one piece of arithmetic, lifted out of
+// AppWindow::drawFrequencyReadout so the wheel and the switches share it
+// exactly rather than carrying two copies that could drift apart, and so a
+// digit's place value and its zero clamp are each checkable without a live
+// source or an open ImGui frame.
+inline constexpr int kFreqDigitCells = 10;
+inline constexpr double kFreqDigitPlaceHz[kFreqDigitCells] = {1e9, 1e8, 1e7, 1e6, 1e5,
+                                                               1e4, 1e3, 1e2, 1e1, 1e0};
+
+// cellIndex must be in [0, kFreqDigitCells) - the only caller is the counter's
+// own fixed ten-cell loop, so this does not defend against anything wider.
+inline double digitPlaceHz(int cellIndex) { return kFreqDigitPlaceHz[cellIndex]; }
+
+// ONE STEP ON ONE DIGIT, clamped at 0 Hz - a tune may never ask the source
+// for a negative centre (see drawFrequencyReadout's own comment on
+// minTunedHz, which clamps a step further still, to the VFO offset, on top
+// of this). up adds the digit's place value, !up subtracts it.
+inline double stepDigit(double currentHz, int cellIndex, bool up) {
+    const double delta = digitPlaceHz(cellIndex);
+    return std::max(0.0, currentHz + (up ? delta : -delta));
+}
+
+// --- The tuner plate's own geometry ------------------------------------------
+//
+// 0.88.0: THE COUNTER IS A PLATE BOLTED ONTO THE FRONT OF THE DECK. The
+// owner handed over a design reference - a 1950s-60s military frequency
+// tuner: an olive-drab riveted plate carrying an engraved name plate, a
+// power lamp and a MHz readout across its head, a black bezel holding ten
+// Nixie tubes, a chrome toggle switch beneath every tube, and a footer line
+// - and asked for it "bolted on to the front" of the deck, reproduced as
+// faithfully as draw-list primitives allow. This is every measurement of
+// that plate, in the deck's own reference units at scale 1, kept here with
+// no ImGui dependency so a test can pin where a tube and its switch sit
+// without an open frame.
+//
+// THE PLATE IS SIZED TO THE DECK, NOT THE DECK TO THE PLATE. The first cut
+// scaled the reference down to the deck's 28-wide digit face and let the
+// bar grow 69 units to hold the 207-tall result, with the tuning knob, the
+// volume dial and the window's minimum width all shifted right for its
+// 408 of width. The owner's words on that cut, both binding: it "need[s] to
+// be smaller", and "we don't want to affect the size of the top bar - it's
+// perfect the way we have it". So the bar stays 160 tall and the knobs stay
+// where they were, and the plate is compacted to fit: 364 wide, which is
+// what stands between the counter's divider and the TUNING caption's first
+// letter with a few units of brass clear on either side, and 121 tall
+// inside the bar.
+//
+// WHAT WAS SHRUNK, AND WHAT WAS NOT. The digit face keeps its size (the
+// tube is 28 x 40, a hair under the reference's 3:4.4); every element of
+// the reference is still here - rivets, name plate, lamp and readout,
+// bezel, ten tubes, ten switches with collar, lever and ball, UP/DN
+// stencils, footer - at the smallest tokens the look allows: a 12-unit name
+// plate strip, a 30-unit switch area with a 14-unit collar and an 8-unit
+// ball, stencils and footer at nine (nothing on this deck is lettered
+// smaller), paddings of four to six. The ball now overlaps the stencil it
+// points at, which is what the reference's own ball does too.
+inline constexpr float kFreqCellW = 28.0f;   // one tube, and the switch beneath it
+inline constexpr float kFreqTubeH = 40.0f;   // the digit face at its own size, in glass
+inline constexpr float kFreqCellGap = 6.0f;  // the reference's 8, closed up for width
+inline constexpr float kFreqTubeSwitchGap = 4.0f;  // the reference's 10, scaled
+inline constexpr float kFreqSwitchH = 30.0f;       // the whole toggle switch area
+inline constexpr float kFreqSwitchHalfH = kFreqSwitchH * 0.5f;  // UP half / DN half
+
+// The plate's paddings and the rows inside it, top to bottom: the header
+// (name plate and status cluster), a gap, the bezel, a gap, the footer line.
+inline constexpr float kFreqPlatePadX = 10.0f;
+inline constexpr float kFreqPlatePadTop = 5.0f;
+inline constexpr float kFreqPlatePadBottom = 5.0f;
+inline constexpr float kFreqPlateHeaderH = 12.0f;   // the name plate strip
+inline constexpr float kFreqPlateHeaderGap = 4.0f;
+inline constexpr float kFreqBezelPadX = 5.0f;
+inline constexpr float kFreqBezelPadY = 4.0f;
+inline constexpr float kFreqPlateFooterGap = 4.0f;
+inline constexpr float kFreqPlateFooterH = 9.0f;
+// The rivets: their centres this far in from each corner of the plate -
+// inside the plate padding, so a rivet never lands on the name plate strip
+// or the footer's first letter.
+inline constexpr float kFreqPlateRivetInset = 5.0f;
+inline constexpr float kFreqPlateRivetR = 2.0f;
+
+inline constexpr float kFreqBezelW =
+    kFreqDigitCells * kFreqCellW + (kFreqDigitCells - 1) * kFreqCellGap +
+    kFreqBezelPadX * 2.0f;  // 280 + 54 + 10 = 344
+inline constexpr float kFreqBezelH = kFreqBezelPadY + kFreqTubeH + kFreqTubeSwitchGap +
+                                     kFreqSwitchH + kFreqBezelPadY;  // 4+40+4+30+4 = 82
+inline constexpr float kFreqPlateW = kFreqBezelW + kFreqPlatePadX * 2.0f;  // 364
+inline constexpr float kFreqPlateH = kFreqPlatePadTop + kFreqPlateHeaderH +
+                                     kFreqPlateHeaderGap + kFreqBezelH +
+                                     kFreqPlateFooterGap + kFreqPlateFooterH +
+                                     kFreqPlatePadBottom;  // 5+12+4+82+4+9+5 = 121
+
+// Where the bezel's own top-left sits inside the plate.
+inline constexpr float kFreqBezelX = kFreqPlatePadX;
+inline constexpr float kFreqBezelY =
+    kFreqPlatePadTop + kFreqPlateHeaderH + kFreqPlateHeaderGap;  // 21
+
+// A rectangle in screen pixels - deliberately not ImVec2, for the same reason
+// KnobPoint above is a bare struct: this header has no ImGui dependency, and
+// none of its callers need one to check it.
+struct FreqRect {
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+};
+
+// A CELL'S OWN LEFT EDGE, from the plate's top-left X. Shared by the tube and
+// the switch beneath it, so the switch can never sit a pixel off the column
+// its own tube is drawn in.
+inline float freqCellLeftX(float plateTLx, int cellIndex, float scale) {
+    return plateTLx + (kFreqBezelX + kFreqBezelPadX +
+                       static_cast<float>(cellIndex) * (kFreqCellW + kFreqCellGap)) *
+                          scale;
+}
+
+// ONE TUBE'S GLASS. plateTLx/plateTLy is the plate's own top-left in screen
+// pixels (the point drawFrequencyReadout is handed), cellIndex in
+// [0, kFreqDigitCells), scale the bar's current scale. The tube is the digit
+// cell: the wheel over it tunes that digit and a click opens the typed
+// editor, exactly as the drum apertures it replaces did.
+inline FreqRect tubeRectForCell(float plateTLx, float plateTLy, int cellIndex, float scale) {
+    const float x0 = freqCellLeftX(plateTLx, cellIndex, scale);
+    const float y0 = plateTLy + (kFreqBezelY + kFreqBezelPadY) * scale;
+    return FreqRect{x0, y0, x0 + kFreqCellW * scale, y0 + kFreqTubeH * scale};
+}
+
+// ONE SWITCH HALF'S RECTANGLE - the SAME one for its InvisibleButton and for
+// what is drawn inside it, the "hit area is the drawn area" contract an
+// earlier cut of the digit keys got wrong once: a live click test on the
+// built app found a key's own ink was not where its hit box actually was,
+// because the button and the shape beside it were two separate
+// calculations. upperHalf selects the switch's top half (true - a flick UP,
+// stepping the digit up) or bottom half (false - DN). The two halves tile the
+// whole kFreqSwitchH area with no gap and no overlap.
+// AppWindow::drawFrequencyReadout calls this once per half to place
+// ImGui::SetCursorScreenPos/InvisibleButton, and the drawing that follows
+// reads back ImGui::GetItemRectMin()/Max() of that SAME button rather than
+// recomputing anything.
+inline FreqRect switchRectForCell(float plateTLx, float plateTLy, int cellIndex, bool upperHalf,
+                                  float scale) {
+    const float x0 = freqCellLeftX(plateTLx, cellIndex, scale);
+    const float areaTopY =
+        plateTLy + (kFreqBezelY + kFreqBezelPadY + kFreqTubeH + kFreqTubeSwitchGap) * scale;
+    const float y0 = upperHalf ? areaTopY : areaTopY + kFreqSwitchHalfH * scale;
+    return FreqRect{x0, y0, x0 + kFreqCellW * scale, y0 + kFreqSwitchHalfH * scale};
+}
+
 }  // namespace cascade::gui

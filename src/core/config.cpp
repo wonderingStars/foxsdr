@@ -261,6 +261,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // exists, so a file from a build with more or fewer banks opens somewhere.
     getInt(j, "railBank", out.railBank);
     out.railBank = static_cast<int>(cascade::gui::railBankFromIndex(out.railBank));
+    // The tuning knob's step: RESET TO THE DEFAULT out of range, not clamped
+    // to the nearest bound — there is no "nearest" step for an index the
+    // table does not have, unlike deemphasisIndex's three-entry table above.
+    getInt(j, "tuneStepIndex", out.tuneStepIndex);
+    if (out.tuneStepIndex < 0 || out.tuneStepIndex > 4) { out.tuneStepIndex = 2; }
     // LEGACY KEYS, READ AND NEVER WRITTEN. A file saved before the map became
     // one page per plugin carries its single window's rectangle here; it is
     // read so that rectangle can seed the pages' default placement, and save()
@@ -587,6 +592,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
     j["railBank"] = cfg.railBank;
+    j["tuneStepIndex"] = cfg.tuneStepIndex;
     // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
     // deliberately NOT written: the map is one page per plugin now, and
     // mapPages below is the rectangle store. The keys are still read (see
