@@ -2441,6 +2441,10 @@ void AppWindow::drawUi() {
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
     pollSoapyAsync();
+    // ...and, once per frame, the one automatic reopen a radio whose driver
+    // faulted gets (0.90.1). After the poll above, so a reopen that just
+    // resolved is seen before this asks whether another is due.
+    pollSoapyRecovery();
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();
     // Same contract for the catalogue fetch / plugin download.
@@ -5239,7 +5243,29 @@ void AppWindow::drawSourceSection() {
         }
         ImGui::EndCombo();
     }
+    // REFRESH IS DISABLED WHILE A RADIO IS OPEN, and says why. The scan it
+    // runs probes every dongle on the bus from a child process - opening and
+    // resetting the one streaming here included - and the 0.90.0 field
+    // report is our next control call dying twelve seconds after exactly
+    // that (see scanSoapy and gui::deviceScanAllowed). The key stays on the
+    // panel rather than vanishing, because a control that is missing reads as
+    // a bug and a control that says "close the radio first" reads as a rule.
+    const bool scanGated = soapyScanGated();
+    if (!scanGated) { soapyScanDeferredLogged_ = false; }  // the next radio gets its own line
+    ImGui::BeginDisabled(scanGated);
     if (ImGui::Button("Refresh")) { scanSoapy(); }
+    ImGui::EndDisabled();
+    if (scanGated) {
+        const std::string why = "Device scan deferred while " + soapyScanGateDevice() +
+                                " is open - the vendor probe opens and resets every dongle "
+                                "it finds. Close the radio to look for other devices.";
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", why.c_str());
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", why.c_str());
+        ImGui::PopStyleColor();
+    }
     ImGui::EndDisabled();
 
     // NO HARDWARE FOUND, explained.
@@ -5448,11 +5474,82 @@ void AppWindow::drawSourceSection() {
     }
 }
 
+bool AppWindow::soapyScanGated() const {
+    // THREE WAYS A RADIO IS OPEN, and the third is the one worth explaining.
+    // soapy_ is the device installed in the pipeline; soapyOpenPending_ is
+    // one being made on its worker right now, Device::make already inside the
+    // driver stack. anyDeviceOpen() is the process-wide count, which by design
+    // never comes down for a device the dead-device policy abandoned: the
+    // module still owns that radio, and in the wedged case one of our own
+    // threads is still executing inside it, and in the faulted case the
+    // driver's own reader thread may be. A probe that resets that dongle from
+    // outside faults a thread the guard cannot reach. So an abandoned radio
+    // keeps the scan gated for the rest of the session, which is the same
+    // bargain the user is given in words: restart FoxSDR to use it again. The
+    // rows already scanned stay usable, and the automatic reopen
+    // (pollSoapyRecovery) needs no scan at all - it has the args.
+    return soapy_ != nullptr || soapyOpenPending_ ||
+           cascade::source::SoapySource::anyDeviceOpen();
+}
+
+std::string AppWindow::soapyScanGateDevice() const {
+    // The MODEL, never the raw args: this string goes into the diagnostic
+    // log, and the args carry the serial (see every other sanitiseDevice
+    // site).
+    if (soapy_ != nullptr && !soapyArgs_.empty()) {
+        return cascade::core::sanitiseDevice(soapyArgs_);
+    }
+    if (soapyOpenPending_ && !soapyBusyLabel_.empty()) { return soapyBusyLabel_; }
+    return "a radio this session could not release";
+}
+
 void AppWindow::scanSoapy() {
     // Kick the enumeration onto a worker and return immediately — see the
     // header for why this may not run inline. One at a time: a second scan
     // while one is in flight would race the result into soapyDevices_.
-    if (soapyScanPending_ || soapyOpenPending_) { return; }
+    //
+    // AND NEVER WHILE A RADIO IS OPEN (0.90.1) - gui::deviceScanAllowed has
+    // the field report. The deferral leaves three things right: soapyScanned_
+    // stays FALSE, or the section would never scan once the radio closes; the
+    // open device has a row, so a session that has not scanned yet (the
+    // radio restored from the config, the combo opened for the first time)
+    // still shows it in the list rather than a blank; and the log says why
+    // ONCE, because the combo asks again on every frame it is open.
+    if (!cascade::gui::deviceScanAllowed(soapyScanGated(), soapyScanPending_,
+                                         soapyOpenPending_)) {
+        if (soapyScanGated() && !soapyScanDeferredLogged_) {
+            soapyScanDeferredLogged_ = true;
+            cascade::core::diagLogf(
+                "soapy: device scan deferred while %s is open - the vendor probe opens "
+                "and resets every dongle it finds (close the radio to look for other "
+                "devices)",
+                soapyScanGateDevice().c_str());
+        }
+        if (soapy_ != nullptr && !soapyArgs_.empty()) {
+            bool listed = false;
+            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                if (soapyDevices_[i].args == soapyArgs_) {
+                    listed = true;
+                    sourceSel_ = 2 + static_cast<int>(i);
+                }
+            }
+            if (!listed) {
+                // The row a scan would have produced, from what the open
+                // itself told us: the live name less its "SoapySDR: " prefix
+                // is the label a vendor module gives its device, and the args
+                // are the exact string that reopens it. A later real scan
+                // replaces the whole list and re-finds the device by args.
+                cascade::source::SoapyDeviceInfo row;
+                row.label = pipeline_.activeSource().name();
+                const std::size_t colon = row.label.rfind(": ");
+                if (colon != std::string::npos) { row.label = row.label.substr(colon + 2); }
+                row.args = soapyArgs_;
+                soapyDevices_.push_back(std::move(row));
+                sourceSel_ = 2 + static_cast<int>(soapyDevices_.size() - 1);
+            }
+        }
+        return;
+    }
     soapyScanned_ = true;  // claimed now so the combo does not re-request
     soapyScanPending_ = true;
     // enumerate() never throws and is simply empty on a machine with no
@@ -5615,6 +5712,20 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     // at a device row would be a readout disagreeing with the hardware.
     if (!r.dev) {
         sourceError_ = r.error.empty() ? "device open failed" : r.error;
+        if (r.recovery) {
+            // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
+            // closed before the attempt, the generator is what is installed,
+            // and the pipeline's own fault latch still shows "Device stopped"
+            // with the driver's reason; nothing tries again
+            // (pollSoapyRecovery has no device to reopen now), and the words
+            // are the ones the dead-device policy has always used.
+            sourceError_ = "the radio could not be reopened after its driver faulted (" +
+                           sourceError_ + ") - restart FoxSDR to use this radio again";
+            cascade::core::diagWarnf(
+                "source: the reopen of %s failed (%s) - restart FoxSDR to use this "
+                "radio again",
+                cascade::core::sanitiseDevice(r.args).c_str(), r.error.c_str());
+        }
         if (soapy_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1) {
             sourceSel_ = 0;
         }
@@ -5632,6 +5743,28 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     soapyGainsDb_.assign(soapyGainNames_.size(), kSoapyGainDefaultDb);
     for (const std::string& g : soapyGainNames_) {
         r.dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
+    }
+    if (r.recovery) {
+        // THE GAINS THE USER HAD, written over the defaults just primed: a
+        // reopen after a driver fault is the same radio to the user, and a
+        // receiver that came back 20 dB quieter would read as the fault
+        // having broken something. By NAME, not by index - the stage list is
+        // read back from the device above, and a driver may answer it in a
+        // different order than it did last time. The slider mirror follows
+        // only a set the driver accepted.
+        for (std::size_t i = 0; i < r.recoveryGainNames.size() && i < r.recoveryGainsDb.size();
+             ++i) {
+            for (std::size_t g = 0; g < soapyGainNames_.size(); ++g) {
+                if (soapyGainNames_[g] != r.recoveryGainNames[i]) { continue; }
+                if (r.dev->setGainDb(soapyGainNames_[g],
+                                     static_cast<double>(r.recoveryGainsDb[i]))) {
+                    soapyGainsDb_[g] = r.recoveryGainsDb[i];
+                }
+            }
+        }
+        if (r.recoveryAgc && soapyAgcSupported_ && r.dev->setAutoGain(true)) {
+            soapyAgc_ = true;
+        }
     }
     // Antenna: restore the saved port if this device still has one by that
     // name, otherwise leave the driver's default alone and just report what
@@ -5685,6 +5818,115 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     }
 
     followInputRate();  // DSP chain follows the device's actual readback
+
+    if (r.recovery) {
+        // THE RECEIVER GOES BACK TO WHAT IT WAS DOING. It was running when the
+        // driver faulted (or the pipeline noticed the fault, which only its
+        // running source thread can) - so it runs again; Pipeline::start
+        // clears the fault latch the source thread raised, which is what
+        // takes "Device stopped" and the FAIL lamp off the deck. A receiver
+        // that was stopped stays stopped: the reopen is a repair, not a
+        // Play press.
+        if (r.recoveryRestart) { pipeline_.start(); }
+        cascade::core::diagLogf("source: reopened %s at %.0f S/s after the driver fault%s",
+                                cascade::core::sanitiseDevice(soapyArgs_).c_str(),
+                                pipeline_.activeSource().sampleRateHz(),
+                                r.recoveryRestart ? "; receiver restarted" : "");
+    }
+}
+
+void AppWindow::launchSoapyOpen(SoapyOpenResult r, const std::string& busyLabel) {
+    soapyBusyLabel_ = busyLabel;
+    soapyOpenPending_ = true;
+    // Stamp the request with the selection it belongs to. Nothing is installed
+    // yet, so the counter is NOT bumped here — only the answer's right to be
+    // applied is recorded.
+    soapyOpenReqGen_ = sourceGen_;
+    // The open runs on a worker: Device::make() is the multi-second, USB-bus
+    // -walking call that used to freeze the GUI here. The request travels
+    // into the worker and comes back as the answer, with the device (or the
+    // reason) filled in.
+    soapyOpenFuture_ = std::async(std::launch::async, [r = std::move(r)]() mutable {
+        auto dev = std::make_unique<cascade::source::SoapySource>();
+        if (!dev->open(r.args)) {
+            r.error = dev->lastError();
+            return std::move(r);  // r.dev stays null: the GUI thread reports the failure
+        }
+        // A rate refusal is not fatal (the panel shows the actual readback
+        // either way) but is surfaced.
+        if (!dev->setSampleRateHz(r.requestRateHz)) { r.error = dev->lastError(); }
+        r.dev = std::move(dev);
+        return std::move(r);
+    });
+}
+
+void AppWindow::pollSoapyRecovery() {
+    // Cheap on every frame that matters: no device, or a live one, and this
+    // is two loads. Every bounded --frames run takes the first return.
+    if (soapy_ == nullptr || !soapy_->deviceDead()) { return; }
+    using DeadReason = cascade::source::SoapySource::DeadReason;
+    const DeadReason reason = soapy_->deadReason();
+    const double now = ImGui::GetTime();
+    if (!cascade::gui::autoReopenDue(reason == DeadReason::VendorFault,
+                                     reason == DeadReason::Abandoned, soapyOpenPending_,
+                                     soapyScanPending_, now, soapyReopenAttemptSec_)) {
+        return;
+    }
+    // Stamped BEFORE anything can fail, so a reopen that faults again (which
+    // condemns its own device the same way) is held off for the minute
+    // rather than tried again on the next frame.
+    soapyReopenAttemptSec_ = now;
+
+    // EVERYTHING THE REOPEN NEEDS IS READ FROM THE DEAD SOURCE FIRST. Its
+    // mirrors survive the fault on purpose (a rate or a retune that faulted
+    // leaves the last CONFIRMED readback in place, never the request), and
+    // the close below is what clears them.
+    SoapyOpenResult r;
+    r.args = soapyArgs_;
+    r.row = sourceSel_;
+    const double confirmedRateHz = soapy_->sampleRateHz();
+    r.requestRateHz =
+        confirmedRateHz > 0.0 ? confirmedRateHz : kSoapyRateHz[soapyRateIndex_];
+    r.keepCenterHz = soapy_->centerFrequencyHz();
+    r.recovery = true;
+    r.recoveryGainNames = soapyGainNames_;
+    r.recoveryGainsDb = soapyGainsDb_;
+    r.recoveryAgc = soapyAgc_;
+    // Running, or faulted - the pipeline's latch is raised only by its own
+    // source thread, which exists only while the receiver runs, so a latched
+    // fault is proof it was running when the driver went.
+    r.recoveryRestart = pipeline_.running() || pipeline_.faulted();
+    std::string what = soapy_->faultedWhile();
+    if (what.empty()) { what = "a driver call"; }
+    std::string label = pipeline_.activeSource().name();
+    const std::size_t colon = label.rfind(": ");
+    if (colon != std::string::npos) { label = label.substr(colon + 2); }
+    cascade::core::diagLogf("source: the driver faulted while %s; reopening %s at %.0f S/s",
+                            what.c_str(), cascade::core::sanitiseDevice(r.args).c_str(),
+                            r.requestRateHz);
+
+    // CLOSE THE DEAD RADIO BEFORE OPENING IT AGAIN - the same order as
+    // selectSource (adjudicated fix #3 for the 0.62.0 field crashes: two
+    // device lifetimes must not overlap in one process's libusb). The close
+    // makes no driver call at all - the dead-device policy drops a faulted
+    // handle without closeStream or unmake - so what this costs is the
+    // generator running until the open resolves, exactly as a device switch
+    // costs it. WHAT THE REOPEN THEN REACHES: SoapySDR's factory keeps every
+    // made device in a table keyed by its enumerated args and hands the SAME
+    // object back for the same args (lib/Factory.cpp, getDeviceFromTable),
+    // and the abandoned device was never unmade, so Device::make answers
+    // from the table without running the vendor's find at all - no probe, no
+    // dongle reset, and the driver's own object is asked to set up a fresh
+    // stream. Whether it can is the driver's answer to give: it is made
+    // under the same guard as every open, and a fault or a refusal there is
+    // the ordinary failed open, reported the ordinary way.
+    soapy_ = nullptr;
+    soapyArgs_.clear();
+    ++sourceGen_;
+    pipeline_.setSource(nullptr);
+    sourceKind_ = "siggen";
+    followInputRate();
+    launchSoapyOpen(std::move(r), label);
 }
 
 void AppWindow::selectSource(int idx) {
@@ -5758,29 +6000,12 @@ void AppWindow::selectSource(int idx) {
         // at the closed radio's rate.
         followInputRate();
     }
-    soapyBusyLabel_ = soapyDevices_[d].label;
-    soapyOpenPending_ = true;
-    // Stamp the request with the selection it belongs to. Nothing is installed
-    // yet, so the counter is NOT bumped here — only the answer's right to be
-    // applied is recorded.
-    soapyOpenReqGen_ = sourceGen_;
-    soapyOpenFuture_ = std::async(std::launch::async, [args, rate, idx, keepCenterHz] {
-        SoapyOpenResult r;
-        r.args = args;
-        r.row = idx;
-        r.requestRateHz = rate;
-        r.keepCenterHz = keepCenterHz;
-        auto dev = std::make_unique<cascade::source::SoapySource>();
-        if (!dev->open(args)) {
-            r.error = dev->lastError();
-            return r;  // r.dev stays null: the GUI thread reports the failure
-        }
-        // A rate refusal is not fatal (the panel shows the actual readback
-        // either way) but is surfaced.
-        if (!dev->setSampleRateHz(rate)) { r.error = dev->lastError(); }
-        r.dev = std::move(dev);
-        return r;
-    });
+    SoapyOpenResult req;
+    req.args = args;
+    req.row = idx;
+    req.requestRateHz = rate;
+    req.keepCenterHz = keepCenterHz;
+    launchSoapyOpen(std::move(req), soapyDevices_[d].label);
 }
 
 std::unique_ptr<cascade::source::SoapySource> AppWindow::openSoapy(
@@ -13585,6 +13810,9 @@ void AppWindow::applyWebControls() {
         // is called from drawUi), which is what makes it safe to touch the
         // source at all.
         if (r.scanDevices.value_or(false)) {
+            // Through the same gate as the panel's Refresh (0.90.1): with a
+            // radio open this defers rather than scans, logs why once, and
+            // the browser keeps the list it had - see scanSoapy.
             scanSoapy();
         }
         if (r.sourceKind.has_value()) {

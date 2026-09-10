@@ -563,9 +563,27 @@ private:
     // combo selection at the active device by args (labels can repeat; a
     // device that vanished from the scan leaves sourceSel_ = -1 and the
     // preview falls back to the live source name). Called from the combo's
-    // first open and from Refresh — deliberately never from the constructor
-    // (see soapyDevices_ below for why).
+    // first open, from Refresh and from the web interface's scanDevices —
+    // deliberately never from the constructor (see soapyDevices_ below for
+    // why).
+    //
+    // NEVER WHILE A RADIO IS OPEN (0.90.1). The scan's child-process probe
+    // opens and resets every dongle it finds - the streaming one included -
+    // and the 0.90.0 field report (NESDR SMArt v5, 2026-09-09) is our next
+    // control call dying twelve seconds after exactly that. While a device is
+    // open the scan is deferred instead: the list stays as it is, the open
+    // device is given a row if it has none, one diag line says why, and
+    // soapyScanned_ is left false so the next draw after the radio closes
+    // scans as before. The decision itself is gui::deviceScanAllowed.
     void scanSoapy();
+    // True while scanSoapy() is refusing to run (see deviceScanAllowed): the
+    // Refresh key is disabled with the reason as its caption. Read every
+    // frame the Source section draws, so it is never stale.
+    bool soapyScanGated() const;
+    // The name a deferral names the open radio by - the sanitised model of
+    // soapyArgs_, the label of an open in flight, or a radio this session
+    // could not release.
+    std::string soapyScanGateDevice() const;
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
     // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
     // (opens immediately; on failure the combo selection is left unchanged).
@@ -1188,6 +1206,19 @@ private:
 
     std::vector<cascade::source::SoapyDeviceInfo> soapyDevices_;
     bool soapyScanned_ = false;  // one lazy scan done (scanSoapy())
+    // A deferral has been logged for the radio currently open. The combo's
+    // lazy scan asks on every frame the dropdown is open, so without this the
+    // one diag line would be written sixty times a second; cleared the moment
+    // the gate opens again (drawSourceSection), so the next radio gets its
+    // own line.
+    bool soapyScanDeferredLogged_ = false;
+
+    // --- Reopening after an absorbed driver fault (0.90.1) -----------------
+    // When the automatic reopen was last attempted, in ImGui::GetTime()
+    // seconds; negative = never. gui::autoReopenDue holds the next attempt
+    // off for kSoapyReopenHoldoffSec after this, so a radio that is really
+    // gone is tried once, not in a loop.
+    double soapyReopenAttemptSec_ = -1.0;
 
     // --- Off-thread SoapySDR discovery and open --------------------------
     // SoapySDR::Device::enumerate()/make() do USB bus discovery and, for a
@@ -1209,6 +1240,19 @@ private:
     // silently retunes the receiver and the audio stops. Captured before the
     // switch because by the time the open finishes, the old source is gone.
     double keepCenterHz = 0.0;
+    // WHAT AN AUTOMATIC REOPEN HAS TO PUT BACK (pollSoapyRecovery, 0.90.1).
+    // The ordinary open primes every gain to its default and leaves AGC off;
+    // a reopen after a driver fault is not a new radio to the user, so the
+    // gains, the gain mode and - if the receiver was running when the driver
+    // faulted - the running state are restored once the device is up. The
+    // antenna needs nothing here: soapyAntenna_ is applied by every open.
+    // Carried INSIDE the result rather than in a member so an answer the
+    // user has moved on from (asyncOpenStillWanted) drops it with the rest.
+    bool recovery = false;
+    std::vector<std::string> recoveryGainNames;
+    std::vector<float> recoveryGainsDb;
+    bool recoveryAgc = false;
+    bool recoveryRestart = false;
     };
     std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
     std::future<SoapyOpenResult> soapyOpenFuture_;
@@ -1254,6 +1298,26 @@ private:
 
     // Consumes finished scan/open futures; called once per frame.
     void pollSoapyAsync();
+    // ONE AUTOMATIC REOPEN AFTER AN ABSORBED DRIVER FAULT (0.90.1); called
+    // once per frame after pollSoapyAsync. The 0.90.0 field report (NESDR
+    // SMArt v5, 2026-09-09): a rate change faulted inside rtlsdr.dll, the
+    // guard absorbed it, the device was condemned, and the radio stayed dead
+    // - deck reading FAIL - until FoxSDR was restarted, though the fault was
+    // on our own call frame and every thread of ours was out of the module.
+    // When the open device is dead by such a fault (SoapySource::deadReason
+    // == VendorFault - never Abandoned, whose driver still has a thread of
+    // ours parked inside it), nothing is in flight, and no attempt was made
+    // in the last kSoapyReopenHoldoffSec (gui::autoReopenDue), this closes
+    // the dead source exactly as selectSource does and reopens the same args
+    // at the same rate through launchSoapyOpen, with the state to restore in
+    // the result. A reopen that fails leaves the ordinary failed-open state
+    // and message, and nothing tries again.
+    void pollSoapyRecovery();
+    // The worker-thread open shared by selectSource and pollSoapyRecovery:
+    // closes nothing (the caller has), stamps the request with sourceGen_,
+    // and sets soapyOpenPending_/soapyBusyLabel_. `r` carries the args, the
+    // row, the rate, the centre to carry across and any recovery payload.
+    void launchSoapyOpen(SoapyOpenResult r, const std::string& busyLabel);
     // Applies a resolved open on the GUI thread (panel mirrors, gain priming,
     // pipeline install). Takes ownership of r.dev.
     void finishSoapyOpen(SoapyOpenResult r);

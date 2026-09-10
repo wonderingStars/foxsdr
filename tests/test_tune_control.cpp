@@ -19,6 +19,9 @@
 
 using cascade::gui::autoPresetIndexOnStart;
 using cascade::gui::autoPresetTriggersOnWindowClick;
+using cascade::gui::autoReopenDue;
+using cascade::gui::deviceScanAllowed;
+using cascade::gui::kSoapyReopenHoldoffSec;
 using cascade::gui::digitPlaceHz;
 using cascade::gui::freqCellLeftX;
 using cascade::gui::FreqRect;
@@ -534,6 +537,69 @@ int main() {
         // The narrowest window: no meters, no room - under the counter.
         CHECK(!muteBannerTakesTheMiddle(static_cast<float>(kDeckMinWindowW) - 50.0f,
                                         kDeckCoreW));
+    }
+
+    // --- deviceScanAllowed: no device scan while a radio is open ---------------
+    // THE 0.90.0 FIELD FAULT (NESDR SMArt v5, 2026-09-09): the tester opened
+    // the Source section with the radio streaming, the child-process scan's
+    // probe reset the dongle from outside, and twelve seconds later our next
+    // control call died on a lock libusb had freed. RED WHEN the deviceOpen
+    // term is dropped: the first assertion below then answers true.
+    {
+        std::printf("  the device scan waits for the radio to close\n");
+        // A RADIO IS OPEN: refused, whatever else is going on.
+        CHECK(!deviceScanAllowed(true, false, false));
+        CHECK(!deviceScanAllowed(true, true, false));
+        CHECK(!deviceScanAllowed(true, false, true));
+        CHECK(!deviceScanAllowed(true, true, true));
+        // NO RADIO, nothing in flight: the ordinary first scan.
+        CHECK(deviceScanAllowed(false, false, false));
+        // NO RADIO but a scan already running: one at a time (a second would
+        // race its result into the same list).
+        CHECK(!deviceScanAllowed(false, true, false));
+        // NO RADIO INSTALLED YET but an open resolving on its worker: the
+        // device is about to be open, and Device::make is inside the driver
+        // stack right now.
+        CHECK(!deviceScanAllowed(false, false, true));
+    }
+
+    // --- autoReopenDue: reopen once after an absorbed driver fault -------------
+    {
+        std::printf("  a driver fault reopens the radio once, never a wedged one\n");
+        CHECK(asValue<double>(kSoapyReopenHoldoffSec) == 60.0);
+
+        // THE FIELD CASE: dead by an absorbed fault, not wedged, nothing in
+        // flight, never attempted - due now.
+        CHECK(autoReopenDue(true, false, false, false, 176.0, -1.0));
+
+        // NOT DEAD BY A FAULT: nothing to recover from. RED WHEN the function
+        // ignores its first argument.
+        CHECK(!autoReopenDue(false, false, false, false, 176.0, -1.0));
+
+        // WEDGED: a thread of ours is still parked inside the module, and a
+        // reopen would put a second one beside it. Never - even when every
+        // other condition says yes. RED WHEN the abandonment term is dropped.
+        CHECK(!autoReopenDue(true, true, false, false, 176.0, -1.0));
+        CHECK(!autoReopenDue(true, true, false, false, 1000.0, 0.0));
+
+        // AN OPEN OR A SCAN IN FLIGHT: wait for it (the reopen itself is an
+        // open in flight, so this is also what stops it doubling).
+        CHECK(!autoReopenDue(true, false, true, false, 176.0, -1.0));
+        CHECK(!autoReopenDue(true, false, false, true, 176.0, -1.0));
+
+        // THE HOLD-OFF. An attempt at t=100 holds every attempt off until
+        // t=160 exactly; 159.999 is still inside it. RED WHEN the comparison
+        // becomes <= or the hold-off is dropped.
+        CHECK(!autoReopenDue(true, false, false, false, 100.0, 100.0));
+        CHECK(!autoReopenDue(true, false, false, false, 159.999, 100.0));
+        CHECK(autoReopenDue(true, false, false, false, 160.0, 100.0));
+        CHECK(autoReopenDue(true, false, false, false, 1000.0, 100.0));
+
+        // "NEVER ATTEMPTED" is any negative stamp, and an attempt at t=0 is a
+        // real attempt (the first frame is not special).
+        CHECK(autoReopenDue(true, false, false, false, 0.0, -1.0));
+        CHECK(autoReopenDue(true, false, false, false, 0.5, -0.5));
+        CHECK(!autoReopenDue(true, false, false, false, 30.0, 0.0));
     }
 
     return testSummary("test_tune_control");

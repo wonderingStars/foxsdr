@@ -225,6 +225,8 @@ bool openHealthy(SoapySource& src, const char* instance) {
     CHECK(src.isOpen());
     CHECK(!src.faulted());
     CHECK(!src.deviceDead());
+    CHECK(src.deadReason() == SoapySource::DeadReason::None);
+    CHECK(src.faultedWhile().empty());
     CHECK(src.centerFrequencyHz() == kBootFreqHz);
     CHECK(src.sampleRateHz() == kBootRateHz);
     return ok;
@@ -330,6 +332,12 @@ int main() {
             CHECK(src.deviceDead());
             CHECK(std::strlen(src.lastError()) > 0);
             CHECK(std::strstr(src.lastError(), "0xC0000005") != nullptr);
+            // WHY it is dead: an absorbed fault on our own frame, which is the
+            // one kind of dead the application may answer with a reopen (0.90.1,
+            // AppWindow::pollSoapyRecovery). RED WHEN noteVendorFault stops
+            // recording the reason, or records the abandonment one.
+            CHECK(src.deadReason() == SoapySource::DeadReason::VendorFault);
+            CHECK(src.faultedWhile() == "starting the stream");
 
             // A DEAD DEVICE IS NEVER CALLED AGAIN. Not asserted through a flag
             // but through the driver's own entry points: none of these may
@@ -423,6 +431,12 @@ int main() {
                 // to be faulted about - while lastError keeps the reason.
                 CHECK(!src.faulted());
                 CHECK(!src.deviceDead());
+                // ...and the reason goes with the latch: a device that is no
+                // longer dead has no reason, and nothing to say it faulted
+                // while doing. RED WHEN teardown clears the latch but not
+                // the reason - the reopen would then fire on a closed source.
+                CHECK(src.deadReason() == SoapySource::DeadReason::None);
+                CHECK(src.faultedWhile().empty());
                 CHECK(std::strstr(src.lastError(), "0xC0000005") != nullptr);
 
                 // unmake was NOT called: the handle is abandoned on purpose,
@@ -474,12 +488,17 @@ int main() {
         struct Case {
             const char* instance;
             FaultAt site;
+            const char* faultedWhile;  // the words noteVendorFault records
         };
         const Case cases[] = {
-            {"stop", FaultAt::DeactivateStream},
-            {"rate", FaultAt::SetSampleRate},
-            {"gain", FaultAt::SetGain},
-            {"ant", FaultAt::SetAntenna},
+            {"stop", FaultAt::DeactivateStream, "stopping the stream"},
+            // THE 0.90.0 FIELD FAULT'S SITE (NESDR SMArt v5, 2026-09-09: a
+            // device scan reset the streaming dongle from outside, and the
+            // next rate change died in libusb). The rate change quiesces the
+            // stream first, so the fault lands in the rate call itself.
+            {"rate", FaultAt::SetSampleRate, "setting the sample rate"},
+            {"gain", FaultAt::SetGain, "setting the gain"},
+            {"ant", FaultAt::SetAntenna, "selecting the antenna port"},
         };
         for (const Case& c : cases) {
             SoapySource src;
@@ -510,11 +529,14 @@ int main() {
                     break;
             }
 
-            std::printf("faulted %s: alive, fault absorbed\n", c.instance);
+            std::printf("faulted %s: alive, fault absorbed (while %s)\n", c.instance,
+                        src.faultedWhile().c_str());
             CHECK(vendorGuardFaultCount() == faults + 1);
             CHECK(vendorGuardLastFaultCode() == 0xC0000005u);
             CHECK(src.faulted());
             CHECK(src.deviceDead());
+            CHECK(src.deadReason() == SoapySource::DeadReason::VendorFault);
+            CHECK(src.faultedWhile() == c.faultedWhile);
             CHECK(std::strstr(src.lastError(), "0xC0000005") != nullptr);
 
             const long destroyed = g_devicesDestroyed;
