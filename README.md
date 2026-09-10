@@ -49,6 +49,9 @@ are still moving. What is in the current build:
 - **Hardware.** Anything SoapySDR reaches, with antenna, sample-rate and
   per-stage gain selection. Developed against an Ettus B200; the built-in
   signal generator and IQ-file playback mean it runs with no radio at all.
+  The device scan waits for the radio to close: while one is open the Source
+  section's Refresh key is disabled and says why, because the vendor probe
+  opens and resets every dongle it finds, the streaming one included.
 - **Working with signals.** Bookmarks, a band scanner with a Skip key and a
   listen limit so a station that never goes quiet cannot stop it, and
   recording of both audio and raw I/Q. The receiver's own position - what
@@ -681,6 +684,11 @@ holds the request, the code and that document to each other in both directions.
   (`uptime-sec`) and whether the thread that faulted was one of FoxSDR's own
   or one a driver created (`fault-thread-own`), and the uploaded copy carries
   at least 80 log lines wherever it carries any.
+- A driver fault that FoxSDR absorbed reopens the radio once: the same device
+  is opened again at the same rate, tuned back, its gains and antenna put
+  back, and started again if it was running — and if that reopen fails the
+  radio stays closed with the reason on the Source panel, and nothing tries
+  again for a minute.
 - Each report that has been sent — or could not be — carries a small `.upload`
   file beside it saying which, in plain words. At most five reports a day leave
   one machine, and the same fault only once a day, so a machine stuck in a crash

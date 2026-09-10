@@ -368,6 +368,39 @@ public:
     // tests can tell "this driver crashed" from "the driver said no".
     bool deviceDead() const;
 
+    // WHY it is dead, because the two ways it can be are not the same to a
+    // caller deciding what to do next - and one caller now does (AppWindow's
+    // automatic reopen, 0.90.1, after the NESDR SMArt v5 report of
+    // 2026-09-09 whose absorbed rate-change fault left the radio dead until
+    // FoxSDR was restarted).
+    //
+    //   VendorFault: a vendor call FAULTED on our own call frame and the guard
+    //     absorbed it (noteVendorFault). Every thread of ours is out of the
+    //     module; what is condemned is the driver's object. A fresh open of
+    //     the same device is an ordinary open that may succeed or fail.
+    //   Abandoned: a call was left RUNNING inside the module - an escape-path
+    //     call that never came back (abandonWedgedDriverLocked), or a driver
+    //     lock stop()/closeDevice() could not win (the parked holder is
+    //     inside the driver right now). One of this process's threads is
+    //     still in there; a reopen would put a second beside it, which is the
+    //     0.62.0 crash class. Never reopened; "restart FoxSDR to use this
+    //     radio again" stands.
+    //   None: not dead (deviceDead() false).
+    //
+    // Abandoned wins: a fault absorbed AFTER a call was left running (say,
+    // "deactivating a condemned stream") does not turn a wedged driver back
+    // into a merely faulted one. Cleared with the dead latch, by the same
+    // teardown, and only there.
+    enum class DeadReason { None, VendorFault, Abandoned };
+    DeadReason deadReason() const;
+
+    // The `what` noteVendorFault recorded - "setting the sample rate",
+    // "changing frequency", ... - for the reopen's own log line; empty unless
+    // deadReason() is VendorFault. The same words open lastError(), but that
+    // sentence goes on to tell the user what to do, and a log line quoting
+    // all of it beside "reopening" would contradict itself.
+    std::string faultedWhile() const;
+
     // Escape-path vendor calls this PROCESS has abandoned because they did not
     // return within kVendorCallWait — deactivateStream, closeStream, unmake.
     // 0 on every healthy path.
@@ -544,6 +577,11 @@ private:
     std::string lastError_;
     bool faulted_ = false;
     bool deviceDead_ = false;
+    // Why deviceDead_ is set - see deadReason(). Written on every path that
+    // sets or clears the dead latch and nowhere else, so the two cannot
+    // disagree: None whenever deviceDead_ is false.
+    DeadReason deadReason_ = DeadReason::None;
+    std::string deadWhat_;  // see faultedWhile()
     int consecutiveErrors_ = 0;
 
 public:

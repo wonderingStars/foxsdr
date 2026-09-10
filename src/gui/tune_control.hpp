@@ -408,4 +408,76 @@ inline constexpr bool muteBannerTakesTheMiddle(float barW, float coreW) {
     return muteBannerMiddleW(barW, coreW) >= kMuteBannerMinW;
 }
 
+// --- The Source section's device scan: never while a radio is open ---------
+//
+// THE 0.90.0 FIELD FAULT (crash store, 2026-09-09, a NESDR SMArt v5 on
+// Windows 10.0.26200; absorbed by the vendor-call guard, so the process
+// survived and the log is complete). The radio had streamed at 2.4 MS/s for
+// two minutes. Then the user opened the Source section for the first time
+// that session, which ran the device scan: UHD's banner appears in the log at
+// 23:27:11 (the child process loading every vendor module), and twelve
+// seconds later the next control call - a sample-rate change - died in
+// ntdll's RtlEnterCriticalSection on a critical section libusb had already
+// freed, inside rtlsdr.dll, under our own setSampleRateHz.
+//
+// WHAT THE SCAN DOES TO A STREAMING DONGLE. SoapyRTLSDR's find routine calls
+// rtlsdr_get_device_usb_strings on every dongle (a NEW libusb context, open,
+// read the strings, close) and then probes each one with rtlsdr_open +
+// rtlsdr_close to say "available" - and rtlsdr_open runs the full demodulator
+// reset and tuner initialisation. FoxSDR has refused the IN-PROCESS walk
+// while a radio is open since 0.62.1 (SoapySource::enumerateInProcess,
+// adjudicated fix #1), but the normal scan runs in a child process, whose
+// probe opens and resets the same dongle from outside, with our stream live
+// on it. The child is a different process; the dongle is the same dongle.
+//
+// So the scan is DEFERRED while a device is open - the app's own (deviceOpen:
+// a SoapySource installed in the pipeline, or an open resolving on its
+// worker) - and while another scan is already running. The section keeps the
+// list it has, the Refresh key says why it is disabled, and the next draw
+// after the radio closes scans as it always did. Pure, so the gate is
+// checkable without a device, a pipeline or an ImGui frame; every caller of
+// AppWindow::scanSoapy() (the combo's lazy first scan, Refresh, and the web
+// interface's scanDevices) goes through it.
+inline bool deviceScanAllowed(bool deviceOpen, bool scanPending, bool openPending) {
+    return !deviceOpen && !scanPending && !openPending;
+}
+
+// --- Reopening a radio whose driver faulted, once ---------------------------
+//
+// The same field report, the other half. The fault was absorbed, the device
+// was condemned (SoapySource's dead-device policy: never call a driver that
+// has faulted), and the radio stayed dead until FoxSDR was restarted - with
+// the deck showing FAIL and the user's session otherwise intact. One
+// automatic reopen is worth attempting: the driver's own object is what is
+// condemned, and a fresh open through the same async path either brings the
+// radio back or fails in the ordinary way, with the ordinary message.
+//
+// The conditions, each of which is load-bearing:
+//   - deadByAbsorbedFault: the device is dead because a vendor call FAULTED
+//     on our own call frame and the guard absorbed it. Not any other kind of
+//     dead.
+//   - !driverAbandoned: a WEDGED driver - an escape-path call that never came
+//     back, or a driver lock that never answered - has one of this process's
+//     threads still parked inside the module. A reopen would put a second
+//     thread in there beside it, which is the 0.62.0 crash class; that device
+//     stays dead and the message ("restart FoxSDR to use this radio again")
+//     stands. SoapySource::deadReason() tells the two apart.
+//   - !openPending && !scanPending: nothing else may be inside the driver
+//     stack, and a reopen already in flight must not be doubled.
+//   - the last attempt was kSoapyReopenHoldoffSec ago or more (lastAttemptSec
+//     < 0 means never): ONE attempt, not a retry loop against a radio that is
+//     really gone. A reopen that faults again condemns its own device the
+//     same way, and this holds the next attempt off for a minute.
+inline constexpr double kSoapyReopenHoldoffSec = 60.0;
+
+inline bool autoReopenDue(bool deadByAbsorbedFault, bool driverAbandoned, bool openPending,
+                          bool scanPending, double nowSec, double lastAttemptSec) {
+    if (!deadByAbsorbedFault || driverAbandoned) { return false; }
+    if (openPending || scanPending) { return false; }
+    if (lastAttemptSec >= 0.0 && nowSec - lastAttemptSec < kSoapyReopenHoldoffSec) {
+        return false;
+    }
+    return true;
+}
+
 }  // namespace cascade::gui

@@ -208,6 +208,37 @@ module, absorbed…` report as the enumeration guard, and then:
   **block forever**. The guard can absorb a second fault; it cannot absorb a
   hang, and a hung GUI thread is worse than a crash.
 
+**Two lines added in 0.90.1**, from the first absorbed report the 0.89.0
+logging caught whole (2026-09-09, a NESDR SMArt v5 on Windows 10.0.26200,
+grouped `crash ntdll.dll @ SoapySource::setSampleRateHz`, uptime 176 s). The
+radio had streamed at 2.4 MS/s for two minutes; then the tester opened the
+Source section for the first time that session, which ran the device scan
+(UHD's banner in the `vendor:` lines is the child process loading every
+module), and twelve seconds later the next rate change died in
+`RtlEnterCriticalSection` on a lock libusb had already freed. SoapyRTLSDR's
+find routine probes every dongle with `rtlsdr_open` + `rtlsdr_close` — a full
+demodulator reset — and the in-process gate (`enumerateInProcess`, 0.62.1)
+never saw it because the scan runs in a child.
+
+- `soapy: device scan deferred while <device> is open - the vendor probe opens
+  and resets every dongle it finds (close the radio to look for other devices)`
+  — written once per open radio by `AppWindow::scanSoapy()` when the combo's
+  lazy first scan, Refresh or the web interface's `scanDevices` asks for a scan
+  with a device open (or resolving, or abandoned by the dead-device policy and
+  so still held by its module). The Refresh key is disabled with the same
+  sentence; the decision is `gui::deviceScanAllowed`.
+- `source: the driver faulted while <what>; reopening <device> at <rate> S/s`
+  — written by `AppWindow::pollSoapyRecovery()` when the open device is dead
+  by an **absorbed fault** (`SoapySource::deadReason() == VendorFault`; a
+  wedged driver, `Abandoned`, still has a thread of ours inside it and is
+  never reopened) and no attempt was made in the last 60 s
+  (`gui::autoReopenDue`). It is followed by either `source: reopened <device>
+  at <rate> S/s after the driver fault; receiver restarted` or `source: the
+  reopen of <device> failed (<reason>) - restart FoxSDR to use this radio
+  again`. The reopen reaches the driver's own object: SoapySDR's factory hands
+  back a device still in its table for the same args (`lib/Factory.cpp`), so
+  no vendor find runs and nothing on the bus is probed.
+
 A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the
 CAT server's mutex while the CAT thread waits inside a socket close" is the bug,

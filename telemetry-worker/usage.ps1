@@ -53,7 +53,7 @@ param(
     # build by anything except the id.
     #
     # Pass -ExcludeInstalls @() to see the unfiltered dataset.
-    [string[]]$ExcludeInstalls = @('397c600669cd9fa2dfb4b7d911edb70c')
+    [string[]]$ExcludeInstalls = @('397c600669cd9fa2dfb4b7d911edb70c', '8a7e3dd06082265df1e21fc7e2d47ed3')  # the owner's old and current desktop ids
 )
 
 $ErrorActionPreference = "Stop"

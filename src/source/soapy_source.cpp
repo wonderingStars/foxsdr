@@ -718,6 +718,8 @@ bool SoapySource::open(const std::string& args) {
                     std::lock_guard<std::mutex> lk(errorMutex_);
                     deviceDead_ = false;
                     faulted_ = false;
+                    deadReason_ = DeadReason::None;
+                    deadWhat_.clear();
                 }
                 stopLocked();
                 teardownLocked();
@@ -774,6 +776,9 @@ void SoapySource::closeDevice() {
         std::lock_guard<std::mutex> lk(errorMutex_);
         deviceDead_ = true;
         faulted_ = true;
+        // The holder of the lock is inside the driver right now: this is an
+        // abandonment, not a fault, and no reopen may follow it.
+        deadReason_ = DeadReason::Abandoned;
         try {
             lastError_ = kAbandonedMessage;
         } catch (...) {
@@ -791,6 +796,16 @@ bool SoapySource::deviceDead() const {
     return deviceDead_;
 }
 
+SoapySource::DeadReason SoapySource::deadReason() const {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    return deadReason_;
+}
+
+std::string SoapySource::faultedWhile() const {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    return deadReason_ == DeadReason::VendorFault ? deadWhat_ : std::string();
+}
+
 void SoapySource::noteVendorFault(const char* what) noexcept {
     const unsigned code = static_cast<unsigned>(vendorGuardLastFaultCode());
     core::diagWarnf(
@@ -803,7 +818,11 @@ void SoapySource::noteVendorFault(const char* what) noexcept {
     // build must not turn a survived fault back into a dead process.
     faulted_ = true;
     deviceDead_ = true;
+    // A fault, unless a call has already been left running in this module -
+    // an abandonment is the stronger verdict and keeps it (see deadReason()).
+    if (deadReason_ != DeadReason::Abandoned) { deadReason_ = DeadReason::VendorFault; }
     try {
+        deadWhat_ = what;
         char buf[320];
         std::snprintf(buf, sizeof(buf),
                       "%s faulted inside the device driver (code 0x%08X). The "
@@ -908,6 +927,7 @@ void SoapySource::abandonWedgedDriverLocked(const char* what) noexcept {
     // allocate must not cost the latches that actually protect the device.
     deviceDead_ = true;
     faulted_ = true;
+    deadReason_ = DeadReason::Abandoned;
     try {
         lastError_ = kAbandonedMessage;
     } catch (...) {
@@ -1023,6 +1043,10 @@ void SoapySource::teardownLocked() noexcept {
         std::lock_guard<std::mutex> lk(errorMutex_);
         faulted_ = link_->abandoned;
         deviceDead_ = link_->abandoned;
+        // The reason follows the latch exactly: an abandoned link stays
+        // Abandoned, and a device that is no longer dead has no reason.
+        deadReason_ = link_->abandoned ? DeadReason::Abandoned : DeadReason::None;
+        if (!link_->abandoned) { deadWhat_.clear(); }
         consecutiveErrors_ = 0;
     }
 }
@@ -1199,6 +1223,9 @@ void SoapySource::stop() {
             std::lock_guard<std::mutex> lk(errorMutex_);
             deviceDead_ = true;
             faulted_ = true;
+            // As in closeDevice(): the lock's holder is inside the driver,
+            // so this is an abandonment and no reopen may follow it.
+            deadReason_ = DeadReason::Abandoned;
             try {
                 lastError_ = kAbandonedMessage;
             } catch (...) {

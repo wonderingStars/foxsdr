@@ -1182,6 +1182,7 @@ int main() {
             CHECK(tuneElapsed < std::chrono::milliseconds(4000));
             CHECK(!src.faulted());     // soft failure: NOT condemned
             CHECK(!src.deviceDead());
+            CHECK(src.deadReason() == SoapySource::DeadReason::None);
             CHECK(std::strlen(src.lastError()) > 0);
 
             // NOW the escape path, against the SAME still-parked reader (it
@@ -1201,6 +1202,14 @@ int main() {
             CHECK(src.faulted());
             CHECK(src.deviceDead());
             CHECK(std::strlen(src.lastError()) > 0);
+            // AND SAY WHICH KIND OF DEAD. The reader is inside the driver
+            // right now, holding the lock stop() could not win: this is an
+            // ABANDONMENT, and the automatic reopen (0.90.1) must never fire
+            // on it - a second thread in that module beside the parked one is
+            // the 0.62.0 crash class. RED WHEN the lock-timeout path records
+            // no reason (None) or the fault one.
+            CHECK(src.deadReason() == SoapySource::DeadReason::Abandoned);
+            CHECK(src.faultedWhile().empty());
             reader.join();
             src.closeDevice();
         }
@@ -1247,6 +1256,11 @@ int main() {
         CHECK(!src->running());
         CHECK(src->faulted());
         CHECK(src->deviceDead());
+        // A call left running inside the module is an ABANDONMENT, not a
+        // fault - the distinction the automatic reopen (0.90.1) turns on.
+        // RED WHEN abandonWedgedDriverLocked records the fault reason.
+        CHECK(src->deadReason() == SoapySource::DeadReason::Abandoned);
+        CHECK(src->faultedWhile().empty());
         std::printf("  lastError=\"%s\"\n", src->lastError());
         CHECK(std::strstr(src->lastError(), "abandoned") != nullptr);
         CHECK(std::strstr(src->lastError(), "Restart FoxSDR") != nullptr);
@@ -1267,6 +1281,11 @@ int main() {
         CHECK(!src->open("driver=fakewedge, serial=reopen"));
         CHECK(std::strstr(src->lastError(), "abandoned") != nullptr);
         CHECK(src->deviceDead());
+        // The refused reopen passed through teardownLocked, which clears
+        // the latch for a faulted device and keeps it for an abandoned one -
+        // the reason must survive that the same way. RED WHEN teardown
+        // resets the reason unconditionally.
+        CHECK(src->deadReason() == SoapySource::DeadReason::Abandoned);
         CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 0);
         CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
 
@@ -1353,6 +1372,7 @@ int main() {
         src.stop();
         CHECK(!src.faulted());
         CHECK(!src.deviceDead());
+        CHECK(src.deadReason() == SoapySource::DeadReason::None);
 
         const auto t0 = std::chrono::steady_clock::now();
         src.closeDevice();
@@ -1362,6 +1382,7 @@ int main() {
         CHECK(g_inWedgedCall.load(std::memory_order_acquire));
         CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
         CHECK(src.deviceDead());
+        CHECK(src.deadReason() == SoapySource::DeadReason::Abandoned);
         CHECK(!src.isOpen());
         CHECK(std::strstr(src.lastError(), "abandoned") != nullptr);
 
