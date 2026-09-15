@@ -1826,6 +1826,94 @@ console.log(out.join(String.fromCharCode(10)));
     CHECK(luma(ramp.back()) - luma(ramp.front()) > 150.0);
 }
 
+// A plugin holding the speakers has to be VISIBLE from the browser, because
+// the browser is the client that cannot see the bench.
+//
+// While a plugin declaring CASCADE_CAP_AUDIO_OUT is playing, its audio
+// REPLACES the demodulated audio above the sink - so /api/audio carries the
+// decoder and the frequency readout on the same page names a carrier nobody
+// is listening to. Without a field saying which, a remote listener has no way
+// at all to tell a decoded DAB programme from the radio having wandered, and
+// no way to tell a decoder that cannot keep up (the plugin gap counters) from
+// a device that is starving (audioUnderruns, published beside them).
+//
+// The other half of this test is that the audio-health block did not LOSE
+// anything on the way: a page written against 0.92.0 reads these five names
+// and would go silently blank on a rename, which is the failure mode a status
+// endpoint has to be held to by name rather than by eye.
+void testPluginAudioSourceReachesTheBrowser() {
+    RadioStatus playing = sampleStatus();
+    playing.audioUnderruns = 4;
+    playing.audioPrimingCallbacks = 9;
+    playing.audioRingMs = 41.0;
+    playing.audioRingCapacityMs = 200.0;
+    playing.audioSource = "Fake DAB";
+    playing.audioPluginGaps = 3;
+    playing.audioPluginGapFrames = 480;
+
+    WebServer server;
+    server.setStatusProvider([playing]() { return playing; });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+
+    auto status = cli.Get("/api/status");
+    CHECK(static_cast<bool>(status));
+    if (status) {
+        CHECK(status->status == 200);
+        const nlohmann::json j = nlohmann::json::parse(status->body, nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) {
+            CHECK(j.contains("audioSource"));
+            CHECK(j.value("audioSource", std::string()) == "Fake DAB");
+            CHECK(j.value("audioPluginGaps", 0ULL) == 3ULL);
+            CHECK(j.value("audioPluginGapFrames", 0ULL) == 480ULL);
+            // Every figure the audio-health block carried before, still
+            // carried, under the same names and beside the new pair.
+            CHECK(j.value("audioUnderruns", 0ULL) == 4ULL);
+            CHECK(j.value("audioPrimingCallbacks", 0ULL) == 9ULL);
+            CHECK(j.value("audioRingMs", -1.0) == 41.0);
+            CHECK(j.value("audioRingCapacityMs", -1.0) == 200.0);
+            CHECK(j.contains("audioMutedBy"));
+        }
+    }
+    server.stop();
+
+    // AND THE ORDINARY CASE SAYS SO OUT LOUD. The receiver's own audio is
+    // playing, and the field is present and EMPTY rather than absent: a page
+    // that had to treat a missing key as "the receiver" could not tell this
+    // build from one too old to know the question.
+    WebServer plain;
+    plain.setStatusProvider([]() { return sampleStatus(); });
+    const int plainPort = startOnFreePort(plain, loopbackConfig(), error);
+    CHECK(plainPort > 0);
+    if (plainPort <= 0) {
+        return;
+    }
+    httplib::Client plainCli("127.0.0.1", plainPort);
+    plainCli.set_connection_timeout(5, 0);
+    plainCli.set_read_timeout(5, 0);
+    auto plainStatus = plainCli.Get("/api/status");
+    CHECK(static_cast<bool>(plainStatus));
+    if (plainStatus) {
+        const nlohmann::json j = nlohmann::json::parse(plainStatus->body, nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) {
+            CHECK(j.contains("audioSource"));
+            CHECK(j.value("audioSource", std::string("unset")).empty());
+            CHECK(j.value("audioPluginGaps", 1ULL) == 0ULL);
+            CHECK(j.value("audioPluginGapFrames", 1ULL) == 0ULL);
+        }
+    }
+    plain.stop();
+}
+
 }  // namespace
 
 int main() {
@@ -1853,5 +1941,6 @@ int main() {
     testTrackFadeMatchesTheDesktopRule();
     testEmptyImageSlotIsNotDrawnAsAPicture();
     testServedWaterfallRampIsMonotone();
+    testPluginAudioSourceReachesTheBrowser();
     return testSummary("test_web_server");
 }

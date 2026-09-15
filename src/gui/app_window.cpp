@@ -2956,6 +2956,14 @@ void AppWindow::drawStatusColumn() {
     char l2[128];
     char l3[128];
 
+    // WHOSE SOUND THIS IS, asked once and answered on two cards below. A plugin
+    // holding CASCADE_CAP_AUDIO_OUT replaces the demodulated audio above the
+    // sink, so both the starvation figures and the SINK card are describing
+    // something other than the band the frequency readout names, and neither
+    // may say so without the other. Empty is the ordinary case and changes
+    // nothing on either card.
+    const std::string audioFrom = pluginRunner_.playingPlugin();
+
     // --- AUDIO ---------------------------------------------------------------
     //
     // THE REFERENCE ARTBOARD LETTERS THIS CARD "AUDIO BUFFER" AND PRINTS "41
@@ -2979,11 +2987,27 @@ void AppWindow::drawStatusColumn() {
         const double capMs =
             1000.0 * static_cast<double>(audioSink.ringCapacityFrames()) / rateHz;
         std::snprintf(l1, sizeof(l1), "ring %.0f of %.0f ms", ringMs, capMs);
-        const StatusLine lines[2] = {
+        StatusLine lines[3] = {
             {under == 0 ? "no callback has starved yet" : "starved callbacks, since start",
              under == 0 ? kFaint : cascade::gui::theme::kAlarm},
-            {l1, kFaint}};
-        card("AUDIO - UNDERRUNS", cascade::gui::theme::kAmber, v, lines, 2);
+            {l1, kFaint},
+            {nullptr, kFaint}};
+        int n = 2;
+        if (!audioFrom.empty()) {
+            // THE PLUGIN PATH'S OWN STARVATION, beside the sink's and never
+            // instead of it. A decoder that cannot hand over a full block
+            // sounds exactly like a device whose ring ran dry, and the two
+            // are repaired in completely different places - so while a plugin
+            // is playing, this card carries both counts and the user can tell
+            // which of them is happening.
+            const unsigned long long gaps =
+                static_cast<unsigned long long>(pluginRunner_.audioGaps());
+            const unsigned long long gapFrames =
+                static_cast<unsigned long long>(pluginRunner_.audioGapFrames());
+            std::snprintf(l2, sizeof(l2), "plugin gaps %llu, %llu frames", gaps, gapFrames);
+            lines[n++] = {l2, gaps == 0 ? kFaint : cascade::gui::theme::kAlarm};
+        }
+        card("AUDIO - UNDERRUNS", cascade::gui::theme::kAmber, v, lines, n);
     }
 
     // --- DECODER OUTPUT ------------------------------------------------------
@@ -3110,8 +3134,15 @@ void AppWindow::drawStatusColumn() {
         muteSinceS_ = muteBy.empty() ? -1.0 : nowS;
     }
     {
-        StatusLine lines[2];
+        StatusLine lines[3];
         int n = 0;
+        // The four states are chosen first and the card drawn once at the end,
+        // because the line that says WHAT is playing belongs under every one of
+        // them: a plugin holding the speakers is as true of a muted sink or a
+        // dead stream as of an open one, and a user asking "why am I hearing
+        // this" is owed the answer in the state where they ask it.
+        const char* value = "OPEN";
+        ImU32 valueCol = cascade::gui::theme::kPhosphor;
         if (!muteBy.empty()) {
             std::snprintf(l0, sizeof(l0), "by %s", muteBy.c_str());
             lines[n++] = {l0, kFaint};
@@ -3121,22 +3152,35 @@ void AppWindow::drawStatusColumn() {
                 std::snprintf(l1, sizeof(l1), "for %s", elapsed);
                 lines[n++] = {l1, kFaint};
             }
-            card("SINK", cascade::gui::theme::kAmber, "MUTED", lines, n);
+            value = "MUTED";
+            valueCol = cascade::gui::theme::kAmber;
         } else if (!pipeline_.audio().everOpened()) {
             lines[n++] = {"no output device was opened", kFaint};
-            card("SINK", kMuted, "NO DEVICE", lines, n);
+            value = "NO DEVICE";
+            valueCol = kMuted;
         } else if (!pipeline_.audio().streamAlive()) {
             // The dead-stream case the audio watchdog exists for: everything
             // upstream stays healthy and the speakers go quiet, so it has to be
             // visible from the panel rather than inferred from silence.
             lines[n++] = {"the output stream stopped", cascade::gui::theme::kAlarm};
-            card("SINK", cascade::gui::theme::kAlarm, "STOPPED", lines, n);
+            value = "STOPPED";
+            valueCol = cascade::gui::theme::kAlarm;
         } else {
             std::snprintf(l0, sizeof(l0), "%s",
                           pipeline_.audio().openedDeviceName().c_str());
             lines[n++] = {l0, kFaint};
-            card("SINK", cascade::gui::theme::kPhosphor, "OPEN", lines, n);
         }
+        // WHAT IS COMING OUT, when it is not the receiver. In PHOSPHOR, the ink
+        // this panel reserves for what the radio actually produced - and not in
+        // the amber a figure is set in, which theme.hpp gives to numbers and to
+        // nothing else. Without this line a decoded DAB programme and a
+        // receiver that has wandered onto a different station are the same
+        // picture: the frequency readout names a carrier nobody is hearing.
+        if (!audioFrom.empty()) {
+            std::snprintf(l2, sizeof(l2), "playing: %s", audioFrom.c_str());
+            lines[n++] = {l2, cascade::gui::theme::kPhosphor};
+        }
+        card("SINK", valueCol, value, lines, n);
     }
 
     // --- RECORDER ------------------------------------------------------------
@@ -14731,6 +14775,13 @@ void AppWindow::publishWebSnapshot() {
         s.audioRingCapacityMs =
             1000.0 * static_cast<double>(sink.ringCapacityFrames()) / rateHz;
     }
+    // WHO THE SPEAKERS BELONG TO, from the same runner the SINK card asks, so
+    // the browser and the bench cannot tell different stories about what is
+    // coming out of this radio. Empty is the ordinary case: the demodulated
+    // audio is playing and the two gap counters have nothing to report.
+    s.audioSource = pluginRunner_.playingPlugin();
+    s.audioPluginGaps = pluginRunner_.audioGaps();
+    s.audioPluginGapFrames = pluginRunner_.audioGapFrames();
     s.audioRecording = audioRecorder_.recording();
     s.iqBytes = iqRecorder_.bytesWritten();
     s.audioBytes = audioRecorder_.bytesWritten();
