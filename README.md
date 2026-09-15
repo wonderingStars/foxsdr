@@ -396,6 +396,64 @@ it, not because this application can keep up with it on every machine. If
 the diagnostic log's `stream health` line shows overflows climbing, drop a
 rate.
 
+## The native ADALM-Pluto driver
+
+An **ADALM-Pluto** is opened by FoxSDR's own driver, over the network — no
+libiio, no libad9361, no SoapySDR module. It is the first radio FoxSDR reaches
+that is not on the USB bus at all: a Pluto presents a USB Ethernet gadget and
+runs an `iiod` daemon on TCP port 30431, so where the other native drivers send
+control transfers this one sends one-line text commands, and where they read a
+bulk endpoint this one reads a socket.
+
+**Receive only.** The Pluto is a transceiver; this is a receiver driver, and
+what a transmit path would need is written down in `src/source/pluto_source.hpp`
+rather than half-built.
+
+**The limits come off the board, not out of a table.** A Pluto may be a stock
+AD9363 that tunes 325 MHz to 3.8 GHz, or one with the AD9364 unlock applied that
+reaches 70 MHz to 6 GHz, and the same firmware serves both — so publishing a
+range would be wrong for half of the owners in one direction or the other.
+FoxSDR reads the tuning range, the sample-rate range, the bandwidth range and
+the gain range out of the board's own `*_available` attributes when it opens,
+reports those, and says in the log which kind of board it found. When a board
+publishes no range at all, FoxSDR says the range is unknown rather than
+inventing one.
+
+**What it does.** Whatever rate the board says it takes (2.083–61.44 MS/s on a
+stock one), with the AD9361's analogue bandwidth following the rate
+automatically — including at open, because a Pluto keeps whatever bandwidth the
+last application left it at and there is nothing on screen that would reveal an
+inherited 200 kHz filter. One RX gain in real decibels, and the AD9361's own
+automatic gain control (slow attack, the mode that settles rather than the one
+that chases bursts); moving the gain by hand switches the AGC off first, because
+the chip ignores a manual gain while it is attacking and a slider that moves and
+changes nothing is worse than one that refuses. Two connections are opened, a
+control one and a stream one, so a retune does not queue behind a sample buffer
+the board has not sent yet.
+
+Asking for a rate below the board's own minimum is refused with a reason rather
+than silently rounded up: going lower needs a FIR filter written into the
+AD9361 through `filter_fir_config`, which FoxSDR does not generate. Above the
+maximum the request is coerced down and says so.
+
+**Every wait is bounded.** A connect gives up after three seconds; every send
+and receive after two. A Pluto unplugged mid-stream produces a socket error and
+a stopped source within that, never a frozen window.
+
+**How it is verified.** There is no Pluto on the bench this was written on, so
+the proof is the protocol rather than a spectrum: `tests/test_pluto_source.cpp`
+runs a fake `iiod` on the loopback interface — a real socket, real threads,
+written from the daemon's own published grammar — and checks the whole
+conversation command for command, including the channel mask that has to be
+read back before every sample buffer and the byte counts on every attribute
+write. What cannot be verified here is the content of a real board's context
+description, so the tests are written not to depend on it: the same code is
+served two different boards, and the driver's answers have to differ
+accordingly. A driver with a built-in table passes neither. The protocol
+description came from libiio's daemon under its LGPL-2.1 licence; the notice is
+in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of libiio is linked or
+shipped.
+
 ## The native RTL-SDR driver
 
 FoxSDR opens an RTL2832U dongle directly as well — the same WinUSB transport,

@@ -557,6 +557,28 @@ THE SOFTWARE.
 --------------------------------------------------------------------------
 
 ======================================================================
+COMPONENT: libiio / iiod (network protocol description written from the
+           daemon's published grammar - nothing linked or shipped)
+======================================================================
+======================================================================
+FoxSDR's ADALM-Pluto driver (src/source/iiod_client.* and
+src/source/pluto_source.*) reaches a Pluto over TCP, by speaking the text
+command protocol its on-board `iiod` daemon listens for on port 30431. No
+part of libiio is linked into this product, no libiio binary is distributed
+with it, and nothing of libiio's is present in this repository. The client
+is our own code, in our own names and our own files.
+
+What was taken from libiio is the PROTOCOL DESCRIPTION: which commands the
+daemon accepts and what shape each reply has. That is published in the
+daemon's own source - iiod/lexer.l, iiod/parser.y and iiod/ops.c - and in
+the HELP text the daemon itself prints on request, which lists every
+command this client sends. Those files were read as documentation of a wire
+format, the way a datasheet is read; each command in src/source/iiod_client.*
+names the handler whose reply shape it was written from, so the claim can be
+checked rather than trusted. libiio is LGPL-2.1-or-later.
+See https://github.com/analogdevicesinc/libiio
+
+======================================================================
 COMPONENT: Saira Condensed (typeface, embedded in the executable)
 ======================================================================
 Used unmodified. "Saira" is a Reserved Font Name: any modified version
