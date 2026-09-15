@@ -82,18 +82,9 @@ std::vector<NativeDeviceInfo> rx888DevicesFrom(
 }
 
 std::vector<NativeDeviceInfo> enumerateRx888() {
-#if defined(_WIN32)
+    // See hackrf_source.cpp's enumerateHackRf(): enumerateWinUsb() is the one
+    // entry point on every platform (WinUSB on Windows, usbfs on Linux).
     return rx888DevicesFrom(cascade::usb::enumerateWinUsb(rx888UsbIds()));
-#else
-    static bool said = false;
-    if (!said) {
-        said = true;
-        core::diagLogf(
-            "rx888: native enumeration is Windows-only in this build (the USB transport is "
-            "WinUSB); use the SoapySDR path on this platform");
-    }
-    return {};
-#endif
 }
 
 // --- construction ---------------------------------------------------------
@@ -480,11 +471,7 @@ bool Rx888Source::awaitStreamer(cascade::usb::UsbDeviceInfo& out, std::string& e
 
 std::vector<cascade::usb::UsbDeviceInfo> Rx888Source::listDevices() {
     if (useFakeTransport_) { return fakeLister_ ? fakeLister_() : std::vector<cascade::usb::UsbDeviceInfo>(); }
-#if defined(_WIN32)
     return cascade::usb::enumerateWinUsb(rx888UsbIds());
-#else
-    return {};
-#endif
 }
 
 // --- open / close ---------------------------------------------------------
@@ -554,11 +541,7 @@ bool Rx888Source::open(const std::string& args) {
         if (useFakeTransport_) {
             d = fakeOpener_(path, err);
         } else {
-#if defined(_WIN32)
             d = cascade::usb::openWinUsb(path, err);
-#else
-            err = "the native RX888 driver needs the WinUSB transport (Windows only in this build)";
-#endif
         }
         return d;
     };

@@ -255,9 +255,18 @@ file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
 file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
-# Native radio drivers talk to the hardware through our own WinUSB transport
-# (src/usb), not through SoapySDR modules or libusb: see src/usb/usb_device.hpp.
+# Native radio drivers talk to the hardware through our own USB transport
+# (src/usb) - WinUSB on Windows, usbfs directly on Linux - not through
+# SoapySDR modules or libusb: see src/usb/usb_device.hpp.
 file(GLOB CASCADE_USB    CONFIGURE_DEPENDS src/usb/*.cpp)
+# usbfs_device.cpp includes <linux/usbdevice_fs.h> and friends, which exist
+# nowhere else; it is compiled ONLY on Linux; every other platform (Windows,
+# macOS, *BSD) keeps building against winusb_device.cpp's portable stub for
+# enumerateWinUsb()/enumerateUnbound()/openWinUsb() exactly as before this
+# file existed.
+if(NOT (UNIX AND NOT APPLE))
+    list(FILTER CASCADE_USB EXCLUDE REGEX "usbfs_device\\.cpp$")
+endif()
 
 add_library(cascade_lib STATIC
     ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK}

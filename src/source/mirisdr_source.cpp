@@ -75,21 +75,9 @@ std::vector<NativeDeviceInfo> miriSdrDevicesFrom(
 }
 
 std::vector<NativeDeviceInfo> enumerateMiriSdr() {
-#if defined(_WIN32)
+    // See hackrf_source.cpp's enumerateHackRf(): enumerateWinUsb() is the one
+    // entry point on every platform (WinUSB on Windows, usbfs on Linux).
     return miriSdrDevicesFrom(cascade::usb::enumerateWinUsb(msi2500::usbIds()));
-#else
-    // The transport is WinUSB. A Linux Mirics device is reached through
-    // SoapySDR until a libusb backend exists behind cascade::usb::UsbDevice;
-    // saying so once beats an empty list nobody can explain.
-    static bool said = false;
-    if (!said) {
-        said = true;
-        core::diagLogf(
-            "mirisdr: native enumeration is Windows-only in this build (the USB transport is "
-            "WinUSB); use the SoapySDR path on this platform");
-    }
-    return {};
-#endif
 }
 
 // --- construction ---------------------------------------------------------
@@ -273,9 +261,7 @@ bool MiriSdrSource::resolveDevice(const std::string& args, cascade::usb::UsbDevi
     if (useFakeTransport_) {
         devices = fakeDevices_;
     } else {
-#if defined(_WIN32)
         devices = cascade::usb::enumerateWinUsb(msi2500::usbIds());
-#endif
     }
     // Keep only devices we recognise: a caller may hand us a list from a wider
     // scan, and sending MSi2500 register writes to somebody else's dongle
@@ -344,11 +330,7 @@ bool MiriSdrSource::open(const std::string& args) {
     if (useFakeTransport_) {
         dev = fakeOpener_(info.path, error);
     } else {
-#if defined(_WIN32)
         dev = cascade::usb::openWinUsb(info.path, error);
-#else
-        error = "the native Mirics driver needs the WinUSB transport (Windows only in this build)";
-#endif
     }
     if (dev == nullptr) {
         setError(error.empty() ? std::string("could not open the Mirics device") : error);
