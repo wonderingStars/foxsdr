@@ -104,12 +104,21 @@ namespace {
 // has no such concept - a method it has to answer, and the honest answer for
 // most of them is "there is no such thing here".
 //
-// So the panel asks the concrete type, in exactly one place. Three drivers
-// have one this panel can reach:
+// So the panel asks the concrete type, in exactly one place. Six drivers have
+// one this panel can reach:
 //   HackRfSource     - always present on a HackRF One
 //   AirspySource     - always present (a GPIO write, see its setBiasT)
 //   AirspyHfSource   - only on some boards, which is why the driver ASKS at
 //                      open (GET_BIAS_TEE_COUNT) and answers biasTeeSupported()
+//   SdrPlaySource    - per model, and per ANTENNA on an RSPdx, which is why it
+//                      too answers biasTeeSupported() rather than assuming
+//   MiriSdrSource    - a bit in the band-switch word, always writable (its own
+//                      header records the two bands where it does nothing)
+//   Rx888Source      - the HF port's. The VHF port has a SECOND one, reached
+//                      through setVhfBiasT, and it is deliberately not on this
+//                      checkbox: one box that meant a different connector
+//                      depending on the tuned frequency is exactly the kind of
+//                      control that puts power somewhere nobody expected.
 // The RTL-SDR's is NOT here, and that is said out loud rather than left to be
 // noticed: RtlSdrSource has one, spelled setBiasTee(), but its open-time
 // policy is its own (it will not switch on from an EEPROM that reads as
@@ -128,8 +137,61 @@ bool withBiasTee(cascade::source::DeviceSource* dev, Fn&& fn) {
         if (!hf->biasTeeSupported()) { return false; }
         return fn(*hf);
     }
+    if (auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev)) {
+        if (!sp->biasTeeSupported()) { return false; }
+        return fn(*sp);
+    }
+    if (auto* m = dynamic_cast<cascade::source::MiriSdrSource*>(dev)) { return fn(*m); }
+    if (auto* r = dynamic_cast<cascade::source::Rx888Source*>(dev)) { return fn(*r); }
     return false;
 }
+
+// THE RSP's THREE OTHER SWITCHES, EACH ONE DRIVER WIDE. Same argument as
+// withBiasTee - they are not ports and not gains, and DeviceSource would have
+// to invent an answer for every source that has no such thing - but each of
+// these is offered by exactly one driver, so there is no dispatch to do
+// beyond the cast, and the per-MODEL question is the one that matters: an
+// RSP1A has no HDR mode, an RSPdx has no DAB notch, and the driver answers
+// for the device that is actually open rather than for the family.
+template <typename Fn>
+bool withRfNotch(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
+    if (sp == nullptr || !sp->rfNotchSupported()) { return false; }
+    return fn(*sp);
+}
+
+template <typename Fn>
+bool withDabNotch(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
+    if (sp == nullptr || !sp->dabNotchSupported()) { return false; }
+    return fn(*sp);
+}
+
+template <typename Fn>
+bool withHdrMode(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
+    if (sp == nullptr || !sp->hdrModeSupported()) { return false; }
+    return fn(*sp);
+}
+
+// THE RX888's ADC PAIR, and they travel together because they are one GPIO
+// word and one decision: dither trades a little noise floor for spurs that
+// stop sitting on exact frequencies, and the output randomiser undoes the
+// FX3's own scrambling. The randomiser is ONE switch on purpose - the driver
+// flips the chip and the host-side de-randomiser in the same call, because
+// turning it on at the chip alone turns the whole band into noise.
+template <typename Fn>
+bool withAdcSwitches(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* r = dynamic_cast<cascade::source::Rx888Source*>(dev);
+    if (r == nullptr) { return false; }
+    return fn(*r);
+}
+
+// THE PLUTO'S DRIVER KEY, spelled once. The Source section has to recognise
+// its row in three places (the label, the row that must not open on
+// selection, and the address field it shows instead), and a literal in each
+// is three chances for a typo that compiles.
+constexpr const char* kPlutoDriverKey = "pluto";
 
 // Takes a resolved device-open result and lets it go, which is precisely what
 // closes the device: the result owns the SoapySource and its destructor is the
@@ -442,7 +504,7 @@ void applyWindowIcon(GLFWwindow* window) {
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
            a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
-           a.soapyAntenna == b.soapyAntenna &&
+           a.plutoUri == b.plutoUri && a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
@@ -5436,6 +5498,19 @@ void AppWindow::drawSourceSection() {
         for (const cascade::usb::UsbId& id : cascade::source::rtlSdrUsbIds()) {
             if (u.vid == id.vid && u.pid == id.pid) { isRtl = true; }
         }
+        // ...AND THE RX888 NEEDS A THIRD SENTENCE, because it is the only
+        // radio FoxSDR opens that has to go through Zadig TWICE. It has two
+        // USB identities - 04B4:00F3 is the bare Cypress bootloader it comes
+        // up as out of a power cycle, 04B4:00F1 is the radio it becomes once
+        // the firmware is loaded - and both have to be bound to WinUSB.
+        // Telling its owner "select this radio in the dropdown" once would
+        // leave them with a device that opens, takes the firmware, and then
+        // vanishes; the driver's own error for that state names the second
+        // id, and this is the sentence that stops them reaching it.
+        bool isRx888 = false;
+        for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
+            if (u.vid == id.vid && u.pid == id.pid) { isRx888 = true; }
+        }
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         if (isRtl) {
             ImGui::TextWrapped(
@@ -5443,6 +5518,16 @@ void AppWindow::drawSourceSection() {
                 "Zadig (zadig.akeo.ie), tick Options -> List All Devices, select \"Bulk-In, "
                 "Interface (Interface 0)\", choose WinUSB and click Replace Driver, then "
                 "press Refresh.",
+                what.c_str());
+        } else if (isRx888) {
+            ImGui::TextWrapped(
+                "%s is plugged in but is not bound to WinUSB, so nothing can open it. An "
+                "RX888 has to be done TWICE, because it is two devices: run Zadig "
+                "(zadig.akeo.ie), tick Options -> List All Devices, bind \"WestBridge\" (USB "
+                "ID 04B4:00F3, the bootloader) to WinUSB, then open the radio here once so "
+                "FoxSDR loads its firmware - it will disappear and come back as \"RX888mk2\" "
+                "(04B4:00F1), which has to be bound to WinUSB as well. Press Refresh after "
+                "each.",
                 what.c_str());
         } else {
             ImGui::TextWrapped(
@@ -5453,6 +5538,35 @@ void AppWindow::drawSourceSection() {
                 what.c_str());
         }
         ImGui::PopStyleColor();
+    }
+
+    // AN SDRPLAY RSP IS INVISIBLE WITHOUT THE VENDOR API, AND SILENCE IS THE
+    // WRONG ANSWER TO THAT.
+    //
+    // Every other radio FoxSDR drives can be listed from the bus whether or
+    // not anything else is installed. An RSP cannot: SDRplay publish no
+    // device protocol and the tuner is programmed by a Windows service, so
+    // with no sdrplay_api.dll the device is not merely unopenable, it is
+    // unseeable - the same "my radio is simply not in the list" the
+    // unbound-device sentence above exists to stop, one layer further down.
+    //
+    // Shown when there is no RSP row AND the driver has something to say. The
+    // wording is the driver's own pure sdrPlayApiAdvice(), not a paraphrase:
+    // it is pinned by a test because it is the only instruction the user
+    // gets, and one that drops "3.x" or "sdrplay.com" sends them nowhere.
+    if (!sdrPlayRowsFound_ && !sdrPlayAdvice_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", sdrPlayAdvice_.c_str());
+        ImGui::PopStyleColor();
+        // WHERE IT LOOKED, dimmed. A user does not need it; whoever is
+        // helping them does, and "which path did it try" is the first
+        // question worth asking - the same reasoning as the "Where FoxSDR
+        // looked" tree further down.
+        if (!sdrPlayApiDetail_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("SDRplay API: %s", sdrPlayApiDetail_.c_str());
+            ImGui::PopStyleColor();
+        }
     }
 
     // NO HARDWARE FOUND, explained.
@@ -5563,6 +5677,68 @@ void AppWindow::drawSourceSection() {
                 // and a report is a support artefact, not a listening record.
                 cascade::core::diagLogf("source: opened an I/Q file at %.0f S/s",
                                         pipeline_.activeSource().sampleRateHz());
+            }
+        }
+    }
+
+    // THE PLUTO'S ADDRESS, shown while the combo sits on its row, and the
+    // only source in this panel whose location the user has to type.
+    //
+    // It follows the IQ file's shape exactly, and for the same reason: a
+    // network address cannot be validated by looking at it, so the switch
+    // happens on a successful Open and never on selection. Nothing is
+    // contacted until the key is pressed - selecting the row costs no
+    // traffic, no timeout and no wait - and an Open that fails leaves
+    // whatever is installed running, with the driver's own sentence in the
+    // red line below.
+    if (sourceSel_ >= kNativeRowBase && sourceSel_ < soapyRowBase()) {
+        const std::size_t plutoRow = static_cast<std::size_t>(sourceSel_ - kNativeRowBase);
+        if (plutoRow < nativeDevices_.size() &&
+            nativeDevices_[plutoRow].driver == kPlutoDriverKey) {
+            // Disabled while an open is already resolving, for the reason
+            // selectSource refuses a row switch mid-open: a second request
+            // would strand the first one's device for a stale-drop teardown.
+            ImGui::BeginDisabled(deviceOpenPending_);
+            ImGui::SetNextItemWidth(-60.0f);
+            ImGui::InputText("##pluto_uri", plutoUri_, sizeof(plutoUri_));
+            ImGui::SameLine();
+            const bool openPluto = ImGui::Button("Open");
+            ImGui::EndDisabled();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped(
+                "A Pluto on its USB cable answers at ip:192.168.2.1. ip:pluto.local works if "
+                "this machine has an mDNS responder, and any address or host name can be "
+                "typed. Nothing is contacted until you press Open.");
+            ImGui::PopStyleColor();
+            if (openPluto) {
+                sourceError_.clear();
+                // Through the SAME worker-thread open every other radio uses,
+                // so a board that is not there spends its connect bound off
+                // the GUI thread and the window keeps drawing. The row's args
+                // are re-derived from the box here rather than read out of
+                // nativeDevices_, because the user may have typed since the
+                // list was built.
+                const std::string args = std::string("uri=") + plutoUri_;
+                if (device_ != nullptr) {
+                    cascade::core::diagLogf(
+                        "source: closing %s before opening the ADALM-Pluto",
+                        deviceModel_.c_str());
+                    device_ = nullptr;
+                    soapyView_ = nullptr;
+                    deviceArgs_.clear();
+                    deviceModel_.clear();
+                    ++sourceGen_;
+                    pipeline_.setSource(nullptr);
+                    sourceKind_ = "siggen";
+                    followInputRate();
+                }
+                DeviceOpenResult req;
+                req.kind = kPlutoDriverKey;
+                req.args = args;
+                req.row = sourceSel_;
+                req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
+                req.keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
+                launchDeviceOpen(std::move(req), "ADALM-Pluto at " + std::string(plutoUri_));
             }
         }
     }
@@ -5720,6 +5896,90 @@ void AppWindow::drawSourceSection() {
                     "Sends about 4.5 V up the antenna cable to power an amplifier at the "
                     "mast. Leave it off unless you have one: equipment that is not "
                     "expecting power on the connector can be damaged by it.");
+            }
+        }
+
+        // THE RSP's OWN SWITCHES, BESIDE THE BIAS TEE AND OUTSIDE THE AGC
+        // DISABLE. None of them is a gain: the notches are fixed filters in
+        // front of the tuner and HDR is a different front-end path
+        // altogether, so automatic gain control has no bearing on any of
+        // them. Each is drawn only when the OPEN model actually has it - an
+        // RSP1A has no HDR mode and an RSPdx has no DAB notch - because a
+        // checkbox the API answers with an error is worse than no checkbox.
+        //
+        // The pattern is the bias tee's throughout: request, then show the
+        // driver's READBACK, so a switch the radio refused leaves the box
+        // where it was.
+        if (deviceRfNotchPresent_) {
+            if (ImGui::Checkbox("FM notch", &deviceRfNotch_)) {
+                withRfNotch(device_, [this](auto& d) {
+                    if (!d.setRfNotch(deviceRfNotch_)) { sourceError_ = d.lastError(); }
+                    deviceRfNotch_ = d.rfNotch();
+                    return true;
+                });
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "The RSP's own broadcast-FM notch filter. Worth switching on when a "
+                    "strong local FM transmitter is desensitising everything else.");
+            }
+        }
+        if (deviceDabNotchPresent_) {
+            if (ImGui::Checkbox("DAB notch", &deviceDabNotch_)) {
+                withDabNotch(device_, [this](auto& d) {
+                    if (!d.setDabNotch(deviceDabNotch_)) { sourceError_ = d.lastError(); }
+                    deviceDabNotch_ = d.dabNotch();
+                    return true;
+                });
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("The RSP's own DAB band III notch filter.");
+            }
+        }
+        if (deviceHdrPresent_) {
+            if (ImGui::Checkbox("HDR mode", &deviceHdr_)) {
+                withHdrMode(device_, [this](auto& d) {
+                    if (!d.setHdrMode(deviceHdr_)) { sourceError_ = d.lastError(); }
+                    deviceHdr_ = d.hdrMode();
+                    return true;
+                });
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "An RSPdx's high-dynamic-range path below 2 MHz, for medium wave and "
+                    "below where the strong stations are the problem.");
+            }
+        }
+
+        // THE RX888's ADC PAIR. Both change what the converter itself does
+        // rather than what reaches it, and both are visible in the spectrum
+        // the moment they move, which is why neither is persisted (see
+        // app_window.hpp).
+        if (deviceAdcSwitchesPresent_) {
+            if (ImGui::Checkbox("ADC dither", &deviceDither_)) {
+                withAdcSwitches(device_, [this](auto& d) {
+                    if (!d.setDither(deviceDither_)) { sourceError_ = d.lastError(); }
+                    deviceDither_ = d.dither();
+                    return true;
+                });
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Adds a small noise signal inside the converter so its spurious tones "
+                    "stop landing on exact frequencies. Costs a little noise floor.");
+            }
+            if (ImGui::Checkbox("ADC randomiser", &deviceRandomiser_)) {
+                withAdcSwitches(device_, [this](auto& d) {
+                    if (!d.setRandomiser(deviceRandomiser_)) { sourceError_ = d.lastError(); }
+                    deviceRandomiser_ = d.randomiser();
+                    return true;
+                });
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Scrambles the converter's output to keep the digital side from "
+                    "coupling back into the analogue one. FoxSDR unscrambles it on this "
+                    "end in the same step, so it is one switch and not two.");
             }
         }
     }
@@ -6352,6 +6612,18 @@ void AppWindow::selectSource(int idx) {
         kind = nativeDevices_[n].driver;
         args = nativeDevices_[n].args;
         label = nativeDevices_[n].label;
+        // THE PLUTO ROW SELECTS AND DOES NOT CONNECT, exactly as the IQ file
+        // row selects and does not open. Every other row in this list is a
+        // radio that was FOUND, so choosing it can only succeed or fail
+        // quickly; this one is an address that has never been contacted, and
+        // opening it on selection would spend the driver's connect bound in
+        // front of a user who was only reading the list. The address box and
+        // the Open key appear instead (see drawSourceSection), and the
+        // pipeline keeps whatever is installed until Open succeeds.
+        if (kind == kPlutoDriverKey) {
+            sourceSel_ = idx;
+            return;
+        }
     } else {
         const std::size_t d = static_cast<std::size_t>(idx - soapyRowBase());
         if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
@@ -6432,13 +6704,17 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
     if (kind == "airspy") { return std::make_unique<cascade::source::AirspySource>(); }
     if (kind == "airspyhf") { return std::make_unique<cascade::source::AirspyHfSource>(); }
+    if (kind == "sdrplay") { return std::make_unique<cascade::source::SdrPlaySource>(); }
+    if (kind == "mirisdr") { return std::make_unique<cascade::source::MiriSdrSource>(); }
+    if (kind == "rx888") { return std::make_unique<cascade::source::Rx888Source>(); }
+    if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
 
 void AppWindow::scanNative() {
     // NO GATE, and that is the whole point of having our own transport. All
-    // four enumerations read SetupAPI device properties and
+    // six USB enumerations read SetupAPI device properties and
     // never open a device, never send a transfer, never reset anything -
     // usb_device.hpp rule 1, which exists precisely because the SoapySDR
     // vendor probe breaks it and killed a running capture doing so (the
@@ -6455,21 +6731,95 @@ void AppWindow::scanNative() {
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspyHf()) {
         nativeDevices_.push_back(std::move(d));
     }
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateMiriSdr()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    // BOTH RX888 IDENTITIES, and the bootloader is listed rather than hidden.
+    // Out of a power cycle an RX888 has no firmware and is a Cypress
+    // bootloader with no bulk endpoint at all; its row says so ("needs
+    // firmware, will load on open") and opening it uploads the image. Hiding
+    // it would leave a plugged-in radio missing from the list with nothing
+    // anywhere saying why - the same failure the unbound-device sentence
+    // below exists to stop.
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateRx888()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    // THE ONE ENUMERATION THAT IS NOT A USB WALK AND IS STILL SAFE HERE.
+    // sdrplay_api_GetDevices asks the SDRplay SERVICE for a list it maintains
+    // anyway; it never touches the bus, so rule 1's reason does not apply to
+    // it and it can run while a radio of ours is streaming, exactly like the
+    // others. On a machine with no SDRplay install it costs one failed
+    // LoadLibrary, cached for the life of the process.
+    const std::size_t beforeSdrPlay = nativeDevices_.size();
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateSdrPlay()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    sdrPlayRowsFound_ = nativeDevices_.size() > beforeSdrPlay;
+    // ...AND WHAT TO SAY WHEN THERE IS NO RSP ROW BECAUSE THERE IS NO API.
+    // Composed here rather than in the draw, because the draw runs sixty
+    // times a second and this reads the process's load result. The sentence
+    // itself comes from the driver (sdrPlayApiAdvice), which is pure and
+    // pinned by a test: it is the only instruction an RSP owner gets, and a
+    // rewording that drops "3.x" or "sdrplay.com" sends them nowhere.
+    const cascade::source::sdrplay_abi::Api& sdrApi = cascade::source::processSdrPlayApi();
+    float sdrVersion = 0.0f;
+    {
+        std::lock_guard<std::mutex> lk(sdrApi.sessionMutex);
+        sdrVersion = sdrApi.version;
+    }
+    sdrPlayAdvice_ = cascade::source::sdrPlayApiAdvice(sdrApi.resolved, sdrVersion);
+    sdrPlayApiDetail_ = sdrApi.loadDetail;
+
+    // THE PLUTO, WHICH IS NOT A DISCOVERY AT ALL. A network cannot be walked,
+    // so there is no honest way to answer "is there a Pluto out there" -
+    // every other row in this list means "this radio is plugged into this
+    // machine", and a probe to find one would break rule 1's spirit by
+    // opening something to ask.
+    //
+    // ONE ROW, ALWAYS, AT THE END, and it opens nothing when it is chosen.
+    // The driver's own enumeratePluto() offers two addresses unconditionally,
+    // which would put two permanent rows in front of every user who has never
+    // owned a Pluto; this is one row that says what it is, and choosing it
+    // shows an address box and an Open key instead of connecting. Last in the
+    // list because the rows above it are radios that are really there.
+    {
+        cascade::source::NativeDeviceInfo pluto;
+        pluto.driver = kPlutoDriverKey;
+        pluto.label = "ADALM-Pluto (network)";
+        // The args the Open key will use, kept in step with the box so that a
+        // restored Pluto's saved nativeArgs matches this row and the combo
+        // settles on it (see applyConfig).
+        pluto.args = std::string("uri=") + plutoUri_;
+        nativeDevices_.push_back(std::move(pluto));
+    }
     nativeRowLabels_.clear();
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // "(native)" is not decoration: with a Soapy row for the same dongle
         // two lines below it, the user has to be able to see which one they
-        // are picking, and which one they got.
-        nativeRowLabels_.push_back(d.label + " (native)");
+        // are picking, and which one they got. The Pluto's row is exempt: it
+        // is not a radio that was found, and "(native)" on it would suggest
+        // there is a non-native row for the same board somewhere.
+        nativeRowLabels_.push_back(d.driver == kPlutoDriverKey ? d.label
+                                                              : d.label + " (native)");
     }
     // ...and the radios that are HERE BUT UNREACHABLE. Listing them as rows
     // would offer an open that cannot succeed; the section says what to do
     // about them instead (see drawSourceSection).
     //
-    // EVERY FAMILY WE DRIVE GOES IN THIS QUERY, not just the dongles. An
+    // EVERY USB FAMILY WE DRIVE GOES IN THIS QUERY, not just the dongles. An
     // Airspy ships on its own vendor driver just as an RTL dongle ships on
     // the DVB-T one, and an owner who has not run Zadig on it would otherwise
-    // see nothing at all in the list and be told nothing about why.
+    // see nothing at all in the list and be told nothing about why. The
+    // Mirics family is the worst case of all: most of those devices are
+    // television sticks that arrive running a DVB-T driver, so an unbound one
+    // is the NORMAL state of a stick somebody has just plugged in.
+    //
+    // BOTH RX888 IDS GO IN, and that is the one entry here that is not
+    // symmetrical with the rows above. An RX888 has two USB identities -
+    // 04B4:00F3 before its firmware and 04B4:00F1 after - and each has to be
+    // bound to WinUSB separately, so a user who has done only one of them has
+    // a radio that is half reachable. Listing whichever identity is currently
+    // unbound is what lets the sentence below say which one.
     std::vector<cascade::usb::UsbId> ids = cascade::source::rtlSdrUsbIds();
     for (const cascade::usb::UsbId& id : cascade::source::hackRfUsbIds()) {
         ids.push_back(id);
@@ -6478,6 +6828,12 @@ void AppWindow::scanNative() {
         ids.push_back(id);
     }
     for (const cascade::usb::UsbId& id : cascade::source::airspyHfUsbIds()) {
+        ids.push_back(id);
+    }
+    for (const cascade::usb::UsbId& id : cascade::source::msi2500::usbIds()) {
+        ids.push_back(id);
+    }
+    for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
         ids.push_back(id);
     }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
@@ -6570,6 +6926,31 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
             return true;
         });
     }
+
+    // THE PER-RADIO SWITCHES, READ AND NOT WRITTEN. Unlike the bias tee these
+    // carry no saved value to push (see app_window.hpp for why none of them
+    // is persisted), so all this does is ask the driver what state its open()
+    // left the radio in and mirror that. A readback rather than an assumption
+    // for the same reason as everywhere else in this function: a panel that
+    // showed a switch the hardware did not actually take is the lie the
+    // antenna combo was fixed for.
+    deviceRfNotchPresent_ = withRfNotch(&dev, [this](auto& d) {
+        deviceRfNotch_ = d.rfNotch();
+        return true;
+    });
+    deviceDabNotchPresent_ = withDabNotch(&dev, [this](auto& d) {
+        deviceDabNotch_ = d.dabNotch();
+        return true;
+    });
+    deviceHdrPresent_ = withHdrMode(&dev, [this](auto& d) {
+        deviceHdr_ = d.hdrMode();
+        return true;
+    });
+    deviceAdcSwitchesPresent_ = withAdcSwitches(&dev, [this](auto& d) {
+        deviceDither_ = d.dither();
+        deviceRandomiser_ = d.randomiser();
+        return true;
+    });
 
     // Antenna: apply a saved port if this device has one by that name, then
     // read back whatever is actually selected, so the panel never claims a
@@ -15919,6 +16300,14 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // open(), so it has to be re-applied afterwards or a mast-head amplifier
     // goes dark on every launch.
     deviceBiasT_ = cfg.nativeBiasT;
+    // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
+    // scanNative() further down: that is what builds the Pluto's row, the
+    // row's args are "uri=" plus this box, and the restore below finds the
+    // row to point the combo at by comparing args. Seeded from the config
+    // even when the saved source is something else entirely, because the box
+    // is the user's own typing and belongs to them, not to the session that
+    // happened to open a radio.
+    std::snprintf(plutoUri_, sizeof(plutoUri_), "%s", cfg.plutoUri.c_str());
 
     // P7 settings. All are pure DSP switches with no failure mode, and the
     // loader has already clamped every one of them into range.
@@ -16447,6 +16836,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.soapyArgs = src.soapyArgs;
     cfg.nativeArgs = src.nativeArgs;
     cfg.nativeBiasT = deviceBiasT_;
+    // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
+    // its address in nativeArgs as well; this field is the typing, and it has
+    // to survive a launch in which the board never answered so it can be
+    // corrected next time rather than retyped from nothing.
+    cfg.plutoUri = plutoUri_;
     cfg.iqFilePath = iqOpenPath_;
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
     cfg.mode = kModeNames[modeIndex_];

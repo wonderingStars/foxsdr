@@ -90,6 +90,10 @@ AppConfig junkConfig() {
     c.soapyArgs = "garbage";
     c.nativeArgs = "garbage";
     c.nativeBiasT = true;  // default is false: a load that forgets it is caught
+    // Junk that is NOT empty, because empty is what the loader substitutes
+    // its default for - a load that forgot this field entirely would leave
+    // the caller's value here and pass a test that used "".
+    c.plutoUri = "garbage";
     c.iqFilePath = "garbage";
     c.centerHz = -1.0;
     c.mode = "garbage";
@@ -205,6 +209,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.nativeBiasT == b.nativeBiasT);
+    CHECK(a.plutoUri == b.plutoUri);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
     CHECK(a.mode == b.mode);
@@ -356,6 +361,7 @@ int main() {
         // launch.
         in.nativeArgs = "serial=00000001";
         in.nativeBiasT = true;
+        in.plutoUri = "ip:pluto.local";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
         in.mode = "USB";
@@ -682,6 +688,73 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.sourceKind == "airspyhf");
 
+        // ...AND THE LAST FOUR (0.93.0). Each is checked with the args it
+        // really carries, because the args and the kind travel together and a
+        // whitelist that admitted the kind while dropping the args would
+        // leave a radio named and unopenable.
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"sdrplay\","
+                        "\"nativeArgs\":\"serial=1811003EFB\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "sdrplay");
+        CHECK(out.nativeArgs == "serial=1811003EFB");
+        // A Mirics device is usually a television stick with no USB serial at
+        // all, so "index=N" is its ordinary case rather than its odd one.
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"mirisdr\","
+                        "\"nativeArgs\":\"index=0\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "mirisdr");
+        CHECK(out.nativeArgs == "index=0");
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"rx888\","
+                        "\"nativeArgs\":\"serial=SDDC0012\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "rx888");
+        CHECK(out.nativeArgs == "serial=SDDC0012");
+        // The Pluto's args are a NETWORK ADDRESS and not a serial - the one
+        // kind in this list whose device is not on the bus at all.
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"pluto\","
+                        "\"nativeArgs\":\"uri=ip:192.168.2.1\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "pluto");
+        CHECK(out.nativeArgs == "uri=ip:192.168.2.1");
+        // ...and "mirisdr" is not "sdrplay" even though an early RSP1 IS a
+        // Mirics device: one is driven through the vendor service and the
+        // other over the bare MSi2500, so a near-miss spelling must reset
+        // rather than land on the neighbour.
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"miri\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "siggen");
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"sddc\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "siggen");
+
+        // THE PLUTO'S ADDRESS IS THE USER'S TYPING AND SURVIVES ON ITS OWN.
+        //
+        // Every other source is discovered, so its args are written only once
+        // something real has been found; a network cannot be walked, so this
+        // is typed - and it has to come back after a launch in which the
+        // board never answered, or an address that is wrong by one digit has
+        // to be retyped from nothing instead of corrected.
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"plutoUri\":\"ip:10.0.0.7:12345\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.plutoUri == "ip:10.0.0.7:12345");
+        // A config that has never seen the key - which is every config
+        // written before 0.93.0 - gets the address the board's own USB
+        // Ethernet gadget serves out of the box, not an empty box.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.plutoUri == "ip:192.168.2.1");
+        // ...and so does one whose key was cleared or hand-edited to "". An
+        // empty box with nothing saying what belongs in it is the state this
+        // avoids.
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"plutoUri\":\"\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.plutoUri == "ip:192.168.2.1");
+
         // THE BIAS TEE SURVIVES A RESTART, and it is the one persisted
         // setting in this file that puts POWER on a connector rather than
         // changing what is heard. It is saved because a mast-head amplifier
@@ -779,6 +852,37 @@ int main() {
         CHECK(next.soapyAntenna == "RX2");
         CHECK(next.nativeBiasT);
         CHECK(next.centerHz == 98500000.0);
+
+        // A SAVED PLUTO, same sequence, and it is the case the rule was least
+        // likely to cover: a board on a network is the source most likely to
+        // be absent on any given launch - switched off, on a different
+        // subnet, or simply not plugged in - so a Pluto is exactly the radio
+        // one bad evening could permanently erase from the config. Its args
+        // are a URI rather than a serial, which is the only thing that makes
+        // it different, and the rule must not care.
+        const cascade::gui::RememberedSource plutoKeep =
+            cascade::gui::rememberedSourceAfterFailedOpen("pluto", "", "uri=ip:192.168.2.1",
+                                                          4000000.0);
+        CHECK(plutoKeep.valid());
+        AppConfig savedPluto;
+        savedPluto.schemaVersion = 1;
+        const cascade::gui::SavedSource srcP =
+            cascade::gui::sourceToSave("siggen", "", "", 2000000.0, plutoKeep);
+        savedPluto.sourceKind = srcP.kind;
+        savedPluto.soapyArgs = srcP.soapyArgs;
+        savedPluto.nativeArgs = srcP.nativeArgs;
+        savedPluto.sampleRateHz = srcP.sampleRateHz;
+        // The typed address rides with it, which is the half nativeArgs does
+        // not cover: the box has to come back filled in even for a session
+        // that never reached the board.
+        savedPluto.plutoUri = "ip:192.168.2.1";
+        CHECK(ConfigStore::save(path, savedPluto, err));
+        CHECK(ConfigStore::load(path, next, err));
+        CHECK(next.sourceKind == "pluto");
+        CHECK(next.sourceKind != "siggen");
+        CHECK(next.nativeArgs == "uri=ip:192.168.2.1");
+        CHECK(next.plutoUri == "ip:192.168.2.1");
+        CHECK(next.sampleRateHz == 4000000.0);
 
         // A SAVED SOAPY DEVICE, same sequence, and the kind that must survive
         // is "soapy" rather than a native driver key.

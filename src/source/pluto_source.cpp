@@ -772,15 +772,23 @@ void PlutoSource::stopStreamingLocked() {
         }
     }
 
-    // Only now, with no thread of ours inside it, is the stream connection
-    // safe to speak on. CLOSE is the polite half - the daemon frees the
-    // buffer at once rather than when it notices the socket has gone (ops.c
-    // ascii_interpreter closes every open device when the connection drops,
-    // so dropping it alone would be correct, just slower) - and it is skipped
-    // on a dead board, where it could only add one more timeout to a teardown
-    // that has already failed.
+    // THE SOCKET CLOSE IS THE CLOSE, and no CLOSE command is sent.
+    //
+    // The daemon's own exit loop (ops.c ascii_interpreter, which calls
+    // close_dev_helper for every device the connection has open) frees the
+    // capture buffer when the connection's read returns 0, so dropping the
+    // socket is correct on its own - the explicit command only makes it
+    // happen a moment sooner. What it costs is the whole reason it is gone:
+    // one iiod::kReplyWait of 2000 ms, ON THE TEARDOWN PATH, which made the
+    // Pluto's shutdown column 4500 ms - longer than SoapySDR's 3000, which
+    // would have moved the charged rows in tests/test_shutdown_budget.cpp to
+    // this driver and taken kShutdownBoundedWaitsMs from 7000 to 8500 for a
+    // politeness the oracle says is optional. Without it the column is
+    // kReaderJoinWait's 2500 alone and every native row stays zero.
+    //
+    // A board that has gone would have skipped the command anyway; this is
+    // about the board that is still there and simply slow to answer.
     if (stream_ != nullptr) {
-        if (!deviceDead()) { stream_->closeBuffer(captureDevice_); }
         stream_->close();
         stream_.reset();
         link_->stream = nullptr;

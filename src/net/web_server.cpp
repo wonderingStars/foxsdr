@@ -964,10 +964,11 @@ function syncControl(el, value) {
 let lastDevKey = '', lastAntKey = '', lastGainKey = '';
 
 // IS THIS SOURCE KIND A RADIO? One list, because the answer is asked twice
-// below and the list has grown from one entry to five - a page that knew
-// about four of them would hide the gain and antenna rows for whichever it
+// below and the list has grown from one entry to nine - a page that knew
+// about eight of them would hide the gain and antenna rows for whichever it
 // had missed, and nothing would say why.
-const RADIO_KINDS = ['soapy', 'rtlsdr', 'hackrf', 'airspy', 'airspyhf'];
+const RADIO_KINDS = ['soapy', 'rtlsdr', 'hackrf', 'airspy', 'airspyhf',
+                     'sdrplay', 'mirisdr', 'rx888', 'pluto'];
 function isRadioKind(k) { return RADIO_KINDS.indexOf(k) >= 0; }
 
 // HOW A GAIN IS LETTERED, and it is the desktop's own rule

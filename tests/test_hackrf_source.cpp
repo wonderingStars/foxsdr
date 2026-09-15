@@ -835,12 +835,63 @@ int main() {
         CHECK(!src.running());
         CHECK(src.faultedWhile() == "waiting for the sample reader to stop");
 
+        // ...AND closeDevice() ON AN ABANDONED READER LEAVES ITS DEVICE
+        // POINTER ALONE.
+        //
+        // THE DEFECT THIS EXISTS FOR (found 2026-09-14, fixed in 0.93.0).
+        // stopStreamingLocked leaks the UsbDevice on purpose and leaves
+        // link_->dev pointing at it, with a comment saying in as many words
+        // that nulling it "would be a data race with the zombie's very next
+        // readBulk". closeDevice, two functions later, nulled it
+        // unconditionally. The stranded thread dereferences link_->dev at the
+        // top of every loop (readerThreadBody), so on the iteration where it
+        // has just passed its `run` check and not yet reached the pointer,
+        // that write is a null dereference inside a thread nothing can catch
+        // - and on every other iteration it is still a plain data race on a
+        // non-atomic pointer. Rx888Source::closeDevice has had exactly this
+        // guard since it was written; this is the same guard.
+        //
+        // ASSERTED BY ASKING THE DRIVER, and that is not laziness. The zombie
+        // never calls back into the fake once `run` is false, so no
+        // transport-level observation can see this at all - there is no
+        // readBulk to count and no handle to watch. linkHoldsDeviceForTest
+        // exists for this one check and nothing in the product calls it.
+        CHECK(src.linkHoldsDeviceForTest());
+        src.closeDevice();
+        if (!src.linkHoldsDeviceForTest()) {
+            std::printf("     closeDevice() cleared link_->dev under an abandoned reader\n");
+        }
+        CHECK(src.linkHoldsDeviceForTest());
+
         // Let the stranded reader finish. The device it is inside was leaked
         // deliberately (see stopStreamingLocked), so it has somewhere valid to
         // land; without this the suite would leave a thread sleeping in it.
         fake->releaseBlock.store(true);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         src.closeDevice();
+    }
+
+    // =====================================================================
+    // 9b. A HEALTHY CLOSE DOES clear it, which is the other half of the guard
+    //     above and the reason it is a condition rather than a deletion.
+    //
+    // The guard keys on "dev_ is null but link_->dev is not", which is the
+    // fingerprint of an abandoned reader and of nothing else. A close that
+    // joined its reader normally has released the device for real, and
+    // leaving link_->dev pointing at freed memory afterwards would be the
+    // mirror-image defect: a dangling pointer instead of a racing one.
+    // =====================================================================
+    {
+        HackRfSource src;
+        attachFake(src);
+        CHECK(src.open(""));
+        CHECK(src.start());
+        CHECK(src.linkHoldsDeviceForTest());
+        src.stop();
+        CHECK(!src.faulted());  // the reader exited; nothing was abandoned
+        src.closeDevice();
+        CHECK(!src.linkHoldsDeviceForTest());
+        CHECK(!src.isOpen());
     }
 
     // =====================================================================

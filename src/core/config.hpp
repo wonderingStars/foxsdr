@@ -28,13 +28,19 @@
 //     degenerate or inverted span is a divide-by-zero, and clamping only one
 //     end would invent a range the user never chose)
 //   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf" |
-//     "airspy" | "airspyhf"; anything else resets to "siggen" (the only
-//     source that can never fail to exist). The last four are the native
-//     drivers, which reach an RTL-SDR, a HackRF, an Airspy R2/Mini or an
-//     Airspy HF+ through our own WinUSB transport and need no SoapySDR
-//     install at all. "airspy" and "airspyhf" are separate keys and not one
-//     family name: they are different USB ids, different hardware and
-//     different bands, and a config that named one must never open the other.
+//     "airspy" | "airspyhf" | "sdrplay" | "mirisdr" | "rx888" | "pluto";
+//     anything else resets to "siggen" (the only source that can never fail
+//     to exist). The last eight are the native drivers, which reach their
+//     radio without any SoapySDR install at all - six of them over our own
+//     WinUSB transport, "sdrplay" through the vendor API the user installed,
+//     and "pluto" over TCP to the board's own iiod daemon.
+//     EVERY ONE IS ITS OWN KEY AND NOT A FAMILY NAME: they are different USB
+//     ids (or no USB at all), different hardware and different bands, and a
+//     config that named one must never open another. "airspy" and "airspyhf"
+//     are the pair that makes that concrete - one spelling is a prefix of the
+//     other - and "mirisdr" is NOT "sdrplay" even though the early RSP1 is a
+//     Mirics device: one is driven through the vendor service, the other over
+//     the bare MSi2500.
 //   - deemphasisIndex clamped to [0, 2]  (the three-entry 50 us / 75 us / off
 //                                         combo; an out-of-range index would
 //                                         read past that table)
@@ -105,7 +111,8 @@ namespace cascade::core {
 
 struct AppConfig {
     int schemaVersion = 1;
-    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"
+    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"
     std::string sourceKind = "siggen";
     // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
     // Empty means "whatever the driver defaults to", which is what every
@@ -123,8 +130,8 @@ struct AppConfig {
     // They are different grammars fed to different openers: soapyArgs is a
     // SoapySDR kwargs markup string ("driver=rtlsdr, serial=00000001") that
     // goes to SoapySource::open, nativeArgs is "serial=00000001" or "index=0"
-    // that goes to RtlSdrSource/HackRfSource/AirspySource/AirspyHfSource's
-    // own open(). More importantly the
+    // that goes to a native driver's own open() - and for the Pluto, which is
+    // not on the USB bus at all, "uri=ip:192.168.2.1". More importantly the
     // application needs BOTH AT ONCE: the prefer-native rule
     // (gui::preferNativeFor) reads the saved SOAPY args to learn which driver
     // and which serial a config meant, opens the native driver instead, and
@@ -144,13 +151,31 @@ struct AppConfig {
     // safe answer for a receiver that may be plugged into something that does
     // not expect power.
     //
-    // ONE FIELD RATHER THAN ONE PER DRIVER: the three radios that have a bias
-    // tee here (HackRF, Airspy R2/Mini, Airspy HF+) are never open at once -
-    // exactly one source is installed in the pipeline at a time - and a
-    // per-kind table would record settings for radios that are not on the
-    // bench and cannot be seen on screen. The setting belongs to "the radio
-    // this receiver is set up around", which is what nativeArgs names.
+    // ONE FIELD RATHER THAN ONE PER DRIVER: the radios that have a bias tee
+    // here (HackRF, Airspy R2/Mini, Airspy HF+, an RSP that has one, a Mirics
+    // and an RX888) are never open at once - exactly one source is installed
+    // in the pipeline at a time - and a per-kind table would record settings
+    // for radios that are not on the bench and cannot be seen on screen. The
+    // setting belongs to "the radio this receiver is set up around", which is
+    // what nativeArgs names.
     bool nativeBiasT = false;
+    // WHERE THE PLUTO IS, and it is a field of its own because it is the one
+    // radio FoxSDR cannot find by looking.
+    //
+    // Every other source is DISCOVERED - a USB walk, a vendor service, a
+    // module's own list - so its args are written only once something real
+    // has been found and opened, and nativeArgs is that. A network cannot be
+    // walked, so the Pluto's address is TYPED, and what the user typed has to
+    // survive a launch whether or not the board answered: an address that is
+    // wrong by one digit, or right but with the board unplugged, must come
+    // back in the box on the next start so it can be corrected rather than
+    // retyped from nothing. nativeArgs still carries "uri=<this>" once a
+    // Pluto actually opens, exactly as it carries a serial for the others, so
+    // the restore and the remembered-radio rule need no special case.
+    //
+    // The default is the address the board's own USB Ethernet gadget serves
+    // out of the box, which is what an ADALM-Pluto on a cable answers at.
+    std::string plutoUri = "ip:192.168.2.1";
     std::string iqFilePath;
     double centerHz = 100000000.0;
     std::string mode = "WFM";

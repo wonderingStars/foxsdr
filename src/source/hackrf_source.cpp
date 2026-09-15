@@ -519,8 +519,18 @@ void HackRfSource::closeDevice() {
         programBiasTLocked(false);
         programAmpLocked(false);
     }
+    // AN ABANDONED READER STILL HOLDS link_->dev AND IS STILL USING IT.
+    // stopStreamingLocked releases dev_ without clearing the link's copy,
+    // deliberately, so a stranded thread has a live object to be inside;
+    // clearing it here anyway would be a data race with that thread's very
+    // next readBulk - and on the iteration where it has just passed its `run`
+    // check and not yet dereferenced, a null one. The exact defect the
+    // abandonment path exists to avoid, reintroduced two functions later.
+    // dev_ being null with link_->dev set is what that state looks like;
+    // Rx888Source::closeDevice has had the same guard since it was written.
+    const bool abandoned = dev_ == nullptr && link_->dev != nullptr;
     dev_.reset();
-    link_->dev = nullptr;
+    if (!abandoned) { link_->dev = nullptr; }
     openMirror_.store(false, std::memory_order_relaxed);
     running_.store(false, std::memory_order_relaxed);
     sampleRateHz_.store(0.0, std::memory_order_relaxed);
@@ -794,6 +804,11 @@ std::uint64_t HackRfSource::droppedTransfers() const {
 
 unsigned long long HackRfSource::readersAbandoned() {
     return g_readersAbandoned.load(std::memory_order_relaxed);
+}
+
+bool HackRfSource::linkHoldsDeviceForTest() const {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    return link_->dev != nullptr;
 }
 
 // --- read -----------------------------------------------------------------

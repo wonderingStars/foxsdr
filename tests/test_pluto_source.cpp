@@ -1257,7 +1257,7 @@ int main() {
     }
 
     // =====================================================================
-    // 10. STREAMING: the second connection, the OPEN/READBUF/CLOSE sequence
+    // 10. STREAMING: the second connection, the SET/OPEN/READBUF sequence
     //     with its byte counts, and every sample once and in order.
     // =====================================================================
     {
@@ -1354,8 +1354,23 @@ int main() {
     }
 
     // =====================================================================
-    // 11. STOP WHILE STREAMING comes back promptly, and CLOSEs the capture
-    //     device on its way out.
+    // 11. STOP WHILE STREAMING comes back promptly, and gets out by DROPPING
+    //     THE SOCKET rather than by sending a CLOSE.
+    //
+    // THE CLOSE WAS REMOVED ON PURPOSE (0.93.0) and this is the assertion
+    // that pins it. The daemon's own exit loop frees the capture buffer when
+    // a connection's read returns 0 (ops.c ascii_interpreter calls
+    // close_dev_helper for every device it held), so the command was the
+    // polite half of something the socket close does anyway - and it cost one
+    // iiod::kReplyWait of 2000 ms ON THE TEARDOWN PATH, which put the Pluto's
+    // shutdown column at 4500 ms, past SoapySDR's 3000, and would have moved
+    // the charged rows in tests/test_shutdown_budget.cpp and taken
+    // kShutdownBoundedWaitsMs from 7000 to 8500.
+    //
+    // So the check is now the NEGATIVE, and it is written as "the last thing
+    // on the wire is not a CLOSE" rather than "no CLOSE anywhere": a future
+    // change that sends one somewhere else on this connection is exactly what
+    // this has to catch.
     // =====================================================================
     {
         FakeIiod daemon;
@@ -1385,7 +1400,23 @@ int main() {
         CHECK(PlutoSource::readersAbandoned() == abandonedBefore);
 
         const std::vector<std::string> s = daemon.commands(1);
-        CHECK(!s.empty() && s.back() == "CLOSE cf-ad9361-lpc");
+        // The conversation ended on the READBUFs it was having, with nothing
+        // said afterwards. Printed on failure because "the last command was
+        // X" is the whole finding.
+        if (!s.empty() && s.back().rfind("CLOSE", 0) == 0) {
+            std::printf("     stream connection ended with \"%s\"; expected no CLOSE at all\n",
+                        s.back().c_str());
+        }
+        CHECK(!s.empty());
+        for (const std::string& c : s) { CHECK(c.rfind("CLOSE", 0) != 0); }
+        // ...and the buffer really was opened on this connection, so "no
+        // CLOSE" is a statement about a stream that ran rather than about one
+        // that never started.
+        bool opened = false;
+        for (const std::string& c : s) {
+            if (c.rfind("OPEN cf-ad9361-lpc", 0) == 0) { opened = true; }
+        }
+        CHECK(opened);
 
         // ...and it can be started again, on a fresh connection.
         CHECK(src.start());
