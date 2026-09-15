@@ -99,21 +99,9 @@ std::vector<NativeDeviceInfo> airspyDevicesFrom(
 }
 
 std::vector<NativeDeviceInfo> enumerateAirspy() {
-#if defined(_WIN32)
+    // See hackrf_source.cpp's enumerateHackRf(): enumerateWinUsb() is the one
+    // entry point on every platform (WinUSB on Windows, usbfs on Linux).
     return airspyDevicesFrom(cascade::usb::enumerateWinUsb(airspyUsbIds()));
-#else
-    // The transport is WinUSB. A Linux Airspy is reached through SoapySDR
-    // until a libusb backend exists behind cascade::usb::UsbDevice; saying so
-    // once beats an empty list nobody can explain.
-    static bool said = false;
-    if (!said) {
-        said = true;
-        core::diagLogf(
-            "airspy: native enumeration is Windows-only in this build (the USB transport is "
-            "WinUSB); use the SoapySDR path on this platform");
-    }
-    return {};
-#endif
 }
 
 // --- construction ---------------------------------------------------------
@@ -469,9 +457,7 @@ bool AirspySource::resolveDevice(const std::string& args, cascade::usb::UsbDevic
     if (useFakeTransport_) {
         devices = fakeDevices_;
     } else {
-#if defined(_WIN32)
         devices = cascade::usb::enumerateWinUsb(airspyUsbIds());
-#endif
     }
     // Keep only Airspys: a caller may hand us a list from a wider scan, and
     // opening somebody else's dongle with Airspy vendor requests would be
@@ -537,11 +523,7 @@ bool AirspySource::open(const std::string& args) {
     if (useFakeTransport_) {
         dev = fakeOpener_(info.path, error);
     } else {
-#if defined(_WIN32)
         dev = cascade::usb::openWinUsb(info.path, error);
-#else
-        error = "the native Airspy driver needs the WinUSB transport (Windows only in this build)";
-#endif
     }
     if (dev == nullptr) {
         setError(error.empty() ? std::string("could not open the Airspy") : error);

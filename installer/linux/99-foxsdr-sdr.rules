@@ -110,3 +110,9 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0511", ATTR{idProduct}=="0037", TAG+="uaccess
 # module blacklisted anyway (a fully offline DVB-never machine, or a kernel
 # old enough that DISCONNECT_CLAIM is unavailable - pre-4.10, not expected on
 # anything this ships to and not verified against one).
+
+# Airspy R2 / Airspy Mini (src/source/airspy_protocol.hpp) and Airspy HF+
+# Discovery / Dual (src/source/airspyhf_protocol.hpp). Added at integration
+# (2026-09-15) when both drivers were routed through the usbfs transport.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="60a1", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="03eb", ATTR{idProduct}=="800c", TAG+="uaccess", MODE="0660", GROUP="plugdev"

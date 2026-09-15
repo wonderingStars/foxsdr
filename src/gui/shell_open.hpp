@@ -132,6 +132,18 @@ inline bool posixShellOpen(const std::string& target) {
     const char* exeEnv = std::getenv("FOXSDR_SHELL_OPEN_EXE");
     const std::string exe = (exeEnv != nullptr && exeEnv[0] != '\0') ? exeEnv : "xdg-open";
 
+    // THE ARGV IS BUILT BEFORE THE FORK. FoxSDR is a multithreaded process,
+    // and after fork() only the forking thread exists in the child: a heap
+    // allocation there can block forever on a malloc lock some other thread
+    // held at the instant of the fork. Everything the grandchild touches
+    // between fork() and execvp() is therefore already allocated here, and
+    // the child side below makes only async-signal-safe calls.
+    std::vector<char> exeBuf(exe.begin(), exe.end());
+    exeBuf.push_back('\0');
+    std::vector<char> targetBuf(target.begin(), target.end());
+    targetBuf.push_back('\0');
+    char* argv[] = {exeBuf.data(), targetBuf.data(), nullptr};
+
     int pipeFds[2] = {-1, -1};
     if (::pipe2(pipeFds, O_CLOEXEC) != 0) { return false; }
     const int readFd = pipeFds[0];
@@ -165,12 +177,7 @@ inline bool posixShellOpen(const std::string& target) {
             ::dup2(devNull, STDERR_FILENO);
             if (devNull > STDERR_FILENO) { ::close(devNull); }
         }
-        std::vector<char> exeBuf(exe.begin(), exe.end());
-        exeBuf.push_back('\0');
-        std::vector<char> targetBuf(target.begin(), target.end());
-        targetBuf.push_back('\0');
-        char* argv[] = {exeBuf.data(), targetBuf.data(), nullptr};
-        ::execvp(exe.c_str(), argv);
+        ::execvp(exeBuf.data(), argv);
         // execvp only returns on failure - report it, then exit.
         const int err = errno;
         (void)!::write(writeFd, &err, sizeof err);
