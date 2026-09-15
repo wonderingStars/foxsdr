@@ -774,3 +774,42 @@ a real dongle.
 The same applies to the RTL-SDR Blog V4's upconverter, notch filters
 and input switching, which were described from the behaviour of that
 fork and implemented independently here.
+
+----------------------------------------------------------------------
+THE NATIVE MIRICS DRIVER IS AN INDEPENDENT IMPLEMENTATION.
+
+FoxSDR can open a Mirics MSi2500 + MSi001 receiver directly, without
+SoapySDR and without libusb, through its own driver
+(src/source/msi2500.*, src/source/tuner_msi001.*,
+src/source/mirisdr_source.*) over its own WinUSB transport (src/usb/).
+That code is original to this product and is licensed with it.
+
+libmirisdr, and the libmirisdr-4 fork of it, are GPL-2.0. NO CODE,
+COMMENT, STRUCTURE OR IDENTIFIER FROM EITHER WAS COPIED, and neither is
+linked into this product in any form - not statically, not dynamically,
+and not as a runtime module loaded by this driver.
+
+What those projects WERE used for is documentation. The Mirics MSi2500
+bridge and the MSi001 tuner have no publicly published register map, so
+the only available description of how the silicon behaves - which vendor
+request reaches which block, how a register write is encoded into a
+control transfer with no data stage, what the ADC's initialisation values
+are, how the sample clock's divider and fraction are computed, which
+band, local-oscillator divider and input-switch word apply at which
+frequency, how the tuner's fractional-N synthesiser and its correction
+trim are programmed, and what each gain stage is worth in decibels - is
+the behaviour of the drivers that already speak to it. Those are facts
+about hardware, and facts are not copyrightable. This implementation was
+written from them in this codebase's own style, with its own structure
+and its own comments explaining why each step exists, and is verified
+against arithmetic the reference itself produces rather than against its
+source: see tests/test_mirisdr_source.cpp, which asserts the byte
+sequences this driver puts on the wire against values computed by the
+reference's own formulae.
+
+One thing that description did NOT cover is recorded in
+src/source/msi2500.hpp: the files that unpack the bit-packed sample
+formats were not among those read, so the twelve- and ten-bit packings
+are derived from the reference's own size arithmetic and are marked as
+such in the source and in the tests.
+----------------------------------------------------------------------
