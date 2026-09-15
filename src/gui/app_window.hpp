@@ -46,6 +46,9 @@ struct GLFWwindow;
 // never see a GUI header.
 #include "gui/scope_view.hpp"
 #include "gui/track_info_cache.hpp"
+// RememberedSource, held by value below: the pure source decisions, ImGui-free
+// like every other gui header included here.
+#include "gui/tune_control.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
 // keeps app_window.hpp usable from the tests (see the note below).
@@ -1514,6 +1517,18 @@ private:
     // the fallback would then have nothing to fall back to.
     std::string cfgSoapyArgs_;
     std::string cfgNativeArgs_;
+
+    // THE SAVED RADIO A RESTORE COULD NOT OPEN, held so the exit save can
+    // write it back instead of the generator that stood in for it. Set only
+    // by the startup restore's failure path and cleared the moment the user
+    // deliberately chooses any other source; see
+    // gui::rememberedSourceAfterFailedOpen for why one session with the
+    // dongle unplugged used to lose the radio permanently. The label is what
+    // the Source section shows in the combo while this is set - a radio that
+    // is saved but not open, rather than a generator presented as if it had
+    // been chosen.
+    cascade::gui::RememberedSource restoreKeep_;
+    std::string restoreKeepLabel_;
 
     // The open radio's MODEL, with no serial in it - what every diagnostic
     // line, the crash context and the scan-gate caption name it by. Kept as a

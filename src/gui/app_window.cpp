@@ -89,15 +89,10 @@ static std::string instrumentWindowId(const cascade::core::HostInstrument& in) {
 
 namespace {
 
-// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are four of
-// them now, in three separate decisions (the config restore, the web remote's
-// device match, and makeDeviceSource's construction), and three copies of a
-// growing list of string literals is three chances for one of them to be
-// missing a driver - which would not fail to compile, it would quietly make
-// an Airspy unrestorable while everything else worked.
-bool isNativeSourceKind(const std::string& kind) {
-    return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf";
-}
+// isNativeSourceKind - the one list of native driver kinds - now lives in
+// gui/tune_control.hpp, in cascade::gui, so unqualified calls in this file
+// still find it. It moved because the remembered-source rule beside it needs
+// the same list, and a rule kept in this .cpp is a rule no test can reach.
 
 // THE BIAS TEE, AND WHY IT IS A dynamic_cast AND NOT A DeviceSource METHOD.
 //
@@ -5321,7 +5316,21 @@ void AppWindow::drawSourceSection() {
     }
     ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    const bool comboOpen = ImGui::BeginCombo("##source_select", rowLabel(sourceSel_));
+    // THE SAVED RADIO IS WHAT THE COMBO SAYS WHILE IT IS STILL THE SAVED ONE.
+    // A restore that could not open it leaves the generator running and the
+    // radio remembered for the config (see gui::sourceToSave); showing
+    // "Signal generator" here would say the user had chosen that, and would
+    // disagree with the file this session is going to write. No row is ticked
+    // in the list below, because none of them is what is installed.
+    const bool keepPreview = restoreKeep_.valid() && device_ == nullptr &&
+                             sourceKind_ == "siggen" && !restoreKeepLabel_.empty();
+    // "(not open)" in the preview itself, because the combo is the one place
+    // a user looks to find out what the receiver is on, and the name alone
+    // there would claim the radio was running.
+    const std::string keepPreviewLabel =
+        keepPreview ? restoreKeepLabel_ + " (saved, not open)" : std::string();
+    const bool comboOpen = ImGui::BeginCombo(
+        "##source_select", keepPreview ? keepPreviewLabel.c_str() : rowLabel(sourceSel_));
     if (comboOpen) {
         // ON THE FRAME IT OPENS, not on every frame it stays open: opening
         // the dropdown IS the user asking to see devices, and the combo asks
@@ -5516,6 +5525,11 @@ void AppWindow::drawSourceSection() {
                 pipeline_.setSource(std::move(file));
                 sourceKind_ = "file";
                 iqOpenPath_ = iqPath_;
+                // A file is a deliberate choice of source like any other, so
+                // a radio remembered from a failed restore is superseded here
+                // too - see selectSource's generator row.
+                restoreKeep_ = cascade::gui::RememberedSource{};
+                restoreKeepLabel_.clear();
                 followInputRate();  // DSP chain + frequency axis track the file's rate
                 // The RATE, never the path: a file name is the user's own data
                 // and a report is a support artefact, not a listening record.
@@ -5685,6 +5699,22 @@ void AppWindow::drawSourceSection() {
     if (!sourceError_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
         ImGui::TextWrapped("%s", sourceError_.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    // ...AND WHAT THAT MEANS FOR NEXT TIME, which is the half the reason
+    // above cannot give. The red line says why the radio did not open; this
+    // says the radio has not been forgotten because of it. Worth the two
+    // lines: the state it describes used to be indistinguishable on screen
+    // from having chosen the generator, and used to end with the radio gone
+    // from the settings.
+    if (keepPreview) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped(
+            "%s is still the saved radio. The signal generator is running in its place for "
+            "this session only - FoxSDR will try the radio again next time it starts. "
+            "Choosing another source here replaces it.",
+            restoreKeepLabel_.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -5976,7 +6006,12 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
                 "radio again",
                 cascade::core::sanitiseDevice(r.args).c_str(), r.error.c_str());
         }
-        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1) {
+        // ...and the combo settles on whatever IS installed - unless a saved
+        // radio is still being remembered for the config, in which case -1
+        // keeps the preview naming that radio instead of ticking a generator
+        // nobody chose. Same rule as the restore's failure path.
+        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1 &&
+            !restoreKeep_.valid()) {
             sourceSel_ = 0;
         }
         return;
@@ -6030,6 +6065,12 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     } else {
         cfgNativeArgs_ = r.args;
     }
+    // A RADIO IS OPEN, so there is nothing to remember on its behalf: whatever
+    // the startup restore failed to open has just been superseded by a device
+    // the user actually has. (A failed open clears nothing - the attempt did
+    // not take, and the saved radio is still the best thing to try next time.)
+    restoreKeep_ = cascade::gui::RememberedSource{};
+    restoreKeepLabel_.clear();
     ++sourceGen_;  // this install is itself a source change
     pipeline_.setSource(std::move(r.dev));
     sourceKind_ = r.kind;
@@ -6242,6 +6283,15 @@ void AppWindow::selectSource(int idx) {
     sourceError_.clear();
 
     if (idx == 0) {
+        // A DELIBERATE CHOICE OF THE GENERATOR STILL OVERWRITES THE SAVED
+        // RADIO. The remembered-source rule holds a radio a RESTORE could not
+        // open; a user picking this row is saying they want the generator, and
+        // the config has to be able to say so too. Cleared here rather than in
+        // sourceToSave because only this side knows the difference between
+        // "the generator stood in" and "the generator was chosen".
+        restoreKeep_ = cascade::gui::RememberedSource{};
+        restoreKeepLabel_.clear();
+
         // Built-in generator: null restores it, and it cannot fail.
         device_ = nullptr;  // before setSource destroys a live device
         soapyView_ = nullptr;
@@ -15668,6 +15718,36 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             cascade::core::diagWarnf("source: the saved radio (%s, %s) did not reopen",
                                      cascade::core::sanitiseDevice(cfg.soapyArgs).c_str(),
                                      kind.c_str());
+
+            // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
+            // generator above, which is right - it has to run on something -
+            // but the exit save reads sourceKind_ and the cfg*Args_ mirrors,
+            // and those describe the generator. Before this, ONE session with
+            // the dongle unplugged, held by another program, or held by a
+            // second copy of FoxSDR (the report that found this) wrote back
+            // "siggen" with both args slots empty and the radio was gone for
+            // good. The SAVED values are remembered here, unchanged, so the
+            // next start tries exactly what this one tried. See
+            // gui::rememberedSourceAfterFailedOpen and gui::sourceToSave.
+            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.sampleRateHz);
+
+            // WHAT THE SOURCE SECTION CALLS IT. The enumerated label is the
+            // best name when this machine can still see the radio (in use by
+            // another program is exactly that case); when it cannot,
+            // nativeLabelFor hands back the args verbatim, which for a native
+            // device is nothing but a serial - so the driver key is used
+            // instead. Not a privacy rule like the log line above, because
+            // this string never leaves the screen; it is simply not a name.
+            std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
+                                                  : modelFromNativeLabel(nativeLabelFor(args));
+            if (label.empty() || label == args) { label = kind; }
+            restoreKeepLabel_ = label;
+            // NOTHING IS TICKED IN THE DROPDOWN. -1 is the same "the live
+            // source is not one of these rows" the Refresh path uses; the
+            // preview names the saved radio instead, so the generator is
+            // never shown as though the user had picked it.
+            sourceSel_ = -1;
         }
     }
     if (sourceKind_ == "siggen") {
@@ -15868,7 +15948,15 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
 
 cascade::core::AppConfig AppWindow::currentConfig() {
     cascade::core::AppConfig cfg;
-    cfg.sourceKind = sourceKind_;
+    // WHICH SOURCE THE FILE NAMES, which is not always the one that is
+    // running: a restore that could not open the saved radio leaves the
+    // generator installed and the radio remembered, and the radio is what
+    // goes back into the file. Everything else - a clean restore, any
+    // deliberate switch - is the live source, exactly as before.
+    const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
+        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_,
+        pipeline_.activeSource().sampleRateHz(), restoreKeep_);
+    cfg.sourceKind = src.kind;
     cfg.soapyAntenna = deviceAntenna_;
     // ONE SLOT PER FAMILY, and BOTH are written on every save - not just the
     // one belonging to whatever is open. The Soapy args of a radio now being
@@ -15876,8 +15964,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // launch and what the tuner fallback needs; dropping them the moment the
     // native driver takes over would make the first native session the last
     // one that could ever fall back. See AppConfig::nativeArgs.
-    cfg.soapyArgs = cfgSoapyArgs_;
-    cfg.nativeArgs = cfgNativeArgs_;
+    cfg.soapyArgs = src.soapyArgs;
+    cfg.nativeArgs = src.nativeArgs;
     cfg.nativeBiasT = deviceBiasT_;
     cfg.iqFilePath = iqOpenPath_;
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
@@ -15889,7 +15977,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.dbMax = dbMax_;
     cfg.splitRatio = splitRatio_;
     cfg.vfoOffsetHz = pipeline_.vfoOffsetHz();
-    cfg.sampleRateHz = pipeline_.activeSource().sampleRateHz();
+    // The live rate, EXCEPT when the source being saved is a remembered radio
+    // rather than the generator standing in for it: the generator's fixed
+    // 2 MS/s is not a rate the user ever chose for their receiver, and it is
+    // the number the next start would hand to the driver's open().
+    cfg.sampleRateHz = src.sampleRateHz;
     cfg.stereoEnabled = stereoEnabled_;
     cfg.deemphasisIndex = deemphIndex_;
     cfg.nrEnabled = nrEnabled_;
