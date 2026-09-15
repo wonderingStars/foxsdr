@@ -130,12 +130,17 @@ if ([string]::IsNullOrWhiteSpace($displayVersion)) { Fail "could not parse: $ver
 $numericCore = ($displayVersion -split '-')[0]
 $parts = $numericCore -split '\.'
 while ($parts.Count -lt 3) { $parts += "0" }
-$packageVersion = "{0}.{1}.{2}.0" -f $parts[0], $parts[1], $parts[2]
-Write-Step "version: $displayVersion  ->  package Version=$packageVersion"
-if ($parts[0] -eq "0") {
-    Write-Note "NOTE: the Store requires the FIRST section to be non-zero. A 0.x product"
-    Write-Note "      version cannot be submitted as-is; see installer\msix\README.md."
-}
+# The Store refuses a first section of 0 ("except for the first section, which
+# cannot be 0" - .../msix/app-package-requirements), so the package major is
+# the product major PLUS ONE: product 0.96.4 -> package 1.96.4.0, and product
+# 1.0.0 -> package 2.0.0.0. The mapping is monotonic across the 0.x -> 1.0
+# boundary (the Store serves the highest package version, so a later product
+# must always pack to a higher number) and it is mechanical, so a package
+# version always reads back to exactly one product version. Decided 2026-09-15
+# for the first submission; see installer\msix\README.md section 5.2.
+$packageMajor = [int]$parts[0] + 1
+$packageVersion = "{0}.{1}.{2}.0" -f $packageMajor, $parts[1], $parts[2]
+Write-Step "version: $displayVersion  ->  package Version=$packageVersion (product major + 1, README 5.2)"
 
 # --- 2. The payload contract ------------------------------------------------
 #
