@@ -42,6 +42,7 @@ struct GLFWwindow;
 // headers below it - the tests include it without a graphics context.
 #include "gui/page_geometry.hpp"
 #include "gui/rail_banks.hpp"
+#include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
 // can be held by value here without breaking the rule this header states above
@@ -589,6 +590,18 @@ private:
     // "install" necessarily means "and close this".
     bool launchInstaller(const std::string& path);
     void requestClose() { closeRequested_ = true; }
+
+    // THE WATCHDOG BRACKET EVERY SHELL CALL GOES THROUGH. ShellExecute blocks
+    // the GUI thread for as long as the shell takes, which for an elevation or
+    // SmartScreen prompt is as long as the USER takes - and the watchdog filed
+    // a hang against exactly that in 0.96.2 ("hang ntdll.dll @
+    // cascade::gui::AppWindow::launchInstaller"). See gui/shell_open.hpp for
+    // why this is a pause and not a helper thread.
+    cascade::gui::ShellPauseHooks watchdogShellHooks();
+    // Hands a folder or a URL to the shell under that bracket. Every
+    // ShellExecute in this file goes through here or through launchInstaller;
+    // there is no third spelling.
+    bool shellOpen(const std::string& target);
 
     void drawSourceSection();
     // The three sections that used to be written inline in drawMenuColumn,

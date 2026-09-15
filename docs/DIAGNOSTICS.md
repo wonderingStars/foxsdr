@@ -293,6 +293,67 @@ not be taken. The uploader forwards them as `uptimeSec` and `faultThreadOwn`
 log now carries fewer than 80 lines (`kMinUsefulLogLines`, with static asserts
 that the payload cap and the ring are at least that).
 
+A report about a **fault in a child process** carries two more lines in that
+same block, and no stack at all (0.96.4). `child-exit-code` is what the child
+died of and `child-attempt` is which try it was; the stack section says, in
+words, that the fault was in another process and this one has nothing to show.
+It is written that way because it had to be: the enumeration helper
+(`cascade --enumerate-json`) is expected to die occasionally by design, and the
+report filed at each death used to walk the stack of whichever worker thread
+noticed — which killed the parent the containment had just saved, twice
+(`B9D41A8D` on 0.64.0, and `crash cascade.exe @ captureFramesGuarded` on
+0.96.3, a stack overflow on a spent worker stack that no `__try` can catch).
+The frame capture now refuses to walk a thread with less than 64 KiB of stack
+left, and refuses to substitute the calling thread's stack for a supplied
+exception context that is null or zeroed. No minidump is written for a child
+fault either: a dump of the process that survived cannot document it.
+
+### `kind: stall` — the display stopped, not the application
+
+A freeze report's `kind` is `hang` or, since 0.96.4, `stall`, and every one of
+them carries a `note` line saying which in a sentence.
+
+`stall` means the stalled thread was in a kernel wait with a **display driver,
+OpenGL or Direct3D/DXGI module underneath it** — the application waiting for
+the graphics stack to present, which is what a monitor being switched off, a
+resolution change, a GPU reset or a remote session reconnecting does. The case
+that forced it: `hang ntdll.dll @ cascade::gui::AppWindow::run` on 0.96.3,
+1177 s into a session, with `GLFW error 65544: Win32: Failed to query display
+settings` in the log and `atio6axx.dll` — AMD's display driver — under a
+five-second `SwapBuffers`.
+
+The classification is made from the frames and nothing else
+(`HangWatchdog::isDisplayPresentationStall`), and it is deliberately not "a
+stall with SwapBuffers on top": a 0.96.2 report had SwapBuffers on top too and
+was a dead SDRplay service, a real fault that must keep being reported. A stall
+also gets its own grouping signature (`STAL`, against `HANG`) so the two can
+never share a group, and **the uploader keeps it on the machine**: the crash
+store accepts `crash` and `hang`, and a display driver's behaviour is not this
+product's fault to file. The sidecar beside it says so rather than implying the
+file was unreadable.
+
+Before any of that, two things stop such a report being written at all
+(`gui/present_grace.hpp`): the watchdog is paused for a bounded 10 s grace when
+a display change is seen — `WM_DISPLAYCHANGE`, counted in the window procedure,
+or GLFW's own 65544 display-settings error — and paused for as long as the
+window is iconified or hidden, because a window nobody can see is not expected
+to present. Both share one counted pause, and the log says
+`display changed - presentation stalls for the next 10000 ms are not reported`
+when the grace starts.
+
+### Shell calls are made under a watchdog pause
+
+`ShellExecute` blocks the GUI thread for as long as the shell takes, and for an
+elevation or SmartScreen prompt that is as long as the **user** takes.
+`hang ntdll.dll @ cascade::gui::AppWindow::launchInstaller` (0.96.2, 28 s
+uptime) is the watchdog reporting a consent dialog the user was reading. Every
+shell call in the application — the update installer, the reports folder in
+both places it is offered, the privacy-policy link — now goes through
+`gui::runShellOpen`, which brackets it in a `WatchdogPause`, exactly as
+`core/hang_watchdog.hpp`'s false-positive rule 2b has always said a native
+modal dialog must. `cascade --frames N` prints the number of pauses a run took,
+so these are visible as a count and not only as a sentence.
+
 What none of this proves: that a real librtlsdr or UHD line arrives. The
 bridge and the capture are exercised with synthetic lines
 (`tests/test_vendor_lines.cpp` writes through both the CRT and the Win32

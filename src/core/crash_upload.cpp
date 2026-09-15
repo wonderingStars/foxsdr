@@ -319,7 +319,16 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     // An unknown kind is refused rather than forwarded: the receiving end
     // accepts two, and inventing a third here would produce a 400 on every
     // send for ever.
-    if (out.kind != "crash" && out.kind != "hang") { return false; }
+    //
+    // "stall" IS PARSED AND THEN KEPT LOCAL, which is not the same thing as
+    // unreadable. A presentation stall (core/hang_watchdog.cpp: the display
+    // driver was waiting for a display, not this application for itself) is a
+    // perfectly well-formed report that simply is not ours to send, and the
+    // sweep below marks it as such with an accurate note. Letting it fall
+    // through this line would file it as "not a readable report", which is
+    // false and would send whoever read the sidecar looking for a corruption
+    // bug that is not there.
+    if (out.kind != "crash" && out.kind != "hang" && out.kind != "stall") { return false; }
 
     auto lookup = [&out](const std::string& name) -> std::string {
         for (const auto& kv : out.modules) {
@@ -954,6 +963,23 @@ SweepOutcome sweepCrashDir(const SweepParams& params,
             writeSidecar(path, "refused", sc.attempts, std::string(), params.nowEpoch,
                          "not a readable report; it was not sent and will not be retried");
             out.notes.push_back(p.filename().string() + ": refused (unreadable)");
+            continue;
+        }
+
+        // A PRESENTATION STALL IS NOT THIS APPLICATION'S FAULT, so it is not
+        // sent anywhere. The graphics stack was waiting for a display - a
+        // monitor switched off, a mode change, a GPU reset, a remote session -
+        // and forwarding it would put another program's behaviour in this
+        // product's fault list, which is exactly what the classification in
+        // core/hang_watchdog.cpp exists to stop. It stays on the machine for a
+        // user who goes looking, and the sidecar says why rather than implying
+        // the file was broken.
+        if (r.kind == "stall") {
+            ++out.refused;
+            writeSidecar(path, "local-only", sc.attempts, r.signature, params.nowEpoch,
+                         "a display-driver presentation stall, not a fault in FoxSDR; it "
+                         "stays on this machine and is not sent");
+            out.notes.push_back(p.filename().string() + ": display stall, kept local");
             continue;
         }
 

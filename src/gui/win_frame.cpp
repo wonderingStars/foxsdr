@@ -2,6 +2,7 @@
 // be put back when it does.
 #include "gui/win_frame.hpp"
 
+#include <atomic>
 #include <cstdlib>
 
 #include "core/diag_log.hpp"
@@ -26,12 +27,26 @@ namespace {
 
 CaptionLayout g_layout;
 
+// Written by the window procedure (the GUI thread) and read by the frame loop
+// on that same thread, but ALSO readable from a diagnostic on another thread,
+// so it is atomic rather than a plain unsigned. See displayChangeCount().
+std::atomic<unsigned> g_displayChanges{0};
+
 #ifdef _WIN32
 HWND g_hwnd = nullptr;
 WNDPROC g_previous = nullptr;
 
 LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_DISPLAYCHANGE:
+        // COUNTED AND PASSED ON. See displayChangeCount() in the header: the
+        // frames immediately after a display change can legitimately stall
+        // inside the driver's present call for seconds, and the application
+        // pauses its hang watchdog for a bounded grace when it sees this number
+        // move. Nothing is handled here - GLFW and the backend still get the
+        // message exactly as before.
+        g_displayChanges.fetch_add(1u, std::memory_order_relaxed);
+        break;
     case WM_NCHITTEST: {
         // THE FRAME ANSWERS FIRST. The window keeps a real, if invisible,
         // sizing frame, so the operating system's own hit test already knows
@@ -259,5 +274,7 @@ bool installed() {
 void setCaptionLayout(const CaptionLayout& layout) { g_layout = layout; }
 
 CaptionLayout captionLayout() { return g_layout; }
+
+unsigned displayChangeCount() { return g_displayChanges.load(std::memory_order_relaxed); }
 
 }  // namespace cascade::gui::frame

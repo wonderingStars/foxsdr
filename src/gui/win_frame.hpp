@@ -127,4 +127,25 @@ void setCaptionLayout(const CaptionLayout& layout);
 // The layout last set, for the code that draws it and for tests.
 CaptionLayout captionLayout();
 
+// HOW MANY TIMES THE DISPLAY HAS CHANGED UNDER THIS WINDOW, counted from the
+// window procedure this module already owns.
+//
+// A monitor switched off, a resolution or scaling change, an adapter switch or
+// a remote session taking the desktop over all stall PRESENTATION: the driver's
+// SwapBuffers does not return until it has somewhere to present to, and on an
+// AMD stack that has been measured at over five seconds - long enough for the
+// hang watchdog to file a report against an application that is doing nothing
+// wrong (0.96.3, "hang ntdll.dll @ cascade::gui::AppWindow::run", atio6axx.dll).
+//
+// WM_DISPLAYCHANGE is the notification, and GLFW offers no hook for it - its
+// monitor callback fires for a monitor arriving or leaving and not for a mode
+// change on one that stays. This module is already subclassing the window
+// procedure for the caption, so the message costs one more case there.
+//
+// A COUNTER RATHER THAN A FLAG, so a caller that reads it once a frame can tell
+// "it changed again while I was waiting" from "it has not changed since"; and
+// monotonic, so no reader can clear it out from under another. Zero before
+// install(), and on every platform but Windows.
+unsigned displayChangeCount();
+
 }  // namespace cascade::gui::frame
