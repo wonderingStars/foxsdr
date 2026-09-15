@@ -681,6 +681,31 @@ demonstration instruments fed with sample state, so a face can be worked on
 with no radio and no plugin — the only windows that open by themselves, and
 only under that switch.
 
+**Sound of its own** (0.93.0). A plugin may also declare that it *plays sound
+through the host*. Up to here a decoder could hand FoxSDR text, pictures, map
+targets, a window or an instrument face and could not hand it audio — so a
+DAB/DAB+ decoder, whose entire output is PCM, could only write a WAV file and
+leave the speakers playing the raw hiss a digital carrier makes of an FM
+demodulator. A plugin that declares it hands the host blocks of samples at its
+own rate, and while it is decoding, **its audio replaces the demodulated
+audio** rather than mixing with it: the band is not underneath, because a
+programme and the carrier it was decoded from are not two things to listen to
+at once. Exactly one plugin plays at a time — if a second asks while the first
+is playing, the first keeps the speakers and the refusal is written to the log
+once, not once a block. When it stops, the demodulated audio comes back. Both
+changeovers are faded over 5 ms, because a hard cut between two unrelated
+signals cannot be made click-free. The handover happens one step above the
+sink, after noise reduction and before the mute, so your volume, the mute key,
+the audio recorder and the browser's audio stream all carry what the speakers
+carry, and the mute lamp still tells the truth. The **SINK** card in the status
+column names the plugin holding the speakers (`playing: …`), the **AUDIO -
+UNDERRUNS** card carries the plugin path's own gap count beside the sink's
+starved-callback count — a decoder that cannot keep up and a device that is
+starving sound identical and are repaired in different places — and the browser
+reads the same two facts from `/api/status` as `audioSource`,
+`audioPluginGaps` and `audioPluginGapFrames`. In the **Plugin store**, a module
+that can do this says so on its own plate before you fit it.
+
 **Stop and start.** In the Fitted modules window every loaded module's row
 carries a **STOP** key, and a stopped one carries **START**; the selected
 module's plate carries the same as **STOP MODULE** / **START MODULE**.

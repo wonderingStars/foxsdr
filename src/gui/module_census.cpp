@@ -34,6 +34,13 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         {CASCADE_CAP_PRESET, p.preset},
         {CASCADE_CAP_BASEMAP, p.basemap},
         {CASCADE_CAP_TRACK_INFO, p.trackInfo},
+        // The audio-out table rides on another capability's instance and has
+        // no create() of its own, which is exactly why it still needs a line
+        // here: the record carries the pointer like any other, and without it
+        // a module that plays sound answers "no" to being asked whether it
+        // does. test_module_census walks CASCADE_CAP_ALL_KNOWN bit by bit
+        // against this table so the next one cannot be forgotten either.
+        {CASCADE_CAP_AUDIO_OUT, p.audioOut},
     };
     for (const Entry& e : table) {
         if ((capMask & e.bit) != 0u && e.table != nullptr) { return true; }

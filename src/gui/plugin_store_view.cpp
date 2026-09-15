@@ -536,6 +536,16 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         r.push_back({"Image decoder", "Fed samples; returns pictures the host displays.",
                      false});
     }
+    if ((c & CASCADE_CAP_AUDIO_OUT) != 0u) {
+        // REPLACES, and the word is the whole row. This is not a module that
+        // adds a sound to the receiver's: while it is decoding, what the
+        // speakers play is the module's and the demodulated audio is not
+        // there at all - which is exactly what a user who has just fitted a
+        // DAB decoder and can no longer hear the band needs to have been told
+        // before it happens.
+        r.push_back({"Plays sound through FoxSDR",
+                     "Replaces the receiver's audio while it is decoding.", false});
+    }
     if ((c & CASCADE_CAP_TRACK_SOURCE) != 0u) {
         r.push_back({"Map targets", "Publishes positions the host draws on its map.",
                      false});

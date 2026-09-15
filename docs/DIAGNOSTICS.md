@@ -207,6 +207,37 @@ handle in-process); a driver with its own statically linked CRT reads
 and that reasoning is what puts its lines in the pipe — a bench with an
 RTL-SDR is the check.
 
+### What a plugin playing sound writes (0.93.0)
+
+A plugin holding `CASCADE_CAP_AUDIO_OUT` **replaces** the demodulated audio
+while it decodes, which makes "the radio went quiet" and "a decoder took the
+speakers and then starved" the same complaint from the outside. `PluginRunner`
+writes two kinds of line so a report can tell them apart, both from
+`pollAudioDiagnostics()` — called by the GUI's existing `drainText()` poll, on
+the GUI thread, so nothing here runs on the real-time path. The audio path
+itself only records fixed-size events under its lock; the formatting, the
+clock and the log write all happen on the side that is allowed to do them.
+
+- **The transition line**, one per changeover, naming the plugin and what it
+  is handing over: `audio: DAB+ is playing (48000 Hz stereo, no resampling
+  needed)`, or `… (32000 Hz mono, resampled to 48000)` when the plugin's clock
+  is not the sink's, and `audio: DAB+ stopped; demodulated audio returns` at
+  the other end. A third form appears only when two plugins want the speakers
+  at once — `audio: APT also wants the speakers; DAB+ has them and keeps them`
+  — and is written **once per contention**, not once per block, because the
+  losing plugin asks again every time the sink does.
+- **The gap digest**, at most once a minute and silent unless something
+  actually broke up: `audio: plugin audio (DAB+) came up short in 37 blocks in
+  the last minute (154 ms of silence)`. This is the sibling of the sink's own
+  starvation line and has to be read beside it: a plugin that cannot hand over
+  a full block is charged a gap and the shortfall is filled with silence,
+  which sounds exactly like the audio ring running dry and is repaired
+  somewhere else entirely. The clock starts at the first call rather than at
+  construction, so a runner nobody drains never reports a minute that did not
+  happen. The same two counters are on the **AUDIO - UNDERRUNS** card and in
+  `/api/status` (`audioPluginGaps`, `audioPluginGapFrames`), beside
+  `audioSource` — the name of whatever is holding the speakers.
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it

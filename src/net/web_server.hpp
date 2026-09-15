@@ -183,6 +183,24 @@ struct RadioStatus {
     std::uint64_t audioPrimingCallbacks = 0;
     double audioRingMs = 0.0;
     double audioRingCapacityMs = 0.0;
+    // WHAT THE STREAM IS CARRYING, when it is not the receiver's own audio.
+    // A plugin holding CASCADE_CAP_AUDIO_OUT REPLACES the demodulated audio
+    // above the sink, so a listener on this stream hears the decoder and not
+    // the band the frequency readout names - and with nothing saying so, a
+    // DAB programme coming out of a receiver tuned to a wideband OFDM carrier
+    // is indistinguishable from the radio having drifted onto something else.
+    // Empty means the receiver's own audio is playing. The plugin's DISPLAY
+    // name, the same one the SINK card letters, because this is read by a
+    // person.
+    std::string audioSource;
+    // The plugin audio path's own starvation figures, siblings of the two
+    // above: blocks in which the playing plugin handed over less than a full
+    // block, and the frames of silence that cost. A decoder that cannot keep
+    // up sounds exactly like a device that is starving, and only these two
+    // beside audioUnderruns say which of the two a listener is hearing. Both
+    // stay 0 while the receiver's own audio plays.
+    std::uint64_t audioPluginGaps = 0;
+    std::uint64_t audioPluginGapFrames = 0;
     bool audioRecording = false;
     std::uint64_t iqBytes = 0;
     std::uint64_t audioBytes = 0;

@@ -3277,6 +3277,12 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["audioPrimingCallbacks"] = s.audioPrimingCallbacks;
         j["audioRingMs"] = s.audioRingMs;
         j["audioRingCapacityMs"] = s.audioRingCapacityMs;
+        // Always published, empty and zero included: a page that reads the
+        // field only when it is present would have to treat "absent" as "the
+        // receiver's own audio", and absent is also what an older build sends.
+        j["audioSource"] = s.audioSource;
+        j["audioPluginGaps"] = s.audioPluginGaps;
+        j["audioPluginGapFrames"] = s.audioPluginGapFrames;
         j["audioRecording"] = s.audioRecording;
         j["iqBytes"] = s.iqBytes;
         j["audioBytes"] = s.audioBytes;

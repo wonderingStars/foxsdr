@@ -49,6 +49,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,15 @@ const CascadeImageDecoderApi kImageApi{};
 const CascadeTrackSourceApi kTrackApi{};
 const CascadeBasemapApi kBasemapApi{};
 const CascadePanelApi kPanelApi{};
+// The rest of the ABI's tables, for the totality check below. Nothing else in
+// this file needs them, and that is precisely the gap the check closes: a bit
+// no test ever attaches a table for is a bit the census may quietly answer
+// "no" for.
+const CascadeInstrumentApi kInstrumentApi{};
+const CascadeHostClientApi kHostClientApi{};
+const CascadePresetApi kPresetApi{};
+const CascadeTrackInfoApi kTrackInfoApi{};
+const CascadeAudioOutApi kAudioOutApi{};
 
 // A module the host LOADED. Tables are attached by the caller.
 LoadedPlugin loadedRecord(const char* path, const char* name, std::uint32_t caps) {
@@ -177,6 +187,39 @@ int main() {
         LoadedPlugin m = loadedRecord("C:/p/map.dll", "Basemap", CASCADE_CAP_BASEMAP);
         m.basemap = &kBasemapApi;
         CHECK(!moduleProvides(m, kDecoderCaps));
+    }
+    // --- and the table is TOTAL over CASCADE_CAP_ALL_KNOWN ------------------
+    //
+    // module_census.cpp opens its Entry table with "one entry per bit this ABI
+    // defines", and nothing was holding it to that: CASCADE_CAP_AUDIO_OUT was
+    // added to the header with no line in the table, so a module that plainly
+    // plays sound answered "no" to being asked whether it does - a module this
+    // census could never see, which is the one failure the file exists to
+    // prevent. Every table is attached and every declared bit asked for ON ITS
+    // OWN, so the red line names the bit that has no entry rather than a count
+    // that has moved.
+    {
+        LoadedPlugin all =
+            loadedRecord("C:/p/everything-1.0.0.dll", "Everything", CASCADE_CAP_ALL_KNOWN);
+        all.decoder = &kAudioApi;
+        all.iqDecoder = &kIqApi;
+        all.imageDecoder = &kImageApi;
+        all.trackSource = &kTrackApi;
+        all.panel = &kPanelApi;
+        all.instrument = &kInstrumentApi;
+        all.hostClient = &kHostClientApi;
+        all.preset = &kPresetApi;
+        all.basemap = &kBasemapApi;
+        all.trackInfo = &kTrackInfoApi;
+        all.audioOut = &kAudioOutApi;
+        for (std::uint32_t bit = 1u; bit != 0u; bit <<= 1) {
+            if ((static_cast<std::uint32_t>(CASCADE_CAP_ALL_KNOWN) & bit) == 0u) { continue; }
+            if (!moduleProvides(all, bit)) {
+                std::printf("no census entry for capability bit 0x%08X\n",
+                            static_cast<unsigned>(bit));
+            }
+            CHECK(moduleProvides(all, bit));
+        }
     }
 
     // --- the census, state by state ----------------------------------------
