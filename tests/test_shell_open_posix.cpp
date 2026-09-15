@@ -219,10 +219,14 @@ int main() {
     checkMissingExecutableFails();
     checkDoesNotWaitForTheChild();
     checkNoZombieLeftBehind();
+    return testSummary("test_shell_open_posix");
 #else
     // posixShellOpen() does not exist on Windows - AppWindow::shellOpen() uses
     // ShellExecuteA there instead, unchanged, and is out of scope for this
-    // file. Nothing to check on this platform.
+    // file. Say so rather than print "0 checks, 0 failed", which reads the
+    // same as a test that ran (tests/test_usb_usbfs.cpp does the same).
+    std::printf("test_shell_open_posix: SKIPPED (xdg-open path is POSIX-only; see "
+                "test_shell_open for the shared watchdog bracket)\n");
+    return 0;
 #endif
-    return testSummary("test_shell_open_posix");
 }
