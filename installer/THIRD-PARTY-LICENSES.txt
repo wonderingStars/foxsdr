@@ -466,6 +466,63 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ======================================================================
+COMPONENT: SDRplay API (interface description written from the public header;
+           the library is the user's own install - nothing linked or shipped)
+======================================================================
+======================================================================
+FoxSDR's SDRplay driver (src/source/sdrplay_api_decl.hpp and
+src/source/sdrplay_source.*) drives an RSP through sdrplay_api.dll from the
+SDRplay API 3.x package THE USER INSTALLED. That library is loaded at run
+time by name from SDRplay's documented install path, its entry points are
+resolved with GetProcAddress, and it is called directly. No part of the
+SDRplay API is linked into this product, no SDRplay binary or header is
+distributed with it, and nothing of SDRplay's is present in this
+repository. An RSP cannot be reached any other way: SDRplay publish no
+device protocol and the tuner is programmed by a Windows service that owns
+the USB handle.
+
+src/source/sdrplay_api_decl.hpp is an INTERFACE DESCRIPTION - our own
+declarations, in our own names and our own file, of the structures, enums
+and function signatures the driver uses - written from SDRplay's publicly
+published sdrplay_api headers so that this product can call a library it
+does not ship. Each structure carries a static_assert on its size, alignment
+and member offsets, checked against the vendor headers for API 3.07, 3.11
+and 3.15 compiled with this product's own compiler, so that a layout change
+fails the build rather than corrupting the service's memory in the field.
+
+The CALL SEQUENCE - the order in which Open, ApiVersion, LockDeviceApi,
+GetDevices, SelectDevice, GetDeviceParams, Init, Update, Uninit,
+ReleaseDevice and Close are used, which update reasons accompany which
+parameter change, how the sample rate below 2 MS/s is produced by
+decimating a low-IF or zero-IF front end, and the per-model antenna, notch,
+bias-tee and LNA-state tables - was learned from SoapySDRPlay3, which is
+MIT licensed. No SoapySDRPlay3 code is present in this product.
+See https://github.com/pothosware/SoapySDRPlay3
+
+The MIT License (MIT)
+
+Copyright (c) 2015 Charles J. Cliffe
+Copyright (c) 2020 Franco Venturi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+======================================================================
 COMPONENT: Saira Condensed (typeface, embedded in the executable)
 ======================================================================
 Used unmodified. "Saira" is a Reserved Font Name: any modified version

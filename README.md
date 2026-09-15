@@ -287,6 +287,66 @@ is linked or shipped.
 
 ---
 
+## The SDRplay driver
+
+An RSP is the one radio FoxSDR cannot reach the way it reaches the others.
+SDRplay publish no device protocol, and the tuner is programmed by a Windows
+service that owns the USB handle — so the only door is `sdrplay_api.dll`, and
+the driver goes through it directly: FoxSDR loads the user's own SDRplay API
+3.x at run time, resolves the entry points it needs, and drives the API itself.
+No SoapySDR module in the path, nothing of SDRplay's linked at build time, and
+nothing of theirs in the installer. If the API is not installed, no RSP is
+listed and the Source panel says exactly what to do about it: install the
+SDRplay API 3.x from sdrplay.com and restart FoxSDR.
+
+**What it does.** RSP1, RSP1A, RSP1B, RSP2, RSPduo, RSPdx and RSPdx-R2, 1 kHz
+to 2 GHz, 62.5 kS/s to 10 MS/s. Everything below 2 MS/s is produced the way the
+hardware actually produces it — the binary fractions of 2 MS/s by decimating a
+6 MHz front end at the 1.62 MHz IF, the audio rates (96/192/384/768 kS/s) by
+decimating a fast zero-IF one — because the RSP's front end does not run below
+2 MS/s and getting that wrong puts the receiver 1.62 MHz off frequency. The IF
+gain is presented as a NEGATIVE gain (−59 to −20 dB) because the hardware's own
+number is a gain REDUCTION and a slider whose right-hand end is quieter is the
+kind of inconsistency that gets blamed on the radio; the LNA is presented in
+steps, not invented decibels, because the API takes an index into a per-model,
+per-band table and publishes no decibel mapping for it. The API's own AGC is
+there with its set point. An RSPdx's three inputs and an RSPduo's two tuners
+appear as antennas; the bias tee, the broadcast-FM and DAB notches and the
+RSPdx's HDR mode are switches of their own, per model, because a control that
+can put power on a connector should never be reachable by something iterating a
+list of port names. ADC overloads are logged AND acknowledged — the service
+re-reports one until it is, so a host that merely logs gets a log full of it —
+and a device removal or a service failure stops the stream with a reason rather
+than freezing the display.
+
+**Windows only**, because the SDRplay API is a Windows service. On other
+platforms enumeration returns nothing and says why in the log.
+
+**A note on versions.** The driver's declarations of the API's structures were
+checked against SDRplay's published headers for 3.07, 3.11 and 3.15, compiled
+with FoxSDR's own compiler, and every size and member offset is pinned by a
+`static_assert` — a layout change fails the build instead of quietly writing
+into the wrong field of the service's memory. Two members did move between
+those versions, and both are handled rather than guessed: the device list's
+`valid` flag is not believed below 3.08, where it is padding, and the RSPdx's
+HDR bandwidth is left at the API's default below 3.15, where it sits four bytes
+lower in the parameter block. Anything older than 3.07 is refused with a
+sentence naming the version it found.
+
+**How it is verified.** There is no RSP on the bench this was written on and
+the SDRplay API is not installed on it, so nothing here has met the real
+service — that is stated plainly rather than implied. What is proved is the
+driver: it reaches the API through one table of function pointers, and
+`tests/test_sdrplay_source.cpp` fills that table with a fake that answers the
+way the vendor's header says the service does. 442 checks cover the exact call
+sequence at open, the exact parameters the radio is started with, every update
+reason against the change that caused it, the sample conversion, the per-model
+antenna, notch and bias-tee routing, the rate-and-decimation plan for every
+published rate, the refusals (no API, an API too old, a frequency out of range,
+an RSPduo another application already holds), the fault path for a removed
+device, and the teardown bound. Each was confirmed to go red against a
+deliberately broken driver before being believed.
+
 ## The native RTL-SDR driver
 
 FoxSDR opens an RTL2832U dongle directly as well — the same WinUSB transport,
@@ -603,6 +663,60 @@ catalogue has been fetched that offers a newer build, and a **Remove** whether
 it does or not — an ABI mismatch has no other way out. Plugins the
 catalogue has never described (private or hand-installed builds) are left
 alone and keep loading.
+
+## Keyboard
+
+Every shortcut below can be changed: open **Key bindings** in the **SYSTEM**
+group of the rail (or press <kbd>F7</kbd>, which goes there and opens that row),
+click the key you want to change, then press the keys you want it to be.
+<kbd>Esc</kbd> leaves it alone and <kbd>Backspace</kbd> clears it, so an action
+can be left with no key at all. **Reset to defaults** puts the whole table back.
+
+Only the keys you change are stored, so a later version's improved default
+still reaches you if you never touched that one.
+
+**No shortcut fires while you are typing** — a frequency in the counter, a
+bookmark name, a password — and none fires while a dialog is open.
+
+| | Key | |
+|---|---|---|
+| Start / stop the receiver | <kbd>Ctrl</kbd>+<kbd>F2</kbd> | |
+| Mute the sound | <kbd>M</kbd> | |
+| Volume up / down | <kbd>+</kbd> / <kbd>-</kbd> | 5% a press |
+| Squelch up / down | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd> | 2 dB a press |
+| Mode: NFM | <kbd>Ctrl</kbd>+<kbd>F</kbd> | |
+| Mode: WFM | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | |
+| Mode: AM | <kbd>Ctrl</kbd>+<kbd>A</kbd> | |
+| Mode: DSB | <kbd>Ctrl</kbd>+<kbd>D</kbd> | |
+| Mode: USB | <kbd>Ctrl</kbd>+<kbd>U</kbd> | |
+| Mode: CW | <kbd>Ctrl</kbd>+<kbd>C</kbd> | |
+| Mode: LSB | <kbd>Ctrl</kbd>+<kbd>L</kbd> | |
+| Mode: RAW | <kbd>Ctrl</kbd>+<kbd>R</kbd> | |
+| Tune up / down one step | <kbd>Ctrl</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd> | 10 kHz |
+| Tune up / down one screen width | <kbd>Ctrl</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd> | by the visible span |
+| Type a frequency | <kbd>T</kbd> | opens the counter's editor |
+| Zoom the spectrum in / out | <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> | about the centre |
+| Zoom back to the full span | <kbd>Ctrl</kbd>+<kbd>Del</kbd> | |
+| Record the audio | <kbd>Shift</kbd>+<kbd>R</kbd> | the I/Q take stays mouse-only |
+| Save a screenshot | <kbd>Ctrl</kbd>+<kbd>W</kbd> | |
+| Maximise / restore the window | <kbd>F11</kbd> | |
+| Bank: SIGNAL PATH / DECODE / VIEW / EXTEND / SYSTEM | <kbd>F1</kbd>…<kbd>F5</kbd> | |
+| Settings and key bindings | <kbd>F7</kbd> | |
+
+Two keys are **not** in the table and cannot be rebound. <kbd>F12</kbd> always
+saves a screenshot — it is the key every note and every test script tells you to
+press, and an instruction that can be rebound is not an instruction — and
+<kbd>Esc</kbd> always cancels what is being typed, or leaves the full-screen
+scope.
+
+The list is HDSDR's where FoxSDR has the same control to offer, with three
+deliberate differences. HDSDR starts and stops on <kbd>F2</kbd>; here
+<kbd>F1</kbd>–<kbd>F5</kbd> are the five FUNCTION SELECT keys engraved on the
+rail, so start/stop takes <kbd>Ctrl</kbd>+<kbd>F2</kbd>. HDSDR has one FM and
+this receiver has two, so narrow FM keeps <kbd>Ctrl</kbd>+<kbd>F</kbd> and wide
+FM takes <kbd>Shift</kbd> with it. And HDSDR's DIG and ECSS modes do not exist
+here, so <kbd>Ctrl</kbd>+<kbd>D</kbd> is DSB and RAW takes its own initial on
+<kbd>Ctrl</kbd>+<kbd>R</kbd>.
 
 ## Browser access
 

@@ -1,0 +1,1792 @@
+// SdrPlaySource - see sdrplay_source.hpp for the argument.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "source/sdrplay_source.hpp"
+
+#include "core/diag_log.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+namespace cascade::source {
+namespace abi = sdrplay_abi;
+
+namespace {
+
+std::atomic<unsigned long long> g_linksStranded{0};
+
+// A stranded Link is kept alive here for the life of the process rather than
+// freed under a service thread that is still inside it. Deliberately never
+// emptied: the whole point is that nothing here is safe to destroy, and a
+// handful of rings is a price worth paying once per wedged teardown.
+std::mutex g_graveyardMutex;
+std::vector<std::shared_ptr<void>> g_graveyard;
+
+void strandLink(std::shared_ptr<void> link) {
+    {
+        std::lock_guard<std::mutex> lk(g_graveyardMutex);
+        g_graveyard.push_back(std::move(link));
+    }
+    g_linksStranded.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::string lowerCopy(std::string s) {
+    for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    return s;
+}
+
+// The API answers an error code; this is what goes in the log and in
+// lastError(). GetErrorString is optional in the table (a fake need not have
+// it), so the number is always printed and the string appended when there is
+// one.
+std::string errText(const abi::Api& api, abi::ErrT err) {
+    char buf[128];
+    const char* s = (api.GetErrorString != nullptr) ? api.GetErrorString(err) : nullptr;
+    if (s != nullptr) {
+        std::snprintf(buf, sizeof(buf), "%s (%d)", s, static_cast<int>(err));
+    } else {
+        std::snprintf(buf, sizeof(buf), "error %d", static_cast<int>(err));
+    }
+    return std::string(buf);
+}
+
+}  // namespace
+
+// --- loading the API ------------------------------------------------------
+
+const char* sdrPlayApiDllPath() {
+    // SDRplay's own documented location for the 64-bit library. Their
+    // installer writes it here and does NOT put it on PATH.
+    return "C:\\Program Files\\SDRplay\\API\\x64\\sdrplay_api.dll";
+}
+
+namespace {
+
+#if defined(_WIN32)
+template <typename Fn>
+bool resolve(HMODULE mod, const char* name, Fn& out, std::string& missing) {
+    FARPROC p = ::GetProcAddress(mod, name);
+    if (p == nullptr) {
+        if (!missing.empty()) { missing += ", "; }
+        missing += name;
+        return false;
+    }
+    out = reinterpret_cast<Fn>(reinterpret_cast<void*>(p));
+    return true;
+}
+#endif
+
+void loadInto(abi::Api& api) {
+#if defined(_WIN32)
+    HMODULE mod = ::LoadLibraryA(sdrPlayApiDllPath());
+    std::string from = sdrPlayApiDllPath();
+    if (mod == nullptr) {
+        // Second, and only second: a user who has arranged their own copy.
+        // Putting the bare name first would let a stray sdrplay_api.dll beside
+        // some other application pre-empt the real install.
+        mod = ::LoadLibraryA("sdrplay_api.dll");
+        from = "sdrplay_api.dll (loader search path)";
+    }
+    if (mod == nullptr) {
+        api.resolved = false;
+        api.loadDetail = "sdrplay_api.dll not found";
+        return;
+    }
+
+    std::string missing;
+    bool ok = true;
+    ok &= resolve(mod, "sdrplay_api_Open", api.Open, missing);
+    ok &= resolve(mod, "sdrplay_api_Close", api.Close, missing);
+    ok &= resolve(mod, "sdrplay_api_ApiVersion", api.ApiVersion, missing);
+    ok &= resolve(mod, "sdrplay_api_LockDeviceApi", api.LockDeviceApi, missing);
+    ok &= resolve(mod, "sdrplay_api_UnlockDeviceApi", api.UnlockDeviceApi, missing);
+    ok &= resolve(mod, "sdrplay_api_GetDevices", api.GetDevices, missing);
+    ok &= resolve(mod, "sdrplay_api_SelectDevice", api.SelectDevice, missing);
+    ok &= resolve(mod, "sdrplay_api_ReleaseDevice", api.ReleaseDevice, missing);
+    ok &= resolve(mod, "sdrplay_api_GetErrorString", api.GetErrorString, missing);
+    ok &= resolve(mod, "sdrplay_api_GetLastError", api.GetLastError, missing);
+    ok &= resolve(mod, "sdrplay_api_DebugEnable", api.DebugEnable, missing);
+    ok &= resolve(mod, "sdrplay_api_GetDeviceParams", api.GetDeviceParams, missing);
+    ok &= resolve(mod, "sdrplay_api_Init", api.Init, missing);
+    ok &= resolve(mod, "sdrplay_api_Uninit", api.Uninit, missing);
+    ok &= resolve(mod, "sdrplay_api_Update", api.Update, missing);
+    // Only an RSPduo needs this one, so a library without it is still usable
+    // for every other model - resolved, but not required.
+    std::string swapMissing;
+    resolve(mod, "sdrplay_api_SwapRspDuoActiveTuner", api.SwapRspDuoActiveTuner, swapMissing);
+
+    api.resolved = ok;
+    api.loadDetail = ok ? from : ("entry points missing from " + from + ": " + missing);
+#else
+    // The API is a Windows service. A Linux or macOS RSP is reached through
+    // SoapySDR until SDRplay's own platform library is behind the same table.
+    api.resolved = false;
+    api.loadDetail = "the SDRplay API is Windows-only in this build";
+#endif
+}
+
+}  // namespace
+
+const sdrplay_abi::Api& processSdrPlayApi() {
+    // Function-local statics: resolved on first use, never unloaded, and
+    // thread-safe initialisation is the language's problem rather than ours.
+    // Two of them rather than one initialised from a lambda's return value,
+    // because Api carries the session mutex and is deliberately non-copyable.
+    static abi::Api api;
+    static const bool once = [] {
+        loadInto(api);
+        core::diagLogf("source: SDRplay API - %s", api.loadDetail.c_str());
+        return true;
+    }();
+    (void) once;
+    return api;
+}
+
+std::string sdrPlayApiAdvice(bool resolved, float version) {
+    if (!resolved) {
+        return "SDRplay radios need the SDRplay API from sdrplay.com, version 3.x - install it "
+               "and restart FoxSDR.";
+    }
+    if (version > 0.0f && !abi::versionAtLeast(version, abi::kMinApiVersion)) {
+        char buf[224];
+        std::snprintf(buf, sizeof(buf),
+                      "The installed SDRplay API is version %.2f; FoxSDR needs %.2f or newer - "
+                      "update it from sdrplay.com and restart FoxSDR.",
+                      static_cast<double>(version), static_cast<double>(abi::kMinApiVersion));
+        return std::string(buf);
+    }
+    return std::string();
+}
+
+// --- the session ----------------------------------------------------------
+
+namespace {
+
+// Open the API once per process per table, check the version, and hand out a
+// reference count. See sdrplay_abi::Api for why the count lives in the table.
+bool sessionAcquire(const abi::Api& api, std::string& error) {
+    if (!api.resolved) {
+        error = sdrPlayApiAdvice(false, 0.0f);
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(api.sessionMutex);
+    if (api.sessions > 0) {
+        ++api.sessions;
+        return true;
+    }
+    const abi::ErrT err = api.Open();
+    if (err != abi::Success) {
+        error = "the SDRplay service did not answer: " + errText(api, err) +
+                ". Check that the SDRplay API service is running.";
+        return false;
+    }
+    float ver = 0.0f;
+    const abi::ErrT verr = api.ApiVersion(&ver);
+    if (verr != abi::Success) {
+        api.Close();
+        error = "the SDRplay API would not report its version: " + errText(api, verr);
+        return false;
+    }
+    if (!abi::versionAtLeast(ver, abi::kMinApiVersion)) {
+        api.Close();
+        error = sdrPlayApiAdvice(true, ver);
+        return false;
+    }
+    api.version = ver;
+    api.sessions = 1;
+    return true;
+}
+
+void sessionRelease(const abi::Api& api) {
+    std::lock_guard<std::mutex> lk(api.sessionMutex);
+    if (api.sessions <= 0) { return; }
+    --api.sessions;
+    if (api.sessions == 0 && api.Close != nullptr) {
+        api.Close();
+        api.version = 0.0f;
+    }
+}
+
+}  // namespace
+
+// --- the pure halves ------------------------------------------------------
+
+std::string sdrPlayModelName(unsigned char hwVer) {
+    switch (hwVer) {
+        case abi::kRsp1: return "RSP1";
+        case abi::kRsp1A: return "RSP1A";
+        case abi::kRsp1B: return "RSP1B";
+        case abi::kRsp2: return "RSP2";
+        case abi::kRspDuo: return "RSPduo";
+        case abi::kRspDx: return "RSPdx";
+        case abi::kRspDxR2: return "RSPdx-R2";
+        default: break;
+    }
+    // A number the user can quote is worth more than the word UNKNOWN: it is
+    // what tells us which model SDRplay shipped after this was written.
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "RSP (hw %u)", static_cast<unsigned>(hwVer));
+    return std::string(buf);
+}
+
+std::string sdrPlayLabel(const abi::DeviceT& dev) {
+    // SerNo is a fixed-size char array the service fills; it is not promised
+    // to be terminated if it were ever full, so bound the read.
+    const std::size_t maxLen = sizeof(dev.SerNo);
+    std::size_t len = 0;
+    while (len < maxLen && dev.SerNo[len] != '\0') { ++len; }
+    const std::string serial(dev.SerNo, len);
+    std::string label = "SDRplay " + sdrPlayModelName(dev.hwVer);
+    if (!serial.empty()) { label += " (serial " + serial + ")"; }
+    return label;
+}
+
+std::vector<std::string> sdrPlayAntennas(unsigned char hwVer, abi::RspDuoModeT duoMode) {
+    switch (hwVer) {
+        case abi::kRsp2:
+            return {"Antenna A", "Antenna B", "Hi-Z"};
+        case abi::kRspDx:
+        case abi::kRspDxR2:
+            return {"Antenna A", "Antenna B", "Antenna C"};
+        case abi::kRspDuo:
+            // Single-tuner is the mode this stage selects; the dual-tuner,
+            // master and slave modes are a second receiver's worth of work and
+            // the Source section has one column for one radio.
+            if (duoMode == abi::RspDuoMode_Single_Tuner || duoMode == abi::RspDuoMode_Unknown) {
+                return {"Tuner 1", "Tuner 2"};
+            }
+            return {"Tuner 1"};
+        default: break;
+    }
+    return {"RX"};
+}
+
+int sdrPlayLnaStateCount(unsigned char hwVer) {
+    // SoapySDRPlay3 Settings.cpp getGainRange states the MAXIMUM LNAstate per
+    // model; the count is that plus one. These are the broadest band's; the
+    // hardware has fewer in some bands and the API clamps, which is why
+    // setGainDb reports back what was programmed rather than what was asked.
+    switch (hwVer) {
+        case abi::kRsp1: return 4;    // 0..3
+        case abi::kRsp2: return 9;    // 0..8
+        case abi::kRspDuo: return 10; // 0..9
+        case abi::kRsp1A: return 10;  // 0..9
+        case abi::kRsp1B: return 10;  // 0..9
+        case abi::kRspDx: return 28;  // 0..27
+        case abi::kRspDxR2: return 28;
+        default: break;
+    }
+    return 10;
+}
+
+std::vector<double> sdrPlaySupportedRatesHz() {
+    return {62500.0,  96000.0,  125000.0, 192000.0,  250000.0,  384000.0,  500000.0,
+            768000.0, 1000000.0, 2000000.0, 2048000.0, 3000000.0, 4000000.0, 5000000.0,
+            6000000.0, 7000000.0, 8000000.0, 9000000.0, 10000000.0};
+}
+
+abi::BwMHzT sdrPlayBwForRate(double r) {
+    if (r < 300000.0) { return abi::BW_0_200; }
+    if (r < 600000.0) { return abi::BW_0_300; }
+    if (r < 1536000.0) { return abi::BW_0_600; }
+    if (r < 5000000.0) { return abi::BW_1_536; }
+    if (r < 6000000.0) { return abi::BW_5_000; }
+    if (r < 7000000.0) { return abi::BW_6_000; }
+    if (r < 8000000.0) { return abi::BW_7_000; }
+    return abi::BW_8_000;
+}
+
+bool sdrPlayRatePlan(double outputRateHz, SdrPlayRatePlan& out) {
+    // THE FRONT END DOES NOT RUN BELOW 2 MS/s, so every rate below that is a
+    // decimation of something faster, and WHICH something depends on the rate.
+    // The reference's own table (SoapySDRPlay3
+    // getInputSampleRateAndDecimation): the binary fractions of 2 MS/s come
+    // from a 6 MHz LOW-IF front end decimated by powers of two, and the audio
+    // rates (96k, 192k, 384k, 768k) come from a ZERO-IF front end running at
+    // the rate times the decimation. Mixing the two up is how a receiver ends
+    // up 1.62 MHz off frequency.
+    const long long r = static_cast<long long>(std::llround(outputRateHz));
+    out = SdrPlayRatePlan{};
+    out.bwType = sdrPlayBwForRate(static_cast<double>(r));
+
+    switch (r) {
+        case 62500: out.ifType = abi::IF_1_620; out.decM = 32; out.decEnable = 1; out.fsHz = 6000000.0; return true;
+        case 125000: out.ifType = abi::IF_1_620; out.decM = 16; out.decEnable = 1; out.fsHz = 6000000.0; return true;
+        case 250000: out.ifType = abi::IF_1_620; out.decM = 8; out.decEnable = 1; out.fsHz = 6000000.0; return true;
+        case 500000: out.ifType = abi::IF_1_620; out.decM = 4; out.decEnable = 1; out.fsHz = 6000000.0; return true;
+        case 1000000: out.ifType = abi::IF_1_620; out.decM = 2; out.decEnable = 1; out.fsHz = 6000000.0; return true;
+        case 2000000: out.ifType = abi::IF_1_620; out.decM = 1; out.decEnable = 0; out.fsHz = 6000000.0; return true;
+        case 96000:
+        case 192000:
+        case 384000:
+        case 768000: {
+            out.ifType = abi::IF_Zero;
+            out.decM = static_cast<unsigned int>(3072000 / r);  // 32, 16, 8, 4
+            out.decEnable = 1;
+            out.wideBandSignal = 1;
+            out.fsHz = static_cast<double>(r) * out.decM;
+            return true;
+        }
+        default: break;
+    }
+
+    // Above 2 MS/s the ADC runs at the output rate and nothing is decimated.
+    for (double supported : sdrPlaySupportedRatesHz()) {
+        if (std::llround(supported) == r && r > 2000000) {
+            out.ifType = abi::IF_Zero;
+            out.decM = 1;
+            out.decEnable = 0;
+            out.fsHz = static_cast<double>(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- enumeration ----------------------------------------------------------
+
+std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
+    std::vector<NativeDeviceInfo> out;
+    std::string error;
+    if (!sessionAcquire(api, error)) {
+        core::diagLogf("source: SDRplay enumeration skipped - %s", error.c_str());
+        return out;
+    }
+
+    abi::DeviceT devs[abi::kMaxDevices];
+    std::memset(devs, 0, sizeof(devs));
+    unsigned int n = 0;
+
+    const abi::ErrT lerr = api.LockDeviceApi();
+    if (lerr != abi::Success) {
+        core::diagWarnf("source: SDRplay LockDeviceApi failed - %s", errText(api, lerr).c_str());
+        sessionRelease(api);
+        return out;
+    }
+    const abi::ErrT gerr = api.GetDevices(devs, &n, abi::kMaxDevices);
+    api.UnlockDeviceApi();
+
+    if (gerr != abi::Success) {
+        core::diagWarnf("source: SDRplay GetDevices failed - %s", errText(api, gerr).c_str());
+        sessionRelease(api);
+        return out;
+    }
+
+    float ver = 0.0f;
+    {
+        std::lock_guard<std::mutex> lk(api.sessionMutex);
+        ver = api.version;
+    }
+    // `valid` is padding before 3.08, so believing it on an older API would
+    // hide every device behind a byte that means nothing.
+    const bool trustValid = abi::versionAtLeast(ver, abi::kValidFieldSinceVersion);
+
+    if (n > abi::kMaxDevices) { n = abi::kMaxDevices; }
+    // The index counts only the devices that made it into the list, because
+    // that is what open()'s "index=N" counts. Counting raw slots here and
+    // valid ones there would make "index=1" mean two different radios on a bus
+    // where one device is busy.
+    unsigned int listed = 0;
+    for (unsigned int i = 0; i < n; ++i) {
+        if (trustValid && devs[i].valid == 0) { continue; }
+        NativeDeviceInfo info;
+        info.driver = "sdrplay";
+        info.label = sdrPlayLabel(devs[i]);
+        const std::size_t maxLen = sizeof(devs[i].SerNo);
+        std::size_t len = 0;
+        while (len < maxLen && devs[i].SerNo[len] != '\0') { ++len; }
+        if (len > 0) {
+            info.args = "serial=" + std::string(devs[i].SerNo, len);
+        } else {
+            char buf[24];
+            std::snprintf(buf, sizeof(buf), "index=%u", listed);
+            info.args = buf;
+        }
+        ++listed;
+        out.push_back(std::move(info));
+    }
+
+    sessionRelease(api);
+    return out;
+}
+
+std::vector<NativeDeviceInfo> enumerateSdrPlay() {
+    return enumerateSdrPlayWith(processSdrPlayApi());
+}
+
+// --- the driver -----------------------------------------------------------
+
+SdrPlaySource::~SdrPlaySource() { closeDevice(); }
+
+void SdrPlaySource::setApiForTest(const abi::Api* api) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    api_ = api;
+}
+
+const abi::Api& SdrPlaySource::api() const {
+    return (api_ != nullptr) ? *api_ : processSdrPlayApi();
+}
+
+unsigned long long SdrPlaySource::linksStranded() {
+    return g_linksStranded.load(std::memory_order_relaxed);
+}
+
+// --- errors ---------------------------------------------------------------
+
+void SdrPlaySource::setErrorOn(Link& link, std::string msg) {
+    std::lock_guard<std::mutex> lk(link.errorMutex);
+    link.lastError = std::move(msg);
+}
+
+void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string& detail) {
+    {
+        std::lock_guard<std::mutex> lk(link.errorMutex);
+        link.lastError = std::string(what) + ": " + detail;
+        link.faulted = true;
+        link.deviceDead = true;
+        link.deadWhat = what;
+    }
+    // Wake a read() that is parked: a dead device must not cost the pipeline
+    // a whole kReadWait before it hears about it.
+    {
+        std::lock_guard<std::mutex> lk(link.waitMutex);
+    }
+    link.waitCv.notify_all();
+}
+
+void SdrPlaySource::setError(std::string msg) { setErrorOn(*link_, std::move(msg)); }
+
+void SdrPlaySource::clearError() {
+    std::lock_guard<std::mutex> lk(link_->errorMutex);
+    link_->lastError.clear();
+    link_->faulted = false;
+    link_->deviceDead = false;
+    link_->deadWhat.clear();
+}
+
+const char* SdrPlaySource::lastError() const {
+    // Returned as a pointer into the Link's own string, which outlives this
+    // object; the lock makes the read safe against the service's thread.
+    static thread_local std::string copy;
+    std::lock_guard<std::mutex> lk(link_->errorMutex);
+    copy = link_->lastError;
+    return copy.c_str();
+}
+
+bool SdrPlaySource::faulted() const {
+    std::lock_guard<std::mutex> lk(link_->errorMutex);
+    return link_->faulted;
+}
+
+bool SdrPlaySource::deviceDead() const {
+    std::lock_guard<std::mutex> lk(link_->errorMutex);
+    return link_->deviceDead;
+}
+
+std::string SdrPlaySource::faultedWhile() const {
+    std::lock_guard<std::mutex> lk(link_->errorMutex);
+    return link_->deadWhat;
+}
+
+void SdrPlaySource::setName(std::string n) {
+    std::lock_guard<std::mutex> lk(nameMutex_);
+    name_ = std::move(n);
+}
+
+const char* SdrPlaySource::name() const {
+    static thread_local std::string copy;
+    std::lock_guard<std::mutex> lk(nameMutex_);
+    copy = name_;
+    return copy.c_str();
+}
+
+std::string SdrPlaySource::serialNo() const {
+    std::lock_guard<std::mutex> lk(nameMutex_);
+    return serial_;
+}
+
+// --- the callbacks --------------------------------------------------------
+
+void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
+    std::lock_guard<std::mutex> lk(link.healthMutex);
+    StreamHealth& h = link.health;
+    const auto now = std::chrono::steady_clock::now();
+    if (!h.windowOpen) {
+        h.windowOpen = true;
+        h.windowStart = now;
+        h.lastSamples = now;
+    }
+    ++h.reads;
+    if (samples > 0) {
+        ++h.withSamples;
+        h.samples += samples;
+        const auto gap =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - h.lastSamples).count();
+        if (gap > h.longestGapMs) { h.longestGapMs = gap; }
+        h.lastSamples = now;
+    }
+    if (dropped) { ++h.overflows; }
+}
+
+std::string SdrPlaySource::healthLineLocked(Link& link) {
+    StreamHealth& h = link.health;
+    if (!h.windowOpen || h.reads == 0) { return std::string(); }
+    const auto now = std::chrono::steady_clock::now();
+    const auto openGap =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - h.lastSamples).count();
+    if (openGap > h.longestGapMs) { h.longestGapMs = openGap; }
+    const auto windowMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - h.windowStart).count();
+    char buf[192];
+    // THE SAME FORMAT SoapySource::streamHealthLine WRITES, word for word, so
+    // a reader of the diagnostic log does not have to know which driver was
+    // open to parse the line.
+    std::snprintf(buf, sizeof(buf),
+                  "source: stream health - reads %llu, with samples %llu, timeouts %llu, "
+                  "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s",
+                  static_cast<unsigned long long>(h.reads),
+                  static_cast<unsigned long long>(h.withSamples),
+                  static_cast<unsigned long long>(h.timeouts),
+                  static_cast<unsigned long long>(h.overflows),
+                  static_cast<unsigned long long>(h.errors),
+                  static_cast<long long>(h.longestGapMs),
+                  static_cast<unsigned long long>(h.samples),
+                  static_cast<long long>((windowMs + 500) / 1000));
+    h = StreamHealth{};
+    return std::string(buf);
+}
+
+void SdrPlaySource::maybeWriteHealth(Link& link) {
+    std::string line;
+    bool warn = false;
+    {
+        std::lock_guard<std::mutex> lk(link.healthMutex);
+        StreamHealth& h = link.health;
+        if (!h.windowOpen) { return; }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - h.windowStart < link.healthWindow) { return; }
+        warn = h.overflows > 0 || h.errors > 0;
+        const bool first = !link.healthEverWritten;
+        const bool nominal = !warn;
+        line = healthLineLocked(link);
+        if (line.empty()) { return; }
+        // A line ALWAYS for the first window after a start, so a healthy radio
+        // leaves one proving it; after that only for a window with something
+        // to report.
+        if (!(warn || first || !nominal)) { return; }
+        link.healthEverWritten = true;
+    }
+    if (warn) {
+        core::diagWarnf("%s", line.c_str());
+    } else {
+        core::diagLogf("%s", line.c_str());
+    }
+}
+
+void SdrPlaySource::streamCallbackA(short* xi, short* xq, abi::StreamCbParamsT* params,
+                                    unsigned int numSamples, unsigned int reset, void* ctx) {
+    (void) reset;
+    Link* link = static_cast<Link*>(ctx);
+    if (link == nullptr) { return; }
+    link->inCallback.fetch_add(1, std::memory_order_acq_rel);
+
+    if (params != nullptr) {
+        // The service's acknowledgement that a queued Update has taken effect.
+        // Latched rather than assigned so a waiting setter cannot miss one
+        // that landed in a block it did not look at.
+        if (params->grChanged != 0) { link->grChanged.store(1, std::memory_order_relaxed); }
+        if (params->rfChanged != 0) { link->rfChanged.store(1, std::memory_order_relaxed); }
+        if (params->fsChanged != 0) { link->fsChanged.store(1, std::memory_order_relaxed); }
+    }
+
+    if (!link->accepting.load(std::memory_order_relaxed) || xi == nullptr || xq == nullptr ||
+        numSamples == 0) {
+        link->inCallback.fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
+
+    // Converted HERE, on the service's thread, exactly as every other driver
+    // converts on its reader thread: the ring carries finished samples so the
+    // pipeline's source thread does nothing but copy.
+    //
+    // /32768 rather than /32767 - the reference's own scaling
+    // (SoapySDRPlay3 Streaming.cpp) and the one that puts the int16 range in
+    // [-1, 1) with no value able to reach exactly 1.0.
+    constexpr float kScale = 1.0f / 32768.0f;
+    // Eight kilobytes on the SERVICE's stack, whose size is not ours to
+    // choose; a block bigger than the API ever delivers at once would be a
+    // gamble taken on somebody else's thread.
+    std::complex<float> block[1024];
+    std::size_t written = 0;
+    bool dropped = false;
+    unsigned int i = 0;
+    while (i < numSamples) {
+        const std::size_t chunk =
+            std::min<std::size_t>(sizeof(block) / sizeof(block[0]), numSamples - i);
+        for (std::size_t k = 0; k < chunk; ++k) {
+            block[k] = std::complex<float>(static_cast<float>(xi[i + k]) * kScale,
+                                           static_cast<float>(xq[i + k]) * kScale);
+        }
+        const std::size_t took = link->ring.write(block, chunk);
+        written += took;
+        if (took < chunk) {
+            dropped = true;
+            link->dropped.fetch_add(chunk - took, std::memory_order_relaxed);
+            break;
+        }
+        i += static_cast<unsigned int>(chunk);
+    }
+
+    noteBlock(*link, written, dropped);
+    maybeWriteHealth(*link);
+
+    if (written > 0) {
+        {
+            std::lock_guard<std::mutex> lk(link->waitMutex);
+        }
+        link->waitCv.notify_one();
+    }
+    link->inCallback.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void SdrPlaySource::streamCallbackB(short* xi, short* xq, abi::StreamCbParamsT* params,
+                                    unsigned int numSamples, unsigned int reset, void* ctx) {
+    // Channel B only exists in the RSPduo's dual-tuner mode, which this stage
+    // does not select. Accepting its samples into the same ring would
+    // interleave two receivers' signal into one stream, so it is dropped on
+    // purpose rather than by omission.
+    (void) xi;
+    (void) xq;
+    (void) params;
+    (void) numSamples;
+    (void) reset;
+    (void) ctx;
+}
+
+void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
+                                  abi::EventParamsT* params, void* ctx) {
+    (void) tuner;
+    Link* linkPtr = static_cast<Link*>(ctx);
+    if (linkPtr == nullptr) { return; }
+    Link& link = *linkPtr;
+    link.inCallback.fetch_add(1, std::memory_order_acq_rel);
+
+    switch (eventId) {
+        case abi::GainChange:
+            if (params != nullptr) {
+                // currGain is the service's own CALIBRATED figure, which with
+                // the AGC running is the only honest answer to "what gain is
+                // the radio at".
+                link.currGainDb.store(params->gainParams.currGain, std::memory_order_relaxed);
+                link.haveGainDb.store(true, std::memory_order_relaxed);
+            }
+            break;
+
+        case abi::PowerOverloadChange: {
+            const bool detected =
+                params != nullptr &&
+                params->powerOverloadParams.powerOverloadChangeType == abi::Overload_Detected;
+            if (detected) { link.overloads.fetch_add(1, std::memory_order_relaxed); }
+            core::diagWarnf("source: SDRplay %s",
+                            detected ? "ADC OVERLOAD - reduce the gain or add attenuation"
+                                     : "ADC overload corrected");
+            // THE ACKNOWLEDGEMENT IS NOT OPTIONAL. The service keeps
+            // re-reporting an overload until it is acknowledged, so an
+            // application that only logs the event gets a log full of it and
+            // a service that never moves on. Every argument comes out of the
+            // Link, so this is safe even on a stranded one.
+            if (link.api != nullptr && link.api->Update != nullptr && link.dev != nullptr) {
+                link.api->Update(link.dev, link.tuner, abi::Update_Ctrl_OverloadMsgAck,
+                                 abi::Update_Ext1_None);
+            }
+            break;
+        }
+
+        case abi::DeviceRemoved:
+            noteFaultOn(link, "device removed", "the RSP was unplugged or the service released it");
+            core::diagWarnf("source: SDRplay device removed - stopping");
+            break;
+
+        case abi::DeviceFailure:
+            noteFaultOn(link, "device failure", "the SDRplay service reported a device failure");
+            core::diagWarnf("source: SDRplay device failure - stopping");
+            break;
+
+        case abi::RspDuoModeChange:
+            if (params != nullptr &&
+                params->rspDuoModeParams.modeChangeType == abi::MasterDllDisappeared) {
+                noteFaultOn(link, "master stream lost",
+                            "the RSPduo master application closed");
+                core::diagWarnf("source: SDRplay RSPduo master disappeared - stopping");
+            }
+            break;
+
+        default: break;
+    }
+
+    link.inCallback.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+// --- open / close ---------------------------------------------------------
+
+abi::RxChannelParamsT* SdrPlaySource::chParamsLocked() const {
+    if (deviceParams_ == nullptr) { return nullptr; }
+    return (device_.tuner == abi::Tuner_B) ? deviceParams_->rxChannelB : deviceParams_->rxChannelA;
+}
+
+bool SdrPlaySource::acquireSessionLocked(std::string& error) {
+    if (sessionHeld_) { return true; }
+    if (!sessionAcquire(api(), error)) { return false; }
+    sessionHeld_ = true;
+    float ver = 0.0f;
+    {
+        std::lock_guard<std::mutex> lk(api().sessionMutex);
+        ver = api().version;
+    }
+    apiVersion_.store(ver, std::memory_order_relaxed);
+    return true;
+}
+
+void SdrPlaySource::releaseSessionLocked() {
+    if (!sessionHeld_) { return; }
+    sessionRelease(api());
+    sessionHeld_ = false;
+    apiVersion_.store(0.0f, std::memory_order_relaxed);
+}
+
+bool SdrPlaySource::selectByArgsLocked(const std::string& args) {
+    const abi::Api& a = api();
+    abi::DeviceT devs[abi::kMaxDevices];
+    std::memset(devs, 0, sizeof(devs));
+    unsigned int n = 0;
+
+    const abi::ErrT lerr = a.LockDeviceApi();
+    if (lerr != abi::Success) {
+        setError("SDRplay LockDeviceApi failed: " + errText(a, lerr));
+        return false;
+    }
+    const abi::ErrT gerr = a.GetDevices(devs, &n, abi::kMaxDevices);
+    if (gerr != abi::Success) {
+        a.UnlockDeviceApi();
+        setError("SDRplay GetDevices failed: " + errText(a, gerr));
+        return false;
+    }
+    if (n > abi::kMaxDevices) { n = abi::kMaxDevices; }
+
+    const bool trustValid =
+        abi::versionAtLeast(apiVersion_.load(std::memory_order_relaxed), abi::kValidFieldSinceVersion);
+
+    const std::string wantSerial = lowerCopy(argValue(args, "serial"));
+    const std::string wantIndex = argValue(args, "index");
+    const std::string wantTuner = argValue(args, "tuner");
+
+    int chosen = -1;
+    int seen = 0;
+    for (unsigned int i = 0; i < n; ++i) {
+        if (trustValid && devs[i].valid == 0) { continue; }
+        const std::size_t maxLen = sizeof(devs[i].SerNo);
+        std::size_t len = 0;
+        while (len < maxLen && devs[i].SerNo[len] != '\0') { ++len; }
+        const std::string serial = lowerCopy(std::string(devs[i].SerNo, len));
+        if (!wantSerial.empty()) {
+            // A SUFFIX match, not an equality: the short form a user reads off
+            // another tool's listing still has to find the radio.
+            const bool hit = serial.size() >= wantSerial.size() &&
+                             serial.compare(serial.size() - wantSerial.size(), wantSerial.size(),
+                                            wantSerial) == 0;
+            if (!hit) { continue; }
+            chosen = static_cast<int>(i);
+            break;
+        }
+        if (!wantIndex.empty()) {
+            if (std::to_string(seen) == wantIndex) {
+                chosen = static_cast<int>(i);
+                break;
+            }
+            ++seen;
+            continue;
+        }
+        chosen = static_cast<int>(i);
+        break;
+    }
+
+    if (chosen < 0) {
+        a.UnlockDeviceApi();
+        setError(n == 0 ? "no SDRplay device is connected"
+                        : ("no SDRplay device matches '" + args + "'"));
+        return false;
+    }
+
+    device_ = devs[chosen];
+
+    if (device_.hwVer == abi::kRspDuo) {
+        // SINGLE-TUNER IS WHAT THIS STAGE SELECTS, and it is chosen HERE
+        // because SelectDevice is where the mode and the tuner are fixed -
+        // there is no later call that can change the mode.
+        if ((device_.rspDuoMode & abi::RspDuoMode_Single_Tuner) == 0) {
+            a.UnlockDeviceApi();
+            setError("this RSPduo is already in use by another application");
+            return false;
+        }
+        device_.rspDuoMode = abi::RspDuoMode_Single_Tuner;
+        device_.tuner = (wantTuner == "2") ? abi::Tuner_B : abi::Tuner_A;
+        device_.rspDuoSampleFreq = 0.0;
+    } else {
+        device_.rspDuoMode = abi::RspDuoMode_Unknown;
+        device_.tuner = abi::Tuner_Neither;
+    }
+
+    const abi::ErrT serr = a.SelectDevice(&device_);
+    a.UnlockDeviceApi();
+    if (serr != abi::Success) {
+        setError("SDRplay SelectDevice failed: " + errText(a, serr));
+        return false;
+    }
+    selected_ = true;
+    return true;
+}
+
+bool SdrPlaySource::getParamsLocked() {
+    const abi::Api& a = api();
+    if (a.DebugEnable != nullptr) {
+        // Off, always. The API's own tracing is per-call and costs more than
+        // it tells us; our diagnostics are in this file.
+        a.DebugEnable(device_.dev, abi::DbgLvl_Disable);
+    }
+    deviceParams_ = nullptr;
+    const abi::ErrT err = a.GetDeviceParams(device_.dev, &deviceParams_);
+    if (err != abi::Success || deviceParams_ == nullptr) {
+        setError("SDRplay GetDeviceParams failed: " + errText(a, err));
+        return false;
+    }
+    if (chParamsLocked() == nullptr) {
+        setError("the SDRplay API returned no channel parameters for the selected tuner");
+        return false;
+    }
+    return true;
+}
+
+void SdrPlaySource::applyKnownStateLocked() {
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) { return; }
+
+    SdrPlayRatePlan plan;
+    sdrPlayRatePlan(2000000.0, plan);
+
+    if (deviceParams_->devParams != nullptr) {
+        deviceParams_->devParams->fsFreq.fsHz = plan.fsHz;
+        deviceParams_->devParams->ppm = 0.0;
+    }
+    ch->tunerParams.ifType = plan.ifType;
+    ch->tunerParams.bwType = plan.bwType;
+    ch->tunerParams.loMode = abi::LO_Auto;
+    ch->tunerParams.rfFreq.rfHz = 100000000.0;
+    ch->tunerParams.gain.gRdB = 40;
+    ch->tunerParams.gain.LNAstate = 0;
+    ch->tunerParams.gain.minGr = abi::NORMAL_MIN_GR;
+    ch->ctrlParams.decimation.enable = static_cast<unsigned char>(plan.decEnable);
+    ch->ctrlParams.decimation.decimationFactor = static_cast<unsigned char>(plan.decM);
+    ch->ctrlParams.decimation.wideBandSignal = static_cast<unsigned char>(plan.wideBandSignal);
+    ch->ctrlParams.agc.enable = abi::AGC_DISABLE;
+    ch->ctrlParams.agc.setPoint_dBfs = -60;
+    // Both corrections ON: a zero-IF front end without DC and IQ correction
+    // puts a carrier in the middle of the display and its own image beside
+    // every signal. The API does them in the service; there is nothing to gain
+    // by doing them again here.
+    ch->ctrlParams.dcOffset.DCenable = 1;
+    ch->ctrlParams.dcOffset.IQenable = 1;
+    // The tuner's own DC tracking, at the settings the reference uses while
+    // streaming (SoapySDRPlay3 activateStream).
+    ch->tunerParams.dcOffsetTuner.dcCal = 4;
+    ch->tunerParams.dcOffsetTuner.speedUp = 0;
+    ch->tunerParams.dcOffsetTuner.trackTime = 63;
+
+    ch->rsp1aTunerParams.biasTEnable = 0;
+    ch->rsp2TunerParams.biasTEnable = 0;
+    ch->rsp2TunerParams.amPortSel = abi::Rsp2_AMPORT_2;
+    ch->rsp2TunerParams.antennaSel = abi::Rsp2_ANTENNA_A;
+    ch->rsp2TunerParams.rfNotchEnable = 0;
+    ch->rspDuoTunerParams.biasTEnable = 0;
+    ch->rspDuoTunerParams.tuner1AmPortSel = abi::RspDuo_AMPORT_2;
+    ch->rspDuoTunerParams.tuner1AmNotchEnable = 0;
+    ch->rspDuoTunerParams.rfNotchEnable = 0;
+    ch->rspDuoTunerParams.rfDabNotchEnable = 0;
+
+    if (deviceParams_->devParams != nullptr) {
+        deviceParams_->devParams->rsp1aParams.rfNotchEnable = 0;
+        deviceParams_->devParams->rsp1aParams.rfDabNotchEnable = 0;
+        deviceParams_->devParams->rspDxParams.hdrEnable = 0;
+        deviceParams_->devParams->rspDxParams.biasTEnable = 0;
+        deviceParams_->devParams->rspDxParams.antennaSel = abi::RspDx_ANTENNA_A;
+        deviceParams_->devParams->rspDxParams.rfNotchEnable = 0;
+        deviceParams_->devParams->rspDxParams.rfDabNotchEnable = 0;
+    }
+
+    sampleRateHz_.store(2000000.0, std::memory_order_relaxed);
+    centerFrequencyHz_.store(100000000.0, std::memory_order_relaxed);
+    ifReductionDb_.store(40, std::memory_order_relaxed);
+    lnaState_.store(0, std::memory_order_relaxed);
+    autoGain_.store(false, std::memory_order_relaxed);
+    agcSetPoint_.store(-60, std::memory_order_relaxed);
+    biasT_.store(false, std::memory_order_relaxed);
+    rfNotch_.store(false, std::memory_order_relaxed);
+    dabNotch_.store(false, std::memory_order_relaxed);
+    hdrMode_.store(false, std::memory_order_relaxed);
+}
+
+bool SdrPlaySource::open(const std::string& args) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (openMirror_.load(std::memory_order_relaxed)) {
+        setError("this SDRplay source is already open");
+        return false;
+    }
+    clearError();
+
+    std::string error;
+    if (!acquireSessionLocked(error)) {
+        setError(error);
+        core::diagWarnf("source: SDRplay open failed - %s", error.c_str());
+        return false;
+    }
+
+    if (!selectByArgsLocked(args)) {
+        releaseSessionLocked();
+        core::diagWarnf("source: SDRplay open failed - %s", lastError());
+        return false;
+    }
+    if (!getParamsLocked()) {
+        api().ReleaseDevice(&device_);
+        selected_ = false;
+        releaseSessionLocked();
+        core::diagWarnf("source: SDRplay open failed - %s", lastError());
+        return false;
+    }
+
+    applyKnownStateLocked();
+
+    hwVer_.store(device_.hwVer, std::memory_order_relaxed);
+    {
+        const std::size_t maxLen = sizeof(device_.SerNo);
+        std::size_t len = 0;
+        while (len < maxLen && device_.SerNo[len] != '\0') { ++len; }
+        std::lock_guard<std::mutex> nlk(nameMutex_);
+        serial_ = std::string(device_.SerNo, len);
+        name_ = "SDRplay " + sdrPlayModelName(device_.hwVer);
+        antenna_ = sdrPlayAntennas(device_.hwVer, device_.rspDuoMode).front();
+        if (device_.hwVer == abi::kRspDuo) {
+            antenna_ = (device_.tuner == abi::Tuner_B) ? "Tuner 2" : "Tuner 1";
+        }
+    }
+
+    openMirror_.store(true, std::memory_order_relaxed);
+    core::diagLogf("source: SDRplay opened %s, API %.2f, tuner %d",
+                   sdrPlayModelName(device_.hwVer).c_str(),
+                   static_cast<double>(apiVersion_.load(std::memory_order_relaxed)),
+                   static_cast<int>(device_.tuner));
+    return true;
+}
+
+void SdrPlaySource::closeDevice() {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (initialised_) { stopStreamingLocked(); }
+    if (selected_) {
+        const abi::Api& a = api();
+        if (a.ReleaseDevice != nullptr) {
+            const abi::ErrT err = a.ReleaseDevice(&device_);
+            if (err != abi::Success) {
+                core::diagWarnf("source: SDRplay ReleaseDevice failed - %s",
+                                errText(a, err).c_str());
+            }
+        }
+        selected_ = false;
+    }
+    deviceParams_ = nullptr;
+    device_ = abi::DeviceT{};
+    releaseSessionLocked();
+    openMirror_.store(false, std::memory_order_relaxed);
+    hwVer_.store(0, std::memory_order_relaxed);
+}
+
+// --- streaming ------------------------------------------------------------
+
+bool SdrPlaySource::startStreamingLocked() {
+    const abi::Api& a = api();
+    link_->accepting.store(true, std::memory_order_relaxed);
+    link_->grChanged.store(0, std::memory_order_relaxed);
+    link_->rfChanged.store(0, std::memory_order_relaxed);
+    link_->fsChanged.store(0, std::memory_order_relaxed);
+
+    // What the event callback will need to acknowledge an overload, copied in
+    // BEFORE Init so nothing writes it while the service is calling.
+    link_->api = &a;
+    link_->dev = device_.dev;
+    link_->tuner = device_.tuner;
+
+    abi::CallbackFnsT cbs{};
+    cbs.StreamACbFn = &SdrPlaySource::streamCallbackA;
+    cbs.StreamBCbFn = &SdrPlaySource::streamCallbackB;
+    cbs.EventCbFn = &SdrPlaySource::eventCallback;
+
+    // The one cbContext the API takes is the LINK - see the header. `cbs`
+    // itself is a stack local because the API copies the table; the reference
+    // does the same.
+    const abi::ErrT err = a.Init(device_.dev, &cbs, link_.get());
+    if (err != abi::Success) {
+        link_->accepting.store(false, std::memory_order_relaxed);
+        link_->dev = nullptr;
+        setError("SDRplay Init failed: " + errText(a, err));
+        core::diagWarnf("source: SDRplay start failed - %s", lastError());
+        return false;
+    }
+    initialised_ = true;
+    running_.store(true, std::memory_order_relaxed);
+    return true;
+}
+
+void SdrPlaySource::stopStreamingLocked() {
+    if (!initialised_) {
+        link_->accepting.store(false, std::memory_order_relaxed);
+        running_.store(false, std::memory_order_relaxed);
+        return;
+    }
+    const abi::Api& a = api();
+    link_->accepting.store(false, std::memory_order_relaxed);
+
+    // UNBOUNDED BY CONSTRUCTION. sdrplay_api_Uninit takes no timeout and
+    // offers no cancellation; the API's contract is that it returns with the
+    // callbacks stopped. There is no argument we can pass to shorten it and no
+    // handle we can close to interrupt it.
+    const abi::ErrT err = a.Uninit(device_.dev);
+    if (err != abi::Success && err != abi::NotInitialised) {
+        core::diagWarnf("source: SDRplay Uninit failed - %s", errText(a, err).c_str());
+    }
+    initialised_ = false;
+    running_.store(false, std::memory_order_relaxed);
+
+    // The bounded half: if a callback is somehow still inside us, wait a
+    // little, then strand the Link rather than free it under the service's
+    // thread.
+    const auto deadline = std::chrono::steady_clock::now() + kCallbackDrainWait;
+    while (link_->inCallback.load(std::memory_order_acquire) > 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::unique_lock<std::mutex> wl(link_->waitMutex);
+        link_->waitCv.wait_for(wl, std::chrono::milliseconds(1));
+    }
+    if (link_->inCallback.load(std::memory_order_acquire) > 0) {
+        core::diagWarnf(
+            "source: SDRplay callback still running %lld ms after Uninit - stranding the link",
+            static_cast<long long>(kCallbackDrainWait.count()));
+        strandLink(link_);
+    } else {
+        // Nothing is inside the callbacks any more, so the device handle can
+        // be forgotten. A stranded Link deliberately KEEPS its copy: the
+        // thread still inside it needs somewhere valid to finish.
+        link_->dev = nullptr;
+    }
+
+    // The stream-health line for whatever the window holds, so a session that
+    // was too short to trip the window still leaves its numbers.
+    std::string line;
+    {
+        std::lock_guard<std::mutex> hl(link_->healthMutex);
+        line = healthLineLocked(*link_);
+    }
+    if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+}
+
+bool SdrPlaySource::start() {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (!openMirror_.load(std::memory_order_relaxed)) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    if (initialised_) { return true; }
+    return startStreamingLocked();
+}
+
+void SdrPlaySource::stop() {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    stopStreamingLocked();
+}
+
+std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
+    if (dst == nullptr || n == 0) { return 0; }
+    std::size_t got = link_->ring.read(dst, n);
+    if (got > 0) { return got; }
+    if (faulted()) { return 0; }
+    {
+        // Bounded and short: the pipeline's self-paced loop treats a zero as
+        // "nothing yet" and backs off a millisecond of its own.
+        std::unique_lock<std::mutex> wl(link_->waitMutex);
+        link_->waitCv.wait_for(wl, kReadWait);
+    }
+    got = link_->ring.read(dst, n);
+    if (got == 0) {
+        std::lock_guard<std::mutex> hl(link_->healthMutex);
+        if (link_->health.windowOpen) { ++link_->health.timeouts; }
+    }
+    return got;
+}
+
+// --- updates --------------------------------------------------------------
+
+bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpdateExt1T ext1,
+                                 const char* what) {
+    if (reason == abi::Update_None && ext1 == abi::Update_Ext1_None) { return true; }
+    if (!initialised_) {
+        // Not streaming: the parameter block IS the device's state and the
+        // service reads it at Init. Nothing to send and nothing to wait for.
+        return true;
+    }
+    const abi::Api& a = api();
+
+    const bool wantGr = (reason & abi::Update_Tuner_Gr) != 0;
+    const bool wantRf = (reason & abi::Update_Tuner_Frf) != 0;
+    const bool wantFs = (reason & abi::Update_Dev_Fs) != 0;
+    if (wantGr) { link_->grChanged.store(0, std::memory_order_relaxed); }
+    if (wantRf) { link_->rfChanged.store(0, std::memory_order_relaxed); }
+    if (wantFs) { link_->fsChanged.store(0, std::memory_order_relaxed); }
+
+    const abi::ErrT err = a.Update(device_.dev, device_.tuner, reason, ext1);
+    if (err != abi::Success) {
+        setError(std::string(what) + " failed: " + errText(a, err));
+        core::diagWarnf("source: SDRplay %s failed - %s", what, errText(a, err).c_str());
+        return false;
+    }
+
+    if (!(wantGr || wantRf || wantFs)) { return true; }
+
+    // The acknowledgement, bounded. The parameter is already programmed; this
+    // is the service telling us it has taken effect, and a missing one is a
+    // warning rather than a failure - see kUpdateWait.
+    const auto deadline = std::chrono::steady_clock::now() + kUpdateWait;
+    for (;;) {
+        const bool done = (!wantGr || link_->grChanged.load(std::memory_order_relaxed) != 0) &&
+                          (!wantRf || link_->rfChanged.load(std::memory_order_relaxed) != 0) &&
+                          (!wantFs || link_->fsChanged.load(std::memory_order_relaxed) != 0);
+        if (done) { return true; }
+        if (std::chrono::steady_clock::now() >= deadline) { break; }
+        if (faulted()) { return false; }
+        std::unique_lock<std::mutex> wl(link_->waitMutex);
+        link_->waitCv.wait_for(wl, std::chrono::milliseconds(1));
+    }
+    core::diagWarnf("source: SDRplay %s - no acknowledgement within %lld ms", what,
+                    static_cast<long long>(kUpdateWait.count()));
+    return true;
+}
+
+// --- frequency ------------------------------------------------------------
+
+bool SdrPlaySource::frequencyRangeHz(double& loHz, double& hiHz) const {
+    loHz = 1000.0;
+    hiHz = 2000000000.0;
+    return true;
+}
+
+bool SdrPlaySource::setCenterFrequencyHz(double hz) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    double lo = 0.0;
+    double hi = 0.0;
+    frequencyRangeHz(lo, hi);
+    if (!(hz >= lo && hz <= hi)) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%.0f Hz is outside the RSP's %.0f Hz to %.0f Hz range", hz,
+                      lo, hi);
+        setError(buf);
+        return false;
+    }
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    ch->tunerParams.rfFreq.rfHz = hz;
+    if (!updateLocked(abi::Update_Tuner_Frf, abi::Update_Ext1_None, "retune")) { return false; }
+    centerFrequencyHz_.store(hz, std::memory_order_relaxed);
+    return true;
+}
+
+// --- rate -----------------------------------------------------------------
+
+std::vector<double> SdrPlaySource::supportedSampleRatesHz() const {
+    return sdrPlaySupportedRatesHz();
+}
+
+bool SdrPlaySource::setSampleRateHz(double hz) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr || deviceParams_ == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+
+    // Coerced to the nearest supported rate, as the Soapy path does, so a
+    // config that asked for something plausible still opens.
+    const std::vector<double> rates = sdrPlaySupportedRatesHz();
+    double best = rates.front();
+    double bestErr = std::numeric_limits<double>::max();
+    for (double r : rates) {
+        const double e = std::fabs(r - hz);
+        if (e < bestErr) {
+            bestErr = e;
+            best = r;
+        }
+    }
+
+    SdrPlayRatePlan plan;
+    if (!sdrPlayRatePlan(best, plan)) {
+        setError("no SDRplay front-end plan for that rate");
+        return false;
+    }
+
+    abi::ReasonForUpdateT reason = abi::Update_None;
+    if (deviceParams_->devParams != nullptr &&
+        deviceParams_->devParams->fsFreq.fsHz != plan.fsHz) {
+        deviceParams_->devParams->fsFreq.fsHz = plan.fsHz;
+        reason = static_cast<abi::ReasonForUpdateT>(reason | abi::Update_Dev_Fs);
+    }
+    if (ch->tunerParams.ifType != plan.ifType) {
+        ch->tunerParams.ifType = plan.ifType;
+        reason = static_cast<abi::ReasonForUpdateT>(reason | abi::Update_Tuner_IfType);
+    }
+    if (ch->ctrlParams.decimation.decimationFactor != static_cast<unsigned char>(plan.decM) ||
+        ch->ctrlParams.decimation.enable != static_cast<unsigned char>(plan.decEnable)) {
+        ch->ctrlParams.decimation.enable = static_cast<unsigned char>(plan.decEnable);
+        ch->ctrlParams.decimation.decimationFactor = static_cast<unsigned char>(plan.decM);
+        ch->ctrlParams.decimation.wideBandSignal = static_cast<unsigned char>(plan.wideBandSignal);
+        reason = static_cast<abi::ReasonForUpdateT>(reason | abi::Update_Ctrl_Decimation);
+    }
+    if (ch->tunerParams.bwType != plan.bwType) {
+        ch->tunerParams.bwType = plan.bwType;
+        reason = static_cast<abi::ReasonForUpdateT>(reason | abi::Update_Tuner_BwType);
+    }
+
+    // ONE Update carrying every reason that changed. Three separate ones would
+    // be three separate disturbances to a live stream for what the API is
+    // perfectly happy to do at once.
+    if (!updateLocked(reason, abi::Update_Ext1_None, "sample rate change")) { return false; }
+    sampleRateHz_.store(best, std::memory_order_relaxed);
+    return true;
+}
+
+// --- gains ----------------------------------------------------------------
+
+std::vector<GainInfo> SdrPlaySource::gains() const {
+    std::vector<GainInfo> g;
+    // The sign is turned over here and nowhere else - see the header.
+    g.push_back(GainInfo{"IF", -59.0, -20.0, 1.0, GainUnit::Decibels});
+    const int states = sdrPlayLnaStateCount(hwVer_.load(std::memory_order_relaxed));
+    g.push_back(GainInfo{"LNA", 0.0, static_cast<double>(states - 1), 1.0, GainUnit::Steps});
+    return g;
+}
+
+double SdrPlaySource::gainDb(const std::string& name) const {
+    if (name == "IF") {
+        return -static_cast<double>(ifReductionDb_.load(std::memory_order_relaxed));
+    }
+    if (name == "LNA") { return static_cast<double>(lnaState_.load(std::memory_order_relaxed)); }
+    return 0.0;
+}
+
+bool SdrPlaySource::setGainDb(const std::string& name, double db) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+
+    if (name == "IF") {
+        if (autoGain_.load(std::memory_order_relaxed)) {
+            // The API refuses a gRdB write while its AGC owns the field, and
+            // pretending otherwise would leave the panel showing a number the
+            // radio is not at.
+            setError("the IF gain is under the RSP's AGC - turn the AGC off to set it by hand");
+            return false;
+        }
+        // CLAMPED, not refused: the DeviceSource contract, and gainDb reports
+        // what was actually programmed.
+        const int reduction = std::clamp(static_cast<int>(std::llround(-db)), 20, 59);
+        if (ch->tunerParams.gain.gRdB != reduction) {
+            ch->tunerParams.gain.gRdB = reduction;
+            if (!updateLocked(abi::Update_Tuner_Gr, abi::Update_Ext1_None, "IF gain change")) {
+                return false;
+            }
+        }
+        ifReductionDb_.store(reduction, std::memory_order_relaxed);
+        return true;
+    }
+
+    if (name == "LNA") {
+        const int states = sdrPlayLnaStateCount(hwVer_.load(std::memory_order_relaxed));
+        const int state = std::clamp(static_cast<int>(std::llround(db)), 0, states - 1);
+        if (ch->tunerParams.gain.LNAstate != static_cast<unsigned char>(state)) {
+            ch->tunerParams.gain.LNAstate = static_cast<unsigned char>(state);
+            if (!updateLocked(abi::Update_Tuner_Gr, abi::Update_Ext1_None, "LNA state change")) {
+                return false;
+            }
+        }
+        lnaState_.store(state, std::memory_order_relaxed);
+        return true;
+    }
+
+    setError("the RSP has no gain called '" + name + "'");
+    return false;
+}
+
+bool SdrPlaySource::setAutoGain(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    const abi::AgcControlT want = on ? abi::AGC_CTRL_EN : abi::AGC_DISABLE;
+    if (ch->ctrlParams.agc.enable != want) {
+        ch->ctrlParams.agc.enable = want;
+        ch->ctrlParams.agc.setPoint_dBfs = agcSetPoint_.load(std::memory_order_relaxed);
+        if (!updateLocked(abi::Update_Ctrl_Agc, abi::Update_Ext1_None, "AGC change")) {
+            return false;
+        }
+    }
+    autoGain_.store(on, std::memory_order_relaxed);
+    if (!on) {
+        // Coming off the AGC, the field holds whatever the loop last wrote.
+        // Put our own number back so the panel and the radio agree.
+        ch->tunerParams.gain.gRdB = ifReductionDb_.load(std::memory_order_relaxed);
+        updateLocked(abi::Update_Tuner_Gr, abi::Update_Ext1_None, "IF gain restore");
+    }
+    return true;
+}
+
+bool SdrPlaySource::setAgcSetPointDbfs(int dbfs) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    const int clamped = std::clamp(dbfs, -72, 0);
+    ch->ctrlParams.agc.setPoint_dBfs = clamped;
+    agcSetPoint_.store(clamped, std::memory_order_relaxed);
+    if (autoGain_.load(std::memory_order_relaxed)) {
+        return updateLocked(abi::Update_Ctrl_Agc, abi::Update_Ext1_None, "AGC set point change");
+    }
+    return true;
+}
+
+// --- antennas -------------------------------------------------------------
+
+std::vector<std::string> SdrPlaySource::antennas() const {
+    const unsigned char hw = hwVer_.load(std::memory_order_relaxed);
+    abi::RspDuoModeT mode = abi::RspDuoMode_Unknown;
+    {
+        std::lock_guard<std::mutex> lk(devMutex_);
+        mode = device_.rspDuoMode;
+    }
+    return sdrPlayAntennas(hw, mode);
+}
+
+std::string SdrPlaySource::antenna() const {
+    std::lock_guard<std::mutex> lk(nameMutex_);
+    return antenna_;
+}
+
+bool SdrPlaySource::reselectTunerLocked(abi::TunerSelectT tuner) {
+    const abi::Api& a = api();
+    // Everything we have programmed lives in memory the service owns and will
+    // free at ReleaseDevice, so it has to be COPIED OUT before the release and
+    // written back after the new select - the reference does exactly this
+    // (SoapySDRPlay3 selectDevice's save/restore).
+    abi::DevParamsT savedDev{};
+    abi::RxChannelParamsT savedCh{};
+    bool haveDev = false;
+    if (deviceParams_ != nullptr) {
+        if (deviceParams_->devParams != nullptr) {
+            savedDev = *deviceParams_->devParams;
+            haveDev = true;
+        }
+        abi::RxChannelParamsT* ch = chParamsLocked();
+        if (ch != nullptr) { savedCh = *ch; }
+    }
+
+    const abi::ErrT rerr = a.ReleaseDevice(&device_);
+    selected_ = false;
+    deviceParams_ = nullptr;
+    if (rerr != abi::Success) {
+        setError("SDRplay ReleaseDevice failed: " + errText(a, rerr));
+        return false;
+    }
+
+    device_.tuner = tuner;
+    device_.rspDuoMode = abi::RspDuoMode_Single_Tuner;
+    const abi::ErrT serr = a.SelectDevice(&device_);
+    if (serr != abi::Success) {
+        setError("SDRplay SelectDevice failed: " + errText(a, serr));
+        return false;
+    }
+    selected_ = true;
+    if (!getParamsLocked()) { return false; }
+
+    if (haveDev && deviceParams_->devParams != nullptr) { *deviceParams_->devParams = savedDev; }
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch != nullptr) { *ch = savedCh; }
+    return true;
+}
+
+bool SdrPlaySource::setAntenna(const std::string& name) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    const unsigned char hw = hwVer_.load(std::memory_order_relaxed);
+    const std::vector<std::string> list = sdrPlayAntennas(hw, device_.rspDuoMode);
+    if (std::find(list.begin(), list.end(), name) == list.end()) {
+        setError("this RSP has no antenna called '" + name + "'");
+        return false;
+    }
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+
+    if (hw == abi::kRspDx || hw == abi::kRspDxR2) {
+        if (deviceParams_->devParams == nullptr) {
+            setError("no SDRplay device parameters");
+            return false;
+        }
+        deviceParams_->devParams->rspDxParams.antennaSel =
+            (name == "Antenna B")   ? abi::RspDx_ANTENNA_B
+            : (name == "Antenna C") ? abi::RspDx_ANTENNA_C
+                                    : abi::RspDx_ANTENNA_A;
+        // The RSPdx's controls are ALL in the extension-1 word, which is why
+        // this is the one Update in the driver whose first reason is None.
+        if (!updateLocked(abi::Update_None, abi::Update_RspDx_AntennaControl, "antenna change")) {
+            return false;
+        }
+    } else if (hw == abi::kRsp2) {
+        if (name == "Hi-Z") {
+            ch->rsp2TunerParams.amPortSel = abi::Rsp2_AMPORT_1;
+            if (!updateLocked(abi::Update_Rsp2_AmPortSelect, abi::Update_Ext1_None,
+                              "antenna change")) {
+                return false;
+            }
+        } else {
+            if (ch->rsp2TunerParams.amPortSel == abi::Rsp2_AMPORT_1) {
+                // Come off Hi-Z FIRST: the antenna switch means nothing while
+                // the AM port owns the input.
+                ch->rsp2TunerParams.amPortSel = abi::Rsp2_AMPORT_2;
+                if (!updateLocked(abi::Update_Rsp2_AmPortSelect, abi::Update_Ext1_None,
+                                  "antenna change")) {
+                    return false;
+                }
+            }
+            ch->rsp2TunerParams.antennaSel =
+                (name == "Antenna B") ? abi::Rsp2_ANTENNA_B : abi::Rsp2_ANTENNA_A;
+            if (!updateLocked(abi::Update_Rsp2_AntennaControl, abi::Update_Ext1_None,
+                              "antenna change")) {
+                return false;
+            }
+        }
+    } else if (hw == abi::kRspDuo) {
+        const abi::TunerSelectT want = (name == "Tuner 2") ? abi::Tuner_B : abi::Tuner_A;
+        if (want != device_.tuner) {
+            if (initialised_) {
+                // Live: the API has a call for exactly this and it is the only
+                // way to move the tuner without dropping the stream.
+                const abi::Api& a = api();
+                if (a.SwapRspDuoActiveTuner == nullptr) {
+                    setError("this SDRplay API has no SwapRspDuoActiveTuner");
+                    return false;
+                }
+                const abi::ErrT err = a.SwapRspDuoActiveTuner(
+                    device_.dev, &device_.tuner, ch->rspDuoTunerParams.tuner1AmPortSel);
+                if (err != abi::Success) {
+                    setError("SDRplay SwapRspDuoActiveTuner failed: " + errText(a, err));
+                    return false;
+                }
+                device_.tuner = want;
+            } else {
+                // Stopped: the tuner is fixed at SelectDevice, so there is
+                // nothing for it but a release and a re-select.
+                if (!reselectTunerLocked(want)) { return false; }
+            }
+        }
+    }
+    // Everything else has one antenna and accepting its own name is the
+    // DeviceSource contract.
+
+    {
+        std::lock_guard<std::mutex> nlk(nameMutex_);
+        antenna_ = name;
+    }
+    return true;
+}
+
+// --- the switches ---------------------------------------------------------
+
+bool SdrPlaySource::biasTeeSupported() const {
+    switch (hwVer_.load(std::memory_order_relaxed)) {
+        case abi::kRsp1A:
+        case abi::kRsp1B:
+        case abi::kRsp2:
+        case abi::kRspDuo:
+        case abi::kRspDx:
+        case abi::kRspDxR2: return true;
+        default: break;
+    }
+    // The original RSP1 has no bias tee at all.
+    return false;
+}
+
+bool SdrPlaySource::setBiasT(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    const unsigned char hw = hwVer_.load(std::memory_order_relaxed);
+    const unsigned char v = on ? 1 : 0;
+    abi::ReasonForUpdateT reason = abi::Update_None;
+    abi::ReasonForUpdateExt1T ext1 = abi::Update_Ext1_None;
+
+    switch (hw) {
+        case abi::kRsp1A:
+        case abi::kRsp1B:
+            ch->rsp1aTunerParams.biasTEnable = v;
+            reason = abi::Update_Rsp1a_BiasTControl;
+            break;
+        case abi::kRsp2:
+            ch->rsp2TunerParams.biasTEnable = v;
+            reason = abi::Update_Rsp2_BiasTControl;
+            break;
+        case abi::kRspDuo:
+            ch->rspDuoTunerParams.biasTEnable = v;
+            reason = abi::Update_RspDuo_BiasTControl;
+            break;
+        case abi::kRspDx:
+        case abi::kRspDxR2:
+            if (deviceParams_->devParams == nullptr) {
+                setError("no SDRplay device parameters");
+                return false;
+            }
+            deviceParams_->devParams->rspDxParams.biasTEnable = v;
+            ext1 = abi::Update_RspDx_BiasTControl;
+            break;
+        default:
+            setError("this RSP has no bias tee");
+            return false;
+    }
+    if (!updateLocked(reason, ext1, "bias tee change")) { return false; }
+    biasT_.store(on, std::memory_order_relaxed);
+    core::diagLogf("source: SDRplay bias tee %s", on ? "ON" : "off");
+    return true;
+}
+
+bool SdrPlaySource::rfNotchSupported() const {
+    switch (hwVer_.load(std::memory_order_relaxed)) {
+        case abi::kRsp1A:
+        case abi::kRsp1B:
+        case abi::kRsp2:
+        case abi::kRspDuo:
+        case abi::kRspDx:
+        case abi::kRspDxR2: return true;
+        default: break;
+    }
+    return false;
+}
+
+bool SdrPlaySource::setRfNotch(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    const unsigned char hw = hwVer_.load(std::memory_order_relaxed);
+    const unsigned char v = on ? 1 : 0;
+    abi::ReasonForUpdateT reason = abi::Update_None;
+    abi::ReasonForUpdateExt1T ext1 = abi::Update_Ext1_None;
+
+    switch (hw) {
+        case abi::kRsp1A:
+        case abi::kRsp1B:
+            if (deviceParams_->devParams == nullptr) {
+                setError("no SDRplay device parameters");
+                return false;
+            }
+            // NOT in the channel block on an RSP1A/1B: the notch is in front
+            // of the whole front end, so the API puts it in DevParams.
+            deviceParams_->devParams->rsp1aParams.rfNotchEnable = v;
+            reason = abi::Update_Rsp1a_RfNotchControl;
+            break;
+        case abi::kRsp2:
+            ch->rsp2TunerParams.rfNotchEnable = v;
+            reason = abi::Update_Rsp2_RfNotchControl;
+            break;
+        case abi::kRspDuo:
+            ch->rspDuoTunerParams.rfNotchEnable = v;
+            reason = abi::Update_RspDuo_RfNotchControl;
+            break;
+        case abi::kRspDx:
+        case abi::kRspDxR2:
+            if (deviceParams_->devParams == nullptr) {
+                setError("no SDRplay device parameters");
+                return false;
+            }
+            deviceParams_->devParams->rspDxParams.rfNotchEnable = v;
+            ext1 = abi::Update_RspDx_RfNotchControl;
+            break;
+        default:
+            setError("this RSP has no broadcast FM notch");
+            return false;
+    }
+    if (!updateLocked(reason, ext1, "FM notch change")) { return false; }
+    rfNotch_.store(on, std::memory_order_relaxed);
+    return true;
+}
+
+bool SdrPlaySource::dabNotchSupported() const {
+    switch (hwVer_.load(std::memory_order_relaxed)) {
+        case abi::kRsp1A:
+        case abi::kRsp1B:
+        case abi::kRspDuo:
+        case abi::kRspDx:
+        case abi::kRspDxR2: return true;
+        default: break;
+    }
+    // The RSP2 has an FM notch and no DAB one.
+    return false;
+}
+
+bool SdrPlaySource::setDabNotch(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    if (ch == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    const unsigned char hw = hwVer_.load(std::memory_order_relaxed);
+    const unsigned char v = on ? 1 : 0;
+    abi::ReasonForUpdateT reason = abi::Update_None;
+    abi::ReasonForUpdateExt1T ext1 = abi::Update_Ext1_None;
+
+    switch (hw) {
+        case abi::kRsp1A:
+        case abi::kRsp1B:
+            if (deviceParams_->devParams == nullptr) {
+                setError("no SDRplay device parameters");
+                return false;
+            }
+            deviceParams_->devParams->rsp1aParams.rfDabNotchEnable = v;
+            reason = abi::Update_Rsp1a_RfDabNotchControl;
+            break;
+        case abi::kRspDuo:
+            ch->rspDuoTunerParams.rfDabNotchEnable = v;
+            reason = abi::Update_RspDuo_RfDabNotchControl;
+            break;
+        case abi::kRspDx:
+        case abi::kRspDxR2:
+            if (deviceParams_->devParams == nullptr) {
+                setError("no SDRplay device parameters");
+                return false;
+            }
+            deviceParams_->devParams->rspDxParams.rfDabNotchEnable = v;
+            ext1 = abi::Update_RspDx_RfDabNotchControl;
+            break;
+        default:
+            setError("this RSP has no DAB notch");
+            return false;
+    }
+    if (!updateLocked(reason, ext1, "DAB notch change")) { return false; }
+    dabNotch_.store(on, std::memory_order_relaxed);
+    return true;
+}
+
+bool SdrPlaySource::hdrModeSupported() const {
+    const unsigned char hw = hwVer_.load(std::memory_order_relaxed);
+    return hw == abi::kRspDx || hw == abi::kRspDxR2;
+}
+
+bool SdrPlaySource::setHdrMode(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (!hdrModeSupported()) {
+        setError("HDR mode is an RSPdx feature");
+        return false;
+    }
+    if (deviceParams_ == nullptr || deviceParams_->devParams == nullptr) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    deviceParams_->devParams->rspDxParams.hdrEnable = on ? 1 : 0;
+    if (!updateLocked(abi::Update_None, abi::Update_RspDx_HdrEnable, "HDR mode change")) {
+        return false;
+    }
+
+    // THE HDR BANDWIDTH IS THE ONE FIELD WHOSE OFFSET MOVED BETWEEN API
+    // VERSIONS (sdrplay_api_decl.hpp, kRspDxTunerLayoutVersion): at 3.07 and
+    // 3.11 it sits four bytes lower inside the channel block. Writing it
+    // against an older service would land on padding at best and on the
+    // neighbouring member at worst, so below 3.15 we leave the API's own
+    // default (1.7 MHz) alone and say so once.
+    const float ver = apiVersion_.load(std::memory_order_relaxed);
+    if (on && !abi::versionAtLeast(ver, abi::kRspDxTunerLayoutVersion)) {
+        core::diagLogf(
+            "source: SDRplay HDR bandwidth left at the API default - it moved in the parameter "
+            "block after 3.11 and this service reports %.2f",
+            static_cast<double>(ver));
+    } else if (on) {
+        abi::RxChannelParamsT* ch = chParamsLocked();
+        if (ch != nullptr) {
+            ch->rspDxTunerParams.hdrBw = abi::RspDx_HDRMODE_BW_1_700;
+            updateLocked(abi::Update_None, abi::Update_RspDx_HdrBw, "HDR bandwidth change");
+        }
+    }
+
+    hdrMode_.store(on, std::memory_order_relaxed);
+    return true;
+}
+
+// --- health ---------------------------------------------------------------
+
+std::string SdrPlaySource::streamHealthLine() {
+    std::lock_guard<std::mutex> lk(link_->healthMutex);
+    return healthLineLocked(*link_);
+}
+
+void SdrPlaySource::setStreamHealthWindowForTest(std::chrono::milliseconds w) {
+    std::lock_guard<std::mutex> lk(link_->healthMutex);
+    link_->healthWindow = w;
+}
+
+std::uint64_t SdrPlaySource::droppedSamples() const {
+    return link_->dropped.load(std::memory_order_relaxed);
+}
+
+std::uint64_t SdrPlaySource::overloadEvents() const {
+    return link_->overloads.load(std::memory_order_relaxed);
+}
+
+double SdrPlaySource::currentGainDb() const {
+    return link_->currGainDb.load(std::memory_order_relaxed);
+}
+
+bool SdrPlaySource::haveCurrentGainDb() const {
+    return link_->haveGainDb.load(std::memory_order_relaxed);
+}
+
+}  // namespace cascade::source
