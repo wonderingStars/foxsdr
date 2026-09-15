@@ -10,10 +10,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "source/device_source.hpp"
 
 namespace cascade::gui {
 
@@ -478,6 +480,97 @@ inline bool autoReopenDue(bool deadByAbsorbedFault, bool driverAbandoned, bool o
         return false;
     }
     return true;
+}
+
+// --- PREFER THE NATIVE DRIVER, AUTOMATICALLY --------------------------------
+//
+// THE USER HAS TO DO NOTHING. From 0.91.0 FoxSDR has its own RTL-SDR and
+// HackRF drivers - our USB transport, our reader thread, our enumeration (see
+// src/usb/usb_device.hpp for why: every crash report this product received
+// from a USB radio in its first month landed inside somebody else's libusb,
+// on a thread we did not create, behind a vendor module we could not fix).
+// A user whose config says "driver=rtlsdr" saved that before any of it
+// existed, and nobody is going to reopen the Source section to switch over.
+//
+// So the decision is made for them: when the saved source is a SoapySDR
+// device whose driver key names a radio we now drive ourselves, and a native
+// row is present for the SAME DONGLE, the native driver opens instead. The
+// same rule fires when the user clicks a Soapy rtlsdr row in the dropdown
+// while a native row exists for that serial - picking the radio should not
+// also be picking which of two code paths reaches it.
+//
+// WHAT "THE SAME DONGLE" MEANS, and why it is not simply "any RTL-SDR". With
+// two dongles plugged in, a config that says serial=00000002 must not be
+// silently answered with serial=00000001: that is a different antenna on a
+// different band, and the user would have no way to tell what happened. So a
+// saved serial must match. A saved args string with NO serial (the bare
+// "driver=rtlsdr" every hand-written config and most Soapy enumerations
+// produce) names no particular dongle, so the first native row of that driver
+// is the honest answer to it.
+//
+// Serial matching is case-insensitive, and a SUFFIX match counts - the long
+// form of a HackRF serial is 32 hex digits and every tool that prints it
+// prints the tail, so HackRfSource::open takes a suffix and this must agree
+// with it or the rule would point at a device the driver then refuses.
+//
+// Returns nothing when the rule does not apply, which is the common case and
+// is not a failure: a B200, an Airspy, a saved generator, an RTL-SDR whose
+// dongle is unplugged or is still on the DVB-T driver.
+inline bool nativeSerialMatches(const std::string& nativeArgs, const std::string& wantSerial) {
+    const std::string have = cascade::source::argValue(nativeArgs, "serial");
+    if (have.empty() || wantSerial.empty()) { return false; }
+    const auto lower = [](std::string t) {
+        for (char& c : t) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+        return t;
+    };
+    const std::string a = lower(have);
+    const std::string b = lower(wantSerial);
+    if (a == b) { return true; }
+    // Suffix either way: the saved string may be the long form and the
+    // enumerated one the short, or the other way round.
+    if (a.size() > b.size()) { return a.compare(a.size() - b.size(), b.size(), b) == 0; }
+    return b.compare(b.size() - a.size(), a.size(), a) == 0;
+}
+
+inline std::optional<cascade::source::NativeDeviceInfo> preferNativeFor(
+    const std::string& savedKind, const std::string& savedArgs,
+    const std::vector<cascade::source::NativeDeviceInfo>& native) {
+    // Only a SAVED SOAPY DEVICE is upgraded. A saved native device is already
+    // native, and the generator and the IQ file are not radios.
+    if (savedKind != "soapy") { return std::nullopt; }
+    std::string driver = cascade::source::argValue(savedArgs, "driver");
+    for (char& c : driver) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (driver != "rtlsdr" && driver != "hackrf") { return std::nullopt; }
+    const std::string serial = cascade::source::argValue(savedArgs, "serial");
+    const cascade::source::NativeDeviceInfo* first = nullptr;
+    for (const cascade::source::NativeDeviceInfo& d : native) {
+        if (d.driver != driver) { continue; }
+        if (first == nullptr) { first = &d; }
+        if (!serial.empty() && nativeSerialMatches(d.args, serial)) { return d; }
+    }
+    // No serial saved: the first row of that driver IS the device the saved
+    // args named, because the saved args named no particular one.
+    if (serial.empty() && first != nullptr) { return *first; }
+    return std::nullopt;
+}
+
+// THE ONE MESSAGE THE NATIVE OPEN IS ALLOWED TO GIVE UP ON, and it is a real
+// dongle, not a hypothetical: an E4000 or FC0012/13 tuner. RtlSdrSource
+// supports the R820T and the R828D and says so in as many words when it meets
+// anything else. A user on one of those must not be left with a dead Source
+// section when the SoapySDR path they were already using works perfectly -
+// so the prefer-native open falls back to it, and says why.
+//
+// Matched on the distinctive middle of RtlSdrSource's own sentence rather
+// than the whole of it, because the whole of it is wrapped across two source
+// lines and a re-wrap must not silently turn the fallback off. A test pins
+// the two together.
+inline constexpr const char* kTunerUnsupportedMarker = "tuner is not one this driver supports";
+
+inline bool nativeOpenShouldFallBack(const std::string& error) {
+    return error.find(kTunerUnsupportedMarker) != std::string::npos;
 }
 
 }  // namespace cascade::gui

@@ -282,6 +282,54 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ======================================================================
+COMPONENT: libhackrf (USB protocol, ported - nothing linked or shipped)
+======================================================================
+FoxSDR's native HackRF driver (src/source/hackrf_protocol.hpp and
+src/source/hackrf_source.*) speaks the HackRF's USB vendor protocol
+directly, over this product's own WinUSB transport. No part of libhackrf
+is linked into this product and no libhackrf binary is distributed with
+it. What was taken from libhackrf is the PROTOCOL: the vendor request
+numbers, the payload layouts, the sample-rate and baseband-filter
+arithmetic, and the gain step rules - and those were ported into our own
+code. libhackrf's hackrf.c and hackrf.h carry the three-clause BSD notice
+below in their own file banner. (The HackRF repository's COPYING file
+covers the firmware and is a different licence; it does not apply here.)
+See https://github.com/greatscottgadgets/hackrf
+
+Copyright (c) 2012-2026 Great Scott Gadgets <info@greatscottgadgets.com>
+Copyright (c) 2012, Jared Boone <jared@sharebrained.com>
+Copyright (c) 2013, Benjamin Vernoux <titanmkd@gmail.com>
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+    Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+
+    Neither the name of Great Scott Gadgets nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+======================================================================
 COMPONENT: Saira Condensed (typeface, embedded in the executable)
 ======================================================================
 Used unmodified. "Saira" is a Reserved Font Name: any modified version
@@ -499,3 +547,37 @@ copyleft-licensed (GPL/LGPL) and are NOT linked into this product.
 Hardware support beyond the bundled components is provided by SoapySDR
 modules that the user installs separately; those are loaded at runtime
 and are not distributed with this product.
+
+----------------------------------------------------------------------
+THE NATIVE RTL-SDR DRIVER IS AN INDEPENDENT IMPLEMENTATION.
+
+FoxSDR can open an RTL2832U dongle directly, without SoapySDR and
+without libusb, through its own driver (src/source/rtl2832u.*,
+src/source/tuner_r82xx.*, src/source/rtlsdr_source.*) over its own
+WinUSB transport (src/usb/). That code is original to this product and
+is licensed with it.
+
+librtlsdr, and the RTL-SDR Blog fork of it, are GPL-2.0. NO CODE,
+COMMENT, STRUCTURE OR IDENTIFIER FROM EITHER WAS COPIED, and neither is
+linked into this product in any form - not statically, not dynamically,
+and not as a runtime module loaded by this driver.
+
+What those projects WERE used for is documentation. The RTL2832U and
+the Rafael Micro R820T/R828D have no publicly published register map,
+so the only available description of how the silicon behaves - which
+vendor request reaches which block, what the demodulator's
+initialisation values are, how the resampler ratio and the tuner's
+fractional-N PLL are computed, which tracking-filter band applies at
+which frequency, and what each gain step was measured to be worth - is
+the behaviour of the drivers that already speak to it. Those are facts
+about hardware, and facts are not copyrightable. This implementation
+was written from them in this codebase's own style, with its own
+structure and its own comments explaining why each step exists, and is
+verified against the hardware rather than against the reference: see
+tests/test_rtlsdr_source.cpp, which asserts the byte sequences this
+driver puts on the wire, and tests/test_rtlsdr_live.cpp, which measures
+a real dongle.
+
+The same applies to the RTL-SDR Blog V4's upconverter, notch filters
+and input switching, which were described from the behaviour of that
+fork and implemented independently here.

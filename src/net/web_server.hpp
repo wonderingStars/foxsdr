@@ -123,14 +123,20 @@ struct RadioStatus {
     struct SoapyDevice {
         std::string label;
         std::string args;
+        // WHICH DRIVER OPENS THIS ROW: "soapy", "rtlsdr" or "hackrf". The
+        // list is no longer all SoapySDR - a native RTL-SDR and the same
+        // dongle through a vendor module can both be in it, with the same
+        // serial in both args - so the row has to carry the kind or the
+        // browser cannot say which of the two it is asking for.
+        std::string kind = "soapy";
     };
     struct GainStage {
         std::string name;
         double db = 0.0;
     };
 
-    std::string sourceKind = "siggen";   // "siggen" | "file" | "soapy"
-    std::string soapyArgs;               // kwargs of the open device, if any
+    std::string sourceKind = "siggen";  // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"
+    std::string soapyArgs;               // args of the open device, if any
     std::string antenna;                 // RX port the DRIVER reports
     std::vector<std::string> antennas;   // ports it offers
     std::vector<SoapyDevice> devices;    // last enumeration, empty until asked

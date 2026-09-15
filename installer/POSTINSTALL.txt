@@ -24,12 +24,38 @@ caches and logs first" - which is off unless you tick it, so an upgrade
 keeps everything. Uninstalling ASKS whether to remove those two folders;
 answer No to keep them for a future install.
 
-RADIO HARDWARE SUPPORT (SoapySDR vendor modules)
-------------------------------------------------
-Hardware support arrives through SoapySDR vendor modules, which are
-separate binaries loaded at runtime — this installer deliberately does
-not bundle any. If you have a USRP (B200 etc.), RTL-SDR, HackRF, Airspy,
-LimeSDR or similar, install ONE of:
+RTL-SDR AND HACKRF: NOTHING TO INSTALL
+---------------------------------------
+From 0.91.0 FoxSDR drives these two itself. There is no SoapySDR
+install, no PothosSDR, no radioconda and no vendor DLL anywhere in the
+path: FoxSDR talks to the dongle over WinUSB, with its own driver, its
+own reader thread and its own device enumeration.
+
+The one thing Windows still requires is that the dongle is bound to
+WinUSB, which every SDR application needs and which the next section
+describes. Once it is, the radio appears in the Source dropdown labelled
+"(native)" and opens straight away.
+
+If you were already using an RTL-SDR or a HackRF through SoapySDR,
+FoxSDR will open it natively from now on WITHOUT being asked and will
+say so in its log ("opening ... natively"). Nothing needs changing and
+nothing is lost: a dongle with an E4000 or FC0012/13 tuner, which the
+native driver does not support, falls back to the SoapySDR path exactly
+as before and says why.
+
+To check the native path from a command prompt:
+
+  "C:\Program Files\FoxSDR\cascade.exe" --rtlsdr-check
+
+which prints what is bound to WinUSB, which tuner answered, the gain
+ranges it offers, and how many samples arrived in three seconds.
+
+EVERY OTHER RADIO (SoapySDR vendor modules)
+--------------------------------------------
+Support for anything else arrives through SoapySDR vendor modules, which
+are separate binaries loaded at runtime — this installer deliberately
+does not bundle any. If you have a USRP (B200 etc.), Airspy, LimeSDR or
+similar, install ONE of:
 
   * PothosSDR   — https://downloads.myriadrf.org/builds/PothosSDR/
   * radioconda  — https://github.com/ryanvolz/radioconda
@@ -50,10 +76,11 @@ though a value you set is still honoured and still takes precedence.)
 
 RTL-SDR DONGLES NEED ONE EXTRA STEP ON WINDOWS
 -----------------------------------------------
-Windows binds RTL dongles to its DVB-T television driver by default, and
-under that driver the dongle is invisible to EVERY SDR application, not
-just this one. To use it for SDR you must replace that driver with
-WinUSB:
+This is the step that applies whichever way you reach the dongle —
+FoxSDR's own driver or a SoapySDR module. Windows binds RTL dongles to
+its DVB-T television driver by default, and under that driver the dongle
+is invisible to EVERY SDR application, not just this one. To use it for
+SDR you must replace that driver with WinUSB:
 
   1. Download Zadig from https://zadig.akeo.ie (no installation needed).
   2. Plug the dongle in and run Zadig.
@@ -66,7 +93,9 @@ WinUSB:
 You only do this once per dongle per machine. In Device Manager, a dongle
 that still needs this shows as "Bulk-In, Interface" with a yellow warning
 triangle (problem code 28, "The drivers for this device are not
-installed").
+installed"). FoxSDR's Source section names such a dongle by model and
+tells you the same thing, rather than leaving it missing from the list
+with no explanation.
 
 This step is not something FoxSDR can do for you: it changes a system
 driver binding and needs administrator rights.

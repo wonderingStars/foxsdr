@@ -351,7 +351,17 @@ int main() {
             CHECK(!src.setAntenna("RX2"));
             CHECK(src.listGainNames().empty());
             CHECK(src.listAntennas().empty());
-            CHECK(src.antenna().empty());
+            // antennaReadback() is the one that asks the driver; antenna()
+            // has answered from the cache since 0.91.0 (SoapySource is a
+            // DeviceSource now, and the panel reads it every frame - see the
+            // class comment for why a const getter may not enter the vendor
+            // stack). The cached value SURVIVES the fault deliberately: the
+            // last port the driver confirmed is what the radio was listening
+            // on when it died, and blanking it would leave the panel less
+            // able to describe the failure, not more. What must not happen is
+            // a CALL, and the g_driverCalls check below is what proves it.
+            CHECK(src.antennaReadback().empty());
+            CHECK(src.antenna() == "RX");  // the fake device boots on RX
             src.stop();
             CHECK(g_driverCalls == callsBefore);
 

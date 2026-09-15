@@ -301,12 +301,57 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // device and every later call on the same path is skipped rather than
 // attempted (see abandonWedgedDriverLocked).
 //
+// THREE SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
+// NOW THAT THE APPLICATION OPENS THEM (0.91.0, and the reason has changed
+// completely from the one the rows carried before).
+//
+// Until 0.91.0 every row below the Soapy block read "nothing constructs one
+// yet", and the notes both driver agents left said that wiring the drivers in
+// would make those rows 1 and raise the budget. The first half happened; the
+// second half is WRONG, and the arithmetic says why.
+//
+// EXACTLY ONE SOURCE IS INSTALLED IN THE PIPELINE AT A TIME.
+// Pipeline::stop() stops `active_`, which is one object: the generator, an
+// IQ file, a SoapySource, an RtlSdrSource or a HackRfSource. A device switch
+// destroys the old source before the new one is constructed
+// (AppWindow::selectSource, close-first, adjudicated fix #3 for the 0.62.0
+// field crashes), so no teardown can ever wait on two of these paths. What
+// the budget must cover is therefore the WORST ONE, not their sum:
+//
+//   SoapySource      kControlLockWait 1500 + kVendorCallWait 1500      = 3000 ms
+//   RtlSdrSource     kReaderJoinWait  1000 + kDeviceLockWait   750
+//                    + usb kAbortDrainWait 250                         = 2000 ms
+//   HackRfSource     hackrf kControlTimeout 100 (transceiver off)
+//                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1350 ms
+//
+// Soapy's 3000 ms is the worst and is the pair charged in the table above, so
+// kShutdownBoundedWaitsMs stays at 7000 (3000 + kSourceJoinWait 3000 + the
+// GPS reader's kOpenAbandonWait 1000) and the native rows stay at zero - not
+// because nothing constructs them, which is no longer true, but because what
+// they cost is spent INSTEAD OF the 3000 already charged, never as well as
+// it. Charging them too would declare a 9350 ms budget for a teardown that
+// can only ever spend 3000 of it on a source, and a budget inflated past what
+// the product can actually do is a guard that has stopped guarding.
+//
+// WHEN THIS HAS TO BE RE-DERIVED, and it is not optional:
+//   - any of the seven constants above changing value;
+//   - a native path growing a wait, which makes its column longer and could
+//     take it past Soapy's 3000 - at which point the CHARGED row moves to
+//     that driver and the Soapy pair becomes the zero;
+//   - two sources ever being able to exist across one teardown (a second
+//     receiver, a source that is torn down asynchronously), which would make
+//     the sum the right arithmetic after all.
+// The scan below still fails on an unknown wait, so a new constant cannot
+// slip past; what it cannot do is notice that one of these columns got
+// longer than another. That is what this note is for.
+//
 // RESIDUAL, stated because it is invisible from the arithmetic: the same
 // lock-then-vendor-call pair composes AGAIN in ~SoapySource -> closeDevice()
 // (closeStream, then unmake). That runs from ~AppWindow, which main() reaches
 // only after run() has returned - i.e. after watchdog_.stop() - so it is not
 // inside this budget and not watched at all. It is out of scope here; it is
-// not out of scope for the product.
+// not out of scope for the product. The native drivers' destructors call
+// closeDevice() from the same place and are outside it for the same reason.
 struct KnownWait {
     const char* file;
     const char* name;
@@ -331,6 +376,70 @@ const KnownWait kKnownWaits[] = {
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},
+
+    // THE NATIVE HACKRF DRIVER, WHICH THE APPLICATION DOES NOW OPEN (0.91.0).
+    // The rows are still zero and the reason is the mutual exclusion argued
+    // above, not absence: a HackRF teardown costs 100 + 1000 + 250 = 1350 ms
+    // and is spent INSTEAD OF the Soapy pair's 3000, never as well as it,
+    // because exactly one source is installed at a time.
+    {"src/source/hackrf_protocol.hpp", "kControlTimeout", 0,
+     "the HackRF's per-control-transfer bound (libhackrf's DEFAULT_REQUEST_TIMEOUT). ONE of "
+     "these is on the teardown path - the transceiver-off in stopStreamingLocked() - and it "
+     "is the first 100 ms of the 1350 ms HackRF column, which is covered by the 3000 ms "
+     "Soapy column already charged"},
+    {"src/source/hackrf_source.hpp", "kBulkReadWait", 0,
+     "how long the HackRF reader thread blocks for one bulk transfer. Spent on the reader's "
+     "OWN thread; it is what bounds how long that thread takes to notice it has been asked "
+     "to stop, not a wait the teardown performs"},
+    {"src/source/hackrf_source.hpp", "kReadWait", 0,
+     "HackRfSource::read()'s wait for samples, spent on the pipeline's source thread, which "
+     "the teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI "
+     "teardown thread"},
+    {"src/source/hackrf_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in HackRfSource::stopStreamingLocked(), and the bulk of that 1350 ms "
+     "column. Zero because a HackRF teardown REPLACES the Soapy one rather than adding to "
+     "it; if this or kControlTimeout ever grows past 3000 ms in total, this is the row that "
+     "becomes the 1 and the Soapy pair that becomes the zero"},
+    {"src/source/hackrf_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the HackRF reader's tally window before it writes its stream-health "
+     "line, matching SoapySource's; nothing sleeps or blocks on it"},
+
+    // THE NATIVE RTL-SDR DRIVER, WHICH THE APPLICATION DOES NOW OPEN (0.91.0)
+    // - and which the prefer-native rule makes the DEFAULT way an RTL-SDR is
+    // reached, so this is the column most users' teardowns actually spend.
+    // The arithmetic the previous note worked out in advance is confirmed and
+    // its conclusion stands: kReaderJoinWait 1000 + kDeviceLockWait 750 +
+    // usb kAbortDrainWait 250 = 2000 ms, spent INSTEAD OF the Soapy pair's
+    // 3000 ms rather than as well as it, because exactly one source is
+    // installed at a time (see the composition note above the table). The
+    // budget is an upper bound and does not move.
+    {"src/source/rtlsdr_source.cpp", "kDeviceLockWait", 0,
+     "the wait for the RTL-SDR's device lock, spent once in stop() after the reader join. "
+     "The middle 750 ms of the 2000 ms RTL-SDR column, which is spent INSTEAD OF "
+     "SoapySource's kControlLockWait + kVendorCallWait, not as well as them"},
+    {"src/source/rtlsdr_source.cpp", "kControlTimeout", 0,
+     "the RTL2832U's per-control-transfer bound. Spent inside a call that already holds the "
+     "device lock, so it is covered by kDeviceLockWait rather than added to it"},
+    {"src/source/rtlsdr_source.cpp", "kBulkReadTimeout", 0,
+     "one bulk read in the RTL-SDR reader loop, spent on the reader's own thread; it is what "
+     "bounds how long that thread can hold the device lock, not a wait the teardown performs"},
+    {"src/source/rtlsdr_source.cpp", "kReaderJoinWait", 0,
+     "the bounded wait in RtlSdrSource::stop() before the reader thread is ABANDONED, and "
+     "the first 1000 ms of the 2000 ms RTL-SDR column. Zero because that column REPLACES "
+     "the 3000 ms Soapy one rather than adding to it; if it ever grows past 3000 ms, this "
+     "is the row that becomes the 1"},
+    {"src/source/rtlsdr_source.cpp", "kReadPollBudget", 0,
+     "RtlSdrSource::read() polling its ring for samples. Spent on the PIPELINE's source "
+     "thread, which the teardown already waits for through kSourceJoinWait's 3000 ms - never "
+     "on the GUI teardown thread"},
+    {"src/source/rtlsdr_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the RTL-SDR reader's tally window before it writes its stream-health "
+     "line, matching SoapySource's; nothing sleeps or blocks on it"},
+    {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
+     "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "
+     "same bound a cancelled control transfer is given. The last 250 ms of either native "
+     "column, and both of those are spent instead of the Soapy pair rather than as well as "
+     "it; measured at 0.1 - 0.4 ms on the bench dongle"},
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {

@@ -50,6 +50,16 @@
 // engineer who was not there can act on. See core/crash_handler.hpp for which
 // four registrations are made and why one filter was never enough.
 // ---------------------------------------------------------------------------
+// --rtlsdr-check, defined in src/source/rtlsdr_check.cpp. Declared here
+// rather than given a header of its own for the same reason the console
+// modes below are written inline: it is one entry point with one caller,
+// and a header would exist only to be included once. OUTSIDE the anonymous
+// namespace, because inside it this declares a different, internal-linkage
+// function and the link fails with the real one unreferenced - which is
+// exactly what it did. Global scope, not cascade::source, because it IS a
+// main: (argc, argv) in, process exit code out.
+int rtlsdrCheckMain(int argc, char** argv);
+
 namespace {
 
 // WHEN DIAGNOSTICS TOUCH THE DISK, and it is deliberately narrow.
@@ -946,6 +956,7 @@ int main(int argc, char** argv) {
     int diagToggle = 0;
     bool selftest = false;
     bool soapyCheck = false;
+    bool rtlsdrCheck = false;
     bool recordCheck = false;
     bool toneCheck = false;
     double rdsCheckMhz = 0.0;
@@ -1022,6 +1033,17 @@ int main(int argc, char** argv) {
             // string on purpose — it requires attached hardware, so
             // advertising it in CI-facing help would only invite red herrings.
             soapyCheck = true;
+        } else if (std::strcmp(argv[i], "--rtlsdr-check") == 0) {
+            // The native counterpart to --soapy-check, and hidden for the
+            // same reason: it needs a dongle bound to WinUSB, so advertising
+            // it in CI-facing help would only invite red herrings. What it
+            // answers is the one question the suite cannot - the register
+            // sequences are proven against a fake, and whether THIS machine's
+            // dongle enumerates, opens, answers its tuner probe and delivers
+            // samples is a question only a run against it can settle. See
+            // source/rtlsdr_check.cpp; exit 0 means samples arrived and were
+            // neither silent nor saturated.
+            rtlsdrCheck = true;
         } else if (std::strcmp(argv[i], "--record-check") == 0) {
             // Hidden bench diagnostic (see runRecordCheck): same policy as
             // --soapy-check — kept out of the usage string because its
@@ -1099,6 +1121,9 @@ int main(int argc, char** argv) {
     // hardware bench check, which is likewise headless.
     if (selftest) { return runSelftest(); }
     if (soapyCheck) { return runSoapyCheck(); }
+    // Headless like the rest of them, and it takes the remaining command line
+    // so a second argument can name which dongle ("serial=00000001").
+    if (rtlsdrCheck) { return rtlsdrCheckMain(argc, argv); }
     if (recordCheck) { return runRecordCheck(); }
     if (toneCheck) { return runToneCheck(); }
     if (rdsCheckMhz > 0.0) { return runRdsCheck(rdsCheckMhz * 1.0e6); }

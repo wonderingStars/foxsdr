@@ -35,6 +35,17 @@ namespace cascade::source {
 
 namespace {
 
+// The driver key the args named, lower-cased, or "soapy" when they named
+// none. Lower-cased because it is compared against the native drivers' own
+// keys ("rtlsdr", "hackrf"), which are lower-case by construction, and a
+// hand-typed "driver=RTLSDR" in a config is the same radio.
+std::string driverKeyFromArgs(const std::string& args) {
+    std::string key = cascade::source::argValue(args, "driver");
+    if (key.empty()) { return "soapy"; }
+    for (char& c : key) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    return key;
+}
+
 // cascade is a single-VFO receiver front end: it always streams RX channel 0.
 // Multi-channel devices (B210 etc.) still work — they just expose one chain.
 constexpr std::size_t kChannel = 0;
@@ -611,6 +622,18 @@ bool SoapySource::open(const std::string& args) {
         double rangeLoHz = 0.0;
         double rangeHiHz = -1.0;
         std::string label;
+        // WHAT THE DeviceSource ACCESSORS WILL ANSWER FROM, interrogated here
+        // because this is the one moment a vendor call is already expected to
+        // cost seconds and is already guarded. Every one of these queries is
+        // ADVISORY in the same sense the frequency range is: a driver that
+        // cannot answer one leaves it empty and the panel does without it,
+        // rather than the whole open failing over a question about a slider.
+        std::vector<GainInfo> gains;
+        std::vector<double> gainDb;
+        std::vector<std::string> antennas;
+        std::string antenna;
+        std::vector<double> rates;
+        bool autoGainSupported = false;
     } o{this, &args};
 
     const bool completed = guardedVendorCall([&o]() noexcept {
@@ -664,6 +687,45 @@ bool SoapySource::open(const std::string& args) {
                 // Left at the "no range" defaults.
             }
 
+            // THE PANEL'S OWN INTERROGATION, each part in its own try so one
+            // unanswerable question cannot cost the others - a driver that
+            // throws from getGainRange must still yield its antenna list.
+            try {
+                for (const std::string& g : s->link_->dev->listGains(SOAPY_SDR_RX, kChannel)) {
+                    GainInfo info;
+                    info.name = g;
+                    const SoapySDR::Range r = s->link_->dev->getGainRange(SOAPY_SDR_RX, kChannel, g);
+                    info.minDb = r.minimum();
+                    info.maxDb = r.maximum();
+                    // Soapy reports 0 for "continuous"; the panel's slider
+                    // wants a step it can actually move by, and 0.1 dB is
+                    // finer than any driver's own resolution.
+                    info.stepDb = r.step() > 0.0 ? r.step() : 0.1;
+                    o.gains.push_back(std::move(info));
+                    o.gainDb.push_back(s->link_->dev->getGain(SOAPY_SDR_RX, kChannel, g));
+                }
+            } catch (...) {
+                o.gains.clear();
+                o.gainDb.clear();
+            }
+            try {
+                o.autoGainSupported = s->link_->dev->hasGainMode(SOAPY_SDR_RX, kChannel);
+            } catch (...) {
+                o.autoGainSupported = false;
+            }
+            try {
+                o.antennas = s->link_->dev->listAntennas(SOAPY_SDR_RX, kChannel);
+                o.antenna = s->link_->dev->getAntenna(SOAPY_SDR_RX, kChannel);
+            } catch (...) {
+                o.antennas.clear();
+                o.antenna.clear();
+            }
+            try {
+                o.rates = s->link_->dev->listSampleRates(SOAPY_SDR_RX, kChannel);
+            } catch (...) {
+                o.rates.clear();
+            }
+
             o.label = s->link_->dev->getHardwareKey();
             if (o.label.empty()) {
                 o.label = s->link_->dev->getDriverKey();
@@ -699,6 +761,25 @@ bool SoapySource::open(const std::string& args) {
             centerFrequencyHz_.store(o.freqHz, std::memory_order_relaxed);
             rangeLoHz_.store(o.rangeLoHz, std::memory_order_relaxed);
             rangeHiHz_.store(o.rangeHiHz, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lk(infoMutex_);
+                gainInfo_ = std::move(o.gains);
+                gainDb_ = std::move(o.gainDb);
+                antennas_ = std::move(o.antennas);
+                antenna_ = std::move(o.antenna);
+                // ASCENDING, and the fallback stated rather than left to an
+                // empty combo. UHD answers listSampleRates with nothing at
+                // all - a B200 takes any rate its master clock divides to, so
+                // there is no list to give - and a Rate control with no rows
+                // in it would be a regression on every device that has always
+                // shown 1/2/4/8.
+                rates_ = std::move(o.rates);
+                std::sort(rates_.begin(), rates_.end());
+                if (rates_.empty()) { rates_ = {1.0e6, 2.0e6, 4.0e6, 8.0e6}; }
+                autoGainSupported_ = o.autoGainSupported;
+                autoGain_ = false;
+                driverKey_ = driverKeyFromArgs(args);
+            }
             {
                 std::lock_guard<std::mutex> lk(errorMutex_);
                 name_ = "SoapySDR: " + o.label;
@@ -882,10 +963,26 @@ void SoapySource::clearDeviceStateLocked(bool deviceReleased) noexcept {
     // mismatch notice.
     rangeLoHz_.store(0.0, std::memory_order_relaxed);
     rangeHiHz_.store(-1.0, std::memory_order_relaxed);
+    // ...and everything else that described a device this object no longer
+    // has. A stale gain range or antenna list surviving a close would be
+    // drawn by the panel against whatever is open next.
+    clearDeviceInfo();
     {
         std::lock_guard<std::mutex> lk(errorMutex_);
         name_ = kNoDeviceName;
     }
+}
+
+void SoapySource::clearDeviceInfo() noexcept {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    gainInfo_.clear();
+    gainDb_.clear();
+    antennas_.clear();
+    antenna_.clear();
+    rates_.clear();
+    autoGainSupported_ = false;
+    autoGain_ = false;
+    driverKey_ = "soapy";
 }
 
 void SoapySource::abandonDeviceLocked() noexcept {
@@ -1778,6 +1875,56 @@ bool SoapySource::frequencyRangeHz(double& loHz, double& hiHz) const {
     return true;
 }
 
+// --- the DeviceSource accessors, all from the cache -------------------------
+//
+// None of these takes the device lock and none of them makes a vendor call:
+// see the class comment in the header. They are what the Source panel reads
+// on every frame it draws, and a per-frame draw must never be able to reach
+// libusb, time out, or condemn a radio.
+
+const char* SoapySource::driverKey() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return driverKey_.c_str();
+}
+
+std::vector<GainInfo> SoapySource::gains() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return gainInfo_;
+}
+
+double SoapySource::gainDb(const std::string& name) const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    for (std::size_t i = 0; i < gainInfo_.size() && i < gainDb_.size(); ++i) {
+        if (gainInfo_[i].name == name) { return gainDb_[i]; }
+    }
+    return 0.0;
+}
+
+bool SoapySource::autoGainSupported() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return autoGainSupported_;
+}
+
+bool SoapySource::autoGain() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return autoGain_;
+}
+
+std::vector<std::string> SoapySource::antennas() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return antennas_;
+}
+
+std::string SoapySource::antenna() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return antenna_;
+}
+
+std::vector<double> SoapySource::supportedSampleRatesHz() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return rates_;
+}
+
 std::vector<std::string> SoapySource::listGainNames() {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
@@ -1821,13 +1968,26 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
         SoapySource* self;
         const std::string* name;
         double db;
+        // WHAT THE DRIVER ACTUALLY TOOK, read straight back inside the same
+        // guarded body. Soapy clamps silently, and a panel that shows the
+        // request rather than the readback claims a gain the radio never had -
+        // the same lie the antenna combo was fixed for. Seeded with the
+        // request so a driver that cannot answer getGain still leaves
+        // something coherent behind.
+        double readback;
         bool threw = false;
         std::string message;
-    } g{this, &name, db};
+    } g{this, &name, db, db};
 
     const bool completed = guardedVendorCall([&g]() noexcept {
         try {
             g.self->link_->dev->setGain(SOAPY_SDR_RX, kChannel, *g.name, g.db);
+            try {
+                g.readback = g.self->link_->dev->getGain(SOAPY_SDR_RX, kChannel, *g.name);
+            } catch (...) {
+                // Left at the request: an unanswerable readback must not fail
+                // a set the driver accepted.
+            }
         } catch (const std::exception& e) {
             g.threw = true;
             g.message = describe(e, "setGain failed");
@@ -1845,6 +2005,12 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
     if (g.threw) {
         setError(std::move(g.message));
         return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(infoMutex_);
+        for (std::size_t i = 0; i < gainInfo_.size() && i < gainDb_.size(); ++i) {
+            if (gainInfo_[i].name == name) { gainDb_[i] = g.readback; }
+        }
     }
     return true;
 }
@@ -1897,7 +2063,21 @@ bool SoapySource::setAutoGain(bool on) {
         // Distinct from a driver fault: the hardware simply has no AGC, and
         // the GUI uses this to grey out the checkbox.
         setError("device has no automatic gain mode");
+        // ...and it is recorded, because autoGainSupported() answers from
+        // here: the probe at open() may say a device HAS a gain mode and this
+        // call is the one that finds out otherwise. AppWindow has always used
+        // the return of setAutoGain(false) as the probe; now both agree.
+        {
+            std::lock_guard<std::mutex> lk(infoMutex_);
+            autoGainSupported_ = false;
+            autoGain_ = false;
+        }
         return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(infoMutex_);
+        autoGainSupported_ = true;
+        autoGain_ = on;
     }
     return true;
 }
@@ -1960,6 +2140,9 @@ bool SoapySource::setAntenna(const std::string& name) {
         SoapySource* self;
         const std::string* name;
         bool known = false;
+        // What the driver reports AFTER the change, read back inside the same
+        // guarded body so antenna() answers the hardware and not the request.
+        std::string readback;
         bool threw = false;
         std::string message;
     } p{this, &name};
@@ -1977,6 +2160,7 @@ bool SoapySource::setAntenna(const std::string& name) {
             }
             p.known = true;
             p.self->link_->dev->setAntenna(SOAPY_SDR_RX, kChannel, *p.name);
+            p.readback = p.self->link_->dev->getAntenna(SOAPY_SDR_RX, kChannel);
         } catch (const std::exception& e) {
             p.threw = true;
             p.message = describe(e, "setAntenna failed");
@@ -1997,10 +2181,14 @@ bool SoapySource::setAntenna(const std::string& name) {
         setError("device has no RX antenna called \"" + name + "\"");
         return false;
     }
+    {
+        std::lock_guard<std::mutex> lk(infoMutex_);
+        antenna_ = p.readback.empty() ? name : p.readback;
+    }
     return true;
 }
 
-std::string SoapySource::antenna() {
+std::string SoapySource::antennaReadback() {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
@@ -2037,6 +2225,10 @@ std::string SoapySource::antenna() {
     if (w.threw) {
         setError(std::move(w.message));
         return {};
+    }
+    {
+        std::lock_guard<std::mutex> lk(infoMutex_);
+        antenna_ = w.out;
     }
     return std::move(w.out);
 }

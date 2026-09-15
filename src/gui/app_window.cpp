@@ -94,7 +94,7 @@ namespace {
 // close. Templated only so it can live here, at file scope, without naming
 // AppWindow's private result type.
 template <typename Fut>
-void drainSoapyOpen(Fut& f) {
+void drainDeviceOpen(Fut& f) {
     try {
         auto r = f.get();
         (void)r;  // destroyed here; ~SoapySource releases the handle
@@ -105,7 +105,7 @@ void drainSoapyOpen(Fut& f) {
     }
 }
 
-// The scan's equivalent, and it is deliberately NOT drainSoapyOpen. That one
+// The scan's equivalent, and it is deliberately NOT drainDeviceOpen. That one
 // exists to CLOSE a device — the result owns the SoapySource. A scan result
 // owns nothing but an enumeration list of strings, so there is no handle at
 // stake and this drain has exactly one job: let the future's blocking
@@ -399,7 +399,7 @@ void applyWindowIcon(GLFWwindow* window) {
 // code path, so any difference is a real user-visible change, never noise.
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
-           a.soapyAntenna == b.soapyAntenna &&
+           a.nativeArgs == b.nativeArgs && a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
@@ -575,6 +575,37 @@ int nearestIndex(const double* arr, int n, double x) {
         if (std::fabs(arr[i] - x) < std::fabs(arr[best] - x)) { best = i; }
     }
     return best;
+}
+
+// The same for a device's own rate list, which is what the Rate combo shows
+// now - twelve rows on an RTL-SDR, ten on a HackRF, four on a Soapy driver
+// that reports none. Empty answers 0, which is the "no selection" the combo
+// draws as blank rather than reading past the end of a vector.
+int nearestIndex(const std::vector<double>& v, double x) {
+    if (v.empty()) { return 0; }
+    return nearestIndex(v.data(), static_cast<int>(v.size()), x);
+}
+
+// A NATIVE radio's MODEL WITH NO SERIAL IN IT, for the log, the crash context
+// and the scan-gate caption - the rule every diagnostic line in this file
+// keeps. core::sanitiseDevice does the job for a SoapySDR kwargs string (its
+// allow list is driver/product/type, so a serial can never survive it), but a
+// native row's args are nothing but "serial=00000001" and sanitising them
+// leaves an empty string. The model has to come out of the LABEL instead,
+// which is the bus-reported description with the serial appended in brackets.
+std::string modelFromNativeLabel(const std::string& label) {
+    const std::size_t at = label.find(" (serial ");
+    return at == std::string::npos ? label : label.substr(0, at);
+}
+
+// "2.400 MS/s" - three decimals because the rates that differ do so in the
+// third (2.048 against 2.160 against 2.400 on an RTL-SDR), and a menu that
+// showed "2.0", "2.2" and "2.4" for those would be a menu with two rows a
+// user cannot tell apart.
+std::string rateLabel(double hz) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.3f MS/s", hz / 1.0e6);
+    return buf;
 }
 
 // WHAT THE TARGET IS, in the vocabulary buildTrackDetailLines reads it in.
@@ -829,8 +860,8 @@ AppWindow::~AppWindow() {
     updateCancel_.store(true, std::memory_order_relaxed);
 
     // Same problem, no cancel to reach for: a device open may still be inside
-    // SoapySDR::Device::make(). See reapPendingSoapyOpen for the semantics.
-    reapPendingSoapyOpen();
+    // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
+    reapPendingDeviceOpen();
 
     // The GPS reader's thread, if a read is still running when the window is
     // destroyed without run()'s teardown (a failed backend init, a test that
@@ -1561,10 +1592,13 @@ void AppWindow::refreshDiagContext() {
     ctx.mode = kModeNames[modeIndex_];
     ctx.sourceKind = sourceKind_;
     ctx.sampleRateHz = pipeline_.activeSource().sampleRateHz();
-    ctx.deviceOpen = (sourceKind_ == "soapy");
+    // ANY RADIO, not just a Soapy one: what this flag tells a report reader
+    // is whether third-party or USB driver code was live in the process, and
+    // a native driver is as much a device open as a vendor module is.
+    ctx.deviceOpen = (device_ != nullptr);
     // MODEL ONLY - sanitiseDevice strips the serial, exactly as the usage
     // report does. A report is a support artefact, not a hardware fingerprint.
-    ctx.sdrModel = cascade::core::sanitiseDevice(soapyArgs_);
+    ctx.sdrModel = deviceModel_;
     std::size_t loaded = 0;
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
@@ -1578,7 +1612,7 @@ void AppWindow::refreshDiagContext() {
     // times a second for a table that changes a handful of times a session.
     // This covers the plugins; the OTHER thing that maps code into this
     // process after start-up is a device open, and that has its own refresh
-    // where the open completes (pollSoapyAsync) - a device open changes no
+    // where the open completes (pollSourceAsync) - a device open changes no
     // plugin count, so this test cannot see it.
     if (loaded != diagPluginCount_) {
         diagPluginCount_ = loaded;
@@ -2440,7 +2474,7 @@ void AppWindow::drawUi() {
 
     // Apply any finished SoapySDR scan/open. Last in the frame so the result
     // lands before the next draw reads the device list.
-    pollSoapyAsync();
+    pollSourceAsync();
     // ...and, once per frame, the one automatic reopen a radio whose driver
     // faulted gets (0.90.1). After the poll above, so a reopen that just
     // resolved is seen before this asks whether another is due.
@@ -3100,27 +3134,27 @@ void AppWindow::drawStatusColumn() {
         int n = 0;
         std::snprintf(l0, sizeof(l0), "%s", pipeline_.activeSource().name());
         lines[n++] = {l0, cascade::gui::theme::kCream};
-        if (soapy_ != nullptr && !soapyAntenna_.empty()) {
-            std::snprintf(l1, sizeof(l1), "ANTENNA %s", soapyAntenna_.c_str());
+        if (device_ != nullptr && !deviceAntenna_.empty()) {
+            std::snprintf(l1, sizeof(l1), "ANTENNA %s", deviceAntenna_.c_str());
             lines[n++] = {l1, cascade::gui::theme::kCream};
         }
         l2[0] = '\0';
-        if (soapy_ != nullptr) {
-            if (soapyAgc_) {
+        if (device_ != nullptr) {
+            if (deviceAgc_) {
                 std::snprintf(l2, sizeof(l2), "GAIN AUTO - AGC ON");
-            } else if (!soapyGainNames_.empty() &&
-                       soapyGainsDb_.size() == soapyGainNames_.size()) {
+            } else if (!deviceGainNames_.empty() &&
+                       deviceGainsDb_.size() == deviceGainNames_.size()) {
                 // The first element by name, and a count of the rest. Summing
                 // them would print a total this application never commanded and
                 // the driver never reported.
-                if (soapyGainNames_.size() == 1) {
-                    std::snprintf(l2, sizeof(l2), "%s %.0f dB", soapyGainNames_[0].c_str(),
-                                  static_cast<double>(soapyGainsDb_[0]));
+                if (deviceGainNames_.size() == 1) {
+                    std::snprintf(l2, sizeof(l2), "%s %.0f dB", deviceGainNames_[0].c_str(),
+                                  static_cast<double>(deviceGainsDb_[0]));
                 } else {
                     std::snprintf(l2, sizeof(l2), "%s %.0f dB +%zu more",
-                                  soapyGainNames_[0].c_str(),
-                                  static_cast<double>(soapyGainsDb_[0]),
-                                  soapyGainNames_.size() - 1);
+                                  deviceGainNames_[0].c_str(),
+                                  static_cast<double>(deviceGainsDb_[0]),
+                                  deviceGainNames_.size() - 1);
                 }
             }
             if (l2[0] != '\0') { lines[n++] = {l2, cascade::gui::theme::kCream}; }
@@ -5196,10 +5230,19 @@ void AppWindow::drawSourceSection() {
 
     // Row label for a combo index; -1 (active device dropped by a Refresh)
     // falls back to the live source name so the preview is never a lie.
+    //
+    // NATIVE ROWS COME FIRST, immediately under the generator and the IQ
+    // file, and Soapy's rows follow them. Not a cosmetic ordering: with both
+    // present the native driver is the one this product can be held
+    // responsible for, and the list is read top-down.
     const auto rowLabel = [this](int idx) -> const char* {
         if (idx == 0) { return "Signal generator"; }
         if (idx == 1) { return "IQ file"; }
-        const int d = idx - 2;
+        const int n = idx - kNativeRowBase;
+        if (n >= 0 && n < static_cast<int>(nativeRowLabels_.size())) {
+            return nativeRowLabels_[static_cast<std::size_t>(n)].c_str();
+        }
+        const int d = idx - soapyRowBase();
         if (d >= 0 && d < static_cast<int>(soapyDevices_.size())) {
             return soapyDevices_[static_cast<std::size_t>(d)].label.c_str();
         }
@@ -5217,23 +5260,33 @@ void AppWindow::drawSourceSection() {
         ImGui::TextWrapped("Reconnect it and pick the source again, or switch to the signal generator.");
     }
 
-    const bool soapyBusy = soapyScanPending_ || soapyOpenPending_;
+    const bool soapyBusy = soapyScanPending_ || deviceOpenPending_;
     if (soapyBusy) {
         ImGui::TextColored(cascade::gui::theme::warning(), "%s",
-                           soapyOpenPending_
-                               ? ("Opening " + soapyBusyLabel_ + "...").c_str()
+                           deviceOpenPending_
+                               ? ("Opening " + deviceBusyLabel_ + "...").c_str()
                                : "Scanning for devices...");
     }
     ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::BeginCombo("##source_select", rowLabel(sourceSel_))) {
-        // Lazy first scan: opening the dropdown IS the user asking to see
-        // devices, and it is the earliest moment the list is needed (the
-        // closed combo's preview never reads it). The one-off enumeration
-        // hitch lands here instead of at startup — see the constructor
-        // comment for why the eager scan was removed.
-        if (!soapyScanned_) { scanSoapy(); }
-        const int rowCount = 2 + static_cast<int>(soapyDevices_.size());
+    const bool comboOpen = ImGui::BeginCombo("##source_select", rowLabel(sourceSel_));
+    if (comboOpen) {
+        // ON THE FRAME IT OPENS, not on every frame it stays open: opening
+        // the dropdown IS the user asking to see devices, and the combo asks
+        // this question sixty times a second otherwise.
+        //
+        // Lazy first Soapy scan, for the reason the constructor comment gives
+        // - enumeration loads vendor modules whose USB discovery crashed
+        // in-process in ~2% of measured runs - so the one-off hitch lands
+        // here rather than at startup. The NATIVE list is re-read every time
+        // and costs nothing worth deferring: it opens nothing (see
+        // scanNative), so it is also the only one of the two that is allowed
+        // to run while a radio is streaming.
+        if (!sourceComboWasOpen_) {
+            scanNative();
+            if (!soapyScanned_) { scanSoapy(); }
+        }
+        const int rowCount = soapyRowBase() + static_cast<int>(soapyDevices_.size());
         for (int i = 0; i < rowCount; ++i) {
             // PushID: two identical devices (same model, no serial in the
             // label) must still be distinct rows.
@@ -5243,30 +5296,53 @@ void AppWindow::drawSourceSection() {
         }
         ImGui::EndCombo();
     }
-    // REFRESH IS DISABLED WHILE A RADIO IS OPEN, and says why. The scan it
-    // runs probes every dongle on the bus from a child process - opening and
-    // resetting the one streaming here included - and the 0.90.0 field
-    // report is our next control call dying twelve seconds after exactly
-    // that (see scanSoapy and gui::deviceScanAllowed). The key stays on the
-    // panel rather than vanishing, because a control that is missing reads as
-    // a bug and a control that says "close the radio first" reads as a rule.
+    sourceComboWasOpen_ = comboOpen;
+    // REFRESH IS LIVE AGAIN, and what is deferred while a radio is open is
+    // now the SoapySDR half of it alone.
+    //
+    // The key was disabled outright in 0.90.1 because the only scan there was
+    // probed every dongle on the bus from a child process - opening and
+    // resetting the one streaming here included - and the 0.90.0 field report
+    // is our next control call dying twelve seconds after exactly that (see
+    // scanSoapy and gui::deviceScanAllowed). That is still true of the Soapy
+    // scan and it is still deferred, with the same words. But the NATIVE
+    // enumeration reads SetupAPI properties and opens nothing at all
+    // (usb_device.hpp rule 1), so it can always run, and a user who has just
+    // plugged a second dongle in must be able to make it appear.
     const bool scanGated = soapyScanGated();
     if (!scanGated) { soapyScanDeferredLogged_ = false; }  // the next radio gets its own line
-    ImGui::BeginDisabled(scanGated);
-    if (ImGui::Button("Refresh")) { scanSoapy(); }
-    ImGui::EndDisabled();
+    if (ImGui::Button("Refresh")) {
+        scanNative();
+        scanSoapy();  // defers itself, and says so once, while a radio is open
+    }
     if (scanGated) {
-        const std::string why = "Device scan deferred while " + soapyScanGateDevice() +
+        const std::string why = "Refreshed the native radios. The SoapySDR scan is deferred "
+                                "while " + soapyScanGateDevice() +
                                 " is open - the vendor probe opens and resets every dongle "
-                                "it finds. Close the radio to look for other devices.";
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("%s", why.c_str());
-        }
+                                "it finds. Close the radio to look for other SoapySDR devices.";
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", why.c_str()); }
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", why.c_str());
         ImGui::PopStyleColor();
     }
     ImGui::EndDisabled();
+
+    // A DONGLE THAT IS PLUGGED IN AND CANNOT BE OPENED, named, with the one
+    // step that fixes it. This is shown whether or not anything else was
+    // found, because the case it exists for is a user with TWO dongles where
+    // only one of them has been through Zadig: "no radio hardware found"
+    // would never appear for them, and the missing one would be missing
+    // silently. See enumerateUnbound.
+    for (const cascade::usb::UsbDeviceInfo& u : nativeUnbound_) {
+        const std::string what = u.description.empty() ? std::string("A USB radio") : u.description;
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped(
+            "%s is plugged in but is not bound to WinUSB, so nothing can open it. Run Zadig "
+            "(zadig.akeo.ie), tick Options -> List All Devices, select \"Bulk-In, Interface "
+            "(Interface 0)\", choose WinUSB and click Replace Driver, then press Refresh.",
+            what.c_str());
+        ImGui::PopStyleColor();
+    }
 
     // NO HARDWARE FOUND, explained.
     //
@@ -5357,8 +5433,10 @@ void AppWindow::drawSourceSection() {
                 // switch would read as a tuning bug.
                 file->setCenterFrequencyHz(
                     pipeline_.activeSource().centerFrequencyHz());
-                soapy_ = nullptr;  // before setSource destroys a live Soapy
-                soapyArgs_.clear();
+                device_ = nullptr;  // before setSource destroys a live device
+                soapyView_ = nullptr;
+                deviceArgs_.clear();
+                deviceModel_.clear();
                 sourceError_.clear();
                 ++sourceGen_;  // a device open still in flight is now stale
                 pipeline_.setSource(std::move(file));
@@ -5373,25 +5451,44 @@ void AppWindow::drawSourceSection() {
         }
     }
 
-    // Soapy device panel, shown while a Soapy source is INSTALLED in the
-    // pipeline (soapy_ tracks setSource, not the combo row, so the panel
-    // stays correct while e.g. the combo previews "IQ file" pre-Open).
-    if (soapy_ != nullptr) {
+    // Device panel, shown while a RADIO of any kind is INSTALLED in the
+    // pipeline (device_ tracks setSource, not the combo row, so the panel
+    // stays correct while e.g. the combo previews "IQ file" pre-Open). Every
+    // control below goes through DeviceSource, so a native RTL-SDR and one
+    // reached through a vendor module are the same panel.
+    if (device_ != nullptr) {
+        // THE RATE MENU IS THE RADIO'S OWN LIST. It was a fixed 1/2/4/8 MS/s
+        // combo for every device on every driver - two rows an RTL-SDR cannot
+        // do at all, and without 2.4 MS/s, which is the rate ADS-B needs.
         ImGui::SetNextItemWidth(120.0f);
-        if (ImGui::Combo("Rate", &soapyRateIndex_, kSoapyRateLabels, kSoapyRateCount)) {
-            if (!soapy_->setSampleRateHz(kSoapyRateHz[soapyRateIndex_])) {
-                sourceError_ = soapy_->lastError();
-            } else {
-                // Rate-follow (P5): rebuild the DSP chain for the ACTUAL
-                // device readback so demod/audio and the frequency axis all
-                // track the hardware, not the request.
-                followInputRate();
+        const char* ratePreview =
+            (deviceRateIndex_ >= 0 &&
+             deviceRateIndex_ < static_cast<int>(deviceRateLabels_.size()))
+                ? deviceRateLabels_[static_cast<std::size_t>(deviceRateIndex_)].c_str()
+                : "";
+        if (ImGui::BeginCombo("Rate", ratePreview)) {
+            for (std::size_t i = 0; i < deviceRateLabels_.size(); ++i) {
+                const bool sel = (static_cast<int>(i) == deviceRateIndex_);
+                if (ImGui::Selectable(deviceRateLabels_[i].c_str(), sel) && !sel) {
+                    if (!device_->setSampleRateHz(deviceRatesHz_[i])) {
+                        sourceError_ = device_->lastError();
+                    } else {
+                        deviceRateIndex_ = static_cast<int>(i);
+                        // Rate-follow (P5): rebuild the DSP chain for the
+                        // ACTUAL device readback so demod/audio and the
+                        // frequency axis all track the hardware, not the
+                        // request.
+                        followInputRate();
+                    }
+                }
+                if (sel) { ImGui::SetItemDefaultFocus(); }
             }
+            ImGui::EndCombo();
         }
         // Actual readback beside the request: drivers coerce, the DSP chain
         // and the user must both see the rate the hardware really runs at.
         ImGui::SameLine();
-        ImGui::Text("actual %.4g MS/s", soapy_->sampleRateHz() / 1.0e6);
+        ImGui::Text("actual %.4g MS/s", device_->sampleRateHz() / 1.0e6);
 
         // ANTENNA. Above the gain controls on purpose: no amount of gain
         // rescues the wrong port, and picking the wrong one gives a receiver
@@ -5399,12 +5496,12 @@ void AppWindow::drawSourceSection() {
         // while hearing essentially nothing. Measured on a B200 at 1090 MHz,
         // the difference between the two ports was 16 dB of signal-to-noise
         // and the difference between decoding aircraft and decoding none.
-        if (soapyAntennas_.size() > 1) {
-            if (ImGui::BeginCombo("Antenna", soapyAntenna_.c_str())) {
-                for (const std::string& a : soapyAntennas_) {
-                    const bool sel = (a == soapyAntenna_);
+        if (deviceAntennas_.size() > 1) {
+            if (ImGui::BeginCombo("Antenna", deviceAntenna_.c_str())) {
+                for (const std::string& a : deviceAntennas_) {
+                    const bool sel = (a == deviceAntenna_);
                     if (ImGui::Selectable(a.c_str(), sel) && !sel) {
-                        if (soapy_->setAntenna(a)) {
+                        if (device_->setAntenna(a)) {
                             // Read BACK rather than assuming the request took:
                             // a driver may coerce, and the panel must show the
                             // port actually in use.
@@ -5412,26 +5509,26 @@ void AppWindow::drawSourceSection() {
                             // which now compares soapyAntenna - no explicit
                             // dirty flag exists, and adding one here would be
                             // a second mechanism doing the same job.
-                            soapyAntenna_ = soapy_->antenna();
+                            deviceAntenna_ = device_->antenna();
                         } else {
-                            sourceError_ = soapy_->lastError();
+                            sourceError_ = device_->lastError();
                         }
                     }
                     if (sel) { ImGui::SetItemDefaultFocus(); }
                 }
                 ImGui::EndCombo();
             }
-        } else if (!soapyAntenna_.empty()) {
+        } else if (!deviceAntenna_.empty()) {
             // One port, nothing to choose - but still shown, because "which
             // antenna am I on" should never be a question the UI cannot answer.
-            ImGui::Text("Antenna: %s", soapyAntenna_.c_str());
+            ImGui::Text("Antenna: %s", deviceAntenna_.c_str());
         }
 
-        if (soapyAgcSupported_) {
-            if (ImGui::Checkbox("Auto gain", &soapyAgc_)) {
-                if (!soapy_->setAutoGain(soapyAgc_)) {
-                    sourceError_ = soapy_->lastError();
-                    soapyAgc_ = !soapyAgc_;  // the device did not change mode
+        if (deviceAgcSupported_) {
+            if (ImGui::Checkbox("Auto gain", &deviceAgc_)) {
+                if (!device_->setAutoGain(deviceAgc_)) {
+                    sourceError_ = device_->lastError();
+                    deviceAgc_ = !deviceAgc_;  // the device did not change mode
                 }
             }
         } else {
@@ -5440,14 +5537,39 @@ void AppWindow::drawSourceSection() {
 
         // Manual gain sliders are meaningless while hardware AGC drives the
         // stages, so grey them out rather than letting them silently fight.
-        ImGui::BeginDisabled(soapyAgc_);
-        for (std::size_t i = 0; i < soapyGainNames_.size(); ++i) {
+        //
+        // EACH SLIDER SPANS WHAT ITS OWN STAGE WILL ACCEPT. They were all
+        // 0..60 dB before, for every stage of every radio, which is right for
+        // none of them: an RTL-SDR's VGA starts at -4.7 dB and its MIXER
+        // stops at 16.1, a B200's PGA runs to 76. SoapySDR clamps silently,
+        // so the top and bottom of several radios were simply unreachable
+        // from this panel and nothing ever said so. kSoapyGainMinDb/MaxDb
+        // remain the fallback for a driver that reports no range at all.
+        ImGui::BeginDisabled(deviceAgc_);
+        for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+            float loDb = kSoapyGainMinDb;
+            float hiDb = kSoapyGainMaxDb;
+            if (i < deviceGainRanges_.size() &&
+                deviceGainRanges_[i].maxDb > deviceGainRanges_[i].minDb) {
+                loDb = static_cast<float>(deviceGainRanges_[i].minDb);
+                hiDb = static_cast<float>(deviceGainRanges_[i].maxDb);
+            }
             ImGui::PushID(static_cast<int>(i));
-            if (ImGui::SliderFloat(soapyGainNames_[i].c_str(), &soapyGainsDb_[i],
-                                   kSoapyGainMinDb, kSoapyGainMaxDb, "%.0f dB")) {
-                if (!soapy_->setGainDb(soapyGainNames_[i],
-                                       static_cast<double>(soapyGainsDb_[i]))) {
-                    sourceError_ = soapy_->lastError();
+            if (ImGui::SliderFloat(deviceGainNames_[i].c_str(), &deviceGainsDb_[i], loDb, hiDb,
+                                   "%.1f dB")) {
+                if (!device_->setGainDb(deviceGainNames_[i],
+                                       static_cast<double>(deviceGainsDb_[i]))) {
+                    sourceError_ = device_->lastError();
+                } else {
+                    // THE READBACK, not the request. Every one of these
+                    // radios quantises: the R820T's LNA moves in fifteen
+                    // discrete steps and its aggregate gain in twenty-nine,
+                    // and a slider that kept showing 21.4 dB while the tuner
+                    // sat at 20.7 would be the same lie the antenna combo was
+                    // fixed for. It makes the slider feel notched, because
+                    // the hardware is notched.
+                    deviceGainsDb_[i] =
+                        static_cast<float>(device_->gainDb(deviceGainNames_[i]));
                 }
             }
             ImGui::PopID();
@@ -5476,7 +5598,7 @@ void AppWindow::drawSourceSection() {
 
 bool AppWindow::soapyScanGated() const {
     // THREE WAYS A RADIO IS OPEN, and the third is the one worth explaining.
-    // soapy_ is the device installed in the pipeline; soapyOpenPending_ is
+    // device_ is the device installed in the pipeline; deviceOpenPending_ is
     // one being made on its worker right now, Device::make already inside the
     // driver stack. anyDeviceOpen() is the process-wide count, which by design
     // never comes down for a device the dead-device policy abandoned: the
@@ -5488,18 +5610,26 @@ bool AppWindow::soapyScanGated() const {
     // bargain the user is given in words: restart FoxSDR to use it again. The
     // rows already scanned stay usable, and the automatic reopen
     // (pollSoapyRecovery) needs no scan at all - it has the args.
-    return soapy_ != nullptr || soapyOpenPending_ ||
+    //
+    // A NATIVE RADIO DOES NOT GATE THE SOAPY SCAN, and this is the one line
+    // of the rule that changed in 0.91.0. The gate exists because the vendor
+    // probe opens and resets every dongle on the bus - including one this
+    // process is streaming from - and that is as true of a dongle we are
+    // holding natively as of one held through a module. So soapyView_ is NOT
+    // what is asked here: device_ is, whatever kind it is. The three
+    // conditions are unchanged in meaning; only the type of the first has
+    // widened.
+    return device_ != nullptr || deviceOpenPending_ ||
            cascade::source::SoapySource::anyDeviceOpen();
 }
 
 std::string AppWindow::soapyScanGateDevice() const {
     // The MODEL, never the raw args: this string goes into the diagnostic
     // log, and the args carry the serial (see every other sanitiseDevice
-    // site).
-    if (soapy_ != nullptr && !soapyArgs_.empty()) {
-        return cascade::core::sanitiseDevice(soapyArgs_);
-    }
-    if (soapyOpenPending_ && !soapyBusyLabel_.empty()) { return soapyBusyLabel_; }
+    // site). deviceModel_ is that model for either family - a native row's
+    // args are nothing BUT a serial, so sanitiseDevice would answer "".
+    if (device_ != nullptr && !deviceModel_.empty()) { return deviceModel_; }
+    if (deviceOpenPending_ && !deviceBusyLabel_.empty()) { return deviceBusyLabel_; }
     return "a radio this session could not release";
 }
 
@@ -5516,7 +5646,7 @@ void AppWindow::scanSoapy() {
     // still shows it in the list rather than a blank; and the log says why
     // ONCE, because the combo asks again on every frame it is open.
     if (!cascade::gui::deviceScanAllowed(soapyScanGated(), soapyScanPending_,
-                                         soapyOpenPending_)) {
+                                         deviceOpenPending_)) {
         if (soapyScanGated() && !soapyScanDeferredLogged_) {
             soapyScanDeferredLogged_ = true;
             cascade::core::diagLogf(
@@ -5525,12 +5655,16 @@ void AppWindow::scanSoapy() {
                 "devices)",
                 soapyScanGateDevice().c_str());
         }
-        if (soapy_ != nullptr && !soapyArgs_.empty()) {
+        // A NATIVE RADIO NEEDS NOTHING HERE: scanNative() is never deferred,
+        // so nativeDevices_ always holds its row and sourceSel_ already
+        // points at it. Only a Soapy device can be open with no scan behind
+        // it (restored from the config, or opened before the gate closed).
+        if (soapyView_ != nullptr && !deviceArgs_.empty()) {
             bool listed = false;
             for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                if (soapyDevices_[i].args == soapyArgs_) {
+                if (soapyDevices_[i].args == deviceArgs_) {
                     listed = true;
-                    sourceSel_ = 2 + static_cast<int>(i);
+                    sourceSel_ = soapyRowBase() + static_cast<int>(i);
                 }
             }
             if (!listed) {
@@ -5543,9 +5677,9 @@ void AppWindow::scanSoapy() {
                 row.label = pipeline_.activeSource().name();
                 const std::size_t colon = row.label.rfind(": ");
                 if (colon != std::string::npos) { row.label = row.label.substr(colon + 2); }
-                row.args = soapyArgs_;
+                row.args = deviceArgs_;
                 soapyDevices_.push_back(std::move(row));
-                sourceSel_ = 2 + static_cast<int>(soapyDevices_.size() - 1);
+                sourceSel_ = soapyRowBase() + static_cast<int>(soapyDevices_.size() - 1);
             }
         }
         return;
@@ -5558,7 +5692,7 @@ void AppWindow::scanSoapy() {
         std::async(std::launch::async, [] { return cascade::source::SoapySource::enumerate(); });
 }
 
-void AppWindow::pollSoapyAsync() {
+void AppWindow::pollSourceAsync() {
     constexpr auto kNoWait = std::chrono::seconds(0);
 
     if (soapyScanPending_ && soapyScanFuture_.valid() &&
@@ -5569,21 +5703,32 @@ void AppWindow::pollSoapyAsync() {
             if (!isAudioDriver(d.args)) { soapyDevices_.push_back(std::move(d)); }
         }
         soapyScanPending_ = false;
-        if (sourceSel_ >= 2 || sourceSel_ < 0) {
+        if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
             // vanished from the scan the device stays open and selected, and
             // the preview falls back to its live name via rowLabel(-1).
+            //
+            // A NATIVE row is re-found first and by the same rule: the Soapy
+            // scan did not touch nativeDevices_, but the row INDEX moves when
+            // the Soapy list changes length only for Soapy rows, so a native
+            // selection is simply looked up again rather than assumed.
             sourceSel_ = -1;
+            for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+                if (device_ != nullptr && soapyView_ == nullptr &&
+                    nativeDevices_[i].args == deviceArgs_) {
+                    sourceSel_ = kNativeRowBase + static_cast<int>(i);
+                }
+            }
             for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                if (soapy_ != nullptr && soapyDevices_[i].args == soapyArgs_) {
-                    sourceSel_ = 2 + static_cast<int>(i);
+                if (soapyView_ != nullptr && soapyDevices_[i].args == deviceArgs_) {
+                    sourceSel_ = soapyRowBase() + static_cast<int>(i);
                 }
             }
         }
     }
 
-    if (soapyOpenPending_ && soapyOpenFuture_.valid() &&
-        soapyOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
+    if (deviceOpenPending_ && deviceOpenFuture_.valid() &&
+        deviceOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
         // THE MODULE TABLE, REBUILT BECAUSE THE OPEN LOADED CODE.
         //
         // SoapySDR::Device::make() maps the vendor module and everything it
@@ -5596,22 +5741,22 @@ void AppWindow::pollSoapyAsync() {
         // diag_report.hpp has always said "after a device is opened"; this is
         // the call that makes that true.
         //
-        // BEFORE finishSoapyOpen, not after, because that function returns
+        // BEFORE finishDeviceOpen, not after, because that function returns
         // early on a failed open and on an open the user has moved on from -
         // and both of those loaded the vendor module just the same. Rebuilt
         // once per open, which is a user action, not per frame.
         cascade::core::refreshModuleTable();
-        finishSoapyOpen(soapyOpenFuture_.get());
-        soapyOpenPending_ = false;
-        soapyBusyLabel_.clear();
+        finishDeviceOpen(deviceOpenFuture_.get());
+        deviceOpenPending_ = false;
+        deviceBusyLabel_.clear();
     }
 }
 
-void AppWindow::reapPendingSoapyOpen() {
-    if (!soapyOpenPending_ || !soapyOpenFuture_.valid()) { return; }
+void AppWindow::reapPendingDeviceOpen() {
+    if (!deviceOpenPending_ || !deviceOpenFuture_.valid()) { return; }
 
     // WHY THIS EXISTS. std::future's destructor for a std::async(launch::async)
-    // task BLOCKS until the worker returns, and soapyOpenFuture_ is a member,
+    // task BLOCKS until the worker returns, and deviceOpenFuture_ is a member,
     // so quitting while a device open was in flight parked the GUI thread
     // inside ~AppWindow for the whole of SoapySDR::Device::make() — seconds on
     // a healthy B200, and unbounded against a device that is wedged or has
@@ -5624,16 +5769,16 @@ void AppWindow::reapPendingSoapyOpen() {
     // short enough not to be felt and long enough to cover every open that was
     // not actually stuck.
     constexpr auto kQuitGrace = std::chrono::milliseconds(250);
-    if (soapyOpenFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
-        drainSoapyOpen(soapyOpenFuture_);
-        soapyOpenPending_ = false;
+    if (deviceOpenFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
+        drainDeviceOpen(deviceOpenFuture_);
+        deviceOpenPending_ = false;
         return;
     }
 
     // Still inside make(). THE CONSERVATIVE CHOICE, stated explicitly because
     // it is a trade and not a free win: the pending work is moved onto a
     // detached reaper so quit stays responsive, and the reaper's only job is
-    // to take the result and DESTROY it — SoapyOpenResult owns the
+    // to take the result and DESTROY it — DeviceOpenResult owns the
     // SoapySource, whose destructor closes the device, so an open that
     // completes after quit still releases its handle rather than leaking it
     // for the lifetime of the process.
@@ -5644,16 +5789,16 @@ void AppWindow::reapPendingSoapyOpen() {
     // That is the accepted cost — the alternative on offer is the hang above,
     // and no amount of waiting can bound a driver call that is not going to
     // return.
-    std::thread([f = std::move(soapyOpenFuture_)]() mutable {
-        drainSoapyOpen(f);
+    std::thread([f = std::move(deviceOpenFuture_)]() mutable {
+        drainDeviceOpen(f);
     }).detach();
-    soapyOpenPending_ = false;
+    deviceOpenPending_ = false;
 }
 
 void AppWindow::reapPendingSoapyScan() {
     if (!soapyScanPending_ || !soapyScanFuture_.valid()) { return; }
 
-    // THE SAME BLOCKING DESTRUCTOR AS reapPendingSoapyOpen, on the other
+    // THE SAME BLOCKING DESTRUCTOR AS reapPendingDeviceOpen, on the other
     // future. std::async(launch::async) futures block in ~future until the
     // worker returns, and soapyScanFuture_ is a member, so quitting while the
     // lazy scan was in flight parked the GUI thread inside ~AppWindow for the
@@ -5690,7 +5835,7 @@ void AppWindow::reapPendingSoapyScan() {
     soapyScanPending_ = false;
 }
 
-void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
+void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // THE USER MAY HAVE MOVED ON. Opening a device takes seconds and the GUI
     // stays live throughout, so by the time this runs they may have selected
     // the generator, opened an IQ file, or done either from the web UI. Before
@@ -5703,7 +5848,7 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     // error string is dropped with it on purpose — it describes a device the
     // user is no longer asking about, and showing it under the source they DID
     // choose would read as a fault in that source.
-    if (!asyncOpenStillWanted(soapyOpenReqGen_, sourceGen_)) { return; }
+    if (!asyncOpenStillWanted(deviceOpenReqGen_, sourceGen_)) { return; }
 
     // Failure: the reason lands in red under the control. The combo settles
     // on what is actually installed — since the close-first ordering in
@@ -5726,7 +5871,7 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
                 "radio again",
                 cascade::core::sanitiseDevice(r.args).c_str(), r.error.c_str());
         }
-        if (soapy_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1) {
+        if (device_ == nullptr && sourceKind_ == "siggen" && sourceSel_ != 1) {
             sourceSel_ = 0;
         }
         return;
@@ -5735,15 +5880,10 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
     if (!r.error.empty()) { sourceError_ = r.error; }
 
     // Panel mirrors, then gain priming — all quick register writes, unlike
-    // the make() that just finished on the worker.
-    soapyRateIndex_ = nearestIndex(kSoapyRateHz, kSoapyRateCount, r.requestRateHz);
-    soapyAgcSupported_ = r.dev->setAutoGain(false);
-    soapyAgc_ = false;
-    soapyGainNames_ = r.dev->listGainNames();
-    soapyGainsDb_.assign(soapyGainNames_.size(), kSoapyGainDefaultDb);
-    for (const std::string& g : soapyGainNames_) {
-        r.dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
-    }
+    // the make() that just finished on the worker. One shared function with
+    // the synchronous config restore, which used to keep its own copy of this
+    // and had already drifted from it.
+    adoptDeviceMirrors(*r.dev, r.kind, r.requestRateHz);
     if (r.recovery) {
         // THE GAINS THE USER HAD, written over the defaults just primed: a
         // reopen after a driver fault is the same radio to the user, and a
@@ -5754,39 +5894,49 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
         // only a set the driver accepted.
         for (std::size_t i = 0; i < r.recoveryGainNames.size() && i < r.recoveryGainsDb.size();
              ++i) {
-            for (std::size_t g = 0; g < soapyGainNames_.size(); ++g) {
-                if (soapyGainNames_[g] != r.recoveryGainNames[i]) { continue; }
-                if (r.dev->setGainDb(soapyGainNames_[g],
+            for (std::size_t g = 0; g < deviceGainNames_.size(); ++g) {
+                if (deviceGainNames_[g] != r.recoveryGainNames[i]) { continue; }
+                if (r.dev->setGainDb(deviceGainNames_[g],
                                      static_cast<double>(r.recoveryGainsDb[i]))) {
-                    soapyGainsDb_[g] = r.recoveryGainsDb[i];
+                    deviceGainsDb_[g] = r.recoveryGainsDb[i];
                 }
             }
         }
-        if (r.recoveryAgc && soapyAgcSupported_ && r.dev->setAutoGain(true)) {
-            soapyAgc_ = true;
+        if (r.recoveryAgc && deviceAgcSupported_ && r.dev->setAutoGain(true)) {
+            deviceAgc_ = true;
         }
     }
-    // Antenna: restore the saved port if this device still has one by that
-    // name, otherwise leave the driver's default alone and just report what
-    // it chose. Never guessed at - which port carries an antenna is a fact
-    // about the user's cabling that no default can know.
-    soapyAntennas_ = r.dev->listAntennas();
-    if (!soapyAntenna_.empty()) { r.dev->setAntenna(soapyAntenna_); }
-    soapyAntenna_ = r.dev->antenna();
+    // The antenna is settled by adoptDeviceMirrors above, on the same rule it
+    // always used: apply the saved port if this device has one by that name,
+    // then report what the driver actually chose.
 
-    soapy_ = r.dev.get();
-    soapyArgs_ = r.args;
+    device_ = r.dev.get();
+    // ...AND THE SAME OBJECT AS A SoapySource WHEN IT IS ONE. dynamic_cast
+    // rather than trusting r.kind: this pointer is what the vendor-fault
+    // recovery and the module diagnostics dereference, and a kind string that
+    // ever disagreed with the object would make that a wild pointer rather
+    // than a wrong caption.
+    soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
+    deviceArgs_ = r.args;
+    deviceModel_ = (r.kind == "soapy") ? cascade::core::sanitiseDevice(r.args)
+                                       : modelFromNativeLabel(nativeLabelFor(r.args));
+    if (r.kind == "soapy") {
+        cfgSoapyArgs_ = r.args;
+    } else {
+        cfgNativeArgs_ = r.args;
+    }
     ++sourceGen_;  // this install is itself a source change
     pipeline_.setSource(std::move(r.dev));
-    sourceKind_ = "soapy";
+    sourceKind_ = r.kind;
     sourceSel_ = r.row;
     // SERIAL STRIPPED, exactly as everywhere else this string is recorded.
     // "which radio, at what rate" is the single most useful line in the run-up
     // to a fault, because vendor SDR modules are third-party code running
-    // in-process and the rate decides whether the chain keeps up.
-    cascade::core::diagLogf("source: opened %s at %.0f S/s",
-                            cascade::core::sanitiseDevice(soapyArgs_).c_str(),
-                            pipeline_.activeSource().sampleRateHz());
+    // in-process and the rate decides whether the chain keeps up. WHICH
+    // DRIVER opened it is on the line too now, because there are two ways to
+    // reach the same dongle and a report has to say which one was taken.
+    cascade::core::diagLogf("source: opened %s (%s) at %.0f S/s", deviceModel_.c_str(),
+                            r.kind.c_str(), pipeline_.activeSource().sampleRateHz());
 
     // CARRY THE FREQUENCY ACROSS, which is the whole difference between
     // changing radio and losing what you were listening to.
@@ -5829,28 +5979,61 @@ void AppWindow::finishSoapyOpen(SoapyOpenResult r) {
         // Play press.
         if (r.recoveryRestart) { pipeline_.start(); }
         cascade::core::diagLogf("source: reopened %s at %.0f S/s after the driver fault%s",
-                                cascade::core::sanitiseDevice(soapyArgs_).c_str(),
+                                deviceModel_.c_str(),
                                 pipeline_.activeSource().sampleRateHz(),
                                 r.recoveryRestart ? "; receiver restarted" : "");
     }
 }
 
-void AppWindow::launchSoapyOpen(SoapyOpenResult r, const std::string& busyLabel) {
-    soapyBusyLabel_ = busyLabel;
-    soapyOpenPending_ = true;
+void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) {
+    deviceBusyLabel_ = busyLabel;
+    deviceOpenPending_ = true;
     // Stamp the request with the selection it belongs to. Nothing is installed
     // yet, so the counter is NOT bumped here — only the answer's right to be
     // applied is recorded.
-    soapyOpenReqGen_ = sourceGen_;
+    deviceOpenReqGen_ = sourceGen_;
     // The open runs on a worker: Device::make() is the multi-second, USB-bus
     // -walking call that used to freeze the GUI here. The request travels
     // into the worker and comes back as the answer, with the device (or the
     // reason) filled in.
-    soapyOpenFuture_ = std::async(std::launch::async, [r = std::move(r)]() mutable {
-        auto dev = std::make_unique<cascade::source::SoapySource>();
+    deviceOpenFuture_ = std::async(std::launch::async, [r = std::move(r)]() mutable {
+        std::unique_ptr<cascade::source::DeviceSource> dev = makeDeviceSource(r.kind);
+        if (!dev) {
+            r.error = "\"" + r.kind + "\" is not a source kind this build can open";
+            return std::move(r);
+        }
         if (!dev->open(r.args)) {
             r.error = dev->lastError();
-            return std::move(r);  // r.dev stays null: the GUI thread reports the failure
+            // THE ONE FALLBACK, and it is a real dongle rather than a
+            // hypothetical: an E4000 or FC0012/13 tuner, which the native
+            // RTL-SDR driver does not support and says so in as many words
+            // (gui::nativeOpenShouldFallBack matches that sentence). A user
+            // on one of those was reaching their radio perfectly well through
+            // SoapySDR before this release, and the prefer-native rule must
+            // not be what takes it away from them. So the Soapy args the
+            // decision was made FROM are carried along and opened instead.
+            if (!r.fallbackSoapyArgs.empty() &&
+                cascade::gui::nativeOpenShouldFallBack(r.error)) {
+                cascade::core::diagWarnf(
+                    "source: the native %s driver refused this radio (%s); opening it "
+                    "through SoapySDR instead",
+                    r.kind.c_str(), r.error.c_str());
+                auto soapy = std::make_unique<cascade::source::SoapySource>();
+                if (soapy->open(r.fallbackSoapyArgs)) {
+                    r.kind = "soapy";
+                    r.args = r.fallbackSoapyArgs;
+                    r.error.clear();
+                    dev = std::move(soapy);
+                } else {
+                    // Both refused it. The NATIVE reason is the one kept: it
+                    // is the specific one ("this dongle's tuner is not one
+                    // this driver supports yet"), and the Soapy failure that
+                    // followed is a second symptom of the same radio.
+                    return std::move(r);
+                }
+            } else {
+                return std::move(r);  // r.dev stays null: the GUI thread reports it
+            }
         }
         // A rate refusal is not fatal (the panel shows the actual readback
         // either way) but is surfaced.
@@ -5863,12 +6046,20 @@ void AppWindow::launchSoapyOpen(SoapyOpenResult r, const std::string& busyLabel)
 void AppWindow::pollSoapyRecovery() {
     // Cheap on every frame that matters: no device, or a live one, and this
     // is two loads. Every bounded --frames run takes the first return.
-    if (soapy_ == nullptr || !soapy_->deviceDead()) { return; }
+    //
+    // SOAPY ONLY, THROUGH soapyView_, and deliberately so. What this repairs
+    // is a VENDOR call that faulted on our own call frame and was absorbed by
+    // the structured-exception guard, which SoapySource::deadReason() can
+    // distinguish from a driver left wedged with one of our threads inside
+    // it. A native driver has neither: its faults are returned, not raised,
+    // and a native radio that has gone dead has done so for a reason its own
+    // lastError() already states. Reopening one on a timer would be guessing.
+    if (soapyView_ == nullptr || !soapyView_->deviceDead()) { return; }
     using DeadReason = cascade::source::SoapySource::DeadReason;
-    const DeadReason reason = soapy_->deadReason();
+    const DeadReason reason = soapyView_->deadReason();
     const double now = ImGui::GetTime();
     if (!cascade::gui::autoReopenDue(reason == DeadReason::VendorFault,
-                                     reason == DeadReason::Abandoned, soapyOpenPending_,
+                                     reason == DeadReason::Abandoned, deviceOpenPending_,
                                      soapyScanPending_, now, soapyReopenAttemptSec_)) {
         return;
     }
@@ -5881,22 +6072,23 @@ void AppWindow::pollSoapyRecovery() {
     // mirrors survive the fault on purpose (a rate or a retune that faulted
     // leaves the last CONFIRMED readback in place, never the request), and
     // the close below is what clears them.
-    SoapyOpenResult r;
-    r.args = soapyArgs_;
+    DeviceOpenResult r;
+    r.kind = "soapy";
+    r.args = deviceArgs_;
     r.row = sourceSel_;
-    const double confirmedRateHz = soapy_->sampleRateHz();
-    r.requestRateHz =
-        confirmedRateHz > 0.0 ? confirmedRateHz : kSoapyRateHz[soapyRateIndex_];
-    r.keepCenterHz = soapy_->centerFrequencyHz();
+    const double confirmedRateHz = soapyView_->sampleRateHz();
+    r.requestRateHz = confirmedRateHz > 0.0 ? confirmedRateHz
+                                            : kSoapyRateHz[kSoapyRateDefaultIndex];
+    r.keepCenterHz = soapyView_->centerFrequencyHz();
     r.recovery = true;
-    r.recoveryGainNames = soapyGainNames_;
-    r.recoveryGainsDb = soapyGainsDb_;
-    r.recoveryAgc = soapyAgc_;
+    r.recoveryGainNames = deviceGainNames_;
+    r.recoveryGainsDb = deviceGainsDb_;
+    r.recoveryAgc = deviceAgc_;
     // Running, or faulted - the pipeline's latch is raised only by its own
     // source thread, which exists only while the receiver runs, so a latched
     // fault is proof it was running when the driver went.
     r.recoveryRestart = pipeline_.running() || pipeline_.faulted();
-    std::string what = soapy_->faultedWhile();
+    std::string what = soapyView_->faultedWhile();
     if (what.empty()) { what = "a driver call"; }
     std::string label = pipeline_.activeSource().name();
     const std::size_t colon = label.rfind(": ");
@@ -5920,13 +6112,15 @@ void AppWindow::pollSoapyRecovery() {
     // stream. Whether it can is the driver's answer to give: it is made
     // under the same guard as every open, and a fault or a refusal there is
     // the ordinary failed open, reported the ordinary way.
-    soapy_ = nullptr;
-    soapyArgs_.clear();
+    device_ = nullptr;
+    soapyView_ = nullptr;
+    deviceArgs_.clear();
+    deviceModel_.clear();
     ++sourceGen_;
     pipeline_.setSource(nullptr);
     sourceKind_ = "siggen";
     followInputRate();
-    launchSoapyOpen(std::move(r), label);
+    launchDeviceOpen(std::move(r), label);
 }
 
 void AppWindow::selectSource(int idx) {
@@ -5939,13 +6133,15 @@ void AppWindow::selectSource(int idx) {
     // generator mid-open used to strand the resolving device for a stale-drop
     // teardown, and the combo's busy label already tells the user why the
     // click did nothing.
-    if (soapyOpenPending_) { return; }
+    if (deviceOpenPending_) { return; }
     sourceError_.clear();
 
     if (idx == 0) {
         // Built-in generator: null restores it, and it cannot fail.
-        soapy_ = nullptr;  // before setSource destroys a live Soapy source
-        soapyArgs_.clear();
+        device_ = nullptr;  // before setSource destroys a live device
+        soapyView_ = nullptr;
+        deviceArgs_.clear();
+        deviceModel_.clear();
         ++sourceGen_;  // a device open still in flight is now stale
         pipeline_.setSource(nullptr);
         sourceKind_ = "siggen";
@@ -5961,18 +6157,50 @@ void AppWindow::selectSource(int idx) {
         return;
     }
 
-    const std::size_t d = static_cast<std::size_t>(idx - 2);
-    if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
-    if (soapyScanPending_) { return; }  // one at a time (open is checked above)
-
+    // WHICH FAMILY THE ROW BELONGS TO. Native rows come first (see rowLabel);
+    // anything past them is a SoapySDR device.
+    std::string kind;
+    std::string args;
+    std::string label;
+    std::string fallbackSoapyArgs;
+    if (idx < soapyRowBase()) {
+        const std::size_t n = static_cast<std::size_t>(idx - kNativeRowBase);
+        if (n >= nativeDevices_.size()) { return; }  // stale row; next frame redraws
+        kind = nativeDevices_[n].driver;
+        args = nativeDevices_[n].args;
+        label = nativeDevices_[n].label;
+    } else {
+        const std::size_t d = static_cast<std::size_t>(idx - soapyRowBase());
+        if (d >= soapyDevices_.size()) { return; }  // stale row; next frame redraws
+        if (soapyScanPending_) { return; }  // one at a time (open is checked above)
+        kind = "soapy";
+        args = soapyDevices_[d].args;
+        label = soapyDevices_[d].label;
+        // PICKING THE SOAPY ROW FOR A DONGLE WE DRIVE OURSELVES OPENS IT
+        // NATIVELY. Two rows can name one physical radio - SoapyRTLSDR's and
+        // ours - and choosing a radio should not also be choosing which of
+        // two code paths reaches it. The user gets the one this product can
+        // be held responsible for, and the log says the swap happened.
+        if (const std::optional<cascade::source::NativeDeviceInfo> nat =
+                cascade::gui::preferNativeFor("soapy", args, nativeDevices_)) {
+            cascade::core::diagLogf(
+                "source: opening %s natively (was SoapySDR %s)",
+                modelFromNativeLabel(nat->label).c_str(),
+                cascade::core::sanitiseDevice(args).c_str());
+            fallbackSoapyArgs = args;
+            kind = nat->driver;
+            args = nat->args;
+            label = nat->label + " (native)";
+        }
+    }
     // The open runs on a worker: Device::make() is the multi-second, USB-bus
-    // -walking call that used to freeze the GUI here. sourceSel_ is left
-    // alone until it resolves; on failure finishSoapyOpen settles the combo
-    // on whatever is actually installed.
-    const std::string args = soapyDevices_[d].args;
+    // -walking call that used to freeze the GUI here, and a native open is a
+    // full demodulator and tuner initialisation. sourceSel_ is left alone
+    // until it resolves; on failure finishDeviceOpen settles the combo on
+    // whatever is actually installed.
     const double rate = kSoapyRateHz[kSoapyRateDefaultIndex];
     // Read the tuned frequency NOW: the old source is closed below, and a
-    // device that has never been opened reports 0, which finishSoapyOpen
+    // device that has never been opened reports 0, which finishDeviceOpen
     // treats as "nothing to carry".
     const double keepCenterHz = pipeline_.activeSource().centerFrequencyHz();
 
@@ -5986,12 +6214,13 @@ void AppWindow::selectSource(int idx) {
     // then let the worker call Device::make. The cost is honest: if the new
     // device fails to open, the receiver is on the generator with the reason
     // shown, not silently back on a radio it had to close to try.
-    if (soapy_ != nullptr) {
-        cascade::core::diagLogf(
-            "source: closing %s before opening another device",
-            cascade::core::sanitiseDevice(soapyArgs_).c_str());
-        soapy_ = nullptr;
-        soapyArgs_.clear();
+    if (device_ != nullptr) {
+        cascade::core::diagLogf("source: closing %s before opening another device",
+                                deviceModel_.c_str());
+        device_ = nullptr;
+        soapyView_ = nullptr;
+        deviceArgs_.clear();
+        deviceModel_.clear();
         ++sourceGen_;
         pipeline_.setSource(nullptr);
         sourceKind_ = "siggen";
@@ -6000,23 +6229,143 @@ void AppWindow::selectSource(int idx) {
         // at the closed radio's rate.
         followInputRate();
     }
-    SoapyOpenResult req;
+    DeviceOpenResult req;
+    req.kind = kind;
     req.args = args;
+    req.fallbackSoapyArgs = fallbackSoapyArgs;
     req.row = idx;
     req.requestRateHz = rate;
     req.keepCenterHz = keepCenterHz;
-    launchSoapyOpen(std::move(req), soapyDevices_[d].label);
+    launchDeviceOpen(std::move(req), label);
 }
 
-std::unique_ptr<cascade::source::SoapySource> AppWindow::openSoapy(
-    const std::string& args, double requestRateHz) {
+std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
+    const std::string& kind) {
+    // ONE PLACE DECIDES WHAT A KIND NAME MEANS. The worker thread, the
+    // synchronous config restore and the prefer-native fallback all construct
+    // drivers, and three copies of this switch would be three chances for
+    // "rtlsdr" to mean something different in one of them.
+    if (kind == "rtlsdr") { return std::make_unique<cascade::source::RtlSdrSource>(); }
+    if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
+    if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
+    return nullptr;
+}
+
+void AppWindow::scanNative() {
+    // NO GATE, and that is the whole point of having our own transport.
+    // enumerateRtlSdr()/enumerateHackRf() read SetupAPI device properties and
+    // never open a device, never send a transfer, never reset anything -
+    // usb_device.hpp rule 1, which exists precisely because the SoapySDR
+    // vendor probe breaks it and killed a running capture doing so (the
+    // 0.90.0 field report behind gui::deviceScanAllowed). So this runs on the
+    // GUI thread, inline, whenever the list might be stale, including while a
+    // radio of ours is streaming.
+    nativeDevices_ = cascade::source::enumerateRtlSdr();
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHackRf()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    nativeRowLabels_.clear();
+    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+        // "(native)" is not decoration: with a Soapy row for the same dongle
+        // two lines below it, the user has to be able to see which one they
+        // are picking, and which one they got.
+        nativeRowLabels_.push_back(d.label + " (native)");
+    }
+    // ...and the dongles that are HERE BUT UNREACHABLE. Listing them as rows
+    // would offer an open that cannot succeed; the section says what to do
+    // about them instead (see drawSourceSection).
+    std::vector<cascade::usb::UsbId> ids = cascade::source::rtlSdrUsbIds();
+    for (const cascade::usb::UsbId& id : cascade::source::hackRfUsbIds()) {
+        ids.push_back(id);
+    }
+    nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
+}
+
+std::string AppWindow::nativeLabelFor(const std::string& args) const {
+    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+        if (d.args == args) { return d.label; }
+    }
+    return args;
+}
+
+void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
+                                   double requestRateHz) {
+    // ONE COPY OF THIS, shared by the worker-thread open and the synchronous
+    // config restore. There were two before, and they had already drifted:
+    // only one of them pointed the Rate combo at the device's ACTUAL readback
+    // rather than at what was asked for.
+
+    // THE RATE MENU IS THE DEVICE'S OWN LIST NOW. It was the fixed 1/2/4/8
+    // MS/s table for every radio on every driver - which an RTL-SDR cannot
+    // actually do two of (it has no 4 MS/s and no 8) and which stops 2.4 MS/s,
+    // the rate ADS-B needs, from ever appearing.
+    deviceRatesHz_ = dev.supportedSampleRatesHz();
+    deviceRateLabels_.clear();
+    for (const double r : deviceRatesHz_) { deviceRateLabels_.push_back(rateLabel(r)); }
+    const double actualHz = dev.sampleRateHz();
+    deviceRateIndex_ = nearestIndex(deviceRatesHz_, actualHz > 0.0 ? actualHz : requestRateHz);
+
+    // AGC probe doubling as initialization: explicitly select manual gain
+    // mode (matching the unchecked box). A device that says it has no gain
+    // mode gets the documented "grey the checkbox" answer, not an error.
+    deviceAgcSupported_ = dev.autoGainSupported() && dev.setAutoGain(false);
+    deviceAgc_ = false;
+
+    // THE GAINS, AND THEIR REAL RANGES. The sliders were 0..60 dB for every
+    // stage of every radio; they are now what the driver says it will accept.
+    deviceGainRanges_ = dev.gains();
+    deviceGainNames_.clear();
+    deviceGainsDb_.clear();
+    for (const cascade::source::GainInfo& g : deviceGainRanges_) {
+        deviceGainNames_.push_back(g.name);
+        deviceGainsDb_.push_back(0.0f);
+    }
+    for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+        if (kind == "soapy") {
+            // UNCHANGED FOR A SOAPY DEVICE, deliberately. FoxSDR has always
+            // pushed a mid-dial 30 dB into every stage of a Soapy radio at
+            // open, because a vendor module's boot gain is whatever the last
+            // application left behind, and the B200 on this bench has been
+            // opened that way for months. Clamped into the stage's real range
+            // now, which is the only difference: 30 dB into a MIXER that
+            // stops at 16.1 used to be silently clamped by the driver and is
+            // now clamped by something that can say what it did.
+            const double want = std::min(std::max(static_cast<double>(kSoapyGainDefaultDb),
+                                                  deviceGainRanges_[i].minDb),
+                                         deviceGainRanges_[i].maxDb);
+            dev.setGainDb(deviceGainNames_[i], want);
+        }
+        // A NATIVE DRIVER IS LEFT ALONE, and this is the difference that
+        // matters. Both native drivers put the radio into a KNOWN STATE as
+        // part of open() and say so in their headers - a middling manual gain
+        // on the RTL-SDR, LNA 16 / VGA 16 / amp off on the HackRF - chosen for
+        // that hardware. Overwriting it with a panel constant would throw away
+        // the one thing the driver knows that the panel does not.
+        deviceGainsDb_[i] = static_cast<float>(dev.gainDb(deviceGainNames_[i]));
+    }
+
+    // Antenna: apply a saved port if this device has one by that name, then
+    // read back whatever is actually selected, so the panel never claims a
+    // port the driver did not accept. Never guessed at - which port carries
+    // an antenna is a fact about the user's cabling that no default can know.
+    deviceAntennas_ = dev.antennas();
+    if (!deviceAntenna_.empty()) { dev.setAntenna(deviceAntenna_); }
+    deviceAntenna_ = dev.antenna();
+}
+
+std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
+    const std::string& kind, const std::string& args, double requestRateHz) {
     // Also guards CONFIG RESTORE, not just the dropdown: a sound card saved by
     // an older build must not come back as the radio on every launch.
-    if (isAudioDriver(args)) {
+    if (kind == "soapy" && isAudioDriver(args)) {
         sourceError_ = "saved source was a sound card (driver=audio), not a radio - ignored";
         return nullptr;
     }
-    auto dev = std::make_unique<cascade::source::SoapySource>();
+    std::unique_ptr<cascade::source::DeviceSource> dev = makeDeviceSource(kind);
+    if (!dev) {
+        sourceError_ = "saved source kind \"" + kind + "\" is not one this build can open";
+        return nullptr;
+    }
     if (!dev->open(args)) {
         sourceError_ = dev->lastError();
         return nullptr;
@@ -6026,29 +6375,7 @@ std::unique_ptr<cascade::source::SoapySource> AppWindow::openSoapy(
     if (!dev->setSampleRateHz(requestRateHz)) {
         sourceError_ = dev->lastError();
     }
-    // Point the Rate combo at the preset nearest the request (exact for the
-    // Source-menu path, best-effort for an arbitrary rate from a config).
-    soapyRateIndex_ = nearestIndex(kSoapyRateHz, kSoapyRateCount, requestRateHz);
-
-    // AGC probe doubling as initialization: explicitly select manual gain
-    // mode (matching the unchecked box). False means the driver has no gain
-    // mode — the documented "grey the checkbox" answer, not an error.
-    soapyAgcSupported_ = dev->setAutoGain(false);
-    soapyAgc_ = false;
-
-    // Push the sliders' starting gain so hardware and display agree (there
-    // is no per-element readback on SoapySource to initialize from).
-    soapyGainNames_ = dev->listGainNames();
-    soapyGainsDb_.assign(soapyGainNames_.size(), kSoapyGainDefaultDb);
-    for (const std::string& g : soapyGainNames_) {
-        dev->setGainDb(g, static_cast<double>(kSoapyGainDefaultDb));
-    }
-    // Same antenna handling as the Source-menu path: apply a saved port if the
-    // device has it, then read back whatever is actually selected so the panel
-    // never claims a port the driver did not accept.
-    soapyAntennas_ = dev->listAntennas();
-    if (!soapyAntenna_.empty()) { dev->setAntenna(soapyAntenna_); }
-    soapyAntenna_ = dev->antenna();
+    adoptDeviceMirrors(*dev, kind, requestRateHz);
     return dev;
 }
 
@@ -9224,23 +9551,36 @@ void AppWindow::drawScopeMode() {
         // Neither is a knob that turns and does nothing.
         const float knobR = std::max(20.0f, 30.0f * scale);
         const ImVec2 knobC((kTL.x + kBR.x) * 0.5f, plinthMid + 8.0f * scale);
-        const bool haveGain = soapy_ != nullptr && !soapyGainNames_.empty();
-        const bool gainLive = haveGain && !soapyAgc_;
+        const bool haveGain = device_ != nullptr && !deviceGainNames_.empty();
+        const bool gainLive = haveGain && !deviceAgc_;
 
+        // WHAT THE KNOB'S TRAVEL ACTUALLY IS. The deck lettered every radio's
+        // gain knob 0..60 dB, which is the number the Source sliders used to
+        // use and is right for no device: the first stage of an RTL-SDR runs
+        // 0..33.5 and a B200's PGA to 76, so the pointer and the figures under
+        // it disagreed with the hardware by tens of decibels. The device's own
+        // range for the FIRST stage - which is the one this knob drives - is
+        // the travel now, with the old constants as the fallback for a driver
+        // that reports no range.
+        float knobLoDb = kSoapyGainMinDb;
+        float knobHiDb = kSoapyGainMaxDb;
+        if (!deviceGainRanges_.empty() &&
+            deviceGainRanges_[0].maxDb > deviceGainRanges_[0].minDb) {
+            knobLoDb = static_cast<float>(deviceGainRanges_[0].minDb);
+            knobHiDb = static_cast<float>(deviceGainRanges_[0].maxDb);
+        }
         // The scale, in whole decibels across the device's own travel.
         {
             int ticks[5];
             for (int i = 0; i < 5; ++i) {
-                ticks[i] = static_cast<int>(
-                    kSoapyGainMinDb +
-                    (kSoapyGainMaxDb - kSoapyGainMinDb) * static_cast<float>(i) / 4.0f);
+                ticks[i] = static_cast<int>(knobLoDb + (knobHiDb - knobLoDb) *
+                                                           static_cast<float>(i) / 4.0f);
             }
             int sel = -1;
             if (gainLive) {
-                const float span = kSoapyGainMaxDb - kSoapyGainMinDb;
+                const float span = knobHiDb - knobLoDb;
                 if (span > 0.0f) {
-                    sel = static_cast<int>(
-                        (soapyGainsDb_[0] - kSoapyGainMinDb) / span * 4.0f + 0.5f);
+                    sel = static_cast<int>((deviceGainsDb_[0] - knobLoDb) / span * 4.0f + 0.5f);
                     sel = std::clamp(sel, 0, 4);
                 }
             }
@@ -9250,17 +9590,16 @@ void AppWindow::drawScopeMode() {
         char gainTxt[24];
         if (!haveGain) {
             std::snprintf(gainTxt, sizeof(gainTxt), "N/A");
-        } else if (soapyAgc_) {
+        } else if (deviceAgc_) {
             std::snprintf(gainTxt, sizeof(gainTxt), "AUTO");
         } else {
             std::snprintf(gainTxt, sizeof(gainTxt), "%.0f dB",
-                          static_cast<double>(soapyGainsDb_[0]));
+                          static_cast<double>(deviceGainsDb_[0]));
         }
         // Where the gain sits on its own travel, so the pointer shows it.
         float gainFrac = 0.5f;
-        if (haveGain && kSoapyGainMaxDb > kSoapyGainMinDb) {
-            gainFrac = (soapyGainsDb_[0] - kSoapyGainMinDb) /
-                       (kSoapyGainMaxDb - kSoapyGainMinDb);
+        if (haveGain && knobHiDb > knobLoDb) {
+            gainFrac = (deviceGainsDb_[0] - knobLoDb) / (knobHiDb - knobLoDb);
         }
         const int gainSteps = cascade::gui::drawScopeKnob(dl, knobC, knobR, "GAIN",
                                                           gainTxt, gainLive, gainFrac);
@@ -9268,20 +9607,20 @@ void AppWindow::drawScopeMode() {
             // Two decibels a detent: fine enough to find the knee between more
             // aircraft and more noise, coarse enough to cross the whole travel
             // in one comfortable sweep.
-            float db = soapyGainsDb_[0] + static_cast<float>(gainSteps) * 2.0f;
-            db = std::clamp(db, kSoapyGainMinDb, kSoapyGainMaxDb);
-            if (db != soapyGainsDb_[0]) {
-                soapyGainsDb_[0] = db;
-                if (!soapy_->setGainDb(soapyGainNames_[0], static_cast<double>(db))) {
-                    sourceError_ = soapy_->lastError();
+            float db = deviceGainsDb_[0] + static_cast<float>(gainSteps) * 2.0f;
+            db = std::clamp(db, knobLoDb, knobHiDb);
+            if (db != deviceGainsDb_[0]) {
+                deviceGainsDb_[0] = db;
+                if (!device_->setGainDb(deviceGainNames_[0], static_cast<double>(db))) {
+                    sourceError_ = device_->lastError();
                 }
             }
         }
         // Which stage moved, or why nothing will.
         {
             const char* note = !haveGain   ? "no device"
-                               : soapyAgc_ ? "auto gain is on"
-                                           : soapyGainNames_[0].c_str();
+                               : deviceAgc_ ? "auto gain is on"
+                                           : deviceGainNames_[0].c_str();
             const ImVec2 nsz = ImGui::CalcTextSize(note);
             // BELOW THE READOUT, and measured off the same radius the readout
             // is, or the two land on each other - "30 dB" and "PGA" were
@@ -11655,13 +11994,13 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // The device rate, before the tune, because changing it re-plans the whole
     // chain. Advisory: a source that refuses simply keeps the rate it had, and
     // the decoder will say so itself rather than the host guessing.
-    if (ps.sampleRateHz > 0.0 && soapy_ != nullptr &&
+    if (ps.sampleRateHz > 0.0 && device_ != nullptr &&
         pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
-        if (soapy_->setSampleRateHz(ps.sampleRateHz)) {
+        if (device_->setSampleRateHz(ps.sampleRateHz)) {
             // The combo follows, or it would keep showing the rate the user
             // last picked while the radio ran at another.
-            soapyRateIndex_ = nearestIndex(kSoapyRateHz, kSoapyRateCount,
-                                           pipeline_.activeSource().sampleRateHz());
+            deviceRateIndex_ =
+                nearestIndex(deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
             followInputRate();
         }
     }
@@ -13037,7 +13376,7 @@ void AppWindow::retuneSourceHz(double centerHz, bool isPluginPreset) {
     // call, so whichever value was requested LAST is the one a deferred
     // apply sees — "latest wins" for the context, not just the frequency.
     pendingRetuneIsPreset_ = isPluginPreset;
-    if (soapy_ == nullptr || scanner_.active()) {
+    if (device_ == nullptr || scanner_.active()) {
         applyRetuneNow(centerHz, isPluginPreset);
         return;
     }
@@ -13095,11 +13434,11 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
 void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset) {
     double rangeLoHz = 0.0;
     double rangeHiHz = 0.0;
-    // soapy_ is null for the generator and the IQ file — neither has a range
+    // device_ is null for the generator and the IQ file — neither has a range
     // to ask about, and tuneMismatchMessage already knows what an absent one
     // means (drop the range sentence rather than print a sentinel as if it
     // were a fact).
-    const bool hasRange = soapy_ != nullptr && soapy_->frequencyRangeHz(rangeLoHz, rangeHiHz);
+    const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
     tuneMismatchNote_ = cascade::gui::tuneMismatchMessage(requestHz, answeredHz, hasRange,
                                                           rangeLoHz, rangeHiHz, isPluginPreset);
     if (tuneMismatchNote_.empty()) { return; }
@@ -13403,15 +13742,20 @@ void AppWindow::publishWebSnapshot() {
     s.stereoEnabled = stereoEnabled_;
     s.pilotLocked = pipeline_.pilotLocked();
     s.sourceKind = sourceKind_;
-    s.soapyArgs = soapyArgs_;
-    s.antenna = soapyAntenna_;
-    s.antennas = soapyAntennas_;
-    s.agcSupported = soapyAgcSupported_;
-    s.agc = soapyAgc_;
-    s.sourceBusy = soapyScanPending_ || soapyOpenPending_;
+    s.soapyArgs = deviceArgs_;
+    s.antenna = deviceAntenna_;
+    s.antennas = deviceAntennas_;
+    s.agcSupported = deviceAgcSupported_;
+    s.agc = deviceAgc_;
+    s.sourceBusy = soapyScanPending_ || deviceOpenPending_;
     s.sourceError = sourceError_;
+    // NATIVE ROWS FIRST, exactly as the desktop combo orders them, so the
+    // browser's list and the application's list are the same list.
+    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+        s.devices.push_back({d.label, d.args, d.driver});
+    }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
-        s.devices.push_back({d.label, d.args});
+        s.devices.push_back({d.label, d.args, "soapy"});
     }
     // THE DEVICE THAT IS ALREADY OPEN MUST APPEAR IN THE LIST even when no
     // scan has run this session. soapyDevices_ is filled only by an explicit
@@ -13420,20 +13764,23 @@ void AppWindow::publishWebSnapshot() {
     // source list that omitted it showed only "Signal generator" while the
     // radio was plainly working, with no way to select it back after switching
     // away.
-    if (sourceKind_ == "soapy" && !soapyArgs_.empty()) {
+    if (device_ != nullptr && !deviceArgs_.empty()) {
         bool listed = false;
         for (const cascade::net::RadioStatus::SoapyDevice& d : s.devices) {
-            if (d.args == soapyArgs_) { listed = true; break; }
+            if (d.args == deviceArgs_ && d.kind == sourceKind_) {
+                listed = true;
+                break;
+            }
         }
         if (!listed) {
-            s.devices.insert(s.devices.begin(), {s.sourceName, soapyArgs_});
+            s.devices.insert(s.devices.begin(), {s.sourceName, deviceArgs_, sourceKind_});
         }
     }
-    for (std::size_t i = 0; i < soapyGainNames_.size(); ++i) {
-        const double db = (i < soapyGainsDb_.size())
-                              ? static_cast<double>(soapyGainsDb_[i])
+    for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+        const double db = (i < deviceGainsDb_.size())
+                              ? static_cast<double>(deviceGainsDb_[i])
                               : 0.0;
-        s.gains.push_back({soapyGainNames_[i], db});
+        s.gains.push_back({deviceGainNames_[i], db});
     }
 
     s.iqRecording = iqRecorder_.recording();
@@ -13810,25 +14157,40 @@ void AppWindow::applyWebControls() {
         // is called from drawUi), which is what makes it safe to touch the
         // source at all.
         if (r.scanDevices.value_or(false)) {
-            // Through the same gate as the panel's Refresh (0.90.1): with a
-            // radio open this defers rather than scans, logs why once, and
-            // the browser keeps the list it had - see scanSoapy.
+            // The native list always refreshes (scanNative opens nothing);
+            // the SoapySDR scan goes through the same gate as the panel's
+            // Refresh (0.90.1), so with a radio open it defers rather than
+            // scans, logs why once, and the browser keeps the list it had.
+            scanNative();
             scanSoapy();
         }
         if (r.sourceKind.has_value()) {
             if (*r.sourceKind == "siggen") {
                 selectSource(0);
-            } else if (*r.sourceKind == "soapy" && r.soapyArgs.has_value()) {
-                // Matched against the SCANNED list rather than passed to the
+            } else if (r.soapyArgs.has_value()) {
+                // Matched against the ENUMERATED list rather than passed to a
                 // driver verbatim: a browser must not be able to hand
-                // arbitrary kwargs to a vendor module, and an unknown string
-                // is simply not a device this receiver has seen.
+                // arbitrary kwargs to a vendor module or arbitrary args to a
+                // native driver, and an unknown string is simply not a device
+                // this receiver has seen. The KIND is matched too - a native
+                // row and a Soapy row for one dongle carry the same serial.
                 bool found = false;
-                for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                    if (soapyDevices_[i].args == *r.soapyArgs) {
-                        selectSource(static_cast<int>(i) + 2);
-                        found = true;
-                        break;
+                if (*r.sourceKind == "rtlsdr" || *r.sourceKind == "hackrf") {
+                    for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+                        if (nativeDevices_[i].driver == *r.sourceKind &&
+                            nativeDevices_[i].args == *r.soapyArgs) {
+                            selectSource(kNativeRowBase + static_cast<int>(i));
+                            found = true;
+                            break;
+                        }
+                    }
+                } else {
+                    for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                        if (soapyDevices_[i].args == *r.soapyArgs) {
+                            selectSource(soapyRowBase() + static_cast<int>(i));
+                            found = true;
+                            break;
+                        }
                     }
                 }
                 if (!found) {
@@ -13838,38 +14200,56 @@ void AppWindow::applyWebControls() {
             }
         }
         // The remaining source settings only mean anything with a device open.
-        if (soapy_ != nullptr) {
+        if (device_ != nullptr) {
             if (r.antenna.has_value()) {
-                if (soapy_->setAntenna(*r.antenna)) {
-                    soapyAntenna_ = soapy_->antenna();  // readback, not the request
+                if (device_->setAntenna(*r.antenna)) {
+                    deviceAntenna_ = device_->antenna();  // readback, not the request
                 } else {
-                    sourceError_ = soapy_->lastError();
+                    sourceError_ = device_->lastError();
                 }
             }
             if (r.sampleRateHz.has_value()) {
-                if (soapy_->setSampleRateHz(*r.sampleRateHz)) {
+                if (device_->setSampleRateHz(*r.sampleRateHz)) {
+                    // THE DESKTOP'S RATE COMBO FOLLOWS, and it did not until
+                    // 0.91.0. Measured on the bench: a browser set 2.4 MS/s on
+                    // a native RTL-SDR, the radio ran at 2.4, the deck read
+                    // 2.400 MS/s, and the Source section's own Rate control
+                    // still said 1.024 - the value that had been selected
+                    // before. A panel disagreeing with the radio it is
+                    // driving is the defect the readback rule exists to stop,
+                    // and every other control here already followed (the
+                    // antenna and the gains both read back). Same call the
+                    // plugin-preset path makes for the same reason.
+                    deviceRateIndex_ = nearestIndex(
+                        deviceRatesHz_, pipeline_.activeSource().sampleRateHz());
                     followInputRate();
                 } else {
-                    sourceError_ = soapy_->lastError();
+                    sourceError_ = device_->lastError();
                 }
             }
             if (r.gainName.has_value() && r.gainDb.has_value()) {
-                if (soapy_->setGainDb(*r.gainName, *r.gainDb)) {
-                    for (std::size_t i = 0; i < soapyGainNames_.size(); ++i) {
-                        if (soapyGainNames_[i] == *r.gainName &&
-                            i < soapyGainsDb_.size()) {
-                            soapyGainsDb_[i] = static_cast<float>(*r.gainDb);
+                if (device_->setGainDb(*r.gainName, *r.gainDb)) {
+                    for (std::size_t i = 0; i < deviceGainNames_.size(); ++i) {
+                        if (deviceGainNames_[i] == *r.gainName &&
+                            i < deviceGainsDb_.size()) {
+                            // THE READBACK, not the request - the same rule
+                            // the panel's own sliders follow. A driver that
+                            // quantises (every one of these does) otherwise
+                            // leaves the browser's number on the desktop
+                            // slider while the radio holds another.
+                            deviceGainsDb_[i] =
+                                static_cast<float>(device_->gainDb(*r.gainName));
                         }
                     }
                 } else {
-                    sourceError_ = soapy_->lastError();
+                    sourceError_ = device_->lastError();
                 }
             }
-            if (r.agc.has_value() && soapyAgcSupported_) {
-                if (soapy_->setAutoGain(*r.agc)) {
-                    soapyAgc_ = *r.agc;
+            if (r.agc.has_value() && deviceAgcSupported_) {
+                if (device_->setAutoGain(*r.agc)) {
+                    deviceAgc_ = *r.agc;
                 } else {
-                    sourceError_ = soapy_->lastError();
+                    sourceError_ = device_->lastError();
                 }
             }
         }
@@ -14790,8 +15170,8 @@ void AppWindow::copyDiagnosticsBundle() {
     in.context.mode = kModeNames[modeIndex_];
     in.context.sourceKind = sourceKind_;
     in.context.sampleRateHz = pipeline_.activeSource().sampleRateHz();
-    in.context.deviceOpen = (sourceKind_ == "soapy");
-    in.context.sdrModel = cascade::core::sanitiseDevice(soapyArgs_);
+    in.context.deviceOpen = (device_ != nullptr);
+    in.context.sdrModel = deviceModel_;
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (p.loaded && in.context.plugins.size() < 32) {
             in.context.plugins.push_back(p.name + " " + p.version);
@@ -15022,40 +15402,104 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // person who already knows what they opened.
             cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
         }
-    } else if (cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) {
-        // Seeded BEFORE the open, because openSoapy applies it as part of
+    } else if ((cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) ||
+               ((cfg.sourceKind == "rtlsdr" || cfg.sourceKind == "hackrf") &&
+                !cfg.nativeArgs.empty())) {
+        // The native list has to exist before the rule below can read it, and
+        // nothing has drawn a frame yet. It costs a SetupAPI walk and opens
+        // nothing (scanNative), so it is safe here where the Soapy scan
+        // deliberately is not.
+        scanNative();
+        std::string kind = cfg.sourceKind;
+        std::string args = (kind == "soapy") ? cfg.soapyArgs : cfg.nativeArgs;
+        std::string fallbackSoapyArgs;
+
+        // PREFER THE NATIVE DRIVER, AUTOMATICALLY, AND SAY SO. A config
+        // written before 0.91.0 says "soapy, driver=rtlsdr" because that was
+        // the only way to reach the dongle; the user is not going to reopen
+        // the Source section to switch over, and should not have to. See
+        // gui::preferNativeFor for what "the same dongle" means and why a
+        // saved serial has to match.
+        if (const std::optional<cascade::source::NativeDeviceInfo> nat =
+                cascade::gui::preferNativeFor(cfg.sourceKind, cfg.soapyArgs, nativeDevices_)) {
+            cascade::core::diagLogf(
+                "source: opening %s natively (was SoapySDR %s)",
+                modelFromNativeLabel(nat->label).c_str(),
+                cascade::core::sanitiseDevice(cfg.soapyArgs).c_str());
+            fallbackSoapyArgs = cfg.soapyArgs;
+            kind = nat->driver;
+            args = nat->args;
+        }
+
+        // Seeded BEFORE the open, because openDeviceSync applies it as part of
         // bringing the device up - the port has to be right from the first
         // sample, not corrected afterwards.
-        soapyAntenna_ = cfg.soapyAntenna;
-        auto dev = openSoapy(cfg.soapyArgs, cfg.sampleRateHz);
+        deviceAntenna_ = cfg.soapyAntenna;
+        auto dev = openDeviceSync(kind, args, cfg.sampleRateHz);
+        if (!dev && !fallbackSoapyArgs.empty() &&
+            cascade::gui::nativeOpenShouldFallBack(sourceError_)) {
+            // The dongle is one whose tuner the native driver does not
+            // support (E4000, FC0012/13). It opened perfectly well through
+            // SoapySDR before this release and must go on doing so.
+            cascade::core::diagWarnf(
+                "source: the native %s driver refused the saved radio (%s); opening it "
+                "through SoapySDR instead",
+                kind.c_str(), sourceError_.c_str());
+            kind = "soapy";
+            args = fallbackSoapyArgs;
+            dev = openDeviceSync(kind, args, cfg.sampleRateHz);
+        }
         if (dev) {
             dev->setCenterFrequencyHz(cfg.centerHz);
-            soapy_ = dev.get();
-            soapyArgs_ = cfg.soapyArgs;
+            device_ = dev.get();
+            soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
+            deviceArgs_ = args;
+            deviceModel_ = (kind == "soapy") ? cascade::core::sanitiseDevice(args)
+                                             : modelFromNativeLabel(nativeLabelFor(args));
+            if (kind == "soapy") {
+                cfgSoapyArgs_ = args;
+                cfgNativeArgs_ = cfg.nativeArgs;
+            } else {
+                cfgNativeArgs_ = args;
+                // THE SOAPY ARGS ARE KEPT even though a native driver is what
+                // opened: they are what the prefer-native rule reads on the
+                // NEXT launch, and throwing them away would make the first
+                // native session the last one that could ever fall back.
+                cfgSoapyArgs_ = cfg.soapyArgs;
+            }
             ++sourceGen_;  // same invariant as the file branch above
             pipeline_.setSource(std::move(dev));
-            sourceKind_ = "soapy";
+            sourceKind_ = kind;
             // Point the combo at the restored device if this machine still
             // enumerates it; -1 otherwise (preview falls back to live name).
             sourceSel_ = -1;
-            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                if (soapyDevices_[i].args == cfg.soapyArgs) {
-                    sourceSel_ = 2 + static_cast<int>(i);
+            if (kind == "soapy") {
+                for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+                    if (soapyDevices_[i].args == args) {
+                        sourceSel_ = soapyRowBase() + static_cast<int>(i);
+                    }
+                }
+            } else {
+                for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+                    if (nativeDevices_[i].args == args) {
+                        sourceSel_ = kNativeRowBase + static_cast<int>(i);
+                    }
                 }
             }
             followInputRate();
-            cascade::core::diagLogf("source: restored %s at %.0f S/s",
-                                    cascade::core::sanitiseDevice(soapyArgs_).c_str(),
+            cascade::core::diagLogf("source: restored %s (%s) at %.0f S/s",
+                                    deviceModel_.c_str(), kind.c_str(),
                                     pipeline_.activeSource().sampleRateHz());
         } else {
-            // openSoapy already set sourceError_. A radio that was there last
+            // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
             // question this product gets - but the driver's own message quotes
             // the device ARGUMENTS back, and those carry the serial number.
             // Same rule as the line above and as every other place these
             // strings are recorded: the sanitised model, never the raw args.
-            cascade::core::diagWarnf("source: the saved radio (%s) did not reopen",
-                                     cascade::core::sanitiseDevice(cfg.soapyArgs).c_str());
+            cascade::core::diagWarnf("source: the saved radio (%s, %s) did not reopen",
+                                     cascade::core::sanitiseDevice(cfg.soapyArgs).c_str(),
+                                     kind.c_str());
         }
     }
     if (sourceKind_ == "siggen") {
@@ -15245,7 +15689,7 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.session.panels = telemetryPanels_;
     // MODEL ONLY - sanitiseDevice strips the serial, which the raw args carry
     // twice (once alone, once inside the label).
-    r.session.sdrModel = cascade::core::sanitiseDevice(soapyArgs_);
+    r.session.sdrModel = deviceModel_;
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (p.loaded && r.session.plugins.size() < 20) {
             r.session.plugins.push_back(p.name + " " + p.version);
@@ -15257,8 +15701,15 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
 cascade::core::AppConfig AppWindow::currentConfig() {
     cascade::core::AppConfig cfg;
     cfg.sourceKind = sourceKind_;
-    cfg.soapyAntenna = soapyAntenna_;
-    cfg.soapyArgs = soapyArgs_;
+    cfg.soapyAntenna = deviceAntenna_;
+    // ONE SLOT PER FAMILY, and BOTH are written on every save - not just the
+    // one belonging to whatever is open. The Soapy args of a radio now being
+    // driven natively are what the prefer-native rule reads on the next
+    // launch and what the tuner fallback needs; dropping them the moment the
+    // native driver takes over would make the first native session the last
+    // one that could ever fall back. See AppConfig::nativeArgs.
+    cfg.soapyArgs = cfgSoapyArgs_;
+    cfg.nativeArgs = cfgNativeArgs_;
     cfg.iqFilePath = iqOpenPath_;
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
     cfg.mode = kModeNames[modeIndex_];

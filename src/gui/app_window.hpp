@@ -69,6 +69,12 @@ struct GLFWwindow;
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
 #include "source/soapy_source.hpp"
+// The two NATIVE drivers the Source section can open without any vendor
+// module at all, and the transport they enumerate through. Headers only -
+// each one names a class and a free function; nothing here pulls in WinUSB.
+#include "source/hackrf_source.hpp"
+#include "source/rtlsdr_source.hpp"
+#include "usb/usb_device.hpp"
 
 namespace cascade::gui {
 
@@ -581,7 +587,7 @@ private:
     // frame the Source section draws, so it is never stale.
     bool soapyScanGated() const;
     // The name a deferral names the open radio by - the sanitised model of
-    // soapyArgs_, the label of an open in flight, or a radio this session
+    // deviceArgs_, the label of an open in flight, or a radio this session
     // could not release.
     std::string soapyScanGateDevice() const;
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
@@ -1058,12 +1064,49 @@ private:
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
 
-    // Opens a Soapy device by kwargs, pushes the requested rate + default
-    // gains, and fills the Soapy panel mirrors. Null (with sourceError_ set)
-    // when the open fails. Shared by selectSource and the config restore so
-    // the two open paths cannot drift apart.
-    std::unique_ptr<cascade::source::SoapySource> openSoapy(const std::string& args,
-                                                            double requestRateHz);
+    // Opens a radio of `kind` ("soapy", "rtlsdr", "hackrf") by its args on
+    // THIS thread, pushes the requested rate and the default gains, and fills
+    // the panel mirrors. Null (with sourceError_ set) when the open fails.
+    // Used by the config restore, which happens before there is a frame to
+    // draw and therefore has nothing to keep responsive; the dropdown's own
+    // path goes through launchDeviceOpen onto a worker.
+    std::unique_ptr<cascade::source::DeviceSource> openDeviceSync(const std::string& kind,
+                                                                  const std::string& args,
+                                                                  double requestRateHz);
+
+    // Constructs an unopened driver of `kind`; null for a kind this build
+    // does not know. One place decides what a kind name means, so the
+    // worker, the synchronous restore and any future caller cannot disagree.
+    static std::unique_ptr<cascade::source::DeviceSource> makeDeviceSource(
+        const std::string& kind);
+
+    // Re-reads nativeDevices_ and nativeUnbound_ from the transport. Cheap,
+    // ungated and safe at any time - see nativeDevices_ for why a native
+    // enumeration is nothing like a Soapy scan.
+    void scanNative();
+
+    // WHERE EACH FAMILY'S ROWS START IN THE SOURCE COMBO. Row 0 is the
+    // generator and row 1 the IQ file; the native radios come next, and the
+    // SoapySDR devices after them. Named rather than written as "2" at the
+    // dozen sites that index this list, because one of those sites forgetting
+    // that the native block exists is an off-by-N that opens the wrong radio.
+    static constexpr int kNativeRowBase = 2;
+    int soapyRowBase() const {
+        return kNativeRowBase + static_cast<int>(nativeDevices_.size());
+    }
+
+    // The label of the native row whose args are `args`, or the args
+    // themselves when no row matches (a device that has since been
+    // unplugged). Used for the model string a log line names the radio by.
+    std::string nativeLabelFor(const std::string& args) const;
+
+    // Fills every panel mirror (rates, gains and their ranges, AGC, antenna)
+    // from an open DeviceSource, priming the hardware where the panel has to
+    // push a value to agree with it. Shared by finishDeviceOpen and
+    // openDeviceSync so the async and synchronous opens cannot drift apart -
+    // they had two copies of this before, and they had already drifted.
+    void adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
+                            double requestRateHz);
 
     // Makes the DSP chain follow activeSource().sampleRateHz() (rate-follow).
     // A pipeline refusal — fractional channel rate — keeps the old chain and
@@ -1227,9 +1270,22 @@ private:
     // thread; the GUI polls each frame and applies the result. The device
     // itself is only ever touched by the GUI thread once the future resolves,
     // so no locking is needed beyond the future's own synchronization.
-    struct SoapyOpenResult {
-        std::unique_ptr<cascade::source::SoapySource> dev;  // null on failure
+    struct DeviceOpenResult {
+        std::unique_ptr<cascade::source::DeviceSource> dev;  // null on failure
+        // WHICH DRIVER THE WORKER SHOULD CONSTRUCT, and afterwards which one
+        // it did: "soapy", "rtlsdr" or "hackrf", the same spellings
+        // AppConfig::sourceKind uses. The kind has to travel with the request
+        // because the worker is what decides the concrete type, and it has to
+        // come back with the answer because sourceKind_ is set from it.
+        std::string kind = "soapy";
         std::string args;
+        // THE SOAPY ARGS THE PREFER-NATIVE DECISION WAS MADE FROM, carried
+        // along so the worker can fall back to them. Empty for an open the
+        // user asked for directly. See launchDeviceOpen: a dongle whose tuner
+        // the native driver does not support (E4000, FC0012/13) must still
+        // open the way it always did, and by the time that is known the
+        // worker is the only thing still holding the request.
+        std::string fallbackSoapyArgs;
         std::string error;
         int row = -1;
         double requestRateHz = 0.0;
@@ -1245,7 +1301,7 @@ private:
     // a reopen after a driver fault is not a new radio to the user, so the
     // gains, the gain mode and - if the receiver was running when the driver
     // faulted - the running state are restored once the device is up. The
-    // antenna needs nothing here: soapyAntenna_ is applied by every open.
+    // antenna needs nothing here: deviceAntenna_ is applied by every open.
     // Carried INSIDE the result rather than in a member so an answer the
     // user has moved on from (asyncOpenStillWanted) drops it with the rest.
     bool recovery = false;
@@ -1255,10 +1311,10 @@ private:
     bool recoveryRestart = false;
     };
     std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
-    std::future<SoapyOpenResult> soapyOpenFuture_;
+    std::future<DeviceOpenResult> deviceOpenFuture_;
     bool soapyScanPending_ = false;
-    bool soapyOpenPending_ = false;
-    std::string soapyBusyLabel_;  // device name shown while an open is in flight
+    bool deviceOpenPending_ = false;
+    std::string deviceBusyLabel_;  // device name shown while an open is in flight
 
     // Paces hardware retunes — see retuneSourceHz. 50 ms: invisible against
     // the wheel gesture, one apply per notch burst instead of one per frame.
@@ -1282,24 +1338,24 @@ private:
 
     // Source-selection sequence number, incremented by EVERY install of a
     // source into the pipeline (generator, IQ file, or a resolved device).
-    // soapyOpenReqGen_ records the value an in-flight open was requested at;
+    // deviceOpenReqGen_ records the value an in-flight open was requested at;
     // asyncOpenStillWanted() compares the two when it resolves. See the
     // predicate's comment above for why a counter and not a flag.
     std::uint64_t sourceGen_ = 0;
-    std::uint64_t soapyOpenReqGen_ = 0;
+    std::uint64_t deviceOpenReqGen_ = 0;
 
     // Drains a pending device open OFF the GUI thread at shutdown. See the
     // definition for the semantics chosen and what they cost.
-    void reapPendingSoapyOpen();
+    void reapPendingDeviceOpen();
     // The same for a pending device SCAN. Separate because the futures are
     // separate and either may be in flight alone; the definition explains why
     // this reaper has nothing to release where the open reaper has a handle.
     void reapPendingSoapyScan();
 
     // Consumes finished scan/open futures; called once per frame.
-    void pollSoapyAsync();
+    void pollSourceAsync();
     // ONE AUTOMATIC REOPEN AFTER AN ABSORBED DRIVER FAULT (0.90.1); called
-    // once per frame after pollSoapyAsync. The 0.90.0 field report (NESDR
+    // once per frame after pollSourceAsync. The 0.90.0 field report (NESDR
     // SMArt v5, 2026-09-09): a rate change faulted inside rtlsdr.dll, the
     // guard absorbed it, the device was condemned, and the radio stayed dead
     // - deck reading FAIL - until FoxSDR was restarted, though the fault was
@@ -1309,18 +1365,18 @@ private:
     // ours parked inside it), nothing is in flight, and no attempt was made
     // in the last kSoapyReopenHoldoffSec (gui::autoReopenDue), this closes
     // the dead source exactly as selectSource does and reopens the same args
-    // at the same rate through launchSoapyOpen, with the state to restore in
+    // at the same rate through launchDeviceOpen, with the state to restore in
     // the result. A reopen that fails leaves the ordinary failed-open state
     // and message, and nothing tries again.
     void pollSoapyRecovery();
     // The worker-thread open shared by selectSource and pollSoapyRecovery:
     // closes nothing (the caller has), stamps the request with sourceGen_,
-    // and sets soapyOpenPending_/soapyBusyLabel_. `r` carries the args, the
+    // and sets deviceOpenPending_/deviceBusyLabel_. `r` carries the args, the
     // row, the rate, the centre to carry across and any recovery payload.
-    void launchSoapyOpen(SoapyOpenResult r, const std::string& busyLabel);
+    void launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel);
     // Applies a resolved open on the GUI thread (panel mirrors, gain priming,
     // pipeline install). Takes ownership of r.dev.
-    void finishSoapyOpen(SoapyOpenResult r);
+    void finishDeviceOpen(DeviceOpenResult r);
     // Combo selection. -1 means "active device no longer in the list" (a
     // Refresh dropped it); the preview then falls back to the active source
     // name. Distinct from the ACTIVE source: selecting "IQ file" only shows
@@ -1328,16 +1384,69 @@ private:
     int sourceSel_ = 0;
     char iqPath_[512] = "";     // InputText buffer for the IQ file path
     std::string sourceError_;   // red text under the Source controls; "" = none
-    // Non-owning view of the SoapySource installed in the pipeline (the
-    // pipeline owns it via setSource). Null whenever the active source is not
-    // Soapy; must be nulled BEFORE any setSource that destroys the object.
-    cascade::source::SoapySource* soapy_ = nullptr;
-    std::string soapyArgs_;     // args of the open device (re-find on Refresh)
-    int soapyRateIndex_ = 1;    // index into the 1/2/4/8 MS/s combo; 2M default
-    std::vector<std::string> soapyGainNames_;  // listGainNames() at open
-    std::vector<float> soapyGainsDb_;          // slider mirrors, one per name
-    bool soapyAgcSupported_ = false;
-    bool soapyAgc_ = false;
+    // THE RADIO THE PANEL DRIVES, whatever kind it is. Non-owning view of the
+    // DeviceSource installed in the pipeline (the pipeline owns it via
+    // setSource); null whenever the active source is the generator or a file,
+    // and must be nulled BEFORE any setSource that destroys the object.
+    //
+    // This was a SoapySource* until 0.91.0 and everything the Source section
+    // did went through the concrete class. It is the interface now because
+    // there are two more kinds of radio behind it - RtlSdrSource and
+    // HackRfSource, which speak WinUSB and need no vendor module at all - and
+    // a panel written against one of the three would have had to be written
+    // three times. Rate, gains, AGC, antenna, tuning range, dead/faulted: all
+    // of it is DeviceSource now, and a Soapy device answers exactly as it did.
+    cascade::source::DeviceSource* device_ = nullptr;
+
+    // ...AND THE SAME OBJECT AS A SoapySource WHEN IT IS ONE, for the four
+    // things that are genuinely Soapy-specific and have no meaning for a
+    // native driver: the child-process scan gate (a native enumeration opens
+    // nothing and needs no gate), the module/vendor diagnostics under "no
+    // radio hardware found", the "close the radio to look for other devices"
+    // caption, and the automatic reopen after an absorbed vendor fault
+    // (deadReason() distinguishes a faulted driver from a wedged one, which
+    // only SoapySource has). Null whenever device_ is not a SoapySource -
+    // including when it is a native radio - and set and cleared with it.
+    cascade::source::SoapySource* soapyView_ = nullptr;
+
+    std::string deviceArgs_;     // args of the open device (re-find on Refresh)
+    // WHICH ROW OF supportedSampleRatesHz() the Rate combo is on. The list
+    // used to be the fixed 1/2/4/8 MS/s table for every radio on every
+    // driver; it is now the DEVICE's own list - the RTL-SDR's twelve standard
+    // rates, the HackRF's 2..20 MS/s menu, whatever a Soapy driver reports -
+    // so the index only means anything alongside deviceRatesHz_.
+    int deviceRateIndex_ = 1;
+    std::vector<double> deviceRatesHz_;         // supportedSampleRatesHz() at open
+    std::vector<std::string> deviceRateLabels_;  // "2.400 MS/s", one per rate
+    std::vector<std::string> deviceGainNames_;  // gains() at open, names only
+    // The RANGE each of those gains will accept, parallel to the names. The
+    // sliders were drawn 0..60 dB for every stage of every radio before this,
+    // which is right for none of them: a B200's PGA goes to 76 dB and an
+    // RTL-SDR's VGA starts at -4.7, and SoapySDR clamps silently so nothing
+    // ever said so.
+    std::vector<cascade::source::GainInfo> deviceGainRanges_;
+    std::vector<float> deviceGainsDb_;          // slider mirrors, one per name
+    bool deviceAgcSupported_ = false;
+    bool deviceAgc_ = false;
+
+    // --- Native radios ----------------------------------------------------
+    // Every RTL-SDR and HackRF bound to WinUSB, from enumerateRtlSdr() and
+    // enumerateHackRf(). UNGATED and refreshed freely, unlike soapyDevices_:
+    // a native enumeration reads SetupAPI properties and NEVER OPENS A DEVICE
+    // (src/usb/usb_device.hpp rule 1), which is the exact rule the vendor
+    // probe breaks and the whole reason scanSoapy() has a gate. It is cheap
+    // enough to run on the GUI thread.
+    std::vector<cascade::source::NativeDeviceInfo> nativeDevices_;
+    // Their combo captions, composed once by scanNative(): the row label with
+    // " (native)" appended. Stored rather than built per frame because the
+    // combo hands ImGui a const char* that has to outlive the call.
+    std::vector<std::string> nativeRowLabels_;
+    // Dongles that are PRESENT but not bound to WinUSB - the DVB-T driver, or
+    // no driver at all (problem code 28). They cannot be opened by anything,
+    // so they are not offered as rows; the Source section says so in one
+    // sentence instead, because "my dongle is not in the list" with no
+    // explanation was the single worst thing this panel used to do.
+    std::vector<cascade::usb::UsbDeviceInfo> nativeUnbound_;
 
     // --- Frequency scale + view interaction state (P5) -----------------------
     // ONE scale owns the x <-> Hz <-> bin mapping for both center panels, fed
@@ -1362,12 +1471,37 @@ private:
     bool configAnnounce_ = false;  // print "config applied: ..." (test hook)
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
-    std::string sourceKind_ = "siggen";  // "siggen" | "file" | "soapy"
+    std::string sourceKind_ = "siggen";  // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"
+
+    // WHAT THE CONFIG REMEMBERS, ONE SLOT PER FAMILY, and they are separate
+    // on purpose. deviceArgs_ above is the LIVE device's args; these two are
+    // the last Soapy device's kwargs and the last native device's args, kept
+    // apart because the prefer-native rule needs both at once: it reads the
+    // SAVED SOAPY args to learn "driver=rtlsdr, serial=00000001" and decide
+    // whether a native row is the same dongle, and it must still have those
+    // Soapy args to fall back to when the native open refuses the tuner. One
+    // shared field would be overwritten by whichever family opened last, and
+    // the fallback would then have nothing to fall back to.
+    std::string cfgSoapyArgs_;
+    std::string cfgNativeArgs_;
+
+    // The open radio's MODEL, with no serial in it - what every diagnostic
+    // line, the crash context and the scan-gate caption name it by. Kept as a
+    // member because it cannot be derived from the args for a native device:
+    // core::sanitiseDevice's allow list is driver/product/type, and a native
+    // row's args are nothing but a serial, so sanitising them yields "".
+    std::string deviceModel_;
+
+    // The source combo was open on the previous frame. The native
+    // enumeration and the lazy Soapy scan run on the frame it OPENS, not on
+    // every frame it stays open - the combo asks sixty times a second
+    // otherwise, and one of those two answers costs a SetupAPI walk.
+    bool sourceComboWasOpen_ = false;
     // RX antenna ports the open device offers, and the one selected. Empty
     // until a Soapy device is opened. Persisted, because which port carries
     // the antenna is a property of the user's cabling, not of a session.
-    std::vector<std::string> soapyAntennas_;
-    std::string soapyAntenna_;
+    std::vector<std::string> deviceAntennas_;
+    std::string deviceAntenna_;
     std::string iqOpenPath_;  // last successfully opened IQ file (persisted;
                               // iqPath_ is just the edit buffer)
     cascade::core::AppConfig savedCfg_;    // what the config file holds now
@@ -2103,7 +2237,7 @@ private:
     // re-points the plan at it before calling applyUpdate.
     void startUpdate(const cascade::core::PluginUpdate& u);
     // Consumes finished catalogue/install futures; called once per frame from
-    // drawUi, right beside pollSoapyAsync.
+    // drawUi, right beside pollSourceAsync.
     void pollPluginAsync();
     // True if the catalogue entry's file name already exists in the plugins
     // directory, comparing against every record PluginHost produced — loaded

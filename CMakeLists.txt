@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.90.1 LANGUAGES C CXX)
+project(cascade VERSION 0.91.0 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -255,10 +255,13 @@ file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
 file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
+# Native radio drivers talk to the hardware through our own WinUSB transport
+# (src/usb), not through SoapySDR modules or libusb: see src/usb/usb_device.hpp.
+file(GLOB CASCADE_USB    CONFIGURE_DEPENDS src/usb/*.cpp)
 
 add_library(cascade_lib STATIC
     ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK}
-    ${CASCADE_NET})
+    ${CASCADE_NET} ${CASCADE_USB})
 
 target_include_directories(cascade_lib PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
 # See src/core/version.cpp: the reported version is injected, never written in.
@@ -295,6 +298,14 @@ target_link_libraries(cascade_lib PUBLIC
     cascade_pffft
     cascade_httplib
     SoapySDR)
+
+if(WIN32)
+    # The native drivers' USB transport: SetupAPI/CfgMgr for enumeration by
+    # device interface (never opening a device to list it), WinUSB for the
+    # pipes. All three are inbox on Windows 10+, so the installer payload
+    # contract (cascade.exe + SoapySDR.dll) does not change.
+    target_link_libraries(cascade_lib PUBLIC winusb setupapi cfgmgr32)
+endif()
 
 if(NOT WIN32)
     # Crypto for the password/digest primitives, SSL for the plugin

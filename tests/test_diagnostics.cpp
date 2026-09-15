@@ -433,10 +433,15 @@ int main() {
         CHECK(!text.empty());
 
         // The open-completion branch, anchored on the wait that resolves it.
-        const std::size_t branch = text.find("soapyOpenFuture_.wait_for(kNoWait)");
+        // Named deviceOpenFuture_/finishDeviceOpen since 0.91.0, when the
+        // Source section started opening native drivers through the same
+        // async path - the branch and the rule it carries are unchanged, and
+        // a module refresh matters just as much for a native open (the
+        // WinUSB transport and its own code are mapped in on that worker).
+        const std::size_t branch = text.find("deviceOpenFuture_.wait_for(kNoWait)");
         const std::size_t finish =
             (branch == std::string::npos) ? std::string::npos
-                                          : text.find("finishSoapyOpen(", branch);
+                                          : text.find("finishDeviceOpen(", branch);
         const std::size_t refresh =
             (branch == std::string::npos)
                 ? std::string::npos

@@ -47,6 +47,8 @@
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <map>
+#include <utility>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -553,6 +555,96 @@ private:
     double rate_ = 2.0e6;   // the field radio's rate at the moment of the crash
     double freq_ = 100.0e6;
 };
+
+// ---------------------------------------------------------------------------
+// A DRIVER WITH A REAL SHAPE: named gain stages with DIFFERENT ranges, two
+// antenna ports, and a list of sample rates.
+//
+// This is what SoapySource has to answer the Source panel with now that the
+// panel is written against DeviceSource. Everything below it used to be
+// hard-wired in the GUI - every gain slider 0..60 dB whatever the stage,
+// every Rate combo 1/2/4/8 MS/s whatever the radio - and because SoapySDR
+// clamps silently, a panel that asked for 60 dB of a 16 dB mixer got 16 and
+// said 60. The ranges here are deliberately unequal and deliberately include
+// a NEGATIVE minimum (an RTL-SDR's VGA starts at -4.7 dB), because a
+// fallback-to-0..60 bug passes against any range that happens to fit inside
+// it.
+// ---------------------------------------------------------------------------
+std::string g_shapeAntenna = "RX2";
+std::vector<std::pair<std::string, double>> g_shapeGains;  // what was SET, in order
+
+class ShapeDevice : public SoapySDR::Device {
+public:
+    std::string getDriverKey() const override { return "fakeshape"; }
+    std::string getHardwareKey() const override { return "fake shaped source"; }
+    size_t getNumChannels(const int) const override { return 1; }
+    SoapySDR::Stream* setupStream(const int, const std::string&, const std::vector<size_t>&,
+                                  const SoapySDR::Kwargs&) override {
+        return reinterpret_cast<SoapySDR::Stream*>(this);
+    }
+    void closeStream(SoapySDR::Stream*) override {}
+    int activateStream(SoapySDR::Stream*, const int, const long long, const size_t) override {
+        return 0;
+    }
+    int deactivateStream(SoapySDR::Stream*, const int, const long long) override { return 0; }
+    double getSampleRate(const int, const size_t) const override { return rate_; }
+    void setSampleRate(const int, const size_t, const double hz) override { rate_ = hz; }
+    std::vector<double> listSampleRates(const int, const size_t) const override {
+        return {250000.0, 1024000.0, 2048000.0, 2400000.0, 3200000.0};
+    }
+    std::vector<std::string> listGains(const int, const size_t) const override {
+        return {"LNA", "MIXER", "VGA"};
+    }
+    SoapySDR::Range getGainRange(const int, const size_t,
+                                 const std::string& name) const override {
+        if (name == "LNA") { return SoapySDR::Range(0.0, 33.5, 0.1); }
+        if (name == "MIXER") { return SoapySDR::Range(0.0, 16.1, 0.1); }
+        return SoapySDR::Range(-4.7, 40.8, 0.1);
+    }
+    void setGain(const int, const size_t, const std::string& name, const double db) override {
+        g_shapeGains.push_back({name, db});
+        // COERCED, exactly as a real driver coerces: clamped into range and
+        // then rounded to a whole decibel. gainDb() must report THIS, not the
+        // request - the readback promise the antenna combo has kept since it
+        // was added, now extended to the gains.
+        const SoapySDR::Range r = getGainRange(0, 0, name);
+        double v = db < r.minimum() ? r.minimum() : (db > r.maximum() ? r.maximum() : db);
+        v = static_cast<double>(static_cast<long long>(v));
+        gains_[name] = v;
+    }
+    double getGain(const int, const size_t, const std::string& name) const override {
+        const auto it = gains_.find(name);
+        return it == gains_.end() ? 0.0 : it->second;
+    }
+    bool hasGainMode(const int, const size_t) const override { return true; }
+    void setGainMode(const int, const size_t, const bool on) override { agc_ = on; }
+    bool getGainMode(const int, const size_t) const override { return agc_; }
+    std::vector<std::string> listAntennas(const int, const size_t) const override {
+        return {"TX/RX", "RX2"};
+    }
+    void setAntenna(const int, const size_t, const std::string& name) override {
+        g_shapeAntenna = name;
+    }
+    std::string getAntenna(const int, const size_t) const override { return g_shapeAntenna; }
+    int readStream(SoapySDR::Stream*, void* const*, const size_t, int&, long long&,
+                   const long) override {
+        return 0;
+    }
+
+private:
+    double rate_ = 2.0e6;
+    bool agc_ = false;
+    mutable std::map<std::string, double> gains_;
+};
+SoapySDR::KwargsList findShape(const SoapySDR::Kwargs& args) {
+    const auto driver = args.find("driver");
+    if (driver != args.end() && driver->second != "fakeshape") { return {}; }
+    SoapySDR::Kwargs k;
+    k["driver"] = "fakeshape";
+    k["label"] = "fake shaped source";
+    return SoapySDR::KwargsList{k};
+}
+SoapySDR::Device* makeShape(const SoapySDR::Kwargs&) { return new ShapeDevice(); }
 
 SoapySDR::KwargsList findRateOrder(const SoapySDR::Kwargs& args) {
     const auto driver = args.find("driver");
@@ -1594,6 +1686,137 @@ int main() {
         (void)src.read(buf.data(), buf.size());
         CHECK(cascade::core::DiagLog::instance().linesWritten() == before);
         src.stop();
+    }
+
+    // -----------------------------------------------------------------------
+    // THE DeviceSource SURFACE. SoapySource implements the interface the
+    // Source panel is written against from 0.91.0, so an RTL-SDR opened
+    // natively and one opened through a vendor module are the same panel.
+    // What this block proves is that a Soapy device answers every one of
+    // those questions with the DRIVER'S OWN numbers.
+    // -----------------------------------------------------------------------
+    {
+        std::printf("--- DeviceSource surface ---\n");
+
+        // BEFORE OPEN: every accessor is safe and says "nothing", which is
+        // the state the panel draws for the generator and the IQ file.
+        {
+            SoapySource src;
+            CHECK(src.gains().empty());
+            CHECK(src.antennas().empty());
+            CHECK(src.antenna().empty());
+            CHECK(src.supportedSampleRatesHz().empty());
+            CHECK(!src.autoGainSupported());
+            CHECK(!src.autoGain());
+            CHECK(src.gainDb("LNA") == 0.0);
+            CHECK(src.driverKey() != nullptr);
+            CHECK(std::strcmp(src.driverKey(), "soapy") == 0);
+        }
+
+        SoapySDR::Registry reg("fakeshape", &findShape, &makeShape, SOAPY_SDR_ABI_VERSION);
+        g_shapeAntenna = "RX2";
+        g_shapeGains.clear();
+        SoapySource src;
+        CHECK(src.open("driver=fakeshape"));
+
+        // THE DRIVER KEY comes out of the ARGS, lower-cased, because the
+        // prefer-native rule has to ask it about devices it has not opened.
+        CHECK(std::strcmp(src.driverKey(), "fakeshape") == 0);
+
+        // THE GAIN STAGES, WITH THEIR REAL RANGES. Three stages, three
+        // DIFFERENT ranges, one of them starting below zero. RED WHEN gains()
+        // falls back to a fixed span: the -4.7 and the 16.1 are what a 0..60
+        // default cannot produce.
+        const std::vector<cascade::source::GainInfo> g = src.gains();
+        CHECK(g.size() == 3u);
+        if (g.size() == 3u) {
+            CHECK(g[0].name == "LNA");
+            CHECK(g[0].minDb == 0.0);
+            CHECK(g[0].maxDb == 33.5);
+            CHECK(g[1].name == "MIXER");
+            CHECK(g[1].maxDb == 16.1);
+            CHECK(g[2].name == "VGA");
+            CHECK(g[2].minDb == -4.7);
+            CHECK(g[2].maxDb == 40.8);
+            CHECK(g[2].stepDb > 0.0);  // never zero: a slider needs a step
+        }
+        // The names still come out of listGainNames() too - nothing the GUI
+        // used before was taken away.
+        CHECK(src.listGainNames() == (std::vector<std::string>{"LNA", "MIXER", "VGA"}));
+
+        // GAIN IS REPORTED AS THE DRIVER COERCED IT, NOT AS ASKED. 40 dB into
+        // a 16.1 dB mixer comes back as 16, and 21.7 into the LNA comes back
+        // as 21. RED WHEN setGainDb stops reading the value back: gainDb()
+        // then answers 40 and 21.7, and the panel claims gain the radio never
+        // had.
+        CHECK(src.setGainDb("MIXER", 40.0));
+        CHECK(src.gainDb("MIXER") == 16.0);
+        CHECK(src.setGainDb("LNA", 21.7));
+        CHECK(src.gainDb("LNA") == 21.0);
+        CHECK(src.setGainDb("VGA", -30.0));
+        CHECK(src.gainDb("VGA") == -4.0);  // clamped to -4.7, then truncated
+        // An unknown stage changes nothing and reads back zero.
+        CHECK(src.gainDb("NOSUCH") == 0.0);
+
+        // AGC: supported here, and autoGain() follows what was actually SET.
+        CHECK(src.autoGainSupported());
+        CHECK(!src.autoGain());
+        CHECK(src.setAutoGain(true));
+        CHECK(src.autoGain());
+        CHECK(src.setAutoGain(false));
+        CHECK(!src.autoGain());
+
+        // ANTENNAS: the list, and a selection reported from the driver's own
+        // readback rather than from the request.
+        CHECK(src.antennas() == (std::vector<std::string>{"TX/RX", "RX2"}));
+        CHECK(src.antenna() == "RX2");  // the device's boot port, read at open
+        CHECK(src.setAntenna("TX/RX"));
+        CHECK(src.antenna() == "TX/RX");
+        CHECK(src.antennaReadback() == "TX/RX");
+        // A port this device does not have is refused and changes nothing.
+        CHECK(!src.setAntenna("RX9"));
+        CHECK(src.antenna() == "TX/RX");
+
+        // THE RATE LIST IS THE DRIVER'S OWN, ascending. RED WHEN it falls
+        // back to the fixed 1/2/4/8 MS/s table: 2.4 MS/s - the rate ADS-B
+        // needs - is in this list and in no fixed one.
+        const std::vector<double> rates = src.supportedSampleRatesHz();
+        CHECK(rates.size() == 5u);
+        if (rates.size() == 5u) {
+            CHECK(rates[0] == 250000.0);
+            CHECK(rates[3] == 2400000.0);
+            CHECK(rates[4] == 3200000.0);
+        }
+        for (std::size_t i = 1; i < rates.size(); ++i) { CHECK(rates[i] > rates[i - 1]); }
+
+        // CLOSING FORGETS ALL OF IT. A stale gain range or antenna list
+        // surviving a close would be drawn by the panel against whatever is
+        // opened next.
+        src.closeDevice();
+        CHECK(src.gains().empty());
+        CHECK(src.antennas().empty());
+        CHECK(src.antenna().empty());
+        CHECK(src.supportedSampleRatesHz().empty());
+        CHECK(!src.autoGainSupported());
+        CHECK(std::strcmp(src.driverKey(), "soapy") == 0);
+    }
+
+    // A DRIVER THAT ANSWERS NO RATE LIST AT ALL still gives the panel
+    // something to show. UHD is exactly this: a B200 takes any rate its
+    // master clock divides to, so listSampleRates comes back empty, and a
+    // Rate control with no rows in it would be a regression on every device
+    // that has always shown 1/2/4/8.
+    {
+        SoapySDR::Registry reg("fakehealth", &findHealth, &makeHealth, SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        CHECK(src.open("driver=fakehealth"));
+        const std::vector<double> rates = src.supportedSampleRatesHz();
+        std::printf("no-list driver falls back to %zu rates\n", rates.size());
+        CHECK(rates == (std::vector<double>{1.0e6, 2.0e6, 4.0e6, 8.0e6}));
+        // ...and a driver with no gains and no antennas is not an error
+        // either: the panel simply draws no sliders.
+        CHECK(src.gains().empty());
+        src.closeDevice();
     }
 
     return testSummary("test_soapy_source");

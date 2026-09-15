@@ -215,11 +215,15 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         *f.dst = v;
     }
 
-    if (req.sourceKind && *req.sourceKind != "siggen" && *req.sourceKind != "soapy") {
+    if (req.sourceKind && *req.sourceKind != "siggen" && *req.sourceKind != "soapy" &&
+        *req.sourceKind != "rtlsdr" && *req.sourceKind != "hackrf") {
         // "file" is refused ON PURPOSE — see the note in web_control.hpp. A
         // browser naming a path on the host is a file-read primitive, not a
-        // source selector.
-        error = "sourceKind must be \"siggen\" or \"soapy\"";
+        // source selector. "rtlsdr" and "hackrf" are the native drivers, and
+        // they are no wider a door than "soapy": the application matches the
+        // args against its own enumerated list before opening anything, so a
+        // browser cannot name a device this receiver has not seen.
+        error = "sourceKind must be \"siggen\", \"soapy\", \"rtlsdr\" or \"hackrf\"";
         return false;
     }
 
