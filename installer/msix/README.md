@@ -88,7 +88,7 @@ a new DLL is added to both packages deliberately or to neither).
 Inno installer ships none either: decoder modules come from the catalogue, on a
 press, into a per-user directory (section 4).
 
-Measured on the 0.96.0 build: 3,394,310 bytes, 107 files.
+Measured on the 0.96.2 build: 3,397,686 bytes, 107 files.
 
 ---
 
@@ -310,10 +310,10 @@ publisher, and says so in yellow on every run.
 > and 65535 (**except for the first section, which cannot be 0**)."
 > — `.../msix/app-package-requirements`
 
-**FoxSDR is 0.96.0, so `0.96.0.0` cannot be submitted.** Either the product
+**FoxSDR is 0.96.2, so `0.96.2.0` cannot be submitted.** Either the product
 reaches 1.0.0 before the first Store submission, or the package version is
-deliberately decoupled from the product version (e.g. ship `1.0.96.0` for
-product 0.96.0), which means the number in the Store and the number in the
+deliberately decoupled from the product version (e.g. ship `1.0.96.2` for
+product 0.96.2), which means the number in the Store and the number in the
 About line disagree — exactly the drift the Inno installer's
 `generated-version.iss` exists to prevent. The script warns on every 0.x build.
 `build-msix.ps1` takes the version from `cascade.exe`'s own version output, so
@@ -507,7 +507,7 @@ failed only on *trust*. So **one elevated command is the whole unlock**:
 
 Then, back in an ordinary shell:
 
-    Add-AppxPackage -Path "installer\msix\Output\FoxSDR-0.96.0-x64.msix"
+    Add-AppxPackage -Path "installer\msix\Output\FoxSDR-0.96.2-x64.msix"
     Get-AppxPackage FoxSDR.Test.Unsubmittable | Select-Object PackageFullName, InstallLocation
 
 ### Undo all of it
@@ -568,17 +568,17 @@ anything is known about where the packaged app writes.
 
 ## 9. What is proven, and what is not
 
-### Proven on this machine, 2026-09-15, FoxSDR 0.96.0
+### Proven on this machine, 2026-09-15, FoxSDR 0.96.2 (commit e188ac4)
 
 * The package **builds**: `makepri` indexes 84 assets, `makeappx` packs 107
-  files into `FoxSDR-0.96.0-x64.msix` (3,394,310 bytes) and its **schema
+  files into `FoxSDR-0.96.2-x64.msix` (3,397,686 bytes) and its **schema
   validation passes** — `makeappx` rejected two earlier manifests with named
   errors, so this is a check that can fail.
 * The package **signs and verifies as signed**: `Get-AuthenticodeSignature`
   names the signer and reports the only defect as the untrusted self-signed
   root, which is the expected and correct state for a test certificate.
 * The identity is **well formed**: `Add-AppxPackage` computed the full name
-  `FoxSDR.Test.Unsubmittable_0.96.0.0_x64__7vfa77ky0r4tt` before it reached
+  `FoxSDR.Test.Unsubmittable_0.96.2.0_x64__7vfa77ky0r4tt` before it reached
   the trust check.
 * Every logo asset is **the size its filename claims** (84/84).
 * The **packaged code paths run**, exercised through the `FOXSDR_FAKE_PACKAGE`
@@ -594,6 +594,13 @@ anything is known about where the packaged app writes.
   * the instance was closed through its own window, addressed by the PID that
     was started (never by process name — another FoxSDR was running on this
     desk at the time, and a name-based harness would have closed theirs).
+* The suite: **123 tests, 122 pass.** The one failure is `test_soapy_enum_proc`
+  and it is a **pre-existing flake unrelated to any of this**: on an md5-pinned
+  binary with identical input it fails roughly three runs in five, always on
+  the single wall-clock assertion `CHECK(r.elapsedMs >= 1500u)` against a
+  1500 ms budget (`tests/test_soapy_enum_proc.cpp:845`), and it behaves the
+  same way on the 0.96.0 build and the 0.96.2 one. That test references nothing
+  changed here.
 * The **RTL-SDR opens from an ordinary process** on this build: RTL2838UHIDIR
   serial 00000001 bound to WinUSB, R820T tuner, 7,225,344 samples in 3.0 s,
   0 timeouts, `PASS`. That is the control the packaged run has to be compared
@@ -662,7 +669,7 @@ commitment.
 
    `Package/Properties/PublisherDisplayName` from the same page goes in
    `-PublisherDisplayName` if it differs from "Steven Fairclough".
-4. **Settle the version question** (section 5.2) — `0.96.0.0` is not a
+4. **Settle the version question** (section 5.2) — `0.96.2.0` is not a
    submittable version because the first section cannot be 0.
 5. **Create the submission and upload the `.msix`** on the *Packages* page.
    **Do not sign it.** Microsoft re-signs it after certification.
@@ -690,6 +697,15 @@ commitment.
    policies. These include, but are not limited to, Desktop Bridge and Win32
    products." A packaged FoxSDR *is* a Desktop Bridge product, so this is now
    true on the face of the policy, not by inference.
+
+   The **in-app** half of this is already done as of 0.96.1: App Developer
+   Agreement v8.11 §4(h) wants "a prominent link to your privacy policy in a
+   reasonable location, such as within your App (in addition to a link on the
+   Store product detail page)", and `src/core/telemetry.hpp` now carries
+   `kPrivacyPolicyUrl = "https://foxsdr.com/privacy.html"` as one constant so
+   the panel, the listing and the site cannot drift apart. **Enter that exact
+   URL in Partner Center**, and make sure the page is current before
+   submitting, because the submitted URL is checked.
 10. **IARC age rating questionnaire**, mandatory under Policy 11.11.
 11. **Submit**, and expect up to three business days. Once publishing begins it
     cannot be cancelled.
