@@ -347,6 +347,22 @@ an RSPduo another application already holds), the fault path for a removed
 device, and the teardown bound. Each was confirmed to go red against a
 deliberately broken driver before being believed.
 
+## The native Mirics driver
+
+**Mirics MSi2500 (native).** FoxSDR opens a Mirics MSi2500 + MSi001
+receiver directly over its own WinUSB transport - no SoapySDR module, no
+libusb and no vendor runtime. That covers the Mirics reference device, the
+early SDRplay RSP1 and RSP2, and the television sticks built on the same
+pair (Hauppauge WinTV 133559 LF, AverMedia A859, IO-DATA GV-TV100, Logitec
+LDT-1S310U/J). It tunes 150 kHz to 2 GHz through the tuner's five bands,
+runs 1.3 to 15 MS/s, and offers the tuner's own gain stages separately -
+low-noise amplifier (24 dB), mixer (19 dB) and baseband (0 to 59 dB), plus
+the buffer that stands in for the amplifier on the medium-wave inputs. The
+baseband filter follows the sample rate automatically. Like every USB radio
+in FoxSDR, the device has to be bound to WinUSB first (see Zadig, below);
+a stick still running its television driver is listed separately with what
+to do about it.
+
 ## The native RTL-SDR driver
 
 FoxSDR opens an RTL2832U dongle directly as well — the same WinUSB transport,
