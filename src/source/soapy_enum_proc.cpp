@@ -23,6 +23,16 @@
 
 #include <fcntl.h>
 #include <io.h>
+#else
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <cerrno>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #endif
 
 namespace cascade::source {
@@ -360,10 +370,158 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     }
     out.outcome = EnumOutcome::Ok;
 #else
-    (void)helper;
-    (void)timeoutMs;
-    (void)crashDir;
-    out.outcome = EnumOutcome::SpawnFailed;
+    // THE POSIX SIDE. fork()+exec() rather than posix_spawn(), because the
+    // parent-side protections below - the process's own group, and the
+    // kernel killing it if this process dies first - both need code to run
+    // in the child BETWEEN the fork and the exec, and posix_spawn has no seam
+    // for that. Everything run there is async-signal-safe (setpgid, prctl,
+    // dup2, close, execv) - fork() in a process with other threads only
+    // duplicates the calling thread, and nothing more than that is safe to
+    // call before the exec replaces this image.
+    //
+    // CHECKED BEFORE FORKING, unlike Windows's CreateProcess-does-the-check:
+    // fork() itself always succeeds regardless of whether `helper` exists, so
+    // without this a bad path would still count as an attempt and only fail
+    // once reaped - breaking the SpawnFailed contract ("nothing was ever
+    // started", attempts == 0) that a missing helper is supposed to keep.
+    if (::access(helper.c_str(), X_OK) != 0) {
+        out.outcome = EnumOutcome::SpawnFailed;
+        return;
+    }
+
+    int pipeFds[2] = {-1, -1};
+    if (::pipe(pipeFds) != 0) {
+        out.outcome = EnumOutcome::SpawnFailed;
+        return;
+    }
+    // Close-on-exec on both ends by default. The child clears it on exactly
+    // the descriptor it dup2()s into place - see SAFE TO CALL CONCURRENTLY in
+    // the header: two overlapping scans must not hand a child the OTHER
+    // scan's pipe, or its drain thread never sees end-of-file.
+    ::fcntl(pipeFds[0], F_SETFD, FD_CLOEXEC);
+    ::fcntl(pipeFds[1], F_SETFD, FD_CLOEXEC);
+
+    const int nullFd = ::open("/dev/null", O_RDWR | O_CLOEXEC);
+
+    std::vector<std::string> argStorage;
+    argStorage.push_back(helper);
+    argStorage.push_back("--enumerate-json");
+    if (!crashDir.empty()) { argStorage.push_back("--crash-dir=" + crashDir); }
+    std::vector<char*> argv;
+    argv.reserve(argStorage.size() + 1);
+    for (std::string& s : argStorage) { argv.push_back(s.data()); }
+    argv.push_back(nullptr);
+
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        out.outcome = EnumOutcome::SpawnFailed;
+        ::close(pipeFds[0]);
+        ::close(pipeFds[1]);
+        if (nullFd >= 0) { ::close(nullFd); }
+        return;
+    }
+    if (pid == 0) {
+        // CHILD. Only async-signal-safe calls from here to execv.
+        //
+        // ITS OWN PROCESS GROUP, so a timeout below can kill it and anything
+        // it spawned with one signal to the group rather than one process.
+        ::setpgid(0, 0);
+#ifdef __linux__
+        // THE CHILD CANNOT OUTLIVE THE PARENT - see the header. This is the
+        // Linux equivalent of the Windows job object with
+        // KILL_ON_JOB_CLOSE: if the thread that called fork() exits (process
+        // death or otherwise) before this child does, the kernel SIGKILLs
+        // it. PR_SET_PDEATHSIG has no portable POSIX equivalent, which is why
+        // this is guarded by __linux__ rather than the general #else.
+        ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
+        if (nullFd >= 0) { ::dup2(nullFd, STDIN_FILENO); }
+        ::dup2(pipeFds[1], STDOUT_FILENO);
+        // stderr is left exactly as inherited - deliberately, matching the
+        // Windows side: UHD's discovery errors keep reaching the same place
+        // they always did (a console, or nowhere in a windowed run).
+        ::execv(argv[0], argv.data());
+        ::_exit(127);  // exec failed; unreachable otherwise
+    }
+
+    // PARENT. The write end must close now, whether or not anything below
+    // succeeds: while it stays open the pipe has a writer and the drain
+    // thread would wait for end-of-file forever.
+    ::close(pipeFds[1]);
+    if (nullFd >= 0) { ::close(nullFd); }
+    out.attempts += 1;
+
+    // DRAINED ON ITS OWN THREAD, not after the wait - see the Windows side
+    // for why: a full pipe would otherwise deadlock against a child that is
+    // itself blocked in write() while this thread sits in waitpid().
+    std::string text;
+    std::thread drain([rd = pipeFds[0], &text] {
+        char buf[4096];
+        for (;;) {
+            const ssize_t got = ::read(rd, buf, sizeof(buf));
+            if (got <= 0) { break; }
+            text.append(buf, static_cast<std::size_t>(got));
+        }
+    });
+
+    // BOUNDED WITH A POLLING WAIT rather than a blocking waitpid(), because
+    // POSIX has no "wait with a timeout" call: sigtimedwait() needs SIGCHLD
+    // blocked process-wide (this is a library function other threads share),
+    // and a self-pipe adds a second file descriptor and signal handler for
+    // the same result this loop gets directly. 5 ms polling on a 20 s budget
+    // costs nothing a caller would notice.
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    int status = 0;
+    bool exited = false;
+    for (;;) {
+        const pid_t r = ::waitpid(pid, &status, WNOHANG);
+        if (r == pid) {
+            exited = true;
+            break;
+        }
+        if (r < 0 && errno != EINTR) { break; }  // ECHILD or similar: give up
+        if (std::chrono::steady_clock::now() >= deadline) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (!exited) {
+        // Kill the whole group - see THE CHILD CANNOT OUTLIVE THE PARENT and
+        // ITS OWN PROCESS GROUP above - then reap it. SIGKILL cannot be
+        // caught or blocked, so this wait is bounded even against a wedged
+        // vendor driver.
+        ::killpg(pid, SIGKILL);
+        ::waitpid(pid, &status, 0);
+        out.outcome = EnumOutcome::ChildTimedOut;
+    }
+
+    drain.join();
+    ::close(pipeFds[0]);
+
+    unsigned long exitCode = 0;
+    if (WIFEXITED(status)) {
+        exitCode = static_cast<unsigned long>(WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        // THE POSIX READING of the exit code Windows reports as an NTSTATUS
+        // exception (0xC0000005 and friends): there is no equivalent numeric
+        // space on Linux, so this uses the convention every POSIX shell
+        // already reports a signal death as - 128 + the signal number - by
+        // which SIGSEGV (11) is 139. It is a real, well-known number rather
+        // than one invented for this file.
+        exitCode = 128ul + static_cast<unsigned long>(WTERMSIG(status));
+    }
+    out.exitCode = exitCode;
+
+    if (out.outcome == EnumOutcome::ChildTimedOut) { return; }
+    if (exitCode != 0) {
+        out.outcome = EnumOutcome::ChildDied;
+        return;
+    }
+    if (!parseChildOutput(text, out)) {
+        out.devices.clear();
+        out.outcome = EnumOutcome::Malformed;
+        return;
+    }
+    out.outcome = EnumOutcome::Ok;
 #endif
 }
 
@@ -389,7 +547,19 @@ std::string enumerateHelperPath() {
     if (dir.empty()) { return std::string(); }
     return narrow(dir + L"cascade.exe");
 #else
-    return std::string();
+    // THE RUNNING EXECUTABLE'S DIRECTORY, Linux-style: /proc/self/exe is
+    // always a symlink to the binary that is actually running, argv[0]
+    // notwithstanding (a relative path, a PATH lookup, an exec*() that lied).
+    // The shipping case is "cascade" beside itself, exactly as the Windows
+    // side is "cascade.exe" beside itself - see CMakeLists.txt's
+    // add_executable(cascade ...), which carries no suffix on this platform.
+    char buf[4096];
+    const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) { return std::string(); }
+    const std::string exe(buf, static_cast<std::size_t>(n));
+    const std::size_t slash = exe.find_last_of('/');
+    if (slash == std::string::npos) { return std::string(); }
+    return exe.substr(0, slash + 1) + "cascade";
 #endif
 }
 

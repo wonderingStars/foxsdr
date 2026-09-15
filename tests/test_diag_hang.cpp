@@ -171,6 +171,18 @@ int main() {
     ParkedThreads parked;
     parked.spawn(3);
 
+    // LINUX-TODO(crash-capture): every block from here through "No report
+    // directory means no file, and no crash" below asserts that a stall
+    // produces an actual hang REPORT - HangWatchdog::captureAllThreads() is a
+    // documented no-op off Windows (core/hang_watchdog.cpp ~494-647: the
+    // whole function body is `#if defined(_WIN32)` with no #else, so
+    // reportsWritten() can never leave 0 and lastReportPath() can never leave
+    // empty). start()/stop()/running()/heartbeat() themselves are portable
+    // and do work correctly on Linux today, but every property worth
+    // asserting here is downstream of the capture that does not exist yet.
+    // Skipped as one block rather than failing forever against that missing
+    // half; see the parallel crash-capture branch this is written for.
+#if defined(_WIN32)
     // --- A stall is noticed, reported, and survived -------------------------
     {
         const fs::path dir = scratchDir("fires");
@@ -463,6 +475,12 @@ int main() {
         CHECK(w.lastReportPath().empty());
         w.stop();
     }
+#else
+    SKIP_LINUX(
+        "HangWatchdog::captureAllThreads() is a no-op off Windows (hang_watchdog.cpp "
+        "~494-647) - a stall is detected but never produces a report to assert "
+        "against");
+#endif
 
     // The teardown's own budget (beginShutdown) and the cost of stop() itself
     // are asserted in tests/test_shutdown_budget.cpp rather than here - this
@@ -730,20 +748,26 @@ int main() {
 
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
     }
+#endif  // _WIN32 - the real-application runs and toggle blocks above need
+        // cascade's Windows CreateProcess/_popen plumbing in this test file.
 
     // --- ...and the ORDER, which the two blocks above cannot see -----------
     //
-    // The blocks above prove the marker is false mid-session and true after a
-    // clean run. Both stay green whichever side of pipeline_.stop() the write
-    // sits on — so on their own they do NOT pin the property this change
-    // exists for: that a death during the pipeline join counts as UNCLEAN.
-    // Proving that dynamically would mean killing the process inside a join
-    // that a bounded run completes in milliseconds, with no seam to hold it
-    // open. So the ordering is pinned STATICALLY, against the source that
-    // ships — crude, but it is exactly what a revert would touch, and it goes
-    // red the moment the marker moves back above the join. (Reading a source
-    // file to hold a promise is the same device tests/test_crash_upload.cpp
-    // uses against PRIVACY.md.)
+    // Pure source-text inspection - no process spawn, no Windows API - so
+    // unlike everything above this runs and means the same thing on every
+    // platform, and stays outside the #if defined(_WIN32) guard on purpose.
+    //
+    // The blocks above (Windows-only) prove the marker is false mid-session
+    // and true after a clean run. Both stay green whichever side of
+    // pipeline_.stop() the write sits on — so on their own they do NOT pin
+    // the property this change exists for: that a death during the pipeline
+    // join counts as UNCLEAN. Proving that dynamically would mean killing the
+    // process inside a join that a bounded run completes in milliseconds,
+    // with no seam to hold it open. So the ordering is pinned STATICALLY,
+    // against the source that ships — crude, but it is exactly what a revert
+    // would touch, and it goes red the moment the marker moves back above the
+    // join. (Reading a source file to hold a promise is the same device
+    // tests/test_crash_upload.cpp uses against PRIVACY.md.)
     {
         const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
         const std::string text = readFile(src);
@@ -768,7 +792,6 @@ int main() {
         CHECK(haveAll && join < marker);
         CHECK(haveAll && marker < glTeardown);
     }
-#endif
 
     return testSummary("test_diag_hang");
 }

@@ -371,6 +371,19 @@ int main() {
     }
 
     // --- The module table, and the build id that makes it symbolisable ------
+    //
+    // LINUX-TODO(crash-capture): refreshModuleTable()/peBuildId() read the
+    // Windows PE CodeView RSDS record (core/diag_report.cpp) - the durable
+    // key crash and hang reports resolve addresses against. Off Windows
+    // refreshModuleTable() is a documented no-op (returns 0, diag_report.cpp
+    // ~160) and peBuildId() has no PE to parse, so every assertion below
+    // would fail forever against missing infrastructure rather than a
+    // regression. The Linux equivalent (ELF module enumeration off
+    // /proc/self/maps, the .note.gnu.build-id key in place of a PE's RSDS
+    // GUID) is symbol-resolution infrastructure of the same kind the
+    // parallel crash-capture branch is adding for crash_handler.cpp and
+    // hang_watchdog.cpp - real assertions belong here once that lands.
+#if defined(_WIN32)
     {
         const int n = refreshModuleTable();
         CHECK(n > 0);
@@ -408,6 +421,11 @@ int main() {
         std::uintptr_t junkOffset = 0;
         CHECK(!resolveAddress(static_cast<std::uintptr_t>(1), junk, junkOffset));
     }
+#else
+    SKIP_LINUX(
+        "refreshModuleTable()/peBuildId() read the Windows PE CodeView RSDS record "
+        "(diag_report.cpp) - no ELF build-id equivalent is implemented yet");
+#endif
 
     // --- ...and it is rebuilt when a DEVICE OPEN loads the vendor module ----
     //
@@ -461,6 +479,15 @@ int main() {
     // build is unreadable forever. The archive layout is the symbol-server
     // one, <pdb name>/<build id>/<pdb name>, so the same store can be handed
     // straight to a debugger.
+    //
+    // LINUX-TODO(crash-capture): the whole pipeline this exercises - a PE
+    // build id from peBuildId(), a PDB archived by the POST_BUILD step in
+    // CMakeLists.txt, tools/archive-symbols.ps1's layout - is Windows-only,
+    // and CASCADE_APP_BINDIR/"cascade.exe" is a Windows-only filename literal
+    // besides. Nothing here can pass until a Linux build-id and a Linux
+    // symbol-archiving equivalent exist; see the module-table skip above for
+    // the same reasoning.
+#if defined(_WIN32)
     {
         const fs::path exe = fs::path(CASCADE_APP_BINDIR) / "cascade.exe";
         CHECK(fs::exists(exe));
@@ -493,6 +520,12 @@ int main() {
         const std::uintmax_t mapSize = fs::file_size(symmap, mapSizeEc);
         CHECK(!mapSizeEc && mapSize > 0);
     }
+#else
+    SKIP_LINUX(
+        "the PE build id / PDB symbol-archive pipeline (peBuildId, "
+        "tools/archive-symbols.ps1) is Windows-only - no Linux build-id or symbol "
+        "archive exists yet");
+#endif
 
 #if defined(_WIN32)
     // --- The archiver works for a module that is NOT cascade.exe ------------

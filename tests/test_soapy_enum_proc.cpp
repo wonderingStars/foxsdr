@@ -77,6 +77,10 @@
 #include <io.h>
 #include <sys/stat.h>
 #include <tlhelp32.h>
+#else
+#include <csignal>
+#include <cstdint>
+#include <unistd.h>
 #endif
 
 #include "test_check.hpp"
@@ -255,8 +259,18 @@ int fakeHelper(int argc, char** argv) {
                        SEM_NOOPENFILEERRORBOX);
         ::SetUnhandledExceptionFilter(&quietDeath);
         ::RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
-#endif
         return 0;  // unreachable on Windows
+#else
+        // THE LINUX EQUIVALENT: a real SIGSEGV, not a return code. No dump or
+        // dialog exists to suppress on this platform - a signal death simply
+        // exits the process - so there is nothing here to disable first. The
+        // parent side reads this back as WIFSIGNALED(SIGSEGV), reported as
+        // exitCode 128+11=139; see the "0xC0000005 on Windows, 139 on Linux"
+        // comment below at the count of injected faults.
+        volatile int* p = nullptr;
+        *p = 1;
+        return 0;  // unreachable
+#endif
     }
     if (mode == "flaky") {
         // Dies the first time it is asked and answers the second, which is the
@@ -273,6 +287,8 @@ int fakeHelper(int argc, char** argv) {
     if (mode == "hang") {
 #ifdef _WIN32
         ::Sleep(60000);
+#else
+        ::sleep(60);
 #endif
         return 0;
     }
@@ -316,7 +332,7 @@ unsigned long currentPid() {
 #ifdef _WIN32
     return static_cast<unsigned long>(::GetCurrentProcessId());
 #else
-    return 0ul;
+    return static_cast<unsigned long>(::getpid());
 #endif
 }
 
@@ -367,7 +383,16 @@ unsigned long waitClockTickMs() {
 #ifdef _WIN32
 std::string selfExePath() { return std::filesystem::path(selfExePathW()).string(); }
 #else
-std::string selfExePath() { return std::string(); }
+// /proc/self/exe is always this running binary, argv[0] notwithstanding -
+// the same reasoning as the product's own enumerateHelperPath() in
+// soapy_enum_proc.cpp, which this test's helper resolution below is checked
+// against.
+std::string selfExePath() {
+    char buf[4096];
+    const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) { return std::string(); }
+    return std::string(buf, static_cast<std::size_t>(n));
+}
 #endif
 
 void setMode(const char* mode) {
@@ -400,8 +425,15 @@ std::string findRealCascade() {
     if (self.empty()) { return std::string(); }
     const std::filesystem::path dir = self.parent_path();
     const std::filesystem::path candidates[] = {
+#ifdef _WIN32
         dir / "cascade.exe",
         dir.parent_path().parent_path() / "Release" / "cascade.exe",
+#else
+        // Single-config Ninja layout: tests build into build/tests/ and the
+        // app into build/ - one level up from this binary's directory,
+        // rather than the multi-config MSVC layout's two.
+        dir.parent_path() / "cascade",
+#endif
     };
     std::error_code ec;
     for (const auto& c : candidates) {
@@ -587,8 +619,15 @@ int main(int argc, char** argv) {
         const std::string resolved = enumerateHelperPath();
         CHECK(!resolved.empty());
         // Beside the running executable, named for the application - not for
-        // whatever this test binary happens to be called.
+        // whatever this test binary happens to be called. The name itself is
+        // platform-specific: CMakeLists.txt's add_executable(cascade ...)
+        // gets a ".exe" suffix from the linker on Windows and none at all on
+        // Linux, so the literal string this checks against has to follow it.
+#ifdef _WIN32
         CHECK(std::filesystem::path(resolved).filename().string() == "cascade.exe");
+#else
+        CHECK(std::filesystem::path(resolved).filename().string() == "cascade");
+#endif
         CHECK(std::filesystem::path(resolved).parent_path() ==
               std::filesystem::path(self).parent_path());
     }
@@ -821,6 +860,18 @@ int main(int argc, char** argv) {
         o.allowInProcessFallback = false;
         o.attempts = 1;
 
+        // THE EXPECTED CODE, and it is genuinely platform-specific rather than
+        // a Windows literal left unported: 0xC0000005 is the NTSTATUS for an
+        // access violation, which has no meaning outside Windows. The POSIX
+        // side of runOneChild (soapy_enum_proc.cpp) reads a signal death off
+        // WIFSIGNALED/WTERMSIG and reports it the way every POSIX shell
+        // already reports one - 128 + the signal number - so a SIGSEGV here
+        // is 139, not an invented substitute for the Windows number.
+#ifdef _WIN32
+        constexpr unsigned long kExpectedFaultCode = 0xC0000005ul;
+#else
+        constexpr unsigned long kExpectedFaultCode = 128ul + SIGSEGV;
+#endif
         constexpr int kFaults = 200;
         int died = 0;
         int rightCode = 0;
@@ -828,12 +879,11 @@ int main(int argc, char** argv) {
         for (int i = 0; i < kFaults; ++i) {
             const EnumResult r = enumerateIsolated(o);
             if (r.outcome == EnumOutcome::ChildDied) { ++died; }
-            if (r.exitCode == 0xC0000005ul) { ++rightCode; }
+            if (r.exitCode == kExpectedFaultCode) { ++rightCode; }
             if (!r.devices.empty()) { ++leakedDevices; }
         }
-        std::printf("injected child faults: %d/%d reported as child-died, %d/%d with "
-                    "0xC0000005\n",
-                    died, kFaults, rightCode, kFaults);
+        std::printf("injected child faults: %d/%d reported as child-died, %d/%d with 0x%08lX\n",
+                    died, kFaults, rightCode, kFaults, kExpectedFaultCode);
         CHECK(died == kFaults);
         CHECK(rightCode == kFaults);
         CHECK(leakedDevices == 0);
@@ -893,8 +943,17 @@ int main(int argc, char** argv) {
         CHECK(r.elapsedMs >= floorMs);
         // ...and then acted, rather than waiting out the helper's own 60 s.
         CHECK(r.elapsedMs < 20000u);
-        // Killed by us, with our marker, rather than having exited on its own.
+        // Killed by us, rather than having exited on its own. Windows carries
+        // a custom marker in the exit code because TerminateProcess lets the
+        // caller choose one; POSIX's kill has no such parameter, so runOneChild
+        // reports the actual mechanism instead - a SIGKILL death reads back as
+        // 128+9 by the same WIFSIGNALED convention as the injected-fault block
+        // above.
+#ifdef _WIN32
         CHECK(r.exitCode == 0xE0454E55ul);
+#else
+        CHECK(r.exitCode == 128ul + SIGKILL);
+#endif
         // NOT retried: a timeout has already cost the full budget.
         CHECK(r.attempts == 1);
     }
@@ -1089,7 +1148,18 @@ int main(int argc, char** argv) {
         cfg.enabled = true;
         cascade::core::installCrashHandlers(cfg);
         cascade::core::setCrashCaptureEnabled(true, false);
+        // LINUX-TODO(crash-capture): installCrashHandlers/activeCrashDir are a
+        // documented no-op off Windows (core/crash_handler.cpp ~741-806), so
+        // "armed" here can only ever read back empty until that lands. Real
+        // assertion kept for Windows; Linux gets an honest, counted skip
+        // rather than a permanent, misleading FAIL.
+#ifdef _WIN32
         CHECK(cascade::core::activeCrashDir() == dir.string());
+#else
+        SKIP_LINUX(
+            "core::activeCrashDir()/installCrashHandlers() are a no-op off Windows "
+            "(crash_handler.cpp ~741-806) - nothing is armed to report");
+#endif
 
         // THE CHILD IS TOLD. Without the command-line argument the child runs
         // with no handler at all and this is false.
@@ -1100,7 +1170,16 @@ int main(int argc, char** argv) {
             o.allowInProcessFallback = false;
             const EnumResult r = enumerateIsolated(o);
             CHECK(r.outcome == EnumOutcome::Ok);
+            // LINUX-TODO(crash-capture): childCaptureArmed can only be true
+            // when the parent's own activeCrashDir() is non-empty, which it
+            // never is on Linux today - see the skip above. The rest of this
+            // block (outcome, device rows, and "nothing was filed") are pure
+            // enumeration mechanics and keep running for real.
+#ifdef _WIN32
             CHECK(r.childCaptureArmed);
+#else
+            SKIP_LINUX("childCaptureArmed cannot be true while activeCrashDir() is a no-op");
+#endif
             CHECK(rowsOf(r) == expectedOkRows());
             // A healthy scan files nothing: the reports below mean something
             // only because this one produced none.
@@ -1130,9 +1209,21 @@ int main(int argc, char** argv) {
             const std::string body = allReportText(dir);
             std::printf("contained fault: %zu report(s) after a recovered death\n",
                         crashReports(dir).size());
+            // LINUX-TODO(crash-capture): the CONTAINED death is real (outcome
+            // Ok, childDeaths 1, both asserted above and both genuine
+            // enumeration mechanics) but reportAbsorbedChildFault() - the
+            // write side - is a no-op off Windows, so no file is ever filed
+            // to inspect. Skip the report-content assertions rather than
+            // failing them against a file that cannot exist yet.
+#ifdef _WIN32
             CHECK(crashReports(dir).size() == 1);
             CHECK(body.find("enumeration child process died") != std::string::npos);
             CHECK(body.find("code: 0x00000007") != std::string::npos);
+#else
+            SKIP_LINUX(
+                "core::reportAbsorbedChildFault() is a no-op off Windows - a recovered "
+                "child death is contained but never filed as a report");
+#endif
 
             std::filesystem::remove(counter, ec);
             setEnvVar(kCounterVar, "");
@@ -1190,7 +1281,14 @@ int main(int argc, char** argv) {
             CHECK(r.guardedCalls == (r.childRuntimeAvailable ? 2ull : 0ull));
             // The REAL helper reports capture it actually armed, not capture
             // it was merely told about.
+            // LINUX-TODO(crash-capture): the real binary cannot report armed
+            // capture while the parent's own activeCrashDir() is a no-op -
+            // see the skip earlier in this block.
+#ifdef _WIN32
             CHECK(r.childCaptureArmed);
+#else
+            SKIP_LINUX("the real helper cannot arm capture while activeCrashDir() is a no-op");
+#endif
         }
 
         // OFF MEANS OFF, all the way down: with the parent's capture switched

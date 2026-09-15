@@ -378,9 +378,25 @@ bool SoapySource::runtimeAvailable() {
 #else
     // POSIX links it normally, but the module search path still has to cover
     // wherever the distribution put the vendor modules.
+    //
+    // GUARDED, like the Windows branch above and every other crossing in this
+    // file (moduleSearchPaths, loadedModules, vendorInstalls, ...): a vendor
+    // .so can fault during this touch exactly as a vendor .dll can, and
+    // callGuardingVendorFaults's POSIX side still counts the crossing even
+    // though it cannot recover from a SIGSEGV - see vendor_guard.cpp. This is
+    // the reason test_soapy_enum_proc's durability block asserts exactly TWO
+    // guarded calls when the runtime is present: one here, one for the walk
+    // itself. Calling ensureVendorModulesVisible bare would leave the count
+    // at one and, more to the point, leave this crossing uncounted alongside
+    // every other one in this file being counted.
     static const bool ready = []() {
         installSoapyLogBridge();  // same reason as the Windows branch above
-        ensureVendorModulesVisible(SoapySDR::getABIVersion());
+        guardedVendorCall([]() noexcept {
+            try {
+                ensureVendorModulesVisible(SoapySDR::getABIVersion());
+            } catch (...) {
+            }
+        });
         return true;
     }();
     (void)ready;
