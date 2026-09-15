@@ -92,6 +92,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -387,7 +388,32 @@ public:
     // to push interleaved frames or a mono downmix, and going through the
     // sink directly would leave that mirror stale. Returns false only when
     // both attempts fail (the sink is then closed and write() simply drops).
+    //
+    // BLOCKING, and on some machines for a very long time: on Windows this
+    // reaches waveOutOpen, which has no timeout and held one field session's
+    // GUI thread for 57 seconds. Call it directly only where blocking is
+    // harmless - the constructor, before any frame loop exists. Everything
+    // else goes through gui::AudioOpen with audioOpener() below.
     bool openAudioDevice(int deviceIndex);
+
+    // The same open, packaged so it can run on a worker thread that may
+    // outlive this Pipeline: the returned callable owns a reference to the
+    // sink (see audio_ below) and touches nothing else of this object.
+    //
+    // WHAT IT DELIBERATELY LEAVES OUT is the channel mirror. audioChannels_ is
+    // read by the DSP thread under audioMutex_ and belongs to this object, not
+    // to the worker, so the caller republishes it with publishAudioChannels()
+    // on the frame it collects the result. The cost of that deferral is at
+    // most one audio block pushed in the previous layout during a device
+    // switch, which is inaudible against the switch itself; the cost of
+    // letting an abandoned worker write it would be a use-after-free.
+    std::function<bool(int)> audioOpener();
+
+    // Mirrors the sink's current channel layout for the DSP thread. Called
+    // from the GUI thread when an asynchronous open completes; `ok` false
+    // means the open failed and the layout falls back to mono, exactly as the
+    // synchronous path does.
+    void publishAudioChannels(bool ok);
 
     // --- Runtime input-rate follow (rate-follow) ------------------------------
     // Rebuilds the rate-dependent DSP chain for a new input sample rate. The
@@ -706,8 +732,16 @@ private:
     std::unique_ptr<cascade::dsp::AutoNotch> autoNotchR_;
     std::unique_ptr<cascade::dsp::NoiseReduction> nrL_;
     std::unique_ptr<cascade::dsp::NoiseReduction> nrR_;
-    cascade::sink::AudioOut audio_;       // constructed always; device opened
-                                          // only when cfg_.audioEnabled
+    // SHARED, NOT HELD BY VALUE, and the reason is lifetime rather than
+    // sharing. A device open is a blocking driver call, so the GUI runs it on
+    // a worker (gui/audio_open.hpp) and abandons that worker at quit rather
+    // than joining it - which means the worker can still be inside
+    // Pa_OpenStream after this Pipeline is gone. audioOpener() hands the
+    // worker a copy of this pointer, so the sink outlives the abandonment and
+    // whichever thread drops the last reference is the one that closes the
+    // stream. Never null.
+    std::shared_ptr<cascade::sink::AudioOut> audio_;  // device opened only
+                                                      // when cfg_.audioEnabled
     // Channel layout the sink was last opened with (1 or 2), mirrored under
     // audioMutex_ so the DSP thread never races a GUI device switch.
     int audioChannels_ = 1;

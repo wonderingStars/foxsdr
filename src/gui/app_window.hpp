@@ -42,6 +42,7 @@ struct GLFWwindow;
 // headers below it - the tests include it without a graphics context.
 #include "gui/page_geometry.hpp"
 #include "gui/rail_banks.hpp"
+#include "gui/audio_open.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -580,6 +581,19 @@ private:
     // version is that a dead sink is invisible from inside the app, so the
     // only fix is to keep asking.
     void pollAudioHealth();
+    // Collects a finished asynchronous audio-device open. Called once per
+    // frame, BEFORE pollAudioHealth: the watchdog must not judge a sink that
+    // an open has just handed back.
+    void pollAudioOpen();
+    // Asks for an output device through audioOpen_, and applies the result
+    // immediately when the device answered inside the bound. `recovery` marks
+    // a request the audio watchdog made rather than the user, so only those
+    // are counted as recoveries. Returns true when the open completed here.
+    bool requestAudioOpen(int deviceIndex, bool recovery);
+    // The GUI-thread half of an open, wherever it completed: republishes the
+    // channel layout for the DSP thread, re-enumerates, and puts the Sinks
+    // combo back on the device that is actually playing.
+    void applyAudioOpenResult();
     // Takes every live plugin handle off the pipeline and the UI, in the one
     // order that is safe, then unmaps the modules. The ONLY way any code here
     // may call PluginHost::unloadAll() — see the note in its body.
@@ -1322,6 +1336,19 @@ private:
     double lastAudioProbeSec_ = 0.0;
     int audioRecoveries_ = 0;
     std::string audioHealthNote_;
+    // THE DEVICE OPEN, OFF THIS THREAD. Field report "hang ntdll.dll @
+    // InitializeWaveHandles" (0.96.4): picking an output device put the GUI
+    // thread inside waveOutOpen for 57 seconds. See gui/audio_open.hpp for the
+    // whole argument; what matters here is that nothing on this thread may
+    // query the sink while inFlight() is true.
+    cascade::gui::AudioOpen audioOpen_;
+    // The AudioOpen::Result tag that says which of the two asked: the audio
+    // watchdog reopening a dead stream (counted as a recovery, and the only
+    // one that writes the health note) or the user picking a device. Carried
+    // by the request rather than kept in a member here, because a click queued
+    // behind a reopen would otherwise relabel the open already in flight.
+    static constexpr int kAudioOpenByUser = 0;
+    static constexpr int kAudioOpenByWatchdog = 1;
     // Once-a-minute starvation digest (see pollAudioHealth). Sampled every
     // frame — not gated behind the 1 Hz watchdog above — because a ring can
     // dip and recover well inside a second at 48 kHz, and a low-water mark

@@ -202,6 +202,7 @@ Pipeline::Pipeline(Config cfg)
                   static_cast<unsigned>(cfg.sampleRateHz /
                                             static_cast<double>(vfoDecim_) +
                                         0.5)),
+      audio_(std::make_shared<cascade::sink::AudioOut>()),
       tapBuf_(2 * kAudioTapSize, 0.0f) {
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     estimator_.setAlpha(cfg.averagingAlpha);
@@ -352,14 +353,27 @@ void Pipeline::publishRds() {
 }
 
 bool Pipeline::openAudioDevice(int deviceIndex) {
-    // Stereo first, mono as the fallback: a two-channel open is what the WFM
-    // stereo path needs, but a mono-only device (or a host API that refuses
-    // the layout) must still produce sound rather than nothing.
-    bool ok = audio_.open(deviceIndex, kAudioRateHz, 2);
-    if (!ok) { ok = audio_.open(deviceIndex, kAudioRateHz, 1); }
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    audioChannels_ = ok ? audio_.channels() : 1;
+    const bool ok = audioOpener()(deviceIndex);
+    publishAudioChannels(ok);
     return ok;
+}
+
+std::function<bool(int)> Pipeline::audioOpener() {
+    // BY VALUE, and that is the whole point: the worker this is handed to may
+    // still be inside the driver when the Pipeline is destroyed, so it holds
+    // the sink alive rather than a pointer back into an object that is gone.
+    return [audio = audio_](int deviceIndex) {
+        // Stereo first, mono as the fallback: a two-channel open is what the
+        // WFM stereo path needs, but a mono-only device (or a host API that
+        // refuses the layout) must still produce sound rather than nothing.
+        if (audio->open(deviceIndex, kAudioRateHz, 2)) { return true; }
+        return audio->open(deviceIndex, kAudioRateHz, 1);
+    };
+}
+
+void Pipeline::publishAudioChannels(bool ok) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    audioChannels_ = ok ? audio_->channels() : 1;
 }
 
 Pipeline::~Pipeline() {
@@ -901,7 +915,7 @@ bool Pipeline::audioMuted() const {
 }
 
 cascade::sink::AudioOut& Pipeline::audio() {
-    return audio_;
+    return *audio_;
 }
 
 bool Pipeline::setInputRateHz(double rateHz) {
@@ -1701,9 +1715,9 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
             outIlv_[2 * i] = outL_[i];
             outIlv_[2 * i + 1] = outR_[i];
         }
-        audio_.writeStereo(outIlv_.data(), k);
+        audio_->writeStereo(outIlv_.data(), k);
     } else {
-        audio_.write(monoOut_.data(), k);
+        audio_->write(monoOut_.data(), k);
     }
 }
 
