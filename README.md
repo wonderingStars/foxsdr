@@ -18,16 +18,18 @@ other radio SoapySDR can reach.
 >   test suite, the built-in signal generator and IQ-file playback. No SDR has
 >   been driven through it on a Linux machine, so the hardware path is unproven,
 >   and that is the single biggest reason not to rely on it yet.
-> - **Native USB drivers are Windows-only here so far; SoapySDR and the SDRplay
->   API are the exceptions.** The RTL-SDR, HackRF, Airspy R2/Mini and Airspy
->   HF+ native drivers talk to their radios over WinUSB and say so plainly
->   rather than silently listing no devices; a libusb-based transport for them
->   is being built in a parallel effort alongside this one, not yet in this
->   branch. The SDRplay driver dlopens the real Linux API library
->   (`libsdrplay_api.so.3`, from SDRplay's own `.run` installer) instead of
->   refusing outright, but — like everything else in this notice — that path
->   has not been exercised against a real RSP. Any radio SoapySDR itself can
->   reach already works the same as on Windows.
+> - **The native USB drivers now have a Linux transport, but no radio has been
+>   through it.** Since 0.97.0 the RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+,
+>   RX888 mk2 and Mirics drivers reach their radios on Linux through
+>   `src/usb/usbfs_device.cpp`, the kernel's own usbfs interface, with no
+>   libusb and no SoapySDR module; the udev rule in `installer/linux/` grants
+>   a desktop user access to the device nodes. Every line of that transport
+>   was written and unit-tested on a machine with no radio attached, so the
+>   hardware path is unproven — see `installer/linux/README.md` for exactly
+>   what is and is not verified. The SDRplay driver dlopens the real Linux API
+>   library (`libsdrplay_api.so.3`, from SDRplay's own `.run` installer), also
+>   unexercised against a real RSP. Any radio SoapySDR itself can reach
+>   already works the same as on Windows.
 > - **The plugins are built and installable, but unproven on air here.**
 >   Seventeen of the twenty-four catalogued plugins now ship for Linux and
 >   install from the in-app catalogue, including the aircraft registry lookup
@@ -881,10 +883,16 @@ Audio goes through ALSA. On a machine whose audio is managed by PulseAudio or
 PipeWire, install `libasound2-plugins` so ALSA's default device routes to the
 sound server rather than claiming the hardware directly.
 
-**Hardware.** The RTL-SDR, HackRF, Airspy R2/Mini and Airspy HF+ native drivers
-talk to their radios over WinUSB and are Windows-only in this branch; a
-libusb-based transport for `src/usb/usb_device.hpp` is being built in a
-parallel effort alongside this port, not merged here yet. The SDRplay driver
+**Hardware.** The RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, RX888 mk2 and
+Mirics native drivers talk to their radios on Linux through
+`src/usb/usbfs_device.cpp` — the kernel's usbfs ioctls on
+`/dev/bus/usb/BBB/DDD`, not libusb — behind the same `src/usb/usb_device.hpp`
+contract the Windows WinUSB transport keeps. Install the udev rule from
+`installer/linux/` first (`installer/linux/README.md` has the three commands
+and the troubleshooting list); without it every open fails with a permissions
+error that says so. An RTL-SDR needs no unbinding from the kernel's DVB
+driver — the transport detaches it itself. None of this has been driven with
+a real radio yet. The SDRplay driver
 does work on Linux as of this port: it `dlopen()`s `libsdrplay_api.so.3`, the
 SONAME SDRplay's own `.run` installer registers with `ldconfig` (get the API
 from [sdrplay.com](https://www.sdrplay.com), version 3.x), falling back to the
