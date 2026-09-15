@@ -643,4 +643,109 @@ inline bool nativeOpenShouldFallBack(const std::string& error) {
     return error.find(kTunerUnsupportedMarker) != std::string::npos;
 }
 
+// --- The saved radio outlives a restore that could not open it -------------
+
+// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are four of
+// them, read by the config restore, the web remote's device match,
+// makeDeviceSource's construction and the remembered-source rule below, and a
+// list of string literals copied per call site is one chance per copy for an
+// Airspy to become quietly unrestorable while everything else keeps working.
+// It sits here rather than in app_window.cpp's anonymous namespace because
+// the decisions in this file need it too - and because a rule kept in a .cpp
+// is a rule no test can reach, which is the whole reason this header exists.
+inline bool isNativeSourceKind(const std::string& kind) {
+    return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf";
+}
+
+// THE RADIO THE CONFIG NAMES, HELD OVER A SESSION THAT COULD NOT OPEN IT.
+//
+// The startup restore falls back to the signal generator when the saved radio
+// does not open - the dongle unplugged, in use by another program, or a
+// second copy of FoxSDR holding it, which is the case that found this - and
+// that fallback is right: the session has to run on something. What was wrong
+// is what the exit save then wrote. The live source is the generator, so the
+// config went out as "siggen" with both args slots empty, and ONE session
+// with the dongle out of its socket was enough for FoxSDR to forget the radio
+// permanently: the next start had nothing to try, and the user had to find
+// their receiver in the Source section again with nothing anywhere saying
+// why it had gone.
+//
+// So a failed restore keeps these values and the save writes them in place of
+// what is live (see sourceToSave). BOTH args slots travel, because they are
+// different grammars for different openers and the next start needs both -
+// soapyArgs is what the prefer-native rule reads, nativeArgs is what a native
+// driver opens (see AppConfig::nativeArgs). The rate travels with them: the
+// generator runs at a fixed 2 MS/s, and writing THAT back as the radio's rate
+// would bring the dongle up next time at a rate the user never chose.
+//
+// The antenna and the bias tee need nothing here - the restore seeds those
+// mirrors from the config before it attempts the open, so a failed open
+// leaves them holding exactly what the file carried.
+struct RememberedSource {
+    std::string kind;  // empty: nothing to remember, the live source is the truth
+    std::string soapyArgs;
+    std::string nativeArgs;
+    double sampleRateHz = 0.0;
+
+    bool valid() const { return !kind.empty(); }
+};
+
+// WHAT A FAILED RESTORE IS ALLOWED TO REMEMBER: a radio, and only a radio.
+// The generator and an I/Q file are not radios (a file path is saved through
+// its own field), and a kind with no args for its own family names no
+// particular device, so there is nothing there worth carrying into the next
+// launch. Anything else returns an empty RememberedSource, which sourceToSave
+// reads as "save what is live", i.e. exactly today's behaviour.
+inline RememberedSource rememberedSourceAfterFailedOpen(const std::string& savedKind,
+                                                        const std::string& savedSoapyArgs,
+                                                        const std::string& savedNativeArgs,
+                                                        double savedSampleRateHz) {
+    RememberedSource keep;
+    const bool soapy = (savedKind == "soapy") && !savedSoapyArgs.empty();
+    const bool native = isNativeSourceKind(savedKind) && !savedNativeArgs.empty();
+    if (!soapy && !native) { return keep; }
+    keep.kind = savedKind;
+    keep.soapyArgs = savedSoapyArgs;
+    keep.nativeArgs = savedNativeArgs;
+    // A rate of zero is a config that never recorded one; the restore's own
+    // open() treats it the same way, so do not write it back as if chosen.
+    keep.sampleRateHz = savedSampleRateHz > 0.0 ? savedSampleRateHz : 0.0;
+    return keep;
+}
+
+// WHICH SOURCE THE SAVE NAMES. The remembered radio wins ONLY while the
+// generator is what is running - which is the fallback state a failed restore
+// leaves behind, and nothing else. The moment any real source is installed
+// (another radio opened, an I/Q file opened) the live values are the truth and
+// are written, and a user who deliberately picks the generator has their
+// remembered radio dropped at the point they pick it, not here: a deliberate
+// choice must still overwrite, exactly as it always has.
+//
+// The gate on the live kind is belt and braces for that clearing - a saved
+// radio silently outliving an open one would be a far worse bug than the one
+// this fixes.
+struct SavedSource {
+    std::string kind;
+    std::string soapyArgs;
+    std::string nativeArgs;
+    double sampleRateHz = 0.0;
+};
+
+inline SavedSource sourceToSave(const std::string& liveKind, const std::string& liveSoapyArgs,
+                                const std::string& liveNativeArgs, double liveSampleRateHz,
+                                const RememberedSource& remembered) {
+    SavedSource out;
+    out.kind = liveKind;
+    out.soapyArgs = liveSoapyArgs;
+    out.nativeArgs = liveNativeArgs;
+    out.sampleRateHz = liveSampleRateHz;
+    if (remembered.valid() && liveKind == "siggen") {
+        out.kind = remembered.kind;
+        out.soapyArgs = remembered.soapyArgs;
+        out.nativeArgs = remembered.nativeArgs;
+        if (remembered.sampleRateHz > 0.0) { out.sampleRateHz = remembered.sampleRateHz; }
+    }
+    return out;
+}
+
 }  // namespace cascade::gui

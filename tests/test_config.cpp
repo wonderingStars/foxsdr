@@ -32,6 +32,11 @@
 // sense read together — so the cases live in one file. Pulls in no GLFW or
 // ImGui; see the note at the top of app_window.hpp.
 #include "gui/app_window.hpp"
+// rememberedSourceAfterFailedOpen()/sourceToSave(): the two pure decisions
+// AppWindow makes about WHICH source the file names, exercised here against
+// the real store because the defect they fix is only visible as a config that
+// came back without the radio in it.
+#include "gui/tune_control.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -692,6 +697,111 @@ int main() {
         CHECK(out.sourceKind == "soapy");
         CHECK(out.soapyArgs == "driver=rtlsdr");
         CHECK(out.nativeArgs.empty());
+    }
+
+    // --- a config saved after a FAILED RESTORE still names the radio ---------
+    //
+    // The whole sequence, through the real store: a config naming a radio is
+    // loaded, the radio does not open (a dongle unplugged, in use by another
+    // program, or held by a second copy of FoxSDR - the report that found
+    // this), the session runs on the generator, and the file is written again
+    // at exit. What used to come back was "siggen" with both args slots empty,
+    // which is the radio gone for good: the next start had nothing to try.
+    //
+    // AppWindow cannot be constructed here (it wants a window), so the two
+    // pure decisions it now makes are driven directly - which is exactly the
+    // reason they are pure. See gui/tune_control.hpp.
+    {
+        const std::string path = p("failed_restore_keeps_radio.json");
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"rtlsdr\","
+                        "\"nativeArgs\":\"serial=deadbeef\","
+                        "\"soapyArgs\":\"driver=rtlsdr\","
+                        "\"soapyAntenna\":\"RX2\",\"nativeBiasT\":true,"
+                        "\"sampleRateHz\":2400000.0,\"centerHz\":98500000.0}\n"));
+        AppConfig loaded;
+        std::string err;
+        CHECK(ConfigStore::load(path, loaded, err));
+        CHECK(loaded.sourceKind == "rtlsdr");
+        CHECK(loaded.nativeArgs == "serial=deadbeef");
+
+        // The open fails. AppWindow remembers the saved radio...
+        const cascade::gui::RememberedSource keep =
+            cascade::gui::rememberedSourceAfterFailedOpen(loaded.sourceKind, loaded.soapyArgs,
+                                                          loaded.nativeArgs,
+                                                          loaded.sampleRateHz);
+        CHECK(keep.valid());
+
+        // ...and at exit the live source is the generator. Everything the
+        // restore seeded from the file BEFORE attempting the open - the
+        // antenna, the bias tee, the centre frequency - is still in the
+        // mirrors, so it is written out unchanged; only the source fields
+        // come from the decision.
+        AppConfig saved;
+        saved.schemaVersion = 1;
+        const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
+            "siggen", "", "", 2000000.0 /* the generator's fixed rate */, keep);
+        saved.sourceKind = src.kind;
+        saved.soapyArgs = src.soapyArgs;
+        saved.nativeArgs = src.nativeArgs;
+        saved.sampleRateHz = src.sampleRateHz;
+        saved.soapyAntenna = loaded.soapyAntenna;
+        saved.nativeBiasT = loaded.nativeBiasT;
+        saved.centerHz = loaded.centerHz;
+        CHECK(ConfigStore::save(path, saved, err));
+
+        AppConfig next = junkConfig();
+        CHECK(ConfigStore::load(path, next, err));
+        // THE DEFECT, STATED AS THE THING THAT MUST NEVER COME BACK: the file
+        // written by a session that never opened the radio still names it.
+        CHECK(next.sourceKind == "rtlsdr");
+        CHECK(next.nativeArgs == "serial=deadbeef");
+        CHECK(next.sourceKind != "siggen");
+        // Both args slots, for the prefer-native rule and the tuner fallback.
+        CHECK(next.soapyArgs == "driver=rtlsdr");
+        // The radio's own rate, not the generator's 2 MS/s - this is the
+        // number the next start hands to the driver's open().
+        CHECK(next.sampleRateHz == 2400000.0);
+        // ...and the settings that describe the radio rather than the source
+        // choice rode through untouched.
+        CHECK(next.soapyAntenna == "RX2");
+        CHECK(next.nativeBiasT);
+        CHECK(next.centerHz == 98500000.0);
+
+        // A SAVED SOAPY DEVICE, same sequence, and the kind that must survive
+        // is "soapy" rather than a native driver key.
+        const cascade::gui::RememberedSource soapyKeep =
+            cascade::gui::rememberedSourceAfterFailedOpen("soapy", "driver=uhd,serial=ABC123",
+                                                          "", 8000000.0);
+        AppConfig savedSoapy;
+        savedSoapy.schemaVersion = 1;
+        const cascade::gui::SavedSource src2 =
+            cascade::gui::sourceToSave("siggen", "", "", 2000000.0, soapyKeep);
+        savedSoapy.sourceKind = src2.kind;
+        savedSoapy.soapyArgs = src2.soapyArgs;
+        savedSoapy.nativeArgs = src2.nativeArgs;
+        savedSoapy.sampleRateHz = src2.sampleRateHz;
+        CHECK(ConfigStore::save(path, savedSoapy, err));
+        CHECK(ConfigStore::load(path, next, err));
+        CHECK(next.sourceKind == "soapy");
+        CHECK(next.soapyArgs == "driver=uhd,serial=ABC123");
+        CHECK(next.sampleRateHz == 8000000.0);
+
+        // A SESSION THAT REMEMBERS NOTHING saves the generator, which is what
+        // a user deliberately choosing it must still get.
+        AppConfig savedGen;
+        savedGen.schemaVersion = 1;
+        const cascade::gui::SavedSource src3 = cascade::gui::sourceToSave(
+            "siggen", "", "", 2000000.0, cascade::gui::RememberedSource{});
+        savedGen.sourceKind = src3.kind;
+        savedGen.soapyArgs = src3.soapyArgs;
+        savedGen.nativeArgs = src3.nativeArgs;
+        savedGen.sampleRateHz = src3.sampleRateHz;
+        CHECK(ConfigStore::save(path, savedGen, err));
+        CHECK(ConfigStore::load(path, next, err));
+        CHECK(next.sourceKind == "siggen");
+        CHECK(next.nativeArgs.empty());
+        CHECK(next.soapyArgs.empty());
     }
 
     // --- P7 clamps (documented in config.hpp) --------------------------------

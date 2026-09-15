@@ -869,5 +869,98 @@ int main() {
         CHECK(formatGain(silent.name, 16.0, silent.unit) == "VGA 16 dB");
     }
 
+    // --- rememberedSourceAfterFailedOpen / sourceToSave ----------------------
+    //
+    // THE CONFIG FORGETTING THE RADIO AFTER ONE SESSION WITHOUT IT. Reported
+    // from a live profile: a second copy of FoxSDR held the dongle, the
+    // restore logged "the saved radio (rtlsdr, rtlsdr) did not reopen", the
+    // session ran on the generator - and the exit save wrote sourceKind
+    // "siggen" with both args slots empty, so the next start had no radio to
+    // try and nothing said why. Everything below is that sequence, with no
+    // window, no pipeline and no dongle.
+    {
+        using cascade::gui::RememberedSource;
+        using cascade::gui::rememberedSourceAfterFailedOpen;
+        using cascade::gui::SavedSource;
+        using cascade::gui::sourceToSave;
+
+        // THE REPORTED CASE ITSELF, end to end. The config named a native
+        // RTL-SDR; the restore could not open it; the generator is what is
+        // running at exit - and what goes back into the file is the radio.
+        const RememberedSource keep =
+            rememberedSourceAfterFailedOpen("rtlsdr", "driver=rtlsdr", "serial=00000001",
+                                            2400000.0);
+        CHECK(keep.valid());
+        CHECK(keep.kind == "rtlsdr");
+        CHECK(keep.nativeArgs == "serial=00000001");
+        // BOTH SLOTS TRAVEL: the Soapy args are what the prefer-native rule
+        // reads on the next launch and what the unsupported-tuner fallback
+        // needs, so dropping them here would make the failed session the one
+        // that quietly removed the fallback.
+        CHECK(keep.soapyArgs == "driver=rtlsdr");
+        CHECK(keep.sampleRateHz == 2400000.0);
+
+        const SavedSource saved =
+            sourceToSave("siggen", "", "", 2000000.0 /* the generator's fixed rate */, keep);
+        CHECK(saved.kind == "rtlsdr");
+        CHECK(saved.nativeArgs == "serial=00000001");
+        CHECK(saved.soapyArgs == "driver=rtlsdr");
+        // ...AND NOT THE GENERATOR'S 2 MS/s, which is not a rate the user ever
+        // chose for their radio.
+        CHECK(saved.sampleRateHz == 2400000.0);
+
+        // A SAVED SOAPY DEVICE, the other half of the same case: a B200, a
+        // LimeSDR, anything reached through a vendor module.
+        const RememberedSource soapyKeep =
+            rememberedSourceAfterFailedOpen("soapy", "driver=uhd,serial=ABC123", "", 8000000.0);
+        CHECK(soapyKeep.valid());
+        CHECK(sourceToSave("siggen", "", "", 2000000.0, soapyKeep).kind == "soapy");
+        CHECK(sourceToSave("siggen", "", "", 2000000.0, soapyKeep).soapyArgs ==
+              "driver=uhd,serial=ABC123");
+
+        // NOTHING IS REMEMBERED FOR A SOURCE THAT IS NOT A RADIO, and nothing
+        // for a kind whose own args slot is empty - it names no particular
+        // device, so there is nothing for the next start to open.
+        CHECK(!rememberedSourceAfterFailedOpen("siggen", "", "", 2000000.0).valid());
+        CHECK(!rememberedSourceAfterFailedOpen("file", "", "", 2000000.0).valid());
+        CHECK(!rememberedSourceAfterFailedOpen("rtlsdr", "driver=rtlsdr", "", 2400000.0).valid());
+        CHECK(!rememberedSourceAfterFailedOpen("soapy", "", "serial=00000001", 2400000.0).valid());
+        // A rate that was never recorded is not written back as if it had been.
+        CHECK(rememberedSourceAfterFailedOpen("hackrf", "", "serial=0000ABCD", 0.0).sampleRateHz ==
+              0.0);
+
+        // A DELIBERATE CHOICE STILL OVERWRITES. Nothing remembered at all:
+        // whatever is live is what is saved, which is every session that
+        // restored cleanly.
+        const SavedSource plain =
+            sourceToSave("airspyhf", "", "serial=DEADBEEF", 768000.0, RememberedSource{});
+        CHECK(plain.kind == "airspyhf");
+        CHECK(plain.nativeArgs == "serial=DEADBEEF");
+        CHECK(plain.sampleRateHz == 768000.0);
+
+        // ...AND A REMEMBERED RADIO NEVER OUTLIVES AN OPEN ONE. The clearing
+        // happens where the user acts (selectSource, a successful open); this
+        // gate is the second lock on the same door, because a config naming a
+        // radio the user had just switched away from would be a worse bug than
+        // the one this exists to fix.
+        const SavedSource live =
+            sourceToSave("soapy", "driver=uhd", "", 8000000.0, keep);
+        CHECK(live.kind == "soapy");
+        CHECK(live.soapyArgs == "driver=uhd");
+        CHECK(live.nativeArgs.empty());
+        CHECK(sourceToSave("file", "", "", 1000000.0, keep).kind == "file");
+
+        // THE NATIVE KIND LIST, pinned here because the rule above keys on it:
+        // a driver missing from it would not fail to compile, it would quietly
+        // make that radio the one kind the config still forgets.
+        CHECK(cascade::gui::isNativeSourceKind("rtlsdr"));
+        CHECK(cascade::gui::isNativeSourceKind("hackrf"));
+        CHECK(cascade::gui::isNativeSourceKind("airspy"));
+        CHECK(cascade::gui::isNativeSourceKind("airspyhf"));
+        CHECK(!cascade::gui::isNativeSourceKind("soapy"));
+        CHECK(!cascade::gui::isNativeSourceKind("siggen"));
+        CHECK(!cascade::gui::isNativeSourceKind("file"));
+    }
+
     return testSummary("test_tune_control");
 }
