@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FoxSDR
+GenericName=Software-Defined Radio Receiver
+Comment=Multi-band SDR receiver with waterfall, decoders and plugins
+Exec=cascade
+Icon=foxsdr
+Categories=AudioVideo;Audio;HamRadio;
+Terminal=false
+StartupNotify=true

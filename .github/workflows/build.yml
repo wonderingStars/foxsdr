@@ -83,3 +83,43 @@ jobs:
         with:
           name: foxsdr-linux-x64
           path: foxsdr-*-linux-x64.tar.gz
+
+      # A single-file, double-clickable alternative to the tarball above, for
+      # a desktop user who has no interest in extracting an archive and
+      # setting up a .desktop entry by hand. installer/linux/build-appimage.sh
+      # stages the SAME payload the "Package" step above already produces
+      # (the cascade binary and resources/bandplans it reads at runtime) plus
+      # the licensing text a distributable build must carry - it does not
+      # bundle SoapySDR/OpenSSL/ALSA/OpenGL, so this runner's host libraries
+      # are exactly what a machine running the AppImage also needs, same as
+      # the tarball already requires.
+      #
+      # squashfs-tools is not guaranteed on every runner image (appimagetool
+      # shells out to the system mksquashfs rather than bundling one), so it
+      # is installed explicitly here instead of assuming it rode in with
+      # something else.
+      - name: Build AppImage
+        run: |
+          sudo apt-get install -y --no-install-recommends squashfs-tools
+          installer/linux/build-appimage.sh build
+
+      # The AppImage runtime itself needs FUSE to mount, which this runner
+      # does not have configured; extract-and-run is the same fallback used
+      # to build it, and covers a user's FUSE-less container or CI runner as
+      # much as it covers this one - a real desktop session normally has FUSE
+      # and never needs it. Both checks mirror the "Selftest" and "Test"
+      # steps above: an exact frame count, not just a nonzero exit code.
+      - name: Verify AppImage runs
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          appimage="dist/FoxSDR-$version-x86_64.AppImage"
+          "$appimage" --version
+          xvfb-run -a "$appimage" --frames 60
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-linux-x64-appimage
+          path: dist/FoxSDR-*-x86_64.AppImage

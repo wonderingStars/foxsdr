@@ -1,9 +1,20 @@
 // Tests for core/config.hpp / config.cpp (ConfigStore).
 //
 // Every fixture file is synthesized in-test under one pid-suffixed directory
-// in the CWD — ctest runs each test from build-<slug>/tests, which is
-// gitignored — and the whole directory is removed on success, left behind on
-// failure for autopsy.
+// in the OS temp directory (fs::temp_directory_path(), the same base every
+// other fixture-writing test in this suite uses - test_image_write.cpp,
+// test_web_server.cpp, test_soapy_enum_proc.cpp among them) and the whole
+// directory is removed on success, left behind on failure for autopsy.
+//
+// THIS WAS PREVIOUSLY A BARE RELATIVE NAME IN THE CWD ("cfg_test_<pid>"), on
+// the documented assumption that ctest always runs each test from
+// build-<slug>/tests. That assumption does not hold for every way this binary
+// gets invoked - a direct run from the repository root among them - and each
+// one leaves a stray cfg_test_<pid>/ directory behind in whatever the caller's
+// working directory was; twelve such directories were found sitting in the
+// repository root on a Windows checkout (Linux port, 2026-09-15). Temp is
+// correct regardless of cwd, which is what the rest of this suite already
+// relies on for exactly this reason.
 //
 // Reference checking: roundtrip equality is asserted field by field against
 // the exact values written, never against re-serialized output. Float/double
@@ -316,7 +327,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
 }  // namespace
 
 int main() {
-    g_root = "cfg_test_" + std::to_string(TEST_GETPID());
+    g_root = (fs::temp_directory_path() / ("cfg_test_" + std::to_string(TEST_GETPID()))).string();
     fs::remove_all(g_root);  // stale debris from a failed prior run
     fs::create_directory(g_root);
 

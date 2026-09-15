@@ -18,6 +18,16 @@ other radio SoapySDR can reach.
 >   test suite, the built-in signal generator and IQ-file playback. No SDR has
 >   been driven through it on a Linux machine, so the hardware path is unproven,
 >   and that is the single biggest reason not to rely on it yet.
+> - **Native USB drivers are Windows-only here so far; SoapySDR and the SDRplay
+>   API are the exceptions.** The RTL-SDR, HackRF, Airspy R2/Mini and Airspy
+>   HF+ native drivers talk to their radios over WinUSB and say so plainly
+>   rather than silently listing no devices; a libusb-based transport for them
+>   is being built in a parallel effort alongside this one, not yet in this
+>   branch. The SDRplay driver dlopens the real Linux API library
+>   (`libsdrplay_api.so.3`, from SDRplay's own `.run` installer) instead of
+>   refusing outright, but — like everything else in this notice — that path
+>   has not been exercised against a real RSP. Any radio SoapySDR itself can
+>   reach already works the same as on Windows.
 > - **The plugins are built and installable, but unproven on air here.**
 >   Seventeen of the twenty-four catalogued plugins now ship for Linux and
 >   install from the in-app catalogue, including the aircraft registry lookup
@@ -27,6 +37,10 @@ other radio SoapySDR can reach.
 > - **Never run on a real Linux desktop.** It has been exercised under WSL and
 >   under a virtual display in CI — neither is a real graphical session with a
 >   real sound card.
+> - **An AppImage exists**, built by `installer/linux/build-appimage.sh` and
+>   published from CI alongside the plain tarball — see "Building (Linux)"
+>   below. It is a packaging convenience, not a claim of readiness: it carries
+>   the exact same unproven binary as the tarball.
 >
 > Treat it as something to build and experiment with, not something to rely on.
 > Reports of what breaks are welcome; it will be announced as supported when it
@@ -371,8 +385,13 @@ re-reports one until it is, so a host that merely logs gets a log full of it —
 and a device removal or a service failure stops the stream with a reason rather
 than freezing the display.
 
-**Windows only**, because the SDRplay API is a Windows service. On other
-platforms enumeration returns nothing and says why in the log.
+**A Windows service on Windows; a dynamically loaded library on Linux.** On
+Windows the SDRplay API runs as a background service this driver talks to
+through `sdrplay_api.dll`; on Linux there is no service, only
+`libsdrplay_api.so.3` from SDRplay's own `.run` installer, `dlopen()`d the
+same way. Either platform without the API installed gets an empty enumeration
+and a reason in the log, and the Linux path has not yet been run against a
+real RSP (see the notice at the top of this file).
 
 **When the service itself stops answering** (0.96.1). Everything above depends
 on a Windows service that FoxSDR neither owns nor can restart, and none of the
@@ -831,10 +850,11 @@ first frame it is drawn, for a shot that needs to show its contents.
 
 ## Building (Linux — in development, see the notice at the top)
 
-**This is unfinished work.** It builds and the tests pass, but no plugins are
-available, it has never been driven with a radio on Linux, and it has never run
-on a real desktop session. Build it to experiment or to help find what is
-broken, not to use as a receiver.
+**This is unfinished work.** It builds and the tests pass, and seventeen of the
+twenty-four catalogued plugins install from the in-app catalogue (see
+[Plugins](#plugins)), but it has never been driven with a radio on Linux and it
+has never run on a real desktop session. Build it to experiment or to help find
+what is broken, not to use as a receiver.
 
 The same vendored dependencies build from source here too. Three system
 packages are needed: OpenGL headers, SoapySDR, and OpenSSL — the last of these
@@ -860,6 +880,51 @@ ctest --test-dir build --output-on-failure
 Audio goes through ALSA. On a machine whose audio is managed by PulseAudio or
 PipeWire, install `libasound2-plugins` so ALSA's default device routes to the
 sound server rather than claiming the hardware directly.
+
+**Hardware.** The RTL-SDR, HackRF, Airspy R2/Mini and Airspy HF+ native drivers
+talk to their radios over WinUSB and are Windows-only in this branch; a
+libusb-based transport for `src/usb/usb_device.hpp` is being built in a
+parallel effort alongside this port, not merged here yet. The SDRplay driver
+does work on Linux as of this port: it `dlopen()`s `libsdrplay_api.so.3`, the
+SONAME SDRplay's own `.run` installer registers with `ldconfig` (get the API
+from [sdrplay.com](https://www.sdrplay.com), version 3.x), falling back to the
+bare `libsdrplay_api.so` for a dev machine with only the unversioned symlink —
+but like everything else in the notice at the top of this file, that path has
+not been exercised against a real RSP. The ADALM-Pluto's driver
+(`src/source/iiod_client.*`) talks IIOD over a plain TCP socket rather than
+USB, so it already builds and runs identically on both platforms — it is
+likewise unverified against a real Pluto here. Any radio SoapySDR itself can
+reach (`libsoapysdr-dev` above) already works the same as on Windows. Opening
+the reports folder, the update banner's "Open foxsdr.com" and the privacy
+policy link all go through `xdg-open`, forked and exec'd directly (never
+through a shell), so a desktop environment with no `xdg-open` on `PATH` will
+see those buttons fail rather than silently do nothing.
+
+**Packaging.** `installer/linux/build-appimage.sh` packages a Release build as
+a single-file AppImage — the same payload the CI tarball carries (the
+`cascade` binary and the `resources/bandplans` it reads next to itself at
+runtime) plus `LICENSE`, `THIRD-PARTY-LICENSES.txt` and `POSTINSTALL.txt`. It
+does not bundle SoapySDR, OpenSSL, ALSA or OpenGL, so a machine running the
+AppImage needs the same libraries the tarball already needs on the host. Build
+it after the `cmake --build` step above:
+
+```
+installer/linux/build-appimage.sh build
+```
+
+This downloads `appimagetool` (pinned by version and verified against a fixed
+sha256) and writes `dist/FoxSDR-<version>-x86_64.AppImage`. FUSE is not
+required to build it (the script runs `appimagetool` itself with
+`APPIMAGE_EXTRACT_AND_RUN=1`) nor to run the result on a machine that lacks
+FUSE — set the same environment variable before launching it:
+
+```
+APPIMAGE_EXTRACT_AND_RUN=1 dist/FoxSDR-<version>-x86_64.AppImage
+```
+
+CI builds and smoke-tests this AppImage (`--version`, then `--frames 60` under
+Xvfb) on every push and publishes it as a separate build artifact alongside
+the tarball.
 
 **Plugins: one catalogue, both platforms.** The catalogue lists every build of
 a plugin and each installation picks the one matching its own os and

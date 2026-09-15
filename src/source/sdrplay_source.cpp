@@ -24,6 +24,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 namespace cascade::source {
@@ -78,6 +80,23 @@ const char* sdrPlayApiDllPath() {
     return "C:\\Program Files\\SDRplay\\API\\x64\\sdrplay_api.dll";
 }
 
+#if !defined(_WIN32)
+const char* sdrPlayApiSoName() {
+    // SDRplay's Linux .run installer (SDRplay_RSP_API-Linux-<ver>.run) drops
+    // libsdrplay_api.so.<major>.<minor> into /usr/local/lib (or /usr/local/lib64
+    // on Fedora-family systems) and runs ldconfig, which is what registers
+    // this SONAME - confirmed against SoapySDRPlay3, the reference open-source
+    // consumer of this API, and against SDRplay's own community documentation
+    // for the Linux .run installer. The "3" is the API's own major version,
+    // unrelated to any FoxSDR or Ubuntu version. Unlike the Windows install,
+    // this location IS on the loader's ordinary search path once ldconfig has
+    // run, so - unlike sdrPlayApiDllPath() above - there is no separate
+    // hardcoded directory to try first: dlopen() with the bare SONAME already
+    // searches it.
+    return "libsdrplay_api.so.3";
+}
+#endif
+
 namespace {
 
 #if defined(_WIN32)
@@ -90,6 +109,22 @@ bool resolve(HMODULE mod, const char* name, Fn& out, std::string& missing) {
         return false;
     }
     out = reinterpret_cast<Fn>(reinterpret_cast<void*>(p));
+    return true;
+}
+#else
+template <typename Fn>
+bool resolve(void* mod, const char* name, Fn& out, std::string& missing) {
+    // dlsym's result is a void*: not implicitly convertible to a function
+    // pointer under ISO C (the standard the compiler is entitled to reject
+    // this on), which is why POSIX itself pushes the cast through a same-size
+    // object representation rather than a direct reinterpret_cast<Fn>(void*).
+    void* p = ::dlsym(mod, name);
+    if (p == nullptr) {
+        if (!missing.empty()) { missing += ", "; }
+        missing += name;
+        return false;
+    }
+    std::memcpy(&out, &p, sizeof(out));
     return true;
 }
 #endif
@@ -136,10 +171,51 @@ void loadInto(abi::Api& api) {
     api.resolved = ok;
     api.loadDetail = ok ? from : ("entry points missing from " + from + ": " + missing);
 #else
-    // The API is a Windows service. A Linux or macOS RSP is reached through
-    // SoapySDR until SDRplay's own platform library is behind the same table.
-    api.resolved = false;
-    api.loadDetail = "the SDRplay API is Windows-only in this build";
+    // RTLD_NOW rather than RTLD_LAZY: a symbol missing from an installed-but-
+    // mismatched API build should surface HERE, as a load failure with a
+    // reason, not later as a segfault the first time some rarely-called entry
+    // point (SwapRspDuoActiveTuner, say) is finally reached.
+    void* mod = ::dlopen(sdrPlayApiSoName(), RTLD_NOW);
+    std::string from = sdrPlayApiSoName();
+    if (mod == nullptr) {
+        // Second, and only second: a dev machine with just the unversioned
+        // symlink (no ldconfig run, or a hand-built API), mirroring the
+        // Windows branch's own fallback order above.
+        mod = ::dlopen("libsdrplay_api.so", RTLD_NOW);
+        from = "libsdrplay_api.so (loader search path)";
+    }
+    if (mod == nullptr) {
+        api.resolved = false;
+        const char* err = ::dlerror();
+        api.loadDetail = std::string("libsdrplay_api.so.3 not found") +
+                         (err != nullptr ? (std::string(": ") + err) : std::string());
+        return;
+    }
+
+    std::string missing;
+    bool ok = true;
+    ok &= resolve(mod, "sdrplay_api_Open", api.Open, missing);
+    ok &= resolve(mod, "sdrplay_api_Close", api.Close, missing);
+    ok &= resolve(mod, "sdrplay_api_ApiVersion", api.ApiVersion, missing);
+    ok &= resolve(mod, "sdrplay_api_LockDeviceApi", api.LockDeviceApi, missing);
+    ok &= resolve(mod, "sdrplay_api_UnlockDeviceApi", api.UnlockDeviceApi, missing);
+    ok &= resolve(mod, "sdrplay_api_GetDevices", api.GetDevices, missing);
+    ok &= resolve(mod, "sdrplay_api_SelectDevice", api.SelectDevice, missing);
+    ok &= resolve(mod, "sdrplay_api_ReleaseDevice", api.ReleaseDevice, missing);
+    ok &= resolve(mod, "sdrplay_api_GetErrorString", api.GetErrorString, missing);
+    ok &= resolve(mod, "sdrplay_api_GetLastError", api.GetLastError, missing);
+    ok &= resolve(mod, "sdrplay_api_DebugEnable", api.DebugEnable, missing);
+    ok &= resolve(mod, "sdrplay_api_GetDeviceParams", api.GetDeviceParams, missing);
+    ok &= resolve(mod, "sdrplay_api_Init", api.Init, missing);
+    ok &= resolve(mod, "sdrplay_api_Uninit", api.Uninit, missing);
+    ok &= resolve(mod, "sdrplay_api_Update", api.Update, missing);
+    // Only an RSPduo needs this one, so a library without it is still usable
+    // for every other model - resolved, but not required.
+    std::string swapMissing;
+    resolve(mod, "sdrplay_api_SwapRspDuoActiveTuner", api.SwapRspDuoActiveTuner, swapMissing);
+
+    api.resolved = ok;
+    api.loadDetail = ok ? from : ("entry points missing from " + from + ": " + missing);
 #endif
 }
 

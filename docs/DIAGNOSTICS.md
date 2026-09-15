@@ -354,6 +354,20 @@ both places it is offered, the privacy-policy link — now goes through
 modal dialog must. `cascade --frames N` prints the number of pauses a run took,
 so these are visible as a count and not only as a sentence.
 
+**On Linux** (this port, 2026-09-15) `AppWindow::shellOpen()` no longer just
+returns `false`: it hands the target to `xdg-open` via `fork`+`execvp` — never
+a shell, so a target string is never reinterpreted — double-forked so the call
+does not wait for whatever `xdg-open` starts (which can outlive it by as long
+as a freshly launched browser stays open) and so nothing is left as a zombie
+regardless. `cascade::gui::posixShellOpen()` (`gui/shell_open.hpp`) is the free
+function this runs through, chosen so a test can drive it without constructing
+an `AppWindow`; `tests/test_shell_open_posix.cpp` points
+`FOXSDR_SHELL_OPEN_EXE` at a recording stand-in rather than a real `xdg-open`.
+There is no installer to launch on Linux (`AppWindow::launchInstaller` still
+returns `false` there, unchanged), so the update banner's action is instead an
+"Open foxsdr.com" button through this same path — see the "Building (Linux)"
+section of the top-level README.
+
 What none of this proves: that a real librtlsdr or UHD line arrives. The
 bridge and the capture are exercised with synthetic lines
 (`tests/test_vendor_lines.cpp` writes through both the CRT and the Win32

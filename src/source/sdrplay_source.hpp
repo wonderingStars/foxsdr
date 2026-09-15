@@ -104,6 +104,14 @@ const sdrplay_abi::Api& processSdrPlayApi();
 // both name the same string.
 const char* sdrPlayApiDllPath();
 
+#if !defined(_WIN32)
+// The Linux SONAME dlopen() is asked for first - the versioned name
+// SDRplay's own .run installer registers with ldconfig - exposed for the same
+// reason sdrPlayApiDllPath() is: so this string cannot drift from what
+// tests/test_sdrplay_source.cpp checks it against.
+const char* sdrPlayApiSoName();
+#endif
+
 // THE SENTENCE THE SOURCE SECTION SHOWS WHEN THERE IS NO RADIO TO SHOW.
 // Pure: it takes what the load found rather than looking again, so it can be
 // proved without an install. Empty string when the API is present and new
