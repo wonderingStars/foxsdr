@@ -124,17 +124,69 @@ public:
         return static_cast<int>(len);
     }
 
+    // A STANDARD GET_DESCRIPTOR IS NOT A VENDOR READ, and this fake used to
+    // answer it as though it were: it returned the REQUESTED length for every
+    // scripted answer, so a driver asking for 256 bytes of a 22-byte string
+    // got 256 back and read the string happily. A real RTL2832U does neither
+    // of those things. Measured on the RTL2838 on this desk (2026-09-15),
+    // through WinUsb_ControlTransfer and WinUsb_GetDescriptor alike:
+    //   request 255 bytes of string 1 -> 16 bytes, the descriptor
+    //   request 256 bytes of string 1 ->  0 bytes, SUCCESS, no error
+    // A descriptor's bLength is one byte, so 256 is one past every legal
+    // answer and the device's control endpoint simply returns nothing. That
+    // silent zero is what hid a Blog V4 from this driver in the field while
+    // this fake reported it recognised - see Rtl2832u::stringDescriptor.
+    static constexpr std::size_t kDescriptorRequestCeiling = 255;
+    bool isGetDescriptor(std::uint8_t requestType, std::uint8_t request) const {
+        return requestType == 0x80 && request == 0x06;
+    }
+
     int controlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
                   std::uint16_t index, std::uint8_t* data, std::size_t len, unsigned) override {
         ++controlCalls;
+        const bool descriptor = isGetDescriptor(requestType, request);
+        if (descriptor && len > kDescriptorRequestCeiling) {
+            // The device's answer, byte for byte: nothing written, nothing
+            // moved, no error.
+            FakeControl c;
+            c.out = false;
+            c.requestType = requestType;
+            c.request = request;
+            c.value = value;
+            c.index = index;
+            controls.push_back(std::move(c));
+            return 0;
+        }
         const auto it = inAnswers.find(InKey{request, value, index});
+        std::size_t moved = len;
         if (it == inAnswers.end()) {
             ++unscriptedReads;
             for (std::size_t i = 0; i < len; ++i) { data[i] = defaultInByte; }
+            // An unscripted DESCRIPTOR read is a descriptor the device does
+            // not have: a stall, which the transport reports as a failure.
+            if (descriptor) { moved = 0; }
         } else {
             for (std::size_t i = 0; i < len; ++i) {
                 data[i] = (i < it->second.size()) ? it->second[i] : defaultInByte;
             }
+            // THE COUNT IS THE ACTUAL COUNT (usb_device.hpp's own contract) -
+            // for descriptors, where a driver decides what to believe from it.
+            if (descriptor && it->second.size() < len) { moved = it->second.size(); }
+        }
+        if (descriptor && moved != len) {
+            FakeControl c;
+            c.out = false;
+            c.requestType = requestType;
+            c.request = request;
+            c.value = value;
+            c.index = index;
+            c.data.assign(data, data + moved);
+            controls.push_back(std::move(c));
+            if (failControlAfter >= 0 && controlCalls > failControlAfter) {
+                lastError_ = "fake: control transfer failed";
+                return -1;
+            }
+            return static_cast<int>(moved);
         }
         FakeControl c;
         c.out = false;

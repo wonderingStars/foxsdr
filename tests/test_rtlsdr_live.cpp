@@ -25,6 +25,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "test_check.hpp"
 
@@ -97,6 +98,30 @@ bool oneCycle(const std::string& args, int cycle) {
     }
     std::printf("  cycle %d: opened %s, tuner %s\n", cycle, src.name(),
                 src.tunerName().c_str());
+
+    // THE USB STRINGS CAME BACK, which no fake can prove and which one dongle
+    // on a bench can. Every RTL-SDR carries a manufacturer string, and this
+    // driver's whole recognition of an RTL-SDR Blog V4 - and therefore the
+    // crystal its tuner's PLL is referenced to - rests on reading it. From
+    // 0.93.0 to 0.96.3 it read NOTHING on every dongle on every machine: the
+    // GET_DESCRIPTOR was asking for 256 bytes and a descriptor's length is one
+    // byte, so the device answered with zero bytes and no error at all. Six
+    // V4-specific features were dead in the field while the fake said they
+    // worked, because the fake answered a request no device answers. An empty
+    // manufacturer string here is that defect, back.
+    {
+        bool sawStrings = false;
+        for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (line.find("usb strings manufacturer \"\"") != std::string::npos) {
+                std::printf("  cycle %d: the dongle's USB strings read back EMPTY: %s\n", cycle,
+                            line.c_str());
+            } else if (line.find("usb strings manufacturer \"") != std::string::npos) {
+                sawStrings = true;
+                std::printf("  cycle %d: %s\n", cycle, line.c_str());
+            }
+        }
+        CHECK(sawStrings);
+    }
 
     CHECK(src.setSampleRateHz(2400000.0));
     CHECK(src.setCenterFrequencyHz(100000000.0));

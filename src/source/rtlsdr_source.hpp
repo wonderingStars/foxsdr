@@ -261,6 +261,14 @@ private:
     std::atomic<bool> biasTee_{false};
     std::atomic<int> ppm_{0};
 
+    // TUNES THAT DID NOT LOCK, counted rather than narrated. A PLL that will
+    // not lock does not lock ONCE - it fails on every retune, and a warning
+    // per retune buries the log it is trying to explain (the field report
+    // that found this carried one line per frequency and nothing that said
+    // how many). So: the first one in an open says everything worth saying,
+    // the rest only increment, and close() states the total.
+    std::atomic<int> unlockedTunes_{0};
+
     std::thread reader_;
     // Satisfied by the reader thread as its last act, so stop() has a BOUNDED
     // join - std::thread offers none.
