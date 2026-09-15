@@ -225,9 +225,23 @@ int main() {
             writeFile(root + "/1-2-ghost/idVendor", "0bda\n");
             writeFile(root + "/1-2-ghost/idProduct", "2838\n");
 
+            // A complete, well-formed device from the RIGHT vendor with a
+            // product id that is NOT in the list asked for - a Realtek
+            // network adapter beside a Realtek dongle is the everyday shape.
+            // Added by the judge (2026-09-15): with the product half of the
+            // id match deleted the suite still passed 157/157, because no
+            // fixture node exercised it. This one does: it must never become
+            // /dev/bus/usb/001/009 in the answer.
+            makeDir(root + "/1-6");
+            writeFile(root + "/1-6/idVendor", "0bda\n");
+            writeFile(root + "/1-6/idProduct", "0001\n");
+            writeFile(root + "/1-6/product", "same vendor, wrong product\n");
+            writeFile(root + "/1-6/busnum", "1\n");
+            writeFile(root + "/1-6/devnum", "9\n");
+
             const std::vector<SysfsUsbNode> nodes = cascade::usb::readSysfsUsbNodes(root);
             std::printf("fixture walk: %zu nodes\n", nodes.size());
-            CHECK(nodes.size() == 7);
+            CHECK(nodes.size() == 8);
 
             {
                 const SysfsUsbNode* ghost = nullptr;
