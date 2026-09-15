@@ -146,6 +146,32 @@ public:
     std::atomic<bool> insideUpdate{false};
     std::atomic<bool> leftUpdate{false};
 
+    // ...AND THE WEDGE HOLDS THE WHOLE DEVICE, NOT JUST THE ONE CALL.
+    //
+    // This is what the 0.96.4 hang report added to the two above, and it is
+    // the only part of a wedged service the fake could not express. The GUI
+    // thread's stack there is
+    //
+    //   ntdll -> KERNELBASE -> sdrplay_api.dll -> sdrplay_api.dll
+    //         -> SdrPlaySource::stopStreamingLocked -> stop
+    //         -> Pipeline::quiesceSourceThreadLocked -> Pipeline::start
+    //
+    // i.e. the TEARDOWN's sdrplay_api_Uninit parked on a synchronisation
+    // object inside the vendor DLL, while the log two lines above says a
+    // control had already been abandoned and "a worker is still inside
+    // sdrplay_api_Update". One call per device at a time is what the API's own
+    // device lock means, so a call that never returns is a device nothing else
+    // can enter - and Uninit and ReleaseDevice are exactly what a teardown
+    // enters it with.
+    //
+    // Modelled the same way as the hangs above: polled, so a caller released
+    // later can still leave, and observed through flags so a test can say WHO
+    // went in rather than only how long it took.
+    std::atomic<int> updateHangDepth{0};
+    std::atomic<bool> wedgedDeviceBlocksTeardown{true};
+    std::atomic<bool> uninitEnteredWhileWedged{false};
+    std::atomic<bool> releaseEnteredWhileWedged{false};
+
     // --- what the tests observe ------------------------------------------
 
     std::vector<std::string> calls;
@@ -288,6 +314,19 @@ private:
 
     void note(std::string s) { calls.push_back(std::move(s)); }
 
+    // A call that has to queue behind a worker parked inside Update, because
+    // the vendor DLL lets one call at a time near a device. `entered` records
+    // that this call went in while the device was wedged, which is the fact a
+    // test wants: elapsed time alone cannot tell "we did not call it" from "we
+    // called it and it happened to be quick".
+    static void queueBehindWedgedDevice(FakeSdrPlayApi* f, std::atomic<bool>& entered) {
+        if (!f->wedgedDeviceBlocksTeardown.load() || f->updateHangDepth.load() <= 0) { return; }
+        entered.store(true);
+        while (f->updateHangDepth.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+
     std::vector<abi::DeviceT> devices;
     abi::StreamCallbackT streamA = nullptr;
     abi::StreamCallbackT streamB = nullptr;
@@ -380,6 +419,7 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr || d == nullptr) { return abi::Fail; }
         f->note("ReleaseDevice");
+        queueBehindWedgedDevice(f, f->releaseEnteredWhileWedged);
         ++f->releaseCount;
         d->dev = nullptr;
         return abi::Success;
@@ -446,6 +486,9 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr) { return abi::Fail; }
         f->note("Uninit");
+        // Noted first, then queued behind a wedged device - so the call is on
+        // the record even when it never comes back out. See updateHangDepth.
+        queueBehindWedgedDevice(f, f->uninitEnteredWhileWedged);
         // The API's contract: Uninit returns with the callbacks stopped.
         f->streamA = nullptr;
         f->streamB = nullptr;
@@ -467,9 +510,11 @@ private:
         // returned without an acknowledgement once released.
         if (f->hangInUpdate.load()) {
             f->insideUpdate.store(true);
+            f->updateHangDepth.fetch_add(1);
             while (!f->releaseUpdateHang.load()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
+            f->updateHangDepth.fetch_sub(1);
             f->leftUpdate.store(true);
             return f->updateResult;
         }

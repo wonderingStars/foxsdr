@@ -423,8 +423,23 @@ report blamed the GPU. Every live control — retune, gain, AGC, antenna, bias
 tee, notches, sample rate — now runs its vendor call on a worker and gives it
 one second, then abandons it, releases the radio and refuses further controls
 for that device. A healthy service answers in milliseconds and behaves exactly
-as before. Restarting the service (Windows Services, **SDRplay API Service**)
-and choosing the radio again is the whole recovery.
+as before.
+
+A fourth report, an RSP1B on API 3.15, was the freeze that came next — this
+time in FoxSDR's own teardown. Abandoning the retune releases the radio, which
+stops the pipeline, which stops the source, which called the vendor's
+uninitialise on the thread that draws the window — into a device the abandoned
+worker was still holding, because the API lets one call at a time near a
+radio. So the window froze on the step that was meant to be the recovery.
+FoxSDR now treats an abandoned call, and a service that has said it is gone,
+as a door that stays shut: no uninitialise, no release, no close, the ring the
+service writes into is kept alive rather than freed under it, and stopping and
+closing the radio return immediately. Recovery is restarting the SDRplay API
+service (Windows Services, **SDRplay API Service**) and then restarting
+FoxSDR — the radio stays claimed inside the service until the service comes
+back, and this is the one case where choosing it again in the same session is
+not enough. Every other SDRplay fault, including an unplugged RSP, still
+releases the radio properly and can be re-opened without restarting anything.
 
 **A note on versions.** The driver's declarations of the API's structures were
 checked against SDRplay's published headers for 3.07, 3.11 and 3.15, compiled
