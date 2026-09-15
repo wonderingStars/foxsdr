@@ -858,7 +858,7 @@ int main() {
         // The open fails. AppWindow remembers the saved radio...
         const cascade::gui::RememberedSource keep =
             cascade::gui::rememberedSourceAfterFailedOpen(loaded.sourceKind, loaded.soapyArgs,
-                                                          loaded.nativeArgs,
+                                                          loaded.nativeArgs, loaded.iqFilePath,
                                                           loaded.sampleRateHz);
         CHECK(keep.valid());
 
@@ -870,7 +870,7 @@ int main() {
         AppConfig saved;
         saved.schemaVersion = 1;
         const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
-            "siggen", "", "", 2000000.0 /* the generator's fixed rate */, keep);
+            "siggen", "", "", "", 2000000.0 /* the generator's fixed rate */, keep);
         saved.sourceKind = src.kind;
         saved.soapyArgs = src.soapyArgs;
         saved.nativeArgs = src.nativeArgs;
@@ -906,13 +906,13 @@ int main() {
         // are a URI rather than a serial, which is the only thing that makes
         // it different, and the rule must not care.
         const cascade::gui::RememberedSource plutoKeep =
-            cascade::gui::rememberedSourceAfterFailedOpen("pluto", "", "uri=ip:192.168.2.1",
+            cascade::gui::rememberedSourceAfterFailedOpen("pluto", "", "uri=ip:192.168.2.1", "",
                                                           4000000.0);
         CHECK(plutoKeep.valid());
         AppConfig savedPluto;
         savedPluto.schemaVersion = 1;
         const cascade::gui::SavedSource srcP =
-            cascade::gui::sourceToSave("siggen", "", "", 2000000.0, plutoKeep);
+            cascade::gui::sourceToSave("siggen", "", "", "", 2000000.0, plutoKeep);
         savedPluto.sourceKind = srcP.kind;
         savedPluto.soapyArgs = srcP.soapyArgs;
         savedPluto.nativeArgs = srcP.nativeArgs;
@@ -933,11 +933,11 @@ int main() {
         // is "soapy" rather than a native driver key.
         const cascade::gui::RememberedSource soapyKeep =
             cascade::gui::rememberedSourceAfterFailedOpen("soapy", "driver=uhd,serial=ABC123",
-                                                          "", 8000000.0);
+                                                          "", "", 8000000.0);
         AppConfig savedSoapy;
         savedSoapy.schemaVersion = 1;
         const cascade::gui::SavedSource src2 =
-            cascade::gui::sourceToSave("siggen", "", "", 2000000.0, soapyKeep);
+            cascade::gui::sourceToSave("siggen", "", "", "", 2000000.0, soapyKeep);
         savedSoapy.sourceKind = src2.kind;
         savedSoapy.soapyArgs = src2.soapyArgs;
         savedSoapy.nativeArgs = src2.nativeArgs;
@@ -948,12 +948,70 @@ int main() {
         CHECK(next.soapyArgs == "driver=uhd,serial=ABC123");
         CHECK(next.sampleRateHz == 8000000.0);
 
+        // A SAVED I/Q FILE, which was the last source the config still forgot.
+        // The whole sequence again, through the store: the file is what the
+        // config named, the recording has moved (an external drive unplugged,
+        // a folder renamed, a capture deleted), the session runs on the
+        // generator - and what used to come back was "siggen" with
+        // iqFilePath EMPTY, so the path box was blank on the next start and
+        // nothing anywhere said which file had gone.
+        {
+            const std::string iq = "D:\\recordings\\noaa-19.wav";
+            AppConfig fileCfg;
+            fileCfg.schemaVersion = 1;
+            fileCfg.sourceKind = "file";
+            fileCfg.iqFilePath = iq;
+            fileCfg.soapyArgs = "driver=rtlsdr";
+            fileCfg.nativeArgs = "serial=deadbeef";
+            fileCfg.sampleRateHz = 1024000.0;
+            CHECK(ConfigStore::save(path, fileCfg, err));
+
+            AppConfig fileLoaded;
+            CHECK(ConfigStore::load(path, fileLoaded, err));
+            CHECK(fileLoaded.sourceKind == "file");
+            CHECK(fileLoaded.iqFilePath == iq);
+
+            const cascade::gui::RememberedSource fileKeep =
+                cascade::gui::rememberedSourceAfterFailedOpen(
+                    fileLoaded.sourceKind, fileLoaded.soapyArgs, fileLoaded.nativeArgs,
+                    fileLoaded.iqFilePath, fileLoaded.sampleRateHz);
+            CHECK(fileKeep.valid());
+
+            AppConfig savedFile;
+            savedFile.schemaVersion = 1;
+            // The live source is the generator, and iqOpenPath_ is EMPTY -
+            // nothing opened, so the mirror that means "the file this session
+            // is playing" was never filled. That empty string is exactly what
+            // used to be written out.
+            const cascade::gui::SavedSource srcF =
+                cascade::gui::sourceToSave("siggen", "", "", "", 2000000.0, fileKeep);
+            savedFile.sourceKind = srcF.kind;
+            savedFile.soapyArgs = srcF.soapyArgs;
+            savedFile.nativeArgs = srcF.nativeArgs;
+            savedFile.iqFilePath = srcF.filePath;
+            savedFile.sampleRateHz = srcF.sampleRateHz;
+            CHECK(ConfigStore::save(path, savedFile, err));
+
+            CHECK(ConfigStore::load(path, next, err));
+            // THE DEFECT, STATED AS THE THING THAT MUST NEVER COME BACK: the
+            // file written by a session that never opened the recording still
+            // names it.
+            CHECK(next.sourceKind == "file");
+            CHECK(next.sourceKind != "siggen");
+            CHECK(next.iqFilePath == iq);
+            CHECK(next.sampleRateHz == 1024000.0);
+            // ...and the radio the config was also carrying is still there. A
+            // missing file must not take the dongle with it.
+            CHECK(next.soapyArgs == "driver=rtlsdr");
+            CHECK(next.nativeArgs == "serial=deadbeef");
+        }
+
         // A SESSION THAT REMEMBERS NOTHING saves the generator, which is what
         // a user deliberately choosing it must still get.
         AppConfig savedGen;
         savedGen.schemaVersion = 1;
         const cascade::gui::SavedSource src3 = cascade::gui::sourceToSave(
-            "siggen", "", "", 2000000.0, cascade::gui::RememberedSource{});
+            "siggen", "", "", "", 2000000.0, cascade::gui::RememberedSource{});
         savedGen.sourceKind = src3.kind;
         savedGen.soapyArgs = src3.soapyArgs;
         savedGen.nativeArgs = src3.nativeArgs;

@@ -5460,12 +5460,13 @@ void AppWindow::drawSourceSection() {
     }
     ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    // THE SAVED RADIO IS WHAT THE COMBO SAYS WHILE IT IS STILL THE SAVED ONE.
+    // THE SAVED SOURCE IS WHAT THE COMBO SAYS WHILE IT IS STILL THE SAVED ONE.
     // A restore that could not open it leaves the generator running and the
-    // radio remembered for the config (see gui::sourceToSave); showing
-    // "Signal generator" here would say the user had chosen that, and would
-    // disagree with the file this session is going to write. No row is ticked
-    // in the list below, because none of them is what is installed.
+    // radio - or the I/Q file - remembered for the config (see
+    // gui::sourceToSave); showing "Signal generator" here would say the user
+    // had chosen that, and would disagree with the file this session is going
+    // to write. No row is ticked in the list below, because none of them is
+    // what is installed.
     const bool keepPreview = restoreKeep_.valid() && device_ == nullptr &&
                              sourceKind_ == "siggen" && !restoreKeepLabel_.empty();
     // "(not open)" in the preview itself, because the combo is the one place
@@ -5605,9 +5606,11 @@ void AppWindow::drawSourceSection() {
     // unbound-device sentence above exists to stop, one layer further down.
     //
     // Shown when there is no RSP row AND the driver has something to say. The
-    // wording is the driver's own pure sdrPlayApiAdvice(), not a paraphrase:
+    // wording is the driver's own pure sdrPlayPanelAdvice(), not a paraphrase:
     // it is pinned by a test because it is the only instruction the user
     // gets, and one that drops "3.x" or "sdrplay.com" sends them nowhere.
+    // Both cases arrive here - no API at all, and an API too old to drive an
+    // RSP - and the second of them could not reach this line until 0.94.1.
     if (!sdrPlayRowsFound_ && !sdrPlayAdvice_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", sdrPlayAdvice_.c_str());
@@ -6051,12 +6054,19 @@ void AppWindow::drawSourceSection() {
     // from having chosen the generator, and used to end with the radio gone
     // from the settings.
     if (keepPreview) {
+        // THE SAME SENTENCE FOR A FILE, in the file's own words. A saved I/Q
+        // recording is lost the same ways a dongle is and is remembered on
+        // the same terms (gui::rememberedSourceAfterFailedOpen), so the one
+        // thing that changes is the noun: telling someone their missing .wav
+        // is "the saved radio" would read as a different fault entirely.
+        const bool keepFile = restoreKeep_.kind == "file";
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped(
-            "%s is still the saved radio. The signal generator is running in its place for "
-            "this session only - FoxSDR will try the radio again next time it starts. "
+            "%s is still the saved %s. The signal generator is running in its place for "
+            "this session only - FoxSDR will try the %s again next time it starts. "
             "Choosing another source here replaces it.",
-            restoreKeepLabel_.c_str());
+            restoreKeepLabel_.c_str(), keepFile ? "I/Q file" : "radio",
+            keepFile ? "file" : "radio");
         ImGui::PopStyleColor();
     }
 
@@ -6812,16 +6822,26 @@ void AppWindow::scanNative() {
     // ...AND WHAT TO SAY WHEN THERE IS NO RSP ROW BECAUSE THERE IS NO API.
     // Composed here rather than in the draw, because the draw runs sixty
     // times a second and this reads the process's load result. The sentence
-    // itself comes from the driver (sdrPlayApiAdvice), which is pure and
+    // itself comes from the driver (sdrPlayPanelAdvice), which is pure and
     // pinned by a test: it is the only instruction an RSP owner gets, and a
     // rewording that drops "3.x" or "sdrplay.com" sends them nowhere.
+    //
+    // THROUGH THE ENUMERATION'S OWN REASON, because the two fields below
+    // cannot describe an API THAT IS INSTALLED BUT TOO OLD. `version` is
+    // written onto the table only by a session that got past the version
+    // gate, so a 3.05 install leaves it at zero, and asking the load result
+    // alone gave an RSP owner an empty Source section while the log carried
+    // the sentence telling them to update. The enumeration a few lines up has
+    // just recorded it; sdrPlayPanelAdvice prefers that and falls back to the
+    // load result, which is what this used to do on its own.
     const cascade::source::sdrplay_abi::Api& sdrApi = cascade::source::processSdrPlayApi();
     float sdrVersion = 0.0f;
     {
         std::lock_guard<std::mutex> lk(sdrApi.sessionMutex);
         sdrVersion = sdrApi.version;
     }
-    sdrPlayAdvice_ = cascade::source::sdrPlayApiAdvice(sdrApi.resolved, sdrVersion);
+    sdrPlayAdvice_ = cascade::source::sdrPlayPanelAdvice(
+        sdrApi.resolved, sdrVersion, cascade::source::sdrPlayLastEnumerationSkip());
     sdrPlayApiDetail_ = sdrApi.loadDetail;
 
     // THE PLUTO, WHICH IS NOT A DISCOVERY AT ALL. A network cannot be walked,
@@ -16875,6 +16895,29 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // full text stays in sourceError_, which is shown on screen to the
             // person who already knows what they opened.
             cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
+
+            // ...AND THE CONFIG GOES ON NAMING IT, exactly as it does for a
+            // radio that did not reopen (see the device branch below). A
+            // recording goes missing the same ways a dongle does - an
+            // external drive unplugged, a folder renamed, the capture moved -
+            // and until 0.94.1 this branch left iqOpenPath_ empty, so the
+            // exit save wrote sourceKind "siggen" with iqFilePath BLANK: one
+            // session with the drive out and FoxSDR could not even say which
+            // file it had been playing. The saved path is remembered instead,
+            // and the box is filled in with it so the user can plug the drive
+            // back in and press Open without typing it again.
+            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
+            std::snprintf(iqPath_, sizeof(iqPath_), "%s", cfg.iqFilePath.c_str());
+            // WHAT THE SOURCE SECTION CALLS IT: the file's own name, not the
+            // whole path, because the preview it goes into is one combo wide
+            // and a recording lives several folders deep. Never logged - the
+            // rule above is about the ring, and this string only ever reaches
+            // the screen of the person who chose the file.
+            restoreKeepLabel_ = cascade::gui::fileNameOf(cfg.iqFilePath);
+            // Nothing is ticked in the dropdown, for the same reason the
+            // device branch gives: the generator is not what the user chose.
+            sourceSel_ = -1;
         }
     } else if ((cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) ||
                (isNativeSourceKind(cfg.sourceKind) && !cfg.nativeArgs.empty())) {
@@ -16985,7 +17028,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // next start tries exactly what this one tried. See
             // gui::rememberedSourceAfterFailedOpen and gui::sourceToSave.
             restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
-                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.sampleRateHz);
+                cfg.sourceKind, cfg.soapyArgs, cfg.nativeArgs, cfg.iqFilePath, cfg.sampleRateHz);
 
             // WHAT THE SOURCE SECTION CALLS IT. The enumerated label is the
             // best name when this machine can still see the radio (in use by
@@ -17209,7 +17252,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // goes back into the file. Everything else - a clean restore, any
     // deliberate switch - is the live source, exactly as before.
     const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
-        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_,
+        sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, iqOpenPath_,
         pipeline_.activeSource().sampleRateHz(), restoreKeep_);
     cfg.sourceKind = src.kind;
     cfg.soapyAntenna = deviceAntenna_;
@@ -17227,7 +17270,14 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // to survive a launch in which the board never answered so it can be
     // corrected next time rather than retyped from nothing.
     cfg.plutoUri = plutoUri_;
-    cfg.iqFilePath = iqOpenPath_;
+    // THE FILE THIS SESSION PLAYED, or the one it could not find. Normally
+    // iqOpenPath_, which is the last recording that actually opened; when the
+    // saved source was a file and the restore could not open it, the same
+    // decision that keeps a missing radio in the config keeps the path (see
+    // gui::sourceToSave). Before that, one session with the drive unplugged
+    // wrote this out EMPTY - the path box came back blank on the next start
+    // and nothing anywhere said which file had gone.
+    cfg.iqFilePath = src.filePath;
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
     cfg.mode = kModeNames[modeIndex_];
     cfg.bandwidthHz = vfoBandwidthHz_;

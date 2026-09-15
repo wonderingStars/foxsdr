@@ -173,6 +173,44 @@ std::string sdrPlayApiAdvice(bool resolved, float version) {
     return std::string();
 }
 
+namespace {
+
+// The last enumeration's skip reason. A mutex rather than an atomic because
+// it is a std::string written on whatever thread enumerated and read on the
+// GUI's - the same rule the driver's own error slot follows.
+std::mutex& enumSkipMutex() {
+    static std::mutex m;
+    return m;
+}
+std::string& enumSkipSlot() {
+    static std::string s;
+    return s;
+}
+
+void setEnumerationSkip(std::string reason) {
+    std::lock_guard<std::mutex> lk(enumSkipMutex());
+    enumSkipSlot() = std::move(reason);
+}
+
+}  // namespace
+
+std::string sdrPlayLastEnumerationSkip() {
+    std::lock_guard<std::mutex> lk(enumSkipMutex());
+    return enumSkipSlot();
+}
+
+std::string sdrPlayPanelAdvice(bool resolved, float version, const std::string& enumerationSkip) {
+    // THE ENUMERATION'S REASON WINS, because it is the only one of the two
+    // that met the API. It was opened, asked its version and closed again, so
+    // it knows the number; the load result on its own only knows the DLL was
+    // there. When there is no reason - nothing has enumerated yet, or the
+    // last one reached the device list - fall back to what the load alone can
+    // say, which is what this panel showed before and is empty on a healthy
+    // install.
+    if (!enumerationSkip.empty()) { return enumerationSkip; }
+    return sdrPlayApiAdvice(resolved, version);
+}
+
 // --- the session ----------------------------------------------------------
 
 namespace {
@@ -365,8 +403,16 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
     std::string error;
     if (!sessionAcquire(api, error)) {
         core::diagLogf("source: SDRplay enumeration skipped - %s", error.c_str());
+        // ...AND THE SCREEN GETS THE SAME SENTENCE THE LOG JUST GOT. Kept
+        // verbatim rather than re-derived in the panel: the too-old case
+        // knows a version number that only this call learned, and nothing
+        // above this line can find it out again without opening the API a
+        // second time. See sdrPlayLastEnumerationSkip.
+        setEnumerationSkip(error);
         return out;
     }
+    // The API answered, so whatever it last refused for is over.
+    setEnumerationSkip(std::string());
 
     abi::DeviceT devs[abi::kMaxDevices];
     std::memset(devs, 0, sizeof(devs));

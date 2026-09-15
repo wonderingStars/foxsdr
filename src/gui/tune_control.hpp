@@ -698,7 +698,27 @@ inline bool isNativeSourceKind(const std::string& kind) {
            kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto";
 }
 
-// THE RADIO THE CONFIG NAMES, HELD OVER A SESSION THAT COULD NOT OPEN IT.
+// WHAT TO CALL A RECORDING ON SCREEN: its own name, not the path it lives at.
+//
+// The Source section names a saved-but-not-open source in a combo preview one
+// column wide and in one sentence beneath it, and an I/Q capture lives several
+// folders down a drive that may not be plugged in. The folders are in
+// sourceError_ for the person reading it; the name is what identifies the file
+// at a glance.
+//
+// BOTH SEPARATORS, because the path came out of a config file that a user may
+// have written by hand or carried from another machine, and a Windows path
+// with forward slashes opens perfectly well. A path that ends in a separator
+// names no file at all, so the whole string is given back rather than an empty
+// caption: an odd-looking label says more than a blank one.
+inline std::string fileNameOf(const std::string& path) {
+    const std::size_t cut = path.find_last_of("/\\");
+    if (cut == std::string::npos) { return path; }
+    const std::string name = path.substr(cut + 1);
+    return name.empty() ? path : name;
+}
+
+// THE SOURCE THE CONFIG NAMES, HELD OVER A SESSION THAT COULD NOT OPEN IT.
 //
 // The startup restore falls back to the signal generator when the saved radio
 // does not open - the dongle unplugged, in use by another program, or a
@@ -722,45 +742,71 @@ inline bool isNativeSourceKind(const std::string& kind) {
 // The antenna and the bias tee need nothing here - the restore seeds those
 // mirrors from the config before it attempts the open, so a failed open
 // leaves them holding exactly what the file carried.
+//
+// AND THE SAME IS TRUE OF A SAVED I/Q FILE, which 0.93.0 left behind and
+// 0.94.1 finishes. A recording is lost exactly the way a dongle is - an
+// external drive unplugged, a folder renamed, a capture moved or deleted -
+// and the file branch of the restore fell back to the generator with the path
+// dropped as well: sourceKind went out as "siggen" and iqFilePath EMPTY,
+// because that mirror is only filled by an open that succeeded. One session
+// with the drive out and FoxSDR could no longer say which file it had been
+// playing, let alone try it again. So a file travels here too, by its path,
+// on exactly the terms a radio does.
 struct RememberedSource {
     std::string kind;  // empty: nothing to remember, the live source is the truth
     std::string soapyArgs;
     std::string nativeArgs;
+    std::string filePath;  // only ever set for kind "file"
     double sampleRateHz = 0.0;
 
     bool valid() const { return !kind.empty(); }
 };
 
-// WHAT A FAILED RESTORE IS ALLOWED TO REMEMBER: a radio, and only a radio.
-// The generator and an I/Q file are not radios (a file path is saved through
-// its own field), and a kind with no args for its own family names no
-// particular device, so there is nothing there worth carrying into the next
-// launch. Anything else returns an empty RememberedSource, which sourceToSave
-// reads as "save what is live", i.e. exactly today's behaviour.
+// WHAT A FAILED RESTORE IS ALLOWED TO REMEMBER: a source that names a
+// PARTICULAR thing to open. A radio with args for its own family, or a file
+// with a path. The generator names nothing (it is what the session already
+// fell back to), and a kind with no args or no path of its own names no
+// particular device or recording, so there is nothing there worth carrying
+// into the next launch. Anything else returns an empty RememberedSource,
+// which sourceToSave reads as "save what is live", i.e. exactly today's
+// behaviour.
+//
+// BOTH ARGS SLOTS TRAVEL WITH A REMEMBERED FILE as well, untouched. They
+// belong to a radio the user opened at some point before choosing the file,
+// and a session that could not find the recording has learned nothing about
+// the radio - blanking them would make a missing file take the dongle with
+// it, which is the very bug this rule exists to stop, one source along.
 inline RememberedSource rememberedSourceAfterFailedOpen(const std::string& savedKind,
                                                         const std::string& savedSoapyArgs,
                                                         const std::string& savedNativeArgs,
+                                                        const std::string& savedFilePath,
                                                         double savedSampleRateHz) {
     RememberedSource keep;
     const bool soapy = (savedKind == "soapy") && !savedSoapyArgs.empty();
     const bool native = isNativeSourceKind(savedKind) && !savedNativeArgs.empty();
-    if (!soapy && !native) { return keep; }
+    // A PATH IS NOT ENOUGH ON ITS OWN: every config that ever played a file
+    // carries iqFilePath so the box comes back filled in, and only a config
+    // whose KIND is "file" was actually listening to it.
+    const bool file = (savedKind == "file") && !savedFilePath.empty();
+    if (!soapy && !native && !file) { return keep; }
     keep.kind = savedKind;
     keep.soapyArgs = savedSoapyArgs;
     keep.nativeArgs = savedNativeArgs;
+    if (file) { keep.filePath = savedFilePath; }
     // A rate of zero is a config that never recorded one; the restore's own
     // open() treats it the same way, so do not write it back as if chosen.
     keep.sampleRateHz = savedSampleRateHz > 0.0 ? savedSampleRateHz : 0.0;
     return keep;
 }
 
-// WHICH SOURCE THE SAVE NAMES. The remembered radio wins ONLY while the
-// generator is what is running - which is the fallback state a failed restore
-// leaves behind, and nothing else. The moment any real source is installed
-// (another radio opened, an I/Q file opened) the live values are the truth and
-// are written, and a user who deliberately picks the generator has their
-// remembered radio dropped at the point they pick it, not here: a deliberate
-// choice must still overwrite, exactly as it always has.
+// WHICH SOURCE THE SAVE NAMES. The remembered source - a radio or an I/Q file
+// - wins ONLY while the generator is what is running, which is the fallback
+// state a failed restore leaves behind and nothing else. The moment any real
+// source is installed (another radio opened, an I/Q file opened) the live
+// values are the truth and are written, and a user who deliberately picks the
+// generator has their remembered source dropped at the point they pick it,
+// not here: a deliberate choice must still overwrite, exactly as it always
+// has.
 //
 // The gate on the live kind is belt and braces for that clearing - a saved
 // radio silently outliving an open one would be a far worse bug than the one
@@ -769,21 +815,30 @@ struct SavedSource {
     std::string kind;
     std::string soapyArgs;
     std::string nativeArgs;
+    std::string filePath;
     double sampleRateHz = 0.0;
 };
 
 inline SavedSource sourceToSave(const std::string& liveKind, const std::string& liveSoapyArgs,
-                                const std::string& liveNativeArgs, double liveSampleRateHz,
+                                const std::string& liveNativeArgs,
+                                const std::string& liveFilePath, double liveSampleRateHz,
                                 const RememberedSource& remembered) {
     SavedSource out;
     out.kind = liveKind;
     out.soapyArgs = liveSoapyArgs;
     out.nativeArgs = liveNativeArgs;
+    out.filePath = liveFilePath;
     out.sampleRateHz = liveSampleRateHz;
     if (remembered.valid() && liveKind == "siggen") {
         out.kind = remembered.kind;
         out.soapyArgs = remembered.soapyArgs;
         out.nativeArgs = remembered.nativeArgs;
+        // THE PATH ONLY WHEN THERE IS ONE TO REMEMBER, which is the same
+        // guard the rate has and for the same reason. A remembered RADIO
+        // carries no path, and the live iqFilePath is the box's own memory of
+        // the last recording played - it describes no source choice, so a
+        // failed radio restore must not blank it on its way past.
+        if (!remembered.filePath.empty()) { out.filePath = remembered.filePath; }
         if (remembered.sampleRateHz > 0.0) { out.sampleRateHz = remembered.sampleRateHz; }
     }
     return out;
