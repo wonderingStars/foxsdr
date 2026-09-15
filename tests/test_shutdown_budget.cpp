@@ -301,7 +301,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // device and every later call on the same path is skipped rather than
 // attempted (see abandonWedgedDriverLocked).
 //
-// FIVE SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
+// SIX SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
 // NOW THAT THE APPLICATION OPENS THEM (0.91.0, and the reason has changed
 // completely from the one the rows carried before).
 //
@@ -312,8 +312,8 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //
 // EXACTLY ONE SOURCE IS INSTALLED IN THE PIPELINE AT A TIME.
 // Pipeline::stop() stops `active_`, which is one object: the generator, an
-// IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource or
-// an AirspyHfSource - and from 0.92.0 the Source section can install any of
+// IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource,
+// an AirspyHfSource or an SdrPlaySource - and from 0.92.0 the Source section can install any of
 // them, which is what makes this note's arithmetic load-bearing rather than
 // hypothetical. A device switch
 // destroys the old source before the new one is constructed
@@ -330,6 +330,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1750 ms
 //   AirspyHfSource   airspyhf kControlTimeout 500 (receiver mode off)
 //                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1750 ms
+//   SdrPlaySource    kCallbackDrainWait 250                            =  250 ms
 //
 // Soapy's 3000 ms is the worst and is the pair charged in the table above, so
 // kShutdownBoundedWaitsMs stays at 7000 (3000 + kSourceJoinWait 3000 + the
@@ -508,6 +509,35 @@ const KnownWait kKnownWaits[] = {
     {"src/source/airspyhf_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the Airspy HF+ reader's tally window before it writes its "
      "stream-health line, matching SoapySource's; nothing sleeps or blocks on it"},
+    // THE SDRPLAY DRIVER, WHICH IS UNLIKE EVERY OTHER NATIVE ONE HERE: it owns
+    // no thread and no USB handle. The service calls OUR callbacks on ITS
+    // thread, and the calls that stop it - sdrplay_api_Uninit, ReleaseDevice,
+    // Close - take no timeout and offer no cancellation. Those are UNBOUNDED
+    // BY CONSTRUCTION and are not in this table because there is nothing to
+    // put in it: no argument shortens them and no handle interrupts them. What
+    // IS ours is the 250 ms drain after Uninit, and a teardown that spends it
+    // is a teardown that has already given up on the service answering.
+    //
+    // The column is therefore 250 ms - by a distance the shortest of the six -
+    // and it is spent INSTEAD OF the Soapy pair's 3000, never as well as it,
+    // because exactly one source is installed at a time.
+    {"src/source/sdrplay_source.hpp", "kCallbackDrainWait", 0,
+     "the bounded wait in SdrPlaySource::stopStreamingLocked() for a service callback that is "
+     "still inside us after Uninit returned, after which the Link is STRANDED rather than freed "
+     "under a thread we cannot join. The whole of the 250 ms SDRplay column, covered by the "
+     "3000 ms Soapy column already charged"},
+    {"src/source/sdrplay_source.hpp", "kReadWait", 0,
+     "SdrPlaySource::read()'s wait for the service's callback to fill the ring, spent on the "
+     "pipeline's source thread, which the teardown already waits for through kSourceJoinWait's "
+     "3000 ms - never on the GUI teardown thread"},
+    {"src/source/sdrplay_source.hpp", "kUpdateWait", 0,
+     "how long a live parameter change waits for the service to ACKNOWLEDGE it through the next "
+     "stream callback's changed flags (SoapySDRPlay3's updateTimeout, same 500 ms). Spent on the "
+     "GUI thread by a setter, never on the teardown path: stop() and closeDevice() issue no "
+     "Update"},
+    {"src/source/sdrplay_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the tally window before one \"source: stream health ...\" line is "
+     "written, matching SoapySource's; nothing sleeps or blocks on it"},
     {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
      "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "
      "same bound a cancelled control transfer is given. The last 250 ms of either native "
