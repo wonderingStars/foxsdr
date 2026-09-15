@@ -938,6 +938,14 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         return true;
     });
 
+    // THE DEVICE OPEN IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD.
+    // gui/audio_open.hpp carries the field report and the whole argument; the
+    // opener is Pipeline's, packaged so it can outlive this window, and the
+    // hooks are the watchdog's for the bounded wait the requesting frame
+    // spends. Bound here, before anything can ask for a device.
+    audioOpen_.bind(pipeline_.audioOpener(), [this] { watchdog_.pause(); },
+                    [this] { watchdog_.resume(); });
+
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
         if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
@@ -1032,6 +1040,14 @@ AppWindow::~AppWindow() {
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
     reapPendingDeviceOpen();
+
+    // And the same problem again on the AUDIO device, which is the one that
+    // produced it: an open still inside waveOutOpen would hold ~AudioOpen's
+    // future - and therefore this destructor - for the rest of the driver
+    // call. reap() spends a short grace and then abandons the worker; it is
+    // safe to abandon because the opener holds the sink alive by shared_ptr
+    // (see Pipeline::audioOpener).
+    audioOpen_.reap();
 
     // The GPS reader's thread, if a read is still running when the window is
     // destroyed without run()'s teardown (a failed backend init, a test that
@@ -2795,7 +2811,9 @@ void AppWindow::drawUi() {
     pumpAddAll();
     pollUpdateAsync();
     // And the sink: everything above this line can be working perfectly while
-    // the user hears nothing.
+    // the user hears nothing. The collect comes first - the health check must
+    // not judge a stream an open is still installing.
+    pollAudioOpen();
     pollAudioHealth();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
@@ -2852,6 +2870,13 @@ void AppWindow::pollAudioHealth() {
     if (now - lastAudioProbeSec_ < 1.0) { return; }
     lastAudioProbeSec_ = now;
 
+    // AN OPEN IN FLIGHT ALREADY OWNS THE SINK. Asking a sink that a worker is
+    // inside open() on whether its stream is alive is a race, and acting on
+    // the answer would start a SECOND concurrent device open — which is the
+    // shape of fault this whole path was written to end, not to create. The
+    // frame after the open completes asks the question again.
+    if (audioOpen_.inFlight()) { return; }
+
     if (out.streamAlive()) { return; }
 
     // The stream is dead. Re-enumerate before choosing a target: the device
@@ -2862,30 +2887,74 @@ void AppWindow::pollAudioHealth() {
     const int target = cascade::sink::recoveryDeviceIndex(
         out.openedDeviceRequested(), out.openedDeviceName(), devices_);
 
-    if (!pipeline_.openAudioDevice(target)) {
+    // OFF THIS THREAD. A dead stream is usually a device that has gone away,
+    // and a device that has gone away is exactly the one whose open blocks —
+    // so this is the LAST place in the application that may call a blocking
+    // open on the frame loop, and it used to do it once a second for as long
+    // as the condition lasted. requestAudioOpen answers false when the device
+    // has not replied inside the bound; the result lands in pollAudioOpen when
+    // it does, and this tick goes back to rendering.
+    (void)requestAudioOpen(target, true);
+}
+
+// What the Sinks panel says while a device has not answered yet. Named because
+// it is both written and tested for: a user switch takes its own line down
+// again, and must not take the audio watchdog's recovery note with it.
+const char* const kAudioBusyNote = "audio device busy - still opening";
+
+bool AppWindow::requestAudioOpen(int deviceIndex, bool recovery) {
+    const cascade::gui::AudioOpen::Outcome outcome = audioOpen_.request(
+        deviceIndex, recovery ? kAudioOpenByWatchdog : kAudioOpenByUser);
+    if (outcome != cascade::gui::AudioOpen::Outcome::Finished) {
+        // Still inside the driver. Said in the panel rather than left to look
+        // like nothing happened — "I picked the device and nothing changed" is
+        // how a silent wait reads, and it is the reading that sends the next
+        // report to the wrong end of the chain.
+        audioHealthNote_ = kAudioBusyNote;
+        return false;
+    }
+    applyAudioOpenResult();
+    return audioOpen_.result().ok;
+}
+
+void AppWindow::pollAudioOpen() {
+    if (!audioOpen_.poll()) { return; }
+    applyAudioOpenResult();
+}
+
+void AppWindow::applyAudioOpenResult() {
+    const cascade::gui::AudioOpen::Result r = audioOpen_.result();
+    // THE DSP THREAD'S MIRROR, published here rather than by the worker: it
+    // lives under Pipeline's audioMutex_ and belongs to the Pipeline, which an
+    // abandoned worker may outlive. See Pipeline::audioOpener().
+    pipeline_.publishAudioChannels(r.ok);
+
+    // Re-enumerate now that the sink is this thread's again: the list is how
+    // the row below is resolved, and the reason a stream died is usually that
+    // a device went away — so it can be SHORTER than the one deviceIndex_ was
+    // chosen against.
+    devices_ = pipeline_.audio().listOutputDevices();
+
+    if (!r.ok) {
         // Say so rather than failing silently — silent failure is the exact
         // bug this whole path exists to end. The next tick tries again.
         audioHealthNote_ = "audio output stopped and could not be reopened";
-        // The list above was replaced whatever happened next, and the reason
-        // the stream died is usually that a device went away — so it can be
-        // SHORTER than the one deviceIndex_ was chosen against. The Sinks
-        // combo subscripts that row guarded only by "not empty", so leaving a
-        // stale row here is an out-of-bounds read on the very next frame, on
-        // the one path where nothing else touches it.
+        // The Sinks combo subscripts deviceIndex_ guarded only by "not empty",
+        // so leaving a stale row against a shorter list is an out-of-bounds
+        // read on the very next frame.
         deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
         return;
     }
 
-    ++audioRecoveries_;
     // Keep the Sinks combo honest about what is actually open. Without this
     // the panel would name the old device while audio came out of another.
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
-        if (devices_[static_cast<std::size_t>(i)].index == target) {
+        if (devices_[static_cast<std::size_t>(i)].index == r.deviceIndex) {
             deviceIndex_ = i;
             break;
         }
     }
-    if (target < 0) {
+    if (r.deviceIndex < 0) {
         for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
             if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
         }
@@ -2895,6 +2964,17 @@ void AppWindow::pollAudioHealth() {
     // calls) leaves the old row standing against the new list. Same
     // out-of-bounds, so the same clamp closes it here too.
     deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
+
+    if (r.tag != kAudioOpenByWatchdog) {
+        // The user picked this device themselves and can see the result. Only
+        // the "still opening" line this request may have put up is taken down:
+        // a recovery note from earlier in the session is the watchdog's, and
+        // stays, because "audio stopped and came back on its own" is the thing
+        // a user would otherwise report as a fault in their radio.
+        if (audioHealthNote_ == kAudioBusyNote) { audioHealthNote_.clear(); }
+        return;
+    }
+    ++audioRecoveries_;
     char buf[160];
     std::snprintf(buf, sizeof(buf),
                   "output device stopped and was restarted (%d time%s)",
@@ -3345,6 +3425,13 @@ void AppWindow::drawStatusColumn() {
                 lines[n++] = {l1, kFaint};
             }
             value = "MUTED";
+            valueCol = cascade::gui::theme::kAmber;
+        } else if (audioOpen_.inFlight()) {
+            // Same rule as the Sinks lamp: while a worker is inside the
+            // driver's open, nothing about the sink may be asked, so this says
+            // the one true thing there is to say.
+            lines[n++] = {"waiting for the output device", kFaint};
+            value = "OPENING";
             valueCol = cascade::gui::theme::kAmber;
         } else if (!pipeline_.audio().everOpened()) {
             lines[n++] = {"no output device was opened", kFaint};
@@ -5102,11 +5189,19 @@ void AppWindow::drawSinksSection() {
         // stream is dead, and dark only when no output device has ever been
         // opened - which is the one case where there is nothing to report.
     const bool sinkMuted = !muteSubjectText().empty();
-    const bool sinkOpened = pipeline_.audio().everOpened();
+    // AN OPEN IN FLIGHT IS NOT A STATE OF THE SINK, it is a state of the
+    // driver, and asking the sink anything while a worker is inside its open()
+    // is the race gui/audio_open.hpp forbids. So it is reported on its own
+    // terms and nothing below is consulted.
+    const bool sinkOpening = audioOpen_.inFlight();
+    const bool sinkOpened = !sinkOpening && pipeline_.audio().everOpened();
     const bool sinkAlive = sinkOpened && pipeline_.audio().streamAlive();
     const char* sinkChip = "ON";
     ImU32 sinkLamp = cascade::gui::theme::kPhosphor;
-    if (!sinkOpened) {
+    if (sinkOpening) {
+        sinkChip = "OPENING";
+        sinkLamp = cascade::gui::theme::kAmber;
+    } else if (!sinkOpened) {
         sinkChip = "NO DEV";
         sinkLamp = cascade::gui::theme::kInkFaint;
     } else if (!sinkAlive) {
@@ -5117,7 +5212,8 @@ void AppWindow::drawSinksSection() {
         sinkChip = "MUTED";
         sinkLamp = cascade::gui::theme::kAmber;
     }
-    const bool sinksOpen = benchSection("Sinks", true, sinkChip, sinkLamp, sinkOpened);
+    const bool sinksOpen =
+        benchSection("Sinks", true, sinkChip, sinkLamp, sinkOpened || sinkOpening);
     if (sinksOpen) {
         if (devices_.empty()) {
             ImGui::TextDisabled("No audio output devices");
@@ -5133,9 +5229,12 @@ void AppWindow::drawSinksSection() {
                     deviceIndex_ = i;
                     // Re-open on change: open() closes the old stream first,
                     // so this is the whole device-switch operation. Through
-                    // the pipeline, not the sink, so the DSP thread learns
-                    // the new channel layout (stereo first, mono fallback).
-                    pipeline_.openAudioDevice(dev.index);
+                    // audioOpen_, never straight at the sink: this line IS the
+                    // 0.96.4 field hang — Pa_OpenStream is waveOutOpen, it has
+                    // no timeout, and it held one user's frame loop for 57
+                    // seconds. The gate waits a bound for the device and then
+                    // lets the frame go on without it.
+                    (void)requestAudioOpen(dev.index, false);
                 }
                 ImGui::PopID();
             }

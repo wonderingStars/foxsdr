@@ -48,6 +48,14 @@ AudioOut::~AudioOut() {
 std::vector<AudioDevice> AudioOut::listOutputDevices() {
     std::vector<AudioDevice> devices;
     if (!paOk_) { return devices; }
+    // NEVER WHILE AN OPEN IS IN PROGRESS. Enumeration is a PortAudio call and
+    // so is the open a worker may be inside; running both at once is not
+    // something PortAudio promises to survive. An empty list is the honest
+    // answer for "cannot say right now" - the GUI does not ask while
+    // gui::AudioOpen reports an open in flight, and this is the backstop for a
+    // caller that forgets.
+    std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return devices; }
     const PaDeviceIndex count = Pa_GetDeviceCount();
     const PaDeviceIndex def = Pa_GetDefaultOutputDevice();
     for (PaDeviceIndex i = 0; i < count; ++i) {
@@ -66,10 +74,15 @@ std::vector<AudioDevice> AudioOut::listOutputDevices() {
 bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     if (!paOk_ || !(sampleRateHz > 0.0)) { return false; }
     if (channels != 1 && channels != 2) { return false; }
+    // Held for the WHOLE open, Pa_OpenStream included. On Windows that is
+    // waveOutOpen, which has no timeout - so everything that takes this lock
+    // with try_lock is answering "an open is in progress" rather than waiting
+    // for a driver.
+    std::lock_guard<std::mutex> lk(apiMutex_);
     // Re-open semantics: switching device or rate through open() closes the
-    // old stream first. close() is idempotent, so this is safe when nothing
-    // is open yet.
-    close();
+    // old stream first. closeLocked() is idempotent, so this is safe when
+    // nothing is open yet.
+    closeLocked();
 
     const PaDeviceIndex dev = (deviceIndex < 0)
                                   ? Pa_GetDefaultOutputDevice()
@@ -129,6 +142,11 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
 }
 
 void AudioOut::close() {
+    std::lock_guard<std::mutex> lk(apiMutex_);
+    closeLocked();
+}
+
+void AudioOut::closeLocked() {
     if (stream_ == nullptr) { return; }  // idempotent / close-without-open
     // Abort rather than Stop: Stop would block until the device drains its
     // queued buffers (tens of ms of already-heard audio); the stop button
@@ -140,7 +158,20 @@ void AudioOut::close() {
     running_ = false;
 }
 
+std::string AudioOut::openedDeviceName() const {
+    std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return std::string(); }
+    return openedName_;
+}
+
 bool AudioOut::streamAlive() const {
+    // AN OPEN IN PROGRESS IS NOT A DEAD STREAM, and answering false here would
+    // be worse than useless: the audio watchdog reacts to false by opening the
+    // device AGAIN, which is precisely the second concurrent waveOutOpen this
+    // lock exists to prevent. So a sink that is busy being opened reports
+    // alive - nothing needs doing about it, because something already is.
+    std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return true; }
     if (stream_ == nullptr) { return false; }
     // Pa_IsStreamActive: 1 = the callback is being called, 0 = stopped, and a
     // negative PaError when the host API cannot answer at all — which is what
@@ -219,7 +250,8 @@ std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
     auto* ao = static_cast<AudioOut*>(self);
     // The device buffer holds frames * channels interleaved floats; the ring
     // already stores them in that exact order, so this stays one flat read.
-    const std::size_t chan = static_cast<std::size_t>(ao->channels_ == 2 ? 2 : 1);
+    const std::size_t chan =
+        static_cast<std::size_t>(ao->channels_.load(std::memory_order_relaxed) == 2 ? 2 : 1);
     const std::size_t n = frames * chan;
 
     if (!ao->primed_.load(std::memory_order_relaxed)) {
@@ -267,12 +299,12 @@ std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
 }
 
 std::size_t AudioOut::ringFrames() const {
-    const std::size_t chan = static_cast<std::size_t>(channels_ == 2 ? 2 : 1);
+    const std::size_t chan = static_cast<std::size_t>(channels() == 2 ? 2 : 1);
     return ring_.size() / chan;
 }
 
 std::size_t AudioOut::ringCapacityFrames() const {
-    const std::size_t chan = static_cast<std::size_t>(channels_ == 2 ? 2 : 1);
+    const std::size_t chan = static_cast<std::size_t>(channels() == 2 ? 2 : 1);
     return ring_.capacity() / chan;
 }
 

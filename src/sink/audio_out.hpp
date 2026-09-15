@@ -35,6 +35,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -83,7 +84,7 @@ public:
     // without a successful open().
     void close();
 
-    bool running() const { return running_; }
+    bool running() const { return running_.load(std::memory_order_relaxed); }
 
     // True while a stream is open AND PortAudio still reports it running.
     //
@@ -106,23 +107,31 @@ public:
     // Whether ANY open has ever succeeded on this object. Recovery uses it to
     // tell "the stream died" from "there was never a device" — on a headless
     // box the second is normal and must not provoke endless reopen attempts.
-    bool everOpened() const { return everOpened_; }
+    bool everOpened() const { return everOpened_.load(std::memory_order_relaxed); }
 
     // The deviceIndex argument of the last successful open, verbatim: -1 when
     // the caller asked for the system default. Kept UNRESOLVED on purpose —
     // "follow the default" is a different intent from "use this device", and
     // a recovery must preserve which one the user expressed.
-    int openedDeviceRequested() const { return openedRequested_; }
+    int openedDeviceRequested() const {
+        return openedRequested_.load(std::memory_order_relaxed);
+    }
 
     // Name of the device the last successful open actually landed on. Names
     // are the only stable handle across a device coming and going: PortAudio
     // indices are positions in a list that shifts when the set changes.
-    const std::string& openedDeviceName() const { return openedName_; }
+    // BY VALUE, not by reference: open() rewrites this string, and since
+    // 0.96.5 open() may be running on a worker thread (see gui/audio_open.hpp)
+    // while the GUI asks. A reference into a string another thread is
+    // assigning is a dangling read; a copy taken under the api lock is not.
+    // Empty while an open is in progress - see streamAlive() for why that is
+    // answered rather than waited for.
+    std::string openedDeviceName() const;
 
     // Channel layout of the most recent SUCCESSFUL open (1 until one
     // succeeds). Deliberately retained across close(): it describes how the
     // ring's contents are laid out, and the ring outlives the stream.
-    int channels() const { return channels_; }
+    int channels() const { return channels_.load(std::memory_order_relaxed); }
 
     // Non-blocking producer push of raw ring samples. Returns how many
     // samples the ring accepted (< n when the ring is full — the caller
@@ -205,6 +214,10 @@ public:
     static constexpr std::size_t kPrimeFrames = 5760;
 
 private:
+    // The body of close(), for the paths that already hold apiMutex_ (open()
+    // closes the previous stream before it opens the next one).
+    void closeLocked();
+
     // 32768 samples: 32768 mono frames (682 ms at 48 kHz) or 16384 STEREO
     // frames (341 ms — a stereo frame is one L+R pair, so it costs two
     // samples). Deep enough to ride out GUI-thread hiccups on the producer
@@ -224,13 +237,23 @@ private:
     // portaudio.h onto every includer; audio_out.cpp casts at the API line.
     void* stream_ = nullptr;
     bool paOk_ = false;    // did OUR Pa_Initialize() succeed?
-    bool running_ = false;
-    int channels_ = 1;     // layout of the last successful open (see channels())
+    std::atomic<bool> running_{false};
+    // Layout of the last successful open (see channels()). ATOMIC because the
+    // PortAudio callback reads it on every block while open() writes it.
+    std::atomic<int> channels_{1};
+    // THE STREAM LIFECYCLE LOCK. open() and close() hold it for their whole
+    // duration - which on Windows means for the whole of waveOutOpen - and the
+    // queries that touch PortAudio or the identity strings take it with
+    // try_lock, so a caller that asks about the sink while another thread is
+    // opening it gets an answer instead of a stall or a race. It is NEVER
+    // taken by write()/writeStereo()/pullBlock(): the realtime path stays
+    // lock-free, exactly as the file header promises.
+    mutable std::mutex apiMutex_;
     // Identity of the last successful open, retained across close() because
     // that is precisely when recovery needs it (see streamAlive()).
-    bool everOpened_ = false;
-    int openedRequested_ = -1;
-    std::string openedName_;
+    std::atomic<bool> everOpened_{false};
+    std::atomic<int> openedRequested_{-1};
+    std::string openedName_;  // guarded by apiMutex_
 };
 
 // Which device a recovery reopen should target, given what the last

@@ -367,6 +367,27 @@ There is no installer to launch on Linux (`AppWindow::launchInstaller` still
 returns `false` there, unchanged), so the update banner's action is instead an
 "Open foxsdr.com" button through this same path — see the "Building (Linux)"
 section of the top-level README.
+### The audio device is opened off the frame loop
+
+`hang ntdll.dll @ InitializeWaveHandles` (0.96.4, Windows 11 26200, an RTL-SDR
+Blog V4, 350 s uptime) is the Sinks panel's device combo: `Pa_OpenStream` is
+`waveOutOpen` on the WMME host API, it has no timeout, and it held the GUI
+thread from `AppWindow::drawSinksSection` down through `wdmaud.drv` into
+`ntdll` — the watchdog filed at 5 s and the application's own log records the
+frame loop returning 57 seconds later.
+
+A pause alone would have deleted the report and kept the freeze, so the open
+moved instead. `gui::AudioOpen` runs it on a worker and the requesting frame
+waits `kOpenBound` (1500 ms) for the answer under a `WatchdogPause` — a device
+that is merely slow still opens inside the click that asked for it — and then
+goes back to rendering, with the Sinks panel reading **OPENING** and "audio
+device busy — still opening" until the driver replies. Both callers go through
+it: the combo, and the once-a-second reopen the audio watchdog performs when a
+stream has died, which is the worse of the two because a device that has gone
+away is exactly the one whose open blocks. Two opens are never in flight at
+once; a click made during one is queued, and only the last of them runs.
+`tests/test_audio_open.cpp` drives a real `HangWatchdog` against an opener that
+takes 2.5 s and requires no report and an unbroken heartbeat.
 
 What none of this proves: that a real librtlsdr or UHD line arrives. The
 bridge and the capture are exercised with synthetic lines
@@ -579,14 +600,16 @@ own reason:
    system menu open, stops the application's own loop turning over at all, and
    can legitimately last minutes. `GetGUIThreadInfo` reports exactly this
    (`GUI_INMOVESIZE` / `GUI_INMENUMODE` / `GUI_POPUPMENUMODE`).
-2b. **Blocking work the application enters knowingly** — `WatchdogPause`. One
-   path takes it today, and it is named rather than left as a general
+2b. **Blocking work the application enters knowingly** — `WatchdogPause`. Three
+   paths take it today, and they are named rather than left as a general
    principle, because a mitigation with no call sites protects nothing:
    `AppWindow::rescanPlugins()`, which unloads and re-`LoadLibrary`s every
-   installed plugin on the GUI thread. Anything added later that blocks that
-   thread must take one too — a synchronous device open or a native modal
-   dialog would, and neither exists yet (the Soapy open and scan are async,
-   and there is no native file dialog). `cascade --frames N` prints how many
+   installed plugin on the GUI thread; `gui::runShellOpen`, for a shell call
+   that may be sitting on an elevation prompt; and `gui::AudioOpen`'s bounded
+   wait for an output device. The audio one is the shape this rule always
+   anticipated — "a synchronous device open" — and it is bracketed AND
+   bounded, because a pause held for an open that never returns would be the
+   watchdog switched off. `cascade --frames N` prints how many
    pauses the run took and `tests/test_diag_hang.cpp` requires at least one,
    so a rescan that stops pausing goes red instead of silently arming a false
    report.

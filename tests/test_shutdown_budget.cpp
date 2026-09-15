@@ -415,6 +415,24 @@ const KnownWait kKnownWaits[] = {
      "~AppWindow's future reaps: runs after watchdog_.stop(), outside the budgeted stretch"},
     {"src/gui/app_window.cpp", "kNoWait", 0,
      "zero by construction - a ready-poll on a std::future, not a wait"},
+    // THE AUDIO DEVICE OPEN (0.96.5), and why both of its waits are zero here.
+    // The 0.96.4 field hang "ntdll.dll @ InitializeWaveHandles" was a
+    // synchronous waveOutOpen on the FRAME LOOP - the Sinks combo and the audio
+    // watchdog's reopen - and neither of those runs during a teardown: the
+    // frame loop has already ended by the time beginShutdown() is called, and
+    // nothing on the shutdown path opens an output device. The reap is the same
+    // case as app_window.cpp's kQuitGrace above, in the same destructor and for
+    // the same reason.
+    {"src/gui/audio_open.hpp", "kOpenBound", 0,
+     "the bound the REQUESTING FRAME spends on a device open (Sinks combo, audio watchdog "
+     "reopen) under a WatchdogPause - spent in the frame loop, which has ended before "
+     "beginShutdown() raises the threshold"},
+    {"src/gui/audio_open.hpp", "kNoWait", 0,
+     "zero by construction - the once-a-frame ready-poll on a std::future, not a wait"},
+    {"src/gui/audio_open.hpp", "kQuitGrace", 0,
+     "AudioOpen::reap()'s grace before a still-blocked open is abandoned: called from "
+     "~AppWindow after watchdog_.stop(), outside the budgeted stretch, exactly like "
+     "app_window.cpp's kQuitGrace"},
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},
