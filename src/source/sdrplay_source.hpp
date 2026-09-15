@@ -93,6 +93,34 @@ const char* sdrPlayApiDllPath();
 // never loaded and the question never asked.
 std::string sdrPlayApiAdvice(bool resolved, float version);
 
+// WHY THE LAST ENUMERATION LISTED NOTHING, in the enumeration's own words.
+//
+// Added because the too-old-API sentence could not reach the screen. The
+// version a session learns is recorded on the table only when the session
+// SUCCEEDS (sessionAcquire), and a version below kMinApiVersion fails before
+// that line - so the Source section, which composes its sentence from the
+// table's `resolved` and `version`, was asking sdrPlayApiAdvice(true, 0.0f)
+// and being answered with silence. An RSP owner running API 3.05 therefore
+// got an empty Source section and no instruction at all, while the log two
+// inches away carried the exact sentence telling them to update it.
+//
+// So enumerateSdrPlayWith records the reason it skipped - the same string it
+// logs, not a paraphrase - and this hands it back. Empty when the last
+// enumeration got as far as asking for the device list, which is every
+// machine with a working install: a stale sentence there would send its owner
+// to reinstall an API that is already fine.
+//
+// Process-scope and last-writer-wins, like the table it describes: there is
+// one SDRplay API per process and one Source section looking at it.
+std::string sdrPlayLastEnumerationSkip();
+
+// WHAT THE SOURCE SECTION SHOWS WHEN THERE IS NO RSP ROW. Pure, so the panel's
+// whole decision is one testable line: the enumeration's own reason when it
+// has one, and otherwise what can be said from the load result alone (which
+// is what the panel did before, and still covers a draw that happens before
+// any enumeration has run). Empty means there is nothing to say.
+std::string sdrPlayPanelAdvice(bool resolved, float version, const std::string& enumerationSkip);
+
 // --- enumeration ----------------------------------------------------------
 
 // Every RSP the service can see, as the Source section wants them.

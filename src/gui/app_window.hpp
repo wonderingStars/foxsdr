@@ -1612,9 +1612,12 @@ private:
 
     // WHAT THE SOURCE SECTION SAYS ABOUT THE SDRPLAY API WHEN THERE IS NO RSP
     // ROW TO SHOW. Composed by scanNative() from the driver's own pure
-    // sdrPlayApiAdvice(), so the sentence the user is given is the one a test
-    // pins; empty when the API is installed and new enough, which is when
-    // there is nothing to say. sdrPlayApiDetail_ is the loader's own account
+    // sdrPlayPanelAdvice(), so the sentence the user is given is the one a
+    // test pins; empty when the API is installed and new enough, which is when
+    // there is nothing to say. It covers BOTH ways an RSP goes missing - no
+    // API and an API too old - which took the enumeration's recorded reason,
+    // because the table's own version field is written only by a session that
+    // got past the version gate. sdrPlayApiDetail_ is the loader's own account
     // of where it looked, shown dimmed underneath for whoever is helping.
     std::string sdrPlayAdvice_;
     std::string sdrPlayApiDetail_;

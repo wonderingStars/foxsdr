@@ -997,6 +997,73 @@ void testFailuresOnTheOpeningPathUnwind() {
     }
 }
 
+// --- 12b. the sentence has to REACH the Source section --------------------
+
+void testSkipReasonReachesTheSourcePanel() {
+    // THE ONE INSTRUCTION AN RSP OWNER GETS, AND THE HALF OF IT THAT NEVER
+    // ARRIVED. The Source section composes its sentence from the process
+    // table's own fields - resolved, and the version the table records - and
+    // the table records a version only on a session that SUCCEEDED. A too-old
+    // API fails the version gate inside sessionAcquire, so nothing is ever
+    // written into api.version, so the panel asked sdrPlayApiAdvice(true,
+    // 0.0f) and was answered with silence: the user saw an empty Source
+    // section and the "update the API" sentence existed only in the log.
+    //
+    // This is that exact pair of values, and it is why the accessor below has
+    // to exist rather than the panel simply reading harder.
+    CHECK(cascade::source::sdrPlayApiAdvice(true, 0.0f).empty());
+
+    {
+        FakeSdrPlayApi fake;
+        fake.version = 3.05f;
+        fake.addDevice("1234567890", abi::kRsp1A);
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).empty());
+
+        // WHAT THE ENUMERATION SKIPPED FOR, kept verbatim. The same string it
+        // logs, so the screen and the log cannot describe the same machine
+        // differently.
+        const std::string skip = cascade::source::sdrPlayLastEnumerationSkip();
+        CHECK(skip == cascade::source::sdrPlayApiAdvice(true, 3.05f));
+        CHECK(skip.find("3.05") != std::string::npos);
+        CHECK(skip.find("3.07") != std::string::npos);
+        CHECK(skip.find("sdrplay.com") != std::string::npos);
+
+        // ...AND THROUGH THE RULE THE PANEL ITSELF USES, called with the
+        // values scanNative() really has: resolved true, version zero. The
+        // version is asserted rather than only the equality, because two
+        // empty strings are equal - and an empty panel sentence is precisely
+        // the defect this test exists to keep out.
+        const std::string shown = cascade::source::sdrPlayPanelAdvice(true, 0.0f, skip);
+        CHECK(shown.find("3.05") != std::string::npos);
+        CHECK(shown == skip);
+    }
+
+    {
+        // THE MISSING CASE STILL SAYS WHAT IT ALWAYS SAID. It reached the
+        // panel before because sdrPlayApiAdvice answers on `resolved` alone,
+        // and it has to go on reaching it by the new route as well.
+        abi::Api absent;
+        CHECK(cascade::source::enumerateSdrPlayWith(absent).empty());
+        const std::string skip = cascade::source::sdrPlayLastEnumerationSkip();
+        CHECK(skip == cascade::source::sdrPlayApiAdvice(false, 0.0f));
+        CHECK(cascade::source::sdrPlayPanelAdvice(false, 0.0f, skip) == skip);
+    }
+
+    {
+        // AND AN API THAT WORKED SAYS NOTHING. An enumeration that got as far
+        // as the device list clears the reason, so a panel drawn after a good
+        // scan has nothing to show - which is the state every machine with a
+        // working install is in, and a stale sentence there would send its
+        // owner off to reinstall an API that is already fine.
+        FakeSdrPlayApi fake;
+        fake.version = 3.15f;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        CHECK(cascade::source::enumerateSdrPlayWith(fake.table).size() == 1);
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip().empty());
+        CHECK(cascade::source::sdrPlayPanelAdvice(true, 3.15f, std::string()).empty());
+    }
+}
+
 // --- 13. the interface description itself ---------------------------------
 
 void testAbiLayoutIsPinnedToTheVersionsWeChecked() {
@@ -1038,6 +1105,7 @@ int main() {
     testStopAndCloseAreBoundedAndIdempotent();
     testCloseWithoutOpenIsSafe();
     testFailuresOnTheOpeningPathUnwind();
+    testSkipReasonReachesTheSourcePanel();
     testAbiLayoutIsPinnedToTheVersionsWeChecked();
     return testSummary("test_sdrplay_source");
 }

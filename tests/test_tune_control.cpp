@@ -1035,7 +1035,7 @@ int main() {
         // running at exit - and what goes back into the file is the radio.
         const RememberedSource keep =
             rememberedSourceAfterFailedOpen("rtlsdr", "driver=rtlsdr", "serial=00000001",
-                                            2400000.0);
+                                            "", 2400000.0);
         CHECK(keep.valid());
         CHECK(keep.kind == "rtlsdr");
         CHECK(keep.nativeArgs == "serial=00000001");
@@ -1046,8 +1046,10 @@ int main() {
         CHECK(keep.soapyArgs == "driver=rtlsdr");
         CHECK(keep.sampleRateHz == 2400000.0);
 
-        const SavedSource saved =
-            sourceToSave("siggen", "", "", 2000000.0 /* the generator's fixed rate */, keep);
+        CHECK(keep.filePath.empty());  // a radio is not a file
+
+        const SavedSource saved = sourceToSave("siggen", "", "", "",
+                                               2000000.0 /* the generator's fixed rate */, keep);
         CHECK(saved.kind == "rtlsdr");
         CHECK(saved.nativeArgs == "serial=00000001");
         CHECK(saved.soapyArgs == "driver=rtlsdr");
@@ -1058,28 +1060,89 @@ int main() {
         // A SAVED SOAPY DEVICE, the other half of the same case: a B200, a
         // LimeSDR, anything reached through a vendor module.
         const RememberedSource soapyKeep =
-            rememberedSourceAfterFailedOpen("soapy", "driver=uhd,serial=ABC123", "", 8000000.0);
+            rememberedSourceAfterFailedOpen("soapy", "driver=uhd,serial=ABC123", "", "", 8000000.0);
         CHECK(soapyKeep.valid());
-        CHECK(sourceToSave("siggen", "", "", 2000000.0, soapyKeep).kind == "soapy");
-        CHECK(sourceToSave("siggen", "", "", 2000000.0, soapyKeep).soapyArgs ==
+        CHECK(sourceToSave("siggen", "", "", "", 2000000.0, soapyKeep).kind == "soapy");
+        CHECK(sourceToSave("siggen", "", "", "", 2000000.0, soapyKeep).soapyArgs ==
               "driver=uhd,serial=ABC123");
 
-        // NOTHING IS REMEMBERED FOR A SOURCE THAT IS NOT A RADIO, and nothing
-        // for a kind whose own args slot is empty - it names no particular
-        // device, so there is nothing for the next start to open.
-        CHECK(!rememberedSourceAfterFailedOpen("siggen", "", "", 2000000.0).valid());
-        CHECK(!rememberedSourceAfterFailedOpen("file", "", "", 2000000.0).valid());
-        CHECK(!rememberedSourceAfterFailedOpen("rtlsdr", "driver=rtlsdr", "", 2400000.0).valid());
-        CHECK(!rememberedSourceAfterFailedOpen("soapy", "", "serial=00000001", 2400000.0).valid());
+        // --- AND THE SAVED I/Q FILE, WHICH WAS THE ONE SOURCE STILL BEING
+        // FORGOTTEN. 0.93.0 fixed the radio and said so in as many words: a
+        // saved file whose drive is unplugged, whose folder has been renamed
+        // or whose recording has been moved fell back to the generator with
+        // the path dropped as well, so the next start had neither the file
+        // nor any sign there had been one. It is remembered on exactly the
+        // same terms.
+        const RememberedSource fileKeep = rememberedSourceAfterFailedOpen(
+            "file", "driver=rtlsdr", "serial=00000001", "D:\\recordings\\noaa.wav", 1024000.0);
+        CHECK(fileKeep.valid());
+        CHECK(fileKeep.kind == "file");
+        CHECK(fileKeep.filePath == "D:\\recordings\\noaa.wav");
+        CHECK(fileKeep.sampleRateHz == 1024000.0);
+        // THE ARGS SLOTS RIDE THROUGH UNTOUCHED. They belong to a radio the
+        // user opened at some point before choosing this file, and a session
+        // that could not open the file has learned nothing about the radio -
+        // blanking them here would make the missing file take the dongle with
+        // it.
+        CHECK(fileKeep.soapyArgs == "driver=rtlsdr");
+        CHECK(fileKeep.nativeArgs == "serial=00000001");
+
+        const SavedSource savedFile = sourceToSave("siggen", "", "", "", 2000000.0, fileKeep);
+        CHECK(savedFile.kind == "file");
+        CHECK(savedFile.filePath == "D:\\recordings\\noaa.wav");
+        CHECK(savedFile.soapyArgs == "driver=rtlsdr");
+        CHECK(savedFile.nativeArgs == "serial=00000001");
+        // ...and not the generator's rate, for the same reason a radio's is
+        // not: a file plays at its own.
+        CHECK(savedFile.sampleRateHz == 1024000.0);
+
+        // NOTHING IS REMEMBERED FOR THE GENERATOR, for a kind whose own args
+        // slot is empty - it names no particular device - or for a file with
+        // no path, which names no particular recording.
+        CHECK(!rememberedSourceAfterFailedOpen("siggen", "", "", "", 2000000.0).valid());
+        CHECK(!rememberedSourceAfterFailedOpen("file", "", "", "", 2000000.0).valid());
+        CHECK(!rememberedSourceAfterFailedOpen("rtlsdr", "driver=rtlsdr", "", "", 2400000.0)
+                   .valid());
+        CHECK(!rememberedSourceAfterFailedOpen("soapy", "", "serial=00000001", "", 2400000.0)
+                   .valid());
+        // A PATH IS NOT ENOUGH ON ITS OWN. Every config that ever played a
+        // file carries iqFilePath for the box to show; only a config whose
+        // KIND is "file" was actually listening to it, and remembering the
+        // path under a radio's kind would reopen a recording the user had
+        // moved on from.
+        CHECK(!rememberedSourceAfterFailedOpen("siggen", "", "", "D:\\recordings\\noaa.wav",
+                                               2000000.0)
+                   .valid());
+        CHECK(rememberedSourceAfterFailedOpen("rtlsdr", "", "serial=00000001",
+                                              "D:\\recordings\\noaa.wav", 2400000.0)
+                  .filePath.empty());
         // A rate that was never recorded is not written back as if it had been.
-        CHECK(rememberedSourceAfterFailedOpen("hackrf", "", "serial=0000ABCD", 0.0).sampleRateHz ==
-              0.0);
+        CHECK(rememberedSourceAfterFailedOpen("hackrf", "", "serial=0000ABCD", "", 0.0)
+                  .sampleRateHz == 0.0);
+
+        // WHAT THE PANEL CALLS A REMEMBERED RECORDING: its own name. The
+        // preview is one combo wide and a capture lives several folders down
+        // a drive, so the folders stay in the error line and the name is what
+        // identifies the file.
+        using cascade::gui::fileNameOf;
+        CHECK(fileNameOf("D:\\recordings\\noaa-19.wav") == "noaa-19.wav");
+        // Forward slashes too: a config can be hand-written or carried from
+        // another machine, and Windows opens either spelling.
+        CHECK(fileNameOf("D:/recordings/noaa-19.wav") == "noaa-19.wav");
+        CHECK(fileNameOf("C:\\iq/mixed\\seps.raw") == "seps.raw");
+        // A bare name is already a name.
+        CHECK(fileNameOf("capture.wav") == "capture.wav");
+        CHECK(fileNameOf("").empty());
+        // A path that ends in a separator names no file, so the whole string
+        // comes back: an odd-looking label says more than a blank one, and
+        // the preview must never fall back to showing the generator.
+        CHECK(fileNameOf("D:\\recordings\\") == "D:\\recordings\\");
 
         // A DELIBERATE CHOICE STILL OVERWRITES. Nothing remembered at all:
         // whatever is live is what is saved, which is every session that
         // restored cleanly.
         const SavedSource plain =
-            sourceToSave("airspyhf", "", "serial=DEADBEEF", 768000.0, RememberedSource{});
+            sourceToSave("airspyhf", "", "serial=DEADBEEF", "", 768000.0, RememberedSource{});
         CHECK(plain.kind == "airspyhf");
         CHECK(plain.nativeArgs == "serial=DEADBEEF");
         CHECK(plain.sampleRateHz == 768000.0);
@@ -1089,12 +1152,26 @@ int main() {
         // gate is the second lock on the same door, because a config naming a
         // radio the user had just switched away from would be a worse bug than
         // the one this exists to fix.
-        const SavedSource live =
-            sourceToSave("soapy", "driver=uhd", "", 8000000.0, keep);
+        const SavedSource live = sourceToSave("soapy", "driver=uhd", "", "", 8000000.0, keep);
         CHECK(live.kind == "soapy");
         CHECK(live.soapyArgs == "driver=uhd");
         CHECK(live.nativeArgs.empty());
-        CHECK(sourceToSave("file", "", "", 1000000.0, keep).kind == "file");
+        CHECK(sourceToSave("file", "", "", "C:\\iq\\live.wav", 1000000.0, keep).kind == "file");
+
+        // A REMEMBERED FILE IS SUPERSEDED THE SAME WAY, and the path that
+        // travels is the live one. The user opened a radio, or another file:
+        // either way the session has a source of its own and the remembered
+        // one is history.
+        const SavedSource overFile =
+            sourceToSave("rtlsdr", "", "serial=0000AAAA", "C:\\iq\\live.wav", 2400000.0, fileKeep);
+        CHECK(overFile.kind == "rtlsdr");
+        CHECK(overFile.filePath == "C:\\iq\\live.wav");
+        CHECK(overFile.sampleRateHz == 2400000.0);
+        // THE PATH THE SESSION HAS IS KEPT WHEN A RADIO IS WHAT IS
+        // REMEMBERED. iqFilePath is the box's own memory and has nothing to
+        // do with which source is saved; a remembered radio must not blank it.
+        CHECK(sourceToSave("siggen", "", "", "C:\\iq\\live.wav", 2000000.0, keep).filePath ==
+              "C:\\iq\\live.wav");
 
         // THE NATIVE KIND LIST, pinned here because the rule above keys on it:
         // a driver missing from it would not fail to compile, it would quietly

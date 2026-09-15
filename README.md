@@ -75,7 +75,8 @@ are still moving. What is in the current build:
   an RTL dongle still on the DVB-T driver, an Airspy still on its vendor one, a
   television stick still on its DVB-T one - rather than leaving it silently
   missing. An RSP that cannot be listed because the SDRplay API is not
-  installed gets a sentence saying exactly that, rather than nothing at all.
+  installed - or is installed but older than 3.07, which FoxSDR cannot drive -
+  gets a sentence saying exactly that, rather than nothing at all.
   The SoapySDR device scan still waits for the radio to close - the vendor
   probe opens and resets every dongle it finds, the streaming one included -
   but Refresh is live again, because the native enumeration reads SetupAPI
@@ -318,7 +319,12 @@ the driver goes through it directly: FoxSDR loads the user's own SDRplay API
 No SoapySDR module in the path, nothing of SDRplay's linked at build time, and
 nothing of theirs in the installer. If the API is not installed, no RSP is
 listed and the Source panel says exactly what to do about it: install the
-SDRplay API 3.x from sdrplay.com and restart FoxSDR.
+SDRplay API 3.x from sdrplay.com and restart FoxSDR. An API that IS installed
+but is older than 3.07 - the version whose interface this driver is written
+against - reaches the same place, naming the version that is there and asking
+for an update; before 0.94.1 that sentence existed only in the log, because
+the panel composed its advice from a version number the refused session never
+recorded.
 
 **What it does.** RSP1, RSP1A, RSP1B, RSP2, RSPduo, RSPdx and RSPdx-R2, 1 kHz
 to 2 GHz, 62.5 kS/s to 10 MS/s. Everything below 2 MS/s is produced the way the
