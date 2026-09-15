@@ -1321,7 +1321,13 @@ int AppWindow::run(int frames) {
                 const char* v = std::getenv("FOXSDR_SHOT_AT_FRAME");
                 return (v != nullptr && v[0] != '\0') ? std::strtol(v, nullptr, 10) : -1L;
             }();
-            const bool byKey = ImGui::IsKeyPressed(ImGuiKey_F12, false);
+            // F12 stays hard-wired beside the bindable Screenshot action (which
+            // raises shotRequest_): it is the key every harness and every note
+            // in this project tells a tester to press, and an instruction that
+            // can be rebound is not an instruction. Consumed here whatever it
+            // was raised by, so a request never spans two frames.
+            const bool byKey = ImGui::IsKeyPressed(ImGuiKey_F12, false) || shotRequest_;
+            shotRequest_ = false;
             if (byKey || (shotAt >= 0 && static_cast<long>(rendered) == shotAt)) {
                 cascade::core::HostImage img;
                 img.plugin = "self";
@@ -2283,6 +2289,13 @@ void benchGroup(const char* caption) {
 }  // namespace
 
 void AppWindow::drawUi() {
+    // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
+    // and the popup stack are this frame's answers rather than last frame's,
+    // and nothing has been submitted yet - so a key that starts the receiver,
+    // changes the mode or moves the tuning is reflected by everything drawn
+    // below it in the SAME frame instead of one behind. See
+    // dispatchKeyBindings for the three states in which it performs nothing.
+    dispatchKeyBindings();
     // Before anything is drawn: the decoders' output is bounded in the runner
     // and must be collected whether or not the panel that shows it is open.
     pumpDecoderOutput();
@@ -3531,7 +3544,11 @@ void AppWindow::drawToolbar() {
         // ceiling, and MESSAGE RATE in the status column is where the traffic
         // itself is reported.
         const bool decoding = running && pluginRunner_.activeCount() > 0;
-        const bool muted = !muteSubjectText().empty();
+        // The lamp reports the AUDIO being muted, whoever muted it: a plugin
+        // (which is what muteSubjectText names) or the user's own Mute key. A
+        // lamp that only knew about plugins would sit dark over silent
+        // speakers, which is the one thing this cluster exists to prevent.
+        const bool muted = !muteSubjectText().empty() || userMuted_;
         struct MasterLamp {
             ImU32 colour;
             bool lit;
@@ -4356,6 +4373,22 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // offset is positive.
     const double minTunedHz = std::max(0.0, pipeline_.vfoOffsetHz());
 
+    // THE QUICK-TUNE KEY, answered here rather than where it was pressed. The
+    // editor is seeded from the TUNED figure the tubes are showing - the same
+    // quantity the commit path applies, so opening it and pressing Enter
+    // unchanged tunes nowhere - and that figure is a line above. Consumed
+    // whether or not it opens anything, so a request cannot survive into a
+    // frame the user did not ask for.
+    if (freqEditRequest_) {
+        freqEditRequest_ = false;
+        if (!freqEditing_) {
+            std::snprintf(freqEditBuf_, sizeof(freqEditBuf_), "%.6f", hz / 1.0e6);
+            freqEditing_ = true;
+            freqEditFocus_ = true;
+            freqEditWasActive_ = false;
+        }
+    }
+
     // THE PLATE FIRST, because everything else in the counter sits on it -
     // the name plate and the status cluster across its head, the bezel with
     // the ten tubes and their switches, the footer line. Its size comes from
@@ -4603,6 +4636,7 @@ void AppWindow::drawMenuColumn() {
             benchGroup("SYSTEM");
             drawUpdatesSection();
             drawSerialPortsSection();
+            drawKeyBindingsSection();
             drawDiagnosticsSection();
             drawUsageReportingSection();
             break;
@@ -4665,18 +4699,11 @@ void AppWindow::drawRadioSection() {
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             }
-            if (ImGui::Button(kModeNames[i], ImVec2(cellWidth, 0.0f))) {
-                modeIndex_ = i;
-                pipeline_.setDemodMode(kModeMap[i]);
-                bandwidthIndex_ = kModeDefaultBw[i];
-                vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-                pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-                // The MODE and its bandwidth - a demodulator change, not a
-                // tuning change. No frequency reaches the log, here or
-                // anywhere else.
-                cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[i],
-                                        vfoBandwidthHz_);
-            }
+            // setModeIndex, not the six lines that used to be here: the mode
+            // KEYS press this same button (see applyKeyAction), and two copies
+            // of "what changing mode does" is how a key ends up setting the
+            // demodulator without its bandwidth.
+            if (ImGui::Button(kModeNames[i], ImVec2(cellWidth, 0.0f))) { setModeIndex(i); }
             if (selected) { ImGui::PopStyleColor(); }
         }
 
@@ -5033,16 +5060,13 @@ float AppWindow::drawRailBankKeys(float colX, float colY, float colW, float body
     if (keyW < 24.0f || dl == nullptr) { return bodyTop; }
 
     // THE KEYBOARD'S ROW OF FUNCTION KEYS IS THE SAME ROW, F1 to F5 left to
-    // right - not while a field is being typed in, where a function key may
-    // mean something to the field.
+    // right - but it is no longer read here. Every shortcut the application
+    // answers now runs through one dispatcher at the top of the frame
+    // (dispatchKeyBindings), which is what makes the bank keys REBINDABLE like
+    // everything else and puts the "not while a field is being typed in" rule
+    // in one place instead of beside each key that remembered it. The five
+    // defaults are unchanged, and the tooltips below still name them.
     int selected = -1;
-    if (!ImGui::GetIO().WantTextInput) {
-        for (int i = 0; i < cascade::gui::kRailBankCount; ++i) {
-            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_F1 + i), false)) {
-                selected = cascade::gui::railBankForFunctionKey(i);
-            }
-        }
-    }
     for (int i = 0; i < cascade::gui::kRailBankCount; ++i) {
         const cascade::gui::RailBank b = cascade::gui::railBankFromIndex(i);
         const ImVec2 tl(x0 + static_cast<float>(i) * (keyW + kGap), bodyTop);
@@ -5052,16 +5076,20 @@ float AppWindow::drawRailBankKeys(float colX, float colY, float colW, float body
             selected = i;
         }
     }
-    if (selected >= 0 && selected != railBank_) {
-        railBank_ = selected;
-        // The new bank comes up rather than appearing - see drawRailBankCurtain.
-        railBankFade_ = 0.0f;
-    }
+    if (selected >= 0) { setRailBank(selected); }
     // The cursor is left where the sections start, and the caller lays them
     // from the y handed back.
     const float below = bodyTop + keyH + kStrip + 6.0f;
     ImGui::SetCursorScreenPos(ImVec2(x0, below));
     return below;
+}
+
+void AppWindow::setRailBank(int index) {
+    const int want = static_cast<int>(cascade::gui::railBankFromIndex(index));
+    if (want == railBank_) { return; }
+    railBank_ = want;
+    // The new bank comes up rather than appearing - see drawRailBankCurtain.
+    railBankFade_ = 0.0f;
 }
 
 void AppWindow::drawRailBankCurtain() {
@@ -12629,7 +12657,13 @@ void AppWindow::updateAudioMute() {
     // is about, and recomputing them off-preset would empty the list and leave
     // a banner that could not say what was muting anything.
 
-    pipeline_.setAudioMuted(muted);
+    // THE USER'S OWN MUTE IS OR'd IN HERE and nowhere else. It is deliberately
+    // not folded into `muted` above: everything above is recomputed from the
+    // tuning every frame, so a user mute stored in the same place would be
+    // wiped the moment a decoder's preset decided anything, and the Mute key
+    // would appear to stop working. The two mutes are separate facts about the
+    // same audio; the pipeline is told their OR.
+    pipeline_.setAudioMuted(muted || userMuted_);
 }
 
 void AppWindow::stopMutingPlugins(const std::vector<std::string>& keys) {
@@ -13368,17 +13402,11 @@ void AppWindow::drawRecorderSection() {
 
     // Audio take: the post-chain 48 kHz output (same point audioTap uses).
     if (!audioRecorder_.recording()) {
-        if (ImGui::Button("Record audio", ImVec2(-FLT_MIN, 0.0f))) {
-            std::string err;
-            if (audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
-                                     cascade::core::Pipeline::kAudioRateHz, err)) {
-                recordError_.clear();
-                audioRecordStartS_ = ImGui::GetTime();
-                pipeline_.setAudioRecorder(&audioRecorder_);
-            } else {
-                recordError_ = err;
-            }
-        }
+        // startAudioRecording, not the start/install pair that used to be here:
+        // the Record key presses this same button (see applyKeyAction), and the
+        // tap-after-start ordering the Pipeline contract requires is not
+        // something to keep two copies of.
+        if (ImGui::Button("Record audio", ImVec2(-FLT_MIN, 0.0f))) { startAudioRecording(); }
     } else {
         if (ImGui::Button("Stop audio", ImVec2(-FLT_MIN, 0.0f))) {
             stopAudioRecording();
@@ -13438,6 +13466,321 @@ void AppWindow::stopIqRecording() {
 void AppWindow::stopAudioRecording() {
     pipeline_.setAudioRecorder(nullptr);
     audioRecorder_.stop();
+}
+
+bool AppWindow::startAudioRecording() {
+    if (audioRecorder_.recording()) { return true; }
+    std::string err;
+    if (!audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
+                              cascade::core::Pipeline::kAudioRateHz, err)) {
+        recordError_ = err;
+        return false;
+    }
+    recordError_.clear();
+    audioRecordStartS_ = ImGui::GetTime();
+    // Install AFTER start(): the tap must never feed a recorder that is not
+    // accepting (Pipeline::setAudioRecorder contract).
+    pipeline_.setAudioRecorder(&audioRecorder_);
+    return true;
+}
+
+void AppWindow::setModeIndex(int index) {
+    if (index < 0 || index >= 8) { return; }
+    modeIndex_ = index;
+    pipeline_.setDemodMode(kModeMap[index]);
+    bandwidthIndex_ = kModeDefaultBw[index];
+    vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
+    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    // The MODE and its bandwidth - a demodulator change, not a tuning change.
+    // No frequency reaches the log, here or anywhere else.
+    cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[index], vfoBandwidthHz_);
+}
+
+// --- The keyboard ------------------------------------------------------------
+//
+// ONE PLACE IN THE FRAME. Every shortcut the application answers passes through
+// here, which is what makes the table in gui/key_bindings.hpp the truth about
+// the keyboard rather than a description of it: there is nowhere else a key can
+// be wired, so a binding the settings list shows and the radio ignores is not a
+// state this code can be in. (F12 is the one survivor of the old arrangement,
+// and deliberately: see the screenshot case in applyKeyAction.)
+// THE CAPTURE BOX'S OWN FRAME. Run from the dispatcher rather than from the
+// settings row that started it, so a user who changes bank - or closes the row
+// - while it is listening still resolves the capture instead of leaving the
+// keyboard permanently dead.
+//
+// ESCAPE AND BACKSPACE ARE ANSWERED FIRST AND SO CANNOT BE BOUND. That is the
+// trade the prompt on the key states: Esc means "leave it alone" everywhere
+// else in this application and Backspace means "clear the field", and a
+// capture that let them be assigned would take away the only two ways out of
+// the capture itself.
+void AppWindow::pollKeyCapture() {
+    if (keyCaptureAction_ < 0 || keyCaptureAction_ >= cascade::gui::kKeyActionCount) {
+        keyCaptureAction_ = -1;
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        keyCaptureAction_ = -1;
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) {
+        keyBindings_.chords[keyCaptureAction_] = cascade::gui::Chord{};
+        keyCaptureAction_ = -1;
+        return;
+    }
+    ImGuiIO& io = ImGui::GetIO();
+    int keyCount = 0;
+    const ImGuiKey* keys = cascade::gui::chordKeyTable(keyCount);
+    for (int i = 0; i < keyCount; ++i) {
+        if (!ImGui::IsKeyPressed(keys[i], false)) { continue; }
+        cascade::gui::Chord c;
+        c.key = keys[i];
+        c.ctrl = io.KeyCtrl;
+        c.shift = io.KeyShift;
+        c.alt = io.KeyAlt;
+        keyBindings_.chords[keyCaptureAction_] = c;
+        cascade::core::diagLogf("key bindings: %s -> %s",
+                                cascade::gui::keyActionId(
+                                    static_cast<cascade::gui::KeyAction>(keyCaptureAction_)),
+                                cascade::gui::formatChord(c).c_str());
+        keyCaptureAction_ = -1;
+        return;
+    }
+}
+
+void AppWindow::dispatchKeyBindings() {
+    // BEFORE EVERY OTHER GUARD. A row that is listening for its new key must
+    // hear one whatever else is on screen, and nothing else may act on a key
+    // while it is - see pollKeyCapture.
+    if (keyCaptureAction_ >= 0) {
+        pollKeyCapture();
+        return;
+    }
+    ImGuiIO& io = ImGui::GetIO();
+    // NOT WHILE SOMETHING IS BEING TYPED. A frequency in the counter's editor,
+    // a bookmark name, a web password: every one of them is a field where M
+    // means the letter M, and a shortcut that fired anyway would make the
+    // fields unusable. WantTextInput is ImGui's own answer to "is a text field
+    // taking keys right now", so this follows the widget rather than a list of
+    // widgets that could go stale.
+    if (io.WantTextInput) { return; }
+    // NOT WHILE A MODAL IS UP. A dialog is a question, and the radio must not
+    // change underneath one while it is being answered - the mute popup asks
+    // about the very audio the Mute key would toggle.
+    if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+        return;
+    }
+    cascade::gui::Chord c;
+    c.ctrl = io.KeyCtrl;
+    c.shift = io.KeyShift;
+    c.alt = io.KeyAlt;
+
+    // WHAT THE APPLICATION ACTUALLY RECEIVED, on demand. A shortcut that "does
+    // nothing" has two completely different causes - the action did nothing, or
+    // the key never arrived as the key that was pressed - and they are
+    // indistinguishable from outside. This says which, in the application's own
+    // voice, and it is what settled the first live run of this feature: every
+    // letter chord was logged here and every arrow/page chord produced nothing
+    // at all, which located the fault in the test harness's synthetic input
+    // (an extended key sent by virtual-key code alone never reached the window)
+    // rather than in any of this. Off unless FOXSDR_DEBUG_INPUT=1, read once.
+    static const bool debugInput = [] {
+        const char* v = std::getenv("FOXSDR_DEBUG_INPUT");
+        return v != nullptr && v[0] == '1';
+    }();
+    if (debugInput) {
+        int keyCount = 0;
+        const ImGuiKey* keys = cascade::gui::chordKeyTable(keyCount);
+        for (int i = 0; i < keyCount; ++i) {
+            if (!ImGui::IsKeyPressed(keys[i], false)) { continue; }
+            cascade::gui::Chord seen = c;
+            seen.key = keys[i];
+            cascade::core::diagLogf("key seen: %s", cascade::gui::formatChord(seen).c_str());
+        }
+    }
+    // Driven from the BINDINGS rather than from the key table: thirty-one
+    // IsKeyPressed calls a frame against a hundred, and a key nothing is bound
+    // to is never asked about at all.
+    //
+    // REPEAT IS ON for the six a hand holds down - volume, squelch and the two
+    // tuning steps, each up and down - and off for everything else. A held
+    // Ctrl+F2 must start and stop the receiver once, not once per repeat.
+    for (int i = 0; i < cascade::gui::kKeyActionCount; ++i) {
+        const cascade::gui::Chord& want = keyBindings_.chords[i];
+        if (!want.bound()) { continue; }
+        if (want.ctrl != c.ctrl || want.shift != c.shift || want.alt != c.alt) { continue; }
+        const cascade::gui::KeyAction action = static_cast<cascade::gui::KeyAction>(i);
+        const bool repeats = action == cascade::gui::KeyAction::VolumeUp ||
+                             action == cascade::gui::KeyAction::VolumeDown ||
+                             action == cascade::gui::KeyAction::SquelchUp ||
+                             action == cascade::gui::KeyAction::SquelchDown ||
+                             action == cascade::gui::KeyAction::TuneStepUp ||
+                             action == cascade::gui::KeyAction::TuneStepDown;
+        if (!ImGui::IsKeyPressed(want.key, repeats)) { continue; }
+        applyKeyAction(action);
+        // ONE ACTION PER FRAME, even with a table that has a conflict in it:
+        // two actions on one chord would otherwise both fire, and "it does two
+        // things at once" is a worse answer to a clash than "the first one
+        // wins" - which is also what keyActionForChord documents.
+        break;
+    }
+}
+
+void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
+    using cascade::gui::KeyAction;
+
+    // THE KEYBOARD'S TUNING STEP. The counter has no single "step" the way
+    // HDSDR does - every one of its ten digits is its own step, chosen by
+    // which tube the wheel is over - so a key that is not over any tube needs
+    // one named place value. Cell 5 is the 10 kHz digit (kFreqDigitPlaceHz),
+    // which is the step a hand reaches for on every band this receiver covers:
+    // it walks the NFM raster in one press, the broadcast FM raster in ten,
+    // and is small enough not to throw an SSB signal out of the passband in
+    // one keystroke. The arithmetic itself is the plate's own, through
+    // cascade::gui::stepDigit, so the key and the toggle switch beneath the
+    // tube can never disagree.
+    constexpr int kKeyTuneStepCell = 5;
+
+    const double hz = std::max(0.0, currentAbsoluteHz());
+    const double minTunedHz = std::max(0.0, pipeline_.vfoOffsetHz());
+
+    switch (action) {
+        case KeyAction::StartStop:
+            if (pipeline_.running()) {
+                // The toolbar's own stop, in the toolbar's own order: a take
+                // can never outlive the sample flow it was taping.
+                stopIqRecording();
+                stopAudioRecording();
+                pipeline_.stop();
+            } else {
+                pipeline_.start();
+            }
+            cascade::core::diagLogf("key: start/stop -> %s",
+                                    pipeline_.running() ? "running" : "stopped");
+            break;
+        case KeyAction::Mute:
+            userMuted_ = !userMuted_;
+            cascade::core::diagLogf("key: mute -> %d", userMuted_ ? 1 : 0);
+            break;
+        case KeyAction::VolumeUp:
+        case KeyAction::VolumeDown: {
+            // A twentieth of full scale per press: twenty presses from silence
+            // to full, which is a reachable number of taps and fine enough that
+            // a single one is a change rather than a jump.
+            const float step = (action == KeyAction::VolumeUp) ? 0.05f : -0.05f;
+            volume_ = std::clamp(volume_ + step, 0.0f, 1.0f);
+            pipeline_.audio().setVolume(volume_);
+            break;
+        }
+        case KeyAction::SquelchUp:
+        case KeyAction::SquelchDown: {
+            // The slider's own span is [-120, 0] dB; 2 dB a press crosses it in
+            // sixty, and is about the smallest step that audibly moves the gate.
+            const float step = (action == KeyAction::SquelchUp) ? 2.0f : -2.0f;
+            squelchDb_ = std::clamp(squelchDb_ + step, -120.0f, 0.0f);
+            pipeline_.setSquelchDb(squelchDb_);
+            break;
+        }
+        // kModeNames order: NFM WFM AM DSB USB CW LSB RAW. Indices rather than
+        // a name lookup, because this switch is already the mapping and a
+        // second one by string would be a second place to get it wrong.
+        case KeyAction::ModeNFM: setModeIndex(0); break;
+        case KeyAction::ModeWFM: setModeIndex(1); break;
+        case KeyAction::ModeAM: setModeIndex(2); break;
+        case KeyAction::ModeDSB: setModeIndex(3); break;
+        case KeyAction::ModeUSB: setModeIndex(4); break;
+        case KeyAction::ModeCW: setModeIndex(5); break;
+        case KeyAction::ModeLSB: setModeIndex(6); break;
+        case KeyAction::ModeRAW: setModeIndex(7); break;
+        case KeyAction::TuneStepUp:
+            tuneAbsoluteHz(
+                std::max(minTunedHz, cascade::gui::stepDigit(hz, kKeyTuneStepCell, true)));
+            break;
+        case KeyAction::TuneStepDown:
+            tuneAbsoluteHz(
+                std::max(minTunedHz, cascade::gui::stepDigit(hz, kKeyTuneStepCell, false)));
+            break;
+        case KeyAction::TuneSpanUp:
+        case KeyAction::TuneSpanDown: {
+            // HDSDR moves the LO by the VISIBLE spectrum width, which is what
+            // makes the pair a way to walk a band a screenful at a time. The
+            // visible width is the scale's view, not the sample rate, so a
+            // zoomed-in picture steps by what is on screen - the whole point of
+            // the gesture. A scale that has never been given a span (no source
+            // running yet) reports zero, and a zero step tunes nowhere, which
+            // is the honest answer rather than a guess at a width.
+            const double span = scale_.viewHighHz() - scale_.viewLowHz();
+            if (!(span > 0.0)) { break; }
+            const double delta = (action == KeyAction::TuneSpanUp) ? span : -span;
+            tuneAbsoluteHz(std::max(minTunedHz, hz + delta));
+            break;
+        }
+        case KeyAction::QuickTune:
+            // The plate's click-to-type, opened from the keyboard. Raised as a
+            // request because the editor is seeded from the tubes' own figure
+            // inside drawFrequencyReadout.
+            freqEditRequest_ = true;
+            break;
+        case KeyAction::ZoomIn:
+            // About the CENTRE of the view, not about the pointer: the wheel
+            // zooms where the hand is, and a key has no hand.
+            scale_.zoomAt(0.5, kZoomPerNotch);
+            break;
+        case KeyAction::ZoomOut:
+            scale_.zoomAt(0.5, 1.0 / kZoomPerNotch);
+            break;
+        case KeyAction::ZoomReset:
+            scale_.resetView();
+            break;
+        case KeyAction::Record:
+            // THE AUDIO TAKE, which is what HDSDR's record key records. The
+            // I/Q take stays a deliberate, mouse-only decision: it writes the
+            // full baseband at the input rate and fills a disk in minutes, so
+            // it is not something a mis-hit key should start.
+            if (audioRecorder_.recording()) {
+                stopAudioRecording();
+            } else {
+                startAudioRecording();
+            }
+            break;
+        case KeyAction::Screenshot:
+            // The self-capture the render loop performs from the framebuffer -
+            // the only capture that can see this application's GL surface on
+            // this machine. F12 still does it too, hard-wired where it always
+            // was: it is what every harness and every note in the project tells
+            // a tester to press, and a rebindable key cannot also be a fixed
+            // instruction.
+            shotRequest_ = true;
+            break;
+        case KeyAction::Fullscreen:
+            // The maximise key on the rail, from the keyboard. There is no
+            // borderless-fullscreen mode to enter - the window has no OS frame
+            // to begin with (see win_frame.cpp) - so maximised IS full screen
+            // here, and the same key restores it.
+            if (mainWindow_ != nullptr) {
+                if (glfwGetWindowAttrib(mainWindow_, GLFW_MAXIMIZED) != 0) {
+                    glfwRestoreWindow(mainWindow_);
+                } else {
+                    glfwMaximizeWindow(mainWindow_);
+                }
+            }
+            break;
+        case KeyAction::BankSignal: setRailBank(0); break;
+        case KeyAction::BankDecode: setRailBank(1); break;
+        case KeyAction::BankView: setRailBank(2); break;
+        case KeyAction::BankExtend: setRailBank(3); break;
+        case KeyAction::BankSystem: setRailBank(4); break;
+        case KeyAction::OpenSettings:
+            // HDSDR's Options key. It lands on the SYSTEM bank AND opens the
+            // key-binding row, which is what makes it worth having beside F5:
+            // F5 alone leaves somebody who wants to change a key hunting down
+            // the rail for the row that does it.
+            setRailBank(static_cast<int>(cascade::gui::RailBank::System));
+            openKeyBindingsRow_ = true;
+            break;
+        case KeyAction::Count:
+            break;
+    }
 }
 
 // --- Bookmarks (P6) --------------------------------------------------------------
@@ -15188,6 +15531,138 @@ void AppWindow::drawSerialPortsSection() {
     ImGui::PopStyleColor();
 }
 
+// --- "Key bindings": every shortcut, and the capture that changes one --------
+//
+// THE ROW IS A LIST OF KEY CAPS. Each action's chord is drawn on the same
+// benchWordKey primitive the rest of the deck's word keys use, so the list
+// reads as a panel of engraved keys rather than as a settings table that
+// happens to be in a radio - and clicking one IS pressing it, in the sense
+// that matters here: it starts listening for the key that should replace it.
+//
+// A CLASH IS SHOWN, NOT REFUSED. Two actions on one chord is a state the user
+// can reach and can see - the offending rows say so in the palette's alarm
+// colour and name each other - because silently rejecting the key somebody
+// just pressed is exactly what people describe as "the rebind didn't work".
+// dispatchKeyBindings resolves a clash deterministically (the first action in
+// the list wins), so a rig left in that state behaves the same way every
+// launch rather than differently every frame.
+void AppWindow::drawKeyBindingsSection() {
+    // THE SETTINGS KEY OPENS THIS ROW, which is what makes F7 worth having
+    // beside F5 - see the OpenSettings case in applyKeyAction. Consumed the
+    // frame it arrives, so a user who then closes the row is not fought.
+    //
+    // FOXSDR_OPEN_KEY_BINDINGS does the same for a headless self-capture, the
+    // same way FOXSDR_OPEN_SERIAL_PORTS does for the row above: verification
+    // only, and ImGuiCond_Once so a real session that closes the row again
+    // stays closed.
+    if (openKeyBindingsRow_) {
+        openKeyBindingsRow_ = false;
+        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+    } else if (std::getenv("FOXSDR_OPEN_KEY_BINDINGS") != nullptr) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+    }
+
+    // HOW MANY KEYS ARE NOT AS SHIPPED, which is the one thing about this row
+    // worth reading without opening it: "STOCK" means every shortcut is where
+    // the manual says it is, and a count means it is not.
+    const std::vector<std::string> changed =
+        cascade::gui::keyBindingsToConfig(keyBindings_);
+    char chip[16];
+    if (changed.empty()) {
+        std::snprintf(chip, sizeof(chip), "STOCK");
+    } else {
+        std::snprintf(chip, sizeof(chip), "%zu SET", changed.size());
+    }
+    if (!benchSection("Key bindings", false, chip, cascade::gui::theme::kPhosphor,
+                      !changed.empty())) {
+        return;
+    }
+    telemetryNotePanel("key bindings");
+
+    ImGui::TextWrapped(
+        "Every shortcut the receiver answers. Click a key to change it, then "
+        "press the keys you want - Esc leaves it alone, Backspace clears it. "
+        "Shortcuts never fire while you are typing in a field.");
+    ImGui::Spacing();
+    if (ImGui::Button("Reset to defaults")) {
+        keyBindings_ = cascade::gui::defaultKeyBindings();
+        keyCaptureAction_ = -1;
+        cascade::core::diagLogf("key bindings: reset to defaults");
+    }
+    ImGui::Spacing();
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (dl == nullptr) { return; }
+
+    // THE KEY CAPS ARE ALL ONE SIZE, measured from the longest thing any of
+    // them can say - the capture prompt, which is longer than any chord - so a
+    // column of keys is a column and not a ragged edge. Measured every frame
+    // rather than typed as a number, because a font change would otherwise
+    // clip the widest word without anything failing.
+    const float px = cascade::gui::fonts::kTinySize;
+    ImFont* f = cascade::gui::fonts::ui();
+    const char* kPrompt = "press a key";
+    float capW = f->CalcTextSizeA(px, FLT_MAX, 0.0f, kPrompt).x;
+    for (int i = 0; i < cascade::gui::kKeyActionCount; ++i) {
+        const std::string t = cascade::gui::formatChord(keyBindings_.chords[i]);
+        capW = std::max(capW, f->CalcTextSizeA(px, FLT_MAX, 0.0f, t.c_str()).x);
+    }
+    const float keyW = capW + 16.0f;
+    const float keyH = std::max(20.0f, px + 9.0f);
+
+    const char* group = nullptr;
+    for (int i = 0; i < cascade::gui::kKeyActionCount; ++i) {
+        const cascade::gui::KeyAction action = static_cast<cascade::gui::KeyAction>(i);
+        const char* g = cascade::gui::keyActionGroup(action);
+        if (group == nullptr || std::strcmp(group, g) != 0) {
+            group = g;
+            ImGui::Spacing();
+            ImGui::TextDisabled("%s", g);
+        }
+
+        const bool capturing = (keyCaptureAction_ == i);
+        const std::string chord = cascade::gui::formatChord(keyBindings_.chords[i]);
+        // THE CLASH, and WHO WITH. A row that only said "conflict" would leave
+        // the user to find the other one by eye down a list of thirty-one.
+        cascade::gui::KeyAction other = cascade::gui::KeyAction::Count;
+        const bool clash = cascade::gui::keyBindingConflicts(keyBindings_, action,
+                                                             keyBindings_.chords[i], other);
+
+        // THE KEYS ARE RIGHT-ALIGNED IN THE ROW, and the row's width has to be
+        // measured BEFORE the name is written: GetContentRegionAvail after a
+        // SameLine reports what is left beside the name, not the row, so every
+        // cap landed a different distance in and the longest names pushed
+        // theirs off the rail's right edge entirely. Measured first, the caps
+        // are one column whatever the names do - and the rail is a column
+        // somebody can drag narrower, so a fixed left edge is no use either.
+        const float rowX = ImGui::GetCursorPosX();
+        const float rowW = ImGui::GetContentRegionAvail().x;
+        ImGui::TextUnformatted(cascade::gui::keyActionName(action));
+        // Never back OVER the name: on a rail dragged very narrow the cap goes
+        // straight after it rather than on top of it.
+        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), rowX + rowW - keyW));
+        const ImVec2 tl = ImGui::GetCursorScreenPos();
+        const ImVec2 br(tl.x + keyW, tl.y + keyH);
+        const std::string id = std::string("kb_") + cascade::gui::keyActionId(action);
+        if (benchWordKey(dl, tl, br, capturing ? kPrompt : chord.c_str(), true, id.c_str())) {
+            // A second click on the row that is already listening puts it back
+            // rather than listening twice.
+            keyCaptureAction_ = capturing ? -1 : i;
+        }
+        if (clash) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  ImGui::ColorConvertU32ToFloat4(cascade::gui::theme::kAlarm));
+            ImGui::TextWrapped("also %s", cascade::gui::keyActionName(other));
+            ImGui::PopStyleColor();
+        }
+    }
+    ImGui::Spacing();
+    ImGui::TextDisabled(
+        "F12 always saves a screenshot, whatever the Screenshot key is set to.\n"
+        "Esc always cancels what is being typed or the full-screen scope.");
+}
+
 void AppWindow::applyDiagnosticsEnabled(bool on) {
     // THE WHOLE SWITCH, IN ONE PLACE, because it was not. The checkbox used to
     // arm and disarm the crash handler and the log inline and never mention
@@ -15493,6 +15968,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // The rail opens on the bank it was left on. Clamped again here even
     // though load() already did: this is the value a widget indexes with.
     railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
+    // The keyboard. Every line the file could not be understood to mean is
+    // dropped inside keyBindingsFromConfig, on its own, and what it does not
+    // mention keeps the shipped chord - so a config from any build, hand-edited
+    // or not, always produces a whole usable table.
+    keyBindings_ = cascade::gui::keyBindingsFromConfig(cfg.keyBindings);
     scope_.setRangeNm(scopeRangeNm_);
 
     // The map pages' rectangles from the last session, seeded here rather
@@ -15998,6 +16478,10 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
     cfg.railBank = railBank_;
+    // Only the keys that DIFFER from the shipped table, so a user who never
+    // rebound anything writes nothing and still gets a later build's improved
+    // defaults (see keyBindingsToConfig).
+    cfg.keyBindings = cascade::gui::keyBindingsToConfig(keyBindings_);
     // The pages' rectangles and open flags, via the saved store so an entry
     // for a plugin with no page this session rides through untouched. The
     // legacy fields are copied back purely so the first configsEqual against

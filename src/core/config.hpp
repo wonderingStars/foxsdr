@@ -73,6 +73,13 @@
 //     the plugins whose "mute audio while running" setting DIFFERS from the
 //     default their capabilities imply, so a duplicate would be a preference
 //     that flipped twice and an empty name a preference for nothing.
+//   - keyBindings: the same rules once more, from the same code. Each entry is
+//     an "actionId=chord" line for a key the user rebound; an empty line names
+//     no action and a line repeated verbatim is one rebind stated twice. What
+//     a line MEANS is decided in gui/key_bindings.hpp, not here: an id this
+//     build does not know, a missing '=' or a chord it cannot read are each
+//     dropped there, one line at a time, so one bad line never costs the user
+//     the good ones beside it.
 //
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
@@ -272,6 +279,26 @@ struct AppConfig {
     //            nothing. 0 is the default: the signal path is where a new
     //            installation has to start.
     int railBank = 0;
+
+    // --- Keyboard shortcuts ----------------------------------------------------
+    // The rebound keys, one "actionId=chord" line each - "mute=Ctrl+Shift+M",
+    // "quickTune=None". gui/key_bindings.hpp owns the ids, the chord grammar
+    // and both conversions; this field is only the storage, so the config
+    // store never needs to know what an action or a modifier is.
+    //
+    // ONLY WHAT DIFFERS FROM THE DEFAULTS IS WRITTEN, which is why this list is
+    // empty on a fresh install and stays empty for a user who never rebinds
+    // anything. The reasoning is pluginMuteOverride's, above: a file that
+    // recorded every binding would freeze the defaults the day it was written,
+    // so a later build that improved one would improve it for nobody who had
+    // ever run the old one.
+    //
+    // Sanitized on load by the same rule as the four name lists below - empties
+    // and duplicate LINES dropped, length capped. A duplicate line for one
+    // action is handled a second time, and more precisely, inside
+    // keyBindingsFromConfig: two lines naming the same action with different
+    // chords are not textual duplicates, and the first is taken.
+    std::vector<std::string> keyBindings;
 
     // --- Map window geometry --------------------------------------------------
     // The map is its own operating system window, and ImGui's own .ini

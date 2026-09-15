@@ -37,6 +37,10 @@
 // the real store because the defect they fix is only visible as a config that
 // came back without the radio in it.
 #include "gui/tune_control.hpp"
+// The keyboard table. AppConfig::keyBindings is only a list of strings; what a
+// line MEANS lives here, and the round trip that matters to a user is
+// "table -> lines -> file -> lines -> table", which needs both halves.
+#include "gui/key_bindings.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -178,6 +182,10 @@ AppConfig junkConfig() {
     // its capabilities imply. A leftover here would silence a decoder whose
     // author never asked for it, or un-silence one whose user did.
     c.pluginMuteOverride = {"junk-mute.dll"};
+    // And a rebound key that must not survive either: a config that says
+    // nothing about key bindings has rebound none, so every action keeps its
+    // shipped chord. A leftover here would move a key the user never touched.
+    c.keyBindings = {"mute=Ctrl+Junk"};
     // P11 web server: every field away from its default, and the two that
     // matter set to the DANGEROUS value — web access on, bound to every
     // interface — so any load path that forgets to assign them is caught by a
@@ -248,6 +256,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.pluginsStopped == b.pluginsStopped);
     CHECK(a.closedWindows == b.closedWindows);
     CHECK(a.pluginMuteOverride == b.pluginMuteOverride);
+    CHECK(a.keyBindings == b.keyBindings);
     CHECK(a.webEnabled == b.webEnabled);
     CHECK(a.webBindAddress == b.webBindAddress);
     CHECK(a.webPort == b.webPort);
@@ -451,6 +460,9 @@ int main() {
         // And the mute overrides, again with names of their own, so the full
         // round trip proves the three lists stay three lists.
         in.pluginMuteOverride = {"pocsag-decoder.dll"};
+        // And the rebound keys, a fifth list of strings kept beside four lists
+        // of names: a save that crossed any two of the five would show here.
+        in.keyBindings = {"mute=Ctrl+Shift+M", "record=None"};
         // P11: values distinguishable from both the defaults and junkConfig().
         in.webEnabled = true;
         in.webBindAddress = "192.168.1.20";
@@ -2213,6 +2225,93 @@ int main() {
         CHECK(back.pluginMuteOverride == Names({"sstv-decoder-1.0.0-abi3-win-x64.dll"}));
         CHECK(back.pluginsStopped == Names({"ais-decoder-1.0.1-abi3-win-x64.dll"}));
         CHECK(back.pluginTuneAllowed == Names({"tracker.dll"}));
+    }
+
+    // --- keyboard shortcuts ---------------------------------------------------
+    // The store's side is only a list of strings, so what is checked here is
+    // the pairing: the lines survive the file unchanged, and the TABLE they
+    // describe survives with them. A custom binding must come back; a line
+    // nothing can read must cost the user nothing but itself.
+    {
+        const std::string path = p("keys.json");
+        using Names = std::vector<std::string>;
+        using cascade::gui::KeyAction;
+        using cascade::gui::KeyBindings;
+        using cascade::gui::defaultKeyBindings;
+        using cascade::gui::formatChord;
+        using cascade::gui::keyBindingsFromConfig;
+        using cascade::gui::keyBindingsToConfig;
+
+        // NOBODY HAS REBOUND ANYTHING by default, which is what makes the
+        // shipped table the live one for a fresh install - and what lets a
+        // later build improve a default for everybody who never touched it.
+        const AppConfig d;
+        CHECK(d.keyBindings.empty());
+        CHECK(keyBindingsToConfig(defaultKeyBindings()).empty());
+
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.keyBindings.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"keyBindings\":\"mute=M\"}\n"));  // not an array
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.keyBindings.empty());
+
+        // Empties, non-strings and verbatim duplicates are dropped by the same
+        // sanitiser the four name lists use.
+        CHECK(writeText(path,
+                        "{\"keyBindings\":[\"mute=Ctrl+Shift+M\",\"\",7,"
+                        "\"mute=Ctrl+Shift+M\",\"record=None\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.keyBindings == Names({"mute=Ctrl+Shift+M", "record=None"}));
+
+        {
+            std::string big = "{\"keyBindings\":[";
+            for (std::size_t i = 0; i < AppConfig::kMaxTuneGrants + 50u; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"a" + std::to_string(i) + "=M\"";
+            }
+            big += "]}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.keyBindings.size() == AppConfig::kMaxTuneGrants);
+        }
+
+        // A HAND-EDITED FILE, read as a table. The good line takes effect, the
+        // unreadable ones are dropped one at a time, and every action the file
+        // never mentioned still has its shipped chord.
+        CHECK(writeText(path,
+                        "{\"keyBindings\":[\"mute=Ctrl+Shift+M\",\"notAnAction=Ctrl+Q\","
+                        "\"zoomIn\",\"zoomOut=Zork\",\"quickTune=\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        const KeyBindings loaded = keyBindingsFromConfig(out.keyBindings);
+        CHECK(formatChord(loaded[KeyAction::Mute]) == "Ctrl+Shift+M");
+        CHECK(loaded[KeyAction::ZoomIn] == defaultKeyBindings()[KeyAction::ZoomIn]);
+        CHECK(loaded[KeyAction::ZoomOut] == defaultKeyBindings()[KeyAction::ZoomOut]);
+        CHECK(!loaded[KeyAction::QuickTune].bound());
+        CHECK(loaded[KeyAction::StartStop] == defaultKeyBindings()[KeyAction::StartStop]);
+
+        // THE WHOLE LOOP, the way the application performs it: a table the user
+        // edited, written out, saved, loaded, and read back as a table.
+        KeyBindings edited = defaultKeyBindings();
+        edited[KeyAction::StartStop] = loaded[KeyAction::Mute];  // deliberately a clash-free move
+        edited[KeyAction::Mute] = defaultKeyBindings()[KeyAction::Mute];
+        edited[KeyAction::Record] = cascade::gui::Chord{};       // unbound on purpose
+        AppConfig in;
+        in.keyBindings = keyBindingsToConfig(edited);
+        CHECK(in.keyBindings.size() == 2u);
+        const std::string rt = p("keys_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.keyBindings == in.keyBindings);
+        const KeyBindings restored = keyBindingsFromConfig(back.keyBindings);
+        for (int i = 0; i < cascade::gui::kKeyActionCount; ++i) {
+            CHECK(restored.chords[i] == edited.chords[i]);
+        }
     }
 
     // --- P11 web server settings ---------------------------------------------

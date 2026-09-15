@@ -41,6 +41,11 @@ struct GLFWwindow;
 // headers below it - the tests include it without a graphics context.
 #include "gui/page_geometry.hpp"
 #include "gui/rail_banks.hpp"
+// The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
+// opaquely rather than including imgui.h - see its own note), so a KeyBindings
+// can be held by value here without breaking the rule this header states above
+// about GLFW and ImGui never reaching the tests.
+#include "gui/key_bindings.hpp"
 // The ADS-B radar scope. ImGui-free like track_metrics.hpp below, so it can be
 // held by value here without breaking the rule that main() - and the tests -
 // never see a GUI header.
@@ -1039,6 +1044,52 @@ private:
     // Stop path calls them unconditionally.
     void stopIqRecording();
     void stopAudioRecording();
+    // The Recorder section's own "Record audio" path, lifted out of the button
+    // so the keyboard presses the SAME button rather than a second copy of it
+    // that could drift from the one on screen. Returns whether a take started;
+    // the error, when it did not, is in recordError_ exactly as before.
+    bool startAudioRecording();
+    // The Radio section's own mode-button path, lifted out for the same
+    // reason: a mode key must set the demodulator, its default bandwidth and
+    // the log line identically to a click on the button beside it.
+    void setModeIndex(int index);
+
+    // --- The keyboard ---------------------------------------------------------
+    // ONE PLACE IN THE FRAME where a pressed chord becomes an action, and one
+    // function that performs it by calling the same handlers the mouse calls.
+    // See gui/key_bindings.hpp for the table and why it looks like HDSDR's
+    // without being identical to it.
+    void dispatchKeyBindings();
+    void applyKeyAction(cascade::gui::KeyAction action);
+    // The capture box's own frame, run from the dispatcher so it resolves even
+    // if the settings row that started it has gone off screen.
+    void pollKeyCapture();
+    // Selecting a bank is TWO things - the bank and the fade that brings it up
+    // (see drawRailBankCurtain) - so the keys and the pushbuttons share one
+    // call rather than each remembering to reset the fade.
+    void setRailBank(int index);
+
+    cascade::gui::KeyBindings keyBindings_ = cascade::gui::defaultKeyBindings();
+    // WHICH ROW IS LISTENING FOR A KEY, as an index into the action table, or
+    // -1 for none. While a row is capturing, dispatchKeyBindings performs
+    // NOTHING: the next chord belongs to the box, not to the radio, or
+    // pressing Ctrl+F2 to rebind it would stop the receiver on the way past.
+    int keyCaptureAction_ = -1;
+    // THE THREE THINGS A KEY ASKS FOR THAT ONLY A LATER PART OF THE FRAME CAN
+    // DO. Raised by applyKeyAction and consumed - and cleared - where the work
+    // belongs: the frequency editor is opened inside drawFrequencyReadout (it
+    // needs the plate's own geometry and the figure on the tubes), the
+    // screenshot is taken in the render loop after the frame is drawn, and the
+    // key-binding row is opened when the SYSTEM bank next draws it.
+    bool freqEditRequest_ = false;
+    bool shotRequest_ = false;
+    bool openKeyBindingsRow_ = false;
+    // THE USER'S OWN MUTE, kept apart from the plugin mute (mutedBy_ and the
+    // rest). They are different things with different lifetimes: a plugin's
+    // mute is recomputed from the tuning every frame in updateAudioMute, and
+    // one that also cleared a user's mute would make the Mute key stop working
+    // the moment a decoder was running. The pipeline is told the OR of the two.
+    bool userMuted_ = false;
 
     // ONE absolute-tune path shared by bookmark click-to-tune and scanner
     // retunes: commands the SOURCE center to (absHz - VFO offset) through
@@ -1794,6 +1845,10 @@ private:
     // under the rail's Radar section. Drawn before Diagnostics, on the SYSTEM
     // bank.
     void drawSerialPortsSection();
+    // "Key bindings" settings section: every action on one key-shaped label,
+    // and the capture that rebinds it. Drawn on the SYSTEM bank beside the
+    // other two settings rows.
+    void drawKeyBindingsSection();
     // "Diagnostics" settings section: where the log is, what a report carries,
     // and the one-click bundle.
     void drawDiagnosticsSection();
