@@ -10,7 +10,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <future>
 #include <limits>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -398,8 +401,39 @@ bool sdrPlayRatePlan(double outputRateHz, SdrPlayRatePlan& out) {
 
 // --- enumeration ----------------------------------------------------------
 
-std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
+namespace {
+
+// THE HOLD-OFF, which is process-scope for the same reason the skip sentence
+// is: there is one SDRplay API per process and one Source section looking at
+// it. Zero means "not held off", which is the state every process starts in -
+// so clearing it in a test restores the initial state rather than destroying
+// something init() built.
+std::mutex& holdOffMutex() {
+    static std::mutex m;
+    return m;
+}
+std::chrono::steady_clock::time_point& holdOffUntil() {
+    static std::chrono::steady_clock::time_point t{};
+    return t;
+}
+
+bool enumerationHeldOffAt(std::chrono::steady_clock::time_point now) {
+    std::lock_guard<std::mutex> lk(holdOffMutex());
+    return holdOffUntil() != std::chrono::steady_clock::time_point{} && now < holdOffUntil();
+}
+
+void armEnumerationHoldOff(std::chrono::steady_clock::time_point now) {
+    std::lock_guard<std::mutex> lk(holdOffMutex());
+    holdOffUntil() = now + kEnumerateHoldOff;
+}
+
+// The vendor half: everything that can block forever. Runs on the caller's
+// thread when the service is healthy and on an abandoned worker when it is
+// not, which is why it takes nothing by reference except the table itself -
+// the table is process-scope and outlives any worker left inside it.
+std::vector<NativeDeviceInfo> enumerateSdrPlayVendor(const abi::Api& api, std::string& skip) {
     std::vector<NativeDeviceInfo> out;
+    skip.clear();
     std::string error;
     if (!sessionAcquire(api, error)) {
         core::diagLogf("source: SDRplay enumeration skipped - %s", error.c_str());
@@ -408,11 +442,9 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
         // knows a version number that only this call learned, and nothing
         // above this line can find it out again without opening the API a
         // second time. See sdrPlayLastEnumerationSkip.
-        setEnumerationSkip(error);
+        skip = error;
         return out;
     }
-    // The API answered, so whatever it last refused for is over.
-    setEnumerationSkip(std::string());
 
     abi::DeviceT devs[abi::kMaxDevices];
     std::memset(devs, 0, sizeof(devs));
@@ -471,6 +503,92 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
     return out;
 }
 
+// What the worker hands back. Held through a shared_ptr so that abandoning the
+// worker cannot leave it writing into the caller's stack frame.
+struct EnumerateResult {
+    std::vector<NativeDeviceInfo> devices;
+    std::string skip;
+};
+
+}  // namespace
+
+const char* sdrPlayServiceHungSentence() {
+    // The number in the sentence is kEnumerateWait, spelled out rather than
+    // formatted, because this string is pinned by a test and a formatted one
+    // would drift out of step with the constant silently either way.
+    static_assert(kEnumerateWait == std::chrono::milliseconds(3000),
+                  "the sentence below quotes three seconds");
+    return "the SDRplay service did not answer within 3 s - restart the SDRplay API service";
+}
+
+bool sdrPlayEnumerationHeldOff() {
+    return enumerationHeldOffAt(std::chrono::steady_clock::now());
+}
+
+void sdrPlayClearEnumerationHoldOffForTest() {
+    std::lock_guard<std::mutex> lk(holdOffMutex());
+    holdOffUntil() = std::chrono::steady_clock::time_point{};
+}
+
+std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
+    // THE HOLD-OFF FIRST, and it touches the API not at all. A service that
+    // wedged a moment ago is still wedged, and the source combo scans every
+    // time it opens - so without this, each of those would spend another
+    // kEnumerateWait of GUI thread and abandon another worker inside it.
+    const auto now = std::chrono::steady_clock::now();
+    if (enumerationHeldOffAt(now)) {
+        // The sentence is re-asserted rather than left standing, because a
+        // Soapy scan or another driver's enumeration may have written over it
+        // in between and the panel must still say what to do.
+        setEnumerationSkip(sdrPlayServiceHungSentence());
+        return {};
+    }
+
+    // THE VENDOR HALF ON A WORKER, because none of the calls it makes can be
+    // cancelled or given a timeout (see the file header). What is bounded is
+    // our WAIT on it; the worker itself is either joined, or abandoned and
+    // never spoken to again.
+    //
+    // The promise is a shared_ptr, and that is load-bearing rather than tidy:
+    // an abandoned worker outlives this frame, this function and possibly this
+    // Source section, so anything it writes into must be owned by the worker
+    // too. `api` is safe to capture because the table is process-scope and
+    // never unloaded.
+    auto result = std::make_shared<std::promise<EnumerateResult>>();
+    std::future<EnumerateResult> done = result->get_future();
+    std::thread worker([&api, result]() {
+        EnumerateResult r;
+        r.devices = enumerateSdrPlayVendor(api, r.skip);
+        result->set_value(std::move(r));
+    });
+
+    if (done.wait_for(kEnumerateWait) != std::future_status::ready) {
+        // ABANDONED. Not joined, not killed, not signalled: the thread is
+        // parked inside the vendor DLL and there is no handle we can close to
+        // bring it back. It holds everything it needs through the shared
+        // promise, so it can finish (or not) harmlessly. What this process
+        // must never do is call into that API again from here, which is what
+        // the hold-off below arranges.
+        worker.detach();
+        armEnumerationHoldOff(now);
+        core::diagWarnf("source: SDRplay enumeration abandoned - %s",
+                        sdrPlayServiceHungSentence());
+        core::diagLogf("source: SDRplay scans are held off for %lld s",
+                       static_cast<long long>(
+                           std::chrono::duration_cast<std::chrono::seconds>(kEnumerateHoldOff)
+                               .count()));
+        setEnumerationSkip(sdrPlayServiceHungSentence());
+        return {};
+    }
+
+    worker.join();
+    EnumerateResult r = done.get();
+    // The API answered - whatever it last refused for is over, including a
+    // hold-off that has since expired.
+    setEnumerationSkip(r.skip);
+    return std::move(r.devices);
+}
+
 std::vector<NativeDeviceInfo> enumerateSdrPlay() {
     return enumerateSdrPlayWith(processSdrPlayApi());
 }
@@ -513,6 +631,21 @@ void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string&
         std::lock_guard<std::mutex> lk(link.waitMutex);
     }
     link.waitCv.notify_all();
+}
+
+bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
+    if (err != abi::ServiceNotResponding) { return false; }
+    // The same sentence the enumeration skip uses, because it is the same
+    // problem and the same remedy: the service, not the radio, is what has to
+    // be restarted. Said once here rather than left to the caller's generic
+    // "<what> failed: ServiceNotResponding (14)", which reads as a refused
+    // request rather than as a receiver that is gone.
+    noteFaultOn(*link_, what,
+                "the SDRplay service stopped answering - restart the SDRplay API service, "
+                "then open the radio again");
+    core::diagWarnf("source: SDRplay %s - the service stopped answering; the radio is released",
+                    what);
+    return true;
 }
 
 void SdrPlaySource::setError(std::string msg) { setErrorOn(*link_, std::move(msg)); }
@@ -1212,6 +1345,13 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     if (err != abi::Success) {
         setError(std::string(what) + " failed: " + errText(a, err));
         core::diagWarnf("source: SDRplay %s failed - %s", what, errText(a, err).c_str());
+        // ONE REFUSAL IS A REFUSAL; ServiceNotResponding IS A DEAD RECEIVER.
+        // Every live control the panel offers - retune, LNA state, IF gain,
+        // AGC, rate - comes through here, so this is the one place that has to
+        // tell the two apart. The 0.95.0 report is what happens when it does
+        // not: four of those in a row answered 14 and the pipeline kept
+        // reading a service that was gone, 1910 timeouts deep.
+        noteIfServiceDead(err, what);
         return false;
     }
 

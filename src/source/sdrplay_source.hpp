@@ -41,10 +41,20 @@
 // GetDevices, SelectDevice, GetDeviceParams, Init, Uninit, ReleaseDevice and
 // Close take no timeout and offer no cancellation. If the service wedges,
 // those block for as long as it takes; there is no argument we can pass and no
-// handle we can close to shorten them. Our own three waits (kReadWait,
-// kUpdateWait, kCallbackDrainWait) are bounded and named below, and the
-// difference between the two categories is stated again in the shutdown-budget
-// notes rather than left to be discovered.
+// handle we can close to shorten them. Our own waits (kReadWait, kUpdateWait,
+// kCallbackDrainWait and, from 0.96.1, kEnumerateWait) are bounded and named
+// below, and the difference between the two categories is stated again in the
+// shutdown-budget notes rather than left to be discovered.
+//
+// AND ONE OF THOSE UNBOUNDABLE CALLS IS NO LONGER WAITED ON. ENUMERATION is
+// the only one of them a user can provoke at will - the source combo scans
+// every time it opens - and a wedged service turned that into a frozen
+// application (0.96.1, two hang reports). We still cannot cancel the call; we
+// stopped waiting on it instead, by running the vendor half on a worker that
+// is ABANDONED on expiry. See kEnumerateWait. Every other call in that list is
+// made with a device already open and is still unbounded, because abandoning a
+// thread that is inside SelectDevice or Init would leave the service holding a
+// radio nothing in this process could ever release.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -122,6 +132,52 @@ std::string sdrPlayLastEnumerationSkip();
 std::string sdrPlayPanelAdvice(bool resolved, float version, const std::string& enumerationSkip);
 
 // --- enumeration ----------------------------------------------------------
+
+// HOW LONG A SCAN WILL WAIT FOR THE SDRPLAY SERVICE BEFORE GIVING UP ON IT.
+//
+// WHY THIS HAD TO EXIST (0.96.1, two hang reports from one RSP1A on API 3.15).
+// The file header above says plainly that sdrplay_api_Open, LockDeviceApi and
+// GetDevices take no timeout and offer no cancellation, and treats that as
+// something to document rather than something to survive. A user's service
+// then died with the device still open: every call answered
+// sdrplay_api_ServiceNotResponding, and a SCAN from the Source section - on
+// the GUI thread, which is where scanNative() runs - went into sessionAcquire
+// and never came back. The hang watchdog filed it as
+// "hang ntdll.dll @ cascade::source::enumerateSdrPlayWith".
+//
+// We still cannot cancel those calls. What we can do is stop WAITING on them:
+// the vendor half runs on a worker, this is how long the caller gives it, and
+// on expiry the worker is ABANDONED - detached, never joined, never spoken to
+// again - and the panel is told why. Three seconds because a healthy service
+// answers a device list in milliseconds and a user pressing Refresh will
+// tolerate three seconds once; anything longer and the window is visibly
+// stuck, which is the fault being fixed.
+inline constexpr std::chrono::milliseconds kEnumerateWait{3000};
+
+// ...AND HOW LONG THE NEXT SCANS LEAVE IT ALONE AFTER ONE ABANDONMENT.
+//
+// A dead service does not recover in a frame, and scanNative() runs every time
+// the source combo is opened. Without this, every one of those would spend
+// another three seconds of GUI thread and leak another abandoned worker into a
+// service that is still wedged. During the hold-off the SDRplay step is
+// skipped without touching the API at all, and the panel keeps the sentence
+// that says what to do about it.
+inline constexpr std::chrono::seconds kEnumerateHoldOff{60};
+
+// WHAT THE PANEL AND THE LOG SAY WHEN THE SERVICE DID NOT ANSWER. One string,
+// so the sentence a user reads is the sentence a test pins - the same rule
+// sdrPlayApiAdvice follows, and for the same reason: it is the only
+// instruction an RSP owner gets.
+const char* sdrPlayServiceHungSentence();
+
+// True while the hold-off above is still running, i.e. the last enumeration
+// abandoned a wedged service and the next ones are skipping it.
+bool sdrPlayEnumerationHeldOff();
+
+// TESTS ONLY: forget the hold-off. Safe to call at any time because an empty
+// hold-off IS the state this process starts in - unlike a registry populated
+// by init(), which is why that one is never cleared.
+void sdrPlayClearEnumerationHoldOffForTest();
 
 // Every RSP the service can see, as the Source section wants them.
 //
@@ -558,6 +614,20 @@ private:
 
     static void setErrorOn(Link& link, std::string msg);
     static void noteFaultOn(Link& link, const char* what, const std::string& detail);
+
+    // A SERVICE THAT HAS STOPPED ANSWERING IS A DEAD DEVICE, NOT A FAILED CALL.
+    //
+    // sdrplay_api_ServiceNotResponding (14) means the thing holding the USB
+    // handle is gone; nothing we send afterwards can succeed. Treated as an
+    // ordinary refusal it produced the 0.95.0 report's second half: a retune,
+    // an LNA change, an AGC change and finally Uninit each answered 14, the
+    // pipeline kept reading, and the stream-health line recorded 1910 timeouts
+    // over fifty seconds while the user watched a dead receiver. Raising
+    // faulted()/deviceDead() instead puts it through the path a removed radio
+    // already takes - Pipeline's source thread latches the fault, stops, and
+    // the Source section says what happened. True when the error was that one.
+    bool noteIfServiceDead(sdrplay_abi::ErrT err, const char* what);
+
     void setError(std::string msg);
     void clearError();
 

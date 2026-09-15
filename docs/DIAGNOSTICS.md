@@ -116,6 +116,23 @@ describe code this product can be held responsible for.
     `source: SDRplay enumeration skipped - ...` follows it whenever the list
     could not be read - no API, an API older than 3.07, or a service that did
     not answer.
+  - From 0.96.1, three more lines that only a DEAD SDRplay service produces,
+    and they are worth recognising because between them they replace a hang
+    report and fifty seconds of a frozen receiver:
+    - `source: SDRplay enumeration abandoned - the SDRplay service did not
+      answer within 3 s - restart the SDRplay API service`, followed by
+      `source: SDRplay scans are held off for 60 s`. The vendor's device-list
+      call takes no timeout and cannot be cancelled, so the scan runs it on a
+      worker and gives up on the worker rather than on the wait. The same
+      sentence appears in the Source panel. Seeing this means the service, not
+      the radio, is what has to be restarted.
+    - `source: SDRplay <what> - the service stopped answering; the radio is
+      released`, where `<what>` is the control that was refused (`retune`, `IF
+      gain change`, `LNA state change`, and so on). The receiver is marked
+      dead and stopped at that point. Before 0.96.1 a service that died with a
+      radio open produced a run of `source: SDRplay <what> failed -
+      ServiceNotResponding (14)` lines and a stream-health line counting
+      thousands of timeouts, with the picture frozen and nothing saying why.
   - `rx888: opened ... (firmware loaded by FoxSDR)` when the radio was a
     Cypress bootloader and FoxSDR uploaded the image to it. An open that takes
     about five seconds and this line in the log is the NORMAL first open after
@@ -229,6 +246,19 @@ the panel:
   lines from the GUI (a GLFW error, a failed backend init) now reach the log
   too, prefixed `vendor: cascade:`, which is a gain: in a windowed session
   they used to go nowhere. Linux is unchanged (the call returns false).
+  That capture is how `cascade: GLFW error 65543: WGL: Failed to create
+  OpenGL context` reaches a report, and from 0.96.1 one of two lines of our
+  own follows it and says what was done about it:
+  `viewports: this display would not give a second OpenGL context (GLFW
+  65543) - every page stays inside the main window`, written once at startup
+  when the probe FoxSDR makes before enabling torn-off pages is refused; or
+  `viewports: the display could not create a second OpenGL context (GLFW
+  65543) - every page stays inside the main window for this session`, written
+  the first time the driver refuses one while running. Either means torn-off
+  pages are off and everything is drawn inside the main window — which is a
+  restriction, not a fault, and is what 0.95.0 took an access violation
+  instead of doing. `viewports: single (FOXSDR_SINGLE_VIEWPORT set)` is the
+  developer switch and means the same thing on purpose.
 - **Both are rate-limited and scrubbed.** Twenty lines a second per source,
   then one `N more lines suppressed` per second, because a driver that has
   lost its device says so on every failed read and would otherwise push every
