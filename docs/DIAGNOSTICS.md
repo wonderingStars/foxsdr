@@ -56,6 +56,53 @@ every distinct bug inside that plugin collapses into a single group, since
 every plugin stack passes through the same host dispatch on its way down. The client signature
 stays in the payload as transport identity and the client-side dedup key.
 
+### What the native drivers write (0.91.0)
+
+FoxSDR drives an RTL-SDR and a HackRF itself now, over its own WinUSB
+transport, with no SoapySDR module in the path. The log lines that produces
+are deliberately the same shape as the SoapySDR ones, so one log reads the
+same whichever way a radio was opened - the only difference is that these
+describe code this product can be held responsible for.
+
+- `source: opened RTL2838UHIDIR natively, tuner R820T, 2.4000 MS/s` - written
+  by the driver itself at the end of a successful open (`RtlSdrSource::open`).
+  The tuner matters: it is what decides whether the dongle can be opened
+  natively at all, and it is the first thing a report about a dongle that
+  behaves oddly needs to say.
+- `source: opened RTL2838UHIDIR (rtlsdr) at 2400000 S/s` - written by the
+  application when it installs the radio in the pipeline. The parenthesis is
+  the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`): two rows in the Source
+  dropdown can name one physical dongle, and a report has to say which of them
+  was taken.
+- `source: opening RTL2838UHIDIR natively (was SoapySDR rtlsdr)` - the
+  prefer-native rule firing. A config saved before 0.91.0 says "SoapySDR,
+  driver=rtlsdr" because that was the only way to reach the dongle; the
+  application opens it with its own driver instead, without being asked, and
+  this line is where that decision is recorded. See `gui::preferNativeFor`.
+- `source: the native rtlsdr driver refused the saved radio (...); opening it
+  through SoapySDR instead` - a warning, and the one case the rule above backs
+  out of: an E4000 or FC0012/13 tuner, which the native driver does not
+  support. The radio still opens, the way it always did.
+- `source: the RTL-SDR reader thread did not exit within its bound; it is
+  abandoned and the radio is condemned` - a warning, and the native
+  counterpart of SoapySource's abandonment. The remedy is the same one and is
+  told to the user in the same words: restart FoxSDR to use this radio again.
+- The stream-health line below is written by the native drivers too, in the
+  same format and on the same rules.
+
+**`cascade.exe --rtlsdr-check`** is the native counterpart of `--soapy-check`
+and answers the question the suite cannot. The register sequences are proven
+against a fake transport in `tests/test_rtlsdr_source.cpp`; whether THIS
+machine's dongle is bound to WinUSB, enumerates, opens, answers its tuner
+probe and delivers samples that are neither silent nor saturated is a question
+only a run against it can settle, and those four are what actually go wrong in
+the field. It prints what is bound to WinUSB, the tuner, the tuning range,
+every gain with its range and current value, the rate and centre it set, the
+sample count against what three seconds should have produced, the mean and
+peak magnitude, and the stream-health line. Exit 0 means samples arrived and
+were plausible; exit 1 names which of the checks failed, including the
+commonest cause of all - nothing bound to WinUSB, and what to do about it.
+
 ### What the log carries since 0.89.0 — the driver's own words
 
 The 0.88.0 field crash from an RTL-SDR user reached the crash store with a

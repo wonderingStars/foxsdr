@@ -79,6 +79,7 @@ AppConfig junkConfig() {
     c.schemaVersion = -7;
     c.sourceKind = "garbage";
     c.soapyArgs = "garbage";
+    c.nativeArgs = "garbage";
     c.iqFilePath = "garbage";
     c.centerHz = -1.0;
     c.mode = "garbage";
@@ -188,6 +189,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.schemaVersion == b.schemaVersion);
     CHECK(a.sourceKind == b.sourceKind);
     CHECK(a.soapyArgs == b.soapyArgs);
+    CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
     CHECK(a.mode == b.mode);
@@ -331,6 +333,12 @@ int main() {
         in.schemaVersion = 1;  // the only value that loads back (schema gate)
         in.sourceKind = "soapy";
         in.soapyArgs = "driver=uhd,serial=ABC123";
+        // BOTH FAMILIES' ARGS SURVIVE A ROUND TRIP, and they are separate
+        // fields on purpose - see AppConfig::nativeArgs. A config that opened
+        // natively still has to carry the Soapy args the prefer-native rule
+        // read, or the tuner fallback has nothing to fall back to on the next
+        // launch.
+        in.nativeArgs = "serial=00000001";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
         in.mode = "USB";
@@ -625,6 +633,33 @@ int main() {
         CHECK(writeText(path, "{\"sourceKind\":\"banana\"}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.sourceKind == "siggen");
+
+        // THE TWO NATIVE KINDS ARE IN THE WHITELIST (0.91.0). A config saying
+        // "rtlsdr" must survive: resetting it to the generator would silently
+        // demote every user of the native drivers to no radio at all on their
+        // next launch, with nothing on screen to say why.
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"rtlsdr\","
+                        "\"nativeArgs\":\"serial=00000001\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "rtlsdr");
+        CHECK(out.nativeArgs == "serial=00000001");
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"hackrf\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "hackrf");
+
+        // A CONFIG WRITTEN BEFORE 0.91.0 HAS NO nativeArgs AT ALL, and must
+        // load with an empty one rather than whatever the caller's variable
+        // happened to hold - the same "every field is assigned on every path"
+        // rule junkConfig() exists to prove.
+        out = junkConfig();
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"soapy\","
+                        "\"soapyArgs\":\"driver=rtlsdr\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "soapy");
+        CHECK(out.soapyArgs == "driver=rtlsdr");
+        CHECK(out.nativeArgs.empty());
     }
 
     // --- P7 clamps (documented in config.hpp) --------------------------------

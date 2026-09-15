@@ -968,7 +968,8 @@ function reflectSource(s) {
   $('scan').disabled = s.sourceBusy;
   $('srcError').textContent = s.sourceError || '';
 
-  const devKey = s.devices.map(d => d.args).join('|') + '#' + s.sourceKind + '#' + s.soapyArgs;
+  const devKey = s.devices.map(d => (d.kind || 'soapy') + ':' + d.args).join('~') +
+                 '#' + s.sourceKind + '#' + s.soapyArgs;
   if (devKey !== lastDevKey) {
     lastDevKey = devKey;
     const sel = $('srcSel');
@@ -978,7 +979,13 @@ function reflectSource(s) {
     sel.appendChild(gen);
     s.devices.forEach((d) => {
       const o = document.createElement('option');
-      o.value = d.args; o.textContent = d.label;
+      // KIND AND ARGS TOGETHER as the option's value. A native RTL-SDR row
+      // and the SoapySDR row for the same dongle can both carry
+      // "serial=00000001", so the args alone no longer say which driver the
+      // browser is asking for. The separator is a character neither grammar
+      // uses; the handler splits on the FIRST one.
+      o.value = (d.kind || 'soapy') + '|' + d.args;
+      o.textContent = d.label + (d.kind && d.kind !== 'soapy' ? ' (native)' : '');
       sel.appendChild(o);
     });
     // An IQ file may be OPEN (restored from the config, or chosen in the
@@ -991,11 +998,13 @@ function reflectSource(s) {
       sel.appendChild(o);
       sel.value = '__file__';
     } else {
-      sel.value = s.sourceKind === 'soapy' ? s.soapyArgs : '';
+      sel.value = (s.sourceKind === 'soapy' || s.sourceKind === 'rtlsdr' ||
+                   s.sourceKind === 'hackrf') ? (s.sourceKind + '|' + s.soapyArgs) : '';
     }
   }
 
-  const isDevice = s.sourceKind === 'soapy';
+  const isDevice = s.sourceKind === 'soapy' || s.sourceKind === 'rtlsdr' ||
+                   s.sourceKind === 'hackrf';
   $('devRow').classList.toggle('hidden', !isDevice);
   $('gainRow').classList.toggle('hidden', !isDevice);
   if (!isDevice) return;
@@ -2366,7 +2375,10 @@ $('scan').addEventListener('click', () => control({ scanDevices: true }));
 $('srcSel').addEventListener('change', () => {
   const v = $('srcSel').value;
   if (v === '' ) control({ sourceKind: 'siggen' });
-  else if (v !== '__file__') control({ sourceKind: 'soapy', soapyArgs: v });
+  else if (v !== '__file__') {
+    const cut = v.indexOf('|');
+    control({ sourceKind: v.slice(0, cut), soapyArgs: v.slice(cut + 1) });
+  }
 });
 $('antenna').addEventListener('change', () => control({ antenna: $('antenna').value }));
 $('srate').addEventListener('change', () => {
@@ -3109,7 +3121,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         {
             nlohmann::json devices = nlohmann::json::array();
             for (const RadioStatus::SoapyDevice& d : s.devices) {
-                devices.push_back({{"label", d.label}, {"args", d.args}});
+                devices.push_back({{"label", d.label}, {"args", d.args}, {"kind", d.kind}});
             }
             j["devices"] = std::move(devices);
             nlohmann::json gains = nlohmann::json::array();

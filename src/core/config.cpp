@@ -216,6 +216,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
 
     getString(j, "sourceKind", out.sourceKind);
     getString(j, "soapyArgs", out.soapyArgs);
+    getString(j, "nativeArgs", out.nativeArgs);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
     getDouble(j, "centerHz", out.centerHz);
@@ -389,7 +390,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.dbMax = defaults.dbMax;
     }
     if (out.sourceKind != "siggen" && out.sourceKind != "file" &&
-        out.sourceKind != "soapy") {
+        out.sourceKind != "soapy" && out.sourceKind != "rtlsdr" &&
+        out.sourceKind != "hackrf") {
         out.sourceKind = defaults.sourceKind;
     }
     // Map window geometry is validated as ONE rectangle: any bad component
@@ -559,6 +561,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["schemaVersion"] = cfg.schemaVersion;
     j["sourceKind"] = cfg.sourceKind;
     j["soapyArgs"] = cfg.soapyArgs;
+    j["nativeArgs"] = cfg.nativeArgs;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
     j["centerHz"] = cfg.centerHz;

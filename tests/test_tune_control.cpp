@@ -12,6 +12,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "core/plugin_abi.h"
 #include "gui/tune_control.hpp"
@@ -600,6 +601,133 @@ int main() {
         CHECK(autoReopenDue(true, false, false, false, 0.0, -1.0));
         CHECK(autoReopenDue(true, false, false, false, 0.5, -0.5));
         CHECK(!autoReopenDue(true, false, false, false, 30.0, 0.0));
+    }
+
+    // -----------------------------------------------------------------------
+    // PREFER THE NATIVE DRIVER: which saved radio gets taken over, and which
+    // must not be.
+    //
+    // The rule decides, without asking any hardware, whether a config that
+    // says "SoapySDR, driver=rtlsdr" should be answered with FoxSDR's own
+    // RTL-SDR driver instead. It gets that wrong in two directions and both
+    // are bad in a way the user cannot diagnose: refusing to upgrade leaves
+    // them on the libusb path every crash report in this product's first
+    // month came from, and upgrading too eagerly hands them a DIFFERENT
+    // DONGLE than the one they saved - a different antenna on a different
+    // band, with nothing on screen to say so.
+    // -----------------------------------------------------------------------
+    {
+        using cascade::gui::preferNativeFor;
+        using cascade::source::NativeDeviceInfo;
+
+        const std::vector<NativeDeviceInfo> two = {
+            {"rtlsdr", "RTL2838UHIDIR (serial 00000001)", "serial=00000001"},
+            {"rtlsdr", "NESDR SMArt v5 (serial 00000002)", "serial=00000002"},
+        };
+        const std::vector<NativeDeviceInfo> none;
+        const std::vector<NativeDeviceInfo> hack = {
+            {"hackrf", "HackRF One (serial 0000000000000000457863c82e1a51df)",
+             "serial=0000000000000000457863c82e1a51df"},
+        };
+
+        // THE CASE THIS EXISTS FOR: a saved Soapy RTL-SDR with a serial, and
+        // the same serial on the bus natively. RED WHEN the rule is removed.
+        {
+            const auto got = preferNativeFor("soapy", "driver=rtlsdr, serial=00000002", two);
+            CHECK(got.has_value());
+            CHECK(got->driver == "rtlsdr");
+            CHECK(got->args == "serial=00000002");
+        }
+
+        // THE SECOND DONGLE IS NOT THE FIRST ONE. A saved serial that is not
+        // on the bus gets NOTHING - never the other dongle. This is the check
+        // that a "return the first row of that driver" shortcut fails.
+        CHECK(!preferNativeFor("soapy", "driver=rtlsdr, serial=00000099", two).has_value());
+
+        // NO SERIAL SAVED names no particular dongle, so the first row of
+        // that driver is the honest answer to it. Every hand-written config
+        // and most Soapy enumerations look like this.
+        {
+            const auto got = preferNativeFor("soapy", "driver=rtlsdr", two);
+            CHECK(got.has_value());
+            CHECK(got->args == "serial=00000001");
+        }
+        // ...and with nothing on the bus, still nothing.
+        CHECK(!preferNativeFor("soapy", "driver=rtlsdr", none).has_value());
+
+        // A DRIVER WE DO NOT DRIVE OURSELVES IS LEFT ALONE. The owner's B200
+        // is the case that must never be touched.
+        CHECK(!preferNativeFor("soapy", "driver=uhd, serial=3218C7A", two).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=airspy", two).has_value());
+        CHECK(!preferNativeFor("soapy", "", two).has_value());
+
+        // A SAVED NATIVE DEVICE IS ALREADY NATIVE, and the generator and the
+        // IQ file are not radios. Only "soapy" is upgraded.
+        CHECK(!preferNativeFor("rtlsdr", "driver=rtlsdr, serial=00000001", two).has_value());
+        CHECK(!preferNativeFor("siggen", "driver=rtlsdr", two).has_value());
+        CHECK(!preferNativeFor("file", "driver=rtlsdr", two).has_value());
+
+        // THE DRIVER KEY IS MATCHED CASE-INSENSITIVELY: a hand-edited
+        // "driver=RTLSDR" is the same radio.
+        CHECK(preferNativeFor("soapy", "driver=RTLSDR, serial=00000001", two).has_value());
+
+        // A SAVED RTL-SDR MUST NOT BE ANSWERED WITH A HACKRF, which is what a
+        // rule that matched on serial alone (or on nothing) would do.
+        CHECK(!preferNativeFor("soapy", "driver=rtlsdr", hack).has_value());
+
+        // HACKRF SERIALS ARE MATCHED BY SUFFIX, either way round, because
+        // every tool that prints one prints the tail and HackRfSource::open
+        // itself takes a suffix. A rule stricter than the driver's own would
+        // point at a device the driver then refuses.
+        {
+            const auto got = preferNativeFor("soapy", "driver=hackrf, serial=457863c82e1a51df",
+                                             hack);
+            CHECK(got.has_value());
+            CHECK(got->driver == "hackrf");
+        }
+        {
+            // ...and the case the enumerated form is the short one.
+            const std::vector<NativeDeviceInfo> shortForm = {
+                {"hackrf", "HackRF One (serial 457863C82E1A51DF)", "serial=457863C82E1A51DF"},
+            };
+            CHECK(preferNativeFor("soapy",
+                                  "driver=hackrf, serial=0000000000000000457863c82e1a51df",
+                                  shortForm)
+                      .has_value());
+        }
+        // A suffix that is not a suffix is still no match.
+        CHECK(!preferNativeFor("soapy", "driver=hackrf, serial=deadbeef", hack).has_value());
+    }
+
+    // -----------------------------------------------------------------------
+    // THE ONE ERROR THE PREFER-NATIVE OPEN FALLS BACK ON, pinned to the
+    // sentence RtlSdrSource actually produces.
+    //
+    // A dongle with an E4000 or FC0012/13 tuner is not one the native driver
+    // supports, and a user on one was reaching it perfectly well through
+    // SoapySDR before 0.91.0. The fallback is what stops the prefer-native
+    // rule taking their radio away - and it is matched on a SUBSTRING of the
+    // driver's message, so this check is what stops a re-wording from
+    // silently turning the fallback off with nothing going red.
+    // -----------------------------------------------------------------------
+    {
+        using cascade::gui::nativeOpenShouldFallBack;
+        // The exact text of RtlSdrSource::bringUpLocked's tuner-probe
+        // failure, spelled here as one string. If the driver's wording
+        // changes, THIS line goes red and the marker is updated with it.
+        const std::string real =
+            "no R820T or R828D tuner answered; this dongle's tuner is not one this "
+            "driver supports yet";
+        CHECK(nativeOpenShouldFallBack(real));
+
+        // Everything else is a real failure and must NOT be papered over by
+        // silently opening a different driver: an unplugged dongle, a busy
+        // one, a dead one. Falling back on these would turn a clear message
+        // into two confusing ones.
+        CHECK(!nativeOpenShouldFallBack("the radio did not answer its first register write"));
+        CHECK(!nativeOpenShouldFallBack("no RTL-SDR matched serial=00000009"));
+        CHECK(!nativeOpenShouldFallBack(""));
+        CHECK(!nativeOpenShouldFallBack("the demodulator would not initialise: timeout"));
     }
 
     return testSummary("test_tune_control");

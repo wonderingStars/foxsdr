@@ -27,8 +27,11 @@
 //     defaults (the display maps dB to pixels via 1/(dbMax-dbMin); a
 //     degenerate or inverted span is a divide-by-zero, and clamping only one
 //     end would invent a range the user never chose)
-//   - sourceKind  must be "siggen" | "file" | "soapy"; anything else resets
-//     to "siggen" (the only source that can never fail to exist)
+//   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf";
+//     anything else resets to "siggen" (the only source that can never fail
+//     to exist). The last two are the native drivers, which reach an RTL-SDR
+//     or a HackRF through our own WinUSB transport and need no SoapySDR
+//     install at all.
 //   - deemphasisIndex clamped to [0, 2]  (the three-entry 50 us / 75 us / off
 //                                         combo; an out-of-range index would
 //                                         read past that table)
@@ -92,7 +95,7 @@ namespace cascade::core {
 
 struct AppConfig {
     int schemaVersion = 1;
-    std::string sourceKind = "siggen";      // "siggen" | "file" | "soapy"
+    std::string sourceKind = "siggen";  // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"
     // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
     // Empty means "whatever the driver defaults to", which is what every
     // pre-existing config will say. It is persisted because the port is a
@@ -102,6 +105,22 @@ struct AppConfig {
     // essentially nothing.
     std::string soapyAntenna;
     std::string soapyArgs;                  // kwargs of the last soapy device
+    // ARGS OF THE LAST NATIVE DEVICE, and a SEPARATE FIELD from soapyArgs on
+    // purpose rather than one shared slot with sourceKind deciding which
+    // grammar it holds.
+    //
+    // They are different grammars fed to different openers: soapyArgs is a
+    // SoapySDR kwargs markup string ("driver=rtlsdr, serial=00000001") that
+    // goes to SoapySource::open, nativeArgs is "serial=00000001" or "index=0"
+    // that goes to RtlSdrSource/HackRfSource::open. More importantly the
+    // application needs BOTH AT ONCE: the prefer-native rule
+    // (gui::preferNativeFor) reads the saved SOAPY args to learn which driver
+    // and which serial a config meant, opens the native driver instead, and
+    // must still have those Soapy args to fall back to when the native driver
+    // refuses the tuner (an E4000 or FC0012/13 dongle). One shared field
+    // would be overwritten by whichever family opened last, and the fallback
+    // would have nothing left to fall back to.
+    std::string nativeArgs;
     std::string iqFilePath;
     double centerHz = 100000000.0;
     std::string mode = "WFM";

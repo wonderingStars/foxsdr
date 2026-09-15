@@ -46,12 +46,24 @@ are still moving. What is in the current build:
 - **Receiver.** Spectrum and waterfall, NFM/WFM/AM/DSB/USB/LSB/CW, squelch,
   AGC, noise reduction, manual and automatic notch, de-emphasis, stereo FM with
   pilot lock, and RDS (programme service name, radio text, PI, PTY).
-- **Hardware.** Anything SoapySDR reaches, with antenna, sample-rate and
-  per-stage gain selection. Developed against an Ettus B200; the built-in
-  signal generator and IQ-file playback mean it runs with no radio at all.
-  The device scan waits for the radio to close: while one is open the Source
-  section's Refresh key is disabled and says why, because the vendor probe
-  opens and resets every dongle it finds, the streaming one included.
+- **Hardware.** An RTL-SDR or a HackRF through FoxSDR's OWN drivers, needing
+  no SoapySDR install of any kind - only that the dongle is bound to WinUSB
+  (Zadig), which every SDR application needs anyway. Anything else - a USRP,
+  an Airspy, a LimeSDR - through SoapySDR as before. Antenna, sample-rate and
+  per-stage gain selection on all of them, with each gain slider spanning what
+  that stage will actually accept. Developed against an Ettus B200 and an
+  RTL2838 (R820T); the built-in signal generator and IQ-file playback mean it
+  runs with no radio at all.
+  A saved SoapySDR RTL-SDR or HackRF is OPENED NATIVELY on the next launch
+  without being asked, and the log says so; a dongle whose tuner the native
+  driver does not support (E4000, FC0012/13) falls back to the SoapySDR path
+  and says why. The Source section lists the native radios first, labelled
+  "(native)", and names any dongle that is plugged in but still on the DVB-T
+  driver rather than leaving it silently missing.
+  The SoapySDR device scan still waits for the radio to close - the vendor
+  probe opens and resets every dongle it finds, the streaming one included -
+  but Refresh is live again, because the native enumeration reads SetupAPI
+  properties and opens nothing.
 - **Working with signals.** Bookmarks, a band scanner with a Skip key and a
   listen limit so a station that never goes quiet cannot stop it, and
   recording of both audio and raw I/Q. The receiver's own position - what
@@ -129,6 +141,124 @@ will most likely decode nothing off air. Each plugin's catalogue entry says
 where it stands.
 
 See [PLAN.md](PLAN.md) for the roadmap and architecture.
+
+## The native HackRF driver
+
+FoxSDR talks to a HackRF One directly — its own USB transport, its own reader
+thread, no libhackrf, no libusb, no SoapySDR module in the path. Jawbreaker and
+rad1o boards run the same firmware and are listed too.
+
+**Why, given that SoapyHackRF exists.** Every crash this product has received
+from a USB radio in its first months landed inside somebody else's libusb, on a
+thread FoxSDR did not create, behind a vendor module installed from somebody
+else's toolchain: a lock freed and reused, a reader we could not guard, an
+enumeration probe that opened and reset the very dongle that was streaming.
+None of that code is ours, so none of it could be fixed from here. A native
+driver can be. Three rules hold throughout (`src/usb/usb_device.hpp`):
+enumeration never opens a device, FoxSDR owns every thread that can be inside
+the radio, and every wait is bounded — a wedged device costs a timeout, never a
+frozen window.
+
+**What it does.** 2–20 MS/s, with the MAX2837 baseband filter following the
+rate automatically to the widest setting no more than 75% of it; 1 MHz to
+6 GHz; LNA (0–40 dB in 8 dB steps), VGA (0–62 dB in 2 dB steps) and the
+front-end amplifier as a two-position 14 dB gain; the bias-T as its own
+control, deliberately not disguised as an antenna choice, because it is 3.3 V
+on the connector rather than a choice of where to listen. A rate change on a
+live stream is made with the radio quiet — receive off, reader stopped, ring
+torn down, the new rate programmed, then all of it again — which is the shape a
+live rate change had to be given on the SoapySDR path after one killed the
+process on a driver's own reader thread. Opening a HackRF also puts it into a
+known state (10 MS/s, 100 MHz, 16 dB of each gain, amplifier off, bias-T off),
+because the hardware otherwise keeps whatever the last application left it at,
+including a bias-T quietly feeding an antenna.
+
+Asking for less than 2 MS/s is refused with a reason rather than silently
+rounded up to 2: the documented floor is 2 MS/s, and a caller that wanted
+narrowband behaviour being given twice the bandwidth is a lie nothing on screen
+would reveal. Above 20 MS/s the request is coerced down and says so.
+
+**Windows only for now.** The transport is WinUSB; on Linux the HackRF is still
+reached through SoapySDR, and native enumeration returns nothing and says why
+in the log. The protocol layer itself is plain C++20 and builds everywhere.
+
+**How it is verified.** There is no HackRF on the bench this was written on, so
+the proof is byte-exactness rather than a spectrum: `tests/test_hackrf_source.cpp`
+drives the driver through a fake that implements the transport interface and
+records every control transfer, and checks the request numbers, values, indices
+and payloads against libhackrf — the sample-rate and filter arithmetic against
+numbers produced by compiling libhackrf's own functions and running them, not
+read off by eye. The streaming, device-loss and wedged-reader paths are proven
+the same way. The protocol was ported from libhackrf under its BSD-3-Clause
+licence; the notice is in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of
+libhackrf is linked or shipped.
+
+## The native RTL-SDR driver
+
+FoxSDR opens an RTL2832U dongle directly as well — the same WinUSB transport,
+the same rules, no librtlsdr, no libusb, no SoapySDR module in the path. The
+generic Realtek ids and the several dozen rebadged dongles that share the chip
+are all listed.
+
+**Why.** The first month of crash reports from RTL-SDR users is the reason this
+exists at all: every one of them landed inside `libusb-1.0.dll`, reached
+through a vendor module that came from somebody else's install, on a reader
+thread FoxSDR did not create. The remedies available were "restart FoxSDR" and
+"do not scan for devices while streaming", and both of those are apologies
+rather than fixes. This driver owns its USB traffic, its reader thread and its
+enumeration, so a radio that goes wrong is something this code can be held
+responsible for.
+
+**What it does.** The standard rate ladder from 250 kS/s to 3.2 MS/s, with the
+tuner's IF filter following the rate and the demodulator's down-converter
+re-pointed at the intermediate frequency the filter settles on; 24 MHz to
+1766 MHz on an R820T or R820T2; three named gains (LNA, MIXER and VGA) taken
+from the measured step tables, plus the single aggregate "TUNER" ladder every
+other RTL-SDR application offers, so a setting means the same thing here as it
+does there; the tuner's automatic gain, with the demodulator's own digital AGC
+brought in step so the two cannot fight over one signal; the crystal trim in
+parts per million; and the bias tee as its own control. A rate change on a live
+stream is made with the stream stopped and restarted, because the resampler is
+reset as part of the change and a stream running across that reset delivers
+half a buffer of each rate.
+
+**The bias tee is off on every open** unless the dongle's EEPROM says it is
+wired permanently on — and the EEPROM's own header is checked before that byte
+is believed, because a dongle with no EEPROM at all reads as zeroes and zero
+means "force it on". Switching 4.5 V onto somebody's antenna because their
+dongle had no configuration memory is not a default worth having.
+
+**The RTL-SDR Blog V4** is supported as a V4 rather than as a generic R828D:
+below 28.8 MHz the tuner is asked for the upconverted frequency, the dongle's
+own GPIO throws the upconverter switch, the tracking filter is bypassed on that
+path, and the notch filters open inside the bands they notch. Without that a V4
+hears nothing at all below 24 MHz. On any other R82xx dongle, tuning below
+24 MHz switches the demodulator to direct sampling instead, which is what the
+common HF modification wires an antenna to.
+
+**Windows only for now**, like the HackRF driver and for the same reason: the
+transport is WinUSB. On Linux an RTL-SDR is still reached through SoapySDR, and
+native enumeration returns nothing and says why. **A dongle must be bound to
+WinUSB** (with Zadig) to be opened natively; one still running the DVB-T driver
+is not listed, because it cannot be opened.
+
+**How it is verified.** Both ways, because neither alone is enough.
+`tests/test_rtlsdr_source.cpp` drives the whole driver through a fake transport
+that records every control transfer and asserts the exact register sequences —
+the resampler ratio and the achieved rate, the down-converter's three bytes, the
+tuner's PLL divider and sigma-delta at 100 MHz and at 1090 MHz, the gain ladder,
+and the V4's upconverter path at 7 MHz — against arithmetic worked out from the
+chips' behaviour and written out in the test beside each expectation.
+`tests/test_rtlsdr_live.cpp` then measures a real dongle: five seconds at
+2.4 MS/s must deliver within 2% of the rate the radio reports, the samples must
+be neither silent nor saturated, a rate change on a live stream must deliver the
+new rate, and `stop()` must return within 500 ms while samples are still
+flowing. On a machine with no dongle that file says so in one line and passes,
+rather than passing quietly for the wrong reason.
+
+The driver is an independent implementation written from the register-level
+behaviour of the RTL2832U and R82xx. librtlsdr is GPL-2.0 and is not linked or
+shipped; see `installer/THIRD-PARTY-LICENSES.txt` for the full position.
 
 ## Building (Windows)
 
@@ -735,7 +865,12 @@ otherwise, because that is the command an upgrade runs.
 show "Windows protected your PC". Choose **More info → Run anyway** if you are
 happy to proceed. Signing is planned.
 
-Radio hardware support is a separate install (PothosSDR or radioconda) — see
+**An RTL-SDR or a HackRF needs no extra install at all** - FoxSDR drives those
+two itself, over its own WinUSB transport. The one step Windows requires is
+binding the dongle to WinUSB with Zadig, which every SDR application needs and
+which `cascade.exe --rtlsdr-check` will tell you about. Any OTHER radio - a
+USRP, an Airspy, a LimeSDR - still reaches FoxSDR through SoapySDR vendor
+modules, which are a separate install (PothosSDR or radioconda); see
 `POSTINSTALL.txt` in the install folder. FoxSDR runs with no hardware at all
 using the signal generator or I/Q playback.
 
@@ -746,7 +881,10 @@ RTL-SDR dongle needs one further step on Windows**: it ships bound to the DVB-T
 television driver, under which it is invisible to every SDR application, and
 Zadig must be used to bind WinUSB to "Bulk-In, Interface (Interface 0)" instead.
 `cascade.exe --soapy-check` prints the search paths, the loaded modules and
-either the device it opened or the reason there was none.
+either the device it opened or the reason there was none, and
+`cascade.exe --rtlsdr-check` does the same for the native RTL-SDR path: what is
+bound to WinUSB, which tuner answered, the gain ranges, and how many samples
+arrived in three seconds.
 
 **The hardware search runs in a separate short-lived process.** Looking for
 radios means loading every SDR driver installed on the machine and letting each

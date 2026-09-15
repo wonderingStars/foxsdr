@@ -197,6 +197,13 @@ public:
     // cost and the threshold it had to fit inside had already drifted apart
     // over three releases because nothing related the two. (The GPS wait
     // was added the way the scan demands: found by name, classified here.)
+    //
+    // THE TWO NATIVE DRIVERS (0.91.0) ADD NOTHING TO THIS NUMBER, and the
+    // arithmetic is in tests/test_shutdown_budget.cpp beside their rows.
+    // Exactly one source is installed in the pipeline at a time, so a
+    // teardown spends ONE of these columns and never two: SoapySDR 3000 ms,
+    // a native RTL-SDR 2000, a native HackRF 1350. The worst is the one
+    // charged above; the others are covered by it rather than added to it.
     static constexpr unsigned kShutdownBoundedWaitsMs = 7000;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload

@@ -249,7 +249,17 @@ void testSourceFields() {
     CHECK(!accepts("{\"sourceKind\":\"file\",\"iqFilePath\":\"C:/secrets.wav\"}"));
     // ...and iqFilePath is not even a field this version knows.
     CHECK(!accepts("{\"iqFilePath\":\"C:/secrets.wav\"}"));
-    CHECK(!accepts("{\"sourceKind\":\"rtlsdr\"}"));
+    // "rtlsdr" AND "hackrf" ARE ACCEPTED from 0.91.0: they are the native
+    // drivers, and a browser naming one is no wider a door than one naming
+    // "soapy". Both go through AppWindow::applyWebControls, which matches the
+    // args against its OWN enumerated list before opening anything, so a
+    // client still cannot name a device this receiver has not seen - which is
+    // the property that made "soapy" safe and is unchanged.
+    CHECK(accepts("{\"sourceKind\":\"rtlsdr\",\"soapyArgs\":\"serial=00000001\"}"));
+    CHECK(accepts("{\"sourceKind\":\"hackrf\",\"soapyArgs\":\"index=0\"}"));
+    // Everything outside the five is still refused, and the error says so.
+    CHECK(!accepts("{\"sourceKind\":\"airspy\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"RTLSDR\"}"));  // exact spelling, not a fold
     CHECK(!accepts("{\"sourceKind\":\"\"}"));
     CHECK(!accepts("{\"sourceKind\":7}"));
 

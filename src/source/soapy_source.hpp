@@ -87,6 +87,7 @@
 
 #include "source/soapy_modules.hpp"
 
+#include "source/device_source.hpp"
 #include "source/iq_source.hpp"
 
 // Forward declarations instead of <SoapySDR/Device.hpp>: the GUI includes
@@ -109,7 +110,26 @@ struct SoapyDeviceInfo {
 // Self-paced hardware source (selfPaced() == true): samples arrive at the
 // device's own rate, so read() blocks up to ~20 ms and returns 0 as the
 // "nothing yet, retry" signal the IqSource contract defines.
-class SoapySource : public IqSource {
+// IT IMPLEMENTS DeviceSource, and that is the whole reason the Source panel
+// can be written once. Everything the panel asks a radio - its gains and
+// their ranges, its antennas, the rates it supports, whether it is dead -
+// this class already answered; DeviceSource just names the same questions in
+// a form a NATIVE driver (RtlSdrSource, HackRfSource) can answer too, so an
+// RTL-SDR opened natively and one opened through a vendor module look
+// identical on screen. Nothing was taken away to do it: every pre-existing
+// method is still here, and the Soapy-only ones (enumerate, moduleSearchPaths,
+// anyDeviceOpen, deadReason) are still reached through the concrete type.
+//
+// WHY THE DeviceSource ACCESSORS READ A CACHE RATHER THAN THE DRIVER. They
+// are const and the GUI calls them every frame. A vendor call from a const
+// getter would need the device lock, could time out, could fault, and would
+// have nowhere to record any of that - so gains(), antennas(), antenna(),
+// gainDb(), autoGain() and supportedSampleRatesHz() answer from values
+// interrogated once at open() and updated by the setters from the driver's
+// own READBACK. The panel therefore still never shows a value the hardware
+// did not confirm, which is the promise the antenna combo has kept since it
+// was added, and no per-frame draw can reach libusb.
+class SoapySource : public DeviceSource {
 public:
     SoapySource() = default;
     ~SoapySource() override;
@@ -166,16 +186,25 @@ public:
     // and sets up its RX CF32 stream on channel 0. Any previously open
     // device is torn down first, so reopen is safe. False + lastError() on
     // any failure; no partial state survives a failed open.
-    bool open(const std::string& args);
+    bool open(const std::string& args) override;
 
     // Full teardown: deactivate, close stream, release the device handle.
     // Idempotent and safe on a never-opened instance. lastError() is left
     // untouched so a failure reason survives the cleanup that follows it.
-    void closeDevice();
+    void closeDevice() override;
 
     // Atomic mirror of "dev_ != nullptr", so per-frame GUI checks never block
     // behind a driver call holding devMutex_.
-    bool isOpen() const { return openMirror_.load(std::memory_order_relaxed); }
+    bool isOpen() const override { return openMirror_.load(std::memory_order_relaxed); }
+
+    // The driver key this device was made with, as the kwargs said it
+    // ("rtlsdr", "uhd", "hackrf"), lower-cased; "soapy" when the args named
+    // no driver at all. Read out of the ARGS rather than asked of the device
+    // because the Source section wants it to decide things about a device it
+    // may not have opened yet - whether a saved Soapy radio has a native
+    // driver that could take it over (gui::preferNativeFor) - and because a
+    // dead device cannot be asked anything.
+    const char* driverKey() const override;
 
     // True while ANY SoapySource in this process holds an open device. The
     // in-process enumeration fallback checks this and refuses to run: walking
@@ -210,13 +239,38 @@ public:
     // documented ordering), e.g. {"PGA"} on a B200.
     std::vector<std::string> listGainNames();
 
+    // The same stages WITH THE RANGE THE DRIVER WILL ACCEPT, from
+    // getGainRange, interrogated once at open (see the class comment for why
+    // this is a cache). Empty with no device.
+    //
+    // WHAT THIS FIXED, because it is not cosmetic: the Source panel drew every
+    // gain slider 0..60 dB for every device on every driver, which is right
+    // for nothing. A B200's PGA spans 0..76 dB, so the top 16 dB of the radio
+    // was unreachable from the panel; an RTL-SDR's VGA starts at -4.7 dB, so
+    // the bottom of its range was unreachable too. SoapySDR clamps what it is
+    // given, which is exactly why nothing ever complained.
+    std::vector<GainInfo> gains() const override;
+
     // Sets one named gain element in dB. False if there is no device, the
-    // name is unknown, or the driver refused the value.
-    bool setGainDb(const std::string& name, double db);
+    // name is unknown, or the driver refused the value. On success the
+    // driver's own getGain readback is cached, so gainDb() reports what the
+    // hardware took rather than what it was asked for.
+    bool setGainDb(const std::string& name, double db) override;
+
+    // The cached readback for one stage; 0.0 for an unknown name or no
+    // device. See the class comment for why this does not ask the driver.
+    double gainDb(const std::string& name) const override;
+
+    // Whether the device has a hardware gain mode at all (Soapy's
+    // hasGainMode), probed once at open. This is what greys the checkbox.
+    bool autoGainSupported() const override;
 
     // Hardware AGC on/off. False when there is no device or the driver has
     // no gain mode (hasGainMode() false) — the GUI greys the checkbox then.
-    bool setAutoGain(bool on);
+    bool setAutoGain(bool on) override;
+
+    // The mode last SET successfully; false before any device is open.
+    bool autoGain() const override;
 
     // The device's RX antenna ports, e.g. {"TX/RX", "RX2"} on a B200.
     //
@@ -229,13 +283,32 @@ public:
     // and there was no control and no readout to reveal which port was in use.
     std::vector<std::string> listAntennas();
 
-    // Selects an RX antenna by name. False if there is no device, the name is
-    // not one the driver lists, or it refused.
-    bool setAntenna(const std::string& name);
+    // The same list through the DeviceSource interface, from the cache filled
+    // at open. Empty with no device, which is not an error.
+    std::vector<std::string> antennas() const override;
 
-    // The port currently selected, as the DRIVER reports it (not a cached copy
-    // of what was requested) — an empty string when nothing is open.
-    std::string antenna();
+    // Selects an RX antenna by name. False if there is no device, the name is
+    // not one the driver lists, or it refused. On success the driver's own
+    // getAntenna readback is cached (see antenna()).
+    bool setAntenna(const std::string& name) override;
+
+    // The port currently selected, as the DRIVER reported it - never a copy
+    // of what was requested. Empty string when nothing is open. This is the
+    // CACHED readback (see the class comment); antennaReadback() below asks
+    // the device again.
+    std::string antenna() const override;
+
+    // Asks the driver, now, and refreshes the cache. The live call the cached
+    // antenna() used to be: kept because open() and setAntenna() need it, and
+    // because "ask the radio again" is a real thing to want - but it is a
+    // vendor call and must not be made from a draw.
+    std::string antennaReadback();
+
+    // The rates the panel offers. listSampleRates from the driver, ascending,
+    // interrogated at open; when the driver answers none (it advertises a
+    // continuous range instead, as UHD does) this falls back to the 1/2/4/8
+    // MS/s list the Rate combo has always shown, so the panel is never empty.
+    std::vector<double> supportedSampleRatesHz() const override;
 
     // --- IqSource --------------------------------------------------------
 
@@ -291,7 +364,7 @@ public:
     // tune-mismatch notice) treats that exactly like the signal generator
     // and the IQ file, which never call this because they have no tuner to
     // ask about.
-    bool frequencyRangeHz(double& loHz, double& hiHz) const;
+    bool frequencyRangeHz(double& loHz, double& hiHz) const override;
 
     // readStream with a 20 ms timeout (kReadTimeoutUs — short so a control
     // call waiting on devMutex_ behind a parked read never stalls the GUI
@@ -366,7 +439,7 @@ public:
     // then never called again: every setter refuses, and teardown releases the
     // handles WITHOUT calling back into the driver. Exposed so the GUI and the
     // tests can tell "this driver crashed" from "the driver said no".
-    bool deviceDead() const;
+    bool deviceDead() const override;
 
     // WHY it is dead, because the two ways it can be are not the same to a
     // caller deciding what to do next - and one caller now does (AppWindow's
@@ -399,7 +472,7 @@ public:
     // deadReason() is VendorFault. The same words open lastError(), but that
     // sentence goes on to tell the user what to do, and a log line quoting
     // all of it beside "reopening" would contradict itself.
-    std::string faultedWhile() const;
+    std::string faultedWhile() const override;
 
     // Escape-path vendor calls this PROCESS has abandoned because they did not
     // return within kVendorCallWait — deactivateStream, closeStream, unmake.
@@ -419,7 +492,7 @@ public:
     // SOURCE THAT STARTED IT. When an escape-path call does not come back
     // inside kVendorCallWait, it is left running on its worker thread — still
     // inside the vendor module, still using these two handles — and the
-    // SoapySource can be destroyed a millisecond later (AppWindow::openSoapy
+    // SoapySource can be destroyed a millisecond later (AppWindow::openDeviceSync
     // makes a fresh one per open and drops the old one; the field freeze this
     // exists for is a user switching sources). A worker that captured `this`
     // would then be reading freed memory, which is a worse defect than the
@@ -561,6 +634,39 @@ private:
     // written only on a successful open (see frequencyRangeHz).
     std::atomic<double> rangeLoHz_{0.0};
     std::atomic<double> rangeHiHz_{-1.0};
+
+    // WHAT THE DeviceSource ACCESSORS ANSWER FROM. Interrogated once inside
+    // open()'s guarded body and committed with the other readbacks; updated
+    // by setGainDb/setAutoGain/setAntenna from the driver's own readback.
+    // Cleared by clearDeviceStateLocked with everything else that describes a
+    // device this object no longer has.
+    //
+    // Its own small mutex rather than errorMutex_: these are read from the
+    // GUI thread on every frame it draws the Source section, and errorMutex_
+    // is taken by the source thread on every read() that records a failure.
+    // Sharing one would put a per-frame draw behind a per-sample error path
+    // for no reason; the lock order devMutex_ -> infoMutex_ matches
+    // devMutex_ -> errorMutex_ and the two leaves are never both held.
+    mutable std::mutex infoMutex_;
+    std::vector<GainInfo> gainInfo_;
+    std::vector<double> gainDb_;  // parallel to gainInfo_, the last readback
+    std::vector<std::string> antennas_;
+    std::string antenna_;
+    std::vector<double> rates_;
+    bool autoGainSupported_ = false;
+    bool autoGain_ = false;
+    // Lower-cased driver key parsed out of the open args ("rtlsdr", "uhd");
+    // "soapy" when the args named none. Under infoMutex_ like the rest, but
+    // driverKey() has to return a const char*, so the string must outlive the
+    // call - it is only ever assigned on open() and cleared on teardown, both
+    // on the same thread as any driverKey() caller can be (the GUI), which is
+    // why returning .c_str() is sound here and would not be for lastError().
+    std::string driverKey_ = "soapy";
+
+    // Fills gainInfo_/gainDb_/antennas_/antenna_/rates_/autoGainSupported_
+    // from `o` after open()'s guarded body has returned, and clears them on
+    // every path that lets go of a device.
+    void clearDeviceInfo() noexcept;
 
     // Whether THIS source is counted in the process-wide open-device count —
     // set exactly at the successful-open commit, cleared exactly once on the
