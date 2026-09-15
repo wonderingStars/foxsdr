@@ -19,6 +19,8 @@
 // assertions about it.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +28,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/crash_handler.hpp"
@@ -35,6 +38,9 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -59,7 +65,9 @@ std::string selfExePath() {
     const DWORD n = ::GetModuleFileNameA(nullptr, buf, static_cast<DWORD>(sizeof(buf)));
     return std::string(buf, buf + n);
 #else
-    return std::string();
+    char buf[4096] = {};
+    const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    return (n > 0) ? std::string(buf, buf + n) : std::string();
 #endif
 }
 
@@ -105,10 +113,60 @@ unsigned long runFaultChild(int kind, const fs::path& dir, bool enabled, bool& t
     ::CloseHandle(pi.hProcess);
     return code;
 #else
-    (void)kind;
-    (void)dir;
-    (void)enabled;
-    return 0;
+    timedOut = false;
+    const pid_t pid = ::fork();
+    if (pid < 0) { return 0xFFFFFFFFul; }
+    if (pid == 0) {
+        // The child. execv REPLACES this process image with the same binary
+        // re-invoked as `--fault <kind> <dir> <enabled>` - the same "one file,
+        // one fixture" shape the Windows CreateProcessA branch uses.
+        const std::string exe = selfExePath();
+        const std::string kindStr = std::to_string(kind);
+        const std::string dirStr = dir.string();
+        const std::string enabledStr = enabled ? "1" : "0";
+        // argv[0] is the program name, exactly as the shell would set it - the
+        // "--fault" flag main() looks for is argv[1]. Getting this wrong once
+        // shifted every argument down by one, which made the re-exec'd process
+        // silently fail the `argv[1] == "--fault"` test in main() and fall
+        // through to the NORMAL test body - which forks AGAIN, and again,
+        // and again: this is what a fork bomb from a one-character argv bug
+        // looks like, and is why this comment is not shy about naming it.
+        std::vector<char*> argv = {
+            const_cast<char*>(exe.c_str()), const_cast<char*>("--fault"),
+            const_cast<char*>(kindStr.c_str()), const_cast<char*>(dirStr.c_str()),
+            const_cast<char*>(enabledStr.c_str()), nullptr};
+        ::execv(exe.c_str(), argv.data());
+        ::_exit(0x7F);  // execv itself failed
+    }
+
+    // A 30 s deadline, polled with WNOHANG rather than a blocking waitpid, so
+    // a handler that wedges fails the suite instead of hanging it forever -
+    // the same contract the Windows WaitForSingleObject(..., 30000) branch
+    // gives.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    int status = 0;
+    for (;;) {
+        const pid_t r = ::waitpid(pid, &status, WNOHANG);
+        if (r == pid) { break; }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            timedOut = true;
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, &status, 0);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (WIFEXITED(status)) { return static_cast<unsigned long>(WEXITSTATUS(status)); }
+    if (WIFSIGNALED(status)) {
+        // A crash caught by our own handler re-raises the signal with its
+        // default disposition once cfg.exitAfterReport lets it (see
+        // finish() in crash_handler_posix.cpp) - but this test always sets
+        // exitAfterReport=true, so the child actually exits via _exit() with
+        // a plain nonzero code, and this branch is the fallback for a fault
+        // kind that somehow was not caught at all.
+        return 128ul + static_cast<unsigned long>(WTERMSIG(status));
+    }
+    return 0xFFFFFFFFul;
 #endif
 }
 
@@ -195,8 +253,15 @@ void checkReportContent(const CaughtReport& r, const char* what) {
     // The stack, as module+offset. Anything that only recorded an absolute
     // address would be unreadable the moment the process exited.
     CHECK(r.text.find("--- stack") != std::string::npos);
+#if defined(_WIN32)
     CHECK(r.text.find(".exe+0x") != std::string::npos ||
           r.text.find(".dll+0x") != std::string::npos);
+#else
+    // ELF modules carry no file extension ("cascade", "test_crash_capture"),
+    // so the property this checks for - a frame resolved to a NAMED module,
+    // not a bare address - is asserted the platform-neutral way instead.
+    CHECK(r.text.find("+0x") != std::string::npos);
+#endif
 
     // The key that finds the symbols. Without this the offsets above are hex
     // forever - this single line is the difference between a diagnosable
@@ -289,7 +354,15 @@ int main(int argc, char** argv) {
         const CaughtReport r = catchOne(0, "av");
         checkReportContent(r, "access violation");
         CHECK(r.text.find("kind: crash") != std::string::npos);
+#if defined(_WIN32)
         CHECK(r.text.find("0xC0000005") != std::string::npos);
+#else
+        // There is no NTSTATUS on this platform; the equivalent identifying
+        // fact is the signal SIGSEGV was delivered as, and the reason text
+        // crash_handler_posix.cpp writes for it.
+        CHECK(r.text.find("access violation") != std::string::npos);
+        CHECK(r.text.find("SIGSEGV") != std::string::npos);
+#endif
     }
 
     // --- An exception escaping a thread (std::terminate) --------------------

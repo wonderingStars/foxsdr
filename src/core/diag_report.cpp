@@ -17,6 +17,10 @@
 
 #include <psapi.h>
 #pragma comment(lib, "psapi.lib")
+#else
+#include <elf.h>
+#include <link.h>
+#include <unistd.h>
 #endif
 
 namespace cascade::core {
@@ -59,6 +63,20 @@ std::uint64_t fnv1a(const void* data, std::size_t n, std::uint64_t h) {
     return h;
 }
 
+// Shared by the PE reader below and the ELF reader in the platform block
+// further down: both need "the file name with any directory stripped", and
+// both kinds of path can appear with either separator (a PDB path recorded by
+// a cross-built linker, a report read back on the other OS from the one that
+// wrote it).
+const char* leafName(const char* path) {
+    if (path == nullptr) { return ""; }
+    const char* leaf = path;
+    for (const char* p = path; *p != '\0'; ++p) {
+        if (*p == '\\' || *p == '/') { leaf = p + 1; }
+    }
+    return leaf;
+}
+
 #if defined(_WIN32)
 // The CodeView RSDS record the linker stamps into every PE it produces. The
 // layout is fixed and public; it is spelled out here rather than pulled from a
@@ -84,15 +102,6 @@ void formatBuildId(const GUID& g, DWORD age, char* out, std::size_t cap) {
                   static_cast<unsigned>(g.Data4[3]), static_cast<unsigned>(g.Data4[4]),
                   static_cast<unsigned>(g.Data4[5]), static_cast<unsigned>(g.Data4[6]),
                   static_cast<unsigned>(g.Data4[7]), static_cast<unsigned long>(age));
-}
-
-const char* leafName(const char* path) {
-    if (path == nullptr) { return ""; }
-    const char* leaf = path;
-    for (const char* p = path; *p != '\0'; ++p) {
-        if (*p == '\\' || *p == '/') { leaf = p + 1; }
-    }
-    return leaf;
 }
 
 // Reads the CodeView record out of a MAPPED image (module base). In a mapped
@@ -122,6 +131,111 @@ bool codeViewFromImage(const unsigned char* base, char* buildId, std::size_t bui
     return false;
 }
 #endif  // _WIN32
+
+#if !defined(_WIN32)
+// ---------------------------------------------------------------------------
+// LINUX: the GNU build id, read the same way readelf/eu-unstrip do
+// ---------------------------------------------------------------------------
+//
+// There is no PDB and no CodeView record here - the durable key an ELF module
+// carries is the NT_GNU_BUILD_ID note the linker writes by default (GNU ld and
+// lld both emit one unless explicitly disabled), a SHA-1 of the link's actual
+// bytes. tools/elf_symmap.py reads the identical note out of the file on disk
+// so the running image's key and the archived one are the same value by
+// construction, exactly as peBuildId() and codeViewFromImage() agree above for
+// a PE. Rendered as 40 lowercase hex digits, which is the spelling
+// report_reader.hpp's isElfBuildId() and elfSymbolPath() already expect (that
+// reader and its addr2line-based resolver predate this change and needed no
+// edits at all).
+//
+// Read from the MAPPED image via the program headers dl_iterate_phdr hands
+// out - a PT_NOTE segment's file content is also its memory content once
+// loaded, so no file I/O is needed on this, the healthy, path.
+bool gnuBuildIdFromNote(const ElfW(Phdr) * phdrs, int phnum, ElfW(Addr) base, char* out,
+                        std::size_t cap) {
+    for (int i = 0; i < phnum; ++i) {
+        if (phdrs[i].p_type != PT_NOTE) { continue; }
+        const auto* p = reinterpret_cast<const unsigned char*>(base + phdrs[i].p_vaddr);
+        std::size_t remaining = static_cast<std::size_t>(phdrs[i].p_memsz);
+        std::size_t off = 0;
+        while (off + sizeof(ElfW(Nhdr)) <= remaining) {
+            const auto* nh = reinterpret_cast<const ElfW(Nhdr)*>(p + off);
+            const std::size_t hdrsz = sizeof(ElfW(Nhdr));
+            const std::size_t namesz = (static_cast<std::size_t>(nh->n_namesz) + 3u) & ~3u;
+            const std::size_t descsz = (static_cast<std::size_t>(nh->n_descsz) + 3u) & ~3u;
+            if (hdrsz + namesz + descsz > remaining - off) { break; }  // a torn note; stop
+            if (nh->n_type == NT_GNU_BUILD_ID && nh->n_descsz > 0) {
+                const unsigned char* desc = p + off + hdrsz + namesz;
+                static const char kHex[] = "0123456789abcdef";
+                std::size_t at = 0;
+                for (unsigned k = 0; k < nh->n_descsz && at + 2 < cap; ++k) {
+                    out[at++] = kHex[(desc[k] >> 4) & 0xF];
+                    out[at++] = kHex[desc[k] & 0xF];
+                }
+                out[at] = '\0';
+                return at > 0;
+            }
+            off += hdrsz + namesz + descsz;
+        }
+    }
+    return false;
+}
+
+// The end of the highest PT_LOAD segment, relative to the load bias - the same
+// "does this address belong to this module" extent resolveAddress() already
+// tests every frame against for a PE. A module with no PT_LOAD (there is
+// always at least one for anything actually mapped) resolves to size 0, which
+// resolveAddress() correctly treats as "nothing here".
+std::size_t elfLoadSpan(const ElfW(Phdr) * phdrs, int phnum) {
+    ElfW(Addr) end = 0;
+    for (int i = 0; i < phnum; ++i) {
+        if (phdrs[i].p_type != PT_LOAD) { continue; }
+        const ElfW(Addr) segEnd = phdrs[i].p_vaddr + phdrs[i].p_memsz;
+        if (segEnd > end) { end = segEnd; }
+    }
+    return static_cast<std::size_t>(end);
+}
+
+struct ElfModuleWalk {
+    int count = 0;
+};
+
+int elfModuleCallback(struct dl_phdr_info* info, std::size_t /*size*/, void* data) {
+    auto* walk = static_cast<ElfModuleWalk*>(data);
+    if (walk->count >= kMaxDiagModules) { return 0; }  // keep walking; nothing more to store
+
+    DiagModule m;
+    m.base = static_cast<std::uintptr_t>(info->dlpi_addr);
+    m.size = elfLoadSpan(info->dlpi_phdr, info->dlpi_phnum);
+
+    // dl_iterate_phdr reports the MAIN executable with an empty dlpi_name (and,
+    // on some libcs, the vdso the same way) - it is the one module that was
+    // never dlopen()'d, so the loader never recorded a path for it. The real
+    // path is what this process was actually exec'd from.
+    if (info->dlpi_name != nullptr && info->dlpi_name[0] != '\0') {
+        copyField(m.name, sizeof(m.name), leafName(info->dlpi_name));
+    } else {
+        char exe[4096] = {};
+        const ssize_t n = ::readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+        if (n > 0) {
+            exe[n] = '\0';
+            copyField(m.name, sizeof(m.name), leafName(exe));
+        } else {
+            copyField(m.name, sizeof(m.name), "(main)");
+        }
+    }
+
+    gnuBuildIdFromNote(info->dlpi_phdr, info->dlpi_phnum, info->dlpi_addr, m.buildId,
+                       sizeof(m.buildId));
+    // No PDB on this platform; the report writer prints "(none)" for an empty
+    // field exactly as it already does for a PE module with no CodeView
+    // record, so nothing downstream needs to know which reason applies.
+
+    g_modules[walk->count] = m;
+    ++walk->count;
+    return 0;
+}
+#endif  // !_WIN32
 
 }  // namespace
 
@@ -158,7 +272,16 @@ int refreshModuleTable() {
     g_moduleCount.store(kept, std::memory_order_release);
     return kept;
 #else
-    return 0;
+    // HEALTHY PATH ONLY, same as the Windows half above: dl_iterate_phdr walks
+    // the dynamic linker's own link map, which glibc guards with a lock
+    // (dl_load_lock/dl_load_write_lock) that dlopen/dlclose can hold - reading
+    // it from a signal handler mid-fault is the same class of risk
+    // EnumProcessModules is under the loader lock, so this is called only at
+    // start-up and again after anything that can load code (a plugin dlopen).
+    ElfModuleWalk walk;
+    ::dl_iterate_phdr(elfModuleCallback, &walk);
+    g_moduleCount.store(walk.count, std::memory_order_release);
+    return walk.count;
 #endif
 }
 
