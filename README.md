@@ -221,6 +221,68 @@ cannot leave 4.5 V on your antenna port without anything on screen saying so.
 
 Tuning range 24 MHz to 1.75 GHz.
 
+## The native Airspy HF+ driver` section after the RTL-SDR one.
+
+```markdown
+## The native Airspy HF+ driver
+
+FoxSDR opens an Airspy HF+ directly too — the same WinUSB transport, the same
+three rules, no libairspyhf, no libusb, no SoapySDR module in the path. The
+HF+ Dual and the HF+ Discovery are the same two USB ids and both are listed.
+
+**What it does.** The sample rates come off the DEVICE rather than out of a
+table, because a Discovery's list differs from a Dual's and differs again with
+firmware; so does which of those rates is zero-IF and which is low-IF, which of
+the nine attenuator steps the board actually has, whether it has a bias tee at
+all, and the crystal calibration stored in its own flash. 9 kHz – 31 MHz and
+64 – 260 MHz, the two bands the manufacturer publishes, with the gap between
+them refused rather than silently landed in. The attenuator is presented as a
+NEGATIVE gain (−48 to 0 dB in 6 dB steps) so that louder is to the right like
+every other control in the Source panel, the preamp as a two-position 6 dB
+gain, and the hardware AGC — which no other native driver here has — with its
+low/high threshold. Opening one puts it into a known state, because the
+hardware otherwise keeps whatever the last application left it at.
+
+**Three corrections that have to happen on the host.** An Airspy HF+ delivers
+16-bit I/Q and nothing else: the filter gain the firmware reports for the
+current rate, the rotation that undoes both the whole-kilohertz tuning grid and
+the deliberate 5 kHz zero-IF offset, and the adaptive IQ balancer that rejects
+the zero-IF image are all done here, on the reader thread, exactly as
+libairspyhf does them on its own. Skip any of them and the radio is not broken,
+it is subtly wrong — five kilohertz off, or showing a mirror of every signal
+folded across the centre of the span. This is also how the receiver reaches
+9 kHz: the local oscillator cannot go below 180 kHz, so it sits at its floor
+and the whole difference is rotated out in software.
+
+**Windows only for now**, like the other two and for the same reason: the
+transport is WinUSB, and native enumeration returns nothing and says why in the
+log on other platforms. The protocol and DSP layer is plain C++20 and builds
+everywhere.
+
+**How it is verified.** There is no Airspy HF+ on the bench this was written
+on, so the proof is byte-exactness rather than a spectrum:
+`tests/test_airspyhf_source.cpp` drives the driver through a fake that
+implements the transport interface and records every control transfer, and
+checks the request numbers, values, indices, lengths and payloads against
+libairspyhf — the tuning arithmetic computed a second time in the test from the
+reference's own formula and then again by hand as literal wire bytes, because
+two implementations that agree are worth more than one that is merely
+self-consistent. The image rejection is measured rather than asserted: a tone
+damaged by 2% of amplitude and phase error starts 31.0 dB above its image and
+ends 76.6 dB above it after 700 blocks, with the estimator landing on the exact
+imbalance applied. Streaming, device loss, a wedged reader and a firmware too
+old for five of these requests are all proven the same way. The protocol and
+the balancer were ported from libairspyhf under its BSD-3-Clause licence; the
+notice is in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of libairspyhf
+is linked or shipped.
+```
+
+The bullet at README line 49 and the line at 868 (“An RTL-SDR or a HackRF needs
+no extra install at all”) should grow “or an Airspy HF+” when the Source
+section starts offering these rows.
+
+---
+
 ## The native RTL-SDR driver
 
 FoxSDR opens an RTL2832U dongle directly as well — the same WinUSB transport,

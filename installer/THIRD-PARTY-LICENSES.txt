@@ -408,6 +408,64 @@ AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ======================================================================
+COMPONENT: libairspyhf (USB protocol and host DSP, ported - nothing linked or shipped)
+======================================================================
+======================================================================
+FoxSDR's native Airspy HF+ driver (src/source/airspyhf_protocol.hpp and
+src/source/airspyhf_source.*) speaks the Airspy HF+'s USB vendor protocol
+directly, over this product's own WinUSB transport. No part of libairspyhf
+is linked into this product and no libairspyhf binary is distributed with
+it. What was taken from libairspyhf is the PROTOCOL and the HOST-SIDE DSP
+the hardware depends on: the vendor request numbers, the payload layouts,
+the tuning arithmetic (the whole-kilohertz local oscillator, the zero-IF
+offset, the frequency delta the firmware reports back and the crystal
+calibration), the filter-gain scaling, and the adaptive IQ balancer and DC
+canceller that reject this receiver's zero-IF image - and those were ported
+into our own code. An Airspy HF+ cannot be used at all without them: the
+device delivers 16-bit I/Q and every correction lives on the host.
+libairspyhf's airspyhf.c, airspyhf.h and airspyhf_commands.h carry the first
+three-clause BSD notice below in their own file banner; iqbalancer.c and
+iqbalancer.h carry the second. See https://github.com/airspy/airspyhf
+
+Copyright (c) 2013-2024, Youssef Touil <youssef@airspy.com>
+Copyright (c) 2013-2017, Ian Gilmour <ian@sdrsharp.com>
+Copyright (c) 2013-2017, Benjamin Vernoux <bvernoux@airspy.com>
+Copyright (c) 2013, Michael Ossmann <mike@ossmann.com>
+Copyright (c) 2012, Jared Boone <jared@sharebrained.com>
+
+Copyright (c) 2016-2023, Youssef Touil <youssef@airspy.com>
+Copyright (c) 2018, Leif Asbrink <leif@sm5bsz.com>
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+    Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+
+    Neither the name of Airspy HF+ nor the names of its contributors may
+    be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+======================================================================
 COMPONENT: Saira Condensed (typeface, embedded in the executable)
 ======================================================================
 Used unmodified. "Saira" is a Reserved Font Name: any modified version
