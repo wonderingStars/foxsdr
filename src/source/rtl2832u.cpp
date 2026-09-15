@@ -381,15 +381,52 @@ bool Rtl2832u::resetBuffer() {
 
 // --- identity ---------------------------------------------------------------
 
+// THE 255-BYTE CEILING, and how much it cost. GET_DESCRIPTOR carries its
+// length in a 16-bit wLength, so asking for sizeof(a 256-byte buffer) looks
+// harmless - and a descriptor cannot be longer than 255 anyway, because
+// bLength is one byte. MEASURED on the RTL2838 on this desk (2026-09-15),
+// through BOTH WinUsb_ControlTransfer and WinUsb_GetDescriptor: a request for
+// 255 bytes returns the string (16 bytes for index 1, 38 for index 5), and a
+// request for 256 returns SUCCESS WITH ZERO BYTES MOVED and no error at all.
+// A caller that only checks for failure therefore reads an empty string and
+// concludes the device has none.
+//
+// That is not cosmetic here. The RTL-SDR Blog V4 is identified by its USB
+// strings and by nothing else, so an unreadable string made every V4 look
+// like a plain R828D: the tuner's PLL reference was set to the standard
+// R828D's 16 MHz instead of the V4's 28.8 MHz, and a reference wrong by that
+// ratio programmes the VCO 1.8x away from where it was asked to go. It still
+// locks at the 56 MHz filter calibration - 1.8 x 1792 MHz lands inside the
+// VCO's range by luck, so the dongle opens and streams - and then fails to
+// lock at every frequency anyone actually tunes to. The HF upconverter, the
+// notch filters, the input switching and the 500 kHz low limit went with it.
+// The reference driver asks for 255 (libusb's get_string_descriptor_ascii
+// uses a 255-byte buffer), which is why it never saw this.
+constexpr std::size_t kMaxDescriptorRequest = 255;
+
 std::string Rtl2832u::stringDescriptor(std::uint8_t index) {
     if (index == 0) { return std::string(); }
+    // THE LANGUAGE, ASKED FOR RATHER THAN ASSUMED. String descriptor 0 is not
+    // a string: it is the list of language ids the device supports, and a
+    // request in a language a device does not have is answered with a stall.
+    // US English is what every dongle this driver serves reports, so that is
+    // the fallback, but reading the list costs one transfer and removes an
+    // assumption from the one decision a V4 depends on.
+    std::uint8_t langs[kMaxDescriptorRequest] = {0};
+    std::uint16_t langId = 0x0409;
+    const int lr = dev_.controlIn(0x80, 0x06, 0x0300, 0x0000, langs, sizeof(langs),
+                                  controlTimeoutMs_);
+    if (lr >= 4 && langs[1] == 0x03) {
+        langId = static_cast<std::uint16_t>(static_cast<unsigned>(langs[2]) |
+                                            (static_cast<unsigned>(langs[3]) << 8));
+    }
+
     // A STANDARD request, not a vendor one: bmRequestType 0x80,
     // bRequest 6 (GET_DESCRIPTOR), wValue = (STRING << 8) | index,
-    // wIndex = language id. WinUSB permits standard descriptor reads, so this
-    // needs nothing the transport does not already offer.
-    std::uint8_t buf[256] = {0};
+    // wIndex = language id.
+    std::uint8_t buf[kMaxDescriptorRequest] = {0};
     const int r = dev_.controlIn(0x80, 0x06, static_cast<std::uint16_t>((0x03 << 8) | index),
-                                 0x0409, buf, sizeof(buf), controlTimeoutMs_);
+                                 langId, buf, sizeof(buf), controlTimeoutMs_);
     if (r < 4 || buf[1] != 0x03) { return std::string(); }
     const int bytes = (buf[0] < r) ? buf[0] : r;
     // UTF-16LE, and every string this is used for is ASCII, so the low byte
@@ -397,11 +434,31 @@ std::string Rtl2832u::stringDescriptor(std::uint8_t index) {
     // dragging a UTF-8 converter into a driver.
     std::string out;
     for (int i = 2; i + 1 < bytes; i += 2) {
-        const unsigned unit = static_cast<unsigned>(buf[i]) | (static_cast<unsigned>(buf[i + 1]) << 8);
+        const unsigned unit =
+            static_cast<unsigned>(buf[i]) | (static_cast<unsigned>(buf[i + 1]) << 8);
         out.push_back(unit < 0x80 ? static_cast<char>(unit) : '?');
     }
     return out;
 }
+
+// THE INDEX IS A FIELD, NOT A CONVENTION. iManufacturer and iProduct live at
+// offsets 14 and 15 of the device descriptor and a device may put its strings
+// at any index it likes. The RTL2838 on this desk reports iManufacturer 1 and
+// iProduct FIVE, so the conventional "product is string 2" read the wrong
+// descriptor on the very first dongle it was pointed at. The reference driver
+// reads dd.iManufacturer / dd.iProduct for exactly this reason
+// (librtlsdr.c rtlsdr_get_usb_strings). `fallback` covers a device descriptor
+// that cannot be read at all.
+std::uint8_t Rtl2832u::stringIndex(int offset, std::uint8_t fallback) {
+    std::uint8_t dd[18] = {0};
+    const int r = dev_.controlIn(0x80, 0x06, 0x0100, 0x0000, dd, sizeof(dd), controlTimeoutMs_);
+    if (r < offset + 1 || dd[1] != 0x01 || dd[offset] == 0) { return fallback; }
+    return dd[offset];
+}
+
+std::string Rtl2832u::manufacturer() { return stringDescriptor(stringIndex(14, 1)); }
+
+std::string Rtl2832u::product() { return stringDescriptor(stringIndex(15, 2)); }
 
 bool Rtl2832u::readEeprom(std::uint8_t* data, std::uint8_t offset, std::uint8_t len) {
     // The EEPROM hangs off the same I2C block at slave address 0xa0. Its
