@@ -1148,18 +1148,9 @@ int main(int argc, char** argv) {
         cfg.enabled = true;
         cascade::core::installCrashHandlers(cfg);
         cascade::core::setCrashCaptureEnabled(true, false);
-        // LINUX-TODO(crash-capture): installCrashHandlers/activeCrashDir are a
-        // documented no-op off Windows (core/crash_handler.cpp ~741-806), so
-        // "armed" here can only ever read back empty until that lands. Real
-        // assertion kept for Windows; Linux gets an honest, counted skip
-        // rather than a permanent, misleading FAIL.
-#ifdef _WIN32
+        // Armed on both platforms since the Linux engine
+        // (core/crash_handler_posix.cpp) landed in 0.97.0.
         CHECK(cascade::core::activeCrashDir() == dir.string());
-#else
-        SKIP_LINUX(
-            "core::activeCrashDir()/installCrashHandlers() are a no-op off Windows "
-            "(crash_handler.cpp ~741-806) - nothing is armed to report");
-#endif
 
         // THE CHILD IS TOLD. Without the command-line argument the child runs
         // with no handler at all and this is false.
@@ -1170,16 +1161,7 @@ int main(int argc, char** argv) {
             o.allowInProcessFallback = false;
             const EnumResult r = enumerateIsolated(o);
             CHECK(r.outcome == EnumOutcome::Ok);
-            // LINUX-TODO(crash-capture): childCaptureArmed can only be true
-            // when the parent's own activeCrashDir() is non-empty, which it
-            // never is on Linux today - see the skip above. The rest of this
-            // block (outcome, device rows, and "nothing was filed") are pure
-            // enumeration mechanics and keep running for real.
-#ifdef _WIN32
             CHECK(r.childCaptureArmed);
-#else
-            SKIP_LINUX("childCaptureArmed cannot be true while activeCrashDir() is a no-op");
-#endif
             CHECK(rowsOf(r) == expectedOkRows());
             // A healthy scan files nothing: the reports below mean something
             // only because this one produced none.
@@ -1209,21 +1191,12 @@ int main(int argc, char** argv) {
             const std::string body = allReportText(dir);
             std::printf("contained fault: %zu report(s) after a recovered death\n",
                         crashReports(dir).size());
-            // LINUX-TODO(crash-capture): the CONTAINED death is real (outcome
-            // Ok, childDeaths 1, both asserted above and both genuine
-            // enumeration mechanics) but reportAbsorbedChildFault() - the
-            // write side - is a no-op off Windows, so no file is ever filed
-            // to inspect. Skip the report-content assertions rather than
-            // failing them against a file that cannot exist yet.
-#ifdef _WIN32
+            // Filed on both platforms: reportAbsorbedChildFault() has a Linux
+            // writer since 0.97.0, and it records the child's exit code in the
+            // same field.
             CHECK(crashReports(dir).size() == 1);
             CHECK(body.find("enumeration child process died") != std::string::npos);
             CHECK(body.find("code: 0x00000007") != std::string::npos);
-#else
-            SKIP_LINUX(
-                "core::reportAbsorbedChildFault() is a no-op off Windows - a recovered "
-                "child death is contained but never filed as a report");
-#endif
 
             std::filesystem::remove(counter, ec);
             setEnvVar(kCounterVar, "");
@@ -1281,14 +1254,7 @@ int main(int argc, char** argv) {
             CHECK(r.guardedCalls == (r.childRuntimeAvailable ? 2ull : 0ull));
             // The REAL helper reports capture it actually armed, not capture
             // it was merely told about.
-            // LINUX-TODO(crash-capture): the real binary cannot report armed
-            // capture while the parent's own activeCrashDir() is a no-op -
-            // see the skip earlier in this block.
-#ifdef _WIN32
             CHECK(r.childCaptureArmed);
-#else
-            SKIP_LINUX("the real helper cannot arm capture while activeCrashDir() is a no-op");
-#endif
         }
 
         // OFF MEANS OFF, all the way down: with the parent's capture switched
