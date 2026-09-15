@@ -595,5 +595,164 @@ int main() {
         CHECK(worst < 1.0);
     }
 
+    // =====================================================================
+    // 12. THE WEB REMOTE'S KEY: ONE ASSERTION IS WORTH TWO SECONDS
+    //
+    //     The difference between this key and the other two is that the hand
+    //     holding it is at the far end of a network and may simply stop
+    //     existing, with nothing to say so. So it is not a switch: keyRemote()
+    //     buys kRemotePttHoldMs and the caller has to keep buying. These are
+    //     the measurements that say the deadline is real, that re-asserting
+    //     extends it, and that it is not merely the DEADLINE doing the work -
+    //     an explicit release opens the key at once.
+    // =====================================================================
+    {
+        Transmitter tx;
+        auto sink = std::make_unique<RecordingSink>(480000.0);
+        RecordingSink* raw = sink.get();
+        tx.setSink(std::move(sink));
+        tx.setInput(TxInput::Tone);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        tx.keyRemote();
+        tx.tick();
+        CHECK(tx.transmitting());
+        CHECK(tx.remoteKeyed());
+        CHECK(raw->starts.load() == 1);
+        // A remote key is NOT a latch and NOT a PTT: neither of the hands-on
+        // controls has been touched, and the panel must not say they have.
+        CHECK(!tx.latched());
+        CHECK(!tx.pttHeld());
+        // The hold is published as a countdown, and it starts full.
+        const std::int64_t left = tx.remoteHoldRemainingMs();
+        std::printf("remote key: %lld ms of hold left immediately after keying (bound %lld)\n",
+                    static_cast<long long>(left),
+                    static_cast<long long>(Transmitter::kRemotePttHoldMs.count()));
+        CHECK(left > 0 && left <= Transmitter::kRemotePttHoldMs.count());
+
+        // Well inside the hold, with nobody re-asserting, it is still keyed -
+        // so the release below is the deadline and not an immediate drop.
+        tickFor(tx, 1200);
+        CHECK(tx.transmitting());
+        CHECK(tx.remoteKeyed());
+
+        // ...and then it lets go on its own, because the remote stopped
+        // asking. Nothing called release; nothing called tick() differently.
+        CHECK(waitTicking(tx, [&tx] { return !tx.transmitting(); }, std::chrono::seconds(3)));
+        const double heldMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                .count();
+        std::printf("remote key: released itself %.0f ms after one assertion (bound %lld ms)\n",
+                    heldMs, static_cast<long long>(Transmitter::kRemotePttHoldMs.count()));
+        CHECK(heldMs >= static_cast<double>(Transmitter::kRemotePttHoldMs.count()) - 50.0);
+        CHECK(heldMs < static_cast<double>(Transmitter::kRemotePttHoldMs.count()) + 600.0);
+        CHECK(!tx.remoteKeyed());
+        CHECK(tx.remoteHoldRemainingMs() == 0);
+        CHECK(!raw->running());
+        const std::string why = tx.lastAutoUnkeyReason();
+        std::printf("remote key: \"%s\"\n", why.c_str());
+        CHECK(why.find("remote") != std::string::npos);
+
+        // AND THE RADIO REALLY IS QUIET AFTERWARDS. An expiry that unkeyed the
+        // panel while the thread kept feeding the board would pass every
+        // check above.
+        const std::size_t after = raw->samples();
+        tickFor(tx, 100);
+        CHECK(raw->samples() == after);
+    }
+
+    // =====================================================================
+    // 13. RE-ASSERTING EXTENDS THE HOLD
+    //
+    //     The other half of the same rule: a browser that keeps asking keeps
+    //     the key closed past the deadline, or the feature is a two-second
+    //     transmitter and nothing else.
+    // =====================================================================
+    {
+        Transmitter tx;
+        auto sink = std::make_unique<RecordingSink>(480000.0);
+        tx.setSink(std::move(sink));
+        tx.setInput(TxInput::Tone);
+
+        // Re-assert at the cadence the page uses (500 ms), for comfortably
+        // longer than one hold.
+        const auto deadline = std::chrono::steady_clock::now() +
+                              Transmitter::kRemotePttHoldMs * 2 + std::chrono::milliseconds(400);
+        auto nextAssert = std::chrono::steady_clock::now();
+        bool stayedUp = true;
+        tx.keyRemote();
+        tx.tick();
+        CHECK(tx.transmitting());
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextAssert) {
+                tx.keyRemote();
+                nextAssert = now + std::chrono::milliseconds(500);
+            }
+            tx.tick();
+            if (!tx.transmitting()) { stayedUp = false; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        std::printf("remote key: still up after %lld ms of re-assertion: %s\n",
+                    static_cast<long long>(Transmitter::kRemotePttHoldMs.count() * 2 + 400),
+                    stayedUp ? "yes" : "NO");
+        CHECK(stayedUp);
+        CHECK(tx.transmitting());
+
+        // Stop asking, and it goes - which is what proves the hold was being
+        // EXTENDED rather than simply never enforced after the first key.
+        CHECK(waitTicking(tx, [&tx] { return !tx.transmitting(); }, std::chrono::seconds(3)));
+        CHECK(!tx.remoteKeyed());
+    }
+
+    // =====================================================================
+    // 14. RELEASING OPENS IT AT ONCE, AND NO RADIO MEANS NO PENDING KEY
+    // =====================================================================
+    {
+        Transmitter tx;
+        auto sink = std::make_unique<RecordingSink>(480000.0);
+        RecordingSink* raw = sink.get();
+        tx.setSink(std::move(sink));
+        tx.setInput(TxInput::Tone);
+
+        tx.keyRemote();
+        tx.tick();
+        CHECK(tx.transmitting());
+        // ONE TICK. Not "eventually", not "when the hold expires" - the page
+        // said the finger came up and the key opens on the next frame, the
+        // same as letting go of the local PTT.
+        tx.releaseRemote("the remote let go");
+        tx.tick();
+        CHECK(!tx.transmitting());
+        CHECK(!tx.remoteKeyed());
+        CHECK(raw->stops.load() >= 1);
+        // Nothing automatic did this, so there is no automatic reason to show.
+        CHECK(tx.lastAutoUnkeyReason().empty());
+
+        // A remote key with no radio behind it is a refusal that leaves
+        // NOTHING PENDING - if the assertion survived, the refusal would be
+        // retried every frame for two seconds and would key whatever radio
+        // happened to be opened inside that window.
+        Transmitter bare;
+        bare.keyRemote();
+        bare.tick();
+        CHECK(!bare.transmitting());
+        CHECK(!bare.remoteKeyed());
+        CHECK(bare.lastError().find("no transmitter") != std::string::npos);
+
+        // And the radio going away takes the key with it, exactly as it takes
+        // a latch: setSink() stops first.
+        Transmitter swap;
+        auto first = std::make_unique<RecordingSink>(480000.0);
+        swap.setSink(std::move(first));
+        swap.setInput(TxInput::Tone);
+        swap.keyRemote();
+        swap.tick();
+        CHECK(swap.transmitting());
+        swap.setSink(nullptr);
+        CHECK(!swap.transmitting());
+        CHECK(!swap.remoteKeyed());
+    }
+
     return testSummary("test_transmitter");
 }

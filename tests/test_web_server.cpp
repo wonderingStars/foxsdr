@@ -36,6 +36,9 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
 #include "dsp/demod.hpp"
+// For kTxLicenceNotice: the page's transmit sentence is pinned against the
+// desktop page's own constant rather than against a copy of the words.
+#include "gui/transmit_page.hpp"
 #include "net/web_auth.hpp"
 #include "net/web_server.hpp"
 #include "test_check.hpp"
@@ -1914,6 +1917,284 @@ void testPluginAudioSourceReachesTheBrowser() {
     plain.stop();
 }
 
+// --- THE REMOTE TRANSMIT KEY (0.95.1) ---------------------------------------
+//
+// The one control in this API that puts RF out of a connector, so it is the
+// one whose REFUSALS matter more than its acceptance. Everything below is
+// driven over a real socket against a status provider that decides whether a
+// transmitter exists - there is no radio here and nothing on this bench may
+// transmit.
+
+RadioStatus statusWithTransmitter() {
+    RadioStatus s = sampleStatus();
+    s.transmitAvailable = true;
+    return s;
+}
+
+void testRemoteKeyRefusedWithNoTransmitter() {
+    WebServer server;
+    // The default: a receiver with no transmitter open, which is every
+    // installation of this product that has never had a Pluto plugged in.
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+
+    auto refused = cli.Post("/api/control", "{\"transmitPtt\":true}", "application/json");
+    CHECK(static_cast<bool>(refused));
+    if (refused) {
+        // 409, not 400: the request is well formed and would be honoured on a
+        // receiver with a transmitter open. And a SENTENCE, not a bare status
+        // - the page shows this to a person.
+        CHECK(refused->status == 409);
+        const nlohmann::json j = nlohmann::json::parse(refused->body, nullptr, false);
+        CHECK(!j.is_discarded());
+        const std::string msg =
+            j.is_discarded() ? std::string() : j.value("error", std::string());
+        std::printf("remote key with no transmitter: %d \"%s\"\n", refused->status,
+                    msg.c_str());
+        CHECK(msg.find("no transmitter") != std::string::npos);
+    }
+    // AND NOTHING WAS QUEUED. A refusal that still left the request in the
+    // queue would be a key closed one frame later by the application, which is
+    // the whole failure this endpoint exists to prevent.
+    CHECK(server.takePendingControls().empty());
+
+    // A RELEASE IS NEVER REFUSED, whatever the status says. The page sends
+    // false on blur, on visibilitychange and on pointerup, and a release that
+    // could be rejected because the transmitter had just gone away would be a
+    // release that never reached the application.
+    auto release = cli.Post("/api/control", "{\"transmitPtt\":false}", "application/json");
+    CHECK(static_cast<bool>(release));
+    if (release) {
+        CHECK(release->status == 202);
+    }
+    const std::vector<ControlRequest> drained = server.takePendingControls();
+    CHECK(drained.size() == 1);
+    if (drained.size() == 1) {
+        CHECK(drained[0].transmitPtt.has_value());
+        CHECK(!drained[0].transmitPtt.value_or(true));
+    }
+
+    server.stop();
+}
+
+void testRemoteKeyReachesTheQueueWhenATransmitterIsOpen() {
+    WebServer server;
+    server.setStatusProvider([]() { return statusWithTransmitter(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+
+    auto ok = cli.Post("/api/control", "{\"transmitPtt\":true}", "application/json");
+    CHECK(static_cast<bool>(ok));
+    if (ok) {
+        CHECK(ok->status == 202);
+    }
+    const std::vector<ControlRequest> drained = server.takePendingControls();
+    CHECK(drained.size() == 1);
+    if (drained.size() == 1) {
+        CHECK(drained[0].transmitPtt.value_or(false));
+    }
+
+    // The latch is refused at the parse, so it never reaches the gate above -
+    // and it is refused as a DECISION rather than as an unknown field.
+    auto latch = cli.Post("/api/control", "{\"transmitLatch\":true}", "application/json");
+    CHECK(static_cast<bool>(latch));
+    if (latch) {
+        CHECK(latch->status == 400);
+        const nlohmann::json j = nlohmann::json::parse(latch->body, nullptr, false);
+        const std::string msg =
+            j.is_discarded() ? std::string() : j.value("error", std::string());
+        std::printf("remote latch: %d \"%s\"\n", latch->status, msg.c_str());
+        CHECK(msg.find("latch") != std::string::npos);
+    }
+    CHECK(server.takePendingControls().empty());
+
+    server.stop();
+}
+
+void testStoppingTheServerReleasesTheKey() {
+    WebServer server;
+    server.setStatusProvider([]() { return statusWithTransmitter(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(5, 0);
+        cli.set_read_timeout(5, 0);
+        auto ok = cli.Post("/api/control", "{\"transmitPtt\":true}", "application/json");
+        CHECK(static_cast<bool>(ok));
+    }
+    // The application has taken the key request, so the queue is empty and the
+    // radio is (as far as this server knows) keyed.
+    const std::vector<ControlRequest> keyed = server.takePendingControls();
+    CHECK(keyed.size() == 1);
+    CHECK(!keyed.empty() && keyed.front().transmitPtt.value_or(false));
+
+    // NOW THE SERVER STOPS - the settings panel turning it off, the password
+    // changing, the application shutting down. The browser is still holding
+    // the key and can no longer say so, so the server says it for them rather
+    // than leaving the hold to expire in its own time.
+    server.stop();
+    const std::vector<ControlRequest> afterStop = server.takePendingControls();
+    CHECK(afterStop.size() == 1);
+    if (afterStop.size() == 1) {
+        CHECK(afterStop[0].transmitPtt.has_value());
+        CHECK(!afterStop[0].transmitPtt.value_or(true));
+    }
+    std::printf("web server stop queued %zu control(s), transmitPtt=%s\n", afterStop.size(),
+                (!afterStop.empty() && afterStop[0].transmitPtt.has_value())
+                    ? (afterStop[0].transmitPtt.value() ? "true" : "false")
+                    : "absent");
+
+    // And a server that was never running queues nothing: the stop() at the
+    // top of start() must not put a phantom release in front of a client's
+    // first request.
+    WebServer neverRan;
+    neverRan.stop();
+    CHECK(neverRan.takePendingControls().empty());
+}
+
+void testTransmitStatusFieldsReachTheBrowser() {
+    WebServer server;
+    RadioStatus onAir = sampleStatus();
+    onAir.transmitting = true;
+    onAir.transmitAvailable = true;
+    onAir.transmitRemoteHoldMs = 1750;
+    server.setStatusProvider([onAir]() { return onAir; });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+    auto res = cli.Get("/api/status");
+    CHECK(static_cast<bool>(res));
+    if (res) {
+        const nlohmann::json j = nlohmann::json::parse(res->body, nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) {
+            CHECK(j.contains("transmitting"));
+            CHECK(j.contains("transmitAvailable"));
+            CHECK(j.contains("transmitRemoteHold"));
+            CHECK(j.value("transmitting", false));
+            CHECK(j.value("transmitAvailable", false));
+            CHECK(j.value("transmitRemoteHold", 0) == 1750);
+        }
+    }
+    server.stop();
+
+    // THE ORDINARY CASE SAYS SO OUT LOUD, present and false rather than
+    // absent: a page that had to treat a missing key as "no transmitter"
+    // could not tell this build from one too old to know the question.
+    WebServer quiet;
+    quiet.setStatusProvider([]() { return sampleStatus(); });
+    const int quietPort = startOnFreePort(quiet, loopbackConfig(), error);
+    CHECK(quietPort > 0);
+    if (quietPort <= 0) {
+        return;
+    }
+    httplib::Client quietCli("127.0.0.1", quietPort);
+    quietCli.set_connection_timeout(5, 0);
+    quietCli.set_read_timeout(5, 0);
+    auto quietRes = quietCli.Get("/api/status");
+    CHECK(static_cast<bool>(quietRes));
+    if (quietRes) {
+        const nlohmann::json j = nlohmann::json::parse(quietRes->body, nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) {
+            CHECK(j.contains("transmitAvailable"));
+            CHECK(!j.value("transmitAvailable", true));
+            CHECK(j.value("transmitRemoteHold", -1) == 0);
+        }
+    }
+    quiet.stop();
+}
+
+// The key on the page, structurally - the same kind of check the map's pointer
+// bindings get, and for the same reason: every token below is load-bearing for
+// "a key that is HELD, and that lets go of itself".
+void testThePageKeyIsHeldAndReleases() {
+    const std::string js = fetchAppJs();
+    CHECK(js.size() > 10000u);
+
+    // It repeats while held, at the cadence the transmitter's hold is sized
+    // against. A key sent once would open two seconds later, mid-sentence.
+    CHECK(js.find("const PTT_REPEAT_MS = 500;") != std::string::npos);
+    CHECK(js.find("setInterval(() => { pttSend(true); }, PTT_REPEAT_MS)") !=
+          std::string::npos);
+    CHECK(js.find("control({ transmitPtt: on })") != std::string::npos);
+    // Pressed by pointer AND by touch.
+    CHECK(js.find("b.addEventListener('pointerdown', pttPress)") != std::string::npos);
+    CHECK(js.find("b.addEventListener('touchstart', pttPress, { passive: false })") !=
+          std::string::npos);
+    // Released by everything that can mean "this browser has stopped being a
+    // hand on a key" - and released on the WINDOW, not on the button, or a
+    // thumb dragged off the key would never deliver its pointerup.
+    CHECK(js.find("window.addEventListener('pointerup', pttRelease)") != std::string::npos);
+    CHECK(js.find("window.addEventListener('pointercancel', pttRelease)") !=
+          std::string::npos);
+    CHECK(js.find("window.addEventListener('blur', pttRelease)") != std::string::npos);
+    CHECK(js.find("document.addEventListener('visibilitychange'") != std::string::npos);
+    // The disabled state says WHY, and the page lets go by itself when the
+    // transmitter goes away underneath a held key.
+    CHECK(js.find("'no transmitter'") != std::string::npos);
+    CHECK(js.find("if (!avail && pttDown) pttRelease();") != std::string::npos);
+    // And the listeners are actually attached at load.
+    CHECK(js.find("\npttSetup();") != std::string::npos);
+
+    // THE SENTENCE IS THE DESKTOP'S SENTENCE, character for character. It is
+    // the one piece of text in this product that is not about the product, and
+    // two surfaces of the same transmitter must not say different things about
+    // whose responsibility the radiation is.
+    WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+    auto page = cli.Get("/");
+    CHECK(static_cast<bool>(page));
+    if (page) {
+        CHECK(page->status == 200);
+        CHECK(page->body.find("id=\"ptt\"") != std::string::npos);
+        // Disabled in the SERVED page, so a browser that never completes a
+        // status poll cannot key anything.
+        CHECK(page->body.find("id=\"ptt\" class=\"ptt\" disabled") != std::string::npos);
+        const bool sameWords =
+            page->body.find(cascade::gui::kTxLicenceNotice) != std::string::npos;
+        std::printf("the page carries the desktop's licence sentence: %s\n",
+                    sameWords ? "yes" : "NO");
+        CHECK(sameWords);
+    }
+    server.stop();
+}
+
 }  // namespace
 
 int main() {
@@ -1942,5 +2223,10 @@ int main() {
     testEmptyImageSlotIsNotDrawnAsAPicture();
     testServedWaterfallRampIsMonotone();
     testPluginAudioSourceReachesTheBrowser();
+    testRemoteKeyRefusedWithNoTransmitter();
+    testRemoteKeyReachesTheQueueWhenATransmitterIsOpen();
+    testStoppingTheServerReleasesTheKey();
+    testTransmitStatusFieldsReachTheBrowser();
+    testThePageKeyIsHeldAndReleases();
     return testSummary("test_web_server");
 }

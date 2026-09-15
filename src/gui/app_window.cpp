@@ -15597,15 +15597,20 @@ void AppWindow::publishWebSnapshot() {
     s.stereoEnabled = stereoEnabled_;
     s.pilotLocked = pipeline_.pilotLocked();
     s.sourceKind = sourceKind_;
-    // READ ONLY, AND THERE IS NO REMOTE PTT. The browser is told whether the
-    // radio is transmitting because a remote listener seeing a dead band
-    // deserves to know the reason; it is given no way to change it, and that
-    // is a decision rather than an omission. A key that can be closed from
-    // anywhere on the network is a transmitter anybody who reaches the page
-    // can operate, and the licence that covers it belongs to one person at
-    // one desk. If a remote PTT is ever built it needs its own authorisation,
-    // its own failsafe and its own argument - none of which stage one has.
+    // THE TRANSMITTER, AS THE BROWSER SEES IT (0.95.1). Whether it is on the
+    // air, whether the remote key may be closed at all, and how much of the
+    // current hold is left.
+    //
+    // transmitAvailable IS TWO CONDITIONS, and the second one is the point: a
+    // radio has to be open AND the transmit page has to be on screen. Opening
+    // a transmitter is already a deliberate act at this machine, and requiring
+    // the page as well means a remote key can only ever be closed while the
+    // operator has the transmitter in front of them - so the state the page
+    // shows is the state somebody is looking at. Closing the page revokes the
+    // remote key exactly as it releases the local PTT.
     s.transmitting = transmitter_.transmitting();
+    s.transmitAvailable = transmitOpen_ && transmitter_.haveSink();
+    s.transmitRemoteHoldMs = transmitter_.remoteHoldRemainingMs();
     s.soapyArgs = deviceArgs_;
     s.antenna = deviceAntenna_;
     s.antennas = deviceAntennas_;
@@ -16287,6 +16292,54 @@ void AppWindow::applyWebControls() {
             scanner_.skip();
             scannerHasExpected_ = false;
         }
+
+        // --- THE REMOTE TRANSMIT KEY (0.95.1) --------------------------------
+        //
+        // The LAST thing applied in this loop, and the only one here that can
+        // put RF out of a connector. Three things have to be true before it
+        // does, and they are deliberately checked in three different places:
+        // the server refuses the request unless the snapshot it is publishing
+        // says a transmitter is available, this re-checks against the state
+        // THIS frame rather than the one the browser saw, and
+        // core::Transmitter refuses a key with no radio behind it whatever
+        // either of us believes.
+        //
+        // A key is an ASSERTION WITH A DEADLINE, not a switch: keyRemote()
+        // buys kRemotePttHoldMs and the browser has to keep asking. So a
+        // request that arrives while the page is shut is dropped rather than
+        // remembered, and nothing here can leave a key pending.
+        if (r.transmitPtt.has_value()) {
+            if (*r.transmitPtt) {
+                if (transmitOpen_ && transmitter_.haveSink()) {
+                    transmitter_.keyRemote();
+                } else {
+                    transmitter_.releaseRemote("there is no transmitter open");
+                }
+            } else {
+                transmitter_.releaseRemote("the remote let go");
+            }
+        }
+    }
+
+    // --- THE STANDING CONDITIONS ON THE REMOTE KEY ---------------------------
+    //
+    // Both are cheap no-ops while the key is open, and both close a window
+    // that the hold's own expiry would otherwise leave open for two seconds.
+    //
+    // THE PAGE. A remote key exists only while the operator has the transmit
+    // page in front of them; closing it releases the key exactly as it
+    // releases the local PTT, which falls out of the per-frame rebuild for the
+    // local one and has to be said here for this one.
+    if (!transmitOpen_) {
+        transmitter_.releaseRemote("the transmit page was closed");
+    }
+    // THE SERVER. A web server that has been stopped or has never run cannot
+    // be holding a key. WebServer::stop() also queues a release for the loop
+    // above, so a server stopped between two frames releases twice and neither
+    // costs anything; this is the one that covers a server disabled in the
+    // settings panel, where there is no stop to queue anything.
+    if (!webServer_.running()) {
+        transmitter_.releaseRemote("the web server is not running");
     }
 }
 

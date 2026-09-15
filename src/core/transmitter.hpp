@@ -7,11 +7,12 @@
 //
 // TRANSMISSION HAPPENS ONLY WHILE THE OPERATOR IS ASKING FOR IT. Not at
 // startup, not because a config file said the transmitter was on last time,
-// not because a window was left open, and not because a plugin or a remote
-// asked. There are exactly two things in this product that can key a radio -
-// a PTT held down and a LATCH switch deliberately closed - and both of them
-// are a hand on this machine. Everything else in this header exists to make
-// that true even when something goes wrong:
+// not because a window was left open, and not because a plugin asked. There
+// are exactly three things in this product that can key a radio - a PTT held
+// down, a LATCH switch deliberately closed, and (0.95.1) a PTT held down on
+// the web remote - and the first two are a hand on this machine while the
+// third is a hand on a browser that had to be let in. Everything else in this
+// header exists to make that true even when something goes wrong:
 //
 //   - THE CONFIG CANNOT KEY IT. The mode, the power, the input and the split
 //     are saved; the PTT is not, and there is no code path that could restore
@@ -32,6 +33,17 @@
 //   - A FAULT UNKEYS IT. A sink that faults mid-transmission stops the key
 //     rather than being retried, because the next thing after "the board
 //     stopped answering" is not more modulation.
+//
+//   - THE REMOTE KEY IS A DEAD-MAN'S HANDLE OF ITS OWN, and that is the whole
+//     of what makes it defensible. keyRemote() does not set a switch; it buys
+//     kRemotePttHoldMs and no more, so the key opens unless the browser keeps
+//     asking. A closed tab, a phone put in a pocket, a Wi-Fi link that drops
+//     mid-transmission and a laptop lid that shuts all look identical from
+//     here - the remote stops asking - and every one of them opens the key
+//     inside two seconds. THE REMOTE CANNOT LATCH: there is no remote latch
+//     state to set, because a latch is a control that keeps a radio keyed
+//     with nobody touching anything, and "nobody touching anything" is the
+//     ordinary state of a machine at the far end of a network.
 //
 // ============================================================================
 // THE RATE PROBLEM, AND WHY IT IS SOLVED IN TWO STAGES
@@ -186,6 +198,21 @@ public:
     // either: it is a deadline the tick compares against.
     static constexpr std::chrono::milliseconds kLatchTimeout{60000};
 
+    // HOW LONG ONE ASSERTION FROM THE WEB REMOTE IS WORTH. Not a wait either:
+    // it is a deadline stamped by keyRemote() and compared against once a
+    // frame, exactly like the latch's - and it is the reason a remote PTT can
+    // exist at all (see the hard rule at the top of this file).
+    //
+    // TWO SECONDS, AGAINST A BROWSER THAT RE-ASSERTS EVERY 500 ms. The page
+    // repeats while the key is held, so the hold is four missed repeats deep:
+    // long enough that one dropped packet, one garbage-collection pause or
+    // one slow frame on a phone does not chop the transmission into
+    // fragments, and short enough that a link which has genuinely gone costs
+    // two seconds of carrier rather than a minute. Shorter would make the
+    // product unusable on the exact networks it is for; longer would make the
+    // failure a report rather than an embarrassment.
+    static constexpr std::chrono::milliseconds kRemotePttHoldMs{2000};
+
     Transmitter();
     ~Transmitter();
 
@@ -244,6 +271,32 @@ public:
     // survived a radio being swapped would key the new one.
     void setLatched(bool on);
     bool latched() const;
+
+    // --- THE WEB REMOTE'S KEY (0.95.1) ---------------------------------------
+    //
+    // Deliberately NOT a setter taking a bool, which is what every other
+    // control here is. A bool setter is a switch, and a switch left on by a
+    // client that then disappears is a keyed radio nobody is holding; these
+    // two are a key that has to be re-pressed instead.
+
+    // Asserts the remote key, or extends an assertion already made, for
+    // kRemotePttHoldMs from now. The caller is expected to have checked that
+    // a transmitter is open - but this is not the place that decides, and a
+    // key asserted with no radio behind it is refused by tick() like any
+    // other and cleared rather than left pending.
+    void keyRemote();
+
+    // Opens the remote key at once, with a sentence for the log naming what
+    // did it. A no-op - and silent - when the remote key is not held, so
+    // every caller that releases "just in case" costs nothing.
+    void releaseRemote(const char* why);
+
+    bool remoteKeyed() const;
+
+    // Milliseconds left on the current hold; 0 when the remote key is not
+    // held. Published to the browser so the page can show what it is
+    // holding, and read by nothing that decides anything.
+    std::int64_t remoteHoldRemainingMs() const;
 
     // What is actually happening, as against what was asked for. False
     // whenever there is no sink, the sink refused to start, or a fault has
@@ -322,6 +375,11 @@ private:
     std::atomic<bool> transmitting_{false};
     std::atomic<bool> pttHeld_{false};
     std::atomic<bool> latched_{false};
+    // The web remote's key, and when it was last asserted. Steady-clock
+    // milliseconds as a plain count, like lastTickMs_, so tick() can compare
+    // it without taking anything.
+    std::atomic<bool> remoteKeyed_{false};
+    std::atomic<std::int64_t> remoteKeyedAtMs_{0};
     std::atomic<std::uint64_t> blocks_{0};
     std::atomic<std::uint64_t> shortBlocks_{0};
 

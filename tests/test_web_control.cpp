@@ -359,6 +359,56 @@ void testRecorderBookmarkScannerFields() {
     CHECK(accepts("{\"scanStartHz\":88000000}"));
 }
 
+// THE TRANSMIT KEY, and the thing next to it that is refused by name.
+//
+// This is the only field in the vocabulary that puts RF out of a connector, so
+// its parse is exercised the same way every refusal here is: exactly, and
+// including the shapes a careless client would send.
+void testTransmitKey() {
+    ControlRequest r;
+    std::string error;
+
+    CHECK(parseControlRequest("{\"transmitPtt\":true}", r, error));
+    CHECK(error.empty());
+    CHECK(r.transmitPtt.has_value());
+    CHECK(r.transmitPtt.value_or(false));
+
+    CHECK(parseControlRequest("{\"transmitPtt\":false}", r, error));
+    CHECK(r.transmitPtt.has_value());
+    CHECK(!r.transmitPtt.value_or(true));
+
+    // Absent means absent. A key that acquired a default would be a key that
+    // could be closed by a request about something else entirely.
+    CHECK(parseControlRequest("{\"volume\":0.5}", r, error));
+    CHECK(!r.transmitPtt.has_value());
+
+    // Strict booleans, like every other flag here: 1, "true" and "on" are
+    // client bugs, and the one field that keys a radio is the last place to
+    // start guessing what somebody meant.
+    CHECK(!accepts("{\"transmitPtt\":1}"));
+    CHECK(!accepts("{\"transmitPtt\":\"true\"}"));
+    CHECK(!accepts("{\"transmitPtt\":null}"));
+
+    // THE LATCH IS REFUSED BY NAME, not ignored and not reported as an
+    // unknown field: it is a decision, and it has to read like one.
+    ControlRequest latch;
+    std::string latchError;
+    CHECK(!parseControlRequest("{\"transmitLatch\":true}", latch, latchError));
+    CHECK(latchError.find("latch") != std::string::npos);
+    CHECK(latchError.find("hands-on") != std::string::npos);
+    CHECK(latchError.find("unknown field") == std::string::npos);
+    CHECK(latch.empty());
+    // Either spelling, and asking for FALSE is refused too - a client that can
+    // open a latch it was never allowed to close is a client with a latch.
+    CHECK(!parseControlRequest("{\"transmitLatched\":false}", latch, latchError));
+    CHECK(latchError.find("latch") != std::string::npos);
+    // And a latch smuggled in beside a legitimate key takes the whole request
+    // with it, rather than the key being honoured and the latch dropped.
+    CHECK(!parseControlRequest("{\"transmitPtt\":true,\"transmitLatch\":true}", latch,
+                               latchError));
+    CHECK(latch.empty());
+}
+
 void testFailureLeavesNothingBehind() {
     // A caller that ignores the return value must not find a usable request
     // sitting in `out` from a body that was refused.
@@ -387,6 +437,7 @@ int main() {
     testDisplayAndAudioFields();
     testSourceFields();
     testRecorderBookmarkScannerFields();
+    testTransmitKey();
     testFailureLeavesNothingBehind();
     return testSummary("test_web_control");
 }

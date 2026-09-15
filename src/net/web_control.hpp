@@ -162,6 +162,24 @@ struct ControlRequest {
     std::optional<std::string> pluginPresetName;
     std::optional<int> pluginPresetIndex;
 
+    // --- The transmit key (0.95.1) ---------------------------------------
+    // THE ONE FIELD HERE THAT PUTS RF OUT OF A CONNECTOR, so it is worth
+    // saying what it is and what it is not.
+    //
+    // It is a PTT HELD DOWN, not a switch: true buys one bounded hold
+    // (core::Transmitter::kRemotePttHoldMs) and the browser must keep saying
+    // it, false opens the key at once. Nothing here can LATCH - a body
+    // carrying "transmitLatch" is refused by name rather than ignored,
+    // because a latch keeps a radio keyed with nobody touching anything and
+    // the far end of a network is where nobody touching anything is the
+    // ordinary state.
+    //
+    // It is also the one field the server does not simply queue: the handler
+    // refuses it outright unless the application is publishing an open
+    // transmitter, so a browser cannot leave a key request sitting in the
+    // queue waiting for a radio to appear underneath it.
+    std::optional<bool> transmitPtt;
+
     bool empty() const {
         return !running && !centerHz && !vfoOffsetHz && !mode && !bandwidthHz &&
                !squelchDb && !volume && !dbMin && !dbMax && !deemphasisIndex &&
@@ -174,7 +192,7 @@ struct ControlRequest {
                !scanStepHz &&
                !pluginFetch && !pluginInstall && !pluginRemove &&
                !pluginTuneName && !pluginTuneAllowed && !pluginPresetName &&
-               !pluginPresetIndex;
+               !pluginPresetIndex && !transmitPtt;
     }
 };
 

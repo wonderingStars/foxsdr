@@ -26,7 +26,27 @@ const char* const kKnownKeys[] = {
     "bookmarkTune", "bookmarkRemove", "scannerActive", "scannerSkip", "scanStartHz",
     "scanStopHz",   "scanStepHz",  "pluginFetch",    "pluginInstall",
     "acknowledgeNotice", "pluginRemove", "pluginTuneName", "pluginTuneAllowed",
-    "pluginPresetName", "pluginPresetIndex"};
+    "pluginPresetName", "pluginPresetIndex", "transmitPtt"};
+
+// THE KEYS THAT ARE REFUSED BY NAME rather than as "unknown field". A client
+// asking to LATCH the transmitter from a browser has not made a typing
+// mistake, it has asked for something this product declines to offer - and
+// "unknown field \"transmitLatch\"" reads as a version mismatch somebody
+// should work around, where a sentence saying the latch is a hands-on control
+// reads as the decision it is.
+struct RefusedKey {
+    const char* key;
+    const char* why;
+};
+
+constexpr RefusedKey kRefusedKeys[] = {
+    {"transmitLatch",
+     "the transmit latch is a hands-on control and cannot be closed from the web remote; "
+     "hold transmitPtt instead"},
+    {"transmitLatched",
+     "the transmit latch is a hands-on control and cannot be closed from the web remote; "
+     "hold transmitPtt instead"},
+};
 
 // Longest string a control field will accept. Device kwargs and antenna names
 // are short by nature; a cap keeps a hostile client from making the
@@ -86,6 +106,15 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         return false;
     }
 
+    // BEFORE the unknown-key sweep, or a refusal that is a decision would be
+    // reported as a client bug.
+    for (const RefusedKey& r : kRefusedKeys) {
+        if (j.find(r.key) != j.end()) {
+            error = r.why;
+            return false;
+        }
+    }
+
     for (const auto& item : j.items()) {
         if (!isKnownKey(item.key())) {
             error = "unknown field \"" + item.key() + "\"";
@@ -116,6 +145,7 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"pluginFetch", &req.pluginFetch},
         {"acknowledgeNotice", &req.acknowledgeNotice},
         {"pluginTuneAllowed", &req.pluginTuneAllowed},
+        {"transmitPtt", &req.transmitPtt},
     };
     for (const BoolField& f : boolFields) {
         const auto it = j.find(f.key);

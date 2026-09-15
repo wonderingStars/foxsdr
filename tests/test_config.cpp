@@ -26,6 +26,9 @@
 // against the port layer's own list and limit, so a change there is a change
 // this test sees rather than a number it transcribed.
 #include "core/serial_port.hpp"
+// For the one block that asks whether a CONFIG file can become a CONTROL
+// request - the two vocabularies now share the word `transmitPtt`.
+#include "net/web_control.hpp"
 // mapGeometryOnScreen(): the SECOND half of validating a saved map window.
 // ConfigStore decides whether the numbers are sane; this decides whether the
 // rectangle they describe still exists on this machine, and the two only make
@@ -2827,6 +2830,60 @@ int main() {
         CHECK(odd.transmitMode == 0);   // CW
         CHECK(odd.transmitToneHz == 1000.0);
         CHECK(odd.transmitSplitHz == 145.5e6);
+
+        // --- AND `transmitPtt` IS NOW A REAL WORD SOMEWHERE ELSE (0.95.1) ---
+        //
+        // The web remote's key is spelled `transmitPtt`, which is exactly the
+        // name this file has been feeding to the config loader since the day
+        // it was written. Two vocabularies now share a word, and only one of
+        // them can key a radio - so this block says which, in both
+        // directions.
+        //
+        // DIRECTION ONE: the config store still has nowhere to put it. Proved
+        // above by the save; restated here against the FULL round trip,
+        // because a future build that added an AppConfig field of that name
+        // would make every check above pass and this one fail.
+        {
+            AppConfig loaded;
+            CHECK(ConfigStore::load(path, loaded, err));
+            const std::string round = g_root + "/keyed_round.json";
+            CHECK(ConfigStore::save(round, loaded, err));
+            AppConfig back2;
+            CHECK(ConfigStore::load(round, back2, err));
+            const std::string roundText = readAll(round);
+            CHECK(roundText.find("transmitPtt") == std::string::npos);
+            CHECK(roundText.find("transmitLatch") == std::string::npos);
+        }
+
+        // DIRECTION TWO: the CONTROL vocabulary will not read a config file.
+        // The two are deliberately different languages - a control request
+        // refuses every key it does not know (net/web_control.hpp rule 1),
+        // while a config file ignores them - so a config that reached the
+        // control parser by any route at all is REFUSED rather than
+        // half-applied with its key honoured. This is what stops the file
+        // above from ever becoming a key: not that the words differ, but that
+        // nothing will accept the file as an instruction.
+        {
+            cascade::net::ControlRequest cr;
+            std::string cerr;
+            CHECK(!cascade::net::parseControlRequest(readAll(path), cr, cerr));
+            CHECK(!cerr.empty());
+            CHECK(cr.empty());
+            CHECK(!cr.transmitPtt.has_value());
+            std::printf("the config file as a control request: \"%s\"\n", cerr.c_str());
+        }
+        // And a transmit key is a LIVE INSTRUCTION, never a setting: the only
+        // body that carries one is one a client sent on purpose, and the
+        // latch the config file also named is refused by name.
+        {
+            cascade::net::ControlRequest cr;
+            std::string cerr;
+            CHECK(!cascade::net::parseControlRequest(
+                "{\"transmitLatched\":true,\"transmitPtt\":true}", cr, cerr));
+            CHECK(cr.empty());
+            CHECK(cascade::net::parseControlRequest("{\"transmitPtt\":true}", cr, cerr));
+            CHECK(cr.transmitPtt.value_or(false));
+        }
     }
 
     const int rc = testSummary("test_config");

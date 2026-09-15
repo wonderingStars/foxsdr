@@ -738,6 +738,11 @@ const KnownWait kKnownWaits[] = {
     {"src/core/transmitter.hpp", "kLatchTimeout", 0,
      "not a wait either - the deadline a LATCHED transmit key is compared against once a "
      "frame, so that a latch nobody released opens itself after a minute"},
+    {"src/core/transmitter.hpp", "kRemotePttHoldMs", 0,
+     "not a wait - the deadline one assertion of the WEB REMOTE'S key is compared against "
+     "once a frame, so a browser that stops asking opens the key. Nothing sleeps or blocks "
+     "on it, and the teardown does not consult it at all: Transmitter::stop() releases the "
+     "remote key outright on its way past rather than waiting for it to expire"},
 
     {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
      "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "

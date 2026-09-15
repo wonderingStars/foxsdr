@@ -249,6 +249,31 @@ void Transmitter::setLatched(bool on) {
 
 bool Transmitter::latched() const { return latched_.load(std::memory_order_relaxed); }
 
+void Transmitter::keyRemote() {
+    // THE STAMP IS WRITTEN FIRST, and unconditionally. Everything below is
+    // logging; the only thing that keeps the key closed is this timestamp
+    // being recent, so a re-assertion must extend the hold even if every
+    // other line here were removed.
+    remoteKeyedAtMs_.store(nowMs(), std::memory_order_relaxed);
+    if (!remoteKeyed_.exchange(true, std::memory_order_relaxed)) {
+        diagLogf("tx: keyed by the web remote");
+    }
+}
+
+void Transmitter::releaseRemote(const char* why) {
+    if (!remoteKeyed_.exchange(false, std::memory_order_relaxed)) { return; }
+    diagLogf("tx: remote key released (%s)", why != nullptr ? why : "no reason given");
+}
+
+bool Transmitter::remoteKeyed() const { return remoteKeyed_.load(std::memory_order_relaxed); }
+
+std::int64_t Transmitter::remoteHoldRemainingMs() const {
+    if (!remoteKeyed_.load(std::memory_order_relaxed)) { return 0; }
+    const std::int64_t left = kRemotePttHoldMs.count() -
+                              (nowMs() - remoteKeyedAtMs_.load(std::memory_order_relaxed));
+    return left > 0 ? left : 0;
+}
+
 void Transmitter::setLatchTimeoutForTest(std::chrono::milliseconds t) {
     std::lock_guard<std::mutex> lk(stateMutex_);
     latchTimeout_ = t;
@@ -317,17 +342,39 @@ void Transmitter::tick() {
         }
     }
 
+    // THE REMOTE KEY'S OWN DEADLINE, and it is the same shape as the latch's
+    // above for the same reason: the thing holding this key is at the far end
+    // of a network and may simply stop existing. One assertion is worth
+    // kRemotePttHoldMs and no more.
+    if (remoteKeyed_.load(std::memory_order_relaxed)) {
+        const std::int64_t age =
+            nowMs() - remoteKeyedAtMs_.load(std::memory_order_relaxed);
+        if (age >= kRemotePttHoldMs.count()) {
+            remoteKeyed_.store(false, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lk(errorMutex_);
+                autoUnkeyReason_ = "the web remote stopped asking, so the key was released";
+            }
+            diagWarnf("tx: remote key released (the hold expired after %lld ms)",
+                      static_cast<long long>(age));
+        }
+    }
+
     const bool want = pttHeld_.load(std::memory_order_relaxed) ||
-                      latched_.load(std::memory_order_relaxed);
+                      latched_.load(std::memory_order_relaxed) ||
+                      remoteKeyed_.load(std::memory_order_relaxed);
     const bool have = transmitting_.load(std::memory_order_relaxed);
 
     if (want && !have) {
         std::lock_guard<std::mutex> lk(stateMutex_);
         if (!keyDownLocked()) {
             // A key that could not be honoured must not leave a latch closed
-            // and a panel lamp lit, so the request is dropped as well.
+            // and a panel lamp lit, so the request is dropped as well - and
+            // the remote's with it, or a browser that asked once would have
+            // the refusal retried on every frame for two seconds.
             latched_.store(false, std::memory_order_relaxed);
             pttHeld_.store(false, std::memory_order_relaxed);
+            releaseRemote("the radio would not key");
         }
         return;
     }
@@ -346,6 +393,11 @@ void Transmitter::tick() {
         keyUpLocked("the transmitter stopped on its own");
         latched_.store(false, std::memory_order_relaxed);
         pttHeld_.store(false, std::memory_order_relaxed);
+        // AND THE REMOTE'S, which is the one an operator at the far end
+        // cannot see has happened. A fault or the dead-man's handle must not
+        // leave a browser re-asserting into a transmitter that has already
+        // let go; the next assertion then keys a radio that just faulted.
+        releaseRemote("the transmitter stopped on its own");
     }
 }
 
@@ -459,6 +511,10 @@ void Transmitter::stop() {
     const bool was = transmitting_.load(std::memory_order_relaxed);
     pttHeld_.store(false, std::memory_order_relaxed);
     latched_.store(false, std::memory_order_relaxed);
+    // setSink() calls this, so swapping or removing a radio opens the remote
+    // key too - a browser's assertion must not be inherited by the next board
+    // any more than a latch is.
+    releaseRemote("the transmitter was shut down");
     stopThread();
     std::lock_guard<std::mutex> lk(stateMutex_);
     if (was) { keyUpLocked("the transmitter was shut down"); }
