@@ -636,6 +636,12 @@ int main() {
             CHECK_NEAR(g[0].stepDb, 6.0, 1e-9);
             CHECK(g[1].name == "LNA");
             CHECK_NEAR(g[1].maxDb, 6.0, 1e-9);
+            // AND BOTH ARE REAL DECIBELS, which is why the attenuator is
+            // turned over into a negative gain at all: -48 dB of attenuation
+            // is a measurement, and the panel is right to letter it "dB".
+            // Unlike the R2/Mini's five, nothing here is a register index.
+            CHECK(g[0].unit == cascade::source::GainUnit::Decibels);
+            CHECK(g[1].unit == cascade::source::GainUnit::Decibels);
         }
         src.closeDevice();
         CHECK(!src.isOpen());

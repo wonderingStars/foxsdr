@@ -80,6 +80,7 @@ AppConfig junkConfig() {
     c.sourceKind = "garbage";
     c.soapyArgs = "garbage";
     c.nativeArgs = "garbage";
+    c.nativeBiasT = true;  // default is false: a load that forgets it is caught
     c.iqFilePath = "garbage";
     c.centerHz = -1.0;
     c.mode = "garbage";
@@ -190,6 +191,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.sourceKind == b.sourceKind);
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
+    CHECK(a.nativeBiasT == b.nativeBiasT);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
     CHECK(a.mode == b.mode);
@@ -339,6 +341,7 @@ int main() {
         // read, or the tuner fallback has nothing to fall back to on the next
         // launch.
         in.nativeArgs = "serial=00000001";
+        in.nativeBiasT = true;
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
         in.mode = "USB";
@@ -647,6 +650,35 @@ int main() {
         CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"hackrf\"}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.sourceKind == "hackrf");
+
+        // ...AND THE TWO AIRSPY KINDS (0.92.0), for the same reason. They are
+        // separate keys and not one "airspy" covering both: an R2 and an HF+
+        // are different USB ids, different hardware and different bands, and
+        // a config that named one must never open the other.
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"airspy\","
+                        "\"nativeArgs\":\"serial=644866c83f1a51df\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "airspy");
+        CHECK(out.nativeArgs == "serial=644866c83f1a51df");
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"airspyhf\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "airspyhf");
+
+        // THE BIAS TEE SURVIVES A RESTART, and it is the one persisted
+        // setting in this file that puts POWER on a connector rather than
+        // changing what is heard. It is saved because a mast-head amplifier
+        // does not stop needing 4.5 V because the application was closed, and
+        // re-ticking it every launch is how a user ends up not noticing it is
+        // off. A config that has never seen the field loads as OFF, which is
+        // the safe answer and the one every pre-0.92.0 config gets.
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"nativeBiasT\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nativeBiasT);
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"airspy\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.nativeBiasT);
 
         // A CONFIG WRITTEN BEFORE 0.91.0 HAS NO nativeArgs AT ALL, and must
         // load with an empty one rather than whatever the caller's variable

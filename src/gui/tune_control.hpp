@@ -15,6 +15,11 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+// normalisedSerial lives with the driver that needs it, and the prefer-native
+// rule has to use the SAME normalisation the driver's own open() matches on -
+// a rule stricter than the driver's would point at a device the driver then
+// refuses. See nativeSerialMatches.
+#include "source/airspyhf_source.hpp"
 #include "source/device_source.hpp"
 
 namespace cascade::gui {
@@ -410,6 +415,52 @@ inline constexpr bool muteBannerTakesTheMiddle(float barW, float coreW) {
     return muteBannerMiddleW(barW, coreW) >= kMuteBannerMinW;
 }
 
+// --- WHAT A GAIN READS AS, and it is not always decibels --------------------
+//
+// THE DEFECT THIS EXISTS FOR. Every consumer of source::GainInfo lettered its
+// number "%.1f dB" - the Source section's sliders, the RECEIVER card's
+// "TUNER 30 dB +3 more", the scope deck's GAIN knob, and the browser's own
+// gain row - because until the native Airspy R2/Mini every gain in FoxSDR
+// really was decibels. The Airspy's five are register steps and table
+// indices (source/device_source.hpp's GainUnit says why), so that panel
+// showed "LNA 7.0 dB" for step 7: a wrong number carrying a wrong unit,
+// which is worse than either alone because it reads as a measurement.
+//
+// Kept here, pure and with no ImGui, for the same reason as the rest of this
+// header: four call sites in two translation units have to agree about how a
+// gain is lettered, and a test can pin both units without a radio on the desk
+// - which matters more than usual, since there is no Airspy on this bench and
+// these functions are the only proof the Steps case is rendered at all.
+//
+// The wire word is here too so the browser and the desktop cannot drift: the
+// JSON's "unit" field is this string.
+inline const char* gainUnitWire(cascade::source::GainUnit unit) {
+    return unit == cascade::source::GainUnit::Steps ? "step" : "dB";
+}
+
+// The ImGui slider's own format string. A step is a whole number and takes no
+// unit; a decibel keeps the tenth it has always shown, because these radios
+// quantise onto tenths and the slider reports the driver's readback.
+inline const char* gainSliderFormat(cascade::source::GainUnit unit) {
+    return unit == cascade::source::GainUnit::Steps ? "%.0f" : "%.1f dB";
+}
+
+// THE VALUE ALONE, as the card and the knob print it: "30 dB", or "7". Whole
+// numbers in both cases - this is the glanceable readout, not the control.
+inline std::string formatGainValue(double value, cascade::source::GainUnit unit) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf),
+                  unit == cascade::source::GainUnit::Steps ? "%.0f" : "%.0f dB", value);
+    return buf;
+}
+
+// NAME AND VALUE: "TUNER 30 dB", "LNA 7". One space, and nothing else - the
+// RECEIVER card appends its own "+3 more" after this.
+inline std::string formatGain(const std::string& name, double value,
+                              cascade::source::GainUnit unit) {
+    return name + " " + formatGainValue(value, unit);
+}
+
 // --- The Source section's device scan: never while a radio is open ---------
 //
 // THE 0.90.0 FIELD FAULT (crash store, 2026-09-09, a NESDR SMArt v5 on
@@ -485,7 +536,8 @@ inline bool autoReopenDue(bool deadByAbsorbedFault, bool driverAbandoned, bool o
 // --- PREFER THE NATIVE DRIVER, AUTOMATICALLY --------------------------------
 //
 // THE USER HAS TO DO NOTHING. From 0.91.0 FoxSDR has its own RTL-SDR and
-// HackRF drivers - our USB transport, our reader thread, our enumeration (see
+// HackRF drivers, and from 0.92.0 an Airspy R2/Mini and an Airspy HF+ as well
+// - our USB transport, our reader thread, our enumeration (see
 // src/usb/usb_device.hpp for why: every crash report this product received
 // from a USB radio in its first month landed inside somebody else's libusb,
 // on a thread we did not create, behind a vendor module we could not fix).
@@ -511,20 +563,35 @@ inline bool autoReopenDue(bool deadByAbsorbedFault, bool driverAbandoned, bool o
 // Serial matching is case-insensitive, and a SUFFIX match counts - the long
 // form of a HackRF serial is 32 hex digits and every tool that prints it
 // prints the tail, so HackRfSource::open takes a suffix and this must agree
-// with it or the rule would point at a device the driver then refuses.
+// with it or the rule would point at a device the driver then refuses. An
+// Airspy HF+ needs one step more: Windows reports its serial as the whole USB
+// string "AIRSPYHF SN:0123456789ABCDEF" while every other tool and every user
+// quotes the sixteen hex digits, so both sides go through the driver's own
+// normalisedSerial first - exactly as AirspyHfSource::open does.
+//
+// FOUR DRIVER KEYS NOW, and "airspy" and "airspyhf" are matched WHOLE rather
+// than by prefix: one is the prefix of the other, they are different USB ids
+// and different radios, and answering a saved HF+ with an R2 would hand the
+// user a receiver that cannot reach a single frequency they were listening to.
 //
 // Returns nothing when the rule does not apply, which is the common case and
-// is not a failure: a B200, an Airspy, a saved generator, an RTL-SDR whose
+// is not a failure: a B200, a LimeSDR, a saved generator, an RTL-SDR whose
 // dongle is unplugged or is still on the DVB-T driver.
-inline bool nativeSerialMatches(const std::string& nativeArgs, const std::string& wantSerial) {
-    const std::string have = cascade::source::argValue(nativeArgs, "serial");
-    if (have.empty() || wantSerial.empty()) { return false; }
+inline bool nativeSerialMatches(const std::string& nativeArgs, const std::string& wantSerial,
+                                const std::string& driver) {
+    std::string have = cascade::source::argValue(nativeArgs, "serial");
+    std::string want = wantSerial;
+    if (driver == "airspyhf") {
+        have = cascade::source::normalisedSerial(have);
+        want = cascade::source::normalisedSerial(want);
+    }
+    if (have.empty() || want.empty()) { return false; }
     const auto lower = [](std::string t) {
         for (char& c : t) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
         return t;
     };
     const std::string a = lower(have);
-    const std::string b = lower(wantSerial);
+    const std::string b = lower(want);
     if (a == b) { return true; }
     // Suffix either way: the saved string may be the long form and the
     // enumerated one the short, or the other way round.
@@ -542,13 +609,16 @@ inline std::optional<cascade::source::NativeDeviceInfo> preferNativeFor(
     for (char& c : driver) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
-    if (driver != "rtlsdr" && driver != "hackrf") { return std::nullopt; }
+    if (driver != "rtlsdr" && driver != "hackrf" && driver != "airspy" &&
+        driver != "airspyhf") {
+        return std::nullopt;
+    }
     const std::string serial = cascade::source::argValue(savedArgs, "serial");
     const cascade::source::NativeDeviceInfo* first = nullptr;
     for (const cascade::source::NativeDeviceInfo& d : native) {
         if (d.driver != driver) { continue; }
         if (first == nullptr) { first = &d; }
-        if (!serial.empty() && nativeSerialMatches(d.args, serial)) { return d; }
+        if (!serial.empty() && nativeSerialMatches(d.args, serial, driver)) { return d; }
     }
     // No serial saved: the first row of that driver IS the device the saved
     // args named, because the saved args named no particular one.

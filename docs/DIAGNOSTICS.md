@@ -56,9 +56,10 @@ every distinct bug inside that plugin collapses into a single group, since
 every plugin stack passes through the same host dispatch on its way down. The client signature
 stays in the payload as transport identity and the client-side dedup key.
 
-### What the native drivers write (0.91.0)
+### What the native drivers write (0.91.0, 0.92.0)
 
-FoxSDR drives an RTL-SDR and a HackRF itself now, over its own WinUSB
+FoxSDR drives an RTL-SDR and a HackRF itself now, and from 0.92.0 an Airspy
+R2/Mini and an Airspy HF+ as well, over its own WinUSB
 transport, with no SoapySDR module in the path. The log lines that produces
 are deliberately the same shape as the SoapySDR ones, so one log reads the
 same whichever way a radio was opened - the only difference is that these
@@ -71,9 +72,11 @@ describe code this product can be held responsible for.
   behaves oddly needs to say.
 - `source: opened RTL2838UHIDIR (rtlsdr) at 2400000 S/s` - written by the
   application when it installs the radio in the pipeline. The parenthesis is
-  the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`): two rows in the Source
-  dropdown can name one physical dongle, and a report has to say which of them
-  was taken.
+  the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`, `airspy`, `airspyhf`): two rows
+  in the Source dropdown can name one physical radio, and a report has to say
+  which of them was taken. `airspy` and `airspyhf` are separate keys, not one
+  family: an Airspy R2 and an Airspy HF+ are different USB ids, different
+  hardware and different bands.
 - `source: opening RTL2838UHIDIR natively (was SoapySDR rtlsdr)` - the
   prefer-native rule firing. A config saved before 0.91.0 says "SoapySDR,
   driver=rtlsdr" because that was the only way to reach the dongle; the
@@ -89,6 +92,12 @@ describe code this product can be held responsible for.
   told to the user in the same words: restart FoxSDR to use this radio again.
 - The stream-health line below is written by the native drivers too, in the
   same format and on the same rules.
+- The Airspy drivers write the same shapes under their own names - the open
+  line carries the model the bus and the firmware named (`Airspy R2`,
+  `Airspy Mini`, `Airspy HF+ Discovery`) and, for the HF+, the part id
+  verbatim rather than a model guessed from it. There is no `--airspy-check`:
+  the Airspy equivalent of `--rtlsdr-check` was not added, because there is no
+  Airspy on the bench this was written on for it to have been proven against.
 
 **`cascade.exe --rtlsdr-check`** is the native counterpart of `--soapy-check`
 and answers the question the suite cannot. The register sequences are proven

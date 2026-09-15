@@ -27,11 +27,14 @@
 //     defaults (the display maps dB to pixels via 1/(dbMax-dbMin); a
 //     degenerate or inverted span is a divide-by-zero, and clamping only one
 //     end would invent a range the user never chose)
-//   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf";
-//     anything else resets to "siggen" (the only source that can never fail
-//     to exist). The last two are the native drivers, which reach an RTL-SDR
-//     or a HackRF through our own WinUSB transport and need no SoapySDR
-//     install at all.
+//   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf" |
+//     "airspy" | "airspyhf"; anything else resets to "siggen" (the only
+//     source that can never fail to exist). The last four are the native
+//     drivers, which reach an RTL-SDR, a HackRF, an Airspy R2/Mini or an
+//     Airspy HF+ through our own WinUSB transport and need no SoapySDR
+//     install at all. "airspy" and "airspyhf" are separate keys and not one
+//     family name: they are different USB ids, different hardware and
+//     different bands, and a config that named one must never open the other.
 //   - deemphasisIndex clamped to [0, 2]  (the three-entry 50 us / 75 us / off
 //                                         combo; an out-of-range index would
 //                                         read past that table)
@@ -95,7 +98,8 @@ namespace cascade::core {
 
 struct AppConfig {
     int schemaVersion = 1;
-    std::string sourceKind = "siggen";  // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"
+    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"
+    std::string sourceKind = "siggen";
     // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
     // Empty means "whatever the driver defaults to", which is what every
     // pre-existing config will say. It is persisted because the port is a
@@ -112,7 +116,8 @@ struct AppConfig {
     // They are different grammars fed to different openers: soapyArgs is a
     // SoapySDR kwargs markup string ("driver=rtlsdr, serial=00000001") that
     // goes to SoapySource::open, nativeArgs is "serial=00000001" or "index=0"
-    // that goes to RtlSdrSource/HackRfSource::open. More importantly the
+    // that goes to RtlSdrSource/HackRfSource/AirspySource/AirspyHfSource's
+    // own open(). More importantly the
     // application needs BOTH AT ONCE: the prefer-native rule
     // (gui::preferNativeFor) reads the saved SOAPY args to learn which driver
     // and which serial a config meant, opens the native driver instead, and
@@ -121,6 +126,24 @@ struct AppConfig {
     // would be overwritten by whichever family opened last, and the fallback
     // would have nothing left to fall back to.
     std::string nativeArgs;
+    // THE BIAS TEE, ONE BOOL FOR ALL OF THEM, and the only setting in this
+    // file that puts POWER on a connector rather than changing what is heard.
+    //
+    // It is persisted because a mast-head amplifier does not stop needing its
+    // 4.5 V because the application was closed, and a user who has to re-tick
+    // it on every launch is a user who will one day not notice it is off and
+    // spend an evening wondering why the band is dead. It defaults to false,
+    // which is what every config written before 0.92.0 loads as and the only
+    // safe answer for a receiver that may be plugged into something that does
+    // not expect power.
+    //
+    // ONE FIELD RATHER THAN ONE PER DRIVER: the three radios that have a bias
+    // tee here (HackRF, Airspy R2/Mini, Airspy HF+) are never open at once -
+    // exactly one source is installed in the pipeline at a time - and a
+    // per-kind table would record settings for radios that are not on the
+    // bench and cannot be seen on screen. The setting belongs to "the radio
+    // this receiver is set up around", which is what nativeArgs names.
+    bool nativeBiasT = false;
     std::string iqFilePath;
     double centerHz = 100000000.0;
     std::string mode = "WFM";

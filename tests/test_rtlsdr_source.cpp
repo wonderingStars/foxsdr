@@ -553,6 +553,13 @@ int main() {
         CHECK(g[3].name == "VGA");
         CHECK_NEAR(g[3].minDb, -4.7, 0.001);
         CHECK_NEAR(g[3].maxDb, 40.8, 0.001);
+        // EVERY ONE OF THEM IN DECIBELS. This driver walks the R820T's own
+        // gain ladder and reports the tenths it lands on, so unlike the
+        // Airspy R2/Mini - whose five are register indices - these figures
+        // are measurements and the panel is right to letter them "dB".
+        for (const cascade::source::GainInfo& one : g) {
+            CHECK(one.unit == cascade::source::GainUnit::Decibels);
+        }
 
         live->clear();
         CHECK(src.setGainDb("TUNER", 24.0));

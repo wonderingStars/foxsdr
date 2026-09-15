@@ -312,7 +312,10 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //
 // EXACTLY ONE SOURCE IS INSTALLED IN THE PIPELINE AT A TIME.
 // Pipeline::stop() stops `active_`, which is one object: the generator, an
-// IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource or an AirspyHfSource. A device switch
+// IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource or
+// an AirspyHfSource - and from 0.92.0 the Source section can install any of
+// them, which is what makes this note's arithmetic load-bearing rather than
+// hypothetical. A device switch
 // destroys the old source before the new one is constructed
 // (AppWindow::selectSource, close-first, adjudicated fix #3 for the 0.62.0
 // field crashes), so no teardown can ever wait on two of these paths. What

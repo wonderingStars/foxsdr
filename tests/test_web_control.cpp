@@ -257,8 +257,12 @@ void testSourceFields() {
     // the property that made "soapy" safe and is unchanged.
     CHECK(accepts("{\"sourceKind\":\"rtlsdr\",\"soapyArgs\":\"serial=00000001\"}"));
     CHECK(accepts("{\"sourceKind\":\"hackrf\",\"soapyArgs\":\"index=0\"}"));
-    // Everything outside the five is still refused, and the error says so.
-    CHECK(!accepts("{\"sourceKind\":\"airspy\"}"));
+    // ...and "airspy" and "airspyhf" from 0.92.0, on exactly the same terms.
+    CHECK(accepts("{\"sourceKind\":\"airspy\",\"soapyArgs\":\"serial=644866c83f1a51df\"}"));
+    CHECK(accepts("{\"sourceKind\":\"airspyhf\",\"soapyArgs\":\"index=0\"}"));
+    // Everything outside the seven is still refused, and the error says so.
+    CHECK(!accepts("{\"sourceKind\":\"airspyhf2\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"uhd\"}"));
     CHECK(!accepts("{\"sourceKind\":\"RTLSDR\"}"));  // exact spelling, not a fold
     CHECK(!accepts("{\"sourceKind\":\"\"}"));
     CHECK(!accepts("{\"sourceKind\":7}"));

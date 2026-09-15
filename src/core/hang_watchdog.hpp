@@ -202,8 +202,12 @@ public:
     // arithmetic is in tests/test_shutdown_budget.cpp beside their rows.
     // Exactly one source is installed in the pipeline at a time, so a
     // teardown spends ONE of these columns and never two: SoapySDR 3000 ms,
-    // a native RTL-SDR 2000, a native HackRF 1350. The worst is the one
-    // charged above; the others are covered by it rather than added to it.
+    // a native RTL-SDR 2000, a native HackRF 1350, a native Airspy R2/Mini
+    // 1750 and a native Airspy HF+ 1750. The worst is the one charged above;
+    // the others are covered by it rather than added to it. Re-derived when
+    // the Airspys were wired into the Source section (0.92.0) and unchanged:
+    // every native column is still inside SoapySDR's 3000. The arithmetic is
+    // in tests/test_shutdown_budget.cpp's composition note.
     static constexpr unsigned kShutdownBoundedWaitsMs = 7000;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload

@@ -658,8 +658,12 @@ int main() {
         // A DRIVER WE DO NOT DRIVE OURSELVES IS LEFT ALONE. The owner's B200
         // is the case that must never be touched.
         CHECK(!preferNativeFor("soapy", "driver=uhd, serial=3218C7A", two).has_value());
-        CHECK(!preferNativeFor("soapy", "driver=airspy", two).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=lime", two).has_value());
         CHECK(!preferNativeFor("soapy", "", two).has_value());
+        // ...and a driver we DO drive with no row of that driver on the bus is
+        // still nothing: the Airspy key is known from 0.92.0, but this list
+        // holds two RTL-SDRs.
+        CHECK(!preferNativeFor("soapy", "driver=airspy", two).has_value());
 
         // A SAVED NATIVE DEVICE IS ALREADY NATIVE, and the generator and the
         // IQ file are not radios. Only "soapy" is upgraded.
@@ -697,6 +701,82 @@ int main() {
         }
         // A suffix that is not a suffix is still no match.
         CHECK(!preferNativeFor("soapy", "driver=hackrf, serial=deadbeef", hack).has_value());
+
+        // --- THE TWO AIRSPYS (0.92.0) --------------------------------------
+        //
+        // The same rule, and it has to cover them for the same reason: an
+        // Airspy owner who has been reaching their radio through SoapyAirspy
+        // has "driver=airspy, serial=..." saved, and nobody is going to
+        // reopen the Source section to switch over. What is NEW here is that
+        // there are now two Airspy driver keys that look alike and are not
+        // interchangeable - an R2 is not an HF+, they are different USB ids,
+        // different hardware and different bands - so the key has to be
+        // matched exactly and not by prefix.
+        const std::vector<NativeDeviceInfo> airspys = {
+            {"airspy", "Airspy R2 (serial 644866c83f1a51df)", "serial=644866c83f1a51df"},
+            {"airspy", "Airspy Mini (serial 91d066dc2f5a41e3)", "serial=91d066dc2f5a41e3"},
+        };
+        const std::vector<NativeDeviceInfo> hfs = {
+            {"airspyhf", "Airspy HF+ Discovery (serial 0123456789abcdef)",
+             "serial=0123456789abcdef"},
+        };
+
+        // THE CASE THIS EXISTS FOR, for the R2/Mini. RED before the airspy
+        // key was added to the rule: preferNativeFor returned nothing.
+        {
+            const auto got = preferNativeFor("soapy", "driver=airspy, serial=91d066dc2f5a41e3",
+                                             airspys);
+            CHECK(got.has_value());
+            CHECK(got->driver == "airspy");
+            CHECK(got->args == "serial=91d066dc2f5a41e3");
+        }
+        // SoapyAirspy builds its serial out of the 64-bit value the firmware
+        // reports and prints it in UPPER-case hex; enumeration here lower-
+        // cases it. Same radio, and the match is case-insensitive.
+        CHECK(preferNativeFor("soapy", "driver=airspy, serial=644866C83F1A51DF", airspys)
+                  .has_value());
+        // The second Airspy is not the first one.
+        CHECK(!preferNativeFor("soapy", "driver=airspy, serial=1111111111111111", airspys)
+                  .has_value());
+        // No serial saved names no particular radio: the first row answers it.
+        {
+            const auto got = preferNativeFor("soapy", "driver=airspy", airspys);
+            CHECK(got.has_value());
+            CHECK(got->args == "serial=644866c83f1a51df");
+        }
+
+        // AN R2 MUST NOT BE ANSWERED WITH AN HF+, OR THE OTHER WAY ROUND, and
+        // this is the check a prefix match on the driver key would fail:
+        // "airspy" is a prefix of "airspyhf".
+        CHECK(!preferNativeFor("soapy", "driver=airspy", hfs).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=airspyhf", airspys).has_value());
+
+        // THE HF+, whose saved serial may carry the USB string Windows
+        // reports ("AIRSPYHF SN:0123456789ABCDEF") while the enumerated row
+        // carries the sixteen hex digits every other tool prints. Both sides
+        // go through airspyhf's normalisedSerial, which is what
+        // AirspyHfSource::open itself matches on - a rule stricter than the
+        // driver's would point at a device the driver then refuses.
+        {
+            const auto got = preferNativeFor("soapy", "driver=airspyhf, serial=0123456789ABCDEF",
+                                             hfs);
+            CHECK(got.has_value());
+            CHECK(got->driver == "airspyhf");
+            CHECK(got->args == "serial=0123456789abcdef");
+        }
+        CHECK(preferNativeFor("soapy", "driver=airspyhf, serial=AIRSPYHF SN:0123456789ABCDEF",
+                              hfs)
+                  .has_value());
+        CHECK(!preferNativeFor("soapy", "driver=airspyhf, serial=fedcba9876543210", hfs)
+                  .has_value());
+        {
+            const auto got = preferNativeFor("soapy", "driver=airspyhf", hfs);
+            CHECK(got.has_value());
+            CHECK(got->args == "serial=0123456789abcdef");
+        }
+        // A SAVED NATIVE AIRSPY IS ALREADY NATIVE.
+        CHECK(!preferNativeFor("airspy", "driver=airspy", airspys).has_value());
+        CHECK(!preferNativeFor("airspyhf", "driver=airspyhf", hfs).has_value());
     }
 
     // -----------------------------------------------------------------------
@@ -728,6 +808,65 @@ int main() {
         CHECK(!nativeOpenShouldFallBack("no RTL-SDR matched serial=00000009"));
         CHECK(!nativeOpenShouldFallBack(""));
         CHECK(!nativeOpenShouldFallBack("the demodulator would not initialise: timeout"));
+    }
+
+    // -----------------------------------------------------------------------
+    // A GAIN IS LETTERED IN ITS OWN UNIT, or it is a wrong number in a wrong
+    // one.
+    //
+    // Until 0.92.0 every consumer of source::GainInfo printed "%.1f dB",
+    // because every gain FoxSDR had was decibels. The native Airspy R2/Mini's
+    // five are not - LNA, MIXER and VGA are the R820T's register steps,
+    // LINEARITY and SENSITIVITY are libairspy table indices - so the Source
+    // section showed "LNA 7.0 dB" for step 7: a figure nothing measured, in a
+    // unit the radio does not use, which reads as a measurement and so is
+    // worse than either error alone.
+    //
+    // THESE FOUR FUNCTIONS ARE THE ONLY PROOF THE STEPS CASE RENDERS AT ALL.
+    // There is no Airspy on this bench, so the panel, the card, the knob and
+    // the browser cannot be looked at with one attached; what can be pinned
+    // is that each of them asks, and what each of them gets back.
+    // -----------------------------------------------------------------------
+    {
+        using cascade::gui::formatGain;
+        using cascade::gui::formatGainValue;
+        using cascade::gui::gainSliderFormat;
+        using cascade::gui::gainUnitWire;
+        using cascade::source::GainUnit;
+
+        // DECIBELS: exactly what these four call sites printed before any of
+        // this existed, character for character - an RTL-SDR's "TUNER 30 dB"
+        // on the RECEIVER card, the sliders' tenths, the wire's "dB".
+        CHECK(formatGainValue(30.0, GainUnit::Decibels) == "30 dB");
+        CHECK(formatGainValue(0.0, GainUnit::Decibels) == "0 dB");
+        CHECK(formatGainValue(-12.0, GainUnit::Decibels) == "-12 dB");
+        CHECK(formatGain("TUNER", 30.0, GainUnit::Decibels) == "TUNER 30 dB");
+        CHECK(std::string(gainSliderFormat(GainUnit::Decibels)) == "%.1f dB");
+        CHECK(std::string(gainUnitWire(GainUnit::Decibels)) == "dB");
+
+        // STEPS: an index, printed as an index, with no unit at all - because
+        // the honest thing to put after a register position is nothing.
+        CHECK(formatGainValue(7.0, GainUnit::Steps) == "7");
+        CHECK(formatGainValue(0.0, GainUnit::Steps) == "0");
+        CHECK(formatGain("LNA", 7.0, GainUnit::Steps) == "LNA 7");
+        CHECK(formatGain("LINEARITY", 12.0, GainUnit::Steps) == "LINEARITY 12");
+        CHECK(std::string(gainSliderFormat(GainUnit::Steps)) == "%.0f");
+        CHECK(std::string(gainUnitWire(GainUnit::Steps)) == "step");
+
+        // ...and the defect itself, stated as the thing that must never come
+        // back: no "dB" and no decimal anywhere in a step's rendering, in the
+        // readout or in the slider's format string.
+        CHECK(formatGain("LNA", 7.0, GainUnit::Steps).find("dB") == std::string::npos);
+        CHECK(formatGain("LNA", 7.0, GainUnit::Steps).find('.') == std::string::npos);
+        CHECK(std::string(gainSliderFormat(GainUnit::Steps)).find("dB") == std::string::npos);
+
+        // A DRIVER THAT SAYS NOTHING IS SAYING DECIBELS. Every driver but the
+        // Airspy R2/Mini leaves the field alone, so the default is what keeps
+        // four radios rendering exactly as they did.
+        cascade::source::GainInfo silent;
+        silent.name = "VGA";
+        CHECK(silent.unit == GainUnit::Decibels);
+        CHECK(formatGain(silent.name, 16.0, silent.unit) == "VGA 16 dB");
     }
 
     return testSummary("test_tune_control");

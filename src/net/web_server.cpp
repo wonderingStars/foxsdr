@@ -963,6 +963,21 @@ function syncControl(el, value) {
 // second.
 let lastDevKey = '', lastAntKey = '', lastGainKey = '';
 
+// IS THIS SOURCE KIND A RADIO? One list, because the answer is asked twice
+// below and the list has grown from one entry to five - a page that knew
+// about four of them would hide the gain and antenna rows for whichever it
+// had missed, and nothing would say why.
+const RADIO_KINDS = ['soapy', 'rtlsdr', 'hackrf', 'airspy', 'airspyhf'];
+function isRadioKind(k) { return RADIO_KINDS.indexOf(k) >= 0; }
+
+// HOW A GAIN IS LETTERED, and it is the desktop's own rule
+// (gui::formatGainValue): "30 dB" for a real gain, a bare "7" for a stage
+// the radio counts in register steps. One function, because the value is
+// written in two places - while a slider is being dragged, and from each
+// poll - and a page where those two disagreed would change units as soon as
+// the user let go.
+function gainText(v, unit) { return unit === 'step' ? String(v) : (v + ' dB'); }
+
 function reflectSource(s) {
   $('srcBusy').textContent = s.sourceBusy ? 'working...' : '';
   $('scan').disabled = s.sourceBusy;
@@ -998,13 +1013,11 @@ function reflectSource(s) {
       sel.appendChild(o);
       sel.value = '__file__';
     } else {
-      sel.value = (s.sourceKind === 'soapy' || s.sourceKind === 'rtlsdr' ||
-                   s.sourceKind === 'hackrf') ? (s.sourceKind + '|' + s.soapyArgs) : '';
+      sel.value = isRadioKind(s.sourceKind) ? (s.sourceKind + '|' + s.soapyArgs) : '';
     }
   }
 
-  const isDevice = s.sourceKind === 'soapy' || s.sourceKind === 'rtlsdr' ||
-                   s.sourceKind === 'hackrf';
+  const isDevice = isRadioKind(s.sourceKind);
   $('devRow').classList.toggle('hidden', !isDevice);
   $('gainRow').classList.toggle('hidden', !isDevice);
   if (!isDevice) return;
@@ -1025,7 +1038,12 @@ function reflectSource(s) {
   $('agc').disabled = !s.agcSupported;
   if (document.activeElement !== $('agc')) $('agc').checked = s.agc;
 
-  const gainKey = s.gains.map(g => g.name).join('|');
+  // A GAIN'S NUMBER IS NOT ALWAYS DECIBELS. The native Airspy R2/Mini's five
+  // are the R820T's register steps and libairspy's table indices, so this
+  // row said "LNA 7 dB" for step 7 until 0.92.0 - the desktop's own
+  // gui::formatGainValue, in the browser. An older status with no unit field
+  // is decibels, which is what it always was.
+  const gainKey = s.gains.map(g => g.name + ':' + (g.unit || 'dB')).join('|');
   if (gainKey !== lastGainKey) {
     lastGainKey = gainKey;
     const row = $('gainRow');
@@ -1036,8 +1054,9 @@ function reflectSource(s) {
       const inp = document.createElement('input');
       inp.type = 'range'; inp.min = '0'; inp.max = '76'; inp.step = '1';
       inp.dataset.gain = g.name;
+      inp.dataset.unit = g.unit || 'dB';
       inp.addEventListener('input', () => {
-        label.querySelector('.gv').textContent = inp.value + ' dB';
+        label.querySelector('.gv').textContent = gainText(inp.value, inp.dataset.unit);
       });
       inp.addEventListener('change', () => {
         control({ gainName: g.name, gainDb: parseFloat(inp.value) });
@@ -1051,7 +1070,7 @@ function reflectSource(s) {
     if (!inp) return;
     syncControl(inp, Math.round(g.db));
     const gv = inp.parentElement.querySelector('.gv');
-    if (gv) gv.textContent = g.db.toFixed(0) + ' dB';
+    if (gv) gv.textContent = gainText(g.db.toFixed(0), g.unit || 'dB');
   });
 }
 
@@ -3126,7 +3145,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             j["devices"] = std::move(devices);
             nlohmann::json gains = nlohmann::json::array();
             for (const RadioStatus::GainStage& g : s.gains) {
-                gains.push_back({{"name", g.name}, {"db", g.db}});
+                gains.push_back({{"name", g.name}, {"db", g.db}, {"unit", g.unit}});
             }
             j["gains"] = std::move(gains);
 
