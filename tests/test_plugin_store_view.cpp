@@ -54,12 +54,22 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "gui/fonts.hpp"
 #include "gui/plugin_store_view.hpp"
 #include "gui/theme.hpp"
 #include "test_check.hpp"
 
+using cascade::gui::AddAllPlan;
 using cascade::gui::kStoreSortCount;
 using cascade::gui::ModulePlate;
+using cascade::gui::planAddAll;
+using cascade::gui::PluginStoreModel;
+using cascade::gui::storeInstallColour;
+using cascade::gui::storeInstallState;
+using cascade::gui::StoreInstallState;
+using cascade::gui::storeInstallWord;
+using cascade::gui::StoreModule;
+using cascade::gui::storeProsePx;
 using cascade::gui::moduleKindTag;
 using cascade::gui::moduleReachColour;
 using cascade::gui::moduleReachSummary;
@@ -435,6 +445,303 @@ void testSortLabels() {
     CHECK(allDistinct(labels));
 }
 
+// ---------------------------------------------------------------------------
+// 6. storeProsePx - the size the page's sentences are set in
+// ---------------------------------------------------------------------------
+//
+// THE WHOLE OF "make the plugin store larger and easier to read" is behind this
+// one number, because every measured height and key width in the view derives
+// from it. It is pinned here rather than left to a screenshot for two reasons:
+// a regression would be a silent shrink back to the tiny engraving, and the
+// figure has to stay a THEME size - a local literal here is how the next
+// typeface change leaves one window behind.
+void testProseSize() {
+    // Bigger than the smallest engraving in the application, which is what
+    // every sentence on this page used to be set in.
+    CHECK(storeProsePx() > cascade::gui::fonts::kTinySize);
+    // ...and bigger than the ordinary prose size too. "Go bigger on the font"
+    // was asked for AFTER the first raise, and a step from 14 to 17 is what
+    // it was asked about.
+    CHECK(storeProsePx() > cascade::gui::fonts::kUiSize);
+    // A THEME SIZE, NOT A NUMBER INVENTED IN THE VIEW.
+    CHECK(storeProsePx() == cascade::gui::fonts::kPanelSize);
+    // The largest of the five the theme publishes: nothing on the ladder is
+    // above it, so "the largest face the theme offers" is a statement this
+    // check can keep true.
+    CHECK(cascade::gui::fonts::kPanelSize > cascade::gui::fonts::kUiSize);
+    CHECK(cascade::gui::fonts::kPanelSize > cascade::gui::fonts::kReadingSize);
+    CHECK(cascade::gui::fonts::kPanelSize > cascade::gui::fonts::kLegendSize);
+}
+
+// ---------------------------------------------------------------------------
+// 7. storeInstallState - the catalogue's question, in one word
+// ---------------------------------------------------------------------------
+
+StoreModule row() {
+    StoreModule sm;
+    sm.id = "example";
+    sm.plate = catalogueRow();
+    sm.installableHere = true;
+    return sm;
+}
+
+StoreModule fittedStoreRow() {
+    StoreModule sm = row();
+    sm.plate.fitted = true;
+    sm.plate.loaded = true;
+    sm.plate.running = true;
+    sm.plate.haveCapabilities = true;
+    sm.plate.capabilities = CASCADE_CAP_DECODER;
+    return sm;
+}
+
+std::string instWord(const StoreModule& sm) {
+    return std::string(storeInstallWord(storeInstallState(sm)));
+}
+
+void testInstallState() {
+    // NOT INSTALLED and CANNOT FIT are different answers, and the difference
+    // is whether anything the user does could change it.
+    CHECK(storeInstallState(row()) == StoreInstallState::NotInstalled);
+    CHECK(instWord(row()) == "NOT INSTALLED");
+    {
+        StoreModule sm = row();
+        sm.installableHere = false;
+        CHECK(storeInstallState(sm) == StoreInstallState::CannotFit);
+        CHECK(instWord(sm) == "CANNOT FIT");
+    }
+    // A TRANSFER IN FLIGHT MUST NOT MOVE A ROW BETWEEN TWO WORDS. blockedReason
+    // carries "a transfer is already in progress"; installableHere is the
+    // stable fact, and this state is derived from the stable one.
+    {
+        StoreModule sm = row();
+        sm.blockedReason = "a transfer is already in progress";
+        CHECK(storeInstallState(sm) == StoreInstallState::NotInstalled);
+    }
+
+    CHECK(storeInstallState(fittedStoreRow()) == StoreInstallState::Installed);
+    CHECK(instWord(fittedStoreRow()) == "INSTALLED");
+    {
+        StoreModule sm = fittedStoreRow();
+        sm.updateToVersion = "1.3.0";
+        CHECK(storeInstallState(sm) == StoreInstallState::UpdateAvailable);
+        CHECK(instWord(sm) == "UPDATE");
+    }
+    {
+        // FITTED AND REFUSED. The file is here and the host would not have it,
+        // which outranks an update on offer: the row's key still says UPDATE
+        // because that is the ACTION, and the word says what the state IS.
+        StoreModule sm = fittedStoreRow();
+        sm.plate.loaded = false;
+        sm.plate.running = false;
+        sm.plate.refusalReason = "ABI mismatch";
+        CHECK(storeInstallState(sm) == StoreInstallState::Refused);
+        CHECK(instWord(sm) == "REFUSED");
+        sm.updateToVersion = "1.3.0";
+        CHECK(storeInstallState(sm) == StoreInstallState::Refused);
+    }
+
+    // FIVE STATES, FIVE WORDS, FIVE INKS - collapsing any two would report one
+    // state as another on a panel whose whole job is to tell them apart.
+    const StoreInstallState all[5] = {
+        StoreInstallState::NotInstalled, StoreInstallState::CannotFit,
+        StoreInstallState::Installed,    StoreInstallState::UpdateAvailable,
+        StoreInstallState::Refused,
+    };
+    std::vector<std::string> words;
+    for (StoreInstallState s : all) {
+        words.push_back(std::string(storeInstallWord(s)));
+        CHECK(!words.back().empty());
+    }
+    CHECK(allDistinct(words));
+    for (int i = 0; i < 5; ++i) {
+        for (int j = i + 1; j < 5; ++j) {
+            CHECK(storeInstallColour(all[i]) != storeInstallColour(all[j]));
+        }
+    }
+
+    // NEVER AMBER. Amber in this palette is a READING - something the radio or
+    // the machine measured - and an install state is not a measurement. The
+    // updates banner letters its own heading in gold for exactly this reason.
+    for (StoreInstallState s : all) {
+        CHECK(storeInstallColour(s) != theme::kAmber);
+        CHECK(storeInstallColour(s) != theme::kAmberDim);
+    }
+    // ...and only REFUSED takes the alarm ink. Not having something is not a
+    // fault, and a panel of red words means nothing.
+    for (StoreInstallState s : all) {
+        const bool red = storeInstallColour(s) == theme::kAlarm ||
+                         storeInstallColour(s) == theme::kAlarmHot;
+        CHECK(red == (s == StoreInstallState::Refused));
+    }
+    CHECK(storeInstallColour(StoreInstallState::Installed) == theme::kPhosphor);
+    CHECK(storeInstallColour(StoreInstallState::UpdateAvailable) == theme::kGold);
+}
+
+// ---------------------------------------------------------------------------
+// 8. planAddAll - what the one big key picks, and what it says it will do
+// ---------------------------------------------------------------------------
+
+PluginStoreModel readCatalogue(std::vector<StoreModule> mods) {
+    PluginStoreModel m;
+    m.modules = std::move(mods);
+    m.haveCatalogue = !m.modules.empty();
+    m.sourceStatus = "N plugins in the catalogue";
+    return m;
+}
+
+bool hasNaming(const std::vector<std::string>& v, const char* name) {
+    for (const std::string& s : v) {
+        if (s.find(name) != std::string::npos) { return true; }
+    }
+    return false;
+}
+
+void testAddAllPlan() {
+    {
+        // NOTHING INSTALLED, nothing blocked: the key really does add all of
+        // them, and only then may it say so.
+        std::vector<StoreModule> mods(3, row());
+        const AddAllPlan p = planAddAll(readCatalogue(mods), false);
+        CHECK(p.install.size() == 3u);
+        CHECK(p.update.empty());
+        CHECK(p.skipped.empty());
+        CHECK(p.blockedReason.empty());
+        CHECK(p.label == "ADD ALL PLUGINS");
+        // Catalogue order, so the run is the order the user is reading.
+        CHECK(p.install[0] == 0 && p.install[1] == 1 && p.install[2] == 2);
+    }
+    {
+        // SOME INSTALLED AND CURRENT. They are not "skipped": already having
+        // something is the outcome the key was pressed for, and listing five
+        // of them as passed over would bury the one that really could not be
+        // fitted.
+        std::vector<StoreModule> mods = {row(), fittedStoreRow(), row()};
+        const AddAllPlan p = planAddAll(readCatalogue(mods), false);
+        CHECK(p.install.size() == 2u);
+        CHECK(p.install[0] == 0 && p.install[1] == 2);
+        CHECK(p.skipped.empty());
+        CHECK(p.label == "ADD ALL PLUGINS");
+        CHECK(p.blockedReason.empty());
+    }
+    {
+        // SOME BEHIND. Both counts on the key, because "ADD ALL PLUGINS" over
+        // a run that also replaces two fitted modules is not what it says.
+        std::vector<StoreModule> mods = {row(), row(), row(), fittedStoreRow(),
+                                         fittedStoreRow()};
+        mods[3].updateToVersion = "2.0.0";
+        mods[4].updateToVersion = "2.0.0";
+        const AddAllPlan p = planAddAll(readCatalogue(mods), false);
+        CHECK(p.install.size() == 3u);
+        CHECK(p.update.size() == 2u);
+        CHECK(p.update[0] == 3 && p.update[1] == 4);
+        CHECK(p.label == "ADD 3 PLUGINS, UPDATE 2");
+        CHECK(p.blockedReason.empty());
+    }
+    {
+        // ONLY UPDATES, and the singular reads as English.
+        std::vector<StoreModule> mods = {fittedStoreRow(), fittedStoreRow()};
+        mods[0].updateToVersion = "2.0.0";
+        mods[1].updateToVersion = "2.0.0";
+        CHECK(planAddAll(readCatalogue(mods), false).label == "UPDATE 2 PLUGINS");
+        mods[1].updateToVersion.clear();
+        CHECK(planAddAll(readCatalogue(mods), false).label == "UPDATE 1 PLUGIN");
+    }
+    {
+        // EVERYTHING ALREADY FITTED AND CURRENT: a dead key, and it says why.
+        std::vector<StoreModule> mods(2, fittedStoreRow());
+        const AddAllPlan p = planAddAll(readCatalogue(mods), false);
+        CHECK(p.install.empty());
+        CHECK(p.update.empty());
+        CHECK(!p.blockedReason.empty());
+        CHECK(has(p.blockedReason, "already fitted"));
+    }
+    {
+        // AN ENTRY THIS BUILD CANNOT TAKE - a retirement floor above the
+        // installed build, an ABI that does not match - is SKIPPED AND NAMED,
+        // with the reason it gave carried through. "17 installed, 7 skipped"
+        // is a number nobody can act on.
+        std::vector<StoreModule> mods = {row(), row()};
+        mods[1].plate.name = "Inmarsat-C";
+        mods[1].plate.retirementFloor = "9.9.9";
+        mods[1].installableHere = false;
+        mods[1].blockedReason =
+            "not compatible with this version (built for plugin ABI 2, this build "
+            "requires exactly 3)";
+        mods[1].blockedReasonIfAcknowledged = mods[1].blockedReason;
+        const AddAllPlan p = planAddAll(readCatalogue(mods), false);
+        CHECK(p.install.size() == 1u);
+        CHECK(p.install[0] == 0);
+        CHECK(p.skipped.size() == 1u);
+        CHECK(hasNaming(p.skipped, "Inmarsat-C"));
+        CHECK(hasNaming(p.skipped, "plugin ABI 2"));
+        // NOT "ALL", because it is not all. A key engraved ADD ALL PLUGINS
+        // that quietly passes one over is the copy this window exists to
+        // refuse.
+        CHECK(p.label == "ADD 1 PLUGIN");
+        CHECK(p.blockedReason.empty());
+        // ...and it is not counted as held by a notice, because no tick on
+        // this panel would change it.
+        CHECK(p.heldByNotice == 0);
+    }
+    {
+        // A MAKER'S LEGAL NOTICE is the one skip the user can undo from this
+        // panel, so it is counted apart - and the tick is what moves it.
+        std::vector<StoreModule> mods = {row(), row()};
+        mods[1].plate.name = "406 MHz Distress Beacon Decoder";
+        mods[1].plate.legalNotice = "Interception may be an offence where you are.";
+        mods[1].blockedReason = "the legal notice must be acknowledged first";
+        mods[1].blockedReasonIfAcknowledged.clear();
+        const AddAllPlan held = planAddAll(readCatalogue(mods), false);
+        CHECK(held.install.size() == 1u);
+        CHECK(held.heldByNotice == 1);
+        CHECK(hasNaming(held.skipped, "406 MHz"));
+        CHECK(held.label == "ADD 1 PLUGIN");
+
+        const AddAllPlan acked = planAddAll(readCatalogue(mods), true);
+        CHECK(acked.install.size() == 2u);
+        CHECK(acked.skipped.empty());
+        CHECK(acked.heldByNotice == 0);
+        CHECK(acked.label == "ADD ALL PLUGINS");
+    }
+    {
+        // NOBODY HAS ASKED FOR A CATALOGUE. Not "everything is up to date",
+        // which is the clean zero this product has been bitten by: "nothing to
+        // add" and "we have not looked" are different statements.
+        PluginStoreModel m;
+        const AddAllPlan p = planAddAll(m, false);
+        CHECK(!p.blockedReason.empty());
+        CHECK(has(p.blockedReason, "CHECK NOW"));
+        CHECK(!has(p.blockedReason, "already fitted"));
+        CHECK(p.label == "ADD ALL PLUGINS");
+    }
+    {
+        // ASKED, AND THE ATTEMPT FAILED. Telling this user to press CHECK NOW
+        // is telling them to do again the thing that just did not work.
+        PluginStoreModel m;
+        m.sourceError = "TLS handshake failed";
+        const AddAllPlan p = planAddAll(m, false);
+        CHECK(!has(p.blockedReason, "CHECK NOW"));
+        CHECK(has(p.blockedReason, "did not return a catalogue"));
+    }
+    {
+        // ASKED, AND IT LISTED NOTHING.
+        PluginStoreModel m;
+        m.sourceStatus = "0 plugins in the catalogue";
+        CHECK(has(planAddAll(m, false).blockedReason, "lists no modules"));
+    }
+    {
+        // ONE TRANSFER AT A TIME is what the downloader actually does.
+        PluginStoreModel m = readCatalogue(std::vector<StoreModule>(3, row()));
+        m.busy = true;
+        const AddAllPlan p = planAddAll(m, false);
+        CHECK(has(p.blockedReason, "transfer is already in progress"));
+        // The plan is still computed, so the key's word does not flicker while
+        // a download runs.
+        CHECK(p.install.size() == 3u);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -444,5 +751,8 @@ int main() {
     testStateWord();
     testStateInkAndLamp();
     testSortLabels();
+    testProseSize();
+    testInstallState();
+    testAddAllPlan();
     return testSummary("test_plugin_store_view");
 }

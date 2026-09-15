@@ -42,6 +42,45 @@ inline void clampPageSize(float& w, float& h) {
     if (!(h >= kPageMinH)) { h = kPageMinH; }
 }
 
+// THE BREATHING SPACE A PAGE OPENED INSIDE THE MAIN WINDOW LEAVES AROUND
+// ITSELF, so the main window's own frame and rail are still visible behind it
+// and the page reads as a page rather than as a takeover.
+inline constexpr float kPageInsideMargin = 24.0f;
+
+// WHERE A PAGE OPENS WHEN IT OPENS INSIDE THE MAIN WINDOW.
+//
+// The alternative - the stagger slots placeFeatureWindow uses - puts a page a
+// couple of hundred pixels PAST the main window's right edge, which on a
+// single monitor with the application maximised is off the screen entirely.
+// The demod scope refused that arrangement for a page that is WATCHED while
+// you work; the plugin store refuses it for a simpler reason, which is that a
+// user who presses a key on the rail and sees nothing appear has been told
+// nothing at all.
+//
+// Centred, and never larger than the viewport less a margin on each side - and
+// never under the drag floor either, because a viewport smaller than the floor
+// is a real state (a page opened while the main window is a sliver) and a
+// window sized to nothing is the trap kPageMinW exists to prevent.
+//
+// Pure arithmetic on four numbers in, four out: no ImGui, so the decision can
+// be checked without a frame.
+inline void pageOpenInside(float vpX, float vpY, float vpW, float vpH, float wantW,
+                           float wantH, float& x, float& y, float& w, float& h) {
+    const float maxW = vpW - kPageInsideMargin * 2.0f;
+    const float maxH = vpH - kPageInsideMargin * 2.0f;
+    w = wantW;
+    h = wantH;
+    if (!(w <= maxW)) { w = maxW; }  // NaN-safe, and shrinks an oversized page
+    if (!(h <= maxH)) { h = maxH; }
+    clampPageSize(w, h);
+    // A page wider than what is left is pinned to the viewport's own corner
+    // rather than centred off the left edge of it.
+    x = vpX + (vpW - w) * 0.5f;
+    y = vpY + (vpH - h) * 0.5f;
+    if (!(x >= vpX)) { x = vpX; }
+    if (!(y >= vpY)) { y = vpY; }
+}
+
 // WHETHER THIS PAGE STILL OWES THE USER A RE-PLACEMENT, and the counter that
 // makes it happen exactly once.
 //

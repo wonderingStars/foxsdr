@@ -2644,6 +2644,10 @@ void AppWindow::drawUi() {
     pollPendingRetune();
     // Same contract for the catalogue fetch / plugin download.
     pollPluginAsync();
+    // AFTER the poll, never before: the poll is what clears installPending_
+    // when a transfer lands, and a pump that ran first would see the slot busy
+    // and waste a frame on every module in the queue.
+    pumpAddAll();
     pollUpdateAsync();
     // And the sink: everything above this line can be working perfectly while
     // the user hears nothing.
@@ -8470,7 +8474,158 @@ void AppWindow::pollPluginAsync() {
         } else {
             installError_ = r.error;
         }
+        // THE RUN KEEPS ITS OWN TALLY, here, where the single authority on
+        // whether a transfer succeeded already is. Reading installReport_ back
+        // out of the panel afterwards would be a second opinion about the same
+        // event, and the two would eventually disagree.
+        if (addAllRun_.active) {
+            if (r.ok) {
+                ++addAllRun_.installed;
+            } else {
+                ++addAllRun_.failed;
+                addAllRun_.failures.push_back(r.name + ": " + r.error);
+                cascade::core::diagLogf("plugin store: add all - %s FAILED: %s",
+                                        r.name.c_str(), r.error.c_str());
+            }
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// ADD ALL PLUGINS - one queue, and the single install path underneath it
+// ---------------------------------------------------------------------------
+
+void AppWindow::startAddAll(bool noticesAcknowledged) {
+    if (addAllRun_.active || catalogPending_ || installPending_) { return; }
+    // RE-PLANNED FROM LIVE STATE, not from the plan the key was drawn against.
+    // The key was drawn one frame ago from a model built one frame ago, and
+    // the whole point of this queue is that it acts over many frames.
+    cascade::gui::PluginStoreModel model;
+    buildPluginStoreModel(model);
+    const cascade::gui::AddAllPlan plan =
+        cascade::gui::planAddAll(model, noticesAcknowledged);
+    if (!plan.blockedReason.empty()) {
+        installError_ = plan.blockedReason;
+        return;
+    }
+
+    addAllRun_ = AddAllRun{};
+    for (int i : plan.install) {
+        addAllRun_.ids.push_back(model.modules[static_cast<std::size_t>(i)].id);
+        addAllRun_.isUpdate.push_back(false);
+    }
+    for (int i : plan.update) {
+        addAllRun_.ids.push_back(model.modules[static_cast<std::size_t>(i)].id);
+        addAllRun_.isUpdate.push_back(true);
+    }
+    if (addAllRun_.ids.empty()) { return; }
+    addAllRun_.active = true;
+    addAllRun_.total = addAllRun_.ids.size();
+    addAllSummary_.clear();
+    addAllFailed_ = false;
+    installError_.clear();
+    installReport_.clear();
+    cascade::core::diagLogf(
+        "plugin store: add all starting - %zu to fetch, %zu to update, %zu passed over",
+        plan.install.size(), plan.update.size(), plan.skipped.size());
+    for (const std::string& s : plan.skipped) {
+        cascade::core::diagLogf("plugin store: add all - passing over %s", s.c_str());
+    }
+}
+
+std::string AppWindow::addAllProgressLine() const {
+    if (!addAllRun_.active) { return {}; }
+    char buf[256];
+    // "installing 4 of 23: GOES Weather Satellites (HRIT / LRIT)" - the
+    // position AND the name, because a bar with no name cannot tell a user
+    // which module is the slow one.
+    std::snprintf(buf, sizeof buf, "installing %zu of %zu: %s",
+                  std::min(addAllRun_.next + 1u, addAllRun_.total), addAllRun_.total,
+                  addAllRun_.currentName.empty() ? "starting" : addAllRun_.currentName.c_str());
+    return buf;
+}
+
+void AppWindow::pumpAddAll() {
+    if (!addAllRun_.active) { return; }
+    // A transfer is in flight, or a catalogue fetch is: wait. Nothing here
+    // cancels anything - CANCEL is the user's key and it stops the transfer,
+    // which this queue then records as a failure and carries on past.
+    if (installPending_ || catalogPending_) { return; }
+
+    while (addAllRun_.next < addAllRun_.ids.size()) {
+        const std::string id = addAllRun_.ids[addAllRun_.next];
+        const bool wantUpdate = addAllRun_.isUpdate[addAllRun_.next];
+        ++addAllRun_.next;
+
+        // THE ROW IS LOOKED UP AGAIN BY ID. catalog_ may have been replaced
+        // since the queue was built, and an entry that is no longer there is a
+        // failure with a reason rather than a silent skip.
+        int idx = -1;
+        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+            if (catalog_[static_cast<std::size_t>(i)].id == id) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            ++addAllRun_.failed;
+            addAllRun_.failures.push_back(id + ": no longer in the catalogue");
+            cascade::core::diagLogf(
+                "plugin store: add all - %s FAILED: no longer in the catalogue", id.c_str());
+            continue;
+        }
+        const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(idx)];
+        addAllRun_.currentName = e.name;
+
+        if (wantUpdate) {
+            const std::vector<cascade::core::PluginUpdate> plans = plannedPluginUpdates();
+            bool started = false;
+            for (const cascade::core::PluginUpdate& u : plans) {
+                if (u.id != id) { continue; }
+                startUpdate(u);
+                started = installPending_;
+                break;
+            }
+            if (started) { return; }
+            // The catalogue no longer offers a newer build for it - most
+            // likely because the fetch that was already in flight installed
+            // it. Not a failure; nothing is owed.
+            continue;
+        }
+        // THE SAME GATE, RE-TESTED AT THE MOMENT IT STARTS. The queue was
+        // planned frames ago and an install that has landed since can have
+        // changed this answer - "already installed" most of all. Asked with
+        // the notice acknowledged, because being IN this queue is the
+        // acknowledgement the user gave at the key.
+        const std::string blocked = pluginInstallBlockedReason(idx, true);
+        if (!blocked.empty()) {
+            if (blocked == "already installed") { continue; }
+            ++addAllRun_.failed;
+            addAllRun_.failures.push_back(e.name + ": " + blocked);
+            cascade::core::diagLogf("plugin store: add all - %s FAILED: %s", e.name.c_str(),
+                                    blocked.c_str());
+            continue;
+        }
+        startInstall(e);
+        if (installPending_) { return; }
+    }
+
+    // --- the queue is empty: say what happened ------------------------------
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "%d installed, %d failed", addAllRun_.installed,
+                  addAllRun_.failed);
+    addAllSummary_ = buf;
+    addAllFailed_ = addAllRun_.failed > 0;
+    if (addAllRun_.failed > 0) {
+        // NAMED, WITH THE REASON EACH GAVE. "3 failed" is a number nobody can
+        // act on; the reason PluginRepo wrote is the only evidence the user
+        // has, and it is carried through word for word.
+        addAllSummary_ += ".";
+        for (const std::string& f : addAllRun_.failures) { addAllSummary_ += " " + f + "."; }
+    }
+    cascade::core::diagLogf("plugin store: add all finished - %s", addAllSummary_.c_str());
+    addAllRun_.active = false;
+    addAllRun_.currentName.clear();
 }
 
 void AppWindow::removeInstalledPlugin(const std::string& fileName) {
@@ -10488,6 +10643,134 @@ void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h
     placeFeatureWindow(slot, wantW, wantH);
 }
 
+void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
+    // EVERY FIGURE ON THAT PANEL IS TRACED BACK TO SOMETHING MEASURED HERE.
+    // Lifted out of drawPluginStoreWindow unchanged when ADD ALL needed the
+    // same model to plan against: one transcription of a catalogue row into a
+    // StoreModule, so the key and the rows cannot disagree about what is
+    // fitted and what is blocked.
+    model.sourceUrl = pluginCatalogueUrl_;
+    // NOT "the catalogue is empty". Nothing here contacts the origin until
+    // the user asks, so before that every count would be a claim about
+    // something nobody has looked at; the window's banner says IDLE
+    // instead of printing a clean zero.
+    model.haveCatalogue = !catalog_.empty();
+    model.sourceStatus = catalogStatus_;
+    model.sourceError = catalogError_;
+    model.busy = catalogPending_ || installPending_;
+    model.progress = pluginRepo_.progress();
+    model.busyLabel = installPending_ ? ("downloading " + installBusyName_)
+                      : catalogPending_ ? std::string("fetching the catalogue")
+                                        : std::string();
+    model.resultReport = installReport_;
+    model.resultError = installError_;
+    // THE ADD ALL RUN, from the queue that is actually driving it rather than
+    // from `busy`, which cannot tell a bulk run from a single FIT.
+    model.addAllRunning = addAllRun_.active;
+    model.addAllProgress = addAllProgressLine();
+    model.addAllSummary = addAllSummary_;
+    model.addAllFailed = addAllFailed_;
+
+    // The update plans, once for the whole list rather than once per row:
+    // planUpdates walks the catalogue against the manifest, and asking it
+    // per module would be that walk squared for no new information.
+    const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
+
+    model.modules.reserve(catalog_.size());
+    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+        const cascade::core::PluginCatalogEntry& e =
+            catalog_[static_cast<std::size_t>(i)];
+        cascade::gui::StoreModule sm;
+        sm.id = e.id;
+        sm.plate.name = e.name;
+        sm.plate.version = e.version;
+        sm.plate.maker = e.author;
+        sm.plate.licence = e.licence;
+        sm.plate.blurb = e.description.empty() ? e.summary : e.description;
+        // THE SHORT ONE, KEPT APART. The row draws this and the data plate
+        // draws the description above; see ModulePlate::summary for the list
+        // of one that made the distinction necessary.
+        sm.plate.summary = e.summary;
+        sm.plate.homepage = e.homepage;
+        sm.plate.legalNotice = e.legalNotice;
+        // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the
+        // comparison are stated so the plate can letter the mismatch
+        // rather than the verdict.
+        sm.plate.haveAbi = true;
+        sm.plate.abiVersion = e.abiVersion;
+        sm.plate.hostAbiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+        sm.plate.retirementFloor = e.minSupportedVersion;
+        // "windows/x64, linux/x64" - the builds the catalogue publishes.
+        for (const cascade::core::PluginPlatform& pf : e.platforms) {
+            if (!sm.plate.platforms.empty()) { sm.plate.platforms += ", "; }
+            sm.plate.platforms += pf.os + "/" + pf.arch;
+        }
+        const cascade::core::PluginPlatform* plat = e.thisPlatform();
+        if (plat != nullptr && plat->sizeBytes > 0u) {
+            // ADVISORY, AND ONLY WHEN STATED. A catalogue that publishes
+            // no size gets haveSizeBytes false and the plate says it was
+            // never told - never a clean zero, which is the opposite
+            // claim.
+            sm.plate.haveSizeBytes = true;
+            sm.plate.sizeBytes = plat->sizeBytes;
+        }
+        // IS THERE A BUILD THIS MACHINE COULD RUN. A stable fact about the
+        // entry - the exact-ABI test the loader uses, and an os/arch build
+        // existing - deliberately not blockedReason, which also carries
+        // transient states such as a transfer already in flight.
+        sm.installableHere = e.compatible && plat != nullptr;
+        // FITTED, by the SAME test the desktop has always used: the
+        // sanitised file name against the host's records AND the manifest,
+        // so a retired module still counts as fitted.
+        sm.plate.fitted = catalogEntryInstalled(e);
+        // ...and if it is fitted, what the host actually made of it. This
+        // is the only place the catalogue row and the loaded record meet,
+        // and it is what lets the store's plate report loaded/running/
+        // refused instead of guessing from "the file is there".
+        if (const cascade::core::LoadedPlugin* lp = installedPluginRecord(e)) {
+            sm.plate.fileName =
+                std::filesystem::path(lp->path).filename().string();
+            sm.plate.loaded = lp->loaded;
+            sm.plate.refusalReason = lp->error;
+            sm.plate.haveCapabilities = lp->loaded;
+            sm.plate.capabilities = lp->capabilities;
+            const std::string key = cascade::core::pluginKey(*lp);
+            sm.plate.running = lp->loaded && !pluginIsStopped(key);
+            if (lp->hostClient != nullptr) {
+                sm.plate.haveTuneGrant = true;
+                sm.plate.tuneGranted =
+                    pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
+            }
+        }
+        // WHY FIT MAY NOT BE PRESSED, from the SAME predicate the key
+        // itself is tested against when the press is applied - so the
+        // sentence under the key and the key can never disagree.
+        //
+        // THE TICK BELONGS TO ONE MODULE, and the predicate is told so.
+        // deck.legalAck is the acknowledgement for the SELECTED row and
+        // for no other; passing it to every row would let a tick given to
+        // the plugin the user just read about unblock the FIT key on a
+        // different plugin's row, which is consent nobody gave. Every
+        // other row is asked as unacknowledged, so a module with a notice
+        // stays blocked until it is the one on the plate.
+        const bool acked =
+            (i == pluginStoreDeck_->selected) && pluginStoreDeck_->legalAck;
+        sm.blockedReason = pluginInstallBlockedReason(i, acked);
+        // ...AND THE SAME QUESTION ASKED AS IF THE NOTICE WERE ACKNOWLEDGED,
+        // which is what lets ADD ALL count the modules one tick would add and
+        // name them, instead of passing over seven of twenty-four in silence.
+        // Identical to the line above for every module with no notice.
+        sm.blockedReasonIfAcknowledged = pluginInstallBlockedReason(i, true);
+        for (const cascade::core::PluginUpdate& u : updates) {
+            if (u.id != e.id) { continue; }
+            sm.updateToVersion = u.toVersion;
+            sm.updateReason = u.reason;
+            break;
+        }
+        model.modules.push_back(std::move(sm));
+    }
+}
+
 void AppWindow::drawPluginStoreWindow() {
     // RESET FIRST, AND UNCONDITIONALLY. The fitted window reads this flag to
     // decide whether IT has to print the install/remove outcome, and a store
@@ -10507,9 +10790,34 @@ void AppWindow::drawPluginStoreWindow() {
     storeClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
     ImGui::SetNextWindowClass(&storeClass);
     // Wide enough for the deck, the module list and the data plate side by
-    // side - PluginStoreView refuses to lay out under 560 px and says so - and
-    // clamped to the monitor it opens on.
-    placeFeatureWindow(6, 1180.0f, 780.0f);
+    // side at the page's own engraving size - PluginStoreView refuses to lay
+    // out under 640 px and says so - and it OPENS INSIDE THE MAIN WINDOW.
+    //
+    // IT DID NOT, AND THAT WAS THE HALF OF "make the plugin store larger" A
+    // SIZE ALONE COULD NOT FIX. placeFeatureWindow's stagger slots put this
+    // page a couple of hundred pixels PAST the main window's right edge, which
+    // on this desk opened it at x=1657 - on a second monitor - and on a single
+    // monitor with the application maximised opens it off the screen entirely.
+    // A user who presses a key on the rail and sees nothing appear has been
+    // told nothing at all. The demod scope settled this for itself in 0.94.0;
+    // the arithmetic is in gui/page_geometry.hpp now so both do it one way and
+    // it can be checked without a frame.
+    //
+    // Dragging it out by its rail still makes it a separate operating system
+    // window, as any page does; it simply does not start as one.
+    constexpr float kStoreW = 1480.0f;
+    constexpr float kStoreH = 980.0f;
+    float sx = 0.0f;
+    float sy = 0.0f;
+    float sw = kStoreW;
+    float sh = kStoreH;
+    {
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        cascade::gui::pageOpenInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, kStoreW,
+                                     kStoreH, sx, sy, sw, sh);
+    }
+    ImGui::SetNextWindowPos(ImVec2(sx, sy), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_FirstUseEver);
     // NO WINDOW PADDING, because the content is a CABINET: the brass has to
     // reach the frame the operating system drew, and four pixels of ImGui's
     // window ground all the way round it would read as a gap between the
@@ -10521,118 +10829,14 @@ void AppWindow::drawPluginStoreWindow() {
     // state and a rail row's press end up in the same hash bucket. beginPage
     // draws the cabinet this window is, with its name and keys on the rail.
     const bool drawn = beginPage("Plugin store###pluginstorewindow", "PLUGIN STORE", &open,
-                                 0, 1180.0f, 780.0f);
+                                 0, sw, sh);
     // The frame's close button is a real close: it puts the key on the rail
     // back to off, and that is the only state either of them reads.
     if (!open) { pluginBrowseOpen_ = false; }
     if (drawn) {
         // --- what the window is told, from where it is measured -------------
         cascade::gui::PluginStoreModel model;
-        model.sourceUrl = pluginCatalogueUrl_;
-        // NOT "the catalogue is empty". Nothing here contacts the origin until
-        // the user asks, so before that every count would be a claim about
-        // something nobody has looked at; the window's banner says IDLE
-        // instead of printing a clean zero.
-        model.haveCatalogue = !catalog_.empty();
-        model.sourceStatus = catalogStatus_;
-        model.sourceError = catalogError_;
-        model.busy = catalogPending_ || installPending_;
-        model.progress = pluginRepo_.progress();
-        model.busyLabel = installPending_ ? ("downloading " + installBusyName_)
-                          : catalogPending_ ? std::string("fetching the catalogue")
-                                            : std::string();
-        model.resultReport = installReport_;
-        model.resultError = installError_;
-
-        // The update plans, once for the whole list rather than once per row:
-        // planUpdates walks the catalogue against the manifest, and asking it
-        // per module would be that walk squared for no new information.
-        const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
-
-        model.modules.reserve(catalog_.size());
-        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-            const cascade::core::PluginCatalogEntry& e =
-                catalog_[static_cast<std::size_t>(i)];
-            cascade::gui::StoreModule sm;
-            sm.id = e.id;
-            sm.plate.name = e.name;
-            sm.plate.version = e.version;
-            sm.plate.maker = e.author;
-            sm.plate.licence = e.licence;
-            sm.plate.blurb = e.description.empty() ? e.summary : e.description;
-            sm.plate.homepage = e.homepage;
-            sm.plate.legalNotice = e.legalNotice;
-            // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the
-            // comparison are stated so the plate can letter the mismatch
-            // rather than the verdict.
-            sm.plate.haveAbi = true;
-            sm.plate.abiVersion = e.abiVersion;
-            sm.plate.hostAbiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
-            sm.plate.retirementFloor = e.minSupportedVersion;
-            // "windows/x64, linux/x64" - the builds the catalogue publishes.
-            for (const cascade::core::PluginPlatform& pf : e.platforms) {
-                if (!sm.plate.platforms.empty()) { sm.plate.platforms += ", "; }
-                sm.plate.platforms += pf.os + "/" + pf.arch;
-            }
-            const cascade::core::PluginPlatform* plat = e.thisPlatform();
-            if (plat != nullptr && plat->sizeBytes > 0u) {
-                // ADVISORY, AND ONLY WHEN STATED. A catalogue that publishes
-                // no size gets haveSizeBytes false and the plate says it was
-                // never told - never a clean zero, which is the opposite
-                // claim.
-                sm.plate.haveSizeBytes = true;
-                sm.plate.sizeBytes = plat->sizeBytes;
-            }
-            // IS THERE A BUILD THIS MACHINE COULD RUN. A stable fact about the
-            // entry - the exact-ABI test the loader uses, and an os/arch build
-            // existing - deliberately not blockedReason, which also carries
-            // transient states such as a transfer already in flight.
-            sm.installableHere = e.compatible && plat != nullptr;
-            // FITTED, by the SAME test the desktop has always used: the
-            // sanitised file name against the host's records AND the manifest,
-            // so a retired module still counts as fitted.
-            sm.plate.fitted = catalogEntryInstalled(e);
-            // ...and if it is fitted, what the host actually made of it. This
-            // is the only place the catalogue row and the loaded record meet,
-            // and it is what lets the store's plate report loaded/running/
-            // refused instead of guessing from "the file is there".
-            if (const cascade::core::LoadedPlugin* lp = installedPluginRecord(e)) {
-                sm.plate.fileName =
-                    std::filesystem::path(lp->path).filename().string();
-                sm.plate.loaded = lp->loaded;
-                sm.plate.refusalReason = lp->error;
-                sm.plate.haveCapabilities = lp->loaded;
-                sm.plate.capabilities = lp->capabilities;
-                const std::string key = cascade::core::pluginKey(*lp);
-                sm.plate.running = lp->loaded && !pluginIsStopped(key);
-                if (lp->hostClient != nullptr) {
-                    sm.plate.haveTuneGrant = true;
-                    sm.plate.tuneGranted =
-                        pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
-                }
-            }
-            // WHY FIT MAY NOT BE PRESSED, from the SAME predicate the key
-            // itself is tested against when the press is applied - so the
-            // sentence under the key and the key can never disagree.
-            //
-            // THE TICK BELONGS TO ONE MODULE, and the predicate is told so.
-            // deck.legalAck is the acknowledgement for the SELECTED row and
-            // for no other; passing it to every row would let a tick given to
-            // the plugin the user just read about unblock the FIT key on a
-            // different plugin's row, which is consent nobody gave. Every
-            // other row is asked as unacknowledged, so a module with a notice
-            // stays blocked until it is the one on the plate.
-            const bool acked =
-                (i == pluginStoreDeck_->selected) && pluginStoreDeck_->legalAck;
-            sm.blockedReason = pluginInstallBlockedReason(i, acked);
-            for (const cascade::core::PluginUpdate& u : updates) {
-                if (u.id != e.id) { continue; }
-                sm.updateToVersion = u.toVersion;
-                sm.updateReason = u.reason;
-                break;
-            }
-            model.modules.push_back(std::move(sm));
-        }
+        buildPluginStoreModel(model);
 
         // --- the cabinet, and the plate as content --------------------------
         // Whether PluginStoreView::draw actually ran; see the request block
@@ -10714,6 +10918,12 @@ void AppWindow::drawPluginStoreWindow() {
         }
         if (pluginStoreView_->checkNowRequested()) { startCatalogFetch(); }
         if (pluginStoreView_->cancelRequested()) { pluginRepo_.cancel(); }
+        // THE BULK KEY, and it re-plans from live state rather than from the
+        // plan it was drawn against - see startAddAll. The acknowledgement is
+        // the deck's own ADD ALL tick, which is not the per-module one.
+        if (pluginStoreView_->addAllRequested()) {
+            startAddAll(pluginStoreDeck_->addAllAck);
+        }
         const int fitIdx = pluginStoreView_->fitRequested();
         if (fitIdx >= 0 && fitIdx < static_cast<int>(catalog_.size())) {
             // RE-TESTED, NOT TRUSTED. The view only offers the key where the
