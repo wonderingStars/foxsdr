@@ -111,17 +111,18 @@ void getStringArray(const json& j, const char* key, std::vector<std::string>& ds
     dst = std::move(v);
 }
 
-// The shared rule for the four name lists the config carries
-// (pluginTuneAllowed, pluginsStopped, pluginMuteOverride, closedWindows):
-// drop empties, drop duplicates, cap the length. One function rather than
-// four loops, because the lists are the same shape and a rule that applied to
+// The shared rule for the five string lists the config carries
+// (pluginTuneAllowed, pluginsStopped, pluginMuteOverride, closedWindows,
+// keyBindings): drop empties, drop duplicates, cap the length. One function
+// rather than five loops, because the lists are the same shape and a rule that applied to
 // only some of them would be a rule nobody could rely on. Name every caller
 // here when another list arrives — an enumeration that stops being exhaustive
 // is worse than none.
 //
-// closedWindows holds ImGui window identities rather than plugin file names.
-// It is the same shape and wants the same treatment, and keeping one rule is
-// worth more than a second function that would only differ in its name.
+// closedWindows holds ImGui window identities rather than plugin file names,
+// and keyBindings holds "actionId=chord" lines. Both are the same shape and
+// want the same treatment, and keeping one rule is worth more than further
+// functions that would only differ in their names.
 std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in) {
     std::vector<std::string> out;
     for (const std::string& n : in) {
@@ -263,6 +264,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // exists, so a file from a build with more or fewer banks opens somewhere.
     getInt(j, "railBank", out.railBank);
     out.railBank = static_cast<int>(cascade::gui::railBankFromIndex(out.railBank));
+    // The rebound keys. Read here as plain strings and understood nowhere in
+    // this file: gui/key_bindings.hpp turns them into a table, and a line it
+    // cannot read is dropped on its own there rather than costing the user the
+    // good lines beside it.
+    getStringArray(j, "keyBindings", out.keyBindings);
     // LEGACY KEYS, READ AND NEVER WRITTEN. A file saved before the map became
     // one page per plugin carries its single window's rectangle here; it is
     // read so that rectangle can seed the pages' default placement, and save()
@@ -539,6 +545,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // duplicate here would be a preference that flipped twice - which is the
     // same as not being there at all, but only if something removes it.
     out.pluginMuteOverride = sanitisePluginNames(out.pluginMuteOverride);
+    // And the rebound keys, from the same function for the fourth time. An
+    // empty line could name no action, and a line repeated verbatim is one
+    // rebind stated twice - both are noise a hand-edit leaves behind, and the
+    // cap keeps a hostile file from growing the config without bound.
+    out.keyBindings = sanitisePluginNames(out.keyBindings);
     return true;
 }
 
@@ -593,6 +604,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
     j["railBank"] = cfg.railBank;
+    j["keyBindings"] = cfg.keyBindings;
     // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
     // deliberately NOT written: the map is one page per plugin now, and
     // mapPages below is the rectangle store. The keys are still read (see
