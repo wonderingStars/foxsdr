@@ -15,6 +15,10 @@
 #include <utility>
 #include <vector>
 
+// For runningInPackage(), which decides whether defaultPluginDir() may run its
+// write probe at all - inside an MSIX package the exe directory is read-only
+// by design and nothing here should try it.
+#include "core/package_identity.hpp"
 // For PluginRepo::compareVersions. The catalogue's version ordering is REUSED
 // here rather than reimplemented: a second comparator would eventually
 // disagree with the one the update check uses about which of two versions is
@@ -1086,7 +1090,13 @@ bool PluginHost::directoryIsWritable(const std::string& dir) {
 }
 
 std::string PluginHost::choosePluginDir(const std::string& exeDir, const std::string& userDir,
-                                        bool exeDirWritable) {
+                                        bool exeDirWritable, bool packaged) {
+    // Checked FIRST, and it beats a writable-looking exe directory. Inside a
+    // package that directory is the read-only package root; a "writable" claim
+    // about it could only be wrong.
+    if (packaged && !userDir.empty()) {
+        return userDir;
+    }
     if (exeDirWritable) {
         return exeDir;
     }
@@ -1098,7 +1108,14 @@ std::string PluginHost::choosePluginDir(const std::string& exeDir, const std::st
 
 std::string PluginHost::defaultPluginDir() {
     const std::string exeDir = exePluginDir();
-    return choosePluginDir(exeDir, userPluginDir(), directoryIsWritable(exeDir));
+    const std::string userDir = userPluginDir();
+    // THE PROBE IS SKIPPED, NOT IGNORED, when this process is packaged: the
+    // whole point is that nothing writes into the package directory, not even
+    // a probe file that is immediately removed.
+    if (cascade::core::runningInPackage() && !userDir.empty()) {
+        return choosePluginDir(exeDir, userDir, false, true);
+    }
+    return choosePluginDir(exeDir, userDir, directoryIsWritable(exeDir), false);
 }
 
 bool PluginHost::hasPluginExtension(const std::string& filename) {
