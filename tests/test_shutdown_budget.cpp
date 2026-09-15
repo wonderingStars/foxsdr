@@ -572,6 +572,25 @@ const KnownWait kKnownWaits[] = {
     {"src/source/sdrplay_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the tally window before one \"source: stream health ...\" line is "
      "written, matching SoapySource's; nothing sleeps or blocks on it"},
+    // AND THE ONE WAIT THAT IS SPENT ON THE GUI THREAD BY A SCAN (0.96.1).
+    // enumerateSdrPlayWith runs the vendor calls on a worker and waits this
+    // long for them, because sdrplay_api_Open/LockDeviceApi/GetDevices take no
+    // timeout and a user whose service had died watched the application freeze
+    // inside them. It is NOT on the teardown path: scanNative() is called from
+    // the Source section's draw and from applyConfig, both of which run inside
+    // the frame loop, and the teardown between beginShutdown() and stop()
+    // enumerates nothing. A scan cannot be in flight across it either - it is
+    // synchronous on the same thread that runs the teardown, so the frame it
+    // belongs to has already finished.
+    {"src/source/sdrplay_source.hpp", "kEnumerateWait", 0,
+     "how long a scan waits for the SDRplay service before ABANDONING the worker it asked. "
+     "Spent on the GUI thread inside a draw, never between beginShutdown() and stop(): the "
+     "teardown enumerates nothing, and a scan is synchronous on the same thread so it cannot "
+     "still be running when the teardown starts"},
+    {"src/source/sdrplay_source.hpp", "kEnumerateHoldOff", 0,
+     "not a wait at all - how long AFTER an abandoned enumeration the SDRplay step is skipped "
+     "without touching the API. Nothing sleeps or blocks on it; it is compared against the "
+     "clock and the scan returns immediately"},
     // THE NATIVE MIRICS DRIVER. Same argument as the blocks above and the
     // same answer: a Mirics teardown costs msi2500 kTeardownControlTimeout
     // 500 (the stop-streaming command) + kReaderJoinWait 1000 + usb

@@ -60,7 +60,12 @@ exactly as many.
   install id, no cookie kept — and it is not the usage report; the two share
   nothing. Nothing is downloaded or installed without you pressing a button.
 - The application makes one other network request, only when you press
-  **Browse** in the Plugin store panel, to fetch the plugin catalogue.
+  **CHECK NOW** in the plugin store window, to fetch the plugin catalogue
+  from GitHub (raw.githubusercontent.com). Nothing is fetched at startup.
+- The Satellites plugin, when it is fitted and tracking, fetches orbital
+  element sets from CelesTrak about every twelve hours, falling back to a
+  copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request
+  carries no identifier.
 
 ## What is sent when usage reporting is enabled
 
@@ -308,16 +313,22 @@ These are design constraints, not current policy:
 **Settings → Usage reporting**, and untick it. Reporting is on by default, so
 this is the switch that stops it. Turning it off deletes the install
 identifier, so if you ever turn it back on you get a new one that cannot be
-linked to the old one.
+linked to the old one. It also stops the five-minute "still running" beat,
+which is armed only while the identifier exists.
 
-Nothing else in the application is affected: no feature depends on reporting
-being on, and nothing nags you about having turned it off.
+The other two transmissions have their own switches, described in their own
+sections above: **Settings → Diagnostics** for crash and freeze reports, and
+**Settings → Updates** for the version check.
+
+Nothing else in the application is affected: no feature depends on any of
+them being on, and nothing nags you about having turned one off.
 
 ## Where the data goes
 
-To a Cloudflare Worker operated by the FoxSDR project, which aggregates the
-counters above. The source is in `telemetry-worker/` in this repository so you
-can read what the receiving end does with it.
+To `https://telemetry.foxsdr.com`, a Cloudflare Worker operated by the FoxSDR
+project, which aggregates the counters above. The source is in
+`telemetry-worker/` in this repository so you can read what the receiving end
+does with it.
 
 ## Data protection
 

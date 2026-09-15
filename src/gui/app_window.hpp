@@ -66,6 +66,7 @@ struct GLFWwindow;
 // RememberedSource, held by value below: the pure source decisions, ImGui-free
 // like every other gui header included here.
 #include "gui/tune_control.hpp"
+#include "gui/viewport_policy.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
 // keeps app_window.hpp usable from the tests (see the note below).
@@ -2016,6 +2017,15 @@ private:
     bool scopeLeftThisFrame_ = false;
 
     GLFWwindow* mainWindow_ = nullptr;
+
+    // WHETHER A TORN-OFF PAGE GETS AN OPERATING SYSTEM WINDOW, and why not
+    // when it does not. Decided once at startup from FOXSDR_SINGLE_VIEWPORT
+    // and a probe for a second shared GL context, and re-decided the moment
+    // the backend reports that the driver refused one - see
+    // gui/viewport_policy.hpp and the 0.95.0 "crash cascade.exe @
+    // glfwGetWin32Window" report that made it necessary. Kept as state rather
+    // than re-derived because the sentence has to be logged exactly once.
+    cascade::gui::ViewportDecision viewportDecision_ = cascade::gui::ViewportDecision::Enabled;
 
     // --- THE WINDOW FRAMES, ON THE METAL (0.78.0) ------------------------------
     //
