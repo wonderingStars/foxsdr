@@ -426,6 +426,17 @@ public:
     // Rate the chain resamples to and the device is opened at.
     static constexpr double kAudioRateHz = 48000.0;
 
+    // How long the chain takes to hand the speakers to a plugin, or take them
+    // back, in FRAMES at kAudioRateHz: 5 ms.
+    //
+    // A HARD CUT BETWEEN TWO UNRELATED SIGNALS IS A CLICK, and a loud one - the
+    // step at the seam is the sum of two amplitudes that know nothing about
+    // each other, which is a broadband impulse straight into the speakers. 5 ms
+    // is long enough to make that step inaudible and short enough that nobody
+    // perceives the changeover as a fade. Public so the test can measure the
+    // seam against the number rather than against a guess.
+    static constexpr std::size_t kPluginFadeFrames = 240;
+
     // --- Test support (used by --selftest) ----------------------------------
     // Total audio samples produced by the chain, counted BEFORE
     // AudioOut::write so the count advances with or without a device.
@@ -627,6 +638,17 @@ private:
     std::vector<float> outR_;
     std::vector<float> outIlv_;                  // interleaved 48 kHz for the sink
     std::vector<float> monoOut_;                 // (L+R)/2 for tap + recorder
+    // A plugin's audio (CASCADE_CAP_AUDIO_OUT), already at kAudioRateHz, and
+    // the crossfade that hands the speakers over. DSP thread only.
+    std::vector<float> plugL_;
+    std::vector<float> plugR_;
+    float pluginFade_ = 0.0f;  // 0 = demodulated audio, 1 = the plugin's
+    // The last sample actually played from the plugin, held through the fade
+    // OUT. Fading to digital zero instead would put a step the size of that
+    // sample at the seam - the click the fade exists to prevent, moved to the
+    // other end of the takeover.
+    float pluginLastL_ = 0.0f;
+    float pluginLastR_ = 0.0f;
     // Rolling pre-AudioOut tap window (interleaved L,R; kAudioTapSize FRAMES)
     // + producer-side counters (test support).
     std::vector<float> tapBuf_;

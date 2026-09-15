@@ -3,8 +3,11 @@
 #include "core/plugin_runner.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+
+#include "core/diag_log.hpp"
 
 namespace cascade::core {
 namespace {
@@ -115,6 +118,14 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
         // blocks rather than an else-if.
         bool started = false;
 
+        // THE HANDLE CASCADE_CAP_AUDIO_OUT RIDES ON. That table has no
+        // create() of its own - the sound a decoder makes is the same object
+        // as the decode - so it borrows the first instance this plugin
+        // produces, in the fixed order the ABI states: decoder, then I/Q
+        // decoder, then image decoder. Taken here, once, rather than at three
+        // call sites, so the order cannot drift from what the header promises.
+        void* audioHandle = nullptr;
+
         if (lp.decoder != nullptr) {
             // requiredRateHz == 0 means "any rate"; anything else is the rate
             // the decoder is BUILT around, and the host resamples the pipeline's
@@ -145,6 +156,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     // so the instance can rewrite its own reason later if the
                     // decoder gives up mid-run.
                     inst.statusIndex = status_.size();
+                    if (audioHandle == nullptr) { audioHandle = h; }
                     instances_.push_back(std::move(inst));
                     DecoderStatus st;
                     st.plugin = lp.name;
@@ -184,6 +196,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     inst.handle = h;
                     inst.name = lp.name;
                     inst.statusIndex = status_.size();
+                    if (audioHandle == nullptr) { audioHandle = h; }
                     iqInstances_.push_back(std::move(inst));
                     DecoderStatus st;
                     st.plugin = lp.name;
@@ -237,6 +250,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     inst.inputKind = isIq ? CASCADE_INPUT_IQ : CASCADE_INPUT_AUDIO;
                     if (resample) { setUpResample(inst.resample, have, want); }
                     inst.statusIndex = status_.size();
+                    if (audioHandle == nullptr) { audioHandle = h; }
                     imageInstances_.push_back(std::move(inst));
                     if (isIq) { ++iqImageCount_; } else { ++audioImageCount_; }
                     st.reason = DecoderIdleReason::Running;
@@ -250,6 +264,40 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
                     started = true;
                 }
             }
+        }
+
+        // THE SPEAKERS. Registered last, because it needs an instance to ride
+        // on and the three blocks above are what produce one. A plugin that
+        // declares the capability but got no instance (its create() failed,
+        // or its decoder wants a rate this receiver is not producing) is
+        // simply not registered: it has nothing to play from, and the status
+        // row its decoder already pushed says why in the words the user needs.
+        if (lp.audioOut != nullptr && audioHandle != nullptr) {
+            AudioInstance a;
+            a.api = lp.audioOut;
+            a.handle = audioHandle;
+            a.name = lp.name;
+            a.key = key;
+            a.rateHz = lp.audioOut->sampleRateHz;
+            a.channels = lp.audioOut->channels;
+            // The plugin's rate is validated non-zero and in range at load
+            // time, so this ratio is always meaningful. Built once here, not
+            // on the first block: the audio thread must not construct a
+            // resampler (it allocates, and it computes a filter).
+            if (static_cast<double>(a.rateHz) != audioRateHz && audioRateHz > 0.0) {
+                a.rsL = std::make_unique<cascade::dsp::RationalResampler>(
+                    static_cast<unsigned>(audioRateHz), a.rateHz);
+                a.rsR = std::make_unique<cascade::dsp::RationalResampler>(
+                    static_cast<unsigned>(audioRateHz), a.rateHz);
+            }
+            // Reserved, never resized down: every append below stays inside
+            // this capacity, so the steady-state path allocates nothing.
+            a.fifoL.reserve(kAudioFifoFrames);
+            a.fifoR.reserve(kAudioFifoFrames);
+            a.pullBuf.reserve(kAudioFifoFrames * 2u);
+            a.inL.reserve(kAudioFifoFrames);
+            a.inR.reserve(kAudioFifoFrames);
+            audioInstances_.push_back(std::move(a));
         }
 
         // No table this runner drives: say so rather than leaving the plugin
@@ -330,6 +378,20 @@ void PluginRunner::clear() {
 }
 
 void PluginRunner::destroyLocked() {
+    // FIRST, BEFORE ANY destroy(). An AudioInstance holds no handle of its
+    // own: it borrows a decoder instance's. Dropping these after the loops
+    // below would leave a borrowed pointer to a destroyed instance in the
+    // vector, and the very next block on the audio thread would pull through
+    // it. The events and counters go with them - they describe a set of
+    // instances that no longer exists.
+    audioInstances_.clear();
+    playing_ = kNoAudio;
+    audioEventCount_ = 0;
+    audioGaps_ = 0;
+    audioGapFrames_ = 0;
+    audioGapsReported_ = 0;
+    audioGapFramesReported_ = 0;
+
     for (Instance& i : instances_) {
         if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
     }
@@ -382,6 +444,293 @@ void PluginRunner::processAudio(const float* mono, std::size_t frames) {
     if (fedAny) { audioFed_ += frames; }
     pollLocked();
     pollImageTextLocked(CASCADE_INPUT_AUDIO);
+}
+
+// ---------------------------------------------------------------------------
+// The plugin audio path
+// ---------------------------------------------------------------------------
+
+void PluginRunner::noteAudioEventLocked(AudioEvent::Kind kind, const AudioInstance& a,
+                                        const AudioInstance* holder) {
+    // DROPPED RATHER THAN QUEUED WITHOUT BOUND. This array is written by the
+    // audio thread and emptied by the GUI thread; a GUI that has stopped
+    // draining (minimised, modal) must not make the audio path grow anything.
+    // Eight transitions between two drains is already a plugin flapping.
+    if (audioEventCount_ >= kMaxAudioEvents) { return; }
+    AudioEvent& e = audioEvents_[audioEventCount_++];
+    e = AudioEvent{};
+    e.kind = kind;
+    std::snprintf(e.name, sizeof e.name, "%s", a.name.c_str());
+    if (holder != nullptr) {
+        std::snprintf(e.holder, sizeof e.holder, "%s", holder->name.c_str());
+    }
+    e.rateHz = a.rateHz;
+    e.channels = a.channels;
+    e.sinkRateHz = static_cast<std::uint32_t>(audioRateHz_);
+}
+
+void PluginRunner::pullAudioLocked(AudioInstance& a, float* left, float* right,
+                                   std::size_t frames) {
+    // TOP UP FIRST, THEN SERVE. The plugin's clock is not the sink's, so a
+    // resampler hands back a variable number of samples per call while the
+    // block below needs an exact count; the FIFO is what absorbs the
+    // difference. Only the shortfall is asked for, so the buffer never runs
+    // ahead and the plugin's own latency is not added to.
+    const std::size_t have = a.fifoL.size() - a.fifoHead;
+    if (have < frames && !a.stopped) {
+        const std::size_t shortfall = frames - have;
+        std::size_t needIn = shortfall;
+        if (a.rsL) {
+            // Ceiling plus two: a polyphase resampler's output count per block
+            // depends on its stream phase, so asking for the exact ratio can
+            // come up one sample short and charge a gap for arithmetic.
+            needIn = static_cast<std::size_t>(
+                         std::ceil(static_cast<double>(shortfall) *
+                                   static_cast<double>(a.rateHz) / audioRateHz_)) +
+                     2u;
+        }
+        if (a.pullBuf.size() < needIn * a.channels) { a.pullBuf.resize(needIn * a.channels); }
+        const std::int32_t got = a.api->pull(a.handle, a.pullBuf.data(), needIn);
+        if (got < 0) {
+            // The ABI's "stopped producing for good": never pulled again, and
+            // whatever is still in the FIFO is played out below rather than
+            // cut off mid-word.
+            a.stopped = true;
+        } else if (got > 0) {
+            std::size_t n = static_cast<std::size_t>(got);
+            if (n > needIn) { n = needIn; }  // a plugin that overstated itself
+            if (a.inL.size() < n) {
+                a.inL.resize(n);
+                a.inR.resize(n);
+            }
+            if (a.channels == 2u) {
+                for (std::size_t i = 0; i < n; ++i) {
+                    a.inL[i] = a.pullBuf[2 * i];
+                    a.inR[i] = a.pullBuf[2 * i + 1];
+                }
+            } else {
+                // MONO GOES TO BOTH EARS, not to one. Halving it into a centre
+                // image would make every mono service quieter than every
+                // stereo one, which is the sort of difference a user blames on
+                // the plugin.
+                for (std::size_t i = 0; i < n; ++i) {
+                    a.inL[i] = a.pullBuf[i];
+                    a.inR[i] = a.pullBuf[i];
+                }
+            }
+
+            // Compact before appending: the head is consumed audio, and an
+            // index that only ever grows would walk the buffer off its
+            // reserve. The tail being moved is always less than one block.
+            if (a.fifoHead != 0) {
+                a.fifoL.erase(a.fifoL.begin(),
+                              a.fifoL.begin() + static_cast<std::ptrdiff_t>(a.fifoHead));
+                a.fifoR.erase(a.fifoR.begin(),
+                              a.fifoR.begin() + static_cast<std::ptrdiff_t>(a.fifoHead));
+                a.fifoHead = 0;
+            }
+            const std::size_t base = a.fifoL.size();
+            const std::size_t room = a.rsL ? a.rsL->maxOut(n) : n;
+            a.fifoL.resize(base + room);
+            a.fifoR.resize(base + room);
+            std::size_t produced = n;
+            if (a.rsL) {
+                const std::size_t kL =
+                    a.rsL->process(a.inL.data(), n, a.fifoL.data() + base, room);
+                const std::size_t kR =
+                    a.rsR->process(a.inR.data(), n, a.fifoR.data() + base, room);
+                produced = std::min(kL, kR);
+            } else {
+                std::memcpy(a.fifoL.data() + base, a.inL.data(), n * sizeof(float));
+                std::memcpy(a.fifoR.data() + base, a.inR.data(), n * sizeof(float));
+            }
+            a.fifoL.resize(base + produced);
+            a.fifoR.resize(base + produced);
+        }
+    }
+
+    const std::size_t avail = a.fifoL.size() - a.fifoHead;
+    const std::size_t take = std::min(avail, frames);
+    if (take != 0) {
+        std::memcpy(left, a.fifoL.data() + a.fifoHead, take * sizeof(float));
+        std::memcpy(right, a.fifoR.data() + a.fifoHead, take * sizeof(float));
+        a.fifoHead += take;
+    }
+    if (take < frames) {
+        // A GAP, NOT AN END. The plugin is still the thing playing; it simply
+        // had nothing this block. Silence for the shortfall and a counter, so
+        // "the DAB audio keeps breaking up" is a number somebody can read
+        // rather than a description.
+        std::fill(left + take, left + frames, 0.0f);
+        std::fill(right + take, right + frames, 0.0f);
+        ++audioGaps_;
+        audioGapFrames_ += frames - take;
+    }
+    if (a.fifoHead == a.fifoL.size()) {
+        a.fifoL.clear();
+        a.fifoR.clear();
+        a.fifoHead = 0;
+    }
+}
+
+bool PluginRunner::pullPluginAudio(float* left, float* right, std::size_t frames) {
+    if (left == nullptr || right == nullptr || frames == 0) { return false; }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (audioInstances_.empty()) { return false; }
+
+    // EVERY INSTANCE IS ASKED EVERY BLOCK, including ones not being pulled
+    // from. That is how a second plugin gets the speakers after the first lets
+    // go - and active() is defined as a read of state the plugin has already
+    // decided, so asking costs nothing.
+    std::size_t want = kNoAudio;
+    for (std::size_t i = 0; i < audioInstances_.size(); ++i) {
+        AudioInstance& a = audioInstances_[i];
+        if (a.stopped) { continue; }
+        if (a.api->active(a.handle) == 0) {
+            a.contentionLogged = false;
+            continue;
+        }
+        if (want == kNoAudio) {
+            want = i;
+            continue;
+        }
+        // FIRST WINS, in load order, and the loser is told once. Deciding it
+        // by load order rather than by whichever asked most recently is what
+        // keeps the speaker from being handed back and forth every block when
+        // two decoders are both running.
+        if (!a.contentionLogged) {
+            a.contentionLogged = true;
+            noteAudioEventLocked(AudioEvent::Kind::Contended, a, &audioInstances_[want]);
+        }
+    }
+
+    if (want != playing_) {
+        if (playing_ != kNoAudio) {
+            noteAudioEventLocked(AudioEvent::Kind::Stopped, audioInstances_[playing_], nullptr);
+        }
+        if (want != kNoAudio) {
+            // Start from empty: whatever is in the FIFO is from the last time
+            // this plugin played, and playing it now would put a fragment of
+            // an old programme in front of the new one.
+            AudioInstance& a = audioInstances_[want];
+            a.fifoL.clear();
+            a.fifoR.clear();
+            a.fifoHead = 0;
+            if (a.rsL) {
+                a.rsL->reset();
+                a.rsR->reset();
+            }
+            noteAudioEventLocked(AudioEvent::Kind::Started, a, nullptr);
+        }
+        playing_ = want;
+    }
+
+    if (playing_ == kNoAudio) { return false; }
+    AudioInstance& a = audioInstances_[playing_];
+    // A plugin that gave up with an empty FIFO hands the speakers back in this
+    // same block rather than after one of silence: there is nothing of its to
+    // play out, so there is nothing to wait for.
+    if (a.stopped && a.fifoL.size() == a.fifoHead) {
+        noteAudioEventLocked(AudioEvent::Kind::Stopped, a, nullptr);
+        playing_ = kNoAudio;
+        return false;
+    }
+    pullAudioLocked(a, left, right, frames);
+    return true;
+}
+
+std::string PluginRunner::playingPlugin() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (playing_ == kNoAudio) { return std::string(); }
+    return audioInstances_[playing_].name;
+}
+
+std::string PluginRunner::playingPluginKey() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (playing_ == kNoAudio) { return std::string(); }
+    return audioInstances_[playing_].key;
+}
+
+std::uint64_t PluginRunner::audioGaps() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return audioGaps_;
+}
+
+std::uint64_t PluginRunner::audioGapFrames() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return audioGapFrames_;
+}
+
+void PluginRunner::pollAudioDiagnostics() {
+    // COPIED OUT UNDER THE LOCK, WRITTEN OUT WITHOUT IT. diagLogf takes a
+    // mutex and writes a file; holding this lock across that would put the
+    // audio thread behind a disk write at exactly the moment it is asking for
+    // the next block.
+    std::array<AudioEvent, kMaxAudioEvents> events{};
+    std::size_t count = 0;
+    std::uint64_t gaps = 0;
+    std::uint64_t gapFrames = 0;
+    double sinkRate = 0.0;
+    std::string playing;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        events = audioEvents_;
+        count = audioEventCount_;
+        audioEventCount_ = 0;
+        gaps = audioGaps_;
+        gapFrames = audioGapFrames_;
+        sinkRate = audioRateHz_;
+        if (playing_ != kNoAudio) { playing = audioInstances_[playing_].name; }
+    }
+
+    for (std::size_t i = 0; i < count; ++i) {
+        const AudioEvent& e = events[i];
+        const char* chans = e.channels == 2u ? "stereo" : "mono";
+        switch (e.kind) {
+            case AudioEvent::Kind::Started:
+                if (e.rateHz == e.sinkRateHz) {
+                    diagLogf("audio: %s is playing (%u Hz %s, no resampling needed)", e.name,
+                             static_cast<unsigned>(e.rateHz), chans);
+                } else {
+                    diagLogf("audio: %s is playing (%u Hz %s, resampled to %u)", e.name,
+                             static_cast<unsigned>(e.rateHz), chans,
+                             static_cast<unsigned>(e.sinkRateHz));
+                }
+                break;
+            case AudioEvent::Kind::Stopped:
+                diagLogf("audio: %s stopped; demodulated audio returns", e.name);
+                break;
+            case AudioEvent::Kind::Contended:
+                diagLogf("audio: %s also wants the speakers; %s has them and keeps them",
+                         e.name, e.holder);
+                break;
+        }
+    }
+
+    // The gap digest, once a minute and silent unless something actually
+    // broke up - the sibling of the sink's own starvation line, and the same
+    // "quiet unless it has news" posture. The clock starts at the first call
+    // rather than at construction, so a runner nobody drains never reports a
+    // minute that did not happen.
+    const auto now = std::chrono::steady_clock::now();
+    if (audioDigestAt_.time_since_epoch().count() == 0) {
+        audioDigestAt_ = now;
+        audioGapsReported_ = gaps;
+        audioGapFramesReported_ = gapFrames;
+        return;
+    }
+    if (now - audioDigestAt_ < std::chrono::seconds(60)) { return; }
+    if (gaps > audioGapsReported_ && sinkRate > 0.0) {
+        const double silentMs =
+            1000.0 * static_cast<double>(gapFrames - audioGapFramesReported_) / sinkRate;
+        diagLogf("audio: plugin audio (%s) came up short in %llu blocks in the last minute "
+                 "(%.0f ms of silence)",
+                 playing.empty() ? "none playing now" : playing.c_str(),
+                 static_cast<unsigned long long>(gaps - audioGapsReported_), silentMs);
+    }
+    audioGapsReported_ = gaps;
+    audioGapFramesReported_ = gapFrames;
+    audioDigestAt_ = now;
 }
 
 void PluginRunner::absorbLocked(const std::string& name, std::string& partial,
@@ -580,6 +929,11 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
 }
 
 std::vector<DecodedLine> PluginRunner::drainText() {
+    // The audio path's diagnostics ride out on the call the GUI already makes
+    // every frame, so a takeover line appears in the log without a single new
+    // call site. Taken BEFORE the lock below, because it takes the lock
+    // itself.
+    pollAudioDiagnostics();
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<DecodedLine> out(pending_.begin(), pending_.end());
     pending_.clear();

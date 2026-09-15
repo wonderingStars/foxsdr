@@ -1510,6 +1510,61 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     nrL_->process(outL_.data(), k, outL_.data());
     nrR_->process(outR_.data(), k, outR_.data());
 
+    // --- A PLUGIN'S OWN AUDIO, WHICH REPLACES THE DEMODULATED AUDIO ---------
+    //
+    // A digital broadcast decoder's whole output is sound (DAB and DAB+ decode
+    // to PCM), and what the analog chain makes of the same carrier is the hiss
+    // the decoder exists to replace. So this is a REPLACEMENT and not a mix:
+    // playing both would put that hiss under the programme.
+    //
+    // ABOVE the hard mute, deliberately, and that is the one decision here
+    // worth arguing about. "Replaces the audio in the sink" would have been the
+    // narrower change, and it would have left the mute lamp, the audio
+    // recorder, the web audio stream and the test tap all describing a
+    // different signal from the one coming out of the speakers - four ways for
+    // the application to contradict itself about what is playing. Everything
+    // below this line is downstream of one signal, whoever made it.
+    //
+    // NOT through the AGC, the squelch, the notch, the auto-notch or the noise
+    // reduction: those sit above this point on purpose. They exist to make a
+    // noisy analog channel comfortable, and every one of them would only damage
+    // finished PCM from an error-corrected stream. The volume dial and the mute
+    // are the user's controls that still apply, which is what the ABI promises
+    // a plugin author.
+    if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
+        plugL_.resize(k);
+        plugR_.resize(k);
+        const bool playing = runner->pullPluginAudio(plugL_.data(), plugR_.data(), k);
+        if (playing || pluginFade_ > 0.0f) {
+            const float target = playing ? 1.0f : 0.0f;
+            const float step = 1.0f / static_cast<float>(kPluginFadeFrames);
+            for (std::size_t i = 0; i < k; ++i) {
+                if (pluginFade_ < target) {
+                    pluginFade_ = std::min(target, pluginFade_ + step);
+                } else if (pluginFade_ > target) {
+                    pluginFade_ = std::max(target, pluginFade_ - step);
+                }
+                const float f = pluginFade_;
+                // Held at the last played sample while fading out - see
+                // pluginLastL_. During a fade IN the plugin's own samples are
+                // already there.
+                const float pl = playing ? plugL_[i] : pluginLastL_;
+                const float pr = playing ? plugR_[i] : pluginLastR_;
+                outL_[i] = (1.0f - f) * outL_[i] + f * pl;
+                outR_[i] = (1.0f - f) * outR_[i] + f * pr;
+            }
+            if (playing && k != 0) {
+                pluginLastL_ = plugL_[k - 1];
+                pluginLastR_ = plugR_[k - 1];
+            }
+        }
+    } else if (pluginFade_ != 0.0f) {
+        // The runner was detached mid-takeover (a rescan, a shutdown). There is
+        // nothing left to fade with, so drop the weight rather than leave the
+        // held sample ringing as DC for ever.
+        pluginFade_ = 0.0f;
+    }
+
     // --- HARD MUTE, at the one point every consumer is downstream of --------
     //
     // See setAudioMuted for why the mute lives in the pipeline rather than at
