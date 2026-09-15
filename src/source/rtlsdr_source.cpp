@@ -499,6 +499,16 @@ bool RtlSdrSource::bringUpLocked() {
     // the wrong frequency by nearly a factor of two.
     cfg.xtalHz =
         (chip == TunerR82xx::Chip::R828D && !blogV4) ? kR828dXtalHz : rtl.correctedXtalHz();
+    // THE IDENTITY, IN THE LOG, because it is the one thing a field report of
+    // "the tuner will not lock" cannot be diagnosed without. A Blog V4 is
+    // recognised by these two strings and by nothing else, and getting that
+    // wrong drives a 28.8 MHz part from a 16 MHz reference and fails every
+    // tune. Empty strings are a finding in their own right: they mean the
+    // descriptor read gave nothing, not that the dongle is anonymous.
+    core::diagLogf("source: usb strings manufacturer \"%s\", product \"%s\"%s; tuner %s from a "
+                   "%.4f MHz reference",
+                   manufacturer.c_str(), product.c_str(), blogV4 ? " - an RTL-SDR Blog V4" : "",
+                   TunerR82xx::chipName(chip), static_cast<double>(cfg.xtalHz) / 1e6);
     link_->tuner = std::make_unique<TunerR82xx>(rtl, cfg);
     TunerR82xx& tuner = *link_->tuner;
 
@@ -575,6 +585,15 @@ void RtlSdrSource::teardownLocked() noexcept {
         return;
     }
     stopStreamLocked();
+    // The count the per-retune warning no longer prints. Emitted here so that
+    // "it would not lock" and "it would not lock 47 times" are distinguishable
+    // in a log, which is the whole point of counting instead of repeating.
+    const int unlocked = unlockedTunes_.exchange(0, std::memory_order_relaxed);
+    if (unlocked > 0) {
+        core::diagWarnf(
+            "source: the tuner's PLL failed to lock on %d tune%s while this radio was open",
+            unlocked, unlocked == 1 ? "" : "s");
+    }
     if (link_->rtl && link_->tuner) {
         // Power the analogue blocks down on the way out, so a dongle left
         // plugged in is not warming the desk for nothing.
@@ -845,7 +864,26 @@ bool RtlSdrSource::retuneLocked(double hz) {
         ok = tuner.setFreqHz(target) && ok;
         rtl.setI2cRepeater(false);
         if (ok && !tuner.locked()) {
-            core::diagWarnf("source: the tuner did not lock at %.4f MHz", hz / 1e6);
+            // ONCE PER OPEN, WITH A COUNT (see unlockedTunes_). A PLL driven
+            // from the wrong reference fails at EVERY frequency, so a line
+            // per retune fills the log with the same fact and says nothing
+            // about how many - which is exactly what the field report that
+            // found this looked like. The one line carries the two facts that
+            // separate the two causes: which tuner this is, and what it is
+            // being clocked from.
+            //
+            // TWO LINES, because the log truncates at 192 bytes and the facts
+            // must survive that: the identity and the reference first, the
+            // advice second.
+            if (unlockedTunes_.fetch_add(1, std::memory_order_relaxed) == 0) {
+                core::diagWarnf("source: the tuner's PLL did not lock at %.4f MHz - %s from a "
+                                "%.4f MHz reference; deaf there, though samples keep flowing",
+                                hz / 1e6, tuner.name(),
+                                static_cast<double>(tuner.xtalHz()) / 1e6);
+                core::diagWarnf("source: if no frequency locks, close the radio and reopen it - "
+                                "a PLL reference that does not match the board fails at every "
+                                "frequency. Send this log if it persists.");
+            }
         }
     }
     if (ok) { centerFrequencyHz_.store(hz, std::memory_order_relaxed); }

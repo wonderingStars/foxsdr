@@ -38,6 +38,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "source/rtl2832u.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/tuner_r82xx.hpp"
@@ -197,13 +198,48 @@ void dressAsR820T(FakeUsbDevice& fake) {
     fake.answerIn(0, 0x00a0, 0x0600, {0x00});
 }
 
+// An 18-byte device descriptor. The two fields this driver reads are
+// iManufacturer (offset 14) and iProduct (offset 15), and they are ARGUMENTS
+// here rather than 1 and 2 because on real hardware they are not 1 and 2: the
+// RTL2838 on the bench reports iManufacturer 1 and iProduct FIVE.
+std::vector<std::uint8_t> deviceDescriptor(std::uint8_t iManufacturer, std::uint8_t iProduct) {
+    return {0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0xDA,
+            0x0B, 0x38, 0x28, 0x00, 0x01, iManufacturer, iProduct, 0x03, 0x01};
+}
+
+// String descriptor 0: the language-id list, US English.
+const std::vector<std::uint8_t> kLangIdList = {0x04, 0x03, 0x09, 0x04};
+
+// A plain R828D dongle that is NOT a Blog V4 - an Astrometa-style stick, the
+// case the 16 MHz tuner crystal exists for. Strings present and ordinary.
+void dressAsPlainR828D(FakeUsbDevice& fake) {
+    fake.answerIn(0, 0x0074, 0x0600, kTunerAnswer);
+    fake.answerIn(0, 0x00a0, 0x0600, {0x00});
+    fake.answerIn(0x06, 0x0100, 0x0000, deviceDescriptor(1, 2));
+    fake.answerIn(0x06, 0x0300, 0x0000, kLangIdList);
+    fake.answerIn(0x06, 0x0301, 0x0409, stringDescriptor("Realtek"));
+    fake.answerIn(0x06, 0x0302, 0x0409, stringDescriptor("RTL2832U"));
+}
+
 // An RTL-SDR Blog V4: an R828D at 0x74, and the two USB strings that are the
 // ONLY thing distinguishing it from any other R828D dongle.
+//
+// THE PRODUCT STRING IS AT INDEX 5, deliberately, and the language list has
+// to be asked for. Both are what a real dongle does and neither was modelled
+// here before: the bench RTL2838 reports iProduct 5, so a driver that assumes
+// "product is string 2" reads the wrong descriptor, and this fixture passed
+// anyway because it put the string where the driver guessed. Together with
+// the fake's 255-byte descriptor ceiling (usb_fake.hpp), this is the shape
+// that catches a V4 going unrecognised - which cost a V4 owner every
+// frequency they tuned to, because an unrecognised V4 has its PLL reference
+// set to a plain R828D's 16 MHz.
 void dressAsBlogV4(FakeUsbDevice& fake) {
     fake.answerIn(0, 0x0074, 0x0600, kTunerAnswer);
     fake.answerIn(0, 0x00a0, 0x0600, {0x00});
+    fake.answerIn(0x06, 0x0100, 0x0000, deviceDescriptor(1, 5));
+    fake.answerIn(0x06, 0x0300, 0x0000, kLangIdList);
     fake.answerIn(0x06, 0x0301, 0x0409, stringDescriptor("RTLSDRBlog"));
-    fake.answerIn(0x06, 0x0302, 0x0409, stringDescriptor("Blog V4"));
+    fake.answerIn(0x06, 0x0305, 0x0409, stringDescriptor("Blog V4"));
 }
 
 }  // namespace
@@ -891,6 +927,188 @@ int main() {
 
         RtlSdrSource none;
         CHECK(!none.openWithTransport(nullptr, "nothing at all"));
+    }
+
+    // =======================================================================
+    // 14. WHICH DONGLE THIS IS, AND THEREFORE WHAT CLOCKS ITS TUNER.
+    //
+    // This is the block that would have caught the field report of 2026-09-15:
+    // a Blog V4 on Windows 11 that logged "the tuner did not lock" at every
+    // frequency its owner tuned to - 100, 1090, 131.525, 145.65 MHz - while
+    // samples flowed normally.
+    //
+    // The chain is short and every link of it was already here except the
+    // first. A V4 is an R828D that keeps the demodulator's 28.8 MHz crystal
+    // as its PLL reference, where every other R828D has its own 16 MHz one
+    // (librtlsdr.c rtlsdr_open: "If NOT an RTL-SDR Blog V4, set typical R828D
+    // 16 MHz freq. Otherwise, keep at 28.8 MHz"). The ONLY thing that tells
+    // them apart is the USB manufacturer and product strings. Read the wrong
+    // reference and the PLL is programmed 1.8x away from where it was asked
+    // to go: it still locks during the 56 MHz filter calibration, because
+    // 1.8 x 1792 MHz lands inside the VCO's 1770-3540 MHz window by luck, so
+    // the dongle opens and streams - and then fails to lock at essentially
+    // everything else.
+    //
+    // Two things stopped the old fixture from noticing. It put the product
+    // string at index 2, which is a convention and not a rule - the bench
+    // RTL2838 reports iProduct FIVE - and it answered a 256-byte descriptor
+    // request in full, where real hardware answers it with zero bytes and no
+    // error (measured through WinUsb_ControlTransfer and WinUsb_GetDescriptor
+    // alike; 255 works, 256 does not). Both are modelled now.
+    //
+    // The assertion is the PLL's integer-divider register at one frequency,
+    // because that is where the reference actually shows up. At 100 MHz, with
+    // the 1,815,000 Hz IF the driver runs at after its default bandwidth
+    // (block 12 uses the same one), the LO is 101,815,000 Hz and mix_div is
+    // 32, so the VCO is 3,258,080,000 Hz:
+    //   28.8 MHz reference: nint = 3,258,080,000 / 57,600,000 =  56
+    //                       ni = (56-13)/4 = 10, si = 3    -> 0x14 = 0xCA
+    //   16.0 MHz reference: nint = 3,258,080,000 / 32,000,000 = 101
+    //                       ni = (101-13)/4 = 22, si = 0   -> 0x14 = 0x16
+    // A V4 that writes 0x16 is the defect, in one byte.
+    // =======================================================================
+    {
+        auto dividerByteAt100MHz = [](void (*dress)(FakeUsbDevice&), RtlSdrSource& src,
+                                      const char* what) {
+            auto fake = std::make_unique<FakeUsbDevice>();
+            dress(*fake);
+            FakeUsbDevice* f = fake.get();
+            CHECK(src.openWithTransport(std::move(fake), what));
+            f->clear();
+            CHECK(src.setCenterFrequencyHz(100000000.0));
+            int value = -1;
+            for (const TunerWrite& t : tunerWrites(f->writes(), 0x74)) {
+                if (t.reg == 0x14) { value = t.value; }
+            }
+            return value;
+        };
+
+        RtlSdrSource v4;
+        const int v4Divider = dividerByteAt100MHz(dressAsBlogV4, v4, "fake Blog V4");
+        // Recognised at all - which needs the strings to have been read from
+        // the index the DEVICE DESCRIPTOR names, with a request the device
+        // will actually answer.
+        CHECK(v4.tunerName() == std::string("R828D (RTL-SDR Blog V4)"));
+        CHECK(v4Divider == 0xCA);
+        v4.closeDevice();
+
+        // ...and the same assertion the other way round, so this proves the
+        // driver picks the right reference rather than merely preferring
+        // 28.8 MHz. A plain R828D must still get its own 16 MHz crystal.
+        RtlSdrSource plain;
+        const int plainDivider = dividerByteAt100MHz(dressAsPlainR828D, plain, "fake R828D");
+        CHECK(plain.tunerName() == std::string("R828D"));
+        CHECK(plainDivider == 0x16);
+        CHECK(plainDivider != v4Divider);
+        plain.closeDevice();
+    }
+
+    // =======================================================================
+    // 15. A DESCRIPTOR REQUEST THIS DRIVER MAKES MUST BE ONE A DEVICE ANSWERS.
+    //
+    // The rule, stated where it can go red: every GET_DESCRIPTOR this driver
+    // sends asks for at most 255 bytes. A descriptor's bLength is one byte,
+    // so 256 is one past every legal answer, and the RTL2832U's control
+    // endpoint answers it with nothing at all - successfully, which is what
+    // made it invisible. The transcript is the evidence: no standard
+    // GET_DESCRIPTOR (request type 0x80, request 0x06) may carry a length
+    // above 255.
+    // =======================================================================
+    {
+        RtlSdrSource v4;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsBlogV4(*fake);
+        FakeUsbDevice* f = fake.get();
+        CHECK(v4.openWithTransport(std::move(fake), "fake Blog V4"));
+        int descriptorReads = 0;
+        int overlong = 0;
+        for (const FakeControl& c : f->controls) {
+            if (c.out || c.requestType != 0x80 || c.request != 0x06) { continue; }
+            ++descriptorReads;
+            // A read the fake refused comes back empty; a read it answered
+            // carries the descriptor. Either way an over-long request is the
+            // thing being ruled out, and the fake's own ceiling is what an
+            // over-long one produces - so the check is that every descriptor
+            // read got SOMETHING back.
+            if (c.data.empty()) { ++overlong; }
+        }
+        // The device descriptor, the language list and two strings.
+        CHECK(descriptorReads >= 4);
+        CHECK(overlong == 0);
+        v4.closeDevice();
+    }
+
+    // =======================================================================
+    // 16. A TUNER THAT WILL NOT LOCK SAYS SO ONCE, AND THEN COUNTS.
+    //
+    // A PLL driven from the wrong reference does not fail once: it fails on
+    // EVERY retune, for as long as the radio is open. The field report that
+    // found the defect above carried one identical warning line per frequency
+    // and no total, so it said "this happened" over and over and never said
+    // "this happened four times" - and a reader cannot tell a radio that
+    // stumbled once at the edge of its range from one that is deaf
+    // everywhere.
+    //
+    // So the contract is: the first failure in an open carries the whole
+    // explanation, including the two facts that separate those two causes
+    // (which tuner, and what reference), and every later one only increments
+    // a counter that close() states. Staged by letting the tuner report lock
+    // during the filter calibration - the open has to succeed for there to be
+    // anything to retune - and then taking the lock bit away.
+    // =======================================================================
+    {
+        cascade::core::DiagLog::instance().resetForTest();
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsBlogV4(*fake);
+        FakeUsbDevice* f = fake.get();
+        CHECK(src.openWithTransport(std::move(fake), "fake Blog V4"));
+
+        // raw[2] 0x02 reversed is 0x40, the lock bit. Clearing it is a tuner
+        // whose PLL never locks.
+        f->answerIn(0, 0x0074, 0x0600, {0x69, 0x00, 0x00, 0x00, 0xA4});
+        CHECK(src.setCenterFrequencyHz(100000000.0));
+        CHECK(src.setCenterFrequencyHz(131525000.0));
+        CHECK(src.setCenterFrequencyHz(145650000.0));
+        CHECK(src.setCenterFrequencyHz(1090000000.0));
+
+        int warnings = 0;
+        bool namedTheReference = false;
+        for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (line.find("did not lock at") == std::string::npos) { continue; }
+            ++warnings;
+            if (line.find("28.8000 MHz reference") != std::string::npos &&
+                line.find("RTL-SDR Blog V4") != std::string::npos) {
+                namedTheReference = true;
+            }
+        }
+        // Four failed tunes, ONE warning.
+        CHECK(warnings == 1);
+        CHECK(namedTheReference);
+
+        src.closeDevice();
+        int totals = 0;
+        for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (line.find("failed to lock on 4 tunes") != std::string::npos) { ++totals; }
+        }
+        CHECK(totals == 1);
+
+        // ...and a fresh open starts the count again rather than staying
+        // silent because a previous radio had already complained.
+        cascade::core::DiagLog::instance().resetForTest();
+        RtlSdrSource again;
+        auto fake2 = std::make_unique<FakeUsbDevice>();
+        dressAsBlogV4(*fake2);
+        FakeUsbDevice* f2 = fake2.get();
+        CHECK(again.openWithTransport(std::move(fake2), "fake Blog V4"));
+        f2->answerIn(0, 0x0074, 0x0600, {0x69, 0x00, 0x00, 0x00, 0xA4});
+        CHECK(again.setCenterFrequencyHz(100000000.0));
+        int warnedAgain = 0;
+        for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (line.find("did not lock at") != std::string::npos) { ++warnedAgain; }
+        }
+        CHECK(warnedAgain == 1);
+        again.closeDevice();
     }
 
     return testSummary("test_rtlsdr_source");
