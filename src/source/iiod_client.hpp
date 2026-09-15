@@ -193,6 +193,29 @@ bool parseSampleFormat(const std::string& text, SampleFormat& out);
 // the arithmetic against scripted words without a socket anywhere near it.
 float convertSample(const std::uint8_t* word, const SampleFormat& fmt);
 
+// THE OTHER DIRECTION, for the transmit path: one sample in [-1, 1) written
+// into one stored word of `fmt`, shifted and byte-ordered as the scan element
+// says. The exact inverse of convertSample for every value that survives the
+// round trip, which tests/test_iiod_client.cpp pins across both formats a
+// Pluto publishes.
+//
+// SATURATING, NOT WRAPPING, and that is the whole reason this is a named
+// function rather than a cast at a call site. A modulator that overshoots by
+// a hundredth is a peak clipped by a hundredth; the same overshoot cast
+// straight to an int16 wraps +1.0 to full-scale NEGATIVE, which is a
+// full-amplitude discontinuity in the middle of a transmitted block - a click
+// on the air, and a wide one. Anything above the largest representable value
+// is pinned to it, anything below the smallest to that, and NaN is written as
+// zero because the only safe thing to transmit for a number that is not one
+// is nothing.
+//
+// DRIVEN BY THE PARSED FORMAT, exactly as convertSample is. A Pluto's
+// transmit scan element says "le:S16/16>>0", so a full-scale float becomes a
+// full-scale 16-bit word - which is the same bit pattern the vendor examples
+// produce by shifting a 12-bit number left by four, arrived at from what the
+// board said rather than from what a sample program does.
+void packSample(float value, const SampleFormat& fmt, std::uint8_t* word);
+
 // --- attribute value shapes ----------------------------------------------
 
 // The "[min step max]" triple an IIO *_available attribute uses for a
@@ -298,6 +321,26 @@ public:
     // as one rather than stitched together.
     bool readBuf(const std::string& device, std::size_t bytes, std::vector<std::uint8_t>& out,
                  std::string* mask = nullptr);
+
+    // WRITEBUF <dev> <bytes_count> (ops.c rw_dev with is_write true ->
+    // rw_buffer -> receive_data). The conversation is THREE parts and the
+    // middle one is ours:
+    //   1. the daemon answers a single "0" line - receive_data emits it while
+    //      thd->new_client is set, and rw_buffer sets that flag on every call
+    //      exactly as it does for the mask line on the read side, so this
+    //      arrives before EVERY write buffer and not only the first;
+    //   2. we send precisely `bytes` raw sample bytes;
+    //   3. the daemon answers the byte count it took, or a negative errno -
+    //      rw_dev's `if (ret <= 0 || is_write) print_value(pdata, ret)`.
+    // A count that comes back short is a FAILURE here rather than a partial
+    // write to be continued: there is no resynchronisation point in a stream
+    // of raw samples, and half a modulated block is worse on the air than
+    // none. The caller drops the block and writes the next one.
+    //
+    // Checked against the daemon's own source (rw_dev, receive_data) in
+    // September 2026; the same reading is recorded in pluto_source.hpp, where
+    // it was written down while the receive driver was built.
+    bool writeBuf(const std::string& device, const std::uint8_t* data, std::size_t bytes);
 
     // The negative errno the daemon last answered, 0 when the last failure
     // was not a protocol one (a socket error, a malformed reply). Kept apart

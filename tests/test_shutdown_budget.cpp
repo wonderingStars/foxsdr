@@ -364,6 +364,17 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // can only ever spend 3000 of it on a source, and a budget inflated past what
 // the product can actually do is a guard that has stopped guarding.
 //
+// AND IT IS STILL NINE, NOT TEN (0.95.0). The transmitter added in that
+// release is NOT a tenth source and this note's arithmetic does not grow a
+// column for it: a transmit sink is not installed in the pipeline, is not
+// mutually exclusive with any source, and is torn down AS WELL AS one. It is
+// therefore the first thing in this file that ADDS to the charged total
+// rather than replacing part of it, and it has its own block in the table
+// below saying so - which is also where kShutdownBoundedWaitsMs going 7000 ->
+// 9000 is argued. The heading above still reads NINE SOURCES because that is
+// still how many there are; what changed is that the sources are no longer
+// the only devices a teardown can wait on.
+//
 // WHEN THIS HAS TO BE RE-DERIVED, and it is not optional:
 //   - any of the seven constants above changing value;
 //   - a native path growing a wait, which makes its column longer and could
@@ -680,6 +691,53 @@ const KnownWait kKnownWaits[] = {
     {"src/source/pluto_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the Pluto reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
+
+    // THE TRANSMITTER (0.95.0), AND IT IS THE FIRST COLUMN THAT ADDS.
+    //
+    // Everything above this block is a SOURCE, and exactly one source is
+    // installed in the pipeline at a time - which is the entire reason those
+    // rows are zero. A TRANSMIT sink is not a source: a Pluto transmitting
+    // while a SoapySDR receiver runs is two devices across one teardown, and
+    // AppWindow's teardown stops the transmitter FIRST (before the GPS
+    // reader, before pipeline_.stop()) precisely because a keyed radio cannot
+    // be left waiting for anything else. So these two are charged, and
+    // kShutdownBoundedWaitsMs went 7000 -> 9000 with kShutdownThresholdMs
+    // 20000 -> 24000 to keep the "at least twice the worst legitimate
+    // shutdown" assertion true.
+    //
+    // WHY THE PAIR IS AN UPPER BOUND AND NOT THE MEASURED COST. In the worst
+    // case the TX thread is inside the sink's own stop when the join bound
+    // expires, so the two overlap and the real cost is 1500 rather than 2000;
+    // in the case where the thread is idle, stopThread returns at once and
+    // Transmitter::stop()'s own sink_->stop() spends the 1500 instead.
+    // Charging both is therefore conservative in the direction a budget
+    // should be conservative in.
+    {"src/core/transmitter.hpp", "kThreadJoinWait", 1,
+     "Transmitter::stopThread() - the bound on the TX thread coming back, spent at the very "
+     "top of the teardown. NOT followed by an abandonment: everything that thread can be "
+     "inside is itself bounded, so the join after it is safe and this wait is what turns a "
+     "slow one into a line in the log"},
+    {"src/source/pluto_tx.hpp", "kWriterJoinWait", 1,
+     "PlutoTx::stopWritingLocked() - the bound on the writer thread, which silences the board "
+     "(attenuation to maximum, then the TX LO down) as its last act before it exits. A writer "
+     "that has not come back by then is ABANDONED and keeps trying on its own leaked "
+     "connection, because a hang on the GUI thread is worse than a leak - but the radio may "
+     "then still be live, which is why this is the one abandonment in the product that is "
+     "reported as a warning naming the radio"},
+    {"src/source/pluto_tx.hpp", "kWriteWait", 0,
+     "PlutoTx::write()'s wait for room in the ring, and the writer's own wait for a whole "
+     "buffer to exist. Both are spent on threads the join above already covers, never on the "
+     "GUI teardown thread"},
+    {"src/core/transmitter.hpp", "kAudioPollWait", 0,
+     "how long the TX thread waits for a block of audio before it modulates silence. Spent on "
+     "that thread, inside the window kThreadJoinWait bounds"},
+    {"src/core/transmitter.hpp", "kKeyAliveWait", 0,
+     "not a wait - the staleness bound on the GUI's per-frame tick that the TX thread watches. "
+     "Nothing sleeps or blocks on it; it is what releases the key when the frame loop stops, "
+     "which is the one failure mode in which nothing on the GUI thread could release it"},
+    {"src/core/transmitter.hpp", "kLatchTimeout", 0,
+     "not a wait either - the deadline a LATCHED transmit key is compared against once a "
+     "frame, so that a latch nobody released opens itself after a minute"},
 
     {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
      "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "

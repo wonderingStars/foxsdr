@@ -72,7 +72,7 @@ int main() {
         // Through a MUTABLE variable, not the constant: MSVC folds a const int
         // and warns (C4127) on the constant condition inside CHECK's own if.
         int actionCount = kKeyActionCount;
-        CHECK(actionCount == 31);
+        CHECK(actionCount == 32);  // 31 + the transmit PTT (0.95.0)
         std::vector<std::string> ids;
         for (int i = 0; i < kKeyActionCount; ++i) {
             const KeyAction a = static_cast<KeyAction>(i);
@@ -208,6 +208,28 @@ int main() {
         CHECK(formatChord(kb[KeyAction::ZoomOut]) == "Ctrl+Minus");
         CHECK(formatChord(kb[KeyAction::ZoomReset]) == "Ctrl+Delete");
         CHECK(formatChord(kb[KeyAction::Screenshot]) == "Ctrl+W");
+        // THE TRANSMIT KEY IS A BARE SPACEBAR, which is what every
+        // transmitter's software PTT is and what nothing else in this table
+        // would dare be. It is safe as a bare key ONLY because
+        // AppWindow::drawTransmitPage reads it while the TRANSMIT page has
+        // focus and dispatchKeyBindings skips it everywhere else - so if this
+        // ever becomes an ordinary dispatched action, this default has to
+        // change with it.
+        CHECK(formatChord(kb[KeyAction::TransmitPtt]) == "Space");
+        // And it is a real chord that round-trips, so a user can rebind it to
+        // a foot switch's key like any other.
+        CHECK(kb[KeyAction::TransmitPtt].bound());
+        CHECK(!kb[KeyAction::TransmitPtt].ctrl);
+        CHECK(!kb[KeyAction::TransmitPtt].shift);
+        CHECK(!kb[KeyAction::TransmitPtt].alt);
+        // NOTHING ELSE ANSWERS A BARE SPACE, which is the half of "no
+        // conflicts" that matters here: a second action on this chord would
+        // fire whenever somebody keyed up.
+        {
+            KeyAction other = KeyAction::Count;
+            CHECK(!keyBindingConflicts(kb, KeyAction::TransmitPtt,
+                                       kb[KeyAction::TransmitPtt], other));
+        }
         CHECK(formatChord(kb[KeyAction::Fullscreen]) == "F11");
         // The five engraved FUNCTION SELECT keys keep the keys the panel and
         // its tooltips already claim for them.

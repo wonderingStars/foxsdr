@@ -143,6 +143,18 @@ AppConfig junkConfig() {
     c.demodScopeTimebase = -7;
     c.demodScopeGain = 9999;
     c.demodScopeAutoGain = false;
+    // The transmitter, away from every default - and the two indices off the
+    // end of the tables they index, because one of them chooses between a
+    // test tone and a live microphone.
+    c.transmitOpen = true;
+    c.transmitMode = 3;
+    c.transmitInput = 0;
+    c.transmitPowerDb = -33.25;
+    c.transmitSplit = true;
+    c.transmitSplitHz = 432.1e6;
+    c.transmitToneHz = 1500.0;
+    c.transmitMonitor = true;
+    c.transmitArgs = "uri=ip:10.0.0.9";
     // The rail's bank, off its default of 0 for the same reason.
     c.railBank = 3;
     // Map geometry, away from the "nothing saved" default and out of range, so
@@ -255,6 +267,15 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.demodScopeTimebase == b.demodScopeTimebase);
     CHECK(a.demodScopeGain == b.demodScopeGain);
     CHECK(a.demodScopeAutoGain == b.demodScopeAutoGain);
+    CHECK(a.transmitOpen == b.transmitOpen);
+    CHECK(a.transmitMode == b.transmitMode);
+    CHECK(a.transmitInput == b.transmitInput);
+    CHECK(a.transmitPowerDb == b.transmitPowerDb);
+    CHECK(a.transmitSplit == b.transmitSplit);
+    CHECK(a.transmitSplitHz == b.transmitSplitHz);
+    CHECK(a.transmitToneHz == b.transmitToneHz);
+    CHECK(a.transmitMonitor == b.transmitMonitor);
+    CHECK(a.transmitArgs == b.transmitArgs);
     CHECK(a.mapWindowWidth == b.mapWindowWidth);
     CHECK(a.mapWindowHeight == b.mapWindowHeight);
     CHECK(a.mapWindowX == b.mapWindowX);
@@ -331,6 +352,11 @@ int main() {
         in.demodScopeTimebase = 5;
         in.demodScopeGain = 1;
         in.demodScopeAutoGain = false;
+        in.transmitOpen = true;
+        in.transmitMode = 4;
+        in.transmitInput = 0;
+        in.transmitPowerDb = -12.5;
+        in.transmitSplit = true;
         in.railBank = 2;
         in.pluginBrowserOpen = true;
         in.fittedModulesOpen = true;
@@ -353,6 +379,16 @@ int main() {
         CHECK(out.demodScopeTimebase == 5);
         CHECK(out.demodScopeGain == 1);
         CHECK(!out.demodScopeAutoGain);
+        // THE TRANSMIT PAGE IS A WINDOW, so it obeys the same rule: what was
+        // showing is recorded and is not reopened. Its SETTINGS come through
+        // untouched, because they are how it would transmit rather than
+        // whether it will - and there is nothing in this object that could
+        // make it, which is the block further down.
+        CHECK(!out.transmitOpen);
+        CHECK(out.transmitMode == 4);
+        CHECK(out.transmitInput == 0);
+        CHECK(out.transmitPowerDb == -12.5);
+        CHECK(out.transmitSplit);
         CHECK(!out.pluginBrowserOpen);
         CHECK(!out.fittedModulesOpen);
         CHECK(out.mapPages.size() == 2);
@@ -375,6 +411,7 @@ int main() {
         AppConfig back = out;
         back.scopeMode = true;
         back.demodScopeOpen = true;
+        back.transmitOpen = true;
         back.pluginBrowserOpen = true;
         back.fittedModulesOpen = true;
         back.mapPages[0].open = true;
@@ -2728,6 +2765,68 @@ int main() {
         CHECK(!ConfigStore::load(g_root, out, err));
         CHECK(!err.empty());
         checkEqual(out, AppConfig{});
+    }
+
+    // --- A CONFIG FILE CANNOT KEY THE RADIO ---------------------------------
+    //
+    // THE ONE CHECK IN THIS FILE THAT IS NOT ABOUT A SETTING. The transmit
+    // page saves how it would transmit and never whether it is transmitting,
+    // and the way that is enforced is that AppConfig has nowhere to put the
+    // key: no transmitPtt, no transmitLatched, no transmitKeyed. A file that
+    // carries them anyway - hand-edited, or written by some future build that
+    // had lost this argument - must change nothing at all, because unknown
+    // fields are ignored.
+    //
+    // It is written as a load of a REAL FILE rather than as a statement about
+    // the struct, because "the struct has no such member" is a thing a
+    // compiler checks and "a file saying so does nothing" is not.
+    {
+        const std::string path = g_root + "/keyed.json";
+        {
+            std::ofstream f(path, std::ios::binary);
+            f << "{\"schemaVersion\":1,"
+                 "\"transmitPtt\":true,"
+                 "\"transmitLatched\":true,"
+                 "\"transmitKeyed\":true,"
+                 "\"transmitting\":true,"
+                 "\"transmitOpen\":true,"
+                 "\"transmitPowerDb\":0.0}";
+        }
+        AppConfig out;
+        std::string err;
+        CHECK(ConfigStore::load(path, out, err));
+        // The settings it DOES understand were taken...
+        CHECK(out.transmitOpen);
+        CHECK(out.transmitPowerDb == 0.0);
+        // ...and nothing it does not understand became a key, because there
+        // is nothing for it to become. The proof that survives a refactor is
+        // the SAVE: write this back out and the file that comes back has no
+        // key in it either.
+        const std::string back = g_root + "/keyed_back.json";
+        CHECK(ConfigStore::save(back, out, err));
+        const std::string text = readAll(back);
+        CHECK(text.find("transmitPtt") == std::string::npos);
+        CHECK(text.find("transmitLatched") == std::string::npos);
+        CHECK(text.find("transmitKeyed") == std::string::npos);
+        CHECK(text.find("\"transmitting\"") == std::string::npos);
+        // And the page it would reopen is closed at startup like every other.
+        CHECK(!cascade::core::startupState(out).transmitOpen);
+
+        // AN UNKNOWN INPUT INDEX LANDS ON THE TONE. A hand-edited file that
+        // named an input this build does not have must not point a
+        // transmitter at a microphone.
+        const std::string weird = g_root + "/weirdinput.json";
+        {
+            std::ofstream f(weird, std::ios::binary);
+            f << "{\"schemaVersion\":1,\"transmitInput\":77,\"transmitMode\":-3,"
+                 "\"transmitToneHz\":-5,\"transmitSplitHz\":0}";
+        }
+        AppConfig odd;
+        CHECK(ConfigStore::load(weird, odd, err));
+        CHECK(odd.transmitInput == 1);  // TONE
+        CHECK(odd.transmitMode == 0);   // CW
+        CHECK(odd.transmitToneHz == 1000.0);
+        CHECK(odd.transmitSplitHz == 145.5e6);
     }
 
     const int rc = testSummary("test_config");

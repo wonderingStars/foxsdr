@@ -216,7 +216,16 @@ public:
     // was dropped instead, because dropping the socket closes the capture
     // device anyway; the composition note in that test file carries the whole
     // argument and is the place to start if it ever has to come back.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 7000;
+    //
+    // AND THE TRANSMITTER IS THE FIRST COLUMN THAT ADDS RATHER THAN REPLACES
+    // (0.95.0), which is why this number moved for the first time since it
+    // was derived. Exactly one SOURCE is installed at a time, so the native
+    // columns above are mutually exclusive; a transmit sink is not one of
+    // them. A Pluto transmitting while a SoapySDR receiver runs is two
+    // devices across one teardown - Transmitter::kThreadJoinWait 500 plus
+    // PlutoTx::kWriterJoinWait 1500 = 2000 ms, spent AS WELL AS the source
+    // column's 3000. 7000 -> 9000, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 9000;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, two config writes, both ImGui shutdowns, glfwDestroyWindow and
@@ -232,7 +241,7 @@ public:
     // that a guard was slow; and short enough that the report is written
     // while the user is still looking at a window that will not close.
     // tests/test_shutdown_budget.cpp pins the "at least twice".
-    static constexpr unsigned kShutdownThresholdMs = 20000;
+    static constexpr unsigned kShutdownThresholdMs = 24000;
 
     HangWatchdog() = default;
     ~HangWatchdog();

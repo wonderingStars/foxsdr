@@ -153,6 +153,40 @@ a console nobody was reading. Three things changed, none of them the fault:
 
 **The stream-health line.** Once a minute the radio's read loop writes what the driver answered: `source: stream health - reads 612, with samples 598, timeouts 14, overflows 0, errors 0, longest gap 38 ms, 1434880 samples in 60 s`. The first minute after a start is always written, so a healthy radio leaves one line proving it; after that a minute is written only when something was not nominal (any timeout, overflow or error, or a gap of 250 ms or more without samples), and as a warning when there was an error or a gap of a second or more. A minute of stalled USB delivery before a driver fault - what the 0.88.0 field crash had, visible then only through the sound path's starvation counter - now reads as a line in the report's tail.
 
+**The transmitter's lines, all prefixed `tx:` (0.95.0).** A transmit path is
+the one part of this product whose faults are somebody else's problem as well
+as the user's, so every state change it has is in the log rather than only on
+the panel:
+
+- `tx: opened <board> at <host>:<port> for transmit - phy ad9361-phy (LO
+  altvoltage1, gain voltage0), DAC cf-ad9361-dds-core-lpc (le:S16/16>>0), 4 DDS
+  tone channel(s)`, followed by the board's own published transmit power range
+  and tuning range, and then `tx: the board is quiet (attenuation at its
+  maximum, TX LO down) and stays that way until the operator keys it`. That last
+  line is the one to look for when somebody asks whether opening the page can
+  transmit: it is written every time a board is opened, and it is written
+  because the driver has just made it true.
+- `tx: keyed - USB at 145.500000 MHz, 2500000 S/s` and `tx: started - ...,
+  power -20.00 dB` when the key closes; `tx: unkeyed after N block(s)` and
+  `tx: stopped - the board was told to go quiet (confirmed)` when it opens. The
+  word in the brackets is `confirmed` when the board acknowledged both
+  quietening writes and `NOT CONFIRMED - the board did not answer` when it did
+  not, which is a different thing to act on: the first is a radio that is
+  certainly silent and the second is one that may not be.
+- `tx: fault while <what>: <detail>` for anything the board refused or stopped
+  answering, as a warning.
+- `tx: the transmit latch released itself after 60000 ms` and `tx: no frame in
+  <n> ms - releasing the key` for the two failsafes. Either of these in a log
+  means the key was opened by the application rather than by the operator, and
+  the second one in particular means the frame loop had stopped - so it will be
+  next to whatever else was wrong.
+- `tx: the writer thread did not return within 1500 ms and was abandoned; the
+  board may still be transmitting` is the one line in this product that says
+  the radio's state is unknown. It is written when the bounded join in
+  `PlutoTx::stopWritingLocked` expires, which means the board stopped answering
+  while keyed; the abandoned thread keeps trying to silence it on its own
+  connection, and `~PlutoTx` tries again on the control connection.
+
 - **SoapySDR's logger is bridged into ours.** `source/soapy_log_bridge.cpp`
   registers a `SoapySDR::registerLogHandler` handler; FATAL/CRITICAL/ERROR/
   WARNING become `warn` lines, NOTICE/INFO (and the `O`/`U`/`D` stream

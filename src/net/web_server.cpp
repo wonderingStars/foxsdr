@@ -3104,6 +3104,9 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["sourceName"] = s.sourceName;
         j["signalDb"] = s.signalDb;
         j["stereoActive"] = s.stereoActive;
+        // Read only. See RadioStatus::transmitting for why there is no
+        // control endpoint next to it.
+        j["transmitting"] = s.transmitting;
         j["squelchDb"] = s.squelchDb;
         j["volume"] = s.volume;
         j["dbMin"] = s.dbMin;

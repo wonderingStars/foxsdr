@@ -126,6 +126,14 @@ int main() {
                "  \"scopeMode\": true,\n"
                "  \"scopeRangeNm\": 400,\n"
                "  \"pluginBrowserOpen\": true,\n"
+               // THE TRANSMIT PAGE, with its power at FULL OUTPUT. If any
+               // launch could reopen a page, this is the one it must not
+               // reopen - and the power is 0 dB deliberately, so a build
+               // that ever did reopen it would be reopening it at the
+               // loudest setting an AD9361 has.
+               "  \"transmitOpen\": true,\n"
+               "  \"transmitPowerDb\": 0.0,\n"
+               "  \"transmitMode\": 3,\n"
                "  \"fittedModulesOpen\": true,\n"
                "  \"fittedModulesX\": 40,\n"
                "  \"fittedModulesY\": 50,\n"
@@ -146,6 +154,7 @@ int main() {
         CHECK(cascade::core::ConfigStore::load(cfgPath.string(), before, err));
         CHECK(before.scopeMode);
         CHECK(before.pluginBrowserOpen);
+        CHECK(before.transmitOpen);
         CHECK(before.fittedModulesOpen);
         CHECK(before.mapPages.size() == 1 && before.mapPages[0].open);
     }
@@ -163,6 +172,14 @@ int main() {
         CHECK(err.empty());
         CHECK(!after.scopeMode);
         CHECK(!after.pluginBrowserOpen);
+        // THE TRANSMIT PAGE IS CLOSED, and its settings came through - which
+        // is the pair this file exists to distinguish. WHERE and HOW are
+        // kept; WHETHER is not. The key is not in this file at all and there
+        // is nowhere in AppConfig for it to be (tests/test_config.cpp loads a
+        // file that tries anyway).
+        CHECK(!after.transmitOpen);
+        CHECK(after.transmitPowerDb == 0.0);
+        CHECK(after.transmitMode == 3);
         CHECK(!after.fittedModulesOpen);
         // The entry that went in comes back closed, its rectangle untouched
         // because a page that was never drawn never read a rectangle back from

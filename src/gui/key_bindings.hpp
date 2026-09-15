@@ -92,6 +92,16 @@ enum class KeyAction : int {
     ZoomOut,
     ZoomReset,
     Record,
+    // THE TRANSMIT KEY, and it is not dispatched like the others. Every
+    // action above fires once on a PRESS; this one has to be HELD, and it
+    // has to be held while the TRANSMIT page has focus and nowhere else - a
+    // transmit key that answered a bare keystroke anywhere in the
+    // application would fire while somebody was typing a bookmark name. So
+    // it lives in this table to be rebindable and to be listed with
+    // everything else, and AppWindow::drawTransmitPage reads its chord
+    // directly rather than waiting for dispatchKeyBindings to call it.
+    // dispatchKeyBindings skips it for the same reason, explicitly.
+    TransmitPtt,
     Screenshot,
     Fullscreen,
     BankSignal,
