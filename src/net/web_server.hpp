@@ -70,14 +70,27 @@ struct RadioStatus {
     std::string sourceName;
     float signalDb = -200.0f;
     bool stereoActive = false;
-    // WHETHER THE RADIO IS TRANSMITTING. Read only, and there is no control
-    // beside it: a remote listener seeing a dead band deserves to know the
-    // reason, but a key that can be closed from anywhere on the network is a
-    // transmitter anybody who reaches the page can operate, and the licence
-    // that covers it belongs to one person at one desk. A remote PTT is not
-    // stage one; it would need its own authorisation, its own failsafe and
-    // its own argument.
+    // WHETHER THE RADIO IS TRANSMITTING, and (0.95.1) the two figures beside
+    // it that the remote key needs.
+    //
+    // The key itself arrived in 0.95.1 with the authorisation, the failsafe
+    // and the argument the first version of this comment said it would need:
+    // the page is behind the same session gate as everything else here, the
+    // key is a PTT that expires (core::Transmitter::kRemotePttHoldMs) rather
+    // than a switch, and it can only be closed while the operator has a
+    // transmitter open at the desk. What has NOT changed is that nothing in
+    // a config, a startup or a stale queued request can close it.
     bool transmitting = false;
+    // A transmitter the remote key may be closed on: the application has a
+    // radio open AND the TRANSMIT page is on screen. The second half is the
+    // deliberate one - it is what makes a remote key impossible unless
+    // somebody at the machine has the transmitter in front of them.
+    bool transmitAvailable = false;
+    // Milliseconds left on the remote key's current hold; 0 when it is not
+    // held. Published so the page can show what it is holding, and so that a
+    // browser which has stopped being listened to can be seen to have
+    // stopped.
+    std::int64_t transmitRemoteHoldMs = 0;
     // Included so the browser's own controls can show where they currently
     // sit. Without them the page would have to remember what it last sent,
     // which goes wrong the moment the desktop window changes something.

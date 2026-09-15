@@ -245,6 +245,13 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <div id="catalogue"></div>
     </div></details>
 
+    <details><summary>Transmit</summary><div class="sec">
+      <button id="ptt" class="ptt" disabled
+              title="hold to transmit - it releases the moment you let go, and by itself if this browser stops asking">PTT</button>
+      <span id="pttState" class="dim">no transmitter</span>
+      <p class="dim">This transmits. An ADALM-Pluto puts out about +7 dBm - roughly five milliwatts - and whether you may radiate it on the frequency you have set is your responsibility and your country's licensing authority's, not this software's.</p>
+    </div></details>
+
   </aside>
 
   <main id="main">
@@ -821,6 +828,18 @@ body { padding:9px; box-sizing:border-box; }
 .dial::after { content:""; position:absolute; left:50%; bottom:-3px; width:7px;
                height:7px; margin-left:-3.5px; border-radius:50%;
                background:#3b3529; box-shadow:0 0 0 1px rgba(0,0,0,.4); }
+
+/* THE TRANSMIT KEY. Big, because it is held rather than clicked and because a
+   key you can miss under a thumb is a key that stays down when you meant to
+   let go. touch-action:none for the same reason the map has it: without it the
+   browser claims the press as a page scroll and the pointerdown never
+   arrives, which on a phone is a key that does nothing at all. user-select
+   stops a long press selecting the word instead of keying. */
+.ptt { width:100%; padding:.9rem 0; font-size:1rem; font-weight:600;
+       letter-spacing:.08em; touch-action:none; user-select:none;
+       -webkit-user-select:none; }
+.ptt.on { background:var(--fault); border-color:var(--fault); color:var(--fg);
+          box-shadow:0 0 10px rgba(0,0,0,.45) inset; }
 )CSS";
 
 // The joined style sheet, built once on first use - the pieces are
@@ -2212,6 +2231,7 @@ function reflect(s) {
 
   reflectSource(s);
   reflectExtras(s);
+  reflectTransmit(s);
   reflectTracks(s);
   reflectPlugins(s);
   reflectImages(s);
@@ -2246,6 +2266,88 @@ function reflect(s) {
   }
 }
 
+)JS";
+
+// --- THE TRANSMIT KEY (0.95.1) ----------------------------------------------
+//
+// A PTT, HELD - not a switch, and the difference is the whole of why this is
+// allowed to exist. The server's key expires by itself after
+// core::Transmitter::kRemotePttHoldMs, so what keeps a radio keyed is this
+// page CONTINUING to say so every PTT_REPEAT_MS. A tab that is closed, hidden,
+// backgrounded, frozen by a phone or simply disconnected stops extending the
+// hold, and the transmitter opens the key without needing to be told.
+//
+// WHY THE RELEASES ARE BOUND TO THE WINDOW AND NOT TO THE BUTTON. A pointerup
+// delivered after the pointer has left the key never reaches the key, so
+// "I dragged my thumb off the button" would be the one gesture in this page
+// that leaves a transmitter keyed. Every listener that can mean "this browser
+// has stopped being a hand on a key" releases: the pointer coming up anywhere,
+// the gesture being cancelled, the window losing focus, and the tab being
+// hidden.
+constexpr char kAppJs2p[] = R"JS(
+const PTT_REPEAT_MS = 500;
+let pttDown = false, pttTimer = null;
+
+function pttSend(on) { control({ transmitPtt: on }); }
+
+function pttPress(e) {
+  const b = $('ptt');
+  if (!b || b.disabled || pttDown) return;
+  // Without this the browser claims a long press as a scroll or a text
+  // selection and the gesture never becomes a key at all.
+  if (e && e.cancelable) e.preventDefault();
+  pttDown = true;
+  b.classList.add('on');
+  pttSend(true);
+  pttTimer = setInterval(() => { pttSend(true); }, PTT_REPEAT_MS);
+}
+
+function pttRelease() {
+  if (!pttDown) return;
+  pttDown = false;
+  if (pttTimer !== null) { clearInterval(pttTimer); pttTimer = null; }
+  const b = $('ptt');
+  if (b) b.classList.remove('on');
+  // Sent even if it fails: the hold expires on its own, so a release that
+  // cannot be delivered costs two seconds rather than a transmission.
+  pttSend(false);
+}
+
+function pttSetup() {
+  const b = $('ptt');
+  if (!b) return;
+  b.addEventListener('pointerdown', pttPress);
+  b.addEventListener('touchstart', pttPress, { passive: false });
+  // A long press on a phone raises the context menu over the key, which eats
+  // the pointerup that would have released it.
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
+  window.addEventListener('pointerup', pttRelease);
+  window.addEventListener('pointercancel', pttRelease);
+  window.addEventListener('touchend', pttRelease);
+  window.addEventListener('touchcancel', pttRelease);
+  window.addEventListener('blur', pttRelease);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) pttRelease();
+  });
+}
+
+function reflectTransmit(s) {
+  const b = $('ptt');
+  if (!b) return;
+  const avail = !!s.transmitAvailable;
+  b.disabled = !avail;
+  // A key that can no longer be closed must not be left holding itself down.
+  // The transmitter going away while somebody is leaning on the key is
+  // exactly the moment this page has to let go.
+  if (!avail && pttDown) pttRelease();
+  b.classList.toggle('on', pttDown || !!s.transmitting);
+  const hold = s.transmitRemoteHold || 0;
+  $('pttState').textContent =
+    !avail ? 'no transmitter'
+           : (s.transmitting
+                ? (hold > 0 ? 'ON AIR - held for another ' + hold + ' ms' : 'ON AIR')
+                : 'ready');
+}
 )JS";
 
 constexpr char kAppJs3[] = R"JS(
@@ -2638,8 +2740,12 @@ $('logout').addEventListener('click', async () => {
 });
 
 // The knob is a face over the volume input, so it is wired once here beside
-// everything else the page attaches at load.
+// everything else the page attaches at load. The transmit key's listeners go
+// on at the same moment - several of them are on the window rather than on the
+// button (see kAppJs2p), and a key whose releases were attached later than its
+// press would be a key that could be held down before it could be let go.
 knobSetup();
+pttSetup();
 refreshSession();
 )JS";
 
@@ -2648,7 +2754,7 @@ refreshSession();
 const std::string& appJs() {
     static const std::string joined =
         std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d +
-        kAppJs2e + kAppJs3;
+        kAppJs2e + kAppJs2p + kAppJs3;
     return joined;
 }
 
@@ -3104,9 +3210,14 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["sourceName"] = s.sourceName;
         j["signalDb"] = s.signalDb;
         j["stereoActive"] = s.stereoActive;
-        // Read only. See RadioStatus::transmitting for why there is no
-        // control endpoint next to it.
+        // The transmitter, as three separate facts: whether it is on the air,
+        // whether the remote key may be closed at all, and how much of the
+        // current hold is left. The page needs all three - a disabled key
+        // with "no transmitter" beside it and a lit key with a hold counting
+        // down are different readings, and one boolean cannot give both.
         j["transmitting"] = s.transmitting;
+        j["transmitAvailable"] = s.transmitAvailable;
+        j["transmitRemoteHold"] = s.transmitRemoteHoldMs;
         j["squelchDb"] = s.squelchDb;
         j["volume"] = s.volume;
         j["dbMin"] = s.dbMin;
@@ -3440,6 +3551,32 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             deny(res, error, 400);
             return;
         }
+        // THE KEY IS THE ONE REQUEST THAT IS NOT SIMPLY QUEUED. Everything
+        // else here is "ask the application to do this when it next looks",
+        // which is right for a control that moves a receiver and wrong for
+        // one that puts RF out of a connector: a queued key request would sit
+        // there being true while the operator opened a transmitter, and would
+        // then be applied to a radio that appeared after it was asked for.
+        // So a key is refused against the status the application is
+        // publishing RIGHT NOW, and the refusal is a sentence rather than a
+        // silence.
+        //
+        // This is a gate, not the decision. The application checks again
+        // before it applies anything (its own snapshot can be a frame newer
+        // than this one), and core::Transmitter refuses a key with no radio
+        // behind it whatever either of them thinks.
+        if (cr.transmitPtt.value_or(false)) {
+            RadioStatus s;
+            if (status_) {
+                s = status_();
+            }
+            if (!s.transmitAvailable) {
+                deny(res,
+                     "there is no transmitter open, so the key cannot be closed from here",
+                     409);
+                return;
+            }
+        }
         {
             std::lock_guard<std::mutex> lock(controlMutex_);
             while (pending_.size() >= WebServer::kMaxQueuedControls) {
@@ -3605,6 +3742,28 @@ void WebServer::Impl::stop() {
     }
     svr_.reset();
     sessions_.revokeAll();
+    // A SERVER THAT HAS STOPPED RELEASES THE TRANSMIT KEY, and it does it by
+    // queueing the release rather than by reaching for a transmitter it has
+    // never been given. The application drains this on its next frame and
+    // opens the key.
+    //
+    // WHY IT IS NEEDED AT ALL, given that the key expires by itself: the
+    // expiry is what covers a browser going away, and this covers the other
+    // direction - the server going away while a browser is still holding the
+    // key. Both end in the same place two seconds apart, and two seconds of
+    // unasked-for carrier is exactly the thing this whole design is arranged
+    // to avoid. It is queued only on a server that was actually running, so
+    // the stop() at the top of start() cannot put a phantom release in front
+    // of a client's first request.
+    {
+        std::lock_guard<std::mutex> lock(controlMutex_);
+        while (pending_.size() >= WebServer::kMaxQueuedControls) {
+            pending_.pop_front();
+        }
+        ControlRequest release;
+        release.transmitPtt = false;
+        pending_.push_back(release);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     boundPort_ = -1;
 }

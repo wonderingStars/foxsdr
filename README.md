@@ -506,9 +506,9 @@ These are the part worth reading, and they are enforced in the code rather than
 described in it — `src/core/transmitter.hpp` carries the same list beside the
 implementation.
 
-- **Only a hand on this machine can key it.** A PTT held down, or a LATCH
-  switch deliberately closed. Nothing else: not a plugin, not the web remote,
-  not a command line, and not a config file.
+- **Only a hand can key it** — a PTT held down, or a LATCH switch deliberately
+  closed, at this machine or (since 0.95.1) on the web remote's own held key.
+  Nothing else: not a plugin, not a command line, and not a config file.
 - **Nothing is restored.** The mode, the power, the input, the split and the
   tone are saved and come back; the key is not saved, and there is no field in
   `config.json` that could carry it. A file that has one anyway changes nothing
@@ -604,13 +604,51 @@ pile-up and a satellite each need — and the key stays lit while it is on,
 because that is the state in which you are not listening where you are
 transmitting.
 
-### The web remote gets a light, not a switch
+### The web remote gets a key, and it is a key you have to keep holding
 
-`/api/status` carries a read-only `transmitting` boolean so a remote listener
-seeing a dead band knows the reason. There is no remote PTT, and that is a
-decision rather than an omission: a key that can be closed from anywhere on the
-network is a transmitter anybody who reaches the page can operate, and the
-licence that covers it belongs to one person at one desk.
+0.95.0 gave the browser a light and no switch, on the argument that a key
+closable from anywhere on the network is a transmitter anybody who reaches the
+page can operate. 0.95.1 gives it the switch, with the authorisation, the
+failsafe and the argument that were said to be its price.
+
+**What the page has.** A PTT under **Transmit** in the control column, the same
+licence sentence the desktop page carries, and a line beside the key that reads
+`no transmitter`, `ready`, or `ON AIR` with the hold counting down.
+
+**The rules it is allowed under, none of which the desktop key needs:**
+
+- **It is held, and it expires.** `POST /api/control {"transmitPtt":true}` buys
+  **two seconds** (`Transmitter::kRemotePttHoldMs`) and no more; the page
+  re-asserts every 500 ms while your finger is down. A tab that is closed,
+  hidden, backgrounded, frozen by a phone or simply disconnected stops
+  extending the hold and the key opens by itself. `{"transmitPtt":false}` opens
+  it at once, and so does the pointer coming up anywhere, the window losing
+  focus, or the tab being hidden.
+- **It cannot latch.** A body carrying `transmitLatch` is refused by name, not
+  ignored: a latch keeps a radio keyed with nobody touching anything, and
+  "nobody touching anything" is the ordinary state of a machine at the far end
+  of a network.
+- **It needs a transmitter you opened, on a page you have open.** The request
+  is refused with `409` and a sentence unless the application is publishing
+  `transmitAvailable` — a radio open **and** the TRANSMIT page on screen. So a
+  remote key can only ever be closed while the operator has the transmitter in
+  front of them, and closing the page revokes it.
+- **It is behind the same gate as everything else here**, which on an
+  off-machine bind means a password (`net/web_policy.hpp` refuses that bind
+  without one).
+- **Everything that releases the local key releases this one** — a fault, the
+  dead-man's handle, the radio being closed or swapped, the application
+  shutting down — **and so does the web server stopping**, which queues a
+  release rather than waiting for the hold to expire.
+- **Nothing else changed.** No config, no startup and no queued request can
+  close it: `transmitPtt` is a live instruction that is refused against the
+  state of this instant, never a setting, and `config.json` still has nowhere
+  to put a key.
+
+`/api/status` carries `transmitting`, `transmitAvailable` and
+`transmitRemoteHold` (milliseconds left on the hold, 0 when it is not held), so
+a remote listener seeing a dead band still knows the reason whether or not they
+are the one keying it.
 
 ### How it is verified
 

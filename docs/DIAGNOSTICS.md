@@ -180,6 +180,22 @@ the panel:
   means the key was opened by the application rather than by the operator, and
   the second one in particular means the frame loop had stopped - so it will be
   next to whatever else was wrong.
+- **The web remote's key (0.95.1)** writes `tx: keyed by the web remote` once,
+  when a browser's PTT first closes the key, and
+  `tx: remote key released (<why>)` when it opens - so a transmission somebody
+  at the desk did not make is identifiable as such, which is the first question
+  anybody reading this section will have. The reasons are `the remote let go`
+  (the page said so: a finger lifted, the tab hidden, the window blurred),
+  `the hold expired after <n> ms` **as a warning** (the browser stopped asking
+  and the two-second hold ran out - a closed tab, a dropped link, a phone that
+  froze the page), `the transmitter stopped on its own` (a fault or the
+  dead-man's handle got there first), `the radio would not key`, `the transmit
+  page was closed`, `the web server is not running`, and `the transmitter was
+  shut down`. The warning is the one to look for: it means the key was opened
+  by a timer rather than by a person, so whatever else went wrong on that
+  network is in the same log. A `keyed by the web remote` with no matching
+  release before the log ends means the application died keyed - and then the
+  driver's own lines above say whether the board was silenced on the way out.
 - `tx: the writer thread did not return within 1500 ms and was abandoned; the
   board may still be transmitting` is the one line in this product that says
   the radio's state is unknown. It is written when the bounded join in
