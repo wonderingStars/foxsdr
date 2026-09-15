@@ -320,6 +320,50 @@ unsigned long currentPid() {
 #endif
 }
 
+// THE BUDGET AND THE STOPWATCH ARE NOT THE SAME CLOCK, and this is the number
+// that reconciles them.
+//
+// runOneChild bounds a wedged probe with WaitForSingleObject(child, timeoutMs).
+// That is a KERNEL wait: its due time is computed on the interrupt-time clock,
+// which advances in whole ticks of lpTimeIncrement - 15.625 ms on a default
+// Windows box, and what GetSystemTimeAdjustment reports below. EnumResult's
+// elapsedMs, by contrast, is measured with steady_clock, i.e. QPC, which is
+// sub-microsecond. So a wait that honoured the whole budget can legitimately be
+// MEASURED as short of it, by up to one tick.
+//
+// Measured on this bench, 2026-09-15: WaitForSingleObject(event, 1500) returned
+// with QPC reading 1484.6 ms at worst over fifteen waits, and the timeout case
+// below produced elapsedMs of 1488..1515 over twenty runs of one md5-pinned
+// binary - failing a bare ">= 1500" on nine of them while the other 127 checks
+// never moved. Nothing was waiting early; the stopwatch simply has finer
+// resolution than the alarm.
+//
+// One tick of slack is therefore the honest floor, and it is deliberately no
+// more than that: the property the check exists for is "a wedged probe is not
+// ABANDONED before its budget", and abandoning it early misses by hundreds of
+// milliseconds, not by a tick.
+unsigned long waitClockTickMs() {
+#ifdef _WIN32
+    DWORD adjustment = 0;
+    DWORD increment = 0;
+    BOOL disabled = FALSE;
+    if (::GetSystemTimeAdjustment(&adjustment, &increment, &disabled) != 0 && increment > 0) {
+        // 100 ns units, rounded UP: a tolerance that undershoots the real tick
+        // is the flake we are here to remove.
+        const unsigned long ms = static_cast<unsigned long>((increment + 9999ul) / 10000ul);
+        // A machine whose timer has been pushed to 0.5 ms still gets a whole
+        // millisecond, and one reporting something absurd does not get to
+        // excuse a genuinely early return.
+        return (ms < 1ul) ? 1ul : ((ms > 20ul) ? 20ul : ms);
+    }
+    return 16ul;  // the default Windows tick, rounded up
+#else
+    // POSIX has no child-wait path in runOneChild yet (SpawnFailed), so this is
+    // only ever the conservative default.
+    return 16ul;
+#endif
+}
+
 #ifdef _WIN32
 std::string selfExePath() { return std::filesystem::path(selfExePathW()).string(); }
 #else
@@ -841,8 +885,12 @@ int main(int argc, char** argv) {
         const EnumResult r = enumerateIsolated(o);
         CHECK(r.outcome == EnumOutcome::ChildTimedOut);
         CHECK(r.devices.empty());
-        // It waited for the budget...
-        CHECK(r.elapsedMs >= 1500u);
+        // It waited for the budget, less exactly one tick of the kernel wait
+        // clock - see waitClockTickMs for why that slack is not a loosening.
+        const unsigned long floorMs = 1500u - waitClockTickMs();
+        std::printf("timed-out scan: elapsed %lu ms, floor %lu ms (budget 1500, wait tick %lu)\n",
+                    r.elapsedMs, floorMs, waitClockTickMs());
+        CHECK(r.elapsedMs >= floorMs);
         // ...and then acted, rather than waiting out the helper's own 60 s.
         CHECK(r.elapsedMs < 20000u);
         // Killed by us, with our marker, rather than having exited on its own.
