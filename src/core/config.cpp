@@ -14,6 +14,7 @@
 // wrong. The header is ImGui-free and pulls in no GL, no window and no
 // plugin instance, so nothing about this include reaches the application
 // shell.
+#include "gui/demod_scope.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/scope_view.hpp"
 // sanitiseSerialPortName() and serialBaudSupported(): the GPS port fields are
@@ -261,6 +262,19 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "scopeMode", out.scopeMode);
     getInt(j, "scopeRangeNm", out.scopeRangeNm);
     out.scopeRangeNm = cascade::gui::clampScopeRangeNm(out.scopeRangeNm);
+    // The demod scope, on exactly the same discipline: read, then snapped onto
+    // the ladders that define it. Every one of these three indexes a constant
+    // array in gui/demod_scope.hpp, so an unclamped hand-edit would not be a
+    // wrong setting - it would be a read off the end of one.
+    getBool(j, "demodScopeOpen", out.demodScopeOpen);
+    getInt(j, "demodScopeSignal", out.demodScopeSignal);
+    out.demodScopeSignal =
+        static_cast<int>(cascade::gui::scopeSignalFromIndex(out.demodScopeSignal));
+    getInt(j, "demodScopeTimebase", out.demodScopeTimebase);
+    out.demodScopeTimebase = cascade::gui::clampScopeTimebase(out.demodScopeTimebase);
+    getInt(j, "demodScopeGain", out.demodScopeGain);
+    out.demodScopeGain = cascade::gui::clampScopeGain(out.demodScopeGain);
+    getBool(j, "demodScopeAutoGain", out.demodScopeAutoGain);
     // Same discipline for the rail's bank: read, then clamped to one that
     // exists, so a file from a build with more or fewer banks opens somewhere.
     getInt(j, "railBank", out.railBank);
@@ -613,6 +627,11 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
+    j["demodScopeOpen"] = cfg.demodScopeOpen;
+    j["demodScopeSignal"] = cfg.demodScopeSignal;
+    j["demodScopeTimebase"] = cfg.demodScopeTimebase;
+    j["demodScopeGain"] = cfg.demodScopeGain;
+    j["demodScopeAutoGain"] = cfg.demodScopeAutoGain;
     j["railBank"] = cfg.railBank;
     j["keyBindings"] = cfg.keyBindings;
     // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
@@ -736,6 +755,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
 AppConfig startupState(AppConfig cfg) {
     // WHETHER goes; WHERE stays. See the declaration for why.
     cfg.scopeMode = false;
+    cfg.demodScopeOpen = false;
     cfg.pluginBrowserOpen = false;
     cfg.fittedModulesOpen = false;
     for (AppConfig::MapPage& page : cfg.mapPages) { page.open = false; }

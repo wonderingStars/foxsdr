@@ -80,6 +80,10 @@
 #include "dsp/squelch.hpp"
 #include "dsp/stereo_fm.hpp"
 #include "dsp/vfo.hpp"
+// The demod scope's two rolling taps. A header, no .cpp: the whole thing is a
+// template over the element type, because one tap carries floats and the
+// other carries complex.
+#include "core/scope_tap.hpp"
 #include "sink/audio_out.hpp"
 #include "source/iq_source.hpp"
 #include "source/siggen_source.hpp"
@@ -456,6 +460,36 @@ public:
     std::size_t audioTapStereo(float* dstLeft, float* dstRight,
                                std::size_t n) const;
 
+    // --- The DEMOD SCOPE's two taps (0.94.0) ---------------------------------
+    //
+    // A THIRD AND FOURTH TAP, and the reasons they are not the two above are
+    // in core/scope_tap.hpp and beside each push site in the .cpp. In short:
+    // audioTap is 85 ms long and is read under the mutex the DSP thread holds
+    // across a whole block, and the scope's longest sweep is half a second
+    // and is read by the render thread once a frame.
+    //
+    // WHAT EACH ONE CARRIES:
+    //
+    //   scopeAudio()  the mono downmix of the FINISHED audio, at
+    //                 kAudioRateHz, taken at the same instant the recorder
+    //                 takes its copy - which is BELOW the plugin audio
+    //                 replacement and BELOW the hard mute. So when a plugin
+    //                 is playing through CASCADE_CAP_AUDIO_OUT, this is the
+    //                 plugin's sound and not the hiss the analog chain made
+    //                 of the same carrier.
+    //
+    //   scopeIq()     the channel I/Q at channelRateHz(), after the VFO and
+    //                 before the demodulator - the signal itself, which is
+    //                 what makes AM, FM and SSB look different.
+    //
+    // Both are const references: a caller reads them with snapshot(), which
+    // is const, and only the DSP thread ever pushes. Neither needs the
+    // pipeline to be running - a stopped chain simply stops advancing
+    // written(), and a reader that watches that counter can tell the
+    // difference between silence and a stall.
+    const ScopeTap<float>& scopeAudio() const { return scopeAudio_; }
+    const ScopeTap<std::complex<float>>& scopeIq() const { return scopeIq_; }
+
     // --- Recorder taps (P6) ---------------------------------------------------
     // Non-owning recorder hooks fed by the DSP thread; nullptr (the default)
     // disconnects. The IQ recorder receives every drained block RAW — the
@@ -654,6 +688,17 @@ private:
     std::vector<float> tapBuf_;
     std::size_t tapWrite_ = 0;   // in frames
     std::size_t tapFilled_ = 0;  // in frames
+    // The demod scope's rolling windows - see scopeAudio()/scopeIq() above.
+    // The sizes are the longest sweep the scope offers plus room for the
+    // trigger to hunt in: half a second at 48 kHz is 24000 samples, and the
+    // same half second of channel I/Q at a typical 200 kHz channel rate is
+    // 100000. Both are powers of two because the tap indexes by mask, and
+    // both are allocated once at construction - the DSP thread never
+    // allocates.
+    static constexpr std::size_t kScopeAudioTapSamples = 65536;   // 1.37 s @ 48 kHz
+    static constexpr std::size_t kScopeIqTapSamples = 262144;     // 1.31 s @ 200 kHz
+    ScopeTap<float> scopeAudio_{kScopeAudioTapSamples};
+    ScopeTap<std::complex<float>> scopeIq_{kScopeIqTapSamples};
     std::atomic<float> signalDb_{-200.0f};
     std::atomic<std::uint64_t> audioSamples_{0};
     // UI snapshots, published once per block like signalDb_.

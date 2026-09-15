@@ -1355,6 +1355,17 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     meter_.process(chanBuf_.data(), m);
     signalDb_.store(meter_.powerDb(), std::memory_order_relaxed);
 
+    // THE DEMOD SCOPE'S BASEBAND TAP, at the one place the I/Q it wants
+    // exists: the channel after the VFO has tuned and decimated it, and
+    // before the demodulator has turned it into one real number. That is what
+    // makes AM, FM and SSB LOOK different on the vector display - after the
+    // demodulator they are all just audio.
+    //
+    // A LOCK-FREE ROLLING WINDOW, not a queue: see core/scope_tap.hpp. This
+    // line can never block, never fail and never wait for the GUI, which is
+    // the condition on anything added to this thread.
+    scopeIq_.push(chanBuf_.data(), m);
+
     // Demodulate 1:1 at the channel rate. In WFM this is the COMPOSITE (MPX)
     // with no de-emphasis applied — see the ownership note in the header.
     //
@@ -1609,6 +1620,20 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         tapWrite_ = (tapWrite_ + 1) % tapFrames;
     }
     tapFilled_ = std::min(tapFrames, tapFilled_ + k);
+    // THE DEMOD SCOPE'S AUDIO TAP, at the same instant and from the same
+    // downmix the recorder takes - which is the whole reason it is HERE and
+    // not at the sink. Everything above this line has already happened: a
+    // plugin's own audio has replaced the demodulated audio if one is playing
+    // (CASCADE_CAP_AUDIO_OUT), and the hard mute has been applied. So the
+    // scope shows what is actually being played, whoever made it, and cannot
+    // contradict the speakers - the same argument the mute's own comment
+    // makes about the four consumers below it.
+    //
+    // A SECOND TAP RATHER THAN A WIDER tapBuf_, because that one is read under
+    // audioMutex_ - the mutex this thread holds across a whole block - and a
+    // render thread must not queue behind DSP for a picture. It is also 4096
+    // frames, 85 ms, where the scope's longest sweep is half a second.
+    scopeAudio_.push(monoOut_.data(), k);
     // Counted in FRAMES, unchanged in meaning: one per 48 kHz instant.
     audioSamples_.fetch_add(k, std::memory_order_relaxed);
     // Audio recorder tap (P6): the same post-chain 48 kHz samples the test

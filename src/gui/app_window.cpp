@@ -45,6 +45,11 @@
 #include "../../resources/icon/foxsdr_icon_rgba.hpp"
 #include "core/image_write.hpp"
 #include "gui/scope_face.hpp"
+// The demod scope's tube, and the window function its spectrum position needs.
+// The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
+// this is the drawing half, which includes imgui.h and therefore may not.
+#include "gui/demod_scope_face.hpp"
+#include "dsp/window.hpp"
 #include "gui/fonts.hpp"
 #include "gui/theme.hpp"
 #include "gui/map_view.hpp"
@@ -4729,6 +4734,11 @@ void AppWindow::drawMenuColumn() {
             // why it sits beside Display rather than among the decoders.
             benchGroup("VIEW");
             drawDisplaySection();
+            // The bench oscilloscope. Here, beside Display and the radar
+            // scope, because it is a way of LOOKING at what the receiver
+            // produced rather than a stage in producing it - the same
+            // argument that put the radar scope in this bank.
+            drawDemodScopeSection();
             drawRadarSection();
             drawBookmarksSection();
             drawScannerSection();
@@ -9626,6 +9636,30 @@ void AppWindow::drawRadarSection() {
     drawScopeModeControl();
 }
 
+void AppWindow::drawDemodScopeSection() {
+    // A KEY, NOT A DRAWER, and the same primitive the plugin store's row uses:
+    // everything this page can be set to is ON the page, where the tube is,
+    // because a time base set from a rail you cannot see the trace from is a
+    // control operated blind.
+    //
+    // WHAT THE CHIP HONESTLY SAYS is which input the selector is on - the one
+    // fact about the scope that is true whether the window is open or not. The
+    // LAMP is the tap actually advancing, so "AUDIO" with the lamp out reads
+    // as "the scope is set to the audio and nothing is arriving", which is the
+    // state a stopped receiver is genuinely in.
+    const cascade::gui::ScopeSignal sig =
+        cascade::gui::scopeSignalFromIndex(demodScope_.signal);
+    if (benchSwitchRow("Demod scope###demodscope", demodScopeOpen_,
+                       cascade::gui::scopeSignalKey(sig), cascade::gui::theme::kPhosphor,
+                       demodScopeOpen_ && scopeLive_, true,
+                       "Opens the bench oscilloscope: the demodulated audio on a\n"
+                       "ten-by-eight graticule, its spectrum, and the channel I/Q as\n"
+                       "two traces and as a vector display. The time base, the\n"
+                       "attenuator and the input selector are on the page itself.")) {
+        demodScopeOpen_ = !demodScopeOpen_;
+    }
+}
+
 void AppWindow::drawScopeModeControl() {
     // THE POSITION COMES FIRST, HERE ON THE RAIL, when there is none. The
     // scope cannot draw a range or a bearing from nowhere, and dropping the
@@ -11528,6 +11562,10 @@ void AppWindow::drawPluginWindows() {
     }
 
     drawDecoderWindow();
+    // The bench oscilloscope, drawn here with the other torn-off pages so it
+    // is a real window like every one of them: movable, resizable, and able to
+    // sit on a second monitor beside the spectrum it is explaining.
+    drawDemodScopePage();
 
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
@@ -13465,6 +13503,292 @@ void AppWindow::drawDecoderWindow() {
         ImGui::SetScrollHereY(1.0f);
     }
         ImGui::EndChild();
+    }
+    endPage();
+}
+
+// --- THE DEMOD SCOPE (0.94.0) -----------------------------------------------
+//
+// The bench oscilloscope. What it is and why the arithmetic behind it lives in
+// its own ImGui-free header is in gui/demod_scope.hpp; what the tube looks like
+// and why it is not the radar scope is in gui/demod_scope_face.cpp. This is the
+// half in between: reading the pipeline's two lock-free taps, finding the
+// trigger, and the keys.
+//
+// WHY ONE PAGE WITH A SIGNAL SELECTOR RATHER THAN TWO PAGES. A bench scope has
+// ONE tube and a switch that says what is on it. Splitting the audio and the
+// baseband into separate windows would also lose the thing the pair is for:
+// switching between the demodulated audio and the I/Q that produced it, on the
+// same graticule at the same instant, is how anybody learns what AM, FM and SSB
+// actually are.
+
+// How long a transform the spectrum position runs. 2048 at 48 kHz is 23 Hz a
+// bin over the 43 ms it consumes - fine enough to separate the harmonics of a
+// voice, short enough that the picture still moves with the sound.
+static constexpr std::size_t kScopeFftSize = 2048;
+
+void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
+    const cascade::gui::ScopeSignal sig =
+        cascade::gui::scopeSignalFromIndex(demodScope_.signal);
+    const bool baseband = cascade::gui::scopeSignalIsBaseband(sig);
+
+    feed.audioRateHz = cascade::core::Pipeline::kAudioRateHz;
+    feed.iqRateHz = pipeline_.channelRateHz();
+
+    // WHOSE SOUND IS IN THE TAP. Empty unless a plugin has taken the speakers
+    // through CASCADE_CAP_AUDIO_OUT - the tap sits BELOW that handover (see
+    // Pipeline::scopeAudio), so when one has, the trace really is the plugin's
+    // audio and the face says so on the glass.
+    scopeAudioFrom_ = pluginRunner_.playingPlugin();
+    feed.audioFrom = scopeAudioFrom_.empty() ? nullptr : scopeAudioFrom_.c_str();
+
+    // LIVE MEANS "SAMPLES ARRIVED SINCE THE LAST FRAME", measured on the tap
+    // this signal actually reads. A stopped receiver leaves the counter still
+    // and the face draws the graticule and says so, rather than drawing a flat
+    // line at zero volts - which would be a measurement nobody made.
+    const double nowS = ImGui::GetTime();
+    const bool audioLive =
+        cascade::gui::scopeTapLive(scopeAudioLive_, pipeline_.scopeAudio().written(), nowS);
+    const bool iqLive =
+        cascade::gui::scopeTapLive(scopeIqLive_, pipeline_.scopeIq().written(), nowS);
+    scopeLive_ = baseband ? iqLive : audioLive;
+    feed.live = scopeLive_;
+    if (!scopeLive_) { return; }
+
+    if (sig == cascade::gui::ScopeSignal::Spectrum) {
+        // The newest transform's worth of audio, windowed and transformed. The
+        // plan and the window are built once and kept: a pffft setup is not
+        // free and this position can be left up for hours.
+        if (!scopeFft_ || scopeFft_->size() != kScopeFftSize) {
+            scopeFft_ = std::make_unique<cascade::dsp::ComplexFFT>(kScopeFftSize);
+            scopeFftWindow_ = cascade::dsp::makeWindow(cascade::dsp::WindowType::Hann,
+                                                       kScopeFftSize);
+        }
+        scopeAudioBuf_.resize(kScopeFftSize);
+        const std::size_t got =
+            pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), kScopeFftSize);
+        if (got < kScopeFftSize) { return; }
+        scopeFftIn_.resize(kScopeFftSize);
+        scopeFftOut_.resize(kScopeFftSize);
+        for (std::size_t i = 0; i < kScopeFftSize; ++i) {
+            scopeFftIn_[i] = std::complex<float>(scopeAudioBuf_[i] * scopeFftWindow_[i],
+                                                 0.0f);
+        }
+        scopeFft_->forward(scopeFftIn_.data(), scopeFftOut_.data());
+        const double binHz = feed.audioRateHz / static_cast<double>(kScopeFftSize);
+        const std::size_t bins = cascade::gui::scopeSpectrumBins(
+            kScopeFftSize, feed.audioRateHz, cascade::gui::scopeSpectrumSpanHz(feed.audioRateHz));
+        scopeSpecDb_.resize(bins);
+        // NORMALISED BY THE TRANSFORM LENGTH AND THE WINDOW'S OWN GAIN, so a
+        // full-scale tone reads 0 dB on the top rule rather than at whatever
+        // number this particular FFT size happens to produce. A dB axis whose
+        // zero moves with an internal buffer size is not a scale.
+        const float norm = 2.0f / (static_cast<float>(kScopeFftSize) *
+                                   cascade::dsp::coherentGain(scopeFftWindow_.data(),
+                                                              kScopeFftSize));
+        for (std::size_t k = 0; k < bins; ++k) {
+            scopeSpecDb_[k] = cascade::gui::scopeSpectrumDb(std::abs(scopeFftOut_[k]) * norm);
+        }
+        feed.spectrumDb = scopeSpecDb_.data();
+        feed.spectrumBins = bins;
+        feed.spectrumBinHz = binHz;
+        return;
+    }
+
+    // --- the three TRIGGERED positions ---------------------------------------
+    const double rate = baseband ? feed.iqRateHz : feed.audioRateHz;
+    std::size_t sweep =
+        cascade::gui::scopeSweepSamples(cascade::gui::scopeTimebaseMs(demodScope_.timebase),
+                                        rate);
+    if (sweep == 0) { return; }
+    // ROOM FOR THE TRIGGER TO HUNT IN. One whole sweep of search, capped by
+    // what the tap actually holds: a request longer than the ring would come
+    // back short and the sweep would be drawn from whatever fitted, which is a
+    // time base that quietly stops meaning what the readout says.
+    const std::size_t cap =
+        baseband ? pipeline_.scopeIq().capacity() : pipeline_.scopeAudio().capacity();
+    std::size_t want = sweep * 2;
+    if (want > cap) { want = cap; }
+    if (sweep > want) { sweep = want; }
+    const std::size_t search = want - sweep;
+    const float hyst = cascade::gui::scopeHysteresis(demodScope_.gainIndex);
+    const std::size_t holdoff = cascade::gui::scopeHoldoffSamples(sweep);
+
+    if (!baseband) {
+        scopeAudioBuf_.resize(want);
+        const std::size_t got = pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), want);
+        if (got < sweep) { return; }
+        std::size_t start = got - sweep;  // free-running: the newest sweep
+        if (search > 0) {
+            const std::size_t t = cascade::gui::scopeFindTrigger(
+                scopeAudioBuf_.data(), got, sweep, 0.0f, hyst, holdoff);
+            if (t != cascade::gui::kScopeNoTrigger) { start = t; }
+        }
+        feed.audio = scopeAudioBuf_.data() + start;
+        feed.audioCount = sweep;
+        return;
+    }
+
+    scopeIqBuf_.resize(want);
+    const std::size_t got = pipeline_.scopeIq().snapshot(scopeIqBuf_.data(), want);
+    if (got < sweep) { return; }
+    // Split into two parallel arrays: every reduction below wants a stride of
+    // one, and the face is explicit that it allocates nothing of its own.
+    scopeI_.resize(got);
+    scopeQ_.resize(got);
+    for (std::size_t i = 0; i < got; ++i) {
+        scopeI_[i] = scopeIqBuf_[i].real();
+        scopeQ_[i] = scopeIqBuf_[i].imag();
+    }
+    std::size_t start = got - sweep;
+    if (search > 0) {
+        // TRIGGERED ON I, AND BOTH ARMS SHIFTED TOGETHER. Triggering them
+        // separately would slide Q against I, and the phase between the two is
+        // the entire content of the vector display.
+        const std::size_t t = cascade::gui::scopeFindTrigger(scopeI_.data(), got, sweep,
+                                                             0.0f, hyst, holdoff);
+        if (t != cascade::gui::kScopeNoTrigger) { start = t; }
+    }
+    feed.iqI = scopeI_.data() + start;
+    feed.iqQ = scopeQ_.data() + start;
+    feed.iqCount = sweep;
+}
+
+void AppWindow::drawDemodScopePage() {
+    if (!demodScopeOpen_) { return; }
+    // Wide rather than tall: the tube is ruled ten by eight, so a window in
+    // roughly that proportion gives square divisions, and a square division is
+    // what makes the vector display's circles circular.
+    constexpr float kScopeW = 780.0f;
+    constexpr float kScopeH = 540.0f;
+    // THE OPENING RECTANGLE IS THE CALL SITE'S JOB, and it is easy to think it
+    // is not: beginPage takes a defaultW/defaultH pair, but those are what a
+    // "Reset window sizes" re-applies - the FIRST placement still has to be
+    // queued here, as every other page does it. Without these two lines the
+    // page opens at ImGui's own auto-size, which for a window whose body is
+    // one Dummy the size of whatever is left is the 240 x 140 floor: a scope
+    // with no room for a tube. (It did, on the first run of this page.)
+    //
+    // AND IT OPENS INSIDE THE MAIN WINDOW, not overhanging its right edge the
+    // way the decoder output and the decoded-image pages do. Those are read
+    // and closed; this one is WATCHED while you tune, so it wants to be on the
+    // same screen as the spectrum it is explaining. The overhang is also how
+    // those pages become their own operating system window immediately, and
+    // the arithmetic behind it (the main window's right edge plus a stagger)
+    // puts a page a couple of hundred pixels PAST that edge - which on a
+    // single monitor with the application maximised is off the screen
+    // entirely. Dragging this one out by its rail still makes it a separate
+    // window, as any page does; it simply does not start as one.
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
+    const float px = mv->Pos.x + std::max(0.0f, mv->Size.x - kScopeW - 36.0f);
+    const float py = mv->Pos.y + std::max(0.0f, mv->Size.y - kScopeH - 56.0f);
+    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(kScopeW, kScopeH), ImGuiCond_FirstUseEver);
+    if (beginPage("Demod scope###demodscopewindow", "DEMOD SCOPE", &demodScopeOpen_, 0,
+                  kScopeW, kScopeH)) {
+        cascade::gui::DemodScopeFeed feed;
+        gatherDemodScope(feed);
+        const cascade::gui::ScopeSignal sig =
+            cascade::gui::scopeSignalFromIndex(demodScope_.signal);
+
+        // THE ATTENUATOR RANGES BEFORE THE TUBE IS DRAWN, so the picture and
+        // the "mV/DIV" printed under it are the same frame's answer. Ranging
+        // afterwards would letter last frame's scale under this frame's trace.
+        if (demodScope_.autoGain) {
+            demodScope_.gainIndex = cascade::gui::scopeAutoGain(
+                cascade::gui::demodScopePeak(feed, sig), demodScope_.gainIndex);
+        }
+
+        // --- the input selector ----------------------------------------------
+        // Four real ImGui buttons, latched: the selected one is drawn pressed
+        // into the panel. Buttons rather than a combo because a bench
+        // instrument's input selector is a row of keys you can see the state
+        // of without opening anything.
+        for (int i = 0; i < cascade::gui::kScopeSignalCount; ++i) {
+            if (i > 0) { ImGui::SameLine(); }
+            const bool on = (demodScope_.signal == i);
+            const cascade::gui::ScopeSignal s = cascade::gui::scopeSignalFromIndex(i);
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+            }
+            if (ImGui::Button(cascade::gui::scopeSignalKey(s), ImVec2(84.0f, 0.0f))) {
+                demodScope_.signal = i;
+            }
+            if (on) { ImGui::PopStyleColor(2); }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", cascade::gui::scopeSignalCaption(s));
+            }
+        }
+
+        // --- the time base and the attenuator ---------------------------------
+        char tb[32];
+        cascade::gui::formatScopeTimebase(tb, sizeof(tb),
+                                          cascade::gui::scopeTimebaseMs(demodScope_.timebase));
+        // NO TIME BASE ON A SPECTRUM. The stepper is disabled rather than
+        // hidden: a control that vanishes reads as a fault, and one that is
+        // plainly greyed says "not on this input" without anybody guessing.
+        const bool spectrum = (sig == cascade::gui::ScopeSignal::Spectrum);
+        ImGui::BeginDisabled(spectrum);
+        ImGui::TextUnformatted("TIME");
+        ImGui::SameLine();
+        if (ImGui::Button("-##tbdown")) {
+            demodScope_.timebase = cascade::gui::clampScopeTimebase(demodScope_.timebase - 1);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("+##tbup")) {
+            demodScope_.timebase = cascade::gui::clampScopeTimebase(demodScope_.timebase + 1);
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(spectrum ? "-- (spectrum)" : tb);
+        ImGui::EndDisabled();
+
+        char gn[32];
+        cascade::gui::formatScopeGain(gn, sizeof(gn),
+                                      cascade::gui::scopeGainPerDiv(demodScope_.gainIndex));
+        ImGui::BeginDisabled(spectrum);
+        ImGui::TextUnformatted("GAIN");
+        ImGui::SameLine();
+        // THE MANUAL STEP IS DISABLED WHILE AUTO IS LATCHED, not silently
+        // overridden: a stepper that moved and then sprang back on the next
+        // frame is the worst of both, and it is exactly what happens if the
+        // ranging is left running while a hand is on the control.
+        ImGui::BeginDisabled(demodScope_.autoGain);
+        if (ImGui::Button("-##gndown")) {
+            demodScope_.gainIndex = cascade::gui::clampScopeGain(demodScope_.gainIndex - 1);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("+##gnup")) {
+            demodScope_.gainIndex = cascade::gui::clampScopeGain(demodScope_.gainIndex + 1);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextUnformatted(spectrum ? "10 dB/DIV" : gn);
+        ImGui::SameLine();
+        ImGui::Checkbox("AUTO", &demodScope_.autoGain);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Ranges the attenuator to fit the signal, one detent at a\n"
+                              "time. Turn it off to set the volts per division by hand.");
+        }
+
+        // --- the tube --------------------------------------------------------
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        if (avail.x > 8.0f && avail.y > 8.0f) {
+            const ImVec2 tl = ImGui::GetCursorScreenPos();
+            const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
+            const std::size_t cols = static_cast<std::size_t>(avail.x) + 2u;
+            scopeLo_.resize(cols);
+            scopeHi_.resize(cols);
+            drawDemodScopeFace(ImGui::GetWindowDrawList(), tl, br, feed, demodScope_,
+                               scopeLo_.data(), scopeHi_.data(), cols);
+            // The face draws into the window's list; this is what tells ImGui
+            // the space is spoken for, so a future control below it lands
+            // under the tube rather than on it.
+            ImGui::Dummy(avail);
+        }
     }
     endPage();
 }
@@ -16405,6 +16729,17 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // of a ladder.
     scopeMode_ = cfg.scopeMode;
     scopeRangeNm_ = clampScopeRangeNm(cfg.scopeRangeNm);
+    // THE DEMOD SCOPE, on the same two rules: the open flag arrives already
+    // cleared by startupState (nothing opens itself at launch), and the three
+    // ladder positions are clamped AGAIN here even though load() clamped them,
+    // for the reason the range above is - these are the values a constant
+    // array is indexed with, and a second clamp costs nothing next to a read
+    // off the end of one.
+    demodScopeOpen_ = cfg.demodScopeOpen;
+    demodScope_.signal = static_cast<int>(scopeSignalFromIndex(cfg.demodScopeSignal));
+    demodScope_.timebase = clampScopeTimebase(cfg.demodScopeTimebase);
+    demodScope_.gainIndex = clampScopeGain(cfg.demodScopeGain);
+    demodScope_.autoGain = cfg.demodScopeAutoGain;
     // The rail opens on the bank it was left on. Clamped again here even
     // though load() already did: this is the value a widget indexes with.
     railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
@@ -16922,6 +17257,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrailStyle = mapTrailStyle_;
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
+    cfg.demodScopeOpen = demodScopeOpen_;
+    cfg.demodScopeSignal = demodScope_.signal;
+    cfg.demodScopeTimebase = demodScope_.timebase;
+    cfg.demodScopeGain = demodScope_.gainIndex;
+    cfg.demodScopeAutoGain = demodScope_.autoGain;
     cfg.railBank = railBank_;
     // Only the keys that DIFFER from the shipped table, so a user who never
     // rebound anything writes nothing and still gets a later build's improved
