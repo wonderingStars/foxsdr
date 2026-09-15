@@ -149,6 +149,11 @@ std::string telemetryEndpoint();
 // what leaves the machine and must not itself be tampered with on the way.
 constexpr char kPrivacyPolicyUrl[] = "https://foxsdr.com/privacy.html";
 
+// THE SITE ITSELF, for the one place the app has to hand someone to the web
+// rather than doing something itself - Linux's update banner (app_window.cpp
+// drawUpdateBanner()), which has no installer to run yet and says so.
+constexpr char kHomepageUrl[] = "https://foxsdr.com";
+
 // Posts one report, on a thread of its own, and forgets about it.
 //
 // Fire-and-forget, but NOT detached: the destructor joins, because a detached

@@ -43,6 +43,46 @@ bool openOn(SdrPlaySource& src, FakeSdrPlayApi& fake, const std::string& args = 
     return src.open(args);
 }
 
+// --- 0. the Linux loader's SONAME, pinned ----------------------------------
+
+#if !defined(_WIN32)
+// LINUX PORT (2026-09-15). processSdrPlayApi()'s loadInto() now dlopen()s a
+// real SONAME on this platform instead of leaving api.resolved permanently
+// false with a "Windows-only" message - src/source/sdrplay_source.cpp mirrors
+// the Windows LoadLibrary branch almost line for line: try the name the
+// vendor installer registers first, then a bare fallback for a dev machine
+// with only the unversioned symlink. What a unit test CAN pin without the
+// real API installed (this machine has neither) is the exact string asked
+// for, because that string is what makes the difference between "found" and
+// "not found" on a real Linux box with SDRplay's .run installer applied -
+// get the SONAME wrong and every RSP silently goes back to being invisible on
+// this platform, exactly as it was before this port.
+void testLinuxSoNameIsTheVendorInstalledOne() {
+    // The API's own major version (3), NOT an FoxSDR or distro version - see
+    // sdrPlayApiSoName()'s comment for how this was confirmed (SDRplay's
+    // Linux .run installer registers this exact SONAME with ldconfig, and
+    // SoapySDRPlay3 - the reference open-source consumer - links against the
+    // same major version).
+    const std::string so = cascade::source::sdrPlayApiSoName();
+    CHECK(so == "libsdrplay_api.so.3");
+
+    // THE SHAPE THE STRING MUST HAVE, independent of the exact version
+    // pinned above - so a future SDRplay API v4 update to this constant still
+    // has to look like a SONAME and not, say, a bare "sdrplay_api" or a path.
+    // CHECK() records and continues rather than stopping the test, so the
+    // digits-only check below is gated on the prefix actually being there -
+    // otherwise a broken prefix does not merely fail one CHECK, it throws out
+    // of substr() and the run never reaches testSummary() at all.
+    const std::string prefix = "libsdrplay_api.so.";
+    CHECK(so.rfind(prefix, 0) == 0);
+    if (so.rfind(prefix, 0) == 0) {
+        const std::string majorDigits = so.substr(prefix.size());
+        CHECK(!majorDigits.empty());
+        for (char c : majorDigits) { CHECK(c >= '0' && c <= '9'); }
+    }
+}
+#endif
+
 // --- 1. no API installed --------------------------------------------------
 
 void testMissingApiIsEmptyAndSaysWhy() {
@@ -1373,6 +1413,9 @@ void testAbiLayoutIsPinnedToTheVersionsWeChecked() {
 }  // namespace
 
 int main() {
+#if !defined(_WIN32)
+    testLinuxSoNameIsTheVendorInstalledOne();
+#endif
     testMissingApiIsEmptyAndSaysWhy();
     testOldApiIsRefusedWithASentence();
     testEnumerationLabelsAndArgs();

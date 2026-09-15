@@ -5,6 +5,10 @@ build*/
 *.exe
 .claude/
 installer/Output/
+# installer/linux/build-appimage.sh's output (the AppImage itself, the AppDir
+# it stages, and the cached appimagetool download) — the Linux analogue of
+# installer/Output/ above.
+dist/
 
 # Wrangler's local cache — it stores the Cloudflare account id and account
 # name (which is an email address). Nothing secret, but it does not belong in

@@ -5549,8 +5549,10 @@ bool AppWindow::shellOpen(const std::string& target) {
             ::ShellExecuteA(nullptr, "open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return reinterpret_cast<std::intptr_t>(rc) > 32;
 #else
-        (void)target;
-        return false;
+        // See gui/shell_open.hpp for why this is a double-forked xdg-open
+        // rather than system()/popen(), and why the logic lives in a free
+        // function a test can call without an AppWindow.
+        return cascade::gui::posixShellOpen(target);
 #endif
     });
 }
@@ -5617,6 +5619,7 @@ void AppWindow::drawUpdateBanner() {
     }
 
     ImGui::Spacing();
+#if defined(_WIN32)
     if (updateDownloading_) {
         ImGui::TextColored(cascade::gui::theme::warning(), "Downloading...");
         // updateProgress_, not pluginRepo_.progress(): this transfer does not
@@ -5652,6 +5655,21 @@ void AppWindow::drawUpdateBanner() {
             ImGui::PopStyleColor();
         }
     }
+#else
+    // NO LINUX INSTALLER EXISTS YET. The manifest at foxsdr.com/api/update
+    // names a Windows .exe (foxsdr-setup-<version>.exe) whether the asking
+    // client is Windows or Linux - it has no notion of a client platform, and
+    // as of this port there is nothing else on the site to offer a Linux
+    // build. Downloading that .exe here and then failing to launch it (the
+    // #if defined(_WIN32) branch above) would be a working-looking button
+    // that quietly cannot succeed. The honest behaviour is to say so and hand
+    // the person to the one place that will eventually have the right file.
+    ImGui::TextWrapped(
+        "There is no in-app updater for Linux yet - download it from foxsdr.com.");
+    if (ImGui::Button("Open foxsdr.com", ImVec2(-FLT_MIN, 0.0f))) {
+        shellOpen(cascade::core::kHomepageUrl);
+    }
+#endif
     if (ImGui::SmallButton("Not now")) { updateDismissed_ = true; }
 
     if (!updateError_.empty()) {
@@ -17600,15 +17618,14 @@ void AppWindow::drawDiagnosticsSection() {
     if (ImGui::Button("Copy diagnostics")) { copyDiagnosticsBundle(); }
     ImGui::SameLine();
     if (ImGui::Button("Open reports folder")) {
-#if defined(_WIN32)
         if (!crashDir.empty()) {
             std::error_code ec;
             std::filesystem::create_directories(std::filesystem::path(crashDir), ec);
-            // Explorer's first window of a session is a multi-second cold start
-            // and this thread is inside the shell for all of it.
+            // Explorer's (or the Linux file manager's) first window of a
+            // session is a multi-second cold start and this thread is inside
+            // the shell for all of it.
             shellOpen(crashDir);
         }
-#endif
     }
     if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
 
@@ -17669,14 +17686,12 @@ void AppWindow::drawDiagnosticsOffer() {
         if (ImGui::Button("Copy diagnostics")) { copyDiagnosticsBundle(); }
         ImGui::SameLine();
         if (ImGui::Button("Open reports folder")) {
-#if defined(_WIN32)
             const std::string dir = cascade::core::diagCrashDir();
             if (!dir.empty()) {
                 std::error_code ec;
                 std::filesystem::create_directories(std::filesystem::path(dir), ec);
                 shellOpen(dir);
             }
-#endif
         }
         ImGui::SameLine();
         if (ImGui::Button("Not now")) { diagOfferOpen_ = false; }
