@@ -522,6 +522,40 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+--------------------------------------------------------------------------
+COMPONENT: ExtIO_sddc (SDDC / RX888 support)
+Upstream:  https://github.com/ik1xpv/ExtIO_sddc
+Used by:   src/source/rx888_protocol.hpp   (the FX3 vendor protocol and the
+                                            RX888 mk2's gain tables, as
+                                            numbers and arithmetic)
+           src/source/rx888_firmware.cpp   (SDDC_FX3.img, embedded verbatim -
+                                            an RX888 has no flash and cannot
+                                            be a radio until a host loads it)
+License:   MIT
+
+The MIT License (MIT)
+
+Copyright (c) 2017-2020 Oscar Steila ik1xpv<at>gmail.com
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+--------------------------------------------------------------------------
+
 ======================================================================
 COMPONENT: Saira Condensed (typeface, embedded in the executable)
 ======================================================================

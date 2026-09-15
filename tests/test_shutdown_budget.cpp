@@ -301,7 +301,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // device and every later call on the same path is skipped rather than
 // attempted (see abandonWedgedDriverLocked).
 //
-// SEVEN SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
+// EIGHT SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
 // NOW THAT THE APPLICATION OPENS THEM (0.91.0, and the reason has changed
 // completely from the one the rows carried before).
 //
@@ -313,7 +313,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // EXACTLY ONE SOURCE IS INSTALLED IN THE PIPELINE AT A TIME.
 // Pipeline::stop() stops `active_`, which is one object: the generator, an
 // IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource,
-// an AirspyHfSource, an SdrPlaySource or a MiriSdrSource - and from 0.92.0 the Source section can install any of
+// an AirspyHfSource, an SdrPlaySource, a MiriSdrSource or an Rx888Source - and from 0.92.0 the Source section can install any of
 // them, which is what makes this note's arithmetic load-bearing rather than
 // hypothetical. A device switch
 // destroys the old source before the new one is constructed
@@ -333,6 +333,9 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //   SdrPlaySource    kCallbackDrainWait 250                            =  250 ms
 //   MiriSdrSource    msi2500 kTeardownControlTimeout 500 (stop streaming)
 //                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1750 ms
+//   Rx888Source      rx888 kControlTimeout 500 x3 (STOPFX3, TUNERSTDBY, the
+//                    bias-tee GPIO word) + kReaderJoinWait 1000
+//                    + usb kAbortDrainWait 250                         = 2750 ms
 //
 // Soapy's 3000 ms is the worst and is the pair charged in the table above, so
 // kShutdownBoundedWaitsMs stays at 7000 (3000 + kSourceJoinWait 3000 + the
@@ -578,6 +581,52 @@ const KnownWait kKnownWaits[] = {
     {"src/source/mirisdr_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the Mirics reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
+    // THE NATIVE RX888 mk2 DRIVER. Same argument as the blocks above and the
+    // same answer, but the arithmetic is tighter and worth writing out: an
+    // RX888 teardown costs rx888 kControlTimeout 500 (the STOPFX3) +
+    // kReaderJoinWait 1000 + TWO more kControlTimeouts in closeDevice (the
+    // tuner to standby when it was in VHF, and the GPIO word that unpowers
+    // both bias tees) + usb kAbortDrainWait 250 = 2750 ms, spent INSTEAD OF
+    // the Soapy pair's 3000 rather than as well as it. That 500 is chosen
+    // for this table: at 1000 the same path would be 4250 and this would be
+    // the column that has to become the 1.
+    //
+    // The driver constants are CLASS MEMBERS of Rx888Source, for the reason
+    // the Airspy block gives - hackrf_source.hpp already declares four of
+    // these names at cascade::source scope.
+    {"src/source/rx888_protocol.hpp", "kControlTimeout", 0,
+     "the RX888's per-control-transfer bound. Three of these are on the teardown path - the "
+     "STOPFX3 in stopStreamingLocked() and, in closeDevice(), the tuner standby and the GPIO "
+     "word that unpowers the bias tees - and together they are 1500 ms of the 2750 ms RX888 "
+     "column, which is covered by the 3000 ms Soapy column already charged"},
+    {"src/source/rx888_protocol.hpp", "kAdcStartTimeout", 0,
+     "STARTADC only, whose firmware handler programs the Si5351 and then sleeps a full second "
+     "before answering (SDDC_FX3/USBhandler.c:264-273). Spent at open and at a sample-rate "
+     "change, never at stop - nothing on the teardown path sets the ADC clock"},
+    {"src/source/rx888_source.hpp", "kBulkReadWait", 0,
+     "how long the RX888 reader thread blocks for one bulk transfer. Spent on the reader's OWN "
+     "thread; it is what bounds how long that thread takes to notice it has been asked to stop, "
+     "not a wait the teardown performs"},
+    {"src/source/rx888_source.hpp", "kReadWait", 0,
+     "Rx888Source::read()'s wait for samples, spent on the pipeline's source thread, which the "
+     "teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI teardown "
+     "thread"},
+    {"src/source/rx888_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in Rx888Source::stopStreamingLocked(), and the largest single piece of "
+     "that 2750 ms column. Zero because an RX888 teardown REPLACES the Soapy one rather than "
+     "adding to it; if the column ever grows past 3000 ms in total, this is the row that becomes "
+     "the 1 and the Soapy pair that becomes the zero"},
+    {"src/source/rx888_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the RX888 reader's tally window before it writes its stream-health "
+     "line, matching SoapySource's; nothing sleeps or blocks on it"},
+    {"src/source/rx888_source.hpp", "kFirmwareReenumerateBudget", 0,
+     "how long open() will wait for an RX888 to come back under its second USB identity after "
+     "its firmware has been uploaded. Spent on the OPEN path only - a radio is never given "
+     "firmware during a shutdown - and it is the one wait in this driver that is deliberately "
+     "long, because the alternative is the reference's fixed 800 ms sleep and a guess"},
+    {"src/source/rx888_source.hpp", "kFirmwarePollInterval", 0,
+     "how often that wait looks at the transport's device list. Same path, same reason: open "
+     "only, never teardown"},
     {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
      "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "
      "same bound a cancelled control transfer is given. The last 250 ms of either native "

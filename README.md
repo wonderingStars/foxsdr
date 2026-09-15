@@ -363,6 +363,39 @@ in FoxSDR, the device has to be bound to WinUSB first (see Zadig, below);
 a stick still running its television driver is listed separately with what
 to do about it.
 
+## The native RX888 mk2 driver
+
+FoxSDR opens the RX888 mk2 natively over its own WinUSB transport: no CyAPI
+or Cypress driver install, no SoapySDR module, and no separate firmware
+loader. The FX3 firmware is built into FoxSDR and uploaded automatically —
+an RX888 has no flash, so out of a power cycle it is a Cypress bootloader
+rather than a receiver, and the Source section lists it as "RX888 (needs
+firmware, will load on open)" and loads the image when you open it. That
+takes a few seconds the first time after each power cycle and nothing
+thereafter.
+
+**Zadig has to be run twice**, because an RX888 has two USB identities and
+FoxSDR has to reach both: `04B4:00F3` (the FX3 bootloader, before the
+firmware) and `04B4:00F1` (the radio, after it). See the Zadig section below.
+
+Direct sampling gives the whole 0 – 32 MHz band from the 64 MHz ADC clock,
+and above that the R828D tuner takes over up to 1.75 GHz. The sample rates
+offered are 2, 4, 8, 16 and 32 MS/s complex, each a power-of-two decimation
+of the ADC clock; above 32 MHz the widest is 8 MS/s, because the tuner puts
+its output at a 4.57 MHz IF and a wider band would reach below 0 Hz. The
+gains are the DAT-31 attenuator (−31.5 to 0 dB in half-decibel steps) and the
+AD8340 IF amplifier on the HF side, and the tuner's own RF and IF gains on
+the VHF side; the ADC's dither and output randomiser, the HF PGA and both
+bias tees are switches on the radio.
+
+**Be honest with yourself about the rate.** The RX888 delivers 128 MB/s and
+the conversion from real samples to complex baseband happens on your
+computer, not on the radio. FoxSDR's DSP chain has a measured single-core
+ceiling around 16 – 20 MS/s, so 32 MS/s is offered because the hardware has
+it, not because this application can keep up with it on every machine. If
+the diagnostic log's `stream health` line shows overflows climbing, drop a
+rate.
+
 ## The native RTL-SDR driver
 
 FoxSDR opens an RTL2832U dongle directly as well — the same WinUSB transport,
@@ -1105,6 +1138,15 @@ SoapySDR module search path itself; `SOAPY_SDR_ROOT` overrides the guess and a
 RTL-SDR dongle needs one further step on Windows**: it ships bound to the DVB-T
 television driver, under which it is invisible to every SDR application, and
 Zadig must be used to bind WinUSB to "Bulk-In, Interface (Interface 0)" instead.
+
+An **RX888** is two devices. Plug it in and run Zadig once for
+**"WestBridge"** (USB ID `04B4:00F3` — the FX3 bootloader), then open it once
+in FoxSDR so the firmware loads: the radio disappears and comes back as
+**"RX888mk2"** (`04B4:00F1`). Run Zadig again for that one. Both need the
+**WinUSB** driver. If you only do the first, FoxSDR will report that the
+radio took the firmware but did not come back; if you only do the second, it
+will not see the radio at all until something else has loaded its firmware.
+(Tick *Options → List All Devices* in Zadig if either one is not in the list.)
 `cascade.exe --soapy-check` prints the search paths, the loaded modules and
 either the device it opened or the reason there was none, and
 `cascade.exe --rtlsdr-check` does the same for the native RTL-SDR path: what is
