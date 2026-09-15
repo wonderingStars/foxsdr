@@ -217,6 +217,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "sourceKind", out.sourceKind);
     getString(j, "soapyArgs", out.soapyArgs);
     getString(j, "nativeArgs", out.nativeArgs);
+    getBool(j, "nativeBiasT", out.nativeBiasT);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
     getDouble(j, "centerHz", out.centerHz);
@@ -391,7 +392,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     }
     if (out.sourceKind != "siggen" && out.sourceKind != "file" &&
         out.sourceKind != "soapy" && out.sourceKind != "rtlsdr" &&
-        out.sourceKind != "hackrf") {
+        out.sourceKind != "hackrf" && out.sourceKind != "airspy" &&
+        out.sourceKind != "airspyhf") {
         out.sourceKind = defaults.sourceKind;
     }
     // Map window geometry is validated as ONE rectangle: any bad component
@@ -562,6 +564,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["sourceKind"] = cfg.sourceKind;
     j["soapyArgs"] = cfg.soapyArgs;
     j["nativeArgs"] = cfg.nativeArgs;
+    j["nativeBiasT"] = cfg.nativeBiasT;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
     j["centerHz"] = cfg.centerHz;

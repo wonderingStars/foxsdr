@@ -915,7 +915,35 @@ int main() {
         CHECK(!src.autoGain());
         // Unlike the HackRF, this radio HAS an AGC.
         CHECK(src.autoGainSupported());
-        CHECK(src.gains().size() == 5);
+        // FIVE GAINS, AND EVERY ONE OF THEM IS STEPS, NOT DECIBELS.
+        //
+        // libairspy takes an index for all five and publishes no decibel
+        // mapping, so "LNA 7.0 dB" - what the Source section, the RECEIVER
+        // card, the scope knob and the browser all printed until 0.92.0 - is
+        // a number nothing produced wearing a unit this radio does not use.
+        // The driver is the only place that knows; if this list ever grows a
+        // sixth gain that really is decibels, this loop has to be the thing
+        // that says so rather than a panel quietly guessing.
+        {
+            const std::vector<cascade::source::GainInfo> g = src.gains();
+            CHECK(g.size() == 5);
+            bool allSteps = !g.empty();
+            std::string names;
+            for (const cascade::source::GainInfo& one : g) {
+                if (one.unit != cascade::source::GainUnit::Steps) {
+                    allSteps = false;
+                    names += one.name + " ";
+                }
+                // The range is the register's own, and a step is one index.
+                CHECK_NEAR(one.minDb, 0.0, 1e-9);
+                CHECK_NEAR(one.stepDb, 1.0, 1e-9);
+                CHECK(one.maxDb >= 14.0);
+            }
+            if (!allSteps) {
+                std::printf("  gains still claiming decibels: %s\n", names.c_str());
+            }
+            CHECK(allSteps);
+        }
         CHECK(src.antennas().size() == 1);
         CHECK(src.setAntenna("RX"));
         CHECK(!src.setAntenna("TX"));

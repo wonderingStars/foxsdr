@@ -89,6 +89,53 @@ static std::string instrumentWindowId(const cascade::core::HostInstrument& in) {
 
 namespace {
 
+// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are four of
+// them now, in three separate decisions (the config restore, the web remote's
+// device match, and makeDeviceSource's construction), and three copies of a
+// growing list of string literals is three chances for one of them to be
+// missing a driver - which would not fail to compile, it would quietly make
+// an Airspy unrestorable while everything else worked.
+bool isNativeSourceKind(const std::string& kind) {
+    return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf";
+}
+
+// THE BIAS TEE, AND WHY IT IS A dynamic_cast AND NOT A DeviceSource METHOD.
+//
+// Putting 4.5 V on an antenna connector is not a thing every radio does, and
+// it is not "a port to choose": each of these drivers keeps it out of
+// antennas() deliberately, so that something iterating a list of port names
+// can never switch power on. Adding it to DeviceSource would give every
+// future source - a file, the generator, a Soapy device whose vendor module
+// has no such concept - a method it has to answer, and the honest answer for
+// most of them is "there is no such thing here".
+//
+// So the panel asks the concrete type, in exactly one place. Three drivers
+// have one this panel can reach:
+//   HackRfSource     - always present on a HackRF One
+//   AirspySource     - always present (a GPIO write, see its setBiasT)
+//   AirspyHfSource   - only on some boards, which is why the driver ASKS at
+//                      open (GET_BIAS_TEE_COUNT) and answers biasTeeSupported()
+// The RTL-SDR's is NOT here, and that is said out loud rather than left to be
+// noticed: RtlSdrSource has one, spelled setBiasTee(), but its open-time
+// policy is its own (it will not switch on from an EEPROM that reads as
+// zeroes, because a bare dongle would otherwise put 4.5 V on the antenna at
+// open), and reconciling a persisted checkbox with that policy is a decision
+// this change did not make. A dongle owner reaches it the way they did
+// before: not from here.
+//
+// `fn` is called with the concrete driver when there is one; false is
+// returned untouched when there is not, which is the common case.
+template <typename Fn>
+bool withBiasTee(cascade::source::DeviceSource* dev, Fn&& fn) {
+    if (auto* h = dynamic_cast<cascade::source::HackRfSource*>(dev)) { return fn(*h); }
+    if (auto* a = dynamic_cast<cascade::source::AirspySource*>(dev)) { return fn(*a); }
+    if (auto* hf = dynamic_cast<cascade::source::AirspyHfSource*>(dev)) {
+        if (!hf->biasTeeSupported()) { return false; }
+        return fn(*hf);
+    }
+    return false;
+}
+
 // Takes a resolved device-open result and lets it go, which is precisely what
 // closes the device: the result owns the SoapySource and its destructor is the
 // close. Templated only so it can live here, at file scope, without naming
@@ -399,7 +446,8 @@ void applyWindowIcon(GLFWwindow* window) {
 // code path, so any difference is a real user-visible change, never noise.
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
-           a.nativeArgs == b.nativeArgs && a.soapyAntenna == b.soapyAntenna &&
+           a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
+           a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
@@ -3147,13 +3195,17 @@ void AppWindow::drawStatusColumn() {
                 // The first element by name, and a count of the rest. Summing
                 // them would print a total this application never commanded and
                 // the driver never reported.
+                //
+                // LETTERED BY THE DRIVER'S OWN UNIT (gui::formatGain): an
+                // Airspy's "LNA 7" is a register step, and this card said
+                // "LNA 7 dB" until 0.92.0.
+                const std::string gainText = cascade::gui::formatGain(
+                    deviceGainNames_[0], static_cast<double>(deviceGainsDb_[0]),
+                    firstGainUnit());
                 if (deviceGainNames_.size() == 1) {
-                    std::snprintf(l2, sizeof(l2), "%s %.0f dB", deviceGainNames_[0].c_str(),
-                                  static_cast<double>(deviceGainsDb_[0]));
+                    std::snprintf(l2, sizeof(l2), "%s", gainText.c_str());
                 } else {
-                    std::snprintf(l2, sizeof(l2), "%s %.0f dB +%zu more",
-                                  deviceGainNames_[0].c_str(),
-                                  static_cast<double>(deviceGainsDb_[0]),
+                    std::snprintf(l2, sizeof(l2), "%s +%zu more", gainText.c_str(),
                                   deviceGainNames_.size() - 1);
                 }
             }
@@ -5335,12 +5387,34 @@ void AppWindow::drawSourceSection() {
     // silently. See enumerateUnbound.
     for (const cascade::usb::UsbDeviceInfo& u : nativeUnbound_) {
         const std::string what = u.description.empty() ? std::string("A USB radio") : u.description;
+        // WHICH ENTRY TO PICK IN ZADIG IS NOT THE SAME FOR EVERY RADIO, and
+        // saying "Bulk-In, Interface (Interface 0)" to an Airspy owner would
+        // be an instruction for a device they are not looking at. An RTL2832U
+        // is a COMPOSITE device whose SDR half is interface 0 and whose entry
+        // is named that way; a HackRF and both Airspys present as a single
+        // device under their own name. So the sentence names the entry that
+        // exists, and the only case where it can be specific is the one where
+        // the specific name is known.
+        bool isRtl = false;
+        for (const cascade::usb::UsbId& id : cascade::source::rtlSdrUsbIds()) {
+            if (u.vid == id.vid && u.pid == id.pid) { isRtl = true; }
+        }
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped(
-            "%s is plugged in but is not bound to WinUSB, so nothing can open it. Run Zadig "
-            "(zadig.akeo.ie), tick Options -> List All Devices, select \"Bulk-In, Interface "
-            "(Interface 0)\", choose WinUSB and click Replace Driver, then press Refresh.",
-            what.c_str());
+        if (isRtl) {
+            ImGui::TextWrapped(
+                "%s is plugged in but is not bound to WinUSB, so nothing can open it. Run "
+                "Zadig (zadig.akeo.ie), tick Options -> List All Devices, select \"Bulk-In, "
+                "Interface (Interface 0)\", choose WinUSB and click Replace Driver, then "
+                "press Refresh.",
+                what.c_str());
+        } else {
+            ImGui::TextWrapped(
+                "%s is plugged in but is not bound to WinUSB, so nothing can open it. Run "
+                "Zadig (zadig.akeo.ie), tick Options -> List All Devices, select this radio "
+                "in the dropdown, choose WinUSB and click Replace Driver, then press "
+                "Refresh.",
+                what.c_str());
+        }
         ImGui::PopStyleColor();
     }
 
@@ -5555,8 +5629,12 @@ void AppWindow::drawSourceSection() {
                 hiDb = static_cast<float>(deviceGainRanges_[i].maxDb);
             }
             ImGui::PushID(static_cast<int>(i));
+            // AND EACH SLIDER IS LETTERED IN ITS OWN UNIT. An Airspy's five
+            // are the R820T's register steps and libairspy's table indices,
+            // not decibels, so they read "7" where a real gain reads
+            // "7.0 dB" - see gui::gainSliderFormat and GainUnit.
             if (ImGui::SliderFloat(deviceGainNames_[i].c_str(), &deviceGainsDb_[i], loDb, hiDb,
-                                   "%.1f dB")) {
+                                   cascade::gui::gainSliderFormat(gainUnitAt(i)))) {
                 if (!device_->setGainDb(deviceGainNames_[i],
                                        static_cast<double>(deviceGainsDb_[i]))) {
                     sourceError_ = device_->lastError();
@@ -5575,6 +5653,33 @@ void AppWindow::drawSourceSection() {
             ImGui::PopID();
         }
         ImGui::EndDisabled();
+
+        // THE BIAS TEE, BELOW THE GAINS AND OUTSIDE THE AGC DISABLE. It is
+        // not a gain and it is not affected by automatic gain control: it is
+        // about 4.5 V sent up the coax to power an amplifier at the mast, and
+        // a user with one needs to reach it whichever way the gain is being
+        // driven.
+        //
+        // Shown ONLY when the open radio actually has one (withBiasTee), and
+        // the state shown is the driver's READBACK: a control transfer the
+        // radio refused must leave the box where it was, because a ticked box
+        // over a radio with no power on the port is the same lie the antenna
+        // combo was fixed for.
+        if (deviceBiasTPresent_) {
+            if (ImGui::Checkbox("Bias tee", &deviceBiasT_)) {
+                withBiasTee(device_, [this](auto& d) {
+                    if (!d.setBiasT(deviceBiasT_)) { sourceError_ = d.lastError(); }
+                    deviceBiasT_ = d.biasT();
+                    return true;
+                });
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Sends about 4.5 V up the antenna cable to power an amplifier at the "
+                    "mast. Leave it off unless you have one: equipment that is not "
+                    "expecting power on the connector can be damaged by it.");
+            }
+        }
     }
 
     if (!sourceError_.empty()) {
@@ -6247,13 +6352,15 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::makeDeviceSource(
     // "rtlsdr" to mean something different in one of them.
     if (kind == "rtlsdr") { return std::make_unique<cascade::source::RtlSdrSource>(); }
     if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
+    if (kind == "airspy") { return std::make_unique<cascade::source::AirspySource>(); }
+    if (kind == "airspyhf") { return std::make_unique<cascade::source::AirspyHfSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
 
 void AppWindow::scanNative() {
-    // NO GATE, and that is the whole point of having our own transport.
-    // enumerateRtlSdr()/enumerateHackRf() read SetupAPI device properties and
+    // NO GATE, and that is the whole point of having our own transport. All
+    // four enumerations read SetupAPI device properties and
     // never open a device, never send a transfer, never reset anything -
     // usb_device.hpp rule 1, which exists precisely because the SoapySDR
     // vendor probe breaks it and killed a running capture doing so (the
@@ -6264,6 +6371,12 @@ void AppWindow::scanNative() {
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHackRf()) {
         nativeDevices_.push_back(std::move(d));
     }
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspy()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspyHf()) {
+        nativeDevices_.push_back(std::move(d));
+    }
     nativeRowLabels_.clear();
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // "(native)" is not decoration: with a Soapy row for the same dongle
@@ -6271,11 +6384,22 @@ void AppWindow::scanNative() {
         // are picking, and which one they got.
         nativeRowLabels_.push_back(d.label + " (native)");
     }
-    // ...and the dongles that are HERE BUT UNREACHABLE. Listing them as rows
+    // ...and the radios that are HERE BUT UNREACHABLE. Listing them as rows
     // would offer an open that cannot succeed; the section says what to do
     // about them instead (see drawSourceSection).
+    //
+    // EVERY FAMILY WE DRIVE GOES IN THIS QUERY, not just the dongles. An
+    // Airspy ships on its own vendor driver just as an RTL dongle ships on
+    // the DVB-T one, and an owner who has not run Zadig on it would otherwise
+    // see nothing at all in the list and be told nothing about why.
     std::vector<cascade::usb::UsbId> ids = cascade::source::rtlSdrUsbIds();
     for (const cascade::usb::UsbId& id : cascade::source::hackRfUsbIds()) {
+        ids.push_back(id);
+    }
+    for (const cascade::usb::UsbId& id : cascade::source::airspyUsbIds()) {
+        ids.push_back(id);
+    }
+    for (const cascade::usb::UsbId& id : cascade::source::airspyHfUsbIds()) {
         ids.push_back(id);
     }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
@@ -6342,6 +6466,31 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
         // that hardware. Overwriting it with a panel constant would throw away
         // the one thing the driver knows that the panel does not.
         deviceGainsDb_[i] = static_cast<float>(dev.gainDb(deviceGainNames_[i]));
+    }
+
+    // THE BIAS TEE, AFTER THE DEVICE IS UP, and only when the radio has one
+    // this panel can reach. Every one of these drivers switches it OFF as
+    // part of open() - deliberately, so that a previous application cannot
+    // leave power on an antenna port with nothing on screen saying so - which
+    // means the saved setting has to be re-applied here or a mast-head
+    // amplifier would go dark on every launch.
+    //
+    // The READBACK is what the checkbox then shows, never the request: a
+    // control transfer the radio refused must leave the box unticked rather
+    // than claiming power that is not there.
+    //
+    // A RADIO WITHOUT ONE LEAVES THE SETTING ALONE rather than clearing it.
+    // The checkbox is not drawn for it, so nothing on screen can claim power
+    // that is not there - but a user who ticked it for the HackRF on their
+    // bench and then spent an evening on the RTL-SDR should not find it
+    // unticked when they go back, and clearing it here is what would do that.
+    deviceBiasTPresent_ = withBiasTee(&dev, [](auto&) { return true; });
+    if (deviceBiasTPresent_) {
+        withBiasTee(&dev, [this](auto& d) {
+            d.setBiasT(deviceBiasT_);
+            deviceBiasT_ = d.biasT();
+            return true;
+        });
     }
 
     // Antenna: apply a saved port if this device has one by that name, then
@@ -9569,7 +9718,9 @@ void AppWindow::drawScopeMode() {
             knobLoDb = static_cast<float>(deviceGainRanges_[0].minDb);
             knobHiDb = static_cast<float>(deviceGainRanges_[0].maxDb);
         }
-        // The scale, in whole decibels across the device's own travel.
+        // The scale, in whole units of whatever the first stage is measured
+        // in - decibels on every radio but the Airspy R2/Mini, whose five are
+        // register steps - across the device's own travel.
         {
             int ticks[5];
             for (int i = 0; i < 5; ++i) {
@@ -9593,8 +9744,12 @@ void AppWindow::drawScopeMode() {
         } else if (deviceAgc_) {
             std::snprintf(gainTxt, sizeof(gainTxt), "AUTO");
         } else {
-            std::snprintf(gainTxt, sizeof(gainTxt), "%.0f dB",
-                          static_cast<double>(deviceGainsDb_[0]));
+            // In the first stage's OWN unit: the knob over an Airspy reads
+            // "7", the step it is on, not "7 dB" of nothing.
+            std::snprintf(gainTxt, sizeof(gainTxt), "%s",
+                          cascade::gui::formatGainValue(
+                              static_cast<double>(deviceGainsDb_[0]), firstGainUnit())
+                              .c_str());
         }
         // Where the gain sits on its own travel, so the pointer shows it.
         float gainFrac = 0.5f;
@@ -9606,7 +9761,9 @@ void AppWindow::drawScopeMode() {
         if (gainSteps != 0 && gainLive) {
             // Two decibels a detent: fine enough to find the knee between more
             // aircraft and more noise, coarse enough to cross the whole travel
-            // in one comfortable sweep.
+            // in one comfortable sweep. On a stage measured in steps it is two
+            // steps a detent - the same arithmetic, in that stage's own unit,
+            // which crosses an Airspy's 0..14 LNA in seven.
             float db = deviceGainsDb_[0] + static_cast<float>(gainSteps) * 2.0f;
             db = std::clamp(db, knobLoDb, knobHiDb);
             if (db != deviceGainsDb_[0]) {
@@ -13780,7 +13937,11 @@ void AppWindow::publishWebSnapshot() {
         const double db = (i < deviceGainsDb_.size())
                               ? static_cast<double>(deviceGainsDb_[i])
                               : 0.0;
-        s.gains.push_back({deviceGainNames_[i], db});
+        // WITH THE UNIT, so the browser can letter the number the same way
+        // the desktop does. The value field keeps its name and its meaning -
+        // a page written against an older build still reads it - and "unit"
+        // says whether it is decibels or the radio's own steps.
+        s.gains.push_back({deviceGainNames_[i], db, cascade::gui::gainUnitWire(gainUnitAt(i))});
     }
 
     s.iqRecording = iqRecorder_.recording();
@@ -14175,7 +14336,7 @@ void AppWindow::applyWebControls() {
                 // this receiver has seen. The KIND is matched too - a native
                 // row and a Soapy row for one dongle carry the same serial.
                 bool found = false;
-                if (*r.sourceKind == "rtlsdr" || *r.sourceKind == "hackrf") {
+                if (isNativeSourceKind(*r.sourceKind)) {
                     for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
                         if (nativeDevices_[i].driver == *r.sourceKind &&
                             nativeDevices_[i].args == *r.soapyArgs) {
@@ -15225,6 +15386,14 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     splitRatio_ = cfg.splitRatio;
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
+    // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
+    // that a config whose saved radio does not open (unplugged, or still on
+    // its vendor driver) does not have the setting quietly rewritten to false
+    // by the next save. adoptDeviceMirrors is what applies it to a radio that
+    // does open - every one of these drivers switches the bias tee off during
+    // open(), so it has to be re-applied afterwards or a mast-head amplifier
+    // goes dark on every launch.
+    deviceBiasT_ = cfg.nativeBiasT;
 
     // P7 settings. All are pure DSP switches with no failure mode, and the
     // loader has already clamped every one of them into range.
@@ -15403,8 +15572,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
         }
     } else if ((cfg.sourceKind == "soapy" && !cfg.soapyArgs.empty()) ||
-               ((cfg.sourceKind == "rtlsdr" || cfg.sourceKind == "hackrf") &&
-                !cfg.nativeArgs.empty())) {
+               (isNativeSourceKind(cfg.sourceKind) && !cfg.nativeArgs.empty())) {
         // The native list has to exist before the rule below can read it, and
         // nothing has drawn a frame yet. It costs a SetupAPI walk and opens
         // nothing (scanNative), so it is safe here where the Soapy scan
@@ -15710,6 +15878,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // one that could ever fall back. See AppConfig::nativeArgs.
     cfg.soapyArgs = cfgSoapyArgs_;
     cfg.nativeArgs = cfgNativeArgs_;
+    cfg.nativeBiasT = deviceBiasT_;
     cfg.iqFilePath = iqOpenPath_;
     cfg.centerHz = pipeline_.activeSource().centerFrequencyHz();
     cfg.mode = kModeNames[modeIndex_];

@@ -123,19 +123,30 @@ struct RadioStatus {
     struct SoapyDevice {
         std::string label;
         std::string args;
-        // WHICH DRIVER OPENS THIS ROW: "soapy", "rtlsdr" or "hackrf". The
-        // list is no longer all SoapySDR - a native RTL-SDR and the same
-        // dongle through a vendor module can both be in it, with the same
-        // serial in both args - so the row has to carry the kind or the
-        // browser cannot say which of the two it is asking for.
+        // WHICH DRIVER OPENS THIS ROW: "soapy", "rtlsdr", "hackrf", "airspy"
+        // or "airspyhf". The list is no longer all SoapySDR - a native
+        // RTL-SDR and the same dongle through a vendor module can both be in
+        // it, with the same serial in both args - so the row has to carry the
+        // kind or the browser cannot say which of the two it is asking for.
         std::string kind = "soapy";
     };
     struct GainStage {
         std::string name;
         double db = 0.0;
+        // WHAT THAT NUMBER IS: "dB", or "step" for a gain the radio measures
+        // in its own register steps (the native Airspy R2/Mini's five - see
+        // source::GainUnit). The field is separate rather than folded into
+        // the number because `db` is what every browser already reads: an
+        // older page still finds its value where it always was and keeps
+        // working, rather than losing the gain row entirely. (It will still
+        // letter an Airspy's steps "dB" until it is reloaded - the number it
+        // shows is right, the word beside it is stale.) "dB" by default,
+        // which is what every driver but the Airspy R2/Mini reports.
+        std::string unit = "dB";
     };
 
-    std::string sourceKind = "siggen";  // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"
+    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"
+    std::string sourceKind = "siggen";
     std::string soapyArgs;               // args of the open device, if any
     std::string antenna;                 // RX port the DRIVER reports
     std::vector<std::string> antennas;   // ports it offers

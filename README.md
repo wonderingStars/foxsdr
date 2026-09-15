@@ -2,8 +2,9 @@
 
 A from-scratch software-defined radio receiver for Windows: spectrum and
 waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
-RDS, recording, bookmarks, a scanner, band plans, and hardware support for any
-radio SoapySDR can reach.
+RDS, recording, bookmarks, a scanner, band plans, native drivers for the
+RTL-SDR, the HackRF, the Airspy R2/Mini and the Airspy HF+, and hardware
+support for any other radio SoapySDR can reach.
 
 > ### ⚠️ Linux is in development and not usable yet
 >
@@ -46,20 +47,25 @@ are still moving. What is in the current build:
 - **Receiver.** Spectrum and waterfall, NFM/WFM/AM/DSB/USB/LSB/CW, squelch,
   AGC, noise reduction, manual and automatic notch, de-emphasis, stereo FM with
   pilot lock, and RDS (programme service name, radio text, PI, PTY).
-- **Hardware.** An RTL-SDR or a HackRF through FoxSDR's OWN drivers, needing
-  no SoapySDR install of any kind - only that the dongle is bound to WinUSB
-  (Zadig), which every SDR application needs anyway. Anything else - a USRP,
-  an Airspy, a LimeSDR - through SoapySDR as before. Antenna, sample-rate and
-  per-stage gain selection on all of them, with each gain slider spanning what
-  that stage will actually accept. Developed against an Ettus B200 and an
-  RTL2838 (R820T); the built-in signal generator and IQ-file playback mean it
-  runs with no radio at all.
-  A saved SoapySDR RTL-SDR or HackRF is OPENED NATIVELY on the next launch
-  without being asked, and the log says so; a dongle whose tuner the native
-  driver does not support (E4000, FC0012/13) falls back to the SoapySDR path
-  and says why. The Source section lists the native radios first, labelled
-  "(native)", and names any dongle that is plugged in but still on the DVB-T
-  driver rather than leaving it silently missing.
+- **Hardware.** An RTL-SDR, a HackRF, an Airspy R2/Mini or an Airspy HF+
+  through FoxSDR's OWN drivers, needing no SoapySDR install of any kind - only
+  that the radio is bound to WinUSB (Zadig), which every SDR application needs
+  anyway. Anything else - a USRP, a LimeSDR, an SDRplay - through SoapySDR as
+  before. Antenna, sample-rate and per-stage gain selection on all of them,
+  with each gain slider spanning what that stage will actually accept and
+  lettered in the unit that stage is really measured in — decibels on every
+  radio but the Airspy R2/Mini, whose five stages are the hardware's own
+  register steps and are shown as bare step numbers rather than invented
+  decibels — and a bias-tee switch on the radios that have one. Developed against an Ettus B200
+  and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
+  mean it runs with no radio at all.
+  A saved SoapySDR RTL-SDR, HackRF, Airspy or Airspy HF+ is OPENED NATIVELY on
+  the next launch without being asked, and the log says so; a dongle whose
+  tuner the native driver does not support (E4000, FC0012/13) falls back to the
+  SoapySDR path and says why. The Source section lists the native radios first, labelled
+  "(native)", and names any radio that is plugged in but not bound to WinUSB -
+  an RTL dongle still on the DVB-T driver, an Airspy still on its vendor one -
+  rather than leaving it silently missing.
   The SoapySDR device scan still waits for the radio to close - the vendor
   probe opens and resets every dongle it finds, the streaming one included -
   but Refresh is live again, because the native enumeration reads SetupAPI
@@ -211,19 +217,22 @@ real-to-complex conversion has to suppress is measured 61 dB down.
 
 Five gains are exposed. **LNA**, **MIXER** and **VGA** drive the R820T's three stages
 directly, and the numbers are the hardware's own steps rather than decibels — libairspy
-publishes no decibel mapping for them and FoxSDR does not invent one. **LINEARITY** and
+publishes no decibel mapping for them and FoxSDR does not invent one. Everywhere a gain
+is shown — the Source sliders, the RECEIVER card, the scope deck's GAIN knob and the
+browser interface — these five are lettered as bare step numbers with no unit, because
+the honest thing to put after a register position is nothing. **LINEARITY** and
 **SENSITIVITY** are libairspy's two curated walks up all three at once: linearity trades
 sensitivity for headroom against a strong neighbouring signal, sensitivity does the
 opposite. Unlike the HackRF the Airspy has automatic gain control, on the LNA and the
-mixer, and FoxSDR's auto-gain switch drives both. The bias tee is a separate control and
-is switched off every time FoxSDR opens or closes the radio, so a previous application
-cannot leave 4.5 V on your antenna port without anything on screen saying so.
+mixer, and FoxSDR's auto-gain switch drives both. The bias tee is a separate control —
+a **Bias tee** checkbox below the gain sliders — and it is switched off every time FoxSDR
+opens or closes the radio, so a previous application cannot leave 4.5 V on your antenna
+port without anything on screen saying so. FoxSDR remembers the setting across restarts
+and puts it back after the open, because a mast-head amplifier does not stop needing
+power because the application was closed.
 
 Tuning range 24 MHz to 1.75 GHz.
 
-## The native Airspy HF+ driver` section after the RTL-SDR one.
-
-```markdown
 ## The native Airspy HF+ driver
 
 FoxSDR opens an Airspy HF+ directly too — the same WinUSB transport, the same
@@ -275,11 +284,6 @@ old for five of these requests are all proven the same way. The protocol and
 the balancer were ported from libairspyhf under its BSD-3-Clause licence; the
 notice is in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of libairspyhf
 is linked or shipped.
-```
-
-The bullet at README line 49 and the line at 868 (“An RTL-SDR or a HackRF needs
-no extra install at all”) should grow “or an Airspy HF+” when the Source
-section starts offering these rows.
 
 ---
 
@@ -955,11 +959,12 @@ otherwise, because that is the command an upgrade runs.
 show "Windows protected your PC". Choose **More info → Run anyway** if you are
 happy to proceed. Signing is planned.
 
-**An RTL-SDR or a HackRF needs no extra install at all** - FoxSDR drives those
-two itself, over its own WinUSB transport. The one step Windows requires is
-binding the dongle to WinUSB with Zadig, which every SDR application needs and
-which `cascade.exe --rtlsdr-check` will tell you about. Any OTHER radio - a
-USRP, an Airspy, a LimeSDR - still reaches FoxSDR through SoapySDR vendor
+**An RTL-SDR, a HackRF, an Airspy R2/Mini or an Airspy HF+ needs no extra
+install at all** - FoxSDR drives those four itself, over its own WinUSB
+transport. The one step Windows requires is binding the radio to WinUSB with
+Zadig, which every SDR application needs and which `cascade.exe --rtlsdr-check`
+will tell you about for a dongle. Any OTHER radio - a USRP, a LimeSDR, an
+SDRplay - still reaches FoxSDR through SoapySDR vendor
 modules, which are a separate install (PothosSDR or radioconda); see
 `POSTINSTALL.txt` in the install folder. FoxSDR runs with no hardware at all
 using the signal generator or I/Q playback.

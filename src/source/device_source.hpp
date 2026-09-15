@@ -71,12 +71,37 @@ inline std::string argValue(const std::string& args, const std::string& key) {
     return {};
 }
 
+// WHAT A GAIN'S NUMBER ACTUALLY IS, because it is not always decibels.
+//
+// Every gain FoxSDR had until 0.92.0 was in dB, so GainInfo's fields are
+// named minDb/maxDb/stepDb and every consumer - the Source sliders, the
+// RECEIVER card, the scope deck's knob, the browser - letters the number
+// "%.1f dB". The native Airspy R2/Mini broke that: libairspy takes an INDEX
+// for each of its five gains (airspy.h:182-206) and publishes no decibel
+// mapping, so LNA 7 is register step 7 of fifteen, and printing it as
+// "7.0 dB" would be a number no instrument ever produced in a unit the radio
+// does not use. Inventing a decibel scale to make the field names read true
+// would be worse still - a made-up figure is harder to distrust than an
+// obviously unitless one.
+//
+// So the driver says which its numbers are, and every consumer asks. For
+// Steps there is nothing more to carry: min/max/step already hold the range
+// and the index granularity.
+enum class GainUnit {
+    Decibels,  // a real gain, or a real negative one (the HF+'s attenuator)
+    Steps,     // a register index or a table position, in the hardware's own units
+};
+
 // One gain the radio exposes, with the range the driver will accept.
 struct GainInfo {
     std::string name;   // as shown to the user: "LNA", "VGA", "TUNER"
     double minDb = 0.0;
     double maxDb = 0.0;
     double stepDb = 1.0;
+    // DEFAULTED, so every driver whose gains really are decibels - which is
+    // all of them but the Airspy R2/Mini - keeps the aggregate initialiser it
+    // already had, and a new driver has to go out of its way to claim steps.
+    GainUnit unit = GainUnit::Decibels;
 };
 
 // One device a native driver can open. `driver` is the driver key ("rtlsdr",

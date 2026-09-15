@@ -1198,6 +1198,117 @@ void testMapPanIsBoundToPointerEvents() {
     server.stop();
 }
 
+// EVERY RADIO KIND THE APPLICATION CAN OPEN IS A RADIO TO THE PAGE TOO.
+//
+// The page hides its antenna, rate and gain rows unless the open source is a
+// radio, and until 0.91.0 that test was one comparison against "soapy". It is
+// now five kinds, and the failure mode of getting it wrong is silent and
+// specific: an Airspy opens, streams, and shows a browser with no gain
+// controls and no antenna row at all, with nothing anywhere saying why. That
+// is exactly the kind of omission a suite can be structurally blind to,
+// because nothing else on the page changes.
+//
+// A TEXT TEST, and its limits are stated rather than hidden: it proves the
+// list the page carries and that both decisions go through the one helper, not
+// that a browser renders correctly. What it catches is the regression that
+// actually happens - a sixth driver added to the application and not to this
+// list, or a hard-coded comparison creeping back in beside the helper.
+void testEveryNativeKindCountsAsARadioOnThePage() {
+    const std::string js = fetchAppJs();
+
+    // The list itself, one kind at a time so a failure names the missing one.
+    const std::size_t at = js.find("const RADIO_KINDS = [");
+    CHECK(at != std::string::npos);
+    const std::size_t end = (at == std::string::npos) ? std::string::npos : js.find(']', at);
+    CHECK(end != std::string::npos);
+    const std::string list = (at == std::string::npos || end == std::string::npos)
+                                 ? std::string()
+                                 : js.substr(at, end - at);
+    CHECK(list.find("'soapy'") != std::string::npos);
+    CHECK(list.find("'rtlsdr'") != std::string::npos);
+    CHECK(list.find("'hackrf'") != std::string::npos);
+    CHECK(list.find("'airspy'") != std::string::npos);
+    CHECK(list.find("'airspyhf'") != std::string::npos);
+
+    // ...and both places that ask the question go through it. The second is
+    // the one that matters: `isDevice` is what shows or hides the rows.
+    CHECK(js.find("function isRadioKind(k)") != std::string::npos);
+    CHECK(js.find("const isDevice = isRadioKind(s.sourceKind);") != std::string::npos);
+    CHECK(js.find("sel.value = isRadioKind(s.sourceKind)") != std::string::npos);
+    // The chain this replaced must not come back alongside it - a page with
+    // both would look correct and behave by whichever ran last.
+    CHECK(js.find("s.sourceKind === 'rtlsdr' ||") == std::string::npos);
+}
+
+// A GAIN'S UNIT REACHES THE BROWSER, AND THE PAGE USES IT.
+//
+// The native Airspy R2/Mini's five gains are register steps and table
+// indices, not decibels (source::GainUnit), and this page lettered every gain
+// " dB" until 0.92.0 - so a remote user saw "LNA 7 dB" for step 7. The status
+// now carries the unit beside the number rather than changing what the number
+// means, because an already-loaded page still reads `db` where it always was.
+//
+// Both halves are asserted, because each fails silently on its own: a server
+// that stops sending the field leaves the page falling back to "dB" with
+// nothing said, and a page that stops reading it does the same while the JSON
+// is perfectly correct.
+void testGainUnitsReachTheBrowser() {
+    WebServer server;
+    server.setStatusProvider([]() {
+        RadioStatus s = sampleStatus();
+        s.sourceKind = "airspy";
+        // One of each, deliberately in one status: a radio whose stages were
+        // all one unit could not tell a hard-coded answer from a real one.
+        s.gains.push_back({"TUNER", 30.0, "dB"});
+        s.gains.push_back({"LINEARITY", 12.0, "step"});
+        return s;
+    });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    auto status = cli.Get("/api/status");
+    CHECK(static_cast<bool>(status));
+    if (status) {
+        CHECK(status->status == 200);
+        // PARSED, not grepped: the pairing is the whole point, and two
+        // substrings found anywhere in the body would not prove that the
+        // step belongs to LINEARITY rather than to TUNER.
+        const nlohmann::json j = nlohmann::json::parse(status->body, nullptr, false);
+        CHECK(!j.is_discarded());
+        const nlohmann::json gains =
+            j.is_discarded() ? nlohmann::json::array() : j.value("gains", nlohmann::json::array());
+        CHECK(gains.size() == 2);
+        if (gains.size() == 2) {
+            // The old field, unchanged and carrying the same number it always
+            // did - this is the compatibility promise, not a formality.
+            CHECK(gains[0].value("name", std::string()) == "TUNER");
+            CHECK(gains[0].value("db", 0.0) == 30.0);
+            CHECK(gains[0].value("unit", std::string()) == "dB");
+            CHECK(gains[1].value("name", std::string()) == "LINEARITY");
+            CHECK(gains[1].value("db", 0.0) == 12.0);
+            CHECK(gains[1].value("unit", std::string()) == "step");
+        }
+    }
+    server.stop();
+
+    // ...and the page letters by it, in BOTH places the value is written -
+    // from each poll, and while a slider is being dragged. A page where those
+    // two disagreed would change units the moment the user let go.
+    const std::string js = fetchAppJs();
+    CHECK(js.find("function gainText(v, unit)") != std::string::npos);
+    CHECK(js.find("unit === 'step'") != std::string::npos);
+    CHECK(js.find("gainText(inp.value, inp.dataset.unit)") != std::string::npos);
+    CHECK(js.find("gainText(g.db.toFixed(0), g.unit") != std::string::npos);
+    // The unconditional " dB" this replaced must not come back beside it: a
+    // page carrying both would look right and behave by whichever ran last.
+    CHECK(js.find("inp.value + ' dB'") == std::string::npos);
+    CHECK(js.find("g.db.toFixed(0) + ' dB'") == std::string::npos);
+}
+
 // THE BROWSER MUST FADE ON THE SAME CURVE THE DESKTOP DOES. Two views of one
 // set of targets that disagree about which are current is worse than either
 // rule alone, so this runs the SERVED helper under node and compares it, value
@@ -1733,6 +1844,8 @@ int main() {
     testAudioListenerCap();
     testServedScriptParses();
     testMapPanIsBoundToPointerEvents();
+    testEveryNativeKindCountsAsARadioOnThePage();
+    testGainUnitsReachTheBrowser();
     testTrackFadeMatchesTheDesktopRule();
     testEmptyImageSlotIsNotDrawnAsAPicture();
     testServedWaterfallRampIsMonotone();

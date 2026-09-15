@@ -1075,13 +1075,18 @@ bool AirspySource::frequencyRangeHz(double& loHz, double& hiHz) const {
 
 std::vector<GainInfo> AirspySource::gains() const {
     // The units are the hardware's register steps, not decibels - see the
-    // header. Step 1 everywhere, because every one of these is an index.
+    // header. Step 1 everywhere, because every one of these is an index, and
+    // GainUnit::Steps on every one of them so the panel, the deck and the
+    // browser print "LNA 7" rather than "LNA 7.0 dB": the figure is a
+    // register position, and nothing in the world measured it in decibels.
     return {
-        GainInfo{"LNA", 0.0, static_cast<double>(airspy::kLnaMaxIndex), 1.0},
-        GainInfo{"MIXER", 0.0, static_cast<double>(airspy::kMixerMaxIndex), 1.0},
-        GainInfo{"VGA", 0.0, static_cast<double>(airspy::kVgaMaxIndex), 1.0},
-        GainInfo{"LINEARITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex), 1.0},
-        GainInfo{"SENSITIVITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex), 1.0},
+        GainInfo{"LNA", 0.0, static_cast<double>(airspy::kLnaMaxIndex), 1.0, GainUnit::Steps},
+        GainInfo{"MIXER", 0.0, static_cast<double>(airspy::kMixerMaxIndex), 1.0, GainUnit::Steps},
+        GainInfo{"VGA", 0.0, static_cast<double>(airspy::kVgaMaxIndex), 1.0, GainUnit::Steps},
+        GainInfo{"LINEARITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex), 1.0,
+                 GainUnit::Steps},
+        GainInfo{"SENSITIVITY", 0.0, static_cast<double>(airspy::kCombinedMaxIndex), 1.0,
+                 GainUnit::Steps},
     };
 }
 

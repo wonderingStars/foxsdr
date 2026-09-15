@@ -1739,6 +1739,12 @@ int main() {
             CHECK(g[2].minDb == -4.7);
             CHECK(g[2].maxDb == 40.8);
             CHECK(g[2].stepDb > 0.0);  // never zero: a slider needs a step
+            // AND ALL OF THEM DECIBELS. SoapySDR's getGainRange is documented
+            // in dB and every vendor module reports it so; a Soapy device is
+            // never the steps case, whatever driver key it carries.
+            for (const cascade::source::GainInfo& one : g) {
+                CHECK(one.unit == cascade::source::GainUnit::Decibels);
+            }
         }
         // The names still come out of listGainNames() too - nothing the GUI
         // used before was taken away.

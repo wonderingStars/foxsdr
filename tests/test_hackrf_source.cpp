@@ -430,6 +430,17 @@ int main() {
         CHECK_NEAR(src.gainDb("LNA"), 16.0, 1e-9);
         CHECK_NEAR(src.gainDb("VGA"), 16.0, 1e-9);
         CHECK_NEAR(src.gainDb("AMP"), 0.0, 1e-9);
+        // THREE GAINS, ALL DECIBELS - the front-end amplifier included. AMP
+        // is a two-position control, but its two positions are 0 dB and
+        // 14 dB: a real figure libhackrf publishes, not a register index like
+        // the Airspy R2/Mini's five, so it is lettered "dB" like the rest.
+        {
+            const std::vector<cascade::source::GainInfo> g = src.gains();
+            CHECK(g.size() == 3);
+            for (const cascade::source::GainInfo& one : g) {
+                CHECK(one.unit == cascade::source::GainUnit::Decibels);
+            }
+        }
         CHECK(!src.biasT());
         CHECK(!src.autoGainSupported());
         CHECK(!src.setAutoGain(true));

@@ -69,9 +69,11 @@ struct GLFWwindow;
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
 #include "source/soapy_source.hpp"
-// The two NATIVE drivers the Source section can open without any vendor
+// The four NATIVE drivers the Source section can open without any vendor
 // module at all, and the transport they enumerate through. Headers only -
 // each one names a class and a free function; nothing here pulls in WinUSB.
+#include "source/airspy_source.hpp"
+#include "source/airspyhf_source.hpp"
 #include "source/hackrf_source.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "usb/usb_device.hpp"
@@ -1064,7 +1066,8 @@ private:
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
 
-    // Opens a radio of `kind` ("soapy", "rtlsdr", "hackrf") by its args on
+    // Opens a radio of `kind` ("soapy" or one of the four native driver keys)
+    // by its args on
     // THIS thread, pushes the requested rate and the default gains, and fills
     // the panel mirrors. Null (with sourceError_ set) when the open fails.
     // Used by the config restore, which happens before there is a frame to
@@ -1273,7 +1276,8 @@ private:
     struct DeviceOpenResult {
         std::unique_ptr<cascade::source::DeviceSource> dev;  // null on failure
         // WHICH DRIVER THE WORKER SHOULD CONSTRUCT, and afterwards which one
-        // it did: "soapy", "rtlsdr" or "hackrf", the same spellings
+        // it did: "soapy", "rtlsdr", "hackrf", "airspy" or "airspyhf" - the
+        // same spellings
         // AppConfig::sourceKind uses. The kind has to travel with the request
         // because the worker is what decides the concrete type, and it has to
         // come back with the answer because sourceKind_ is set from it.
@@ -1426,12 +1430,37 @@ private:
     // ever said so.
     std::vector<cascade::source::GainInfo> deviceGainRanges_;
     std::vector<float> deviceGainsDb_;          // slider mirrors, one per name
+
+    // WHETHER GAIN i IS DECIBELS OR THE HARDWARE'S OWN STEPS, for the four
+    // places that letter a gain (the sliders, the RECEIVER card, the scope
+    // deck's knob, the browser status). Decibels for anything the driver did
+    // not describe - an out-of-range index, or a mirror that outlived the
+    // ranges it was filled beside - because that is what every gain in
+    // FoxSDR was before the native Airspy and what every other driver still
+    // reports.
+    cascade::source::GainUnit gainUnitAt(std::size_t i) const {
+        return i < deviceGainRanges_.size() ? deviceGainRanges_[i].unit
+                                            : cascade::source::GainUnit::Decibels;
+    }
+    cascade::source::GainUnit firstGainUnit() const { return gainUnitAt(0); }
     bool deviceAgcSupported_ = false;
     bool deviceAgc_ = false;
 
+    // THE BIAS TEE. Present only when the OPEN device is one of the three
+    // native drivers that has one and can say so (see withBiasTee in
+    // app_window.cpp for which, and for why this is not a DeviceSource
+    // method). deviceBiasT_ is the persisted setting as well as the
+    // checkbox's mirror: it is seeded from AppConfig::nativeBiasT at restore,
+    // applied to the radio by adoptDeviceMirrors after every open, and read
+    // BACK from the driver afterwards so the box can never claim power the
+    // hardware did not switch on.
+    bool deviceBiasTPresent_ = false;
+    bool deviceBiasT_ = false;
+
     // --- Native radios ----------------------------------------------------
-    // Every RTL-SDR and HackRF bound to WinUSB, from enumerateRtlSdr() and
-    // enumerateHackRf(). UNGATED and refreshed freely, unlike soapyDevices_:
+    // Every RTL-SDR, HackRF, Airspy R2/Mini and Airspy HF+ bound to WinUSB,
+    // from the four enumerate* functions. UNGATED and refreshed freely,
+    // unlike soapyDevices_:
     // a native enumeration reads SetupAPI properties and NEVER OPENS A DEVICE
     // (src/usb/usb_device.hpp rule 1), which is the exact rule the vendor
     // probe breaks and the whole reason scanSoapy() has a gate. It is cheap
@@ -1471,7 +1500,8 @@ private:
     bool configAnnounce_ = false;  // print "config applied: ..." (test hook)
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
-    std::string sourceKind_ = "siggen";  // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"
+    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"
+    std::string sourceKind_ = "siggen";
 
     // WHAT THE CONFIG REMEMBERS, ONE SLOT PER FAMILY, and they are separate
     // on purpose. deviceArgs_ above is the LIVE device's args; these two are
