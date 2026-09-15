@@ -302,23 +302,28 @@ free text:
 Until then the script substitutes `FoxSDR.Test.Unsubmittable` and a local test
 publisher, and says so in yellow on every run.
 
-### 5.2 Version — and a finding the owner has to decide about
+### 5.2 Version — the package major is the product major plus one
 
 > "For Windows 10 or Windows 11 (UWP) packages, the last (fourth) section of
 > the version number is reserved for Store use and must be left as 0 when you
 > build your package… The other sections must be set to an integer between 0
 > and 65535 (**except for the first section, which cannot be 0**)."
-> — `.../msix/app-package-requirements`
+> — `.../msix/app-package-requirements` (re-read 2026-09-15, `updated_at`
+> 2026-08-24; the sentence is unchanged)
 
-**FoxSDR is 0.96.2, so `0.96.2.0` cannot be submitted.** Either the product
-reaches 1.0.0 before the first Store submission, or the package version is
-deliberately decoupled from the product version (e.g. ship `1.0.96.2` for
-product 0.96.2), which means the number in the Store and the number in the
-About line disagree — exactly the drift the Inno installer's
-`generated-version.iss` exists to prevent. The script warns on every 0.x build.
-`build-msix.ps1` takes the version from `cascade.exe`'s own version output, so
-whatever is decided, the package cannot be stamped with a number the binary
-does not report.
+**FoxSDR is 0.x, so `0.96.4.0` cannot be submitted.** Decided 2026-09-15, for
+the first submission: the package version is the product version with the
+first section **plus one** — product `0.96.4` packs as `1.96.4.0`, product
+`0.97.0` as `1.97.0.0`, and product `1.0.0` will pack as `2.0.0.0`. Two
+properties made this the choice over bumping the product to 1.0.0 (which
+would have been a release of its own, and the listing says "still pre-1.0")
+or an ad-hoc number: it is **monotonic across the 0.x → 1.0 boundary**, which
+the Store's "highest package version wins" rule requires, and it is
+**mechanical**, so a package version reads back to exactly one product
+version. The number the Store shows and the number in the About line therefore
+differ by one in the first section, and only there. `build-msix.ps1` still
+takes the version from `cascade.exe`'s own version output, so the package
+cannot be stamped with a number the binary does not report.
 
 ### 5.3 Application element
 
