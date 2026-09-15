@@ -338,17 +338,14 @@ int main(int argc, char** argv) {
         return faultChild(std::atoi(argv[2]), argv[3], std::atoi(argv[4]) != 0);
     }
 
-    // LINUX-TODO(crash-capture): the whole fixture below turns on
-    // runFaultChild() re-executing this binary with `--fault` and reading back
-    // what installCrashHandlers()'s filters wrote (core/crash_handler.cpp
-    // ~741-901). Off Windows, runFaultChild() is itself a no-op that returns 0
-    // without spawning anything (this file, above) and installCrashHandlers()
-    // never registers a filter, so every one of these blocks would fail
-    // forever against a fixture with nothing behind it rather than a real
-    // regression. Skipped as one block, block-shaped, so the merge that lands
-    // real Linux crash capture (and a real Linux runFaultChild) can delete
-    // this guard and restore the five checks it currently protects.
-#if defined(_WIN32)
+    // runFaultChild() re-executes this binary with `--fault` and reads back
+    // what installCrashHandlers()'s filters wrote - core/crash_handler.cpp's
+    // Windows filters (~741-901) or core/crash_handler_posix.cpp's sigaction
+    // handlers, forwarded through the same `#elif defined(__linux__)`
+    // branches. Both platforms are exercised by the fixture below unchanged;
+    // only the two spots that ever needed a platform difference (the module
+    // extension in the stack check, and the NTSTATUS-vs-SIGSEGV identifying
+    // fact for kind 0) branch internally.
     // --- A real access violation, caught, reported --------------------------
     {
         const CaughtReport r = catchOne(0, "av");
@@ -410,11 +407,5 @@ int main(int argc, char** argv) {
             fs::remove_all(scratchDir(tag), ec);
         }
     }
-#else
-    SKIP_LINUX(
-        "runFaultChild()/installCrashHandlers() are Windows-only - the four fault "
-        "kinds and the off-means-off check all need a real Linux crash handler to "
-        "exercise");
-#endif
     return testSummary("test_crash_capture");
 }
