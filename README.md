@@ -95,6 +95,17 @@ are still moving. What is in the current build:
   device path is ever written to the diagnostic log. `FOXSDR_GPS_PORT=<port>`
   (with `FOXSDR_GPS_BAUD`, default 9600) does the same read at start-up, in
   every run mode, for a bench with a receiver on it.
+- **A bench oscilloscope**, under VIEW. The demodulated audio drawn as a
+  phosphor trace on a ten-by-eight graticule, with a 1-2-5 time base from 1 to
+  50 ms a division, an attenuator that ranges itself (or steps by hand), and a
+  rising-edge trigger with hold-off, which is what makes a tone or a vowel
+  stand still instead of sliding. The same tube shows three other things from
+  one row of keys: the audio's own spectrum, 0 to 20 kHz at 10 dB a division;
+  the channel I/Q at the demodulator's input as separate I and Q traces; and
+  that same I/Q plotted against itself as a vector display, which is where AM,
+  FM and SSB stop looking alike. When a plugin is playing through the host the
+  scope is showing the plugin's audio and says whose it is - the tap sits below
+  that handover, so the tube and the speakers can never disagree.
 - **A tuner plate for a counter**, bolted onto the front of the deck after a
   1950s military receiver: an olive-drab riveted plate with an engraved
   "TUNED - HERTZ" name plate, a receiver lamp and a MHz readout across its
@@ -910,7 +921,7 @@ before you use the application:
 - **Amber is a reading.** The tuned frequency, the range, the status chips down
   the rail - anything amber is a number the receiver is reporting.
 - **Phosphor green is what the radio actually heard.** The spectrum trace, the
-  waterfall and the radar scope are all the same tube.
+  waterfall, the radar scope and the demod scope's beam are all the same tube.
 - **Rust is trouble**, and never a reading, so a fault can never be mistaken
   for a figure.
 
@@ -921,8 +932,8 @@ one of them pressed in with a phosphor strip lit beneath it, and the column
 below showing that bank's sections and nothing else. SIGNAL is the receiver
 itself (source, radio, audio filters, sinks, the recorder); DECODE is the
 plugin store, the fitted modules, the decoders, target details and the
-satellites map; VIEW is the display range, the radar scope, bookmarks and the
-scanner; EXTEND is browser access and CAT control; SYSTEM is updates,
+satellites map; VIEW is the display range, the demod scope, the radar scope,
+bookmarks and the scanner; EXTEND is browser access and CAT control; SYSTEM is updates,
 diagnostics and usage reporting. **F1 to F5** press the same five keys from
 the keyboard. Each section still opens and closes with its own key and
 keeps that state as you move between banks; a section unfolds rather than
@@ -931,6 +942,35 @@ the rail opens on whichever bank you left it on — the only part of this the
 configuration file records, so a section comes back at its usual state on
 the next launch. Every chip on a row still reports what that section is
 doing without opening it.
+
+The **Demod scope**, under VIEW, is the other instrument on the bench, and it
+is deliberately not drawn like the radar one. That is a plan-position
+indicator: a round tube, a rotating sweep, a long-persist phosphor. This is a
+rectangular service oscilloscope — ruled ten divisions by eight, minor ticks
+five to a division down the two axes, a short-persist beam and a dark glass
+between sweeps. It opens as its own window, so it can sit beside the spectrum
+rather than replacing it.
+
+Four keys across the top choose what is on the tube. **AUDIO** is the
+demodulated audio, triggered on a rising zero crossing so the waveform stands
+still; the hold-off that makes that work on speech scales with the time base,
+which runs 1, 2, 5, 10, 20 and 50 milliseconds a division. **SPEC** is the same
+audio as a spectrum, 0 to 20 kHz (or the sink's Nyquist, whichever is lower) at
+10 dB a division. **I/Q** is the channel at the demodulator's input, before it
+has been turned into one real number, as an I trace above the axis and a Q
+trace below it. **VECTOR** plots that same I against Q, which is the one
+picture that makes the modes look different from each other: an FM carrier
+draws a circle, AM a line through the origin that breathes with the audio, SSB
+a figure that never sits still.
+
+The attenuator runs 2 mV to 1 V a division on the same 1-2-5 detents, and
+**AUTO** ranges it a detent at a time to keep the signal between about a third
+of the tube and the top of it. Silence holds the setting where it is rather
+than winding all the way in — a scope that made the noise floor leap up the
+screen every time the transmission stopped would be reporting something that
+did not happen. Nothing on the tube is drawn when the receiver is stopped: the
+graticule stays and the glass says so, because a flat line at zero volts is a
+measurement, and there was not one.
 
 The **Radar scope**, under VIEW, is drawn from the receiver's own position —
 every mark on it is a range and a bearing from the antenna — and until that

@@ -41,6 +41,11 @@
 // line MEANS lives here, and the round trip that matters to a user is
 // "table -> lines -> file -> lines -> table", which needs both halves.
 #include "gui/key_bindings.hpp"
+// The demod scope's ladders. The config carries three indices into them, and
+// the checks below name the ladder lengths rather than the numbers they
+// currently happen to be - an extra time base or gain step must not silently
+// make this file assert against the wrong end of its own array.
+#include "gui/demod_scope.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -128,6 +133,16 @@ AppConfig junkConfig() {
     // leave the mode on and the renderer holding a scale it has no rings for.
     c.scopeMode = true;
     c.scopeRangeNm = 12345;
+    // The demod scope, the same way: open when it must not be, and all three
+    // ladder indices off the end of the constant arrays they index. A load
+    // path that forgot any of these three clamps would not be storing a wrong
+    // setting - it would be handing the face an index that reads past the end
+    // of kScopeTimebaseMs or kScopeGainPerDiv.
+    c.demodScopeOpen = true;
+    c.demodScopeSignal = 4242;
+    c.demodScopeTimebase = -7;
+    c.demodScopeGain = 9999;
+    c.demodScopeAutoGain = false;
     // The rail's bank, off its default of 0 for the same reason.
     c.railBank = 3;
     // Map geometry, away from the "nothing saved" default and out of range, so
@@ -235,6 +250,11 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
     CHECK(a.scopeMode == b.scopeMode);
     CHECK(a.scopeRangeNm == b.scopeRangeNm);
+    CHECK(a.demodScopeOpen == b.demodScopeOpen);
+    CHECK(a.demodScopeSignal == b.demodScopeSignal);
+    CHECK(a.demodScopeTimebase == b.demodScopeTimebase);
+    CHECK(a.demodScopeGain == b.demodScopeGain);
+    CHECK(a.demodScopeAutoGain == b.demodScopeAutoGain);
     CHECK(a.mapWindowWidth == b.mapWindowWidth);
     CHECK(a.mapWindowHeight == b.mapWindowHeight);
     CHECK(a.mapWindowX == b.mapWindowX);
@@ -306,6 +326,11 @@ int main() {
         AppConfig in;
         in.scopeMode = true;
         in.scopeRangeNm = 400;
+        in.demodScopeOpen = true;
+        in.demodScopeSignal = 2;
+        in.demodScopeTimebase = 5;
+        in.demodScopeGain = 1;
+        in.demodScopeAutoGain = false;
         in.railBank = 2;
         in.pluginBrowserOpen = true;
         in.fittedModulesOpen = true;
@@ -318,6 +343,16 @@ int main() {
         in.volume = 0.25f;
         const AppConfig out = cascade::core::startupState(in);
         CHECK(!out.scopeMode);
+        // The demod scope is a WINDOW, so it obeys the same rule the radar
+        // scope and the two plugin windows do: what was showing is recorded
+        // and is not reopened. Its three SETTINGS are WHERE and HOW, so they
+        // come through untouched - a user who works at 2 ms/DIV on the vector
+        // display does not set it again every morning.
+        CHECK(!out.demodScopeOpen);
+        CHECK(out.demodScopeSignal == 2);
+        CHECK(out.demodScopeTimebase == 5);
+        CHECK(out.demodScopeGain == 1);
+        CHECK(!out.demodScopeAutoGain);
         CHECK(!out.pluginBrowserOpen);
         CHECK(!out.fittedModulesOpen);
         CHECK(out.mapPages.size() == 2);
@@ -339,6 +374,7 @@ int main() {
         // two configs are equal field for field.
         AppConfig back = out;
         back.scopeMode = true;
+        back.demodScopeOpen = true;
         back.pluginBrowserOpen = true;
         back.fittedModulesOpen = true;
         back.mapPages[0].open = true;
@@ -405,6 +441,15 @@ int main() {
         // value the user had actually selected.
         in.scopeMode = true;
         in.scopeRangeNm = 25;
+        // The demod scope. All four settings on LEGAL but distinct ladder
+        // positions - and every one of them different from the others, so a
+        // save that wrote one field's value into another key would show here
+        // rather than being hidden by two fields that happen to agree.
+        in.demodScopeOpen = true;
+        in.demodScopeSignal = 3;    // VECTOR
+        in.demodScopeTimebase = 1;  // 2 ms/DIV
+        in.demodScopeGain = 7;      // 500 mV/DIV
+        in.demodScopeAutoGain = false;
         // Map pages: two, in an order the roundtrip must preserve, each with a
         // rectangle nobody would arrive at by accident and one with a NEGATIVE
         // x, because a second monitor to the left of the primary one is the
@@ -1119,6 +1164,51 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(!out.scopeMode);
         CHECK(out.scopeRangeNm == 200);
+
+        // --- THE DEMOD SCOPE'S THREE LADDER INDICES ------------------------
+        //
+        // Every one of them indexes a constant array in gui/demod_scope.hpp,
+        // so an unclamped value from a hand-edited file is not a wrong setting
+        // - it is a read past the end of kScopeTimebaseMs or kScopeGainPerDiv,
+        // in a release build, on the first frame the page draws. Both ends of
+        // each ladder, and a value far outside it.
+        CHECK(writeText(path,
+                        "{\"demodScopeSignal\":99,\"demodScopeTimebase\":99,"
+                        "\"demodScopeGain\":99}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.demodScopeSignal == cascade::gui::kScopeSignalCount - 1);
+        CHECK(out.demodScopeTimebase == cascade::gui::kScopeTimebaseCount - 1);
+        CHECK(out.demodScopeGain == cascade::gui::kScopeGainCount - 1);
+        CHECK(writeText(path,
+                        "{\"demodScopeSignal\":-99,\"demodScopeTimebase\":-99,"
+                        "\"demodScopeGain\":-99}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.demodScopeSignal == 0);
+        CHECK(out.demodScopeTimebase == 0);
+        CHECK(out.demodScopeGain == 0);
+        // A legal position is NOT "corrected" - the sanitizer must not take a
+        // setting the user actually selected and move it.
+        CHECK(writeText(path,
+                        "{\"demodScopeSignal\":2,\"demodScopeTimebase\":4,"
+                        "\"demodScopeGain\":3,\"demodScopeAutoGain\":false}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.demodScopeSignal == 2);
+        CHECK(out.demodScopeTimebase == 4);
+        CHECK(out.demodScopeGain == 3);
+        CHECK(!out.demodScopeAutoGain);
+        // And a file that predates the whole page opens with it shut, at the
+        // defaults, with the auto attenuator on.
+        CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.demodScopeOpen);
+        CHECK(out.demodScopeSignal == 0);
+        CHECK(out.demodScopeTimebase == 3);
+        CHECK(out.demodScopeGain == 5);
+        CHECK(out.demodScopeAutoGain);
 
         // A WRONG-TYPED VALUE IS TREATED AS ABSENT, the same rule every other
         // field here follows: one hand-edited mistake must not wipe the rest of

@@ -50,6 +50,16 @@ struct GLFWwindow;
 // held by value here without breaking the rule that main() - and the tests -
 // never see a GUI header.
 #include "gui/scope_view.hpp"
+// The DEMOD SCOPE's arithmetic and its settings struct, held by value below.
+// ImGui-free by construction for the same reason scope_view.hpp is - the
+// DRAWING half of that scope lives in gui/demod_scope_face.hpp, which this
+// header deliberately does not reach.
+#include "gui/demod_scope.hpp"
+// The FFT the scope's spectrum position uses, held here by unique_ptr and so
+// needing to be a complete type. Arrives transitively through pipeline.hpp
+// anyway; named explicitly because a member's type should not depend on
+// somebody else's include order.
+#include "dsp/fft.hpp"
 #include "gui/track_info_cache.hpp"
 // RememberedSource, held by value below: the pure source decisions, ImGui-free
 // like every other gui header included here.
@@ -103,6 +113,10 @@ namespace cascade::gui {
 // includes imgui.h), preserving the rule that main() never sees GUI headers.
 class SpectrumView;
 class WaterfallView;
+// What the demod scope's page hands its tube. Forward-declared for the same
+// reason: gui/demod_scope_face.hpp includes imgui.h, and gatherDemodScope
+// below only takes a reference to one.
+struct DemodScopeFeed;
 // The two plugin windows' view objects and their decks, for exactly the same
 // reason: gui/plugin_store_view.hpp and gui/plugins_view.hpp both include
 // imgui.h, and this header is compiled into the tests. They are held by
@@ -922,6 +936,16 @@ private:
     void drawDecoderStatusRows();
     // The decoded text, in its own operating system window.
     void drawDecoderWindow();
+    // --- the demod scope -----------------------------------------------------
+    // The page itself: the tube, its keys and its readouts.
+    void drawDemodScopePage();
+    // The switch that opens it, in the VIEW bank beside the radar scope's.
+    void drawDemodScopeSection();
+    // Reads whichever tap the selected signal needs into the member buffers,
+    // finds the trigger, and (in the spectrum position) transforms. Split out
+    // because it is the half of the page that has nothing to do with drawing
+    // and everything to do with what is being drawn.
+    void gatherDemodScope(cascade::gui::DemodScopeFeed& feed);
     // Moves decoded lines out of the runner into decoderLog_. Called from
     // drawUi unconditionally, because the runner's buffer is bounded and
     // draining only when the panel is visible would drop output silently.
@@ -2095,6 +2119,52 @@ private:
     ScopeView scope_;
     bool scopeMode_ = false;
     int scopeRangeNm_ = kScopeDefaultRangeNm;
+
+    // --- THE DEMOD SCOPE (0.94.0) --------------------------------------------
+    //
+    // The bench oscilloscope in the VIEW bank: the demodulated audio on a
+    // graticule, its spectrum, and the channel I/Q as two traces and as a
+    // Lissajous. A PAGE rather than a mode - unlike the radar scope above,
+    // which takes over the whole window - because it is something you watch
+    // BESIDE the spectrum while you tune, not instead of it.
+    //
+    // THE BUFFERS ARE MEMBERS so a frame of scope allocates nothing: the taps
+    // are read into them, the I/Q is split into two parallel arrays for the
+    // reductions, and the per-column envelope lands in scopeLo_/scopeHi_. At
+    // the longest sweep the audio one holds half a second and the I/Q one
+    // rather more, so these are the largest scratch buffers in the window and
+    // resizing them once a frame would be the most expensive thing on it.
+    bool demodScopeOpen_ = false;
+    DemodScopeState demodScope_;
+    std::vector<float> scopeAudioBuf_;
+    std::vector<std::complex<float>> scopeIqBuf_;
+    std::vector<float> scopeI_;
+    std::vector<float> scopeQ_;
+    std::vector<float> scopeLo_;
+    std::vector<float> scopeHi_;
+    // The audio spectrum, and the plan that makes it. Created on the first
+    // frame the spectrum position is selected and kept afterwards: a pffft
+    // setup is not free, and the page can be left on that position for hours.
+    std::vector<float> scopeSpecDb_;
+    std::vector<std::complex<float>> scopeFftIn_;
+    std::vector<std::complex<float>> scopeFftOut_;
+    std::vector<float> scopeFftWindow_;
+    std::unique_ptr<cascade::dsp::ComplexFFT> scopeFft_;
+    // WHETHER EACH TAP IS PRODUCING, measured on the clock rather than frame
+    // to frame - see scopeTapLive in gui/demod_scope.hpp for why that
+    // distinction is the difference between a working readout and one that
+    // says "RECEIVER STOPPED" over a running receiver.
+    //
+    // TWO RECORDS, ONE PER TAP, and not one shared: the page reads whichever
+    // tap the selected signal needs, and a record carried over from the other
+    // one would answer for a tap nobody is looking at.
+    cascade::gui::ScopeLiveness scopeAudioLive_;
+    cascade::gui::ScopeLiveness scopeIqLive_;
+    bool scopeLive_ = false;
+    // The plugin currently playing through the host, if any. A member rather
+    // than a local because the face is handed a const char* into it and the
+    // string has to outlive the call.
+    std::string scopeAudioFrom_;
 
     // --- THE FUNCTION SELECT RAIL'S BANK -------------------------------------
     // Which of the five banks (gui/rail_banks.hpp) the rail is showing, as

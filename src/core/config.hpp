@@ -288,6 +288,28 @@ struct AppConfig {
     bool scopeMode = false;
     int scopeRangeNm = 200;
 
+    // --- The DEMOD SCOPE page (0.94.0) ----------------------------------------
+    // The oscilloscope in the VIEW bank: the demodulated audio, its spectrum,
+    // and the channel I/Q, on a ten-by-eight graticule.
+    //
+    // demodScopeOpen  IS SAVED AND NOT RESTORED, exactly like scopeMode above
+    //                 and for the same instruction: every launch opens on the
+    //                 bench and nothing puts a window on screen but its own
+    //                 key. startupState() clears it, so the field records what
+    //                 was showing at the last exit and changes nothing about
+    //                 the next launch.
+    //
+    // The other three are WHERE and HOW rather than WHETHER, so they do
+    // survive - a user who works at 5 ms/DIV on the vector display should not
+    // have to set both again every morning. All three are CLAMPED ON LOAD by
+    // the ladders in gui/demod_scope.hpp, so a hand-edited 99 opens on the
+    // coarsest step rather than indexing off the end of a constant array.
+    bool demodScopeOpen = false;
+    int demodScopeSignal = 0;     // ScopeSignal: 0 audio, 1 spectrum, 2 I/Q, 3 vector
+    int demodScopeTimebase = 3;   // index into kScopeTimebaseMs; 3 is 10 ms/DIV
+    int demodScopeGain = 5;       // index into kScopeGainPerDiv; 5 is 100 mV/DIV
+    bool demodScopeAutoGain = true;
+
     // railBank   which of the FUNCTION SELECT rail's five banks was showing -
     //            SIGNAL PATH, DECODE, VIEW, EXTEND, SYSTEM, as 0..4 in that
     //            order (gui/rail_banks.hpp owns the list). Restored so the
@@ -759,8 +781,9 @@ struct AppConfig {
 // THE STATE THE APPLICATION STARTS IN: the bench, and nothing else.
 //
 // A saved config records what was showing when the application last closed -
-// the scope, the plugin store, the fitted modules window, each plugin's map
-// page. Until 0.79.1 the window reopened all of it, on the argument that a
+// the radar scope, the demod scope, the plugin store, the fitted modules
+// window, each plugin's map page. Until 0.79.1 the window reopened all of it,
+// on the argument that a
 // user who left a window open wanted it back. The user's own instruction
 // settled it the other way: "whenever the software starts it only shows the
 // main screen, regardless of what was running when it was closed." So this
