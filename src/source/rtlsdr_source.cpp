@@ -380,7 +380,7 @@ bool RtlSdrSource::open(const std::string& args) {
 
     const std::vector<usb::UsbDeviceInfo> found = usb::enumerateWinUsb(rtlSdrUsbIds());
     if (found.empty()) {
-        setError("no RTL-SDR is bound to WinUSB on this machine");
+        setError(std::string("no RTL-SDR is ") + usb::kBindHint + " on this machine");
         return false;
     }
     const usb::UsbDeviceInfo* pick = nullptr;
