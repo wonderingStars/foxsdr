@@ -1,0 +1,112 @@
+# udev rules for FoxSDR's native USB radio drivers (src/usb/usbfs_device.cpp).
+#
+# WHAT THIS FILE IS FOR. FoxSDR's native RTL-SDR, HackRF, RX888 mk2 and
+# Mirics MSi2500 drivers talk to the device node at /dev/bus/usb/BBB/DDD
+# directly through usbfs (open() + USBDEVFS_* ioctls) - no libusb, no
+# SoapySDR module. By default that node is owned by root:root, mode 0664 or
+# tighter, so a desktop user's `open()` fails EACCES the moment the dongle is
+# plugged in. TAG+="uaccess" is systemd-logind's mechanism for granting the
+# user who is logged in at the seat (graphically or at a text console)
+# read/write access to exactly that device node for exactly as long as their
+# session owns the seat - the same mechanism every other desktop USB
+# permission (webcams, printers, most SDR tools) already relies on. The
+# MODE/GROUP pair is kept alongside it as a fallback for headless or
+# non-logind setups (systemd-less init, an SSH-only box with no seat): add
+# the user to the `plugdev` group and the 0660 mode still lets them through.
+#
+# INSTALLATION.
+#   sudo cp 99-foxsdr-sdr.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+# Then unplug and replug the radio (a rule reload does not retroactively
+# re-tag a device node that is already sitting there). No reboot needed.
+# See installer/linux/README.md for the RTL-SDR kernel-driver note below.
+#
+# One line per VID:PID, matching exactly the id tables each driver enumerates
+# against (see rtlSdrUsbIds() in src/source/rtlsdr_source.cpp, hackrf::kUsbVid
+# / kPidHackRfOne / kPidJawbreaker / kPidRad1o in src/source/hackrf_protocol.hpp,
+# rx888::kUsbVid / kPidStreamer / kPidBootloader in src/source/rx888_protocol.hpp,
+# and msi2500::deviceModels() in src/source/msi2500.cpp) - a device this file
+# does not list still enumerates (sysfs needs no permission to read), it just
+# cannot be opened until a matching line exists here.
+
+# --- RTL2832U-based RTL-SDR dongles -----------------------------------------
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2832", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0413", ATTR{idProduct}=="6680", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0413", ATTR{idProduct}=="6f0f", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0458", ATTR{idProduct}=="707f", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00a9", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00b3", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00b4", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00b5", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00b7", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00b8", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00b9", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00c0", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00c6", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00d3", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00d7", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0ccd", ATTR{idProduct}=="00e0", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1554", ATTR{idProduct}=="5020", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="15f4", ATTR{idProduct}=="0131", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="15f4", ATTR{idProduct}=="0133", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="185b", ATTR{idProduct}=="0620", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="185b", ATTR{idProduct}=="0650", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="185b", ATTR{idProduct}=="0680", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d393", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d394", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d395", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d397", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d398", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d39d", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d3a4", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d3a8", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d3af", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", ATTR{idProduct}=="d3b0", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d19", ATTR{idProduct}=="1101", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d19", ATTR{idProduct}=="1102", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d19", ATTR{idProduct}=="1103", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d19", ATTR{idProduct}=="1104", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1f4d", ATTR{idProduct}=="a803", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1f4d", ATTR{idProduct}=="b803", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1f4d", ATTR{idProduct}=="c803", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1f4d", ATTR{idProduct}=="d286", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1f4d", ATTR{idProduct}=="d803", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+
+# --- HackRF (One, Jawbreaker, rad1o) -----------------------------------------
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="604b", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+
+# --- RX888 mk2 (SDDC/FX3 firmware) - the bootloader id AND the streamer id --
+# it re-enumerates under after firmware load, so both need the rule or the
+# second stage is unreachable even though the first opened fine.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04b4", ATTR{idProduct}=="00f1", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="04b4", ATTR{idProduct}=="00f3", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+
+# --- Mirics MSi2500 + MSi001 (and the television sticks built on it) -------
+# NOT the SDRplay RSP1/RSP2 rows below the MSi2500 in msi2500.cpp's device
+# table by driver identity - they enumerate under the same VID and two
+# further PIDs and share a rule for the same reason: FoxSDR's native driver
+# opens them with a different tuner band plan, not a different transport.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1df7", ATTR{idProduct}=="2500", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1df7", ATTR{idProduct}=="3000", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1df7", ATTR{idProduct}=="3010", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2040", ATTR{idProduct}=="d300", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="07ca", ATTR{idProduct}=="8591", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="04bb", ATTR{idProduct}=="0537", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0511", ATTR{idProduct}=="0037", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+
+# --- RTL-SDR and the in-tree DVB driver --------------------------------------
+# NO BLACKLIST IS NEEDED HERE, on purpose. Every RTL2832U in the list above
+# ships bound to dvb_usb_rtl28xxu (the kernel's own DVB-T driver for this
+# silicon) the first time it is plugged in - Linux's equivalent of "an
+# RTL-SDR needs Zadig on Windows". openWinUsb() (src/usb/usbfs_device.cpp)
+# detaches it automatically at open time with USBDEVFS_DISCONNECT_CLAIM, the
+# same ioctl libusb's own Linux backend uses for the same purpose, so this
+# transport does not need the device pre-unbound and does not need the
+# module blacklisted to work. See installer/linux/README.md if you want the
+# module blacklisted anyway (a fully offline DVB-never machine, or a kernel
+# old enough that DISCONNECT_CLAIM is unavailable - pre-4.10, not expected on
+# anything this ships to and not verified against one).

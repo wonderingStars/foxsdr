@@ -778,6 +778,22 @@ const KnownWait kKnownWaits[] = {
      "same bound a cancelled control transfer is given. The last 250 ms of either native "
      "column, and both of those are spent instead of the Soapy pair rather than as well as "
      "it; measured at 0.1 - 0.4 ms on the bench dongle"},
+
+    // THE LINUX TRANSPORT (src/usb/usbfs_device.cpp), same constant name and
+    // same value as its Windows counterpart directly above, because it is the
+    // SAME bound in the same driver column: on Linux, UsbfsDevice::endBulkStream()
+    // discards every outstanding URB and gives the whole ring this long to
+    // drain before leaking it, exactly as WinUsbDevice::endBulkStream() does.
+    // The four native drivers' shutdown-cost arithmetic in the block comment
+    // above (RtlSdrSource 2000 ms, HackRfSource 1350 ms, MiriSdrSource
+    // 1750 ms, Rx888Source 2750 ms) is therefore identical on both platforms,
+    // and this row is zero for the same reason the Windows one is: that cost
+    // is spent INSTEAD OF the Soapy pair's 3000 ms, never as well as it.
+    {"src/usb/usbfs_device.cpp", "kAbortDrainWait", 0,
+     "UsbfsDevice::endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per "
+     "request), and the Linux transport's exact counterpart to winusb_device.cpp's constant "
+     "of the same name. Zero for the same reason: spent instead of the Soapy pair, never as "
+     "well as it"},
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {

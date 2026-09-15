@@ -822,18 +822,29 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
     return std::make_unique<WinUsbDevice>(file, winusb, path);
 }
 
-#else  // !_WIN32
+#elif defined(__linux__)  // !_WIN32 && __linux__
 
-// The transport is Windows-only by design (see usb_device.hpp): the native
-// drivers exist because the alternative on Windows was somebody else's
-// libusb. On Linux the tree still COMPILES - and says why - so the rest of
-// the product builds and its tests run against the fake.
+// Nothing here: src/usb/usbfs_device.cpp (compiled only on Linux - see its
+// CMakeLists.txt guard) defines enumerateWinUsb(), enumerateUnbound() and
+// openWinUsb() for this platform, straight onto usbfs. This file still
+// supplies unboundFrom() above (portable, and exercised by
+// tests/test_usb_winusb.cpp on every platform) and the real WinUSB
+// implementation under _WIN32; it supplies nothing else here so that Linux
+// gets exactly one definition of each function rather than two.
+
+#else  // !_WIN32 && !__linux__
+
+// The transport is WinUSB-or-usbfs by design (see usb_device.hpp and
+// src/usb/usbfs_device.cpp): the native drivers exist because the
+// alternative was somebody else's libusb. On a platform that is neither -
+// macOS, *BSD - the tree still COMPILES, and says why, so the rest of the
+// product builds and its tests run against the fake.
 std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>&) {
     return std::vector<UsbDeviceInfo>();
 }
 
 std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>&) {
-    // Nothing is bound to WinUSB off Windows, and nothing is unbound from it
+    // Nothing is bound to WinUSB here, and nothing is unbound from it
     // either: the question does not arise. unboundFrom() above is still built
     // and still tested here, because the decision it makes is portable even
     // though the walk that feeds it is not.
@@ -841,10 +852,10 @@ std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>&) {
 }
 
 std::unique_ptr<UsbDevice> openWinUsb(const std::string&, std::string& error) {
-    error = "native USB radio support is Windows-only in this build";
+    error = "native USB radio support needs WinUSB (Windows) or usbfs (Linux) in this build";
     return nullptr;
 }
 
-#endif  // _WIN32
+#endif  // _WIN32 / __linux__ / other
 
 }  // namespace cascade::usb
