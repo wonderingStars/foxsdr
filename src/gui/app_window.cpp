@@ -44,6 +44,9 @@
 // generated header would be a worse trade than a two-segment relative include.
 #include "../../resources/icon/foxsdr_icon_rgba.hpp"
 #include "core/image_write.hpp"
+// The MSIX question, asked in exactly two places in this file: whether the
+// startup update check runs at all, and what the Settings > Updates row says.
+#include "core/package_identity.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
@@ -5290,7 +5293,29 @@ void AppWindow::drawRailBankCurtain() {
 // ---------------------------------------------------------------------------
 
 void AppWindow::startUpdateCheck() {
-    if (updateStarted_ || updatePending_ || !updateCheckEnabled_) { return; }
+    if (updateStarted_ || updatePending_) { return; }
+    // THE PACKAGED BUILD STANDS DOWN, and says so once.
+    //
+    // A Store install is updated by the Store. This check exists to download
+    // and run foxsdr-setup-<ver>.exe, which inside a package would install a
+    // SECOND, unpackaged FoxSDR beside the packaged one - two products, two
+    // data locations, two update paths. So the check never starts, the reason
+    // goes in the log rather than being inferred from the absence of a
+    // request, and the Settings row below says the same thing in words.
+    //
+    // updateStarted_ is set on the packaged path too, so the line is logged
+    // once per launch and not once per re-tick of the Settings checkbox. The
+    // OffByChoice path deliberately leaves it alone, exactly as the plain
+    // `!updateCheckEnabled_` guard it replaces did.
+    const cascade::core::UpdateCheckDisposition disposition =
+        cascade::core::updateCheckDisposition(cascade::core::runningInPackage(),
+                                              updateCheckEnabled_);
+    if (disposition == cascade::core::UpdateCheckDisposition::OffByChoice) { return; }
+    if (disposition == cascade::core::UpdateCheckDisposition::StorePackage) {
+        updateStarted_ = true;
+        cascade::core::diagLogf("%s", cascade::core::updateCheckStandDownLine());
+        return;
+    }
     updateStarted_ = true;
     updatePending_ = true;
     updateError_.clear();
@@ -7819,6 +7844,19 @@ void AppWindow::rescanPlugins() {
     // without an error — the host's documented behaviour, and the reason
     // nothing here reports a failure.
     pluginDir_ = cascade::core::PluginHost::defaultPluginDir();
+
+    // WHERE, not just WHAT. The lines below say which modules loaded; none of
+    // them said which of the two candidate directories they came from, and
+    // that is the question every "my plugin vanished after an upgrade" report
+    // actually asks - beside the exe for a portable or per-user install,
+    // %LOCALAPPDATA%\foxsdr\plugins for a Program Files one or for a Store
+    // package. One line, once per scan, naming the directory and the reason.
+    if (cascade::core::runningInPackage()) {
+        cascade::core::diagLogf("plugins: %s (this is a Store package: %s)", pluginDir_.c_str(),
+                                cascade::core::packageIdentity().fullName.c_str());
+    } else {
+        cascade::core::diagLogf("plugins: %s", pluginDir_.c_str());
+    }
 
     // ONE ordered sequence, and the order is the feature (see the enforcement
     // note in app_window.hpp). Nothing may hold a mapped module while files
@@ -16857,10 +16895,18 @@ void AppWindow::drawUpdatesSection() {
     // that it is IDLE, because "up to date" and "we have not asked" are
     // different statements and the second one must not wear the first one's
     // clothes.
+    // A FIFTH STATE, and it is not an invented one: a copy installed from the
+    // Microsoft Store is updated by the Store, so this section has nothing to
+    // check and must not pretend it did. "STORE" rather than "OFF", because
+    // off is a choice the user made and this is not.
+    const bool packaged = cascade::core::runningInPackage();
+
     const char* updateChip = "OFF";
     ImU32 updateLamp = cascade::gui::theme::kPhosphor;
     bool updateLit = false;
-    if (updateCheckEnabled_) {
+    if (packaged) {
+        updateChip = "STORE";
+    } else if (updateCheckEnabled_) {
         if (update_.newer) {
             updateChip = update_.critical ? "IMPT" : "NEW";
             updateLamp = update_.critical ? cascade::gui::theme::kAlarm
@@ -16876,6 +16922,15 @@ void AppWindow::drawUpdatesSection() {
     }
     if (!benchSection("Updates", false, updateChip, updateLamp, updateLit)) { return; }
     telemetryNotePanel("updates");
+
+    if (packaged) {
+        // No checkbox: there is nothing here for the user to decide. A tick
+        // that changed nothing would be worse than no tick at all.
+        ImGui::TextWrapped("%s", cascade::core::updateCheckStandDownSentence());
+        ImGui::TextDisabled("this build: %s", cascade::versionString());
+        ImGui::TextDisabled("package: %s", cascade::core::packageIdentity().fullName.c_str());
+        return;
+    }
 
     if (ImGui::Checkbox("Check for updates at startup", &updateCheckEnabled_)) {
         // Off means off immediately: a check already in flight is not waited

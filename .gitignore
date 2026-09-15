@@ -37,3 +37,15 @@ cfg_test_*/
 # appears when a debug or probe harness runs ImGui with the default settings.
 # Committing it would give the repository a layout the product does not read.
 imgui.ini
+
+# The MSIX build's working directories. Layout/ is a staged copy of the
+# Release payload plus 84 generated PNGs; Output/ holds the .msix and, after a
+# -TestSign run, the throwaway local certificate. Both are rebuilt from
+# installer\msix\build-msix.ps1 in one command, and neither belongs in a
+# repository that may become public - least of all a certificate.
+installer/msix/Layout/
+installer/msix/Output/
+
+# installer\msix\make-logos.py imports resources/icon/generate_icon.py by path,
+# which leaves a bytecode cache beside it.
+__pycache__/

@@ -316,6 +316,13 @@ public:
     //
     // Falls back to the relative "plugins" if the executable path cannot be
     // determined (which would mean a very unusual host process).
+    //
+    // INSIDE AN MSIX PACKAGE the per-user directory is used and the write
+    // probe is NOT RUN AT ALL. The package directory is read-only by design,
+    // so the probe's answer is known in advance - and skipping it means the
+    // application never attempts a write into
+    // C:\Program Files\WindowsApps\<full name>, rather than attempting one
+    // that is refused. See core/package_identity.hpp.
     static std::string defaultPluginDir();
 
     // The two candidates defaultPluginDir() chooses between, exposed so the
@@ -336,8 +343,17 @@ public:
     // otherwise `userDir` - except that an empty `userDir` (nothing in the
     // environment to derive one from) yields `exeDir`, so the caller reports
     // the real failure against the real path rather than against "".
+    //
+    // `packaged` is "this process is running from an MSIX package" (see
+    // core/package_identity.hpp). It OVERRIDES `exeDirWritable` rather than
+    // being folded into it, because the two say different things: inside a
+    // package the exe directory is C:\Program Files\WindowsApps\<full name>,
+    // which Microsoft documents as read-only and which the OS protects, so
+    // the per-user directory is the answer even if a probe somehow said
+    // otherwise. It defaults to false so every existing caller and every
+    // existing test keeps its exact meaning.
     static std::string choosePluginDir(const std::string& exeDir, const std::string& userDir,
-                                       bool exeDirWritable);
+                                       bool exeDirWritable, bool packaged = false);
 
     // True if `filename` has the shared-library extension this platform's
     // plugins use (".dll" on Windows, ".so"/".dylib" elsewhere). Case

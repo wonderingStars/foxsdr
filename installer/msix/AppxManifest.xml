@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FoxSDR MSIX package manifest - TEMPLATE.
+
+  This file is not a manifest until build-msix.ps1 has substituted the
+  at-sign-delimited placeholders below. It is kept as a template rather than a
+  finished manifest for one reason: the Identity element is not ours to write.
+  See IDENTITY, below. (The script refuses to pack if any placeholder is left,
+  which is why no other at-sign-delimited capitalised word may appear here.)
+
+  Structure and element choices follow
+  https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion
+  (ms.date 2023-01-04, updated_at 2026-04-15), which is the documented route
+  for packaging a Win32 app by hand rather than with the MSIX Packaging Tool.
+  FoxSDR's payload is nine known files; the Packaging Tool's kernel-driver
+  capture exists for installers whose contents nobody controls.
+
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 uap10 desktop4 rescap">
+
+  <!--
+    ===================================================================
+    IDENTITY - PARTNER CENTER ASSIGNS THESE. COPY THEM FROM
+    Product management > Product identity IN PARTNER CENTER.
+    ===================================================================
+
+    Name and Publisher are NOT free text and NOT ours to invent. They are
+    issued when the product name is reserved, and a package whose identity
+    does not match the reservation is rejected at upload.
+
+      Name       <- "Package/Identity/Name"      on the Product identity page
+      Publisher  <- "Package/Identity/Publisher" on the Product identity page
+                    (a full X.500 string, e.g. CN=A1B2C3D4-....)
+
+    The Store also shows "Package/Properties/PublisherDisplayName" on the same
+    page; that is the <PublisherDisplayName> element further down.
+
+    Cited: ".../desktop-to-uwp-manual-conversion" - "If you've reserved your
+    application name in the Microsoft Store, you can obtain the Name and
+    Publisher by using Partner Center." And ".../msix/app-package-requirements"
+    - "Values in the manifest are case-sensitive. Spaces and other punctuation
+    must also match."
+
+    Until the reservation exists, build-msix.ps1 substitutes local TEST values
+    so the package can be built, installed and driven on this machine. Those
+    test values are not the product's identity and must never be submitted.
+
+    VERSION is four parts and the FOURTH IS ALWAYS 0:
+      "For Windows 10 or Windows 11 (UWP) packages, the last (fourth) section
+       of the version number is reserved for Store use and must be left as 0
+       when you build your package"
+      (.../publish/publish-your-app/msix/app-package-requirements,
+       ms.date 2022-10-30, updated_at 2026-08-24).
+    build-msix.ps1 derives it from `cascade.exe` and its version switch - the
+    binary's own
+    claim - so the package cannot be stamped with a version the binary does
+    not report. The first section cannot be 0, so a 0.x.y product version is
+    carried as-is only while the Store accepts a leading 0; see README.md.
+  -->
+  <Identity Name="@IDENTITY_NAME@"
+            Publisher="@IDENTITY_PUBLISHER@"
+            Version="@VERSION@"
+            ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>FoxSDR</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Description>A software-defined radio receiver for Windows: spectrum, waterfall, demodulation and decoders.</Description>
+    <!-- The Store logo. 50x50 at scale 100; scale variants sit beside it and
+         are selected by resources.pri. -->
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Resources>
+    <!-- English only, declared deliberately. Store Policy 10.7: "You must
+         localize your product for all languages that it supports." FoxSDR
+         supports one, so it declares one. -->
+    <Resource Language="en-GB" />
+  </Resources>
+
+  <Dependencies>
+    <!--
+      MinVersion 10.0.19041.0 is forced by the uap10:RuntimeBehavior and
+      uap10:TrustLevel attributes on <Application> below: "uap10 was
+      introduced in Windows 10, version 2004 (10.0; Build 19041)". The older
+      EntryPoint="Windows.FullTrustApplication" form would reach further back,
+      but 19041 is already older than any supported Windows, and FoxSDR's own
+      floor is higher in practice.
+    -->
+    <TargetDeviceFamily Name="Windows.Desktop"
+                        MinVersion="10.0.19041.0"
+                        MaxVersionTested="@MAX_VERSION_TESTED@" />
+  </Dependencies>
+
+  <Capabilities>
+    <!--
+      runFullTrust - REQUIRED, and the only one of the three that is.
+      "a Medium IL app *needs* to declare the runFullTrust restricted
+      capability" and "A full trust app is one that sets uap10:TrustLevel to
+      mediumIL"
+      (learn.microsoft.com/windows/apps/package-and-deploy/app-capability-declarations,
+       ms.date 2026-09-08). FoxSDR must be full trust: it opens USB devices
+      with WinUsb_Initialize, loads native decoder plugins with LoadLibrary,
+      opens serial ports for GPS and CAT, and LoadLibrary's the SDRplay API
+      from outside the package.
+
+      internetClient and privateNetworkClientServer - DECLARED AS DISCLOSURE,
+      NOT BECAUSE THEY ARE ENFORCED. The same page is explicit that they are
+      not: "The internetClient and enterpriseAuthentication capabilities grant
+      an application the ability to perform certain operations that the user
+      can already do. So those are examples of capabilities that apply only to
+      AppContainer apps. Conversely, a Medium IL app is already running as the
+      user; so an app like that can already perform those operations without
+      requiring those capabilities."
+
+      They are declared anyway because the Store shows a product's declared
+      capabilities to the customer on the listing page, and a radio receiver
+      that talks to the internet and to the local network should say so there
+      rather than leave it to be discovered. What each one covers in FoxSDR:
+
+        internetClient  ("apps can receive incoming data from the Internet.
+                          Cannot act as a server. No local network access.")
+          - the usage report and the crash report (telemetry.foxsdr.com)
+          - the plugin catalogue and plugin downloads (github.com)
+          - the update check - WHICH STANDS DOWN INSIDE THIS PACKAGE
+            (src/core/package_identity.hpp); the capability still covers the
+            code path, which exists in the same binary
+          - satellite element sets from CelesTrak
+          - basemap tiles for the map view
+
+        privateNetworkClientServer ("provides inbound and outbound access to
+                          home and work networks through the firewall... On
+                          Windows, this capability does not provide access to
+                          the Internet.")
+          - the ADALM-Pluto, which is a USB-attached network device at
+            192.168.2.1 and is driven over IIOD
+          - the web remote (net/web_server.cpp) and the CAT server
+            (net/cat_server.cpp). Both are OFF by default and bind 127.0.0.1
+            when switched on; this capability is what covers a user who
+            deliberately widens the binding to the LAN.
+          - USRP/UHD devices reached over Ethernet
+
+      NOT DECLARED, deliberately: no location capability. FoxSDR's receiver
+      position comes from a serial NMEA port the user names and opens by hand
+      (src/core/gps_reader.hpp), not from the Windows Location Service, and it
+      is never transmitted. Declaring a location capability would tell the
+      customer something untrue about where the position comes from.
+    -->
+    <rescap:Capability Name="runFullTrust" />
+    <Capability Name="internetClient" />
+    <Capability Name="privateNetworkClientServer" />
+  </Capabilities>
+
+  <Applications>
+    <!--
+      desktop4:SupportsMultipleInstances="true" is REQUIRED by the schema for
+      the console execution alias below: makeappx refuses the package
+      otherwise ("The AppExecutionAlias element cannot declare the attribute
+      Subsystem with value console without declaring the attribute
+      SupportsMultipleInstances with value true in element Application").
+
+      It is also true of the product, which is why the alias is kept rather
+      than the attribute dropped. FoxSDR has never been a single-instance
+      application: two unpackaged copies run side by side today (that is how
+      a stale 0.64.0 install came to be seen running beside 0.75.0 on this
+      machine), and a `foxsdr` version query from a terminal must answer
+      rather than raise the window of a session already listening to
+      something.
+    -->
+    <Application Id="FoxSDR"
+                 Executable="cascade.exe"
+                 uap10:RuntimeBehavior="packagedClassicApp"
+                 uap10:TrustLevel="mediumIL"
+                 desktop4:SupportsMultipleInstances="true">
+      <uap:VisualElements
+        DisplayName="FoxSDR"
+        Description="A software-defined radio receiver: spectrum, waterfall, demodulation and decoders."
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        BackgroundColor="#1B1F26">
+        <!-- #1B1F26 is SLATE from resources/icon/generate_icon.py - the same
+             tile colour the .ico and the window icon are drawn on, so the
+             plated tile and the mark are one product. -->
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"
+                         Square71x71Logo="Assets\Square71x71Logo.png"
+                         Square310x310Logo="Assets\Square310x310Logo.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#1B1F26" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!--
+          NO FILE TYPE ASSOCIATION AND NO PROTOCOL, because the application
+          registers neither. Checked rather than assumed: installer/cascade.iss
+          has no [Registry] section at all, and nothing in src/ writes an
+          HKCR/HKCU\Software\Classes key or calls RegisterApplicationRestart,
+          IApplicationAssociationRegistration or ShellExecute on a scheme of
+          its own. FoxSDR opens .wav/.iq recordings and .json band plans
+          through its own file dialogs, and reaches the network as a client.
+          Declaring an association the unpackaged product does not have would
+          make the Store copy behave differently from every other copy, and
+          would be a claim on file extensions this project has not earned.
+
+          THE ONE EXTENSION DECLARED - an execution alias, so the application's
+          command line survives packaging.
+
+          A packaged app is normally launched through the shell
+          (shell:AppsFolder\<family>!<Id>), which is how the Start menu entry
+          works and needs nothing declared. But FoxSDR has a real command-line
+          surface that support and testing depend on (version, frames N,
+          selftest, soapy-check, rtlsdr-check and update-check switches, each
+          spelled with the usual two leading hyphens, which an XML comment
+          cannot contain) and a shell activation gives it neither arguments
+          nor a console. The alias
+          makes `foxsdr` on the PATH activate the packaged app with the
+          package identity, the caller's arguments and the caller's console.
+          It is also the mechanism the packaged-run evidence in README.md was
+          collected through.
+
+          desktop4:Subsystem="console" matches the binary: cascade.exe is
+          linked /SUBSYSTEM:CONSOLE (PE Subsystem=3), so it writes its
+          diagnostics to an inherited console rather than to nowhere.
+
+          Schema: uap5:Extension Category="windows.appExecutionAlias", per
+          learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap5-appexecutionalias
+          (ms.date 2026-06-05).
+        -->
+        <uap5:Extension Category="windows.appExecutionAlias"
+                        Executable="cascade.exe"
+                        EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias desktop4:Subsystem="console">
+            <uap5:ExecutionAlias Alias="foxsdr.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>
