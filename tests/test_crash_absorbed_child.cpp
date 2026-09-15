@@ -78,6 +78,20 @@ void checkChildFaultReport() {
     std::error_code ec;
     fs::remove_all(dir, ec);
 
+    // LINUX-TODO(crash-capture): reportAbsorbedChildFault() and
+    // installCrashHandlers() are a documented no-op off Windows
+    // (core/crash_handler.cpp ~741-901), so nothing is ever written to `dir`
+    // here - every assertion below is about the CONTENT of a report that
+    // cannot exist yet. Skipped as one block rather than failing forever
+    // against missing infrastructure a parallel branch is adding.
+#ifndef _WIN32
+    SKIP_LINUX(
+        "core::reportAbsorbedChildFault()/installCrashHandlers() are a no-op off "
+        "Windows - no report is ever written to inspect");
+    fs::remove_all(dir, ec);
+    return;
+#endif
+
     DiagContext ctx;
     ctx.version = "0.96.4-childfaulttest";
     ctx.commit = "deadbeef9999";
@@ -207,6 +221,15 @@ void checkFrameCapturePolicy() {
     // answer. A fix that turned those into empty stacks would have traded one
     // silent report for four.
     CHECK(captureFramesForTest(nullptr, true) > 0);
+#else
+    // LINUX-TODO(crash-capture): captureFramesForTest()/captureFramesGuarded()
+    // exercise Windows structured-exception CONTEXT records
+    // (core/crash_handler.cpp); captureFramesForTest() itself is a no-op
+    // returning 0 off Windows (crash_handler.cpp ~903-912), so there is no
+    // policy here yet to assert.
+    SKIP_LINUX(
+        "captureFramesForTest()/captureFramesGuarded() are Windows CONTEXT-record "
+        "machinery and a no-op off Windows");
 #endif
 }
 

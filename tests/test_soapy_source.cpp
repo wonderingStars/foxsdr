@@ -60,6 +60,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "test_check.hpp"
@@ -86,6 +88,20 @@ std::string findCascadeExe() {
     std::error_code ec;
     for (const auto& c : candidates) {
         if (std::filesystem::exists(c, ec)) { return c.string(); }
+    }
+#else
+    // /proc/self/exe names this running binary regardless of how it was
+    // invoked - see soapy_enum_proc.cpp's own enumerateHelperPath() for the
+    // same reasoning. The single-config Ninja layout puts this test one
+    // directory below the app (build/tests/ vs build/), not the two levels
+    // the MSVC multi-config candidate above accounts for.
+    char linkBuf[4096];
+    const ssize_t n = ::readlink("/proc/self/exe", linkBuf, sizeof(linkBuf) - 1);
+    if (n > 0) {
+        const std::filesystem::path self(std::string(linkBuf, static_cast<std::size_t>(n)));
+        const std::filesystem::path candidate = self.parent_path().parent_path() / "cascade";
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec)) { return candidate.string(); }
     }
 #endif
     return std::string();
