@@ -320,6 +320,19 @@ public:
     // is deleted.
     static unsigned long long readersAbandoned();
 
+    // Tests only: does the reader's link still point at a device?
+    //
+    // THERE IS NO OTHER WAY TO SEE THE STATE THIS EXISTS FOR. After a reader
+    // is abandoned the driver leaks the UsbDevice on purpose and leaves
+    // link_->dev pointing at it, because the stranded thread dereferences
+    // that pointer at the top of every loop; closeDevice() clearing it anyway
+    // is a data race with that read, and on the iteration where the zombie
+    // has just passed its `run` check it is a null dereference. The zombie
+    // never calls back into the fake once `run` is false, so no transport
+    // fake can observe it - only the driver can be asked. Read-only, taken
+    // under the device mutex, and called from nowhere in the product.
+    bool linkHoldsDeviceForTest() const;
+
 private:
     // Everything the reader thread touches, in one object behind a shared_ptr
     // it captures BY VALUE - see the file header. An abandoned reader outlives

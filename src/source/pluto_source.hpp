@@ -87,30 +87,6 @@
 
 namespace cascade::source {
 
-// --- the bounded waits ----------------------------------------------------
-//
-// Named rather than written at their call sites because
-// tests/test_shutdown_budget.cpp discovers `constexpr std::chrono` constants
-// under src/ and refuses to go green until each is classified in its
-// kKnownWaits table. The connect and reply bounds live next door in
-// iiod_client.hpp; these three are the driver's own.
-
-// The bound on joining the reader thread (see the file header). Longer than
-// iiod::kReplyWait on purpose: the reader's longest legitimate stall is one
-// socket receive, and a join shorter than that would abandon a thread that
-// was coming back.
-constexpr std::chrono::milliseconds kReaderJoinWait{2500};
-
-// How long read() waits for the reader to put something in the ring before
-// returning the IqSource contract's "nothing yet, retry" zero. The pipeline's
-// self-paced loop then backs off a millisecond and asks again.
-constexpr std::chrono::milliseconds kReadWait{20};
-
-// The stream-health window, matching SoapySource::kStreamHealthWindow. Not a
-// wait: nothing sleeps or blocks on it. It is how much streaming the reader
-// tallies before it writes one "source: stream health ..." line.
-constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
-
 // --- the buffer geometry --------------------------------------------------
 
 // Samples per capture buffer, and how many of them the daemon keeps. 16384
@@ -144,6 +120,39 @@ bool parsePlutoUri(const std::string& args, std::string& host, std::uint16_t& po
 
 class PlutoSource : public DeviceSource {
 public:
+    // --- the bounded waits ------------------------------------------------
+    //
+    // Named rather than written at their call sites because
+    // tests/test_shutdown_budget.cpp discovers `constexpr std::chrono`
+    // constants under src/ and refuses to go green until each is classified
+    // in its kKnownWaits table. The connect and reply bounds live next door
+    // in iiod_client.hpp; these three are the driver's own.
+    //
+    // CLASS MEMBERS AND NOT NAMESPACE-SCOPE CONSTANTS, for the reason the
+    // Airspy and RX888 headers give: hackrf_source.hpp already declares
+    // kReaderJoinWait, kReadWait and kStreamHealthWindow at cascade::source
+    // scope, so a translation unit that includes both - app_window.cpp does,
+    // from 0.93.0, because the Source section can now open either - would not
+    // compile. Found exactly that way, and the fix is the established one
+    // rather than a rename, because the names ARE the right names.
+
+    // The bound on joining the reader thread (see the file header). Longer
+    // than iiod::kReplyWait on purpose: the reader's longest legitimate stall
+    // is one socket receive, and a join shorter than that would abandon a
+    // thread that was coming back.
+    static constexpr std::chrono::milliseconds kReaderJoinWait{2500};
+
+    // How long read() waits for the reader to put something in the ring
+    // before returning the IqSource contract's "nothing yet, retry" zero. The
+    // pipeline's self-paced loop then backs off a millisecond and asks again.
+    static constexpr std::chrono::milliseconds kReadWait{20};
+
+    // The stream-health window, matching SoapySource::kStreamHealthWindow.
+    // Not a wait: nothing sleeps or blocks on it. It is how much streaming
+    // the reader tallies before it writes one "source: stream health ..."
+    // line.
+    static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
+
     PlutoSource() = default;
     ~PlutoSource() override;
 
@@ -163,9 +172,9 @@ public:
     // streamed until start().
     bool open(const std::string& args) override;
 
-    // Stops the stream, CLOSEs the capture device, drops both connections.
-    // Idempotent, safe on a never-opened instance, and safe from the
-    // destructor. lastError() survives it.
+    // Stops the stream and drops both connections. Idempotent, safe on a
+    // never-opened instance, and safe from the destructor. lastError()
+    // survives it.
     void closeDevice() override;
 
     bool isOpen() const override { return openMirror_.load(std::memory_order_relaxed); }
@@ -214,8 +223,12 @@ public:
     // running at the default depth with no sign anything had been ignored.
     bool start() override;
 
-    // Reader joined (bounded, see the file header), CLOSE sent on the stream
-    // connection. Idempotent, safe before open.
+    // Reader joined (bounded, see the file header), then the stream
+    // connection dropped - which is what closes the capture device, because
+    // the daemon closes every device a connection held when its read returns
+    // 0 (ops.c ascii_interpreter). No CLOSE command is sent: see
+    // stopStreamingLocked for what that would cost the shutdown budget.
+    // Idempotent, safe before open.
     void stop() override;
 
     bool running() const override { return running_.load(std::memory_order_relaxed); }
@@ -240,8 +253,9 @@ public:
     // honour it, because the number comes from the board and not from here.
     //
     // ON A RUNNING STREAM the change is made with the radio QUIET: the reader
-    // stopped and the capture device CLOSEd before the clock underneath it
-    // moves, then reopened. running() reads true throughout on the success
+    // stopped and the stream connection dropped - which closes the capture
+    // device - before the clock underneath it moves, then a fresh connection
+    // opened. running() reads true throughout on the success
     // path, which is the shape 0.89.0 had to give the Soapy path after a live
     // sample-rate change killed the process on a driver's own reader thread.
     bool setSampleRateHz(double hz) override;
@@ -397,7 +411,8 @@ private:
     // SET BUFFERS_COUNT, OPEN, spawn the reader. Assumes devMutex_ held, the
     // board open and not already streaming.
     bool startStreamingLocked();
-    // Signal, bounded join, CLOSE. Idempotent; assumes devMutex_ held.
+    // Signal, bounded join, drop the stream connection. Idempotent; assumes
+    // devMutex_ held.
     void stopStreamingLocked();
 
     // THE READER'S OWN HELPERS ARE STATIC AND TAKE THE LINK, not `this`. An

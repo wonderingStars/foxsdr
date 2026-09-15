@@ -198,16 +198,24 @@ public:
     // over three releases because nothing related the two. (The GPS wait
     // was added the way the scan demands: found by name, classified here.)
     //
-    // THE TWO NATIVE DRIVERS (0.91.0) ADD NOTHING TO THIS NUMBER, and the
+    // THE EIGHT NATIVE DRIVERS ADD NOTHING TO THIS NUMBER, and the
     // arithmetic is in tests/test_shutdown_budget.cpp beside their rows.
     // Exactly one source is installed in the pipeline at a time, so a
     // teardown spends ONE of these columns and never two: SoapySDR 3000 ms,
     // a native RTL-SDR 2000, a native HackRF 1350, a native Airspy R2/Mini
-    // 1750 and a native Airspy HF+ 1750. The worst is the one charged above;
-    // the others are covered by it rather than added to it. Re-derived when
-    // the Airspys were wired into the Source section (0.92.0) and unchanged:
-    // every native column is still inside SoapySDR's 3000. The arithmetic is
-    // in tests/test_shutdown_budget.cpp's composition note.
+    // 1750, a native Airspy HF+ 1750, an SDRplay RSP 250, a native Mirics
+    // 1750, a native RX888 2750 and an ADALM-Pluto 2500. The worst is the one
+    // charged above; the others are covered by it rather than added to it.
+    // Re-derived when the Airspys were wired in (0.92.0) and again when the
+    // last four were (0.93.0), and unchanged both times: every native column
+    // is still inside SoapySDR's 3000.
+    //
+    // THE PLUTO IS THE ONE THAT NEARLY MOVED IT. Its column was 4500 while
+    // its driver sent a CLOSE on the stream connection at teardown - past
+    // Soapy's 3000, which would have taken this constant to 8500. The CLOSE
+    // was dropped instead, because dropping the socket closes the capture
+    // device anyway; the composition note in that test file carries the whole
+    // argument and is the place to start if it ever has to come back.
     static constexpr unsigned kShutdownBoundedWaitsMs = 7000;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload

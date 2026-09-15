@@ -219,6 +219,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "soapyArgs", out.soapyArgs);
     getString(j, "nativeArgs", out.nativeArgs);
     getBool(j, "nativeBiasT", out.nativeBiasT);
+    getString(j, "plutoUri", out.plutoUri);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
     getDouble(j, "centerHz", out.centerHz);
@@ -399,9 +400,17 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.sourceKind != "siggen" && out.sourceKind != "file" &&
         out.sourceKind != "soapy" && out.sourceKind != "rtlsdr" &&
         out.sourceKind != "hackrf" && out.sourceKind != "airspy" &&
-        out.sourceKind != "airspyhf") {
+        out.sourceKind != "airspyhf" && out.sourceKind != "sdrplay" &&
+        out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
+        out.sourceKind != "pluto") {
         out.sourceKind = defaults.sourceKind;
     }
+    // AN EMPTY PLUTO ADDRESS IS NOT A CHOICE, it is a field that was cleared
+    // or a key hand-edited to "". The box would come up blank with nothing
+    // saying what belongs in it, so it falls back to the address the board
+    // serves out of the box - the same answer a config that has never seen
+    // the key gets.
+    if (out.plutoUri.empty()) { out.plutoUri = defaults.plutoUri; }
     // Map window geometry is validated as ONE rectangle: any bad component
     // discards all four, so the window falls back to the size derived from the
     // monitor rather than to a rectangle half of which somebody hand-edited.
@@ -576,6 +585,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["soapyArgs"] = cfg.soapyArgs;
     j["nativeArgs"] = cfg.nativeArgs;
     j["nativeBiasT"] = cfg.nativeBiasT;
+    j["plutoUri"] = cfg.plutoUri;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
     j["centerHz"] = cfg.centerHz;

@@ -260,9 +260,25 @@ void testSourceFields() {
     // ...and "airspy" and "airspyhf" from 0.92.0, on exactly the same terms.
     CHECK(accepts("{\"sourceKind\":\"airspy\",\"soapyArgs\":\"serial=644866c83f1a51df\"}"));
     CHECK(accepts("{\"sourceKind\":\"airspyhf\",\"soapyArgs\":\"index=0\"}"));
-    // Everything outside the seven is still refused, and the error says so.
+    // ...and the last four from 0.93.0. The Pluto is the one worth saying
+    // twice about: its args are a NETWORK ADDRESS, so a parser that let this
+    // through unmatched would be handing a browser somewhere to connect TO.
+    // It is safe for the same reason the rest are - the application matches
+    // the args against its own enumerated row before opening anything - and
+    // that is a property of the caller, which is why this test admits the
+    // kind and test_web_server's device match is what proves the rest.
+    CHECK(accepts("{\"sourceKind\":\"sdrplay\",\"soapyArgs\":\"serial=1811003EFB\"}"));
+    CHECK(accepts("{\"sourceKind\":\"mirisdr\",\"soapyArgs\":\"index=0\"}"));
+    CHECK(accepts("{\"sourceKind\":\"rx888\",\"soapyArgs\":\"serial=SDDC0012\"}"));
+    CHECK(accepts("{\"sourceKind\":\"pluto\",\"soapyArgs\":\"uri=ip:192.168.2.1\"}"));
+    // Everything outside the eleven is still refused, and the error says so.
+    // The three near-misses are the SoapySDR module names for three of the
+    // native drivers, which are NOT source kinds here.
     CHECK(!accepts("{\"sourceKind\":\"airspyhf2\"}"));
     CHECK(!accepts("{\"sourceKind\":\"uhd\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"miri\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"sddc\"}"));
+    CHECK(!accepts("{\"sourceKind\":\"plutosdr\"}"));
     CHECK(!accepts("{\"sourceKind\":\"RTLSDR\"}"));  // exact spelling, not a fold
     CHECK(!accepts("{\"sourceKind\":\"\"}"));
     CHECK(!accepts("{\"sourceKind\":7}"));

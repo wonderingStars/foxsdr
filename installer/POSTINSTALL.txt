@@ -24,10 +24,11 @@ caches and logs first" - which is off unless you tick it, so an upgrade
 keeps everything. Uninstalling ASKS whether to remove those two folders;
 answer No to keep them for a future install.
 
-RTL-SDR, HACKRF AND THE TWO AIRSPYS: NOTHING TO INSTALL
+SIX RADIOS OVER USB: NOTHING TO INSTALL
 --------------------------------------------------------
-From 0.91.0 FoxSDR drives the RTL-SDR and the HackRF itself, and from
-0.92.0 the Airspy R2 / Mini and the Airspy HF+ Discovery / Dual as well.
+From 0.91.0 FoxSDR drives the RTL-SDR and the HackRF itself, from
+0.92.0 the Airspy R2 / Mini and the Airspy HF+ Discovery / Dual, and
+from 0.93.0 the Mirics MSi2500 family and the RX888 mk2 as well.
 There is no SoapySDR install, no PothosSDR, no radioconda and no vendor
 DLL anywhere in the path: FoxSDR talks to the radio over WinUSB, with
 its own driver, its own reader thread and its own device enumeration.
@@ -37,15 +38,59 @@ WinUSB, which every SDR application needs and which the next section
 describes. Once it is, the radio appears in the Source dropdown labelled
 "(native)" and opens straight away.
 
-If you were already using any of those four through SoapySDR, FoxSDR
-will open it natively from now on WITHOUT being asked and will say so in
-its log ("opening ... natively"). Nothing needs changing and nothing is
-lost: a dongle with an E4000 or FC0012/13 tuner, which the native driver
-does not support, falls back to the SoapySDR path exactly as before and
-says why.
+An RX888 is the exception worth knowing about before you start: it has
+no flash, so out of a power cycle it is a Cypress bootloader rather than
+a receiver. FoxSDR carries the firmware and uploads it when you open the
+radio, which takes a few seconds the first time after each power cycle
+and nothing thereafter - but the radio comes back under a SECOND USB
+identity, so Zadig has to be run twice. The next section says how.
 
-The radios with a bias tee (HackRF, Airspy R2 / Mini, and an Airspy HF+
-whose board has one) get a "Bias tee" checkbox under the gain sliders.
+If you were already using any of those six through SoapySDR, FoxSDR
+will open it natively from now on WITHOUT being asked and will say so in
+its log ("opening ... natively"). That covers SoapyMiri (driver=miri)
+and SoapySDDC (driver=sddc) as well as the four obvious ones. Nothing
+needs changing and nothing is lost: a dongle with an E4000 or FC0012/13
+tuner, which the native driver does not support, falls back to the
+SoapySDR path exactly as before and says why.
+
+SDRPLAY: THE VENDOR API, AND NOTHING ELSE
+--------------------------------------------------------
+An SDRplay RSP (RSP1, RSP1A, RSP1B, RSP2, RSPduo, RSPdx, RSPdx-R2) is
+driven natively too, but it is the one radio FoxSDR cannot reach the way
+it reaches the others: SDRplay publish no device protocol and the tuner
+is programmed by a Windows service, so the only door is the SDRplay API.
+Install the SDRplay API 3.x from sdrplay.com and restart FoxSDR - no
+SoapySDR module and no PothosSDR. If it is not installed, no RSP is
+listed and the Source section says exactly that rather than leaving you
+with an empty dropdown.
+
+The RSP's own controls are on the panel: the IF gain (shown as a
+negative number, because the hardware's figure is a gain REDUCTION), the
+LNA in steps, the API's automatic gain control, the antennas your model
+has, and the bias tee, broadcast-FM notch, DAB notch and HDR mode where
+your model has them.
+
+ADALM-PLUTO: OVER THE NETWORK, NOTHING INSTALLED
+--------------------------------------------------------
+An ADALM-Pluto is not on the USB bus as far as FoxSDR is concerned: it
+presents a network adapter and runs a daemon, and FoxSDR speaks to that
+daemon directly - no libiio, no vendor module, no Zadig.
+
+Because a network cannot be searched the way a USB bus can, the Pluto
+does not appear as a discovered radio. The Source dropdown always ends
+with "ADALM-Pluto (network)"; choosing it shows an address box and an
+Open key, and NOTHING is contacted until you press Open. A board on its
+USB cable answers at ip:192.168.2.1, which is what the box starts with.
+The address is remembered, so a board that was switched off last night
+is tried again on the next start.
+
+Receive only: the Pluto is a transceiver, and FoxSDR is a receiver.
+
+BIAS TEES
+--------------------------------------------------------
+The radios with a bias tee (HackRF, Airspy R2 / Mini, an Airspy HF+
+whose board has one, an RSP that has one, a Mirics receiver and an
+RX888) get a "Bias tee" checkbox under the gain sliders.
 It is off every time FoxSDR opens a radio and off again when it closes
 one, so nothing can leave power on your antenna port unannounced; the
 setting is remembered and put back after the open. Leave it off unless
@@ -98,9 +143,27 @@ SDR you must replace that driver with WinUSB:
      device and its SDR half is the entry named "Bulk-In, Interface
      (Interface 0)"; on a dongle that also does DAB/FM, Interface 0 is
      still the SDR one. A HackRF, an Airspy R2 / Mini and an Airspy HF+
-     each appear once, under their own name.
+     each appear once, under their own name. A Mirics receiver is the
+     entry whose USB ID is 1DF7 2500 (or 1DF7 3000 / 1DF7 3010 for an
+     early SDRplay RSP1 or RSP2, 2040 D300 for a Hauppauge WinTV 133559
+     LF, 07CA 8591 for an AverMedia A859, 04BB 0537 for an IO-DATA
+     GV-TV100, or 0511 0037 for a Logitec LDT-1S310U/J); if it is a
+     composite device, bind the entry shown as "(Interface 0)".
   5. Choose WinUSB as the target driver and click Replace Driver.
   6. Unplug the radio, plug it back in, and press Refresh in FoxSDR.
+
+AN RX888 IS TWO DEVICES AND HAS TO BE DONE TWICE. Run Zadig once for
+"WestBridge" (USB ID 04B4:00F3 - the FX3 bootloader), then open the
+radio once in FoxSDR so the firmware loads: it disappears and comes back
+as "RX888mk2" (04B4:00F1). Run Zadig again for that one. Both need
+WinUSB. If you do only the first, FoxSDR reports that the radio took the
+firmware but did not come back; if you do only the second, FoxSDR cannot
+see the radio at all until something else has loaded its firmware.
+
+A TELEVISION STICK STOPS BEING A TELEVISION. Most Mirics devices arrive
+running a DVB-T driver, and that is the driver Zadig replaces - the
+stick will not work as a television receiver again until the original
+driver is put back.
 
 You only do this once per radio per machine. In Device Manager, an RTL
 dongle that still needs this shows as "Bulk-In, Interface" with a yellow

@@ -77,13 +77,24 @@ struct GLFWwindow;
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
 #include "source/soapy_source.hpp"
-// The four NATIVE drivers the Source section can open without any vendor
-// module at all, and the transport they enumerate through. Headers only -
-// each one names a class and a free function; nothing here pulls in WinUSB.
+// The eight NATIVE drivers the Source section can open without any SoapySDR
+// module at all, and the transport six of them enumerate through. Headers
+// only - each one names a class and a free function; nothing here pulls in
+// WinUSB, the SDRplay API or a socket.
+//
+// "Without a vendor module" is exact for seven of them and needs one word of
+// care for the eighth: an SDRplay RSP is reached through sdrplay_api.dll, the
+// user's own install, because SDRplay publish no device protocol at all - but
+// that is the VENDOR's API called directly, not a SoapySDR module wrapping
+// it, which is what every crash in this product's first month came out of.
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/hackrf_source.hpp"
+#include "source/mirisdr_source.hpp"
+#include "source/pluto_source.hpp"
 #include "source/rtlsdr_source.hpp"
+#include "source/rx888_source.hpp"
+#include "source/sdrplay_source.hpp"
 #include "usb/usb_device.hpp"
 
 namespace cascade::gui {
@@ -1120,7 +1131,7 @@ private:
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
 
-    // Opens a radio of `kind` ("soapy" or one of the four native driver keys)
+    // Opens a radio of `kind` ("soapy" or one of the eight native driver keys)
     // by its args on
     // THIS thread, pushes the requested rate and the default gains, and fills
     // the panel mirrors. Null (with sourceError_ set) when the open fails.
@@ -1330,7 +1341,7 @@ private:
     struct DeviceOpenResult {
         std::unique_ptr<cascade::source::DeviceSource> dev;  // null on failure
         // WHICH DRIVER THE WORKER SHOULD CONSTRUCT, and afterwards which one
-        // it did: "soapy", "rtlsdr", "hackrf", "airspy" or "airspyhf" - the
+        // it did: "soapy", or one of the eight native driver keys - the
         // same spellings
         // AppConfig::sourceKind uses. The kind has to travel with the request
         // because the worker is what decides the concrete type, and it has to
@@ -1500,25 +1511,58 @@ private:
     bool deviceAgcSupported_ = false;
     bool deviceAgc_ = false;
 
-    // THE BIAS TEE. Present only when the OPEN device is one of the three
-    // native drivers that has one and can say so (see withBiasTee in
-    // app_window.cpp for which, and for why this is not a DeviceSource
-    // method). deviceBiasT_ is the persisted setting as well as the
-    // checkbox's mirror: it is seeded from AppConfig::nativeBiasT at restore,
-    // applied to the radio by adoptDeviceMirrors after every open, and read
-    // BACK from the driver afterwards so the box can never claim power the
-    // hardware did not switch on.
+    // THE BIAS TEE. Present only when the OPEN device is one of the native
+    // drivers that has one and can say so (see withBiasTee in app_window.cpp
+    // for which, and for why this is not a DeviceSource method).
+    // deviceBiasT_ is the persisted setting as well as the checkbox's mirror:
+    // it is seeded from AppConfig::nativeBiasT at restore, applied to the
+    // radio by adoptDeviceMirrors after every open, and read BACK from the
+    // driver afterwards so the box can never claim power the hardware did not
+    // switch on.
     bool deviceBiasTPresent_ = false;
     bool deviceBiasT_ = false;
 
+    // THE SWITCHES THAT BELONG TO ONE RADIO EACH, and are NOT persisted.
+    //
+    // The bias tee above is saved because leaving it off silently costs a
+    // user an evening of a dead band. None of these does: an RSP's notches
+    // and HDR mode and an RX888's dither and output randomiser change what is
+    // heard, are visible in the spectrum the moment they move, and each
+    // driver deliberately puts the radio into a known state at open. So these
+    // mirror the DRIVER'S READBACK for the session and nothing more - which
+    // also means there is no stale saved value to reconcile against a
+    // driver's open-time policy, the exact reconciliation the RTL-SDR's bias
+    // tee is kept out of withBiasTee to avoid.
+    //
+    // "Present" is asked of the CONCRETE TYPE once per open, because these
+    // are per-model even within one driver: an RSP1A has no HDR mode, an
+    // RSPdx has no DAB notch, and a panel that offered either would be
+    // offering a control the API answers with an error.
+    bool deviceRfNotchPresent_ = false;
+    bool deviceRfNotch_ = false;
+    bool deviceDabNotchPresent_ = false;
+    bool deviceDabNotch_ = false;
+    bool deviceHdrPresent_ = false;
+    bool deviceHdr_ = false;
+    bool deviceAdcSwitchesPresent_ = false;  // the RX888's pair, together
+    bool deviceDither_ = false;
+    bool deviceRandomiser_ = false;
+
     // --- Native radios ----------------------------------------------------
-    // Every RTL-SDR, HackRF, Airspy R2/Mini and Airspy HF+ bound to WinUSB,
-    // from the four enumerate* functions. UNGATED and refreshed freely,
-    // unlike soapyDevices_:
-    // a native enumeration reads SetupAPI properties and NEVER OPENS A DEVICE
+    // Every radio one of our own drivers can open, from the eight enumerate*
+    // functions. UNGATED and refreshed freely, unlike soapyDevices_: a native
+    // enumeration reads SetupAPI properties and NEVER OPENS A DEVICE
     // (src/usb/usb_device.hpp rule 1), which is the exact rule the vendor
     // probe breaks and the whole reason scanSoapy() has a gate. It is cheap
     // enough to run on the GUI thread.
+    //
+    // TWO OF THE EIGHT ARE NOT USB AND ARE STILL IN HERE. enumerateSdrPlay()
+    // asks the SDRplay service for its list, which is safe at any time for
+    // the same reason rule 1 exists - it does not touch the bus. The Pluto's
+    // row is not a discovery at all: a network cannot be walked, so
+    // scanNative appends ONE row for it unconditionally, at the end, and that
+    // row opens nothing until the user presses Open on an address. See
+    // plutoUri_ and kPlutoDriverKey.
     std::vector<cascade::source::NativeDeviceInfo> nativeDevices_;
     // Their combo captions, composed once by scanNative(): the row label with
     // " (native)" appended. Stored rather than built per frame because the
@@ -1530,6 +1574,27 @@ private:
     // sentence instead, because "my dongle is not in the list" with no
     // explanation was the single worst thing this panel used to do.
     std::vector<cascade::usb::UsbDeviceInfo> nativeUnbound_;
+
+    // WHERE THE PLUTO IS. An InputText buffer rather than a std::string
+    // because that is what ImGui edits, seeded from AppConfig::plutoUri at
+    // restore and written back by currentConfig().
+    //
+    // It is an ADDRESS AND NOT A ROW, which is the whole difference between
+    // this radio and the other seven: nothing is contacted until the user
+    // presses Open, so choosing the Pluto row costs no network traffic, no
+    // timeout and no wait - a user who has never owned one can select it,
+    // read what it wants, and select something else.
+    char plutoUri_[192] = "ip:192.168.2.1";
+
+    // WHAT THE SOURCE SECTION SAYS ABOUT THE SDRPLAY API WHEN THERE IS NO RSP
+    // ROW TO SHOW. Composed by scanNative() from the driver's own pure
+    // sdrPlayApiAdvice(), so the sentence the user is given is the one a test
+    // pins; empty when the API is installed and new enough, which is when
+    // there is nothing to say. sdrPlayApiDetail_ is the loader's own account
+    // of where it looked, shown dimmed underneath for whoever is helping.
+    std::string sdrPlayAdvice_;
+    std::string sdrPlayApiDetail_;
+    bool sdrPlayRowsFound_ = false;
 
     // --- Frequency scale + view interaction state (P5) -----------------------
     // ONE scale owns the x <-> Hz <-> bin mapping for both center panels, fed
@@ -1554,7 +1619,8 @@ private:
     bool configAnnounce_ = false;  // print "config applied: ..." (test hook)
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
-    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"
+    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"
     std::string sourceKind_ = "siggen";
 
     // WHAT THE CONFIG REMEMBERS, ONE SLOT PER FAMILY, and they are separate

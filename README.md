@@ -3,8 +3,9 @@
 A from-scratch software-defined radio receiver for Windows: spectrum and
 waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
 RDS, recording, bookmarks, a scanner, band plans, native drivers for the
-RTL-SDR, the HackRF, the Airspy R2/Mini and the Airspy HF+, and hardware
-support for any other radio SoapySDR can reach.
+RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the SDRplay RSPs, the
+Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto, and hardware support for any
+other radio SoapySDR can reach.
 
 > ### ⚠️ Linux is in development and not usable yet
 >
@@ -47,11 +48,17 @@ are still moving. What is in the current build:
 - **Receiver.** Spectrum and waterfall, NFM/WFM/AM/DSB/USB/LSB/CW, squelch,
   AGC, noise reduction, manual and automatic notch, de-emphasis, stereo FM with
   pilot lock, and RDS (programme service name, radio text, PI, PTY).
-- **Hardware.** An RTL-SDR, a HackRF, an Airspy R2/Mini or an Airspy HF+
-  through FoxSDR's OWN drivers, needing no SoapySDR install of any kind - only
-  that the radio is bound to WinUSB (Zadig), which every SDR application needs
-  anyway. Anything else - a USRP, a LimeSDR, an SDRplay - through SoapySDR as
-  before. Antenna, sample-rate and per-stage gain selection on all of them,
+- **Hardware.** An RTL-SDR, a HackRF, an Airspy R2/Mini, an Airspy HF+, a
+  Mirics MSi2500 or an RX888 mk2 through FoxSDR's OWN drivers, needing no
+  SoapySDR install of any kind - only that the radio is bound to WinUSB
+  (Zadig), which every SDR application needs anyway. An **SDRplay RSP** is
+  driven natively too, through the SDRplay API the user installs, because
+  SDRplay publish no device protocol and an RSP cannot be reached any other
+  way. An **ADALM-Pluto** is driven natively over the network, with no libiio
+  and no vendor module at all - it is the one radio whose address is typed
+  rather than discovered, because a network cannot be walked. Anything else -
+  a USRP, a LimeSDR - through SoapySDR as before.
+  Antenna, sample-rate and per-stage gain selection on all of them,
   with each gain slider spanning what that stage will actually accept and
   lettered in the unit that stage is really measured in — decibels on every
   radio but the Airspy R2/Mini, whose five stages are the hardware's own
@@ -59,13 +66,16 @@ are still moving. What is in the current build:
   decibels — and a bias-tee switch on the radios that have one. Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
   mean it runs with no radio at all.
-  A saved SoapySDR RTL-SDR, HackRF, Airspy or Airspy HF+ is OPENED NATIVELY on
+  A saved SoapySDR RTL-SDR, HackRF, Airspy, Airspy HF+, SDRplay, Mirics
+  (`driver=miri`) or RX888 (`driver=sddc`) is OPENED NATIVELY on
   the next launch without being asked, and the log says so; a dongle whose
   tuner the native driver does not support (E4000, FC0012/13) falls back to the
   SoapySDR path and says why. The Source section lists the native radios first, labelled
   "(native)", and names any radio that is plugged in but not bound to WinUSB -
-  an RTL dongle still on the DVB-T driver, an Airspy still on its vendor one -
-  rather than leaving it silently missing.
+  an RTL dongle still on the DVB-T driver, an Airspy still on its vendor one, a
+  television stick still on its DVB-T one - rather than leaving it silently
+  missing. An RSP that cannot be listed because the SDRplay API is not
+  installed gets a sentence saying exactly that, rather than nothing at all.
   The SoapySDR device scan still waits for the radio to close - the vendor
   probe opens and resets every dongle it finds, the streaming one included -
   but Refresh is live again, because the native enumeration reads SetupAPI
@@ -1180,12 +1190,16 @@ otherwise, because that is the command an upgrade runs.
 show "Windows protected your PC". Choose **More info → Run anyway** if you are
 happy to proceed. Signing is planned.
 
-**An RTL-SDR, a HackRF, an Airspy R2/Mini or an Airspy HF+ needs no extra
-install at all** - FoxSDR drives those four itself, over its own WinUSB
-transport. The one step Windows requires is binding the radio to WinUSB with
-Zadig, which every SDR application needs and which `cascade.exe --rtlsdr-check`
-will tell you about for a dongle. Any OTHER radio - a USRP, a LimeSDR, an
-SDRplay - still reaches FoxSDR through SoapySDR vendor
+**An RTL-SDR, a HackRF, an Airspy R2/Mini, an Airspy HF+, a Mirics MSi2500 or
+an RX888 mk2 needs no extra install at all** - FoxSDR drives those six itself,
+over its own WinUSB transport. The one step Windows requires is binding the
+radio to WinUSB with Zadig, which every SDR application needs and which
+`cascade.exe --rtlsdr-check` will tell you about for a dongle. An **SDRplay
+RSP** needs the SDRplay API 3.x from sdrplay.com and nothing else - no SoapySDR
+module - because SDRplay publish no device protocol and the tuner is programmed
+by a Windows service. An **ADALM-Pluto** needs nothing installed at all: FoxSDR
+speaks to the board's own daemon over the network. Any OTHER radio - a USRP, a
+LimeSDR - still reaches FoxSDR through SoapySDR vendor
 modules, which are a separate install (PothosSDR or radioconda); see
 `POSTINSTALL.txt` in the install folder. FoxSDR runs with no hardware at all
 using the signal generator or I/Q playback.
@@ -1205,6 +1219,16 @@ in FoxSDR so the firmware loads: the radio disappears and comes back as
 radio took the firmware but did not come back; if you only do the second, it
 will not see the radio at all until something else has loaded its firmware.
 (Tick *Options → List All Devices* in Zadig if either one is not in the list.)
+
+A **Mirics** receiver needs the same one-off binding, and most of them arrive
+as something other than a radio. Choose the entry whose USB ID is `1DF7 2500`
+(or `1DF7 3000` / `1DF7 3010` for an early SDRplay RSP1 or RSP2, `2040 D300`
+for a Hauppauge WinTV 133559 LF, `07CA 8591` for an AverMedia A859, `04BB 0537`
+for an IO-DATA GV-TV100, or `0511 0037` for a Logitec LDT-1S310U/J), select
+**WinUSB** and press Replace Driver; on a composite device it is the entry
+Zadig shows as *(Interface 0)*. A television stick arrives running its DVB-T
+driver, which is what Zadig replaces — **it will stop working as a television
+receiver** until the original driver is put back.
 `cascade.exe --soapy-check` prints the search paths, the loaded modules and
 either the device it opened or the reason there was none, and
 `cascade.exe --rtlsdr-check` does the same for the native RTL-SDR path: what is

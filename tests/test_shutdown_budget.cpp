@@ -301,7 +301,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // device and every later call on the same path is skipped rather than
 // attempted (see abandonWedgedDriverLocked).
 //
-// EIGHT SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
+// NINE SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
 // NOW THAT THE APPLICATION OPENS THEM (0.91.0, and the reason has changed
 // completely from the one the rows carried before).
 //
@@ -313,7 +313,8 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // EXACTLY ONE SOURCE IS INSTALLED IN THE PIPELINE AT A TIME.
 // Pipeline::stop() stops `active_`, which is one object: the generator, an
 // IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource,
-// an AirspyHfSource, an SdrPlaySource, a MiriSdrSource or an Rx888Source - and from 0.92.0 the Source section can install any of
+// an AirspyHfSource, an SdrPlaySource, a MiriSdrSource, an Rx888Source or a
+// PlutoSource - and from 0.93.0 the Source section can install every one of
 // them, which is what makes this note's arithmetic load-bearing rather than
 // hypothetical. A device switch
 // destroys the old source before the new one is constructed
@@ -336,6 +337,23 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //   Rx888Source      rx888 kControlTimeout 500 x3 (STOPFX3, TUNERSTDBY, the
 //                    bias-tee GPIO word) + kReaderJoinWait 1000
 //                    + usb kAbortDrainWait 250                         = 2750 ms
+//   PlutoSource      kReaderJoinWait 2500 (the bounded join in
+//                    stopStreamingLocked), and NOTHING ELSE               = 2500 ms
+//
+// THE PLUTO'S COLUMN IS THE ONE THAT WAS DECIDED RATHER THAN MEASURED, and
+// what was decided is worth recording because it is the only place in this
+// table where the product was changed to fit the budget rather than the other
+// way round. Its driver used to send a CLOSE on the stream connection after
+// the join, which cost one iiod::kReplyWait of 2000 ms and made the column
+// 4500 - past Soapy's 3000, which is exactly the trigger the "when this has
+// to be re-derived" list below names: the charged rows would have moved here
+// and kShutdownBoundedWaitsMs would have gone 7000 -> 8500. The CLOSE was
+// dropped instead (pluto_source.cpp stopStreamingLocked says why it is
+// optional: the daemon frees the buffer when the connection's read returns 0)
+// and the socket close stands for it. That is a real behavioural difference -
+// the board frees its buffer a moment later - and it bought back 2000 ms of
+// worst-case teardown. closeDevice() adds nothing on top: the control
+// connection is dropped with a closesocket, not with a command.
 //
 // Soapy's 3000 ms is the worst and is the pair charged in the table above, so
 // kShutdownBoundedWaitsMs stays at 7000 (3000 + kSourceJoinWait 3000 + the
@@ -627,6 +645,42 @@ const KnownWait kKnownWaits[] = {
     {"src/source/rx888_source.hpp", "kFirmwarePollInterval", 0,
      "how often that wait looks at the transport's device list. Same path, same reason: open "
      "only, never teardown"},
+
+    // THE NATIVE ADALM-PLUTO DRIVER, WHICH IS REACHED OVER TCP RATHER THAN
+    // USB - so none of the transport's bounds apply to it and its whole
+    // column is one join. Same argument as the blocks above and the same
+    // answer: 2500 ms spent INSTEAD OF the Soapy pair's 3000, never as well
+    // as it.
+    //
+    // THIS IS THE COLUMN THE COMPOSITION NOTE ARGUES OVER. It was 4500 while
+    // the driver sent a CLOSE on the stream connection after the join, which
+    // is longer than Soapy's 3000 and would have made the two rows below the
+    // 1s and the Soapy pair the zeros. The CLOSE went instead - the daemon
+    // frees the buffer when the connection drops either way - so the rows
+    // stay zero and kShutdownBoundedWaitsMs stays 7000.
+    {"src/source/iiod_client.hpp", "kConnectWait", 0,
+     "the bound on connecting to a Pluto's iiod daemon. Spent by open() and by the second "
+     "connection start() makes for the samples - both on the OPEN path. A shutdown connects "
+     "to nothing"},
+    {"src/source/iiod_client.hpp", "kReplyWait", 0,
+     "the socket's send and receive bound once connected. NONE of these is on the teardown "
+     "path any more: stopStreamingLocked sends nothing after the join, and the reader's own "
+     "receives are spent on the reader's thread, which the join below already covers"},
+    {"src/source/pluto_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in PlutoSource::stopStreamingLocked(), and the WHOLE of the 2500 ms "
+     "Pluto column. Longer than iiod::kReplyWait deliberately - the reader's longest "
+     "legitimate stall is one socket receive, and a shorter join would abandon a thread that "
+     "was coming back. Zero because a Pluto teardown REPLACES the Soapy one rather than "
+     "adding to it; if this ever grows past 3000 ms, this is the row that becomes the 1 and "
+     "the Soapy pair that becomes the zero"},
+    {"src/source/pluto_source.hpp", "kReadWait", 0,
+     "PlutoSource::read()'s wait for samples, spent on the pipeline's source thread, which "
+     "the teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI "
+     "teardown thread"},
+    {"src/source/pluto_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the Pluto reader's tally window before it writes its stream-health "
+     "line, matching SoapySource's; nothing sleeps or blocks on it"},
+
     {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
      "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "
      "same bound a cancelled control transfer is given. The last 250 ms of either native "

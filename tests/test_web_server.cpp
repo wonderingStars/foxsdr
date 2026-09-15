@@ -1202,7 +1202,7 @@ void testMapPanIsBoundToPointerEvents() {
 //
 // The page hides its antenna, rate and gain rows unless the open source is a
 // radio, and until 0.91.0 that test was one comparison against "soapy". It is
-// now five kinds, and the failure mode of getting it wrong is silent and
+// now nine kinds, and the failure mode of getting it wrong is silent and
 // specific: an Airspy opens, streams, and shows a browser with no gain
 // controls and no antenna row at all, with nothing anywhere saying why. That
 // is exactly the kind of omission a suite can be structurally blind to,
@@ -1229,6 +1229,10 @@ void testEveryNativeKindCountsAsARadioOnThePage() {
     CHECK(list.find("'hackrf'") != std::string::npos);
     CHECK(list.find("'airspy'") != std::string::npos);
     CHECK(list.find("'airspyhf'") != std::string::npos);
+    CHECK(list.find("'sdrplay'") != std::string::npos);
+    CHECK(list.find("'mirisdr'") != std::string::npos);
+    CHECK(list.find("'rx888'") != std::string::npos);
+    CHECK(list.find("'pluto'") != std::string::npos);
 
     // ...and both places that ask the question go through it. The second is
     // the one that matters: `isDevice` is what shows or hides the rows.

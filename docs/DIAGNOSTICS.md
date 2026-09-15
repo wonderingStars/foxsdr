@@ -56,11 +56,15 @@ every distinct bug inside that plugin collapses into a single group, since
 every plugin stack passes through the same host dispatch on its way down. The client signature
 stays in the payload as transport identity and the client-side dedup key.
 
-### What the native drivers write (0.91.0, 0.92.0)
+### What the native drivers write (0.91.0, 0.92.0, 0.93.0)
 
-FoxSDR drives an RTL-SDR and a HackRF itself now, and from 0.92.0 an Airspy
-R2/Mini and an Airspy HF+ as well, over its own WinUSB
-transport, with no SoapySDR module in the path. The log lines that produces
+FoxSDR drives an RTL-SDR and a HackRF itself now, from 0.92.0 an Airspy
+R2/Mini and an Airspy HF+, and from 0.93.0 a Mirics MSi2500 and an RX888 mk2,
+over its own WinUSB
+transport, with no SoapySDR module in the path. Two more radios are driven
+natively without that transport: an SDRplay RSP through the vendor API the
+user installed (`sdrplay`), and an ADALM-Pluto over TCP to the board's own
+daemon (`pluto`). The log lines that produces
 are deliberately the same shape as the SoapySDR ones, so one log reads the
 same whichever way a radio was opened - the only difference is that these
 describe code this product can be held responsible for.
@@ -72,11 +76,16 @@ describe code this product can be held responsible for.
   behaves oddly needs to say.
 - `source: opened RTL2838UHIDIR (rtlsdr) at 2400000 S/s` - written by the
   application when it installs the radio in the pipeline. The parenthesis is
-  the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`, `airspy`, `airspyhf`): two rows
+  the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`, `airspy`, `airspyhf`,
+  `sdrplay`, `mirisdr`, `rx888`, `pluto`): two rows
   in the Source dropdown can name one physical radio, and a report has to say
-  which of them was taken. `airspy` and `airspyhf` are separate keys, not one
-  family: an Airspy R2 and an Airspy HF+ are different USB ids, different
-  hardware and different bands.
+  which of them was taken. Every one is its own key and none is a family
+  name - `airspy` and `airspyhf` are different USB ids, different hardware and
+  different bands, and `mirisdr` is not `sdrplay` even though an early RSP1 is
+  a Mirics device, because one goes through the vendor service and the other
+  over the bare MSi2500. Two of the keys name radios that are not on the USB
+  bus at all: `sdrplay` is reached through `sdrplay_api.dll` and `pluto` over
+  the network.
 - `source: opening RTL2838UHIDIR natively (was SoapySDR rtlsdr)` - the
   prefer-native rule firing. A config saved before 0.91.0 says "SoapySDR,
   driver=rtlsdr" because that was the only way to reach the dongle; the
@@ -98,6 +107,23 @@ describe code this product can be held responsible for.
   verbatim rather than a model guessed from it. There is no `--airspy-check`:
   the Airspy equivalent of `--rtlsdr-check` was not added, because there is no
   Airspy on the bench this was written on for it to have been proven against.
+- The four added in 0.93.0 write the same shapes again, plus the lines only
+  they can produce:
+  - `source: SDRplay API - ...` once per process, from the loader, naming the
+    path it came from or why it did not. On a machine with no RSP this is the
+    line that says whether the API was even found, and the Source section
+    shows the same sentence the user needs (install 3.x from sdrplay.com).
+    `source: SDRplay enumeration skipped - ...` follows it whenever the list
+    could not be read - no API, an API older than 3.07, or a service that did
+    not answer.
+  - `rx888: opened ... (firmware loaded by FoxSDR)` when the radio was a
+    Cypress bootloader and FoxSDR uploaded the image to it. An open that takes
+    about five seconds and this line in the log is the NORMAL first open after
+    a power cycle, not a fault.
+  - The Pluto's open line names what the board reported about itself rather
+    than a model from a table, including whether it is a stock AD9363 or one
+    with the AD9364 unlock applied - the tuning range differs by a factor of
+    ten between them and nothing else in a report would reveal which.
 
 **`cascade.exe --rtlsdr-check`** is the native counterpart of `--soapy-check`
 and answers the question the suite cannot. The register sequences are proven

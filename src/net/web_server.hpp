@@ -123,11 +123,12 @@ struct RadioStatus {
     struct SoapyDevice {
         std::string label;
         std::string args;
-        // WHICH DRIVER OPENS THIS ROW: "soapy", "rtlsdr", "hackrf", "airspy"
-        // or "airspyhf". The list is no longer all SoapySDR - a native
-        // RTL-SDR and the same dongle through a vendor module can both be in
-        // it, with the same serial in both args - so the row has to carry the
-        // kind or the browser cannot say which of the two it is asking for.
+        // WHICH DRIVER OPENS THIS ROW: "soapy", or one of the eight native
+        // driver keys (gui::isNativeSourceKind). The list is no longer all
+        // SoapySDR - a native RTL-SDR and the same dongle through a vendor
+        // module can both be in it, with the same serial in both args - so
+        // the row has to carry the kind or the browser cannot say which of
+        // the two it is asking for.
         std::string kind = "soapy";
     };
     struct GainStage {
@@ -145,7 +146,8 @@ struct RadioStatus {
         std::string unit = "dB";
     };
 
-    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"
+    // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"
     std::string sourceKind = "siggen";
     std::string soapyArgs;               // args of the open device, if any
     std::string antenna;                 // RX port the DRIVER reports

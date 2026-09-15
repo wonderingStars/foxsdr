@@ -777,6 +777,152 @@ int main() {
         // A SAVED NATIVE AIRSPY IS ALREADY NATIVE.
         CHECK(!preferNativeFor("airspy", "driver=airspy", airspys).has_value());
         CHECK(!preferNativeFor("airspyhf", "driver=airspyhf", hfs).has_value());
+
+        // --- THE THREE ADDED IN 0.93.0, AND THE NAME PROBLEM THEY BROUGHT ---
+        //
+        // The rule compared the saved `driver=` STRAIGHT against our own
+        // driver key until now, and that worked only because SoapyRTLSDR,
+        // SoapyHackRF and the two Airspy modules happen to publish exactly
+        // the words we chose. Two of the three new ones do not:
+        //
+        //   SoapyMiri publishes driver=miri, our key is "mirisdr"
+        //   SoapySDDC publishes driver=sddc, our key is "rx888"
+        //
+        // The module's spelling is what is in the user's saved config and is
+        // not ours to choose, so gui::nativeKeyForSoapyDriver translates. RED
+        // before it existed: every check in this block returned nothing,
+        // because no native row has driver == "miri" or "sddc".
+        const std::vector<NativeDeviceInfo> rsps = {
+            {"sdrplay", "SDRplay RSP1A (serial 1811003EFB)", "serial=1811003EFB"},
+            {"sdrplay", "SDRplay RSPdx (serial 2002000ABC)", "serial=2002000ABC"},
+        };
+        const std::vector<NativeDeviceInfo> mirics = {
+            // No serial, which is the ORDINARY case for this family: most of
+            // these devices are television sticks with no USB serial string
+            // at all, so "index=N" is what enumeration emits.
+            {"mirisdr", "Mirics MSi2500 (index 0)", "index=0"},
+        };
+        const std::vector<NativeDeviceInfo> rx888s = {
+            {"rx888", "RX888 mk2 (serial SDDC0012)", "serial=SDDC0012"},
+        };
+
+        // SDRplay: the one of the three whose Soapy name IS our key, checked
+        // anyway so the translation table cannot lose a row it needs.
+        {
+            const auto got = preferNativeFor("soapy", "driver=sdrplay, serial=2002000ABC", rsps);
+            CHECK(got.has_value());
+            CHECK(got->driver == "sdrplay");
+            CHECK(got->args == "serial=2002000ABC");
+        }
+        // SoapySDRPlay3 prints the RSP serial as the service gives it, in
+        // upper case; the match is case-insensitive either way round.
+        CHECK(preferNativeFor("soapy", "driver=sdrplay, serial=1811003efb", rsps).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=sdrplay, serial=9999999999", rsps).has_value());
+        {
+            const auto got = preferNativeFor("soapy", "driver=sdrplay", rsps);
+            CHECK(got.has_value());
+            CHECK(got->args == "serial=1811003EFB");
+        }
+
+        // SoapyMiri -> our Mirics driver. With no serial on either side this
+        // is the "first row of that driver" path, and that path is the whole
+        // rule for this family rather than a fallback within it.
+        {
+            const auto got = preferNativeFor("soapy", "driver=miri", mirics);
+            CHECK(got.has_value());
+            CHECK(got->driver == "mirisdr");
+            CHECK(got->args == "index=0");
+        }
+        // A saved serial that no row carries is still no match: an empty
+        // enumerated serial must never satisfy a saved one, or every stick
+        // would answer every request.
+        CHECK(!preferNativeFor("soapy", "driver=miri, serial=12345678", mirics).has_value());
+
+        // SoapySDDC -> our RX888 driver.
+        {
+            const auto got = preferNativeFor("soapy", "driver=sddc, serial=SDDC0012", rx888s);
+            CHECK(got.has_value());
+            CHECK(got->driver == "rx888");
+            CHECK(got->args == "serial=SDDC0012");
+        }
+        CHECK(preferNativeFor("soapy", "driver=sddc", rx888s).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=sddc, serial=SDDC9999", rx888s).has_value());
+
+        // AND NO CROSS-ANSWERING. A saved Mirics must not be answered with an
+        // RSP even though the early RSP1 and RSP2 ARE Mirics devices: one is
+        // driven through the SDRplay service and the other over the bare
+        // MSi2500, and they are not interchangeable at the driver.
+        CHECK(!preferNativeFor("soapy", "driver=miri", rsps).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=sdrplay", mirics).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=sddc", mirics).has_value());
+
+        // A SAVED NATIVE ONE OF THE THREE IS ALREADY NATIVE.
+        CHECK(!preferNativeFor("sdrplay", "driver=sdrplay", rsps).has_value());
+        CHECK(!preferNativeFor("mirisdr", "driver=miri", mirics).has_value());
+        CHECK(!preferNativeFor("rx888", "driver=sddc", rx888s).has_value());
+
+        // THE PLUTO IS DELIBERATELY OUTSIDE THIS RULE, and that is a decision
+        // rather than an omission. SoapyPlutoSDR addresses a board by URI and
+        // has no serial to compare, so answering a saved Soapy Pluto with our
+        // row would be a guess wearing a match's clothes - and this row is
+        // not a discovery in the first place.
+        const std::vector<NativeDeviceInfo> plutos = {
+            {"pluto", "ADALM-Pluto (network)", "uri=ip:192.168.2.1"},
+        };
+        CHECK(!preferNativeFor("soapy", "driver=plutosdr", plutos).has_value());
+        CHECK(!preferNativeFor("soapy", "driver=pluto", plutos).has_value());
+    }
+
+    // -----------------------------------------------------------------------
+    // WHICH KINDS ARE NATIVE, asked of the one list that decides it.
+    //
+    // isNativeSourceKind gates the config restore, the web remote's device
+    // match and the remembered-radio rule, and getting it wrong does not fail
+    // to compile - it makes one driver quietly unrestorable while every other
+    // one works, which is the failure mode the list was centralised for.
+    // -----------------------------------------------------------------------
+    {
+        using cascade::gui::isNativeSourceKind;
+        // One per driver, so a failure names the one that was dropped.
+        CHECK(isNativeSourceKind("rtlsdr"));
+        CHECK(isNativeSourceKind("hackrf"));
+        CHECK(isNativeSourceKind("airspy"));
+        CHECK(isNativeSourceKind("airspyhf"));
+        CHECK(isNativeSourceKind("sdrplay"));
+        CHECK(isNativeSourceKind("mirisdr"));
+        CHECK(isNativeSourceKind("rx888"));
+        CHECK(isNativeSourceKind("pluto"));
+        // NOT native, and each for its own reason: two are sources that are
+        // not radios, one is the vendor path, and the last three are the
+        // SoapySDR module names for three of the eight above - which are
+        // exactly the near-misses the translation table introduced.
+        CHECK(!isNativeSourceKind("siggen"));
+        CHECK(!isNativeSourceKind("file"));
+        CHECK(!isNativeSourceKind("soapy"));
+        CHECK(!isNativeSourceKind("miri"));
+        CHECK(!isNativeSourceKind("sddc"));
+        CHECK(!isNativeSourceKind("plutosdr"));
+        CHECK(!isNativeSourceKind(""));
+        // Exact spelling, never a fold: the config store compares the same way.
+        CHECK(!isNativeSourceKind("RTLSDR"));
+
+        // ...and the translation itself, both directions of wrongness.
+        using cascade::gui::nativeKeyForSoapyDriver;
+        CHECK(nativeKeyForSoapyDriver("miri") == "mirisdr");
+        CHECK(nativeKeyForSoapyDriver("sddc") == "rx888");
+        CHECK(nativeKeyForSoapyDriver("sdrplay") == "sdrplay");
+        CHECK(nativeKeyForSoapyDriver("rtlsdr") == "rtlsdr");
+        CHECK(nativeKeyForSoapyDriver("airspyhf") == "airspyhf");
+        // A driver we do not drive maps to nothing, which is what leaves the
+        // owner's B200 alone.
+        CHECK(nativeKeyForSoapyDriver("uhd").empty());
+        CHECK(nativeKeyForSoapyDriver("lime").empty());
+        CHECK(nativeKeyForSoapyDriver("plutosdr").empty());
+        // And OUR key is not a Soapy driver name for the two that differ: a
+        // table that mapped both spellings would make "mirisdr" a Soapy
+        // driver, which no module publishes.
+        CHECK(nativeKeyForSoapyDriver("mirisdr").empty());
+        CHECK(nativeKeyForSoapyDriver("rx888").empty());
     }
 
     // -----------------------------------------------------------------------

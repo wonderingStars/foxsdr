@@ -536,11 +536,12 @@ inline bool autoReopenDue(bool deadByAbsorbedFault, bool driverAbandoned, bool o
 // --- PREFER THE NATIVE DRIVER, AUTOMATICALLY --------------------------------
 //
 // THE USER HAS TO DO NOTHING. From 0.91.0 FoxSDR has its own RTL-SDR and
-// HackRF drivers, and from 0.92.0 an Airspy R2/Mini and an Airspy HF+ as well
-// - our USB transport, our reader thread, our enumeration (see
-// src/usb/usb_device.hpp for why: every crash report this product received
-// from a USB radio in its first month landed inside somebody else's libusb,
-// on a thread we did not create, behind a vendor module we could not fix).
+// HackRF drivers, from 0.92.0 an Airspy R2/Mini and an Airspy HF+, and from
+// 0.93.0 an SDRplay RSP, a Mirics MSi2500 and an RX888 mk2 - our USB
+// transport, our reader thread, our enumeration (see src/usb/usb_device.hpp
+// for why: every crash report this product received from a USB radio in its
+// first month landed inside somebody else's libusb, on a thread we did not
+// create, behind a vendor module we could not fix).
 // A user whose config says "driver=rtlsdr" saved that before any of it
 // existed, and nobody is going to reopen the Source section to switch over.
 //
@@ -569,7 +570,7 @@ inline bool autoReopenDue(bool deadByAbsorbedFault, bool driverAbandoned, bool o
 // quotes the sixteen hex digits, so both sides go through the driver's own
 // normalisedSerial first - exactly as AirspyHfSource::open does.
 //
-// FOUR DRIVER KEYS NOW, and "airspy" and "airspyhf" are matched WHOLE rather
+// SEVEN DRIVER KEYS NOW, and "airspy" and "airspyhf" are matched WHOLE rather
 // than by prefix: one is the prefix of the other, they are different USB ids
 // and different radios, and answering a saved HF+ with an R2 would hand the
 // user a receiver that cannot reach a single frequency they were listening to.
@@ -599,20 +600,50 @@ inline bool nativeSerialMatches(const std::string& nativeArgs, const std::string
     return b.compare(b.size() - a.size(), a.size(), a) == 0;
 }
 
+// WHAT A SoapySDR DRIVER NAME IS CALLED IN OUR OWN LIST, and for three of
+// them the two words are not the same word.
+//
+// The rule used to compare the saved `driver=` straight against the native
+// driver key, which worked only because SoapyRTLSDR, SoapyHackRF and the two
+// Airspy modules happen to publish exactly the names we chose. The three
+// drivers added in 0.93.0 do not:
+//
+//   driver=sdrplay  is SoapySDRPlay3   -> our "sdrplay"   (the same word, and
+//                                         it is here so the list is complete)
+//   driver=miri     is SoapyMiri       -> our "mirisdr"
+//   driver=sddc     is SoapySDDC       -> our "rx888"
+//
+// The module's spelling is the one in the user's saved config and is not ours
+// to choose, so the translation lives here, once, with the module that
+// publishes each name written beside it. An unknown name maps to nothing,
+// which is what leaves a B200 or a LimeSDR alone.
+//
+// The Pluto is deliberately absent. SoapyPlutoSDR addresses a board by URI
+// rather than by serial, so there is no "is this the same physical radio"
+// comparison to make - and with no USB serial on either side, answering a
+// saved Soapy Pluto with our row would be a guess dressed up as a match.
+inline std::string nativeKeyForSoapyDriver(const std::string& soapyDriver) {
+    if (soapyDriver == "rtlsdr" || soapyDriver == "hackrf" || soapyDriver == "airspy" ||
+        soapyDriver == "airspyhf" || soapyDriver == "sdrplay") {
+        return soapyDriver;
+    }
+    if (soapyDriver == "miri") { return "mirisdr"; }
+    if (soapyDriver == "sddc") { return "rx888"; }
+    return std::string();
+}
+
 inline std::optional<cascade::source::NativeDeviceInfo> preferNativeFor(
     const std::string& savedKind, const std::string& savedArgs,
     const std::vector<cascade::source::NativeDeviceInfo>& native) {
     // Only a SAVED SOAPY DEVICE is upgraded. A saved native device is already
     // native, and the generator and the IQ file are not radios.
     if (savedKind != "soapy") { return std::nullopt; }
-    std::string driver = cascade::source::argValue(savedArgs, "driver");
-    for (char& c : driver) {
+    std::string soapyDriver = cascade::source::argValue(savedArgs, "driver");
+    for (char& c : soapyDriver) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
-    if (driver != "rtlsdr" && driver != "hackrf" && driver != "airspy" &&
-        driver != "airspyhf") {
-        return std::nullopt;
-    }
+    const std::string driver = nativeKeyForSoapyDriver(soapyDriver);
+    if (driver.empty()) { return std::nullopt; }
     const std::string serial = cascade::source::argValue(savedArgs, "serial");
     const cascade::source::NativeDeviceInfo* first = nullptr;
     for (const cascade::source::NativeDeviceInfo& d : native) {
@@ -645,7 +676,7 @@ inline bool nativeOpenShouldFallBack(const std::string& error) {
 
 // --- The saved radio outlives a restore that could not open it -------------
 
-// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are four of
+// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are eight of
 // them, read by the config restore, the web remote's device match,
 // makeDeviceSource's construction and the remembered-source rule below, and a
 // list of string literals copied per call site is one chance per copy for an
@@ -653,8 +684,18 @@ inline bool nativeOpenShouldFallBack(const std::string& error) {
 // It sits here rather than in app_window.cpp's anonymous namespace because
 // the decisions in this file need it too - and because a rule kept in a .cpp
 // is a rule no test can reach, which is the whole reason this header exists.
+//
+// "NATIVE" MEANS "FoxSDR's OWN DRIVER", NOT "OVER OUR WINUSB TRANSPORT", and
+// the last two rows are why the distinction has to be written down. An RSP is
+// reached through the vendor API the user installed and a Pluto over TCP to
+// the board's own daemon - neither touches src/usb at all - but both are code
+// this product wrote and can be held responsible for, both carry their own
+// sourceKind, and both restore, save and switch through exactly the same
+// paths as the six USB ones. Anything that needs "does this go through
+// WinUSB" is asking a different question and must not use this list.
 inline bool isNativeSourceKind(const std::string& kind) {
-    return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf";
+    return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf" ||
+           kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto";
 }
 
 // THE RADIO THE CONFIG NAMES, HELD OVER A SESSION THAT COULD NOT OPEN IT.

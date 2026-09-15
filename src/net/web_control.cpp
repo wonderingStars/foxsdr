@@ -217,15 +217,20 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
 
     if (req.sourceKind && *req.sourceKind != "siggen" && *req.sourceKind != "soapy" &&
         *req.sourceKind != "rtlsdr" && *req.sourceKind != "hackrf" &&
-        *req.sourceKind != "airspy" && *req.sourceKind != "airspyhf") {
+        *req.sourceKind != "airspy" && *req.sourceKind != "airspyhf" &&
+        *req.sourceKind != "sdrplay" && *req.sourceKind != "mirisdr" &&
+        *req.sourceKind != "rx888" && *req.sourceKind != "pluto") {
         // "file" is refused ON PURPOSE — see the note in web_control.hpp. A
         // browser naming a path on the host is a file-read primitive, not a
-        // source selector. The four native driver keys are no wider a door
+        // source selector. The eight native driver keys are no wider a door
         // than "soapy": the application matches the args against its own
         // enumerated list before opening anything, so a browser cannot name a
-        // device this receiver has not seen.
+        // device this receiver has not seen. "pluto" is the one worth saying
+        // that about twice, because its args carry a NETWORK ADDRESS - but it
+        // is matched against the enumerated row like every other kind, so the
+        // only address a browser can reach is the one already on this screen.
         error = "sourceKind must be \"siggen\", \"soapy\", \"rtlsdr\", \"hackrf\", "
-                "\"airspy\" or \"airspyhf\"";
+                "\"airspy\", \"airspyhf\", \"sdrplay\", \"mirisdr\", \"rx888\" or \"pluto\"";
         return false;
     }
 
