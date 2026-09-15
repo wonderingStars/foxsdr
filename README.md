@@ -193,6 +193,34 @@ the same way. The protocol was ported from libhackrf under its BSD-3-Clause
 licence; the notice is in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of
 libhackrf is linked or shipped.
 
+## The native Airspy R2 / Mini driver
+
+**Airspy R2 and Airspy Mini** are opened by FoxSDR's own driver, over the same WinUSB
+transport as the RTL-SDR and the HackRF — no libairspy, no libusb, no SoapySDR module.
+Bind the radio to WinUSB with Zadig and it appears in the Source list by itself.
+
+The Airspy is a real-sampling receiver: its ADC runs at twice the rate the radio
+advertises and the host turns that into complex samples, so a device set to 10 MS/s
+streams 20 million 12-bit samples a second and FoxSDR delivers 10 MS/s of I/Q from them.
+The rates on offer are read out of the radio's own firmware rather than compiled in, so
+an R2 shows the two it has and a Mini shows its own; samples arrive packed twelve bits to
+twelve, which is a third less USB traffic than the unpacked format for exactly the same
+signal. The conversion uses libairspy's own half-band kernel, so the spectrum agrees with
+every other Airspy application about where a signal is, and the mirror image that a
+real-to-complex conversion has to suppress is measured 61 dB down.
+
+Five gains are exposed. **LNA**, **MIXER** and **VGA** drive the R820T's three stages
+directly, and the numbers are the hardware's own steps rather than decibels — libairspy
+publishes no decibel mapping for them and FoxSDR does not invent one. **LINEARITY** and
+**SENSITIVITY** are libairspy's two curated walks up all three at once: linearity trades
+sensitivity for headroom against a strong neighbouring signal, sensitivity does the
+opposite. Unlike the HackRF the Airspy has automatic gain control, on the LNA and the
+mixer, and FoxSDR's auto-gain switch drives both. The bias tee is a separate control and
+is switched off every time FoxSDR opens or closes the radio, so a previous application
+cannot leave 4.5 V on your antenna port without anything on screen saying so.
+
+Tuning range 24 MHz to 1.75 GHz.
+
 ## The native RTL-SDR driver
 
 FoxSDR opens an RTL2832U dongle directly as well — the same WinUSB transport,
