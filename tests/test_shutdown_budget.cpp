@@ -301,7 +301,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // device and every later call on the same path is skipped rather than
 // attempted (see abandonWedgedDriverLocked).
 //
-// SIX SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
+// SEVEN SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
 // NOW THAT THE APPLICATION OPENS THEM (0.91.0, and the reason has changed
 // completely from the one the rows carried before).
 //
@@ -313,7 +313,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // EXACTLY ONE SOURCE IS INSTALLED IN THE PIPELINE AT A TIME.
 // Pipeline::stop() stops `active_`, which is one object: the generator, an
 // IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource,
-// an AirspyHfSource or an SdrPlaySource - and from 0.92.0 the Source section can install any of
+// an AirspyHfSource, an SdrPlaySource or a MiriSdrSource - and from 0.92.0 the Source section can install any of
 // them, which is what makes this note's arithmetic load-bearing rather than
 // hypothetical. A device switch
 // destroys the old source before the new one is constructed
@@ -331,6 +331,8 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //   AirspyHfSource   airspyhf kControlTimeout 500 (receiver mode off)
 //                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1750 ms
 //   SdrPlaySource    kCallbackDrainWait 250                            =  250 ms
+//   MiriSdrSource    msi2500 kTeardownControlTimeout 500 (stop streaming)
+//                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1750 ms
 //
 // Soapy's 3000 ms is the worst and is the pair charged in the table above, so
 // kShutdownBoundedWaitsMs stays at 7000 (3000 + kSourceJoinWait 3000 + the
@@ -538,6 +540,44 @@ const KnownWait kKnownWaits[] = {
     {"src/source/sdrplay_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the tally window before one \"source: stream health ...\" line is "
      "written, matching SoapySource's; nothing sleeps or blocks on it"},
+    // THE NATIVE MIRICS DRIVER. Same argument as the blocks above and the
+    // same answer: a Mirics teardown costs msi2500 kTeardownControlTimeout
+    // 500 (the stop-streaming command) + kReaderJoinWait 1000 + usb
+    // kAbortDrainWait 250 = 1750 ms, spent INSTEAD OF the Soapy pair's 3000.
+    //
+    // THE 500 IS A SECOND, SHORTER BOUND ON PURPOSE. This chip's own control
+    // timeout is 2000 ms - the reference's number, four times the Airspy's -
+    // and one of those on the teardown path would make this column 3250 ms,
+    // LONGER than the Soapy column the table charges, which would move the
+    // charged row here and force the whole budget to be re-derived. So the
+    // single teardown transfer takes its own bound, and it is safe to shorten
+    // because we stop anyway when it expires (msi2500.hpp argues it in full).
+    // tests/test_mirisdr_source.cpp pins that transfer's timeout at 500 ms, so
+    // the two cannot drift apart silently.
+    {"src/source/msi2500.hpp", "kControlTimeout", 0,
+     "the MSi2500's ordinary per-control-transfer bound. NONE of these is on the teardown "
+     "path - the one transfer that is takes kTeardownControlTimeout instead - so this is "
+     "spent on opening, tuning and rate changes only, never on a shutdown"},
+    {"src/source/msi2500.hpp", "kTeardownControlTimeout", 0,
+     "the stop-streaming command in MiriSdrSource::stopStreamingLocked, and the ONLY control "
+     "transfer this driver spends on a teardown. The first 500 ms of the 1750 ms Mirics "
+     "column, which is covered by the 3000 ms Soapy column already charged"},
+    {"src/source/mirisdr_source.hpp", "kBulkReadWait", 0,
+     "how long the Mirics reader thread blocks for one bulk transfer. Spent on the reader's "
+     "OWN thread; it is what bounds how long that thread takes to notice it has been asked "
+     "to stop, not a wait the teardown performs"},
+    {"src/source/mirisdr_source.hpp", "kReadWait", 0,
+     "MiriSdrSource::read()'s wait for samples, spent on the pipeline's source thread, which "
+     "the teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI "
+     "teardown thread"},
+    {"src/source/mirisdr_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in MiriSdrSource::stopStreamingLocked(), and the bulk of that 1750 ms "
+     "column. Zero because a Mirics teardown REPLACES the Soapy one rather than adding to "
+     "it; if this or kTeardownControlTimeout ever grows past 3000 ms in total, this is the "
+     "row that becomes the 1 and the Soapy pair that becomes the zero"},
+    {"src/source/mirisdr_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the Mirics reader's tally window before it writes its stream-health "
+     "line, matching SoapySource's; nothing sleeps or blocks on it"},
     {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
      "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "
      "same bound a cancelled control transfer is given. The last 250 ms of either native "
