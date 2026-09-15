@@ -301,7 +301,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // device and every later call on the same path is skipped rather than
 // attempted (see abandonWedgedDriverLocked).
 //
-// FOUR SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
+// FIVE SOURCES, ONE TEARDOWN: WHY THE NATIVE DRIVERS' ROWS ARE STILL ZERO
 // NOW THAT THE APPLICATION OPENS THEM (0.91.0, and the reason has changed
 // completely from the one the rows carried before).
 //
@@ -312,7 +312,7 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //
 // EXACTLY ONE SOURCE IS INSTALLED IN THE PIPELINE AT A TIME.
 // Pipeline::stop() stops `active_`, which is one object: the generator, an
-// IQ file, a SoapySource, an RtlSdrSource, a HackRfSource or an AirspySource. A device switch
+// IQ file, a SoapySource, an RtlSdrSource, a HackRfSource, an AirspySource or an AirspyHfSource. A device switch
 // destroys the old source before the new one is constructed
 // (AppWindow::selectSource, close-first, adjudicated fix #3 for the 0.62.0
 // field crashes), so no teardown can ever wait on two of these paths. What
@@ -324,6 +324,8 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //   HackRfSource     hackrf kControlTimeout 100 (transceiver off)
 //                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1350 ms
 //   AirspySource     airspy kControlTimeout 500 (receiver mode off)
+//                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1750 ms
+//   AirspyHfSource   airspyhf kControlTimeout 500 (receiver mode off)
 //                    + kReaderJoinWait 1000 + usb kAbortDrainWait 250  = 1750 ms
 //
 // Soapy's 3000 ms is the worst and is the pair charged in the table above, so
@@ -472,6 +474,37 @@ const KnownWait kKnownWaits[] = {
     {"src/source/airspy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the Airspy reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
+    // THE NATIVE AIRSPY HF+ DRIVER. Same argument as the two above and the
+    // same answer: its column is 500 + 1000 + 250 = 1750 ms, spent INSTEAD OF
+    // the Soapy pair's 3000 rather than as well as it, because exactly one
+    // source is installed at a time. The control timeout is the row to watch -
+    // it is five times the HackRF's because libairspyhf's own
+    // LIBUSB_CTRL_TIMEOUT_MS is 500 ms, so two control transfers on the
+    // teardown path instead of one would make this column 2250 and still fit,
+    // but a third would not.
+    {"src/source/airspyhf_protocol.hpp", "kControlTimeout", 0,
+     "the Airspy HF+'s per-control-transfer bound (libairspyhf's "
+     "LIBUSB_CTRL_TIMEOUT_MS). ONE of these is on the teardown path - the "
+     "RECEIVER_MODE off in stopStreamingLocked() - and it is the first 500 ms of "
+     "the 1750 ms Airspy HF+ column, which is covered by the 3000 ms Soapy column "
+     "already charged"},
+    {"src/source/airspyhf_source.hpp", "kBulkReadWait", 0,
+     "how long the Airspy HF+ reader thread blocks for one bulk transfer. Spent on "
+     "the reader's OWN thread; it is what bounds how long that thread takes to "
+     "notice it has been asked to stop, not a wait the teardown performs"},
+    {"src/source/airspyhf_source.hpp", "kReadWait", 0,
+     "AirspyHfSource::read()'s wait for samples, spent on the pipeline's source "
+     "thread, which the teardown already waits for through kSourceJoinWait's 3000 "
+     "ms - never on the GUI teardown thread"},
+    {"src/source/airspyhf_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in AirspyHfSource::stopStreamingLocked(), and the middle "
+     "1000 ms of that 1750 ms column. Zero because an Airspy HF+ teardown REPLACES "
+     "the Soapy one rather than adding to it; if this or kControlTimeout ever grows "
+     "past 3000 ms in total, this is the row that becomes the 1 and the Soapy pair "
+     "that becomes the zero"},
+    {"src/source/airspyhf_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the Airspy HF+ reader's tally window before it writes its "
+     "stream-health line, matching SoapySource's; nothing sleeps or blocks on it"},
     {"src/usb/winusb_device.cpp", "kAbortDrainWait", 0,
      "endBulkStream()'s bound for the WHOLE cancelled ring to drain (not per request), and the "
      "same bound a cancelled control transfer is given. The last 250 ms of either native "
