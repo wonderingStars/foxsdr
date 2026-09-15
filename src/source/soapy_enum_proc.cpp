@@ -709,6 +709,7 @@ void armEnumerateHelperProcess(const char* crashDir) {
     // fault occasionally by design, and a dialog on a hidden process is a hang
     // that nobody can see to dismiss.
     ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
 
     if (crashDir != nullptr && *crashDir != '\0') {
         // THE ORDINARY HANDLERS, into the directory the parent already armed.
@@ -716,7 +717,12 @@ void armEnumerateHelperProcess(const char* crashDir) {
         // writes the report and TerminateProcesses with the exception code,
         // so the parent still reads 0xC0000005 and WER still never runs -
         // but a fault in cascade's own code on this path is once again a
-        // symbolised, uploadable report instead of an exit code.
+        // symbolised, uploadable report instead of an exit code. On Linux
+        // the same config arms crash_handler_posix.cpp's signal handlers:
+        // the report is written, the process _exits with the signal number
+        // and the parent reads 128 + signal, exactly as an unhandled death
+        // would have read. This block was Windows-only until 0.97.0, which
+        // is why a Linux helper reported capture as never armed.
         //
         // No minidump, ever, from here: a dump is process memory and the user
         // consented to reports, not to memory, on a process they cannot see.
@@ -728,11 +734,12 @@ void armEnumerateHelperProcess(const char* crashDir) {
         core::installCrashHandlers(cfg);
         return;
     }
+#ifdef _WIN32
     // Diagnostics off. Nothing is written anywhere; the process just goes.
     ::SetUnhandledExceptionFilter(&quietDeath);
-#else
-    (void)crashDir;
 #endif
+    // On Linux with diagnostics off there is nothing to install: the default
+    // signal disposition already dies quietly and the parent reads the signal.
 }
 
 std::string enumerationReportJson(bool runtimeAvailable,
