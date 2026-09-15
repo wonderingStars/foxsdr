@@ -14,6 +14,8 @@
 // wrong. The header is ImGui-free and pulls in no GL, no window and no
 // plugin instance, so nothing about this include reaches the application
 // shell.
+#include "core/transmitter.hpp"
+#include "dsp/modulator.hpp"
 #include "gui/demod_scope.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/scope_view.hpp"
@@ -275,6 +277,28 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getInt(j, "demodScopeGain", out.demodScopeGain);
     out.demodScopeGain = cascade::gui::clampScopeGain(out.demodScopeGain);
     getBool(j, "demodScopeAutoGain", out.demodScopeAutoGain);
+    // The transmitter. Every index is snapped onto a table that exists; the
+    // POWER deliberately is not, because this file does not know which board
+    // will be opened - source::clampTxGainDb does it against the board's own
+    // published range, and answers silence for anything it cannot honour.
+    getBool(j, "transmitOpen", out.transmitOpen);
+    getInt(j, "transmitMode", out.transmitMode);
+    out.transmitMode = static_cast<int>(cascade::dsp::txModeFromIndex(out.transmitMode));
+    getInt(j, "transmitInput", out.transmitInput);
+    // AN UNKNOWN INPUT LANDS ON THE TONE, not on the microphone: a
+    // hand-edited number this build does not know must not point a
+    // transmitter at a room.
+    out.transmitInput = static_cast<int>(cascade::core::txInputFromIndex(out.transmitInput));
+    getDouble(j, "transmitPowerDb", out.transmitPowerDb);
+    getBool(j, "transmitSplit", out.transmitSplit);
+    getDouble(j, "transmitSplitHz", out.transmitSplitHz);
+    if (!(out.transmitSplitHz > 0.0)) { out.transmitSplitHz = 145.5e6; }
+    getDouble(j, "transmitToneHz", out.transmitToneHz);
+    if (!(out.transmitToneHz > 0.0) || out.transmitToneHz > 20000.0) {
+        out.transmitToneHz = 1000.0;
+    }
+    getBool(j, "transmitMonitor", out.transmitMonitor);
+    getString(j, "transmitArgs", out.transmitArgs);
     // Same discipline for the rail's bank: read, then clamped to one that
     // exists, so a file from a build with more or fewer banks opens somewhere.
     getInt(j, "railBank", out.railBank);
@@ -632,6 +656,18 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["demodScopeTimebase"] = cfg.demodScopeTimebase;
     j["demodScopeGain"] = cfg.demodScopeGain;
     j["demodScopeAutoGain"] = cfg.demodScopeAutoGain;
+    j["transmitOpen"] = cfg.transmitOpen;
+    j["transmitMode"] = cfg.transmitMode;
+    j["transmitInput"] = cfg.transmitInput;
+    j["transmitPowerDb"] = cfg.transmitPowerDb;
+    j["transmitSplit"] = cfg.transmitSplit;
+    j["transmitSplitHz"] = cfg.transmitSplitHz;
+    j["transmitToneHz"] = cfg.transmitToneHz;
+    j["transmitMonitor"] = cfg.transmitMonitor;
+    j["transmitArgs"] = cfg.transmitArgs;
+    // AND NOTHING FOR THE KEY. There is no transmitPtt and no transmitLatched
+    // in this object, deliberately - see the note in config.hpp. A saved key
+    // would be a radio that came up transmitting.
     j["railBank"] = cfg.railBank;
     j["keyBindings"] = cfg.keyBindings;
     // The legacy single-window rectangle (mapWindowWidth/Height/X/Y) is
@@ -756,6 +792,7 @@ AppConfig startupState(AppConfig cfg) {
     // WHETHER goes; WHERE stays. See the declaration for why.
     cfg.scopeMode = false;
     cfg.demodScopeOpen = false;
+    cfg.transmitOpen = false;
     cfg.pluginBrowserOpen = false;
     cfg.fittedModulesOpen = false;
     for (AppConfig::MapPage& page : cfg.mapPages) { page.open = false; }

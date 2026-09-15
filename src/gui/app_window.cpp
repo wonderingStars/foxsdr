@@ -1545,6 +1545,21 @@ int AppWindow::run(int frames) {
     watchdog_.beginShutdown();
     const auto teardownStart = std::chrono::steady_clock::now();
 
+    // THE TRANSMITTER BEFORE ANYTHING ELSE, AND IT IS NOT A STYLE CHOICE.
+    // Everything else in this teardown can take its time; a radio that is
+    // still keyed cannot. This is also the moment the dead-man's handle in
+    // core/transmitter.hpp stops being hypothetical - from here on nothing
+    // calls tick() again, so a transmitter that somehow survived this call
+    // would be released by its own thread within kKeyAliveWait rather than
+    // transmitting for the rest of the process's life.
+    //
+    // ITS COST IS CHARGED IN tests/test_shutdown_budget.cpp, as the only
+    // column that ADDS to the source teardown rather than replacing it: a
+    // Pluto transmitting while a SoapySDR receiver runs is two devices across
+    // one teardown, which is the case the composition note there says makes
+    // the sum the right arithmetic.
+    transmitter_.stop();
+
     // THE GPS READER FIRST: its stop is bounded - one port read (200 ms)
     // while the worker is reading, GpsReader::kOpenAbandonWait (1 s, counted
     // in the shutdown budget) while it is still inside the port driver's
@@ -2363,6 +2378,14 @@ void AppWindow::drawUi() {
     // below it in the SAME frame instead of one behind. See
     // dispatchKeyBindings for the three states in which it performs nothing.
     dispatchKeyBindings();
+    // THE KEY REQUEST IS REBUILT FROM NOTHING EVERY FRAME, and this is where
+    // it is cleared. Whatever is holding the PTT down - the mouse on the big
+    // key, or the spacebar while the page has focus - sets it again while
+    // drawTransmitPage runs; a page that is not drawn at all sets nothing, so
+    // closing the window, switching banks or losing focus releases the key
+    // rather than leaving it where it was. That is the shape the hard rule in
+    // core/transmitter.hpp needs from this end of it.
+    transmitPttHeld_ = false;
     // Before anything is drawn: the decoders' output is bounded in the runner
     // and must be collected whether or not the panel that shows it is open.
     pumpDecoderOutput();
@@ -2390,6 +2413,21 @@ void AppWindow::drawUi() {
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
     drawPluginWindows();
+    // ONCE A FRAME, AFTER THE PAGE HAS HAD ITS SAY. drawTransmitPage above is
+    // what sets transmitPttHeld_, so this has to follow it or the key would
+    // always be acting on the previous frame's request. It is also the stamp
+    // the TX thread's dead-man's handle watches, which is why it is here in
+    // the frame loop and not behind the `if (transmitOpen_)` that guards the
+    // page: a transmitter keyed from a page that was then closed must still
+    // be ticked, and then released, rather than simply abandoned.
+    //
+    // THE MUTE IS THEREFORE ONE FRAME BEHIND THE KEY. updateAudioMute() runs
+    // above, before anything draws, for reasons its own comment gives at
+    // length; so the receiver is silenced on the frame AFTER the key closes.
+    // At the frame rates this application runs at that is between one and
+    // sixteen milliseconds of monitor audio, which is shorter than the
+    // transmitter's own envelope ramp.
+    transmitter_.tick();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -4723,6 +4761,10 @@ void AppWindow::drawMenuColumn() {
             drawRadioSection();
             drawAudioFilterSection();
             drawSinksSection();
+            // The way OUT. Here rather than in VIEW - where the demod scope's
+            // switch went - because the transmitter is a stage in the signal
+            // path and not a way of looking at one; see drawTransmitSection.
+            drawTransmitSection();
             drawRecorderSection();
             break;
         case cascade::gui::RailBank::Decode:
@@ -11582,6 +11624,7 @@ void AppWindow::drawPluginWindows() {
     }
 
     drawDecoderWindow();
+    drawTransmitPage();
     // The bench oscilloscope, drawn here with the other torn-off pages so it
     // is a real window like every one of them: movable, resizable, and able to
     // sit on a second monitor beside the spectrum it is explaining.
@@ -13146,7 +13189,19 @@ void AppWindow::updateAudioMute() {
     // wiped the moment a decoder's preset decided anything, and the Mute key
     // would appear to stop working. The two mutes are separate facts about the
     // same audio; the pipeline is told their OR.
-    pipeline_.setAudioMuted(muted || userMuted_);
+    // AND THE THIRD FACT ABOUT THIS AUDIO: whether the radio is transmitting.
+    // A receiver left unmuted on the frequency it is transmitting on is a
+    // howl, and on a full-duplex board like the Pluto the receiver really is
+    // still running while the key is down - which is the point of keeping it
+    // running, but not the point of listening to it. The operator can turn
+    // the monitor on (transmitMonitor_), which is what somebody working split
+    // wants; off is the default and is what everybody else wants.
+    //
+    // Separate from the other two for the same reason they are separate from
+    // each other: it is recomputed from the KEY every frame, and folding it
+    // into either of the others would wipe whichever one it was folded into.
+    const bool txMute = transmitter_.transmitting() && !transmitMonitor_;
+    pipeline_.setAudioMuted(muted || userMuted_ || txMute);
 }
 
 void AppWindow::stopMutingPlugins(const std::vector<std::string>& keys) {
@@ -13525,6 +13580,473 @@ void AppWindow::drawDecoderWindow() {
         ImGui::EndChild();
     }
     endPage();
+}
+
+// --- THE TRANSMITTER (0.95.0) ------------------------------------------------
+//
+// The other direction, on the panel. What the driver underneath does and why
+// it is arranged around keeping a radio quiet is in source/pluto_tx.hpp; the
+// rules about when the key may close are in core/transmitter.hpp; the
+// arithmetic this page needs is in gui/transmit_page.hpp. What is here is the
+// panel itself, and the three decisions it makes that the headers do not:
+//
+//   1. THE PAGE IS WHERE THE KEY IS. Not the rail. A PTT on a rail row would
+//      be a transmit key that can be pressed while the page it belongs to is
+//      not even on screen - and, worse, one that sits a few pixels from
+//      nineteen other rail rows. The rail carries a switch that opens the
+//      page and a lamp that says whether the radio is on the air; every
+//      control that can put RF out is on the page, together, where somebody
+//      looking at them can see all of them at once.
+//
+//   2. THE REQUEST IS REBUILT EVERY FRAME. transmitPttHeld_ is cleared at the
+//      top of drawUi and set here only while something is actually holding
+//      the key down. A page that is not drawn sets nothing, so closing it,
+//      switching banks, or the window losing focus all release the key -
+//      which is the behaviour those things should have and is not behaviour
+//      that has to be written anywhere, because it falls out of clearing the
+//      flag rather than remembering it.
+//
+//   3. THE LATCH IS A SEPARATE SWITCH WITH A SEPARATE LOOK. It is the one
+//      control here that keeps a radio keyed with nobody touching anything,
+//      so it is drawn as a latched key in alarm red rather than as a
+//      checkbox, and the panel letters its own failsafe next to it.
+
+void AppWindow::drawTransmitSection() {
+    // A KEY, NOT A DRAWER, and the same primitive the demod scope's row uses:
+    // everything this page can be set to is ON the page, because a transmit
+    // power set from a rail you cannot see the lamp from is a control operated
+    // blind.
+    //
+    // WHAT THE CHIP SAYS IS THE STATE OF THE RADIO, which is the one fact
+    // about the transmitter that is true whether the window is open or not,
+    // and the LAMP is lit only while it is actually on the air. A rail with
+    // "ON AIR" showing and a lamp burning is the one thing on this panel that
+    // has to be readable from across the room.
+    const cascade::gui::TxLamp lamp = cascade::gui::txLampState(
+        transmitter_.haveSink(),
+        transmitter_.sink() != nullptr && transmitter_.sink()->faulted(),
+        transmitter_.transmitting());
+    ImU32 colour = cascade::gui::theme::kInkFaint;
+    switch (lamp) {
+        case cascade::gui::TxLamp::NoRadio: colour = cascade::gui::theme::kInkFaint; break;
+        case cascade::gui::TxLamp::Ready: colour = cascade::gui::theme::kAmber; break;
+        case cascade::gui::TxLamp::Transmitting: colour = cascade::gui::theme::kAlarmHot; break;
+        case cascade::gui::TxLamp::Fault: colour = cascade::gui::theme::kAlarm; break;
+    }
+    if (benchSwitchRow("Transmit###transmit", transmitOpen_, cascade::gui::txLampText(lamp),
+                       colour, transmitter_.transmitting(), true,
+                       "Opens the transmitter: frequency, mode, power, input and the key.\n"
+                       "Nothing here transmits until the key is held or latched, and the\n"
+                       "page is the only place the key exists.")) {
+        transmitOpen_ = !transmitOpen_;
+    }
+}
+
+void AppWindow::openTransmitRadio() {
+    transmitError_.clear();
+    // SEEDED FROM THE RECEIVER when the receiver is a Pluto, because one board
+    // doing both is the overwhelmingly common case and making the operator
+    // retype an address they have already given is how a transmitter ends up
+    // pointed at the wrong machine on a shared bench.
+    if (transmitArgs_.empty()) {
+        transmitArgs_ = (sourceKind_ == "pluto" && !deviceArgs_.empty())
+                            ? deviceArgs_
+                            : std::string("uri=ip:192.168.2.1");
+    }
+    auto tx = std::make_unique<cascade::source::PlutoTx>();
+    if (!tx->open(transmitArgs_)) {
+        transmitError_ = tx->lastError();
+        cascade::core::diagWarnf("tx: could not open %s - %s", transmitArgs_.c_str(),
+                                 transmitError_.c_str());
+        return;
+    }
+    // THE POWER IS WRITTEN BEFORE THE SINK IS INSTALLED, and it is written
+    // through the driver's own clamp - so a config file carrying a number
+    // from a board with a different range lands on that board's quiet end
+    // rather than on its loud one (source/pluto_tx.hpp, clampTxGainDb).
+    tx->setGainDb(transmitPowerDb_);
+    transmitPowerDb_ = tx->gainDb();
+    transmitter_.setSink(std::move(tx));
+    transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
+    transmitter_.setInput(cascade::core::txInputFromIndex(transmitInputIndex_));
+    transmitter_.setToneHz(transmitToneHz_);
+    followTransmitFrequency();
+}
+
+void AppWindow::closeTransmitRadio() {
+    // setSink(nullptr) stops and destroys whatever is there, which silences
+    // it: the driver's stop() and its destructor both do, and Transmitter
+    // unkeys before either runs.
+    transmitter_.setSink(nullptr);
+    transmitError_.clear();
+}
+
+void AppWindow::followTransmitFrequency() {
+    if (!transmitter_.haveSink()) { return; }
+    const double want = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_,
+                                                    std::max(0.0, currentAbsoluteHz()));
+    // ONLY WHEN IT HAS MOVED. This runs every frame and a Pluto's retune is a
+    // WRITE on a socket; writing the same number a thousand times a second
+    // would saturate the control connection and leave nothing for the
+    // controls a hand is actually operating.
+    if (std::fabs(want - transmitter_.frequencyHz()) < 1.0) { return; }
+    if (!transmitter_.setFrequencyHz(want)) { transmitError_ = transmitter_.lastError(); }
+}
+
+void AppWindow::drawTransmitPage() {
+    if (!transmitOpen_) { return; }
+    constexpr float kTxW = 560.0f;
+    constexpr float kTxH = 520.0f;
+    // The opening rectangle is the call site's job - see drawDemodScopePage
+    // for the frame this page was found in when it was left to ImGui.
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
+    const float px = mv->Pos.x + std::max(0.0f, mv->Size.x - kTxW - 36.0f);
+    const float py = mv->Pos.y + 64.0f;
+    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(kTxW, kTxH), ImGuiCond_FirstUseEver);
+    if (!beginPage("Transmit###transmitwindow", "TRANSMIT", &transmitOpen_, 0, kTxW, kTxH)) {
+        endPage();
+        return;
+    }
+
+    cascade::source::IqSink* sink = transmitter_.sink();
+    const bool have = sink != nullptr;
+    const bool onAir = transmitter_.transmitting();
+
+    // THE ADDRESS IS SEEDED FOR THE EYE, not only for openTransmitRadio.
+    // Doing it only inside the open left the field BLANK on the page, so the
+    // panel offered no answer at all to "which board would this be?" until
+    // after somebody had already pressed Open. Found on the first screenshot
+    // of this page.
+    if (transmitArgs_.empty()) {
+        transmitArgs_ = (sourceKind_ == "pluto" && !deviceArgs_.empty())
+                            ? deviceArgs_
+                            : std::string("uri=ip:192.168.2.1");
+    }
+
+    // --- the radio -----------------------------------------------------------
+    ImGui::TextUnformatted("RADIO");
+    ImGui::SameLine();
+    {
+        // THE ADDRESS CANNOT BE EDITED WHILE THE RADIO IS OPEN, because the
+        // field would then describe something other than what is connected -
+        // and on this page "what is connected" is the thing that is about to
+        // radiate.
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%s", transmitArgs_.c_str());
+        ImGui::BeginDisabled(have);
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::InputText("##txargs", buf, sizeof(buf))) { transmitArgs_ = buf; }
+        ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (!have) {
+        if (ImGui::Button("Open##txopen")) { openTransmitRadio(); }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Connects to the board's iiod daemon and leaves it QUIET:\n"
+                              "maximum attenuation, transmit oscillator down. Nothing goes\n"
+                              "out until the key below is held.");
+        }
+    } else {
+        // CLOSING IS REFUSED WHILE THE KEY IS DOWN rather than silently
+        // unkeying: a control that did two things - one of them "stop
+        // transmitting" - would be one whose effect depends on state the
+        // operator has to remember.
+        ImGui::BeginDisabled(onAir);
+        if (ImGui::Button("Close##txclose")) { closeTransmitRadio(); }
+        ImGui::EndDisabled();
+    }
+    if (have) {
+        ImGui::TextUnformatted(sink->name());
+    } else if (!transmitError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
+        ImGui::TextWrapped("%s", transmitError_.c_str());
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+        ImGui::TextUnformatted("No transmitter is open.");
+        ImGui::PopStyleColor();
+    }
+    ImGui::Separator();
+
+    // --- the frequency -------------------------------------------------------
+    ImGui::BeginDisabled(!have);
+    // WHAT THE READOUT SHOWS IS WHERE IT WOULD TRANSMIT, which when SPLIT is
+    // off is the RECEIVER's dial and not the sink's idea of itself. The first
+    // draft read the sink, so with no radio open the page lettered 0.000000
+    // MHz under a control that was about to follow the receiver - a number
+    // that was true about nothing.
+    double mhz = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_,
+                                             std::max(0.0, currentAbsoluteHz())) /
+                 1e6;
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::BeginDisabled(!transmitSplit_);
+    if (ImGui::InputDouble("MHz##txfreq", &mhz, 0.001, 0.1, "%.6f")) {
+        transmitSplitHz_ = mhz * 1e6;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    // SPLIT IS THE STATE WHERE SOMEBODY TRANSMITS WHERE THEY ARE NOT
+    // LISTENING, so the key stays lit while it is on rather than being a tick
+    // in a box that is easy to leave set.
+    {
+        const bool on = transmitSplit_;
+        if (on) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kIvory));
+        }
+        if (ImGui::Button("SPLIT##txsplit", ImVec2(80.0f, 0.0f))) {
+            transmitSplit_ = !transmitSplit_;
+            // Coming OUT of split puts the transmitter back on the receiver
+            // immediately; going INTO it starts from wherever the receiver
+            // is, so the first thing that happens is never a jump.
+            if (transmitSplit_) { transmitSplitHz_ = std::max(0.0, currentAbsoluteHz()); }
+        }
+        if (on) { ImGui::PopStyleColor(2); }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Off: the transmitter follows the receiver's dial, so a reply\n"
+                          "goes out where the call came in.\n"
+                          "On: the two are unlinked - what a repeater, a pile-up and a\n"
+                          "satellite each need, and the state in which you are not\n"
+                          "listening where you are transmitting.");
+    }
+    if (!transmitSplit_) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+        ImGui::TextUnformatted("following the receiver");
+        ImGui::PopStyleColor();
+    }
+
+    // --- the mode ------------------------------------------------------------
+    for (int i = 0; i < cascade::dsp::kTxModeCount; ++i) {
+        if (i > 0) { ImGui::SameLine(); }
+        const bool on = (transmitModeIndex_ == i);
+        const cascade::dsp::TxMode m = cascade::dsp::txModeFromIndex(i);
+        if (on) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+        }
+        if (ImGui::Button(cascade::dsp::txModeName(m), ImVec2(64.0f, 0.0f))) {
+            transmitModeIndex_ = i;
+            transmitter_.setMode(m);
+        }
+        if (on) { ImGui::PopStyleColor(2); }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", cascade::dsp::txModeCaption(m)); }
+    }
+
+    // --- the power -----------------------------------------------------------
+    double quiet = -89.75;
+    double loud = 0.0;
+    const bool haveRange = have && sink->gainRangeDb(quiet, loud);
+    char power[32];
+    cascade::gui::formatTxPower(power, sizeof(power), transmitPowerDb_, quiet);
+    ImGui::TextUnformatted("POWER");
+    ImGui::SameLine();
+    {
+        // A SLIDER IN THE BOARD'S OWN SPAN, drawn so that RIGHT IS LOUDER -
+        // which is the opposite of the number underneath it, because the
+        // number is an ATTENUATION and 0 dB is full output. That inversion is
+        // the whole reason gui/transmit_page.hpp exists: it happens once, in
+        // one place, with a test on it.
+        float t = cascade::gui::txPowerFraction(transmitPowerDb_, quiet, loud);
+        ImGui::SetNextItemWidth(240.0f);
+        if (ImGui::SliderFloat("##txpower", &t, 0.0f, 1.0f, "")) {
+            transmitPowerDb_ = cascade::gui::txPowerFromFraction(t, quiet, loud);
+            transmitter_.setPowerDb(transmitPowerDb_);
+            if (have) { transmitPowerDb_ = sink->gainDb(); }
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(power);
+    if (!haveRange && have) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
+        ImGui::TextUnformatted("(the board published no range)");
+        ImGui::PopStyleColor();
+    }
+
+    // --- the input -----------------------------------------------------------
+    ImGui::TextUnformatted("INPUT");
+    for (int i = 0; i < cascade::core::kTxInputCount; ++i) {
+        ImGui::SameLine();
+        const bool on = (transmitInputIndex_ == i);
+        const cascade::core::TxInput in = cascade::core::txInputFromIndex(i);
+        if (on) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+        }
+        if (ImGui::Button(cascade::core::txInputName(in), ImVec2(70.0f, 0.0f))) {
+            transmitInputIndex_ = i;
+            transmitter_.setInput(in);
+            if (in == cascade::core::TxInput::Microphone &&
+                !transmitter_.audioIn().running()) {
+                // Opened WHEN IT IS CHOSEN and not before: a microphone that
+                // is open from launch is one that is listening to a room
+                // nobody asked it to listen to.
+                if (!transmitter_.audioIn().open(-1, 48000.0)) {
+                    transmitError_ = "no microphone could be opened";
+                }
+            }
+        }
+        if (on) { ImGui::PopStyleColor(2); }
+    }
+    if (transmitInputIndex_ == static_cast<int>(cascade::core::TxInput::Tone)) {
+        ImGui::SameLine();
+        double tone = transmitToneHz_;
+        ImGui::SetNextItemWidth(110.0f);
+        if (ImGui::InputDouble("Hz##txtone", &tone, 50.0, 500.0, "%.0f")) {
+            transmitToneHz_ = tone;
+            transmitter_.setToneHz(tone);
+            transmitToneHz_ = transmitter_.toneHz();
+        }
+    }
+
+    // --- the audio meter -----------------------------------------------------
+    {
+        const float peak = transmitter_.takeInputPeak();
+        // DECAYED, NOT REPLACED. A bar redrawn from one 10 ms peak a frame is
+        // unreadable at any frame rate; a fast rise and a slow fall is what a
+        // meter with a needle in it does.
+        transmitPeak_ = std::max(peak, transmitPeak_ * 0.90f);
+        ImGui::TextUnformatted("AUDIO");
+        ImGui::SameLine();
+        ImGui::ProgressBar(cascade::gui::txMeterFraction(transmitPeak_), ImVec2(240.0f, 0.0f),
+                           "");
+    }
+
+    ImGui::Separator();
+
+    // --- THE KEY -------------------------------------------------------------
+    {
+        const cascade::gui::TxLamp lamp =
+            cascade::gui::txLampState(have, have && sink->faulted(), onAir);
+        ImU32 lampColour = cascade::gui::theme::kInkFaint;
+        switch (lamp) {
+            case cascade::gui::TxLamp::NoRadio: lampColour = cascade::gui::theme::kInkFaint; break;
+            case cascade::gui::TxLamp::Ready: lampColour = cascade::gui::theme::kAmber; break;
+            case cascade::gui::TxLamp::Transmitting:
+                lampColour = cascade::gui::theme::kAlarmHot;
+                break;
+            case cascade::gui::TxLamp::Fault: lampColour = cascade::gui::theme::kAlarm; break;
+        }
+
+        ImGui::BeginDisabled(!have);
+        if (onAir) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kIvory));
+        }
+        ImGui::Button("PTT##txptt", ImVec2(160.0f, 56.0f));
+        // HELD, NOT CLICKED. IsItemActive is true for exactly as long as the
+        // pointer is down on the key, so letting go - anywhere, including off
+        // the key and outside the window - opens it.
+        const bool mouseHeld = ImGui::IsItemActive();
+        if (onAir) { ImGui::PopStyleColor(2); }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Hold to transmit. Let go and it stops.\n"
+                              "The spacebar does the same while this page has focus, and can\n"
+                              "be rebound in SYSTEM > Settings.");
+        }
+        ImGui::EndDisabled();
+
+        // THE SPACEBAR, AND ONLY WHILE THIS PAGE HAS FOCUS. A transmit key
+        // that answered a bare keystroke anywhere in the application would be
+        // one that fired while somebody was typing a bookmark name.
+        bool keyHeld = false;
+        const cascade::gui::Chord& ptt =
+            keyBindings_[cascade::gui::KeyAction::TransmitPtt];
+        if (have && ptt.bound() && !ImGui::GetIO().WantTextInput &&
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+            ImGuiIO& io = ImGui::GetIO();
+            keyHeld = ImGui::IsKeyDown(ptt.key) && io.KeyCtrl == ptt.ctrl &&
+                      io.KeyShift == ptt.shift && io.KeyAlt == ptt.alt;
+        }
+        if (have && (mouseHeld || keyHeld)) { transmitPttHeld_ = true; }
+
+        ImGui::SameLine();
+        // THE LATCH: the one control here that keeps a radio keyed with
+        // nobody touching anything.
+        ImGui::BeginDisabled(!have);
+        if (transmitLatched_) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kIvory));
+        }
+        if (ImGui::Button("LATCH##txlatch", ImVec2(100.0f, 56.0f))) {
+            transmitLatched_ = !transmitLatched_;
+        }
+        if (transmitLatched_) { ImGui::PopStyleColor(2); }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Holds the key down with no hand on it. It releases itself\n"
+                              "after a minute, and any fault releases it at once.");
+        }
+        ImGui::EndDisabled();
+
+        // The latch is owned by the page but enforced by the transmitter,
+        // which also clears it on a fault and on its own failsafe - so the
+        // page follows it rather than the other way round.
+        transmitter_.setLatched(transmitLatched_);
+        transmitLatched_ = transmitter_.latched();
+        transmitter_.setPttHeld(transmitPttHeld_);
+
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(lampColour));
+        ImGui::TextUnformatted(cascade::gui::txLampText(lamp));
+        ImGui::PopStyleColor();
+
+        // ON ITS OWN LINE. Beside the lamp it ran off the right-hand edge of
+        // the page at its default width and read "Listen while trans" - a
+        // control that has clipped its own label looks like a design decision
+        // rather than a fault.
+        ImGui::Checkbox("Listen while transmitting", &transmitMonitor_);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("The Pluto is full duplex, so the receiver keeps running while\n"
+                              "you transmit. This is whether you HEAR it - off by default,\n"
+                              "because a receiver on the frequency it is transmitting on is\n"
+                              "a howl.");
+        }
+    }
+
+    // --- what happened -------------------------------------------------------
+    const std::string autoReason = transmitter_.lastAutoUnkeyReason();
+    if (!autoReason.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+        ImGui::TextWrapped("%s", autoReason.c_str());
+        ImGui::PopStyleColor();
+    }
+    const std::string txError = transmitter_.lastError();
+    if (!txError.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
+        ImGui::TextWrapped("%s", txError.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::EndDisabled();  // !have
+
+    // --- THE SENTENCE --------------------------------------------------------
+    //
+    // Said once, here, where the controls are. Not a dialog: a warning that
+    // has to be clicked past is a warning that gets clicked past. The words
+    // are gui/transmit_page.hpp's, so this page and the README cannot come to
+    // say different things.
+    ImGui::Separator();
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+    ImGui::TextWrapped("%s", cascade::gui::kTxLicenceNotice);
+    ImGui::PopStyleColor();
+
+    endPage();
+
+    // Applied AFTER the page is drawn, so the frequency the operator just
+    // typed is the one that goes to the radio this frame rather than next.
+    followTransmitFrequency();
 }
 
 // --- THE DEMOD SCOPE (0.94.0) -----------------------------------------------
@@ -14379,6 +14901,14 @@ void AppWindow::dispatchKeyBindings() {
         if (!want.bound()) { continue; }
         if (want.ctrl != c.ctrl || want.shift != c.shift || want.alt != c.alt) { continue; }
         const cascade::gui::KeyAction action = static_cast<cascade::gui::KeyAction>(i);
+        // THE TRANSMIT KEY IS NOT DISPATCHED HERE, and skipping it is the
+        // whole design rather than an omission. Everything else in this table
+        // fires once on a press; a PTT has to be HELD, and it has to be held
+        // while the TRANSMIT page has focus and nowhere else. So
+        // drawTransmitPage reads this chord itself and asks whether the key is
+        // DOWN; if this loop also fired it, a press would key the radio from
+        // anywhere in the application and nothing would ever unkey it.
+        if (action == cascade::gui::KeyAction::TransmitPtt) { continue; }
         const bool repeats = action == cascade::gui::KeyAction::VolumeUp ||
                              action == cascade::gui::KeyAction::VolumeDown ||
                              action == cascade::gui::KeyAction::SquelchUp ||
@@ -14500,6 +15030,12 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             break;
         case KeyAction::ZoomReset:
             scale_.resetView();
+            break;
+        case KeyAction::TransmitPtt:
+            // UNREACHABLE BY CONSTRUCTION - dispatchKeyBindings skips this
+            // action, because a PTT is held rather than pressed. Present so
+            // the switch stays exhaustive and a future action cannot be added
+            // to the enum without something here failing to compile.
             break;
         case KeyAction::Record:
             // THE AUDIO TAKE, which is what HDSDR's record key records. The
@@ -15061,6 +15597,15 @@ void AppWindow::publishWebSnapshot() {
     s.stereoEnabled = stereoEnabled_;
     s.pilotLocked = pipeline_.pilotLocked();
     s.sourceKind = sourceKind_;
+    // READ ONLY, AND THERE IS NO REMOTE PTT. The browser is told whether the
+    // radio is transmitting because a remote listener seeing a dead band
+    // deserves to know the reason; it is given no way to change it, and that
+    // is a decision rather than an omission. A key that can be closed from
+    // anywhere on the network is a transmitter anybody who reaches the page
+    // can operate, and the licence that covers it belongs to one person at
+    // one desk. If a remote PTT is ever built it needs its own authorisation,
+    // its own failsafe and its own argument - none of which stage one has.
+    s.transmitting = transmitter_.transmitting();
     s.soapyArgs = deviceArgs_;
     s.antenna = deviceAntenna_;
     s.antennas = deviceAntennas_;
@@ -16760,6 +17305,24 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     demodScope_.timebase = clampScopeTimebase(cfg.demodScopeTimebase);
     demodScope_.gainIndex = clampScopeGain(cfg.demodScopeGain);
     demodScope_.autoGain = cfg.demodScopeAutoGain;
+    // THE TRANSMITTER'S SETTINGS, AND NOT ITS KEY. Everything restored here
+    // is HOW it would transmit; nothing restored here can MAKE it transmit,
+    // and there is nothing in AppConfig that could (core/config.hpp says why
+    // at length). transmitOpen_ is cleared by startupState() before this runs
+    // on a launch, so the page records what was showing at the last exit and
+    // opens nothing by itself.
+    transmitOpen_ = cfg.transmitOpen;
+    transmitModeIndex_ = static_cast<int>(cascade::dsp::txModeFromIndex(cfg.transmitMode));
+    transmitInputIndex_ = static_cast<int>(cascade::core::txInputFromIndex(cfg.transmitInput));
+    transmitPowerDb_ = cfg.transmitPowerDb;
+    transmitSplit_ = cfg.transmitSplit;
+    transmitSplitHz_ = cfg.transmitSplitHz;
+    transmitToneHz_ = cfg.transmitToneHz;
+    transmitMonitor_ = cfg.transmitMonitor;
+    transmitArgs_ = cfg.transmitArgs;
+    transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
+    transmitter_.setInput(cascade::core::txInputFromIndex(transmitInputIndex_));
+    transmitter_.setToneHz(transmitToneHz_);
     // The rail opens on the bank it was left on. Clamped again here even
     // though load() already did: this is the value a widget indexes with.
     railBank_ = static_cast<int>(cascade::gui::railBankFromIndex(cfg.railBank));
@@ -17312,6 +17875,18 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.demodScopeTimebase = demodScope_.timebase;
     cfg.demodScopeGain = demodScope_.gainIndex;
     cfg.demodScopeAutoGain = demodScope_.autoGain;
+    cfg.transmitOpen = transmitOpen_;
+    cfg.transmitMode = transmitModeIndex_;
+    cfg.transmitInput = transmitInputIndex_;
+    cfg.transmitPowerDb = transmitPowerDb_;
+    cfg.transmitSplit = transmitSplit_;
+    cfg.transmitSplitHz = transmitSplitHz_;
+    cfg.transmitToneHz = transmitToneHz_;
+    cfg.transmitMonitor = transmitMonitor_;
+    cfg.transmitArgs = transmitArgs_;
+    // AND NOTHING FOR THE KEY: transmitPttHeld_ and transmitLatched_ are not
+    // written, because AppConfig has nowhere to put them and must not grow
+    // one. A saved key is a radio that comes up transmitting.
     cfg.railBank = railBank_;
     // Only the keys that DIFFER from the shipped table, so a user who never
     // rebound anything writes nothing and still gets a later build's improved

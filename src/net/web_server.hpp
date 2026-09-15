@@ -70,6 +70,14 @@ struct RadioStatus {
     std::string sourceName;
     float signalDb = -200.0f;
     bool stereoActive = false;
+    // WHETHER THE RADIO IS TRANSMITTING. Read only, and there is no control
+    // beside it: a remote listener seeing a dead band deserves to know the
+    // reason, but a key that can be closed from anywhere on the network is a
+    // transmitter anybody who reaches the page can operate, and the licence
+    // that covers it belongs to one person at one desk. A remote PTT is not
+    // stage one; it would need its own authorisation, its own failsafe and
+    // its own argument.
+    bool transmitting = false;
     // Included so the browser's own controls can show where they currently
     // sit. Without them the page would have to remember what it last sent,
     // which goes wrong the moment the desktop window changes something.

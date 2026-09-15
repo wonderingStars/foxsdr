@@ -35,6 +35,7 @@ struct GLFWwindow;
 #include "core/recorder.hpp"
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
+#include "core/transmitter.hpp"
 #include "gui/basemap_cache.hpp"
 // The floor a torn-off page cannot be dragged under, and the reset generation
 // that puts an already-wrong one back. ImGui-free for the same reason as the
@@ -55,6 +56,7 @@ struct GLFWwindow;
 // DRAWING half of that scope lives in gui/demod_scope_face.hpp, which this
 // header deliberately does not reach.
 #include "gui/demod_scope.hpp"
+#include "gui/transmit_page.hpp"
 // The FFT the scope's spectrum position uses, held here by unique_ptr and so
 // needing to be a complete type. Arrives transitively through pipeline.hpp
 // anyway; named explicitly because a member's type should not depend on
@@ -102,6 +104,7 @@ struct GLFWwindow;
 #include "source/hackrf_source.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/pluto_source.hpp"
+#include "source/pluto_tx.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/rx888_source.hpp"
 #include "source/sdrplay_source.hpp"
@@ -936,6 +939,27 @@ private:
     void drawDecoderStatusRows();
     // The decoded text, in its own operating system window.
     void drawDecoderWindow();
+    // --- the transmitter (0.95.0) --------------------------------------------
+    //
+    // WHY THE SWITCH IS IN SIGNAL PATH AND NOT IN VIEW, which is where the
+    // demod scope's went. The scope is a way of LOOKING at what the receiver
+    // produced; the transmitter is a STAGE, the outbound one, and it belongs
+    // with the source, the radio and the sinks it is the counterpart of. A
+    // panel whose "what the samples pass through" bank had everything except
+    // the direction they go out in would be hiding the transmitter from the
+    // one person looking for it.
+    void drawTransmitSection();
+    // The page: the frequency, the mode, the power, the input, the key.
+    void drawTransmitPage();
+    // Opens or closes the transmit radio. Bounded, and on the GUI thread -
+    // opening a Pluto is a TCP connect with iiod::kConnectWait on it, not a
+    // USB enumeration, so it is fast enough not to need a worker.
+    void openTransmitRadio();
+    void closeTransmitRadio();
+    // Pushes the receiver's centre into the transmitter when SPLIT is off,
+    // and nothing when it is on. Called once a frame.
+    void followTransmitFrequency();
+
     // --- the demod scope -----------------------------------------------------
     // The page itself: the tube, its keys and its readouts.
     void drawDemodScopePage();
@@ -2168,6 +2192,42 @@ private:
     // than a local because the face is handed a const char* into it and the
     // string has to outlive the call.
     std::string scopeAudioFrom_;
+
+    // --- THE TRANSMITTER (0.95.0) --------------------------------------------
+    //
+    // The TX thread, the modulator, the microphone and the radio all live
+    // inside Transmitter; this is everything the PAGE needs and nothing more.
+    //
+    // NOTHING HERE CAN KEY IT. transmitPttHeld_ is written from the page's
+    // own key and from the spacebar while the page has focus, and it is reset
+    // to false at the top of every frame - so a page that stops being drawn
+    // stops asking, which is the behaviour a window losing focus should have.
+    // The LATCH is a deliberate switch and has its own failsafe inside
+    // Transmitter. Neither is persisted; core/config.hpp says why at length.
+    cascade::core::Transmitter transmitter_;
+    bool transmitOpen_ = false;    // is the PAGE on screen
+    bool transmitPttHeld_ = false; // this frame's key request, rebuilt each frame
+    bool transmitLatched_ = false;
+    bool transmitSplit_ = false;
+    double transmitSplitHz_ = 145.5e6;
+    int transmitModeIndex_ = 0;    // dsp::TxMode
+    int transmitInputIndex_ = 1;   // core::TxInput; 1 is TONE, and deliberately
+    double transmitPowerDb_ = -89.75;
+    double transmitToneHz_ = cascade::dsp::kToneDefaultHz;
+    // LISTEN WHILE TRANSMITTING. Off by default: a receiver left unmuted on
+    // the frequency it is transmitting on is a howl, and on a full-duplex
+    // board like the Pluto the receiver really is still running. On is what
+    // somebody working split, or listening to their own signal through a
+    // second radio, actually wants.
+    bool transmitMonitor_ = false;
+    // The address the transmit radio is opened at. Seeded from the Source
+    // section's own args when that is a Pluto, because the overwhelmingly
+    // common case is one board doing both.
+    std::string transmitArgs_;
+    std::string transmitError_;
+    // The microphone's peak, decayed towards zero so the meter falls rather
+    // than flickering - a bar redrawn from one 10 ms peak a frame is unreadable.
+    float transmitPeak_ = 0.0f;
 
     // --- THE FUNCTION SELECT RAIL'S BANK -------------------------------------
     // Which of the five banks (gui/rail_banks.hpp) the rail is showing, as

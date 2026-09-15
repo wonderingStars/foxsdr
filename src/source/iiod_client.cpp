@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -621,6 +622,50 @@ float convertSample(const std::uint8_t* word, const SampleFormat& fmt) {
     return static_cast<float>((static_cast<double>(raw) - full) / full);
 }
 
+void packSample(float value, const SampleFormat& fmt, std::uint8_t* word) {
+    const std::size_t bytes = fmt.storageBytes();
+    const int bits = fmt.bits;
+    const std::uint64_t mask = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1ULL);
+    const double full = static_cast<double>(1ULL << (bits - 1));
+
+    // NaN first, and with a negated test so it cannot fall through: every
+    // ordering comparison against NaN is false, so `if (v > hi)` and
+    // `if (v < lo)` would BOTH decline to clamp it and a cast would then be
+    // undefined. Silence is the only honest transmission of a non-number.
+    double v = static_cast<double>(value);
+    if (!(v == v)) { v = 0.0; }
+
+    std::uint64_t raw = 0;
+    if (fmt.isSigned) {
+        // The asymmetry is the format's, not a rounding choice: a two's
+        // complement field of `bits` holds -full through full-1, so +1.0
+        // saturates one step short of where -1.0 does. Clamping to `full`
+        // instead would write the most negative value.
+        double scaled = v * full;
+        if (scaled > full - 1.0) { scaled = full - 1.0; }
+        if (scaled < -full) { scaled = -full; }
+        const std::int64_t q = static_cast<std::int64_t>(std::llround(scaled));
+        raw = static_cast<std::uint64_t>(q) & mask;
+    } else {
+        double scaled = v * full + full;
+        const double top = static_cast<double>(mask);
+        if (scaled > top) { scaled = top; }
+        if (scaled < 0.0) { scaled = 0.0; }
+        raw = static_cast<std::uint64_t>(std::llround(scaled)) & mask;
+    }
+    raw <<= fmt.shift;
+
+    if (fmt.littleEndian) {
+        for (std::size_t b = 0; b < bytes; ++b) {
+            word[b] = static_cast<std::uint8_t>((raw >> (8 * b)) & 0xFFu);
+        }
+    } else {
+        for (std::size_t b = 0; b < bytes; ++b) {
+            word[b] = static_cast<std::uint8_t>((raw >> (8 * (bytes - 1 - b))) & 0xFFu);
+        }
+    }
+}
+
 // --- attribute value shapes ----------------------------------------------
 
 bool parseRange(const std::string& text, Range& out) {
@@ -974,6 +1019,46 @@ bool Client::readBuf(const std::string& device, std::size_t bytes, std::vector<s
         // caller may still be closing politely.
         out.clear();
         fail("the Pluto handed over a short sample buffer");
+        return false;
+    }
+    return true;
+}
+
+bool Client::writeBuf(const std::string& device, const std::uint8_t* data, std::size_t bytes) {
+    if (transport_ == nullptr) {
+        fail("there is no connection to the Pluto");
+        return false;
+    }
+    if (bytes == 0) {
+        // Nothing to say and nothing to send. Refused rather than sent,
+        // because a WRITEBUF of zero would still cost the ack round trip and
+        // the daemon's own answer to it is not worth discovering on the air.
+        fail("nothing was offered to the Pluto to transmit");
+        return false;
+    }
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "WRITEBUF %s %zu", device.c_str(), bytes);
+    if (!sendLine(buf)) { return false; }
+
+    // THE ACK, BEFORE THE BYTES. Sending the payload without waiting for it
+    // would work right up until the daemon refused the command - at which
+    // point the refusal line and our sample bytes would cross, and the next
+    // reply this client read would be the middle of its own modulation.
+    long ack = 0;
+    if (!recvStatus(ack, "take a transmit buffer")) { return false; }
+
+    if (!transport_->sendAll(data, bytes)) {
+        fail(transport_->lastError());
+        return false;
+    }
+
+    long took = 0;
+    if (!recvStatus(took, "finish taking a transmit buffer")) { return false; }
+    if (static_cast<std::size_t>(took) != bytes) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg),
+                      "the Pluto took %ld of %zu bytes it was offered to transmit", took, bytes);
+        fail(msg);
         return false;
     }
     return true;

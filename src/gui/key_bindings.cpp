@@ -53,6 +53,11 @@ constexpr ActionRow kActions[kKeyActionCount] = {
     {KeyAction::ZoomOut, "zoomOut", "Zoom the spectrum out", "Picture"},
     {KeyAction::ZoomReset, "zoomReset", "Zoom back to the full span", "Picture"},
     {KeyAction::Record, "record", "Record the audio", "Picture"},
+    // Its own group, because it is the only action in this list that puts RF
+    // out of a connector and filing it under "Receiver" beside the mute would
+    // be the panel's own list understating it.
+    {KeyAction::TransmitPtt, "transmitPtt", "Transmit (hold, on the TRANSMIT page)",
+     "Transmit"},
     {KeyAction::Screenshot, "screenshot", "Save a screenshot", "Picture"},
     {KeyAction::Fullscreen, "fullscreen", "Maximise / restore the window", "Picture"},
     {KeyAction::BankSignal, "bankSignal", "Bank: SIGNAL PATH", "Rail"},
@@ -385,6 +390,12 @@ KeyBindings defaultKeyBindings() {
     set(KeyAction::ZoomOut, "Ctrl+Minus");
     set(KeyAction::ZoomReset, "Ctrl+Delete");
     set(KeyAction::Record, "Shift+R");
+    // THE SPACEBAR, which is what every transmitter's software PTT is and
+    // what HDSDR does not have an equivalent of. Bare rather than modified
+    // because a key you hold for the length of an over must be one hand and
+    // one finger; safe because it is only read while the TRANSMIT page has
+    // focus, and that page has no text field on it that a space would go to.
+    set(KeyAction::TransmitPtt, "Space");
     set(KeyAction::Screenshot, "Ctrl+W");
     set(KeyAction::Fullscreen, "F11");
 

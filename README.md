@@ -4,7 +4,8 @@ A from-scratch software-defined radio receiver for Windows: spectrum and
 waterfall, multi-mode demodulation (NFM/WFM/AM/DSB/USB/LSB/CW), stereo FM with
 RDS, recording, bookmarks, a scanner, band plans, native drivers for the
 RTL-SDR, the HackRF, the Airspy R2/Mini, the Airspy HF+, the SDRplay RSPs, the
-Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto, and hardware support for any
+Mirics MSi2500, the RX888 mk2 and the ADALM-Pluto — which it also
+TRANSMITS through — and hardware support for any
 other radio SoapySDR can reach.
 
 > ### ⚠️ Linux is in development and not usable yet
@@ -432,9 +433,11 @@ runs an `iiod` daemon on TCP port 30431, so where the other native drivers send
 control transfers this one sends one-line text commands, and where they read a
 bulk endpoint this one reads a socket.
 
-**Receive only.** The Pluto is a transceiver; this is a receiver driver, and
-what a transmit path would need is written down in `src/source/pluto_source.hpp`
-rather than half-built.
+**It transmits too, from 0.95.0** — see *Transmitting* below, which is a
+section of its own because the rules about when a radio may be keyed matter more
+than anything else on this page. The receive driver stays exactly as it was: the
+transmit half is a separate file, a separate pair of connections and a separate
+object, so nothing about keying a Pluto can change how it listens.
 
 **The limits come off the board, not out of a table.** A Pluto may be a stock
 AD9363 that tunes 325 MHz to 3.8 GHz, or one with the AD9364 unlock applied that
@@ -480,6 +483,157 @@ accordingly. A driver with a built-in table passes neither. The protocol
 description came from libiio's daemon under its LGPL-2.1 licence; the notice is
 in `installer/THIRD-PARTY-LICENSES.txt`, and nothing of libiio is linked or
 shipped.
+
+
+## Transmitting
+
+**FoxSDR transmits, through an ADALM-Pluto, over the same IIOD protocol it
+receives on** — no libiio, no SoapySDR, no vendor library anywhere in the path.
+CW, AM, narrow FM, USB and LSB, from a microphone or from a built-in test tone.
+
+**This transmits.** An ADALM-Pluto puts out about +7 dBm — roughly five
+milliwatts — and whether you may radiate it on the frequency you have set is
+your responsibility and your country's licensing authority's, not this
+software's. The same sentence is on the page, once, where the controls are.
+
+**Where it is.** SIGNAL PATH (F1) → **Transmit**, which opens a page. The switch
+on the rail is a switch and a lamp; every control that can put RF out of a
+connector is on the page, together, where you can see all of them at once.
+
+### The rules about when it is keyed
+
+These are the part worth reading, and they are enforced in the code rather than
+described in it — `src/core/transmitter.hpp` carries the same list beside the
+implementation.
+
+- **Only a hand on this machine can key it.** A PTT held down, or a LATCH
+  switch deliberately closed. Nothing else: not a plugin, not the web remote,
+  not a command line, and not a config file.
+- **Nothing is restored.** The mode, the power, the input, the split and the
+  tone are saved and come back; the key is not saved, and there is no field in
+  `config.json` that could carry it. A file that has one anyway changes nothing
+  — `tests/test_config.cpp` loads exactly such a file and checks that it does
+  not.
+- **Letting go stops it.** The PTT is held, not clicked, so releasing the
+  mouse anywhere — including off the key and outside the window — opens it. So
+  does closing the page, switching rail banks, or the window losing focus: the
+  key request is rebuilt from nothing on every frame rather than remembered.
+- **The latch releases itself after a minute.** Somebody who walks away from a
+  latched transmitter with a live microphone is transmitting the room.
+- **A frozen window releases it.** The GUI thread stamps a timestamp every
+  frame and the transmit thread watches for it; if the frames stop, the
+  transmit thread silences the radio itself. This is the one failure in which
+  nothing on the GUI thread could do it, because the thing that would normally
+  release the key is the thing that has stopped.
+- **A fault releases it.** A board that stops answering unkeys rather than
+  being retried.
+- **The spacebar is a PTT**, but only while the TRANSMIT page has focus — and
+  it is rebindable in SYSTEM → Settings like every other key.
+
+### What the driver does to the board
+
+- **Opening a board leaves it QUIET, without being asked.** A Pluto keeps
+  whatever the last program left in it, so one handed over at 0 dB attenuation
+  with its transmit oscillator up would start radiating the moment anything fed
+  the DAC. `open()` writes the attenuation to the board's **own** maximum and
+  powers the TX LO down before it returns, and says so in the log.
+- **Keying is the LAST step of starting.** The port, the frequency, the rate,
+  the internal DDS shutdown and the buffer all happen while the board is still
+  at maximum attenuation; the power you asked for is written after every one of
+  them. So a failure halfway through leaves a silent radio, which is what
+  `tests/test_pluto_tx.cpp` checks by refusing one of those writes.
+- **Stopping silences before it tidies**, in that order: attenuation to
+  maximum first, then the oscillator down, then the buffer. The reverse would
+  leave a keyed board transmitting whatever the DAC held for as long as the
+  tidying took. The destructor does the same, for a caller who forgot.
+- **A board that will not say how quiet it can be is not keyed.** Everything
+  above is written in terms of the board's own published maximum attenuation;
+  without one there is no number to write, so FoxSDR refuses to transmit
+  through it rather than inventing a figure or skipping the step.
+- **The power control is an ATTENUATION.** An AD9361 publishes 0 dB as *full
+  output* and −89.75 dB as its quietest. The slider runs left-quiet to
+  right-loud so nothing on the panel has to be read backwards, and a value the
+  driver cannot honour — out of range, hand-edited, a units mix-up — lands on
+  **silence**, not on the maximum. That is the opposite of what every receive
+  gain in this product does, and it is deliberate.
+- **The board's own test tones are switched off.** An AD9361 has internal DDS
+  generators, and a Pluto left with them running plays those instead of
+  whatever is written to it — which looks exactly like a driver that is
+  sending nothing.
+
+### The modulators
+
+At 48 kHz, in `src/dsp/modulator.cpp`, then interpolated to whatever the board
+is clocked at.
+
+- **CW** — a keyed carrier, with a 5 ms raised-cosine edge. That shaping is the
+  substance of the mode: a carrier switched on in one sample is a step, and a
+  step's spectrum is everywhere. Measured 70 dB quieter 4–6 kHz off frequency
+  than the same burst keyed hard.
+- **AM** — carrier and both sidebands at a modulation index of 0.9, so an audio
+  peak cannot take the envelope through zero.
+- **NFM** — 2.5 kHz deviation with 750 µs pre-emphasis and a hard limit on the
+  instantaneous deviation, applied *after* the pre-emphasis. Checked against the
+  Bessel functions: at a 1 kHz tone and full deviation the carrier and the first
+  three sidebands read 0.049 / 0.497 / 0.446 / 0.217, against J0…J3(2.5) of
+  0.0484 / 0.4971 / 0.4461 / 0.2166.
+- **USB / LSB** — the analytic signal through a 129-tap Blackman-windowed
+  Hilbert transformer, measured at 69 dB of opposite-sideband suppression.
+- **A test tone**, because the first question about any transmit path is "is
+  anything coming out at all", and the answer must not depend on a microphone
+  being plugged in and talked into. It is also the default input: a transmitter
+  that came up pointed at a microphone is one that would put a room on the air
+  the first time somebody pressed the big key to see what it did.
+
+### Getting 48 kHz onto a 2.5 MS/s DAC
+
+In two stages, because the obvious tool is the wrong one — a rational
+resampler asked for 2,083,333 / 48,000 would build two million polyphase
+branches. An integer interpolation by round(sink ÷ audio) with a real
+windowed-sinc anti-imaging filter does the work; a linear interpolation covers
+the half-percent left over, which is exact to parts per million against a signal
+that is already oversampled fifty times. Measured first-image rejection: 110 dB.
+
+### Receiving while transmitting
+
+The Pluto is full duplex and the receiver keeps running, which is the point of
+keeping it running. Whether you **hear** it is a switch on the page, off by
+default, because a receiver on the frequency it is transmitting on is a howl.
+**SPLIT** unlinks the transmit frequency from the dial — what a repeater, a
+pile-up and a satellite each need — and the key stays lit while it is on,
+because that is the state in which you are not listening where you are
+transmitting.
+
+### The web remote gets a light, not a switch
+
+`/api/status` carries a read-only `transmitting` boolean so a remote listener
+seeing a dead band knows the reason. There is no remote PTT, and that is a
+decision rather than an omission: a key that can be closed from anywhere on the
+network is a transmitter anybody who reaches the page can operate, and the
+licence that covers it belongs to one person at one desk.
+
+### How it is verified
+
+There is no Pluto on the bench this was written on and nothing on it may
+transmit, so the proof is the conversation and the arithmetic rather than a
+spectrum analyser. `tests/test_pluto_tx.cpp` runs a fake `iiod` on the loopback
+interface — a real socket, real threads, written from the daemon's own
+published grammar — and checks every command, in order, on both connections:
+that opening quietens, that keying is last, that stopping silences first, that a
+refused write leaves the board quiet, that the destructor does it for a caller
+who forgot, and that a board which vanishes mid-transmission faults, stops and
+is silenced through whatever connection still works. The sample bytes are read
+back off the wire and decoded with the format the board published.
+`tests/test_modulator.cpp` measures every mode against its closed form;
+`tests/test_transmitter.cpp` drives the whole path into a sink that records what
+it was given and exercises each of the release rules above, including pulling
+the frames away and watching the transmit thread silence the radio by itself.
+
+**What is NOT verified:** nothing has been into an antenna, a dummy load or a
+second receiver. No real board has been keyed, no real modulation has been
+heard, and the output power, the spectral purity and the actual behaviour of a
+Pluto's DAC and filters are all unmeasured. What is established is what FoxSDR
+sends and when.
 
 ## The native RTL-SDR driver
 
@@ -857,10 +1011,18 @@ bookmark name, a password — and none fires while a dialog is open.
 | Zoom the spectrum in / out | <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> | about the centre |
 | Zoom back to the full span | <kbd>Ctrl</kbd>+<kbd>Del</kbd> | |
 | Record the audio | <kbd>Shift</kbd>+<kbd>R</kbd> | the I/Q take stays mouse-only |
+| Transmit | <kbd>Space</kbd> | HELD, and only while the TRANSMIT page has focus |
 | Save a screenshot | <kbd>Ctrl</kbd>+<kbd>W</kbd> | |
 | Maximise / restore the window | <kbd>F11</kbd> | |
 | Bank: SIGNAL PATH / DECODE / VIEW / EXTEND / SYSTEM | <kbd>F1</kbd>…<kbd>F5</kbd> | |
 | Settings and key bindings | <kbd>F7</kbd> | |
+
+The transmit key is the one entry that behaves differently from every other:
+it is **held** rather than pressed, it is read only while the TRANSMIT page has
+focus, and it does nothing anywhere else in the application. A bare
+<kbd>Space</kbd> is safe as a transmit key for exactly that reason — and if you
+rebind it, it is still only read on that page. See *Transmitting* for the rest
+of the rules about when a radio may be keyed.
 
 Two keys are **not** in the table and cannot be rebound. <kbd>F12</kbd> always
 saves a screenshot — it is the key every note and every test script tells you to

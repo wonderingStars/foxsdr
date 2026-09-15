@@ -310,6 +310,40 @@ struct AppConfig {
     int demodScopeGain = 5;       // index into kScopeGainPerDiv; 5 is 100 mV/DIV
     bool demodScopeAutoGain = true;
 
+    // --- THE TRANSMITTER (0.95.0) --------------------------------------------
+    //
+    // WHAT IS SAVED IS HOW, NEVER WHETHER. The mode, the power, the input, the
+    // split and the tone are settings somebody chose and should not have to
+    // choose again every morning. THE KEY IS NOT SAVED AND CANNOT BE: there is
+    // no field here for the PTT or for the latch, there is no code that reads
+    // one, and that is the point - a transmitter that came back up keyed
+    // because a file said it was keyed when the application last closed would
+    // be radiating before anybody had looked at the screen. core/transmitter.hpp
+    // states the same rule from the other side, and tests/test_config.cpp pins
+    // that a file carrying such a field changes nothing.
+    //
+    // transmitOpen IS SAVED AND NOT RESTORED, exactly like demodScopeOpen and
+    // scopeMode above: startupState() clears it, so the field records what was
+    // showing at the last exit and changes nothing about the next launch.
+    //
+    // transmitPowerDb IS AN ATTENUATION IN THE BOARD'S OWN NEGATIVE DECIBELS,
+    // where 0 is FULL OUTPUT. It is deliberately NOT clamped to a range here:
+    // this file has no idea which board will be opened, and the two candidate
+    // clamps are both wrong (a stock AD9363's -89.75 floor would be a lie on a
+    // board with a different one, and an unclamped 40 is full power). The
+    // driver clamps it instead, through source::clampTxGainDb, which answers
+    // SILENCE for anything it cannot honour. What IS done here is the default:
+    // a fresh install starts at the quiet end and has to be turned up.
+    bool transmitOpen = false;
+    int transmitMode = 0;      // dsp::TxMode: 0 CW, 1 AM, 2 NFM, 3 USB, 4 LSB
+    int transmitInput = 1;     // core::TxInput: 0 MIC, 1 TONE - and 1 is the default
+    double transmitPowerDb = -89.75;
+    bool transmitSplit = false;
+    double transmitSplitHz = 145.5e6;
+    double transmitToneHz = 1000.0;
+    bool transmitMonitor = false;
+    std::string transmitArgs;
+
     // railBank   which of the FUNCTION SELECT rail's five banks was showing -
     //            SIGNAL PATH, DECODE, VIEW, EXTEND, SYSTEM, as 0..4 in that
     //            order (gui/rail_banks.hpp owns the list). Restored so the
