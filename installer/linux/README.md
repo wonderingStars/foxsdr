@@ -94,11 +94,14 @@ place. Delete the file and re-plug to reverse it.
 This transport and this rules file were written and unit-tested on a machine
 with no RTL-SDR, HackRF, RX888 or Mirics device attached (WSL2, which also
 exposes no `/sys/bus/usb/devices` at all). The sysfs parser, the enumeration
-matching, the open-of-a-nonexistent-path failure path, and the bulk-read
-timeout bound are exercised by `tests/test_usb_usbfs.cpp` and
-`tests/test_usb_winusb.cpp` without hardware. **Not verified on this
-machine, for lack of one:** that `USBDEVFS_DISCONNECT_CLAIM` actually detaches
-`dvb_usb_rtl28xxu` on a real dongle, that interface 0 is the correct claim
-for all four device families, and that a real bulk stream delivers samples
-end to end. A user or tester with the hardware attached is the check that
+matching (including a right-vendor, wrong-product device that must be left
+out) and the open-of-a-nonexistent-path failure path are exercised by
+`tests/test_usb_usbfs.cpp` without hardware; the bounded-read timing check in
+that file runs against the shared fake transport, not against a usbfs
+handle. **Not verified on this machine, for lack of one:** that
+`USBDEVFS_DISCONNECT_CLAIM` actually detaches `dvb_usb_rtl28xxu` on a real
+dongle, that interface 0 is the correct claim for all four device families,
+that `readBulk()`'s poll bound and `endBulkStream()`'s drain bound behave as
+written on a live usbfs file descriptor, and that a real bulk stream delivers
+samples end to end. A user or tester with the hardware attached is the check that
 closes this out.

@@ -486,7 +486,7 @@ bool Rx888Source::resolveDevice(const std::string& args, cascade::usb::UsbDevice
         if (d.vid == rx888::kUsbVid && isSddcPid(d.pid)) { ours.push_back(d); }
     }
     if (ours.empty()) {
-        error = "no RX888 found (is it plugged in, and bound to WinUSB?)";
+        error = std::string("no RX888 found (is it plugged in, and ") + cascade::usb::kBindHint + "?)";
         return false;
     }
 

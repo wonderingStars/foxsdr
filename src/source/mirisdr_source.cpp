@@ -271,7 +271,8 @@ bool MiriSdrSource::resolveDevice(const std::string& args, cascade::usb::UsbDevi
         if (msi2500::modelFor(d.vid, d.pid) != nullptr) { ours.push_back(d); }
     }
     if (ours.empty()) {
-        error = "no Mirics MSi2500 device found (is it plugged in, and bound to WinUSB?)";
+        error = std::string("no Mirics MSi2500 device found (is it plugged in, and ") +
+                cascade::usb::kBindHint + "?)";
         return false;
     }
 

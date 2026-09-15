@@ -352,7 +352,7 @@ bool HackRfSource::resolveDevice(const std::string& args, cascade::usb::UsbDevic
         }
     }
     if (ours.empty()) {
-        error = "no HackRF found (is it plugged in, and bound to WinUSB?)";
+        error = std::string("no HackRF found (is it plugged in, and ") + cascade::usb::kBindHint + "?)";
         return false;
     }
 

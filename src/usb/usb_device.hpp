@@ -46,6 +46,18 @@
 
 namespace cascade::usb {
 
+// The words a driver uses for "the radio is present but this transport cannot
+// reach it", so a "not found" message names the remedy for the platform it
+// is shown on: on Windows the device has to be bound to WinUSB with Zadig; on
+// Linux the device node has to be readable, which the udev rule in
+// installer/linux/ grants. The Windows text is byte-for-byte what the
+// drivers said before this constant existed.
+#if defined(_WIN32)
+constexpr const char* kBindHint = "bound to WinUSB";
+#else
+constexpr const char* kBindHint = "reachable through usbfs (see installer/linux/README.md)";
+#endif
+
 // One device as SetupAPI reports it. `path` is the device interface path
 // openWinUsb() takes; `serial` is the last instance-id segment, which for
 // most SDR dongles is the USB serial string ("00000001" on a stock RTL-SDR).
