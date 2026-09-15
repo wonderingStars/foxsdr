@@ -236,7 +236,8 @@ extern "C" {
 #define CASCADE_CAP_BASEMAP 0x00000080u
 #define CASCADE_CAP_TRACK_INFO 0x00000100u
 #define CASCADE_CAP_INSTRUMENT 0x00000200u
-#define CASCADE_CAP_ALL_KNOWN 0x000003FFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_AUDIO_OUT 0x00000400u
+#define CASCADE_CAP_ALL_KNOWN 0x000007FFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -252,6 +253,14 @@ extern "C" {
  *
  * A plugin declaring ONLY these and no decoder is therefore legitimate and
  * must load.
+ *
+ * CASCADE_CAP_AUDIO_OUT (0x400) is the newest, added the same way and for the
+ * same kind of reason: a decoder could hand the host text, pictures, map
+ * targets, a window or an instrument face, and could not hand it SOUND. A
+ * DAB/DAB+ decoder produces PCM - that is its entire output - and until this
+ * bit existed the only thing it could do with it was write a WAV file and
+ * leave the speakers playing the raw OFDM hiss the demodulator made of a
+ * digital carrier. See CascadeAudioOutApi below.
  */
 
 /*
@@ -907,6 +916,121 @@ typedef struct CascadeInstrumentApi {
 } CascadeInstrumentApi;
 
 /* ==========================================================================
+ * CASCADE_CAP_AUDIO_OUT - the plugin plays sound through the host.
+ *
+ * Every other output capability hands the host something to LOOK at. A digital
+ * broadcast decoder's output is sound and nothing else: DAB/DAB+ decodes an
+ * OFDM ensemble to PCM, and with no way to hand that PCM over, the best it
+ * could do was write a WAV file while the speakers played the hiss an analog
+ * demodulator makes of a digital carrier. This bit is the missing path.
+ *
+ * THERE IS NO create() OR destroy() HERE, AND THAT IS THE DESIGN. This
+ * capability is not a thing of its own; it RIDES ON the decoder instance the
+ * plugin already has. The `handle` passed to pull() and active() is the handle
+ * the host got from the plugin's own decoder create(), so the decode and the
+ * sound it produces are one object with one lifetime. A plugin declaring
+ * AUDIO_OUT and no decoder capability therefore provides nothing the host can
+ * drive - there is no instance to pull from - and is refused for the same
+ * reason a preset-only plugin is.
+ *
+ * WHICH handle, for a plugin that declares several decoder capabilities: the
+ * host uses the FIRST instance it created for that plugin, in the fixed order
+ * CASCADE_CAP_DECODER, CASCADE_CAP_IQ_DECODER, CASCADE_CAP_IMAGE_DECODER. A
+ * plugin that wants no ambiguity should declare one. (DAB declares only the
+ * I/Q decoder, so its case is not ambiguous at all.)
+ *
+ * THREADING, and it is the same promise the decoder tables make. pull() and
+ * active() are called from the host's real-time audio thread - THE SAME thread
+ * that calls process() and poll_text() on that handle, serialised with them and
+ * never concurrent with them. So the ABI's "one owner at a time" rule is intact
+ * and the plugin needs no lock of its own between decode and playback. The
+ * real-time rules are intact too, and they are not advisory: no blocking lock,
+ * no allocation, no file or network I/O, no logging, no throw. A decoder that
+ * produces PCM in bursts (DAB's audio superframe is 120 ms of it at once)
+ * should buffer that in a preallocated ring and let pull() read it out.
+ *
+ * WHAT THE HOST DOES WITH IT. While exactly one instance says it is active, its
+ * audio REPLACES the demodulated audio at the speakers - the receiver is in a
+ * raw mode under a digital decoder anyway, and mixing the two would mean the
+ * hiss the decoder exists to replace playing under the programme. When none is
+ * active the demodulated audio returns. Two active at once: the FIRST in load
+ * order wins and the second is told so once, in the log, rather than the two of
+ * them fighting for the speaker with the winner decided by timing.
+ *
+ * The host resamples to its own output rate when sampleRateHz differs from it,
+ * mixes 1 channel up to 2 or 2 down to 1 as its device needs, and crossfades
+ * over a few milliseconds at each takeover so the changeover is not a click.
+ * The user's volume dial and mute lamp apply exactly as they do to the
+ * receiver's own audio - a plugin cannot play over a muted receiver, and does
+ * not get its own volume control to be surprised by.
+ *
+ * The host does NOT put this audio through its AGC, squelch, notch, auto-notch
+ * or noise reduction. Those exist to make a noisy analog channel comfortable;
+ * this is finished PCM from an error-corrected digital stream, and every one of
+ * them would only damage it.
+ *
+ * EVERY function pointer here must be non-NULL, and none of them may throw.
+ * ==========================================================================
+ */
+typedef struct CascadeAudioOutApi {
+    /* sizeof(CascadeAudioOutApi) as the PLUGIN compiled it. Checked.
+     * (Four bytes of padding follow `channels` on every 64-bit target, before
+     * the first function pointer; the host never reads them.) */
+    uint32_t structSize;
+
+    /*
+     * The rate the PLUGIN's PCM is at, in Hz - 48000 for DAB and DAB+. The
+     * host resamples to whatever its output device is running at. Must be in
+     * [CASCADE_AUDIO_RATE_MIN_HZ, CASCADE_AUDIO_RATE_MAX_HZ]; unlike the
+     * decoder tables, 0 is NOT allowed and is refused at load time. "Any rate"
+     * is a meaningful thing for a consumer of samples to say and a meaningless
+     * thing for a producer of them: the host cannot resample a stream whose
+     * rate nobody will state, and guessing is how a broadcast plays back at
+     * the wrong pitch.
+     */
+    uint32_t sampleRateHz;
+
+    /* 1 for mono or 2 for interleaved stereo (L,R,L,R...). Anything else is
+     * refused at load time. Fixed for the plugin's lifetime: a service change
+     * that alters the channel count must be presented as the plugin's
+     * declared layout, upmixed by the plugin if need be, because the host
+     * builds its conversion once at create() and not per block. */
+    uint32_t channels;
+
+    /*
+     * Fills `interleaved` with up to `frames` frames of PCM (that is
+     * frames * channels floats), nominally in [-1, +1] but not hard-clipped,
+     * and returns:
+     *     > 0  that many FRAMES were written, at the front of the buffer
+     *     = 0  nothing available right now - the host plays silence for the
+     *          gap, counts it, and asks again on the next block. Not an error:
+     *          a decoder that has just lost the signal is expected to say this
+     *     < 0  this plugin has STOPPED producing audio for good. The host ends
+     *          the takeover, returns the speakers to the demodulated audio and
+     *          never calls pull() on this instance again
+     * Writing fewer than `frames` is legal and is treated exactly as the gap
+     * above, for the shortfall only. Never write more than `frames`.
+     *
+     * Real-time thread: see THREADING above. Must be cheap - it is called once
+     * per audio block, for ever, whenever this plugin is playing.
+     */
+    int32_t (*pull)(void *handle, float *interleaved, size_t frames);
+
+    /*
+     * Non-zero while the plugin WANTS the speakers. A DAB decoder says so once
+     * a service is selected and decoding, and stops saying so when the user
+     * deselects it or the ensemble is lost. Polled once per audio block on the
+     * same thread as pull(), so it must be a read of state the plugin has
+     * already decided and never the place to decide it.
+     *
+     * The host asks this of every audio-out instance every block, including
+     * ones it is not pulling from, because that is how a plugin gets the
+     * speakers back after the one holding them lets go.
+     */
+    int32_t (*active)(void *handle);
+} CascadeAudioOutApi;
+
+/* ==========================================================================
  * CASCADE_CAP_HOST_CLIENT - the only capability that points the other way.
  *
  * Everything else is the plugin producing something. This one lets a plugin
@@ -1453,6 +1577,11 @@ static inline const CascadeInstrumentApi *cascade_plugin_instrument(
     const CascadePluginDesc *desc) {
     return (const CascadeInstrumentApi *)cascade_plugin_capability(desc,
                                                                    CASCADE_CAP_INSTRUMENT);
+}
+
+static inline const CascadeAudioOutApi *cascade_plugin_audio_out(
+    const CascadePluginDesc *desc) {
+    return (const CascadeAudioOutApi *)cascade_plugin_capability(desc, CASCADE_CAP_AUDIO_OUT);
 }
 
 static inline const CascadeHostClientApi *cascade_plugin_host_client(

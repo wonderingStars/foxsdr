@@ -291,6 +291,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                         ? static_cast<const CascadeTrackInfoApi*>(
                               findCapabilityTable(desc, CASCADE_CAP_TRACK_INFO))
                         : nullptr;
+    rec.audioOut = (desc->capabilities & CASCADE_CAP_AUDIO_OUT) != 0u
+                       ? static_cast<const CascadeAudioOutApi*>(
+                             findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT))
+                       : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -515,6 +519,38 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         ++usable;
     }
 
+    if ((desc->capabilities & CASCADE_CAP_AUDIO_OUT) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT);
+        if (raw == nullptr) {
+            return PluginRejection::MissingAudioOutApi;
+        }
+        const auto* a = static_cast<const CascadeAudioOutApi*>(raw);
+        if (a->structSize != static_cast<uint32_t>(sizeof(CascadeAudioOutApi))) {
+            return PluginRejection::AudioOutStructSizeMismatch;
+        }
+        // 0 is NOT "any rate" here, unlike every consuming table above. The
+        // host has to resample this stream to its device rate, and it cannot
+        // do that from a rate the plugin declined to state - see
+        // CascadeAudioOutApi. Refusing at load time means the author is told;
+        // accepting would mean a broadcast played back at the wrong pitch.
+        if (a->sampleRateHz < CASCADE_AUDIO_RATE_MIN_HZ ||
+            a->sampleRateHz > CASCADE_AUDIO_RATE_MAX_HZ) {
+            return PluginRejection::AudioOutBadRate;
+        }
+        if (a->channels != 1u && a->channels != 2u) {
+            return PluginRejection::AudioOutBadChannels;
+        }
+        if (a->pull == nullptr || a->active == nullptr) {
+            return PluginRejection::MissingAudioOutFunction;
+        }
+        // NOT counted toward `usable`, and for a stronger reason than the host
+        // client and the preset tables: this capability has no create() and
+        // rides on a decoder instance, so a plugin declaring ONLY this one has
+        // no instance for the host to pull from and could never make a sound.
+        // Counting it would load a plugin that is silent by construction and
+        // let it look like a working audio source.
+    }
+
     if ((desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u) {
         const void* raw = findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT);
         if (raw == nullptr) {
@@ -661,6 +697,16 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "instrument table has a null function pointer or no window title";
         case PluginRejection::InstrumentHalfMemory:
             return "instrument supplies only one of columns and poll_rows";
+        case PluginRejection::MissingAudioOutApi:
+            return "declares CASCADE_CAP_AUDIO_OUT but supplies no audio table";
+        case PluginRejection::AudioOutStructSizeMismatch:
+            return "audio-out table size does not match this host's";
+        case PluginRejection::AudioOutBadRate:
+            return "audio-out declares no usable sample rate for the audio it produces";
+        case PluginRejection::AudioOutBadChannels:
+            return "audio-out declares neither mono nor stereo";
+        case PluginRejection::MissingAudioOutFunction:
+            return "audio-out table has a null function pointer";
         case PluginRejection::MissingHostClientApi:
             return "declares CASCADE_CAP_HOST_CLIENT but supplies no table";
         case PluginRejection::HostClientStructSizeMismatch:
@@ -793,6 +839,36 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
             s += " (" + std::to_string(desc->capabilityCount) + " declared, limit " +
                  std::to_string(kMaxCapabilityEntries) + ")";
             break;
+        case PluginRejection::AudioOutBadRate: {
+            // The number it declared, because the commonest way to reach this
+            // is a table left zero-initialised - and "0 Hz" says that where
+            // "no usable sample rate" leaves the author guessing which field.
+            const auto* a = static_cast<const CascadeAudioOutApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT));
+            if (a != nullptr) {
+                s += " (declares " + std::to_string(a->sampleRateHz) + " Hz; must be " +
+                     std::to_string(CASCADE_AUDIO_RATE_MIN_HZ) + ".." +
+                     std::to_string(CASCADE_AUDIO_RATE_MAX_HZ) + ")";
+            }
+            break;
+        }
+        case PluginRejection::AudioOutBadChannels: {
+            const auto* a = static_cast<const CascadeAudioOutApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT));
+            if (a != nullptr) {
+                s += " (declares " + std::to_string(a->channels) + "; must be 1 or 2)";
+            }
+            break;
+        }
+        case PluginRejection::AudioOutStructSizeMismatch: {
+            const auto* a = static_cast<const CascadeAudioOutApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT));
+            if (a != nullptr) {
+                s += " (host " + std::to_string(sizeof(CascadeAudioOutApi)) +
+                     " bytes, plugin " + std::to_string(a->structSize) + ")";
+            }
+            break;
+        }
         default:
             break;
     }
@@ -878,6 +954,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.preset = nullptr;
         r.basemap = nullptr;
         r.trackInfo = nullptr;
+        r.audioOut = nullptr;
         ++skipped;
     }
     return skipped;

@@ -8,6 +8,10 @@
 //
 //   rebuild()/clear()   control thread. Creates and destroys instances.
 //   processAudio()      DSP thread, real-time. Must not block or allocate.
+//   pullPluginAudio()   DSP thread, real-time, the same thread and the same
+//                       lock as processAudio - which is what lets the ABI
+//                       promise a plugin that pull() never runs concurrently
+//                       with process() on its handle.
 //   drainText()         GUI thread, once per frame.
 //   pollImages()        GUI thread, once per frame.
 //
@@ -33,7 +37,10 @@
 #ifndef CASCADE_CORE_PLUGIN_RUNNER_HPP
 #define CASCADE_CORE_PLUGIN_RUNNER_HPP
 
+#include <array>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -191,6 +198,54 @@ public:
     // process call. Cheap and safe to call when nothing has changed.
     void retune(double centreHz);
 
+    // ----- The plugin audio path (CASCADE_CAP_AUDIO_OUT) --------------------
+    //
+    // DSP thread, real-time, and the SAME thread as processAudio/processIq -
+    // which is the whole reason the ABI can promise a plugin that pull() is
+    // never concurrent with process() on its handle. Serialised with them by
+    // the same lock either way, so a rebuild still cannot destroy a handle a
+    // pull is inside.
+    //
+    // Fills `left` and `right` with `frames` of the playing plugin's audio at
+    // the audio rate rebuild() was given, resampled and channel-converted, and
+    // returns TRUE. Returns FALSE when no plugin wants the speakers, leaving
+    // both buffers untouched - the caller keeps its demodulated audio.
+    //
+    // A plugin that has nothing to hand over right now still counts as
+    // playing: the shortfall is filled with silence and charged as a gap (see
+    // audioGaps below), because a decoder between superframes has not stopped
+    // being the thing the user is listening to.
+    bool pullPluginAudio(float* left, float* right, std::size_t frames);
+
+    // Which plugin currently holds the speakers, by descriptor name; empty
+    // when the demodulated audio is playing. This is what the Sinks card and
+    // /api/status read - any thread, cheap.
+    std::string playingPlugin() const;
+    // ...and its module file name, for anything that has to act on the plugin
+    // rather than print it (the same identity every other per-plugin decision
+    // is keyed on - see pluginKey).
+    std::string playingPluginKey() const;
+
+    // Blocks in which the playing plugin handed over less than a full block,
+    // and how many frames of silence that cost. Cumulative since the last
+    // rebuild. The sibling of AudioOut::underruns() for the plugin path: a
+    // decoder that is playing but cannot keep up sounds exactly like a device
+    // that is starving, and without these two numbers side by side there is no
+    // way to tell which of the two is happening.
+    std::uint64_t audioGaps() const;
+    std::uint64_t audioGapFrames() const;
+
+    // GUI thread. Writes the diagnostics the audio path recorded: one line per
+    // takeover transition, and a once-a-minute gap digest when there is
+    // anything to say.
+    //
+    // CALLED BY drainText(), which the GUI already calls every frame, so this
+    // needs no new wiring to work - and is public so the status card can call
+    // it explicitly if the frame loop ever stops draining text. The real-time
+    // path only records fixed-size events; the formatting, the clock and the
+    // log write all happen here, on a thread that is allowed to do them.
+    void pollAudioDiagnostics();
+
     // GUI thread. Moves out whatever has been decoded since the last call.
     std::vector<DecodedLine> drainText();
 
@@ -284,6 +339,78 @@ private:
         bool failed = false;
     };
 
+    // ONE PLUGIN'S CLAIM ON THE SPEAKERS, riding on a decoder instance.
+    //
+    // It holds no handle of its own because CASCADE_CAP_AUDIO_OUT has no
+    // create(): `handle` is borrowed from whichever decoder instance this
+    // plugin produced, and destroyLocked() must therefore drop these BEFORE it
+    // destroys the instances they point at.
+    //
+    // Everything else here exists so the real-time pull allocates nothing. The
+    // plugin's rate is almost never the sink's, and a resampler emits a
+    // variable number of samples per call while the sink needs an exact block,
+    // so the converted audio lands in a small FIFO and the block is taken from
+    // that. `fifoHead` is an index rather than an erase: at 48 kHz this runs
+    // every few milliseconds for as long as the user is listening.
+    struct AudioInstance {
+        const CascadeAudioOutApi* api = nullptr;
+        void* handle = nullptr;  // borrowed from a decoder instance
+        std::string name;
+        std::string key;
+        std::uint32_t rateHz = 0;
+        std::uint32_t channels = 1;
+        // Set when pull() returns negative - the ABI's "stopped producing for
+        // good". The instance is never pulled or asked active() again.
+        bool stopped = false;
+        // Said once, when this instance asked for the speakers while another
+        // already had them. Cleared when it stops asking, so a plugin that
+        // contends again after a real change of mind is heard from again.
+        bool contentionLogged = false;
+        // One resampler per output channel, from rateHz to the sink rate; null
+        // when the two agree. Two of them for the same reason the pipeline has
+        // two: a resampler is a state machine and one instance cannot carry
+        // two signals.
+        std::unique_ptr<cascade::dsp::RationalResampler> rsL;
+        std::unique_ptr<cascade::dsp::RationalResampler> rsR;
+        std::vector<float> pullBuf;  // interleaved, handed to the plugin
+        std::vector<float> inL, inR;
+        std::vector<float> fifoL, fifoR;
+        std::size_t fifoHead = 0;
+    };
+
+    // Recorded by the real-time path, written out by pollAudioDiagnostics on
+    // the GUI thread. FIXED STORAGE and a fixed-size array, because the thread
+    // that fills one of these is not allowed to allocate - a std::string here
+    // would put a heap call in the audio path for the sake of a log line.
+    struct AudioEvent {
+        enum class Kind { Started, Stopped, Contended } kind = Kind::Started;
+        char name[64] = {0};
+        // Whoever has the speakers, for a Contended event - a line that names
+        // only the loser leaves the user hunting for which plugin to stop.
+        char holder[64] = {0};
+        std::uint32_t rateHz = 0;
+        std::uint32_t channels = 0;
+        std::uint32_t sinkRateHz = 0;
+    };
+    static constexpr std::size_t kMaxAudioEvents = 8;
+
+    // Enough converted audio to absorb one large block plus the ragged
+    // remainder a resampler leaves. Sized once, at rebuild.
+    static constexpr std::size_t kAudioFifoFrames = 16384;
+
+    // No plugin is playing. std::size_t, not -1 in an int, because it indexes
+    // audioInstances_.
+    static constexpr std::size_t kNoAudio = static_cast<std::size_t>(-1);
+
+    // Fills one instance's FIFO and takes `frames` out of it. Called with the
+    // lock held, from the real-time path only.
+    void pullAudioLocked(AudioInstance& a, float* left, float* right, std::size_t frames);
+    // Records a transition for pollAudioDiagnostics. Lock held, no allocation.
+    // `holder` is the instance currently holding the speakers, for a Contended
+    // event, and null otherwise.
+    void noteAudioEventLocked(AudioEvent::Kind kind, const AudioInstance& a,
+                              const AudioInstance* holder);
+
     // A plugin is third-party code: an absurd width/height must not make the
     // host try to allocate it. CASCADE_IMAGE_MAX_DIM bounds each side; this
     // bounds the product, which is what actually gets allocated.
@@ -321,6 +448,21 @@ private:
     // decide whether it has anything to feed without walking the vector.
     std::size_t audioImageCount_ = 0;
     std::size_t iqImageCount_ = 0;
+    std::vector<AudioInstance> audioInstances_;
+    // Index into audioInstances_ of the plugin holding the speakers, or
+    // kNoAudio. FIRST WINS: the search runs in rebuild order and stops at the
+    // first instance that says it is active, so two plugins asking at once is
+    // decided by load order and not by which block the question was asked in.
+    std::size_t playing_ = kNoAudio;
+    std::array<AudioEvent, kMaxAudioEvents> audioEvents_{};
+    std::size_t audioEventCount_ = 0;
+    std::uint64_t audioGaps_ = 0;
+    std::uint64_t audioGapFrames_ = 0;
+    // What pollAudioDiagnostics last reported, so the once-a-minute digest
+    // reports the minute rather than the session. GUI thread only.
+    std::uint64_t audioGapsReported_ = 0;
+    std::uint64_t audioGapFramesReported_ = 0;
+    std::chrono::steady_clock::time_point audioDigestAt_{};
     std::vector<DecoderStatus> status_;
     double audioRateHz_ = 0.0;
     double iqRateHz_ = 0.0;

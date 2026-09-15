@@ -127,6 +127,14 @@ enum class PluginRejection {
     InstrumentStructSizeMismatch,
     MissingInstrumentFunction,     // create/poll_state/destroy NULL, or no title
     InstrumentHalfMemory,          // columns and poll_rows must be both set or both NULL
+    MissingAudioOutApi,
+    AudioOutStructSizeMismatch,
+    AudioOutBadRate,       // sampleRateHz 0, or outside the audio bounds. 0 is
+                           // refused here though the decoder tables allow it:
+                           // see CascadeAudioOutApi - a producer that will not
+                           // state its rate cannot be resampled.
+    AudioOutBadChannels,   // channels neither 1 nor 2
+    MissingAudioOutFunction,  // pull or active NULL
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -177,6 +185,11 @@ struct LoadedPlugin {
     const CascadePresetApi* preset = nullptr;              // CASCADE_CAP_PRESET
     const CascadeBasemapApi* basemap = nullptr;            // CASCADE_CAP_BASEMAP
     const CascadeTrackInfoApi* trackInfo = nullptr;        // CASCADE_CAP_TRACK_INFO
+    // CASCADE_CAP_AUDIO_OUT. Carries no create/destroy of its own: it rides on
+    // whichever decoder instance this plugin's other capabilities produced (see
+    // CascadeAudioOutApi), so a record with this set and no decoder table is a
+    // plugin the runner will never pull from.
+    const CascadeAudioOutApi* audioOut = nullptr;
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.
