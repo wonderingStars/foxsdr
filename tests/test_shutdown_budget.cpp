@@ -564,6 +564,16 @@ const KnownWait kKnownWaits[] = {
      "SdrPlaySource::read()'s wait for the service's callback to fill the ring, spent on the "
      "pipeline's source thread, which the teardown already waits for through kSourceJoinWait's "
      "3000 ms - never on the GUI teardown thread"},
+    {"src/source/sdrplay_source.hpp", "kControlWait", 0,
+     "how long a live control waits for sdrplay_api_Update ITSELF before ABANDONING the worker "
+     "it ran the call on (the 0.96.2 hang report, bounded in 0.96.3). Spent on the GUI thread by "
+     "a setter - a panel retune, a gain "
+     "slider, an antenna change - and NOT on the teardown path: stop() issues no Update at all, "
+     "it calls sdrplay_api_Uninit directly, and closeDevice() calls ReleaseDevice. A control "
+     "cannot be in flight across the teardown either, because it is synchronous on the same "
+     "thread the teardown runs on, so the frame it belongs to has already finished. It composes "
+     "with kUpdateWait below rather than replacing it: 1000 + 500 is the worst a single control "
+     "can cost that thread, which is what has to stay under the watchdog's frame threshold"},
     {"src/source/sdrplay_source.hpp", "kUpdateWait", 0,
      "how long a live parameter change waits for the service to ACKNOWLEDGE it through the next "
      "stream callback's changed flags (SoapySDRPlay3's updateTimeout, same 500 ms). Spent on the "

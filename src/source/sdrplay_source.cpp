@@ -521,6 +521,15 @@ const char* sdrPlayServiceHungSentence() {
     return "the SDRplay service did not answer within 3 s - restart the SDRplay API service";
 }
 
+const char* sdrPlayControlHungSentence() {
+    // As above: the number is kControlWait, spelled out and pinned, because a
+    // formatted sentence and a changed constant drift apart in silence.
+    static_assert(SdrPlaySource::kControlWait == std::chrono::milliseconds(1000),
+                  "the sentence below quotes one second");
+    return "the SDRplay service did not answer within 1 s - restart the SDRplay API service, "
+           "then open the radio again";
+}
+
 bool sdrPlayEnumerationHeldOff() {
     return enumerationHeldOffAt(std::chrono::steady_clock::now());
 }
@@ -1135,6 +1144,10 @@ bool SdrPlaySource::open(const std::string& args) {
         return false;
     }
     clearError();
+    // A fresh session is a fresh device: the same judgement clearError() makes
+    // about deviceDead, applied to the control seam. Whatever we abandoned
+    // belongs to the device that was open before this one.
+    controlAbandoned_ = false;
 
     std::string error;
     if (!acquireSessionLocked(error)) {
@@ -1332,6 +1345,16 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
         // service reads it at Init. Nothing to send and nothing to wait for.
         return true;
     }
+
+    // A DEVICE WE HAVE ALREADY ABANDONED A THREAD INSIDE gets no further
+    // calls, ever. See controlAbandoned_: the first one is parked in the
+    // vendor DLL with no way to recall it, and a panel whose sliders keep
+    // working would park one per click.
+    if (controlAbandoned_) {
+        setError(std::string(what) + " refused: " + sdrPlayControlHungSentence());
+        return false;
+    }
+
     const abi::Api& a = api();
 
     const bool wantGr = (reason & abi::Update_Tuner_Gr) != 0;
@@ -1341,7 +1364,52 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     if (wantRf) { link_->rfChanged.store(0, std::memory_order_relaxed); }
     if (wantFs) { link_->fsChanged.store(0, std::memory_order_relaxed); }
 
-    const abi::ErrT err = a.Update(device_.dev, device_.tuner, reason, ext1);
+    // THE VENDOR CALL ON A WORKER, and the caller's WAIT is what is bounded -
+    // sdrplay_api_Update takes no timeout and cannot be cancelled, exactly
+    // like the enumeration calls above. The 0.96.2 report is this call taking
+    // five seconds to answer ServiceNotResponding on the GUI thread, which is
+    // the hang watchdog's entire frame threshold. See kControlWait.
+    //
+    // The promise is a shared_ptr and the device handle and tuner are copied
+    // in, and that is load-bearing rather than tidy: an abandoned worker
+    // outlives this frame and this function, so everything it writes into
+    // must be owned by the worker - INCLUDING the table, which is captured as
+    // a POINTER BY VALUE rather than as this frame's reference to it: the
+    // table itself is process-scope and never unloaded (and a test's fake
+    // outlives the worker it abandons deliberately), but the local reference
+    // naming it dies with this frame and an abandoned worker does not.
+    auto result = std::make_shared<std::promise<abi::ErrT>>();
+    std::future<abi::ErrT> done = result->get_future();
+    const abi::Api* const table = &a;
+    void* const dev = device_.dev;
+    const abi::TunerSelectT tuner = device_.tuner;
+    std::thread worker([table, result, dev, tuner, reason, ext1]() {
+        result->set_value(table->Update(dev, tuner, reason, ext1));
+    });
+
+    if (done.wait_for(kControlWait) != std::future_status::ready) {
+        // ABANDONED. Not joined, not killed, not signalled: the thread is
+        // inside the vendor DLL and there is no handle we can close to bring
+        // it back. It holds everything it needs, so it can finish - or not -
+        // harmlessly.
+        worker.detach();
+        controlAbandoned_ = true;
+        // A DEAD RECEIVER, through the same path a returned
+        // ServiceNotResponding takes, so Pipeline's source thread latches the
+        // fault and stops rather than reading a service that is gone.
+        noteFaultOn(*link_, what, sdrPlayControlHungSentence());
+        core::diagWarnf(
+            "source: SDRplay %s abandoned - the service did not answer within %lld ms; the radio "
+            "is released",
+            what, static_cast<long long>(kControlWait.count()));
+        core::diagLogf(
+            "source: SDRplay controls are refused for this device from here - a worker is still "
+            "inside sdrplay_api_Update");
+        return false;
+    }
+
+    worker.join();
+    const abi::ErrT err = done.get();
     if (err != abi::Success) {
         setError(std::string(what) + " failed: " + errText(a, err));
         core::diagWarnf("source: SDRplay %s failed - %s", what, errText(a, err).c_str());
