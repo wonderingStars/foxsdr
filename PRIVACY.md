@@ -163,7 +163,11 @@ application was looking for hardware, which is caught and turned into "no
 devices found" instead of a crash. The second is the device search itself,
 which runs in a small separate process so that a driver falling over cannot
 take the session with it — when that process dies, the session records what
-happened to it, including when the search then succeeded on a second try. That
+happened to it, including when the search then succeeded on a second try. When that happens the
+report carries NO call stack at all, and says so: the fault was in the other
+process, and this one has nothing to show. It adds the two `child-` lines in
+the process block below and nothing else, and no memory dump is written for it.
+That
 small process can also write a report of its own, into the same folder and with
 the same fields, and only when diagnostics are switched on: it is handed the
 folder by the session that started it and is told nothing at all when the
@@ -175,7 +179,8 @@ none of them adds a field, and all are governed by the same switch in
 
 | Field | Example | Why |
 |---|---|---|
-| `kind` | `hang` | As above. |
+| `kind` | `hang` or `stall` | As above. `stall` means the wait was inside the display driver rather than inside FoxSDR - a monitor switched off, a resolution change, a remote session. Those are kept on your machine and never sent. |
+| `note` | `the gui thread did not complete a frame within the threshold` | The same distinction in one sentence, so a report says what it is without anyone having to know the codes. |
 | `stalled-ms` | `7213` | How long the interface had been unresponsive. |
 | `threshold-ms` | `5000` | What it was measured against, so the number above can be judged. |
 | `signature` | `7C04…` | As above. |
@@ -193,6 +198,8 @@ crash report and before the stacks in a freeze report:
 |---|---|---|
 | `uptime-sec` | `2731` | How many seconds the application had been running. A fault forty seconds after a rate change and one three hours in are different bugs at the same address. |
 | `fault-thread-own` | `yes`, `no` or `unknown` | Crash reports only. Whether any frame of the faulting thread's stack lies in FoxSDR's own executable: `no` means a thread a radio driver created and ran entirely in its own code, which a report could not previously say. `unknown` when the stack could not be walked. |
+| `child-exit-code` | `0xC0000005` | Child-process faults only (0.96.4). What the small device-search process died of - the same number Windows gave it. |
+| `child-attempt` | `1` | Child-process faults only. Which try it was, since the search is retried once. |
 
 Both are about the program. Neither is about you.
 
@@ -223,7 +230,7 @@ One request per report, on the **next** start after the failure, to
 | Field | Example | Why |
 |---|---|---|
 | `schema` | `1` | Which version of this list the request follows. |
-| `kind` | `crash` or `hang` | Which of the two documents it is. |
+| `kind` | `crash` or `hang` | Which of the two documents it is. A freeze whose `kind` is `stall` - the display driver was waiting, not FoxSDR - is never uploaded at all; it stays on your machine. |
 | `version` | `0.62.0` | Which release. |
 | `commit` | `98a9d7d617a7` | Which build. Only the commit names a build; the offsets below are meaningless against the wrong one. |
 | `buildId` | `651FD5EB…C528` | Which *link*. Two builds of one version have different code at the same offsets. This identifies the compiled file, not you or your machine. |

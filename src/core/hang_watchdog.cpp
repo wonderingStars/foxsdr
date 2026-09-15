@@ -246,7 +246,99 @@ bool isMessagePumpModule(const char* name) {
     return name[i] == '\0';
 }
 
+// Case-insensitive helpers for the module-name rules below. The loader reports
+// names as the file system has them and the same machine has produced
+// "win32u.dll" and "WIN32U.DLL" in one module table, so nothing here may
+// compare bytes directly.
+char lowerAscii(char c) {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+bool equalsNoCase(const char* name, const char* want) {
+    if (name == nullptr) { return false; }
+    std::size_t i = 0;
+    for (; want[i] != '\0'; ++i) {
+        if (name[i] == '\0' || lowerAscii(name[i]) != want[i]) { return false; }
+    }
+    return name[i] == '\0';
+}
+
+bool startsWithNoCase(const char* name, const char* prefix) {
+    if (name == nullptr) { return false; }
+    for (std::size_t i = 0; prefix[i] != '\0'; ++i) {
+        if (name[i] == '\0' || lowerAscii(name[i]) != prefix[i]) { return false; }
+    }
+    return true;
+}
+
+bool containsNoCase(const char* name, const char* needle) {
+    if (name == nullptr) { return false; }
+    for (std::size_t s = 0; name[s] != '\0'; ++s) {
+        if (startsWithNoCase(name + s, needle)) { return true; }
+    }
+    return false;
+}
+
+// WHERE A THREAD SITS WHEN IT IS WAITING FOR SOMETHING. Every blocking wait on
+// Windows bottoms out in one of these, so this alone says nothing about the
+// CAUSE - it is the precondition, not the decision.
+bool isKernelWaitModule(const char* name) {
+    return equalsNoCase(name, "ntdll.dll") || equalsNoCase(name, "win32u.dll") ||
+           equalsNoCase(name, "kernelbase.dll") || equalsNoCase(name, "kernel32.dll");
+}
+
+// THE GRAPHICS STACK, and the list is deliberately in three parts because the
+// three rot at different speeds.
+//
+//   - The Windows-owned names are fixed and can be matched exactly.
+//   - The vendor driver names are stable per vendor and matched by PREFIX, so a
+//     new revision (atio6axx -> atio7axx) is still recognised.
+//   - The installable client drivers all carry "icd" in the middle of a name
+//     that is otherwise unpredictable (ig9icd64, igvk64, nvoglv64), so that
+//     substring is the third rule.
+//
+// A name that is not here is simply not evidence of a display stall, and the
+// report stays a hang - which is the safe direction to be wrong in.
+bool isDisplayModule(const char* name) {
+    static const char* const kExact[] = {
+        "opengl32.dll", "glu32.dll",  "dxgi.dll",    "dxcore.dll", "gdi32.dll",
+        "gdi32full.dll", "dwmapi.dll", "d3d9.dll",   "d3d11.dll",  "d3d12.dll",
+        "d3d10warp.dll", "vulkan-1.dll",
+    };
+    for (const char* e : kExact) {
+        if (equalsNoCase(name, e)) { return true; }
+    }
+    static const char* const kPrefixes[] = {
+        // AMD (atio6axx.dll is the module the 0.96.3 report named).
+        "atio", "atig", "aticfx", "amdxc", "amdihk", "amdvlk", "amdxn",
+        // NVIDIA.
+        "nvoglv", "nvd3dum", "nvwgf2um", "nvldumd", "nvapi",
+        // Intel.
+        "igd", "igvk", "igc", "ig9", "ig11", "ig12",
+    };
+    for (const char* p : kPrefixes) {
+        if (startsWithNoCase(name, p)) { return true; }
+    }
+    return containsNoCase(name, "icd");
+}
+
 }  // namespace
+
+bool HangWatchdog::isDisplayPresentationStall(const char* const* frameModules, int count) {
+    if (frameModules == nullptr || count <= 0) { return false; }
+    // THE TOP FRAME MUST BE A WAIT. A thread that is BUSY in a display driver -
+    // spinning, or genuinely computing - is not stalled on presentation, and a
+    // stall that is not a wait is this application burning a core.
+    if (!isKernelWaitModule(frameModules[0])) { return false; }
+    const int scan = (count < kDisplayStallScanFrames) ? count : kDisplayStallScanFrames;
+    // ...AND THE GRAPHICS STACK MUST BE UNDER IT, within the handful of frames a
+    // present call occupies. Frame 0 is skipped: it is the wait module by the
+    // test above, and nothing else.
+    for (int i = 1; i < scan; ++i) {
+        if (isDisplayModule(frameModules[i])) { return true; }
+    }
+    return false;
+}
 
 bool HangWatchdog::guiThreadIsPumping() const {
     {
@@ -501,9 +593,67 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
             topOffset = off;
         }
     }
+
+    // PHASE 1b - THE STALLED THREAD'S WALK, AND WHY IT COMES BEFORE THE HEADER.
+    //
+    // The `kind` line is the first line of the file and decides how the report
+    // groups, so it has to be right before anything is written - and telling a
+    // display stall from a real hang needs the frames UNDER the top one, not
+    // just frame 0 (which is ntdll.dll for every wait there is). So exactly one
+    // walk is moved ahead of the header: the stalled thread's.
+    //
+    // WHAT THAT COSTS, plainly. The header is written first because phase 2's
+    // unwinder can in principle block on the loader lock, and a report that
+    // stops half way still names the fault. Walking one thread first means a
+    // wedge THERE costs the whole report. It is bounded and it is the least bad
+    // of the three options: the thread walked here is by definition not moving,
+    // it is the one walk whose result the report cannot be written without, and
+    // the alternative - filing every AMD display stall as a hang in this
+    // application - is the defect being fixed. Every other thread is still
+    // walked after the header, exactly as before.
+    //
+    // ONLY WHEN IT MIGHT MATTER: a stalled thread whose frame 0 is not a kernel
+    // wait cannot be waiting on presentation, so the ordinary path is untouched
+    // for it and the header goes out first as it always did.
+    bool displayStall = false;
+    bool guiWalked = false;
+#if defined(_WIN32) && defined(_M_X64)
+    if (!stacks.empty() && stacks[0].tid == gui && stacks[0].tid != self &&
+        stacks[0].count > 0 && isKernelWaitModule(topModule)) {
+        CONTEXT ctx = contexts[0];
+        const int n = walkThreadContext(&ctx, stacks[0].frames, kMaxHangFrames);
+        if (n > 0) {
+            stacks[0].count = n;
+            guiWalked = true;
+            DiagModule mods[HangWatchdog::kDisplayStallScanFrames];
+            const char* names[HangWatchdog::kDisplayStallScanFrames] = {};
+            const int scan =
+                (n < HangWatchdog::kDisplayStallScanFrames) ? n
+                                                            : HangWatchdog::kDisplayStallScanFrames;
+            for (int i = 0; i < scan; ++i) {
+                std::uintptr_t off = 0;
+                names[i] = resolveAddress(stacks[0].frames[i], mods[i], off) ? mods[i].name
+                                                                            : nullptr;
+            }
+            displayStall = HangWatchdog::isDisplayPresentationStall(names, scan);
+        } else {
+            // The walk yielded nothing: frame 0 is still the register the
+            // signature is built from, so put it back rather than leaving an
+            // empty stack behind.
+            stacks[0].frames[0] = static_cast<std::uintptr_t>(contexts[0].Rip);
+            stacks[0].count = 1;
+        }
+    }
+#endif
+
     // 0x48414E47 is 'HANG' - a hang and a crash at the same address are
-    // different bugs and must not group together.
-    const std::string sig = crashSignature(0x48414E47ul, topModule, topOffset);
+    // different bugs and must not group together. 0x5354414C is 'STAL', and it
+    // is a THIRD group for the same reason: a stall in the display driver and a
+    // deadlock in this application can present the same top frame
+    // (ntdll.dll+the same wait), and letting them share a signature would bury
+    // a real bug under a pile of monitors being switched off.
+    const std::string sig =
+        crashSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, topModule, topOffset);
 
     // THE IDENTIFYING HALF GOES TO DISK FIRST, and is flushed, exactly as
     // crash_handler.cpp does on the fault path. Phase 1 above can no longer
@@ -519,7 +669,21 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // PRIVACY.md; tests/test_diag_hang.cpp compares the two as SETS, both
     // ways, against a report written by a real stall. A line added here
     // without being added there fails that test.
-    out << "kind: hang\n";
+    // TWO KINDS, and a sentence saying which. "stall" is a presentation stall
+    // in the graphics stack - the application was waiting for a driver that was
+    // waiting for a display - and it must not be counted, grouped or triaged
+    // alongside a fault in this program. core/crash_upload.cpp keeps a stall on
+    // the machine rather than sending it: the receiving end accepts crash and
+    // hang, and the whole point of the classification is that this is not one
+    // of ours to report.
+    out << "kind: " << (displayStall ? "stall" : "hang") << "\n";
+    out << "note: "
+        << (displayStall
+                ? "presentation stalled in the display driver - the frames under the wait "
+                  "are the graphics stack, not this application. A monitor switched off, a "
+                  "resolution change, a GPU reset or a remote session will do this."
+                : "the gui thread did not complete a frame within the threshold")
+        << "\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
     // The threshold IN FORCE, which is what tells a reader whether this stall
     // was measured against the frame loop's 5 s or the teardown's own budget.
@@ -589,7 +753,10 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     for (std::size_t i = 0; i < stacks.size(); ++i) {
         ThreadStack& ts = stacks[i];
 #if defined(_WIN32) && defined(_M_X64)
-        if (ts.tid != self && ts.count > 0) {
+        // ...except the stalled thread, if phase 1b already walked it for the
+        // classification. Walking it twice would unwind an already-unwound
+        // context and produce one frame.
+        if (ts.tid != self && ts.count > 0 && !(i == 0 && guiWalked)) {
             CONTEXT ctx = contexts[i];
             ts.count = walkThreadContext(&ctx, ts.frames, kMaxHangFrames);
             // A walk that yielded nothing still has the register frame, which

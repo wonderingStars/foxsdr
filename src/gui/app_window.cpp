@@ -74,6 +74,7 @@
 #include "gui/track_detail_view.hpp"
 #include "gui/tune_control.hpp"
 #include "gui/waterfall_view.hpp"
+#include "gui/present_grace.hpp"
 #include "gui/win_frame.hpp"
 #include "source/iq_file_source.hpp"
 
@@ -466,9 +467,37 @@ bool parseFrequencyHz(const char* text, double& outHz) {
 // GLFW reports failures through this callback *before* glfwInit/CreateWindow
 // return their error codes, so printing here is what gives the user an actual
 // reason instead of a bare "init failed".
+// A DISPLAY-SETTINGS ERROR IS A DISPLAY CHANGE IN PROGRESS, and it is counted.
+//
+// GLFW error 65544 (GLFW_PLATFORM_ERROR) with "Failed to query display
+// settings" is EnumDisplaySettingsW failing, which is what happens while the
+// desktop is being re-configured underneath the process. It is the line
+// immediately before the five-second SwapBuffers stall in field report "hang
+// ntdll.dll @ cascade::gui::AppWindow::run" (0.96.3, atio6axx.dll), so it is
+// the earliest warning this application gets - earlier, sometimes, than the
+// WM_DISPLAYCHANGE the window procedure counts, because GLFW queries monitors
+// from inside glfwPollEvents.
+//
+// A free counter rather than a member, because GLFW's error callback is a plain
+// function pointer with no user data. Atomic because GLFW may report from
+// whichever thread called in.
+std::atomic<unsigned> g_glfwDisplayErrors{0};
+
 void glfwErrorCallback(int code, const char* description) {
     std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
                  description ? description : "(no description)");
+    // Matched on the MESSAGE as well as the code: GLFW_PLATFORM_ERROR covers
+    // most of what the Win32 backend can refuse, and only the display-settings
+    // one says the desktop is being reconfigured. Anything else keeps the
+    // watchdog armed, which is the safe direction.
+    if (code == 0x00010008 && description != nullptr &&
+        std::strstr(description, "display settings") != nullptr) {
+        g_glfwDisplayErrors.fetch_add(1u, std::memory_order_relaxed);
+        cascade::core::diagWarnf(
+            "display: GLFW could not query display settings - presentation may stall "
+            "briefly; hang reports are suppressed for the next %u ms",
+            cascade::core::HangWatchdog::kDisplayGraceMs);
+    }
 }
 
 // CAN THIS DISPLAY MAKE A SECOND OPENGL CONTEXT AT ALL?
@@ -1339,6 +1368,20 @@ int AppWindow::run(int frames) {
     // at exit, so this costs a write that was already going to happen.
     if (!configPath_.empty()) { saveConfigNow(); }
 
+    // THE FRAMES THIS APPLICATION IS NOT EXPECTED TO PRESENT. See
+    // gui/present_grace.hpp and false-positive rule 2d in
+    // core/hang_watchdog.hpp: a display change stalls the driver's present call
+    // for seconds (0.96.3, an AMD stack, five seconds inside atio6axx.dll), and
+    // an iconified window presents nothing at all. One counted pause covers
+    // both, held by this object and released by its destructor - so no path out
+    // of the loop, exception included, can leave the watchdog disarmed.
+    cascade::gui::PresentGrace presentGrace(
+        [this] { watchdog_.pause(); }, [this] { watchdog_.resume(); },
+        cascade::core::HangWatchdog::kDisplayGraceMs / 1000.0);
+    unsigned lastDisplayChanges =
+        cascade::gui::frame::displayChangeCount() +
+        g_glfwDisplayErrors.load(std::memory_order_relaxed);
+
     int rendered = 0;
     frameCounter_ = 0;
     while (!glfwWindowShouldClose(window) && !closeRequested_) {
@@ -1353,6 +1396,33 @@ int AppWindow::run(int frames) {
         diagSkipNextGap_ = false;
 
         glfwPollEvents();
+
+        // AFTER THE PUMP, BEFORE THE FRAME. glfwPollEvents is where the window
+        // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
+        // been counted by the time this reads it - and the pause is therefore
+        // in force for the very first present after the change, which is the
+        // one that stalls. Both sources are summed into one number: either
+        // moving means the desktop is being reconfigured, and the counters are
+        // monotonic so a sum cannot go backwards.
+        {
+            const unsigned changes = cascade::gui::frame::displayChangeCount() +
+                                     g_glfwDisplayErrors.load(std::memory_order_relaxed);
+            const bool displayChanged = changes != lastDisplayChanges;
+            if (displayChanged) {
+                lastDisplayChanges = changes;
+                cascade::core::diagLogf(
+                    "display changed - presentation stalls for the next %u ms are not reported",
+                    cascade::core::HangWatchdog::kDisplayGraceMs);
+            }
+            // A window nobody can see is not expected to present. GLFW_VISIBLE
+            // is false while the window is still being built (it is created
+            // hidden on purpose, see above) and true for the whole session
+            // afterwards; GLFW_ICONIFIED is the minimise.
+            const bool hidden = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0 ||
+                                glfwGetWindowAttrib(window, GLFW_VISIBLE) == 0;
+            presentGrace.update(glfwGetTime(), displayChanged, hidden);
+        }
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -1609,6 +1679,14 @@ int AppWindow::run(int frames) {
     // the threshold to one sized against those bounded waits. It pauses
     // nothing and disarms nothing: a shutdown that genuinely wedges still
     // crosses the budget and is still captured with every thread's stack.
+    // ...AND THE TEARDOWN IS NOT EXCUSED BY A MINIMISED WINDOW. If the last
+    // frame ran with the presentation pause held - the user minimised the
+    // window and then quit it from the taskbar - that pause must be released
+    // before the shutdown budget starts, or the teardown would run unwatched
+    // and the 120 s CAT freeze this whole mechanism exists for would be
+    // invisible again.
+    presentGrace.release();
+
     watchdog_.beginShutdown();
     const auto teardownStart = std::chrono::steady_clock::now();
 
@@ -5457,15 +5535,48 @@ void AppWindow::pollUpdateAsync() {
     }
 }
 
+cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
+    cascade::gui::ShellPauseHooks hooks;
+    hooks.pause = [this] { watchdog_.pause(); };
+    hooks.resume = [this] { watchdog_.resume(); };
+    return hooks;
+}
+
+bool AppWindow::shellOpen(const std::string& target) {
+    return cascade::gui::runShellOpen(watchdogShellHooks(), [&target]() -> bool {
+#if defined(_WIN32)
+        const HINSTANCE rc =
+            ::ShellExecuteA(nullptr, "open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return reinterpret_cast<std::intptr_t>(rc) > 32;
+#else
+        (void)target;
+        return false;
+#endif
+    });
+}
+
 bool AppWindow::launchInstaller(const std::string& path) {
 #if defined(_WIN32)
-    // ShellExecute rather than CreateProcess: the installer asks for elevation
-    // through its manifest, and only the shell will show that prompt. The
-    // return is the documented "> 32 means it started" convention.
-    const std::wstring wide(path.begin(), path.end());
-    const HINSTANCE rc = ::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr,
-                                         SW_SHOWNORMAL);
-    return reinterpret_cast<std::intptr_t>(rc) > 32;
+    // UNDER A WATCHDOG PAUSE, and that is the whole of the 0.96.2 fix. The
+    // installer asks for elevation through its manifest, only the shell will
+    // show that prompt, and ShellExecuteW does not return until it has been
+    // answered - so this line legitimately blocks the GUI thread for as long as
+    // the user takes to read a dialog. Field report "hang ntdll.dll @
+    // cascade::gui::AppWindow::launchInstaller" is the watchdog reporting that
+    // wait as a hang, five seconds into a consent prompt on a Windows 11
+    // machine 28 s after launch. core/hang_watchdog.hpp's rule 2b names this
+    // exact case ("a native modal dialog ... MUST take one too"); see
+    // gui/shell_open.hpp for why a pause and not a helper thread.
+    return cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
+        // ShellExecute rather than CreateProcess: the installer asks for
+        // elevation through its manifest, and only the shell will show that
+        // prompt. The return is the documented "> 32 means it started"
+        // convention.
+        const std::wstring wide(path.begin(), path.end());
+        const HINSTANCE rc = ::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr,
+                                             SW_SHOWNORMAL);
+        return reinterpret_cast<std::intptr_t>(rc) > 32;
+    });
 #else
     // The installer is a Windows setup program; there is nothing to launch
     // elsewhere, and saying so is better than appearing to succeed.
@@ -17129,10 +17240,10 @@ void AppWindow::drawUsageReportingSection() {
     // reachable from inside the application, not only from the website.
     ImGui::SameLine();
     if (ImGui::SmallButton("Privacy policy (foxsdr.com)")) {
-#if defined(_WIN32)
-        ::ShellExecuteA(nullptr, "open", cascade::core::kPrivacyPolicyUrl, nullptr, nullptr,
-                        SW_SHOWNORMAL);
-#endif
+        // Under the watchdog pause, like every other shell call here: a browser
+        // that has to be COLD STARTED keeps this thread inside the shell for
+        // seconds. See gui/shell_open.hpp.
+        shellOpen(cascade::core::kPrivacyPolicyUrl);
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", cascade::core::kPrivacyPolicyUrl); }
     if (privacyNoticeOpen_) {
@@ -17493,7 +17604,9 @@ void AppWindow::drawDiagnosticsSection() {
         if (!crashDir.empty()) {
             std::error_code ec;
             std::filesystem::create_directories(std::filesystem::path(crashDir), ec);
-            ::ShellExecuteA(nullptr, "open", crashDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            // Explorer's first window of a session is a multi-second cold start
+            // and this thread is inside the shell for all of it.
+            shellOpen(crashDir);
         }
 #endif
     }
@@ -17561,7 +17674,7 @@ void AppWindow::drawDiagnosticsOffer() {
             if (!dir.empty()) {
                 std::error_code ec;
                 std::filesystem::create_directories(std::filesystem::path(dir), ec);
-                ::ShellExecuteA(nullptr, "open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                shellOpen(dir);
             }
 #endif
         }

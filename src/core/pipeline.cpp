@@ -246,6 +246,49 @@ Pipeline::Pipeline(Config cfg)
     // drains. A failed open (headless box) degrades to a deviceless sink:
     // write() still accepts samples, nothing ever blocks.
     if (cfg_.audioEnabled) { openAudioDevice(-1); }
+    // The mirrors the per-frame getters read, seeded from the chain that has
+    // just been built. No thread exists yet, so no lock is needed or taken -
+    // and the input rate's mirror, which lives under the OTHER mutex, is
+    // published here for the same reason.
+    publishParamMirrorsLocked();
+    mirrorInputRateHz_.store(cfg_.sampleRateHz, std::memory_order_relaxed);
+}
+
+void Pipeline::publishParamMirrorsLocked() {
+    // Read from the LIVE objects, not from the arguments the setters were
+    // given: notchFrequencyHz() and the channel rate are clamped/derived, and
+    // mirroring an un-clamped request would have changed a readout while fixing
+    // a stall. See the header for why these mirrors exist at all.
+    mirrorVfoOffsetHz_.store(vfo_.offsetHz(), std::memory_order_relaxed);
+    mirrorChannelRateHz_.store(vfo_.channelRateHz(), std::memory_order_relaxed);
+    mirrorDemodMode_.store(static_cast<int>(demod_.mode()), std::memory_order_relaxed);
+    mirrorDeemphasisUs_.store(deemphasisUs_, std::memory_order_relaxed);
+    mirrorStereoEnabled_.store(stereoEnabled_, std::memory_order_relaxed);
+    // The post-resampler blocks do not exist yet on the constructor's first
+    // pass (rebuildChannelBlocks runs before they are made), so each is guarded
+    // rather than assumed - the alternative is a null dereference on every
+    // construction, which is a worse bug than the one being fixed.
+    if (nrL_) {
+        mirrorNrEnabled_.store(nrL_->isEnabled(), std::memory_order_relaxed);
+        mirrorNrStrength_.store(nrL_->strength(), std::memory_order_relaxed);
+    }
+    if (notchL_) {
+        mirrorNotchEnabled_.store(notchL_->isEnabled(), std::memory_order_relaxed);
+        mirrorNotchHz_.store(notchL_->frequencyHz(), std::memory_order_relaxed);
+        mirrorNotchQ_.store(notchL_->q(), std::memory_order_relaxed);
+    }
+    if (autoNotchL_) {
+        mirrorAutoNotchEnabled_.store(autoNotchL_->isEnabled(), std::memory_order_relaxed);
+    }
+}
+
+void Pipeline::holdLockForTest(LockForTest which, int holdMs, std::atomic<bool>* acquired) {
+    // THE ONE PLACE THIS FILE DELIBERATELY BLOCKS. See the declaration: it
+    // exists so a test can hold the mutex the DSP thread holds across a block
+    // and prove the GUI's getters no longer queue behind it.
+    std::unique_lock<std::mutex> lk(which == LockForTest::Audio ? audioMutex_ : controlMutex_);
+    if (acquired != nullptr) { acquired->store(true, std::memory_order_release); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(holdMs > 0 ? holdMs : 0));
 }
 
 void Pipeline::rebuildChannelBlocks(double chanRate) {
@@ -660,11 +703,11 @@ void Pipeline::setDeemphasisUs(double us) {
     // NFM never de-emphasised: the missing half is the helper.
     stereo_->setDeemphasisUs(us);
     applyDemodDeemphasisLocked();
+    publishParamMirrorsLocked();
 }
 
 double Pipeline::deemphasisUs() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return deemphasisUs_;
+    return mirrorDeemphasisUs_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
@@ -681,6 +724,7 @@ void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
     // Leaving WFM abandons the composite the decoders were tracking, and
     // coming back to it is a fresh acquisition either way.
     resetDecodersLocked();
+    publishParamMirrorsLocked();
 }
 
 void Pipeline::setStereoEnabled(bool on) {
@@ -690,11 +734,11 @@ void Pipeline::setStereoEnabled(bool on) {
     // and stereo instead of stepping — a step in the difference channel is an
     // audible click in both speakers.
     stereo_->setForceMono(!on);
+    publishParamMirrorsLocked();
 }
 
 bool Pipeline::stereoEnabled() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return stereoEnabled_;
+    return mirrorStereoEnabled_.load(std::memory_order_relaxed);
 }
 
 bool Pipeline::pilotLocked() const {
@@ -723,22 +767,22 @@ void Pipeline::setNoiseReductionEnabled(bool on) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     nrL_->setEnabled(on);
     nrR_->setEnabled(on);
+    publishParamMirrorsLocked();
 }
 
 bool Pipeline::noiseReductionEnabled() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return nrL_->isEnabled();
+    return mirrorNrEnabled_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setNoiseReductionStrength(float s01) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     nrL_->setStrength(s01);
     nrR_->setStrength(s01);
+    publishParamMirrorsLocked();
 }
 
 float Pipeline::noiseReductionStrength() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return nrL_->strength();
+    return mirrorNrStrength_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setNotchEnabled(bool on) {
@@ -751,22 +795,22 @@ void Pipeline::setNotchEnabled(bool on) {
     }
     notchL_->setEnabled(on);
     notchR_->setEnabled(on);
+    publishParamMirrorsLocked();
 }
 
 bool Pipeline::notchEnabled() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return notchL_->isEnabled();
+    return mirrorNotchEnabled_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setNotchFrequencyHz(double hz) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     notchL_->setFrequencyHz(hz);
     notchR_->setFrequencyHz(hz);
+    publishParamMirrorsLocked();
 }
 
 double Pipeline::notchFrequencyHz() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return notchL_->frequencyHz();
+    return mirrorNotchHz_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setNotchQ(double q) {
@@ -775,11 +819,11 @@ void Pipeline::setNotchQ(double q) {
     notchR_->setQ(q);
     autoNotchL_->setQ(q);
     autoNotchR_->setQ(q);
+    publishParamMirrorsLocked();
 }
 
 double Pipeline::notchQ() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return notchL_->q();
+    return mirrorNotchQ_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setAutoNotchEnabled(bool on) {
@@ -793,11 +837,11 @@ void Pipeline::setAutoNotchEnabled(bool on) {
     if (!on) {
         autoNotchEngaged_.store(false, std::memory_order_relaxed);
     }
+    publishParamMirrorsLocked();
 }
 
 bool Pipeline::autoNotchEnabled() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return autoNotchL_->isEnabled();
+    return mirrorAutoNotchEnabled_.load(std::memory_order_relaxed);
 }
 
 bool Pipeline::autoNotchEngaged() const {
@@ -809,8 +853,8 @@ double Pipeline::autoNotchFrequencyHz() const {
 }
 
 cascade::dsp::DemodMode Pipeline::demodMode() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return demod_.mode();
+    return static_cast<cascade::dsp::DemodMode>(
+        mirrorDemodMode_.load(std::memory_order_relaxed));
 }
 
 void Pipeline::setVfoOffsetHz(double offsetHz) {
@@ -821,11 +865,11 @@ void Pipeline::setVfoOffsetHz(double offsetHz) {
     // that belonged to the old one must not survive it. (The SOURCE centre
     // moving is invisible from here — that caller has to call resetRds().)
     resetDecodersLocked();
+    publishParamMirrorsLocked();
 }
 
 double Pipeline::vfoOffsetHz() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return vfo_.offsetHz();
+    return mirrorVfoOffsetHz_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setVfoBandwidthHz(double bandwidthHz) {
@@ -835,6 +879,7 @@ void Pipeline::setVfoBandwidthHz(double bandwidthHz) {
     // the NEW channel rate (clamping a clamp would ratchet the bandwidth).
     vfoBandwidthHz_ = bandwidthHz;
     vfo_.setBandwidthHz(bandwidthHz);
+    publishParamMirrorsLocked();
 }
 
 void Pipeline::setSquelchDb(float thresholdDb) {
@@ -1011,6 +1056,11 @@ bool Pipeline::setInputRateHz(double rateHz) {
 
         fmScale_ = static_cast<float>(0.5 * chanRate /
                                       (kTwoPi * kFmDeviationHz));
+
+        // The whole chain has just been replaced, so every mirror the GUI
+        // polls is stale by definition - the channel rate above all, which is
+        // the value this call exists to change.
+        publishParamMirrorsLocked();
     }
     signalDb_.store(-200.0f, std::memory_order_relaxed);
 
@@ -1018,6 +1068,9 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // refused/aborted call really did change nothing. The spectrum estimator
     // and the ring are deliberately untouched (rate-agnostic; see header).
     cfg_.sampleRateHz = rateHz;
+    // ...and the lock-free mirror inputRateHz() reads, in the same breath as
+    // the field it mirrors, so the two can never disagree.
+    mirrorInputRateHz_.store(rateHz, std::memory_order_relaxed);
 
     if (live) {
         dspRun_.store(true, std::memory_order_relaxed);
@@ -1027,13 +1080,15 @@ bool Pipeline::setInputRateHz(double rateHz) {
 }
 
 double Pipeline::inputRateHz() const {
-    std::lock_guard<std::mutex> lk(controlMutex_);
-    return cfg_.sampleRateHz;
+    // controlMutex_ is held across the WHOLE of start(), stop(), setSource()
+    // and setInputRateHz - seconds, when a vendor driver is slow to give a
+    // source thread back - and the GUI reads this thirteen times a frame. The
+    // mirror is published at the one line that commits a new rate.
+    return mirrorInputRateHz_.load(std::memory_order_relaxed);
 }
 
 double Pipeline::channelRateHz() const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    return vfo_.channelRateHz();
+    return mirrorChannelRateHz_.load(std::memory_order_relaxed);
 }
 
 std::uint64_t Pipeline::audioSamplesProduced() const {

@@ -155,6 +155,43 @@ std::string activeCrashDir();
 void reportAbsorbedFault(const char* reason, unsigned long code, const void* faultAddress,
                          void* exceptionPointers);
 
+// THE SAME THING FOR A FAULT IN A CHILD PROCESS, and it is a separate entry
+// point because the one fact that matters is the one reportAbsorbedFault cannot
+// express: this process did not fault, so it has no stack worth capturing.
+//
+// WHY IT EXISTS. `cascade --enumerate-json` is expected to die occasionally by
+// design (the contained libusb fault under an old UHD), and
+// source/soapy_enum_proc.cpp files a report at every death so the containment
+// does not make the fault invisible. It filed it through reportAbsorbedFault
+// with no exception pointers, which walked the CURRENT thread's stack - the
+// std::async worker of the device scan, the one caller that arrives here with a
+// nearly spent stack. Twice: B9D41A8D on 0.64.0, which the __try in
+// captureFramesGuarded was added for, and then "crash cascade.exe @
+// captureFramesGuarded" on 0.96.3, where the fault was a STACK OVERFLOW and the
+// __try had no room to run either. The parent survived the child's death and
+// was then killed by the act of writing the report about it.
+//
+// So this path never walks at all. The report carries the reason, the child's
+// exit code and which attempt it was; the stack section says in words that the
+// fault was in another process. No minidump is written either - a dump of the
+// process that SURVIVED cannot document the fault and is the most revealing
+// artefact this product can put on a user's disk.
+void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, int attempt);
+
+// TEST HOOK for the frame-capture policy above. The two properties that matter
+// cannot be reached any other way - captureFramesGuarded is internal, and
+// neither an exhausted stack nor a zeroed exception context can be staged
+// through a real fault from ctest.
+//
+//   `exceptionPointers`  an EXCEPTION_POINTERS* (void* so this header stays
+//                        free of <windows.h>), or nullptr.
+//   `mayWalkCurrentThread`  false forbids touching this thread's own stack.
+//
+// Returns the number of frames captured. A supplied context with a null or
+// zeroed ContextRecord returns 0 rather than quietly substituting the calling
+// thread's stack for the one that was asked for.
+int captureFramesForTest(void* exceptionPointers, bool mayWalkCurrentThread);
+
 // TEST HOOK. Raises a real fault of the requested kind so a child process can
 // prove the handler catches it and writes a readable report. A crash handler
 // that has never caught a crash is a hypothesis; this is how it stops being

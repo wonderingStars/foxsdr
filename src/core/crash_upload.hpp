@@ -117,7 +117,11 @@ struct ReportThread {
 };
 
 struct ParsedReport {
-    std::string kind;  // "crash" | "hang"; anything else is refused
+    // "crash" | "hang" are sent; "stall" (a display-driver presentation stall,
+    // see core/hang_watchdog.cpp) parses but is kept on the machine, because it
+    // is not a fault in this application; anything else is refused as
+    // unreadable.
+    std::string kind;
     std::string signature;
     // The report's own `reason:` and `code:` lines, verbatim. These are what
     // separate an ABSORBED vendor fault (the guard filed the report and the

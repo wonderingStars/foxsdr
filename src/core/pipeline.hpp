@@ -56,6 +56,35 @@
 // Audio-chain parameter setters serialize against the DSP thread under one
 // internal mutex and take effect at the next block.
 //
+// AND THE PARAMETER GETTERS TAKE NO LOCK AT ALL, which is not an optimisation.
+//
+// processAudioBlock() holds audioMutex_ across a WHOLE block - the VFO's FIR at
+// the input rate, the demodulator, the stereo matrix, RDS, the AGC, the
+// squelch, three resamplers, the notches, the noise reduction and the sink
+// write. On a machine that keeps up that is a few tens of microseconds per
+// block and nobody notices. On one that does not, the blocks run back to back
+// and the mutex is held essentially all of the time.
+//
+// The GUI reads these parameters EVERY FRAME - vfoOffsetHz() alone from eleven
+// places in app_window.cpp, inputRateHz() from thirteen, channelRateHz() from
+// eight, and currentConfig() once more on top of that for the debounced config
+// save. Each of those used to be a std::mutex acquisition queued behind the DSP
+// thread, so a machine whose DSP could not keep up convoyed its RENDER thread
+// behind the audio chain. Field report "hang ntdll.dll @
+// cascade::core::Pipeline::vfoOffsetHz" (0.96.2, an NESDR SMArt v5 starving its
+// audio callback 110 times a minute) is exactly that: the GUI thread stalled
+// over five seconds inside AppWindow::run -> maybeSaveConfig -> currentConfig
+// -> vfoOffsetHz -> a mutex wait, and the hang watchdog filing a report against
+// an application whose only fault was being on a machine that was too slow.
+//
+// So every getter the GUI polls per frame reads an ATOMIC MIRROR, published by
+// whichever setter changed the value, under the same lock, at the moment it
+// changed - publishParamMirrorsLocked() below, one function so a new setter
+// cannot mirror half of what it wrote. The setters' semantics are untouched:
+// they still serialize against the DSP thread and still take effect at the next
+// block. What changes is only that READING a parameter can no longer wait for
+// one.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
@@ -442,6 +471,20 @@ public:
     static constexpr std::size_t kPluginFadeFrames = 240;
 
     // --- Test support (used by --selftest) ----------------------------------
+
+    // TEST HOOK for the lock-free getters above, and the only way to stage the
+    // condition that produced the 0.96.2 report: the DSP thread holding its
+    // mutex for longer than a frame. A test cannot make a real machine too slow
+    // on demand, and driving a real pipeline hard enough would measure the
+    // bench rather than the property - so this holds the SAME mutex the DSP
+    // thread holds across a block, for a stated time, from whatever thread
+    // calls it.
+    //
+    // `acquired` (optional) is set true once the lock is actually held, so the
+    // test can start timing when the contention really exists rather than after
+    // a sleep it guessed at. Never called by the application.
+    enum class LockForTest { Audio, Control };
+    void holdLockForTest(LockForTest which, int holdMs, std::atomic<bool>* acquired);
     // Total audio samples produced by the chain, counted BEFORE
     // AudioOut::write so the count advances with or without a device.
     std::uint64_t audioSamplesProduced() const;
@@ -565,6 +608,21 @@ private:
     // runs it before any thread exists); touches only demod_, so it is safe to
     // call before stereo_ has been built.
     void applyDemodDeemphasisLocked();
+
+    // PUBLISHES EVERY PER-FRAME GETTER'S MIRROR from the live objects. Caller
+    // holds audioMutex_ (the constructor runs it before any thread exists).
+    // Called at the END of every setter that can move one of these values, and
+    // at the end of the rate-switch rebuild - one function rather than a store
+    // beside each assignment, because a setter that mirrors three of the four
+    // values it changed is a wrong readout that no test of the setter itself
+    // would see. tests/test_pipeline_getters.cpp drives every setter and
+    // compares each getter against the value that went in, so a mirror that is
+    // never published fails there rather than on a user's screen.
+    //
+    // inputRateHz's mirror is deliberately NOT published here: cfg_.sampleRateHz
+    // lives under controlMutex_, not audioMutex_, and setInputRateHz publishes
+    // it at the one line that commits the new rate.
+    void publishParamMirrorsLocked();
 
     Config cfg_;
     // Built-in generator source: always alive (a member, not a unique_ptr)
@@ -712,6 +770,29 @@ private:
     // stall behind a block of DSP for a per-frame update.
     std::atomic<bool> audioMuted_{false};
     std::atomic<double> autoNotchHz_{0.0};
+
+    // THE PER-FRAME GETTERS' MIRRORS. See the header comment: the GUI polls
+    // these every frame and must never queue behind a DSP block to read one.
+    // Each is written under audioMutex_ by publishParamMirrorsLocked() (or, for
+    // the input rate, under controlMutex_ by setInputRateHz) and read with no
+    // lock at all by the getter of the same name.
+    //
+    // The values are the CLAMPED, live ones - notchFrequencyHz() has always
+    // returned what the biquad actually uses rather than what was asked for,
+    // and mirroring the request instead would have changed a readout while
+    // fixing a stall.
+    std::atomic<double> mirrorVfoOffsetHz_{0.0};
+    std::atomic<double> mirrorChannelRateHz_{0.0};
+    std::atomic<double> mirrorInputRateHz_{0.0};
+    std::atomic<int> mirrorDemodMode_{0};
+    std::atomic<double> mirrorDeemphasisUs_{50.0};
+    std::atomic<bool> mirrorStereoEnabled_{true};
+    std::atomic<bool> mirrorNrEnabled_{false};
+    std::atomic<float> mirrorNrStrength_{0.0f};
+    std::atomic<bool> mirrorNotchEnabled_{false};
+    std::atomic<double> mirrorNotchHz_{0.0};
+    std::atomic<double> mirrorNotchQ_{0.0};
+    std::atomic<bool> mirrorAutoNotchEnabled_{false};
     // Published RDS state. Its own mutex (never held together with any other)
     // so rdsSnapshot() from the GUI cannot stall behind an audio block.
     mutable std::mutex rdsMutex_;

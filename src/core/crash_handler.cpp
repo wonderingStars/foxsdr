@@ -328,6 +328,51 @@ void stderrAttribution(unsigned long code, std::uintptr_t addr) {
     ::WriteFile(h, buf, static_cast<DWORD>(at), &written, nullptr);
 }
 
+// HOW MUCH STACK MUST BE LEFT BEFORE A WALK IS ATTEMPTED.
+//
+// RtlCaptureStackBackTrace itself needs very little, but the report that
+// motivated this measured ZERO: the faulting instruction was the CALL, which
+// faults while pushing its return address. 64 KiB is the size of the default
+// stack reserve's first few commits and is far more than any of the work below
+// this point needs, so a thread with less than this left is one that has
+// already been driven to the edge by whatever ran before the fault - exactly
+// the PPL worker in the two reports. Cheap to be generous: the cost of
+// refusing is one stack section, and the cost of being wrong is the process.
+constexpr std::uintptr_t kStackWalkMarginBytes = 64u * 1024u;
+
+using GetThreadStackLimitsFn = void(WINAPI*)(PULONG_PTR, PULONG_PTR);
+GetThreadStackLimitsFn g_getThreadStackLimits = nullptr;
+
+// Resolved on the HEALTHY path (installCrashHandlers). GetProcAddress from a
+// fault handler would be one more call into the loader than the handler's own
+// contract allows.
+void resolveStackLimitsApi() {
+    if (g_getThreadStackLimits != nullptr) { return; }
+    HMODULE k32 = ::GetModuleHandleW(L"kernel32.dll");
+    if (k32 == nullptr) { return; }
+    g_getThreadStackLimits = reinterpret_cast<GetThreadStackLimitsFn>(
+        reinterpret_cast<void*>(::GetProcAddress(k32, "GetCurrentThreadStackLimits")));
+}
+
+// True when this thread has room to spare. UNRESOLVABLE ANSWERS ARE "YES", not
+// "no": the API is present on every version this product supports, and a build
+// or platform where it is not must not lose the stack of every terminate,
+// purecall and abort report - those paths have always walked here and have
+// never been the ones that ran out.
+bool stackHeadroomIsSafe() {
+    if (g_getThreadStackLimits == nullptr) { return true; }
+    ULONG_PTR low = 0;
+    ULONG_PTR high = 0;
+    g_getThreadStackLimits(&low, &high);
+    if (low == 0 || high <= low) { return true; }
+    // _AddressOfReturnAddress is one slot above the current frame's return
+    // address: near enough to the stack pointer for a 64 KiB margin, and it
+    // needs no inline assembly or intrinsic that differs per architecture.
+    const std::uintptr_t here = reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress());
+    if (here <= static_cast<std::uintptr_t>(low)) { return false; }
+    return (here - static_cast<std::uintptr_t>(low)) >= kStackWalkMarginBytes;
+}
+
 void writeMinidump(EXCEPTION_POINTERS* ep, const char* txtPath) {
     if (!g_minidump || g_miniDumpWriteDump == nullptr) { return; }
     // <report>.dmp beside the text report. LOCAL ONLY and never uploaded: a
@@ -376,40 +421,83 @@ void writeMinidump(EXCEPTION_POINTERS* ep, const char* txtPath) {
 // section that says it could not be taken, not a dead process and no report
 // at all. The irony of the crash reporter being the thing that crashed is
 // worth one guard.
-int captureFramesGuarded(EXCEPTION_POINTERS* ep) {
+// AND THE GUARD WAS NOT ENOUGH, which is field report "crash cascade.exe @
+// captureFramesGuarded" (0.96.3, Windows 10.0.22631).
+//
+// Same shape as B9D41A8D above and the same caller - an enumeration child died,
+// reportAbsorbedFault ran on the std::async worker thread of the scanSoapy
+// lambda with no exception context of its own, and the fallback below walked
+// that worker's own nearly-spent stack. The __try did not save it, and could
+// not: a STACK OVERFLOW leaves no room for the exception dispatcher either, so
+// the second-chance fault kills the process at the same instruction the first
+// one happened on. A guard that needs stack cannot guard a stack overflow.
+//
+// So the guard is now structural rather than only __try:
+//
+//   1. `mayWalkCurrentThread` false means the caller has said its own stack is
+//      not the answer, and the current thread is never touched. An absorbed
+//      CHILD-PROCESS fault is exactly that case: the child died, this process
+//      did not, and the frames of whichever worker noticed describe the
+//      noticing and not the fault. See reportAbsorbedChildFault.
+//   2. THE HEADROOM IS MEASURED BEFORE THE CALL. GetCurrentThreadStackLimits
+//      gives the committed low bound of this thread's stack; the distance from
+//      it to the current frame is how much is left. Below kStackWalkMarginBytes
+//      the walk is refused rather than attempted, because attempting it is what
+//      crashed. A refusal costs a stack section that says it could not be
+//      taken; attempting it costs the report AND the process.
+//   3. A SUPPLIED CONTEXT IS THE ONLY STACK WALKED. A null or zeroed
+//      ContextRecord used to fall through to "walk whatever thread is running
+//      this handler", silently substituting one thread's story for another's -
+//      which is how this fault reached the unguarded call in the first place.
+//      A caller that supplies EXCEPTION_POINTERS is asking for THAT stack, and
+//      gets no frames rather than somebody else's.
+int captureFramesGuarded(EXCEPTION_POINTERS* ep, bool mayWalkCurrentThread) {
     __try {
         int n = 0;
+        if (ep != nullptr) {
 #if defined(_M_X64)
-        if (ep != nullptr && ep->ContextRecord != nullptr) {
             // The FAULTING stack, not the handler's: unwound from the context
-            // Windows captured at the moment of the fault.
-            std::memcpy(&g_walkContext, ep->ContextRecord, sizeof(CONTEXT));
-            n = walkFromContext(&g_walkContext, g_frames, kMaxFrames);
-        }
-#else
-        (void)ep;
+            // Windows captured at the moment of the fault. A context with no
+            // Rip has no stack to unwind and says so with zero frames.
+            if (ep->ContextRecord != nullptr && ep->ContextRecord->Rip != 0) {
+                std::memcpy(&g_walkContext, ep->ContextRecord, sizeof(CONTEXT));
+                n = walkFromContext(&g_walkContext, g_frames, kMaxFrames);
+            }
 #endif
-        if (n == 0) {
-            // No exception context (terminate, purecall, invalid parameter):
-            // the handler runs on the offending thread, so its own stack IS
-            // the answer.
-            n = static_cast<int>(
-                ::RtlCaptureStackBackTrace(0, static_cast<ULONG>(kMaxFrames),
-                                           reinterpret_cast<PVOID*>(g_frames), nullptr));
+            return n;
         }
+        if (!mayWalkCurrentThread) { return 0; }
+        // No exception context (terminate, purecall, invalid parameter, abort):
+        // the handler runs on the offending thread, so its own stack IS the
+        // answer - provided there is enough of it left to ask the question.
+        if (!stackHeadroomIsSafe()) { return 0; }
+        n = static_cast<int>(
+            ::RtlCaptureStackBackTrace(0, static_cast<ULONG>(kMaxFrames),
+                                       reinterpret_cast<PVOID*>(g_frames), nullptr));
         return n;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        // Includes EXCEPTION_STACK_OVERFLOW, which is why this is __except and
-        // not catch(...): a stack overflow is a structured exception and no
-        // C++ handler would ever see it.
+        // Still here, and still worth having: it catches the bad frame pointer
+        // and the unreadable context, which are recoverable. It is the stack
+        // overflow it cannot catch, and the headroom check above is what stands
+        // in for it.
         return 0;
     }
 }
 
+// WHAT A CHILD PROCESS'S ABSORBED FAULT ADDS TO A REPORT, and what it takes
+// away. Present (non-null) only on the reportAbsorbedChildFault path: the fault
+// happened in ANOTHER PROCESS, so this one has no frames to offer and no
+// minidump worth writing, and the two facts that do identify it - what the
+// child died of and which attempt it was - go in the process block.
+struct ChildFault {
+    unsigned long exitCode = 0;
+    int attempt = 0;
+};
+
 // The whole report, written incrementally so a deadlock in the unwinder still
 // leaves the identifying half on disk. See the file header.
 void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAddr,
-                 EXCEPTION_POINTERS* ep) {
+                 EXCEPTION_POINTERS* ep, const ChildFault* child = nullptr) {
     if (!g_enabled || g_crashDir[0] == '\0') { return; }
 
     const long seq = ::InterlockedIncrement(&g_reportSeq);
@@ -448,13 +536,24 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     e.str("--- stack (thread ");
     e.dec(::GetCurrentThreadId());
     e.str(") ---\n");
-    const int nFrames = captureFramesGuarded(ep);
+    // A CHILD-PROCESS FAULT NEVER WALKS. The frames of whichever of this
+    // process's threads noticed the death describe the noticing, not the fault
+    // - and walking them is what crashed the parent in the 0.96.3 report. The
+    // reason string, the child's exit code and the attempt number are the whole
+    // of what this process knows, and they are worth more than a stack of the
+    // observer.
+    const int nFrames = (child != nullptr) ? 0 : captureFramesGuarded(ep, true);
     if (nFrames == 0) {
         // SAID, not left as an empty section. A stack section with no frames
         // and no explanation reads as "this fault had no stack", which is
         // never true; it means the walk could not be taken, and a reader needs
         // to know which of the two they are looking at.
-        e.str("  (no frames: the stack could not be walked)\n");
+        if (child != nullptr) {
+            e.str("  (no frames: the fault was in a child process, so this "
+                  "process has no stack to show)\n");
+        } else {
+            e.str("  (no frames: the stack could not be walked)\n");
+        }
     }
     for (int i = 0; i < nFrames; ++i) {
         e.str("  ");
@@ -492,13 +591,30 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         e.str(own ? "yes" : "no");
     }
     e.str("\n");
+    // THE TWO FACTS A CHILD DEATH ACTUALLY CARRIES. In the process block rather
+    // than the header because the header's field set is inventoried in
+    // crashReportFieldNames() and compared BOTH WAYS against a report from a
+    // real fault (tests/test_crash_capture.cpp) - a line that appears on one
+    // path and not another would fail that comparison for every report that is
+    // not a child death.
+    if (child != nullptr) {
+        e.str("child-exit-code: 0x");
+        e.hex(child->exitCode, 8);
+        e.str("\nchild-attempt: ");
+        e.dec(static_cast<unsigned long>(child->attempt));
+        e.str("\n");
+    }
 
     writeModules(e);
     writeRing(e);
     ::CloseHandle(e.h);
 
     std::memcpy(g_lastPath, g_reportPath, kPathBytes);
-    writeMinidump(ep, g_reportPath);
+    // NO MINIDUMP FOR A CHILD FAULT: a dump of this process's memory describes
+    // the process that SURVIVED, and dumps are the most revealing artefact this
+    // product can write (PRIVACY.md). One that cannot document the fault is not
+    // worth the pages it would put on the user's disk.
+    if (child == nullptr) { writeMinidump(ep, g_reportPath); }
 }
 
 void finish(unsigned long exitCode) {
@@ -654,6 +770,11 @@ void installCrashHandlers(const CrashHandlerConfig& cfg) {
         g_enabled = false;
     }
 
+    // The stack-headroom API the frame capture consults, resolved HERE because
+    // GetProcAddress from a fault handler is a call into the loader the
+    // handler's own contract forbids. See stackHeadroomIsSafe().
+    resolveStackLimitsApi();
+
     // The module snapshot the fault path searches. Refreshed again by the
     // application after anything that loads code; this is just the floor.
     if (moduleCount() == 0) { refreshModuleTable(); }
@@ -752,6 +873,41 @@ void reportAbsorbedFault(const char* reason, unsigned long code, const void* fau
     (void)code;
     (void)faultAddress;
     (void)exceptionPointers;
+#endif
+}
+
+void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, int attempt) {
+#if defined(_WIN32)
+    // The same latch reportAbsorbedFault uses, and for the same reason: a real
+    // crash landing mid-write must not be turned into a silent TerminateProcess
+    // by borrowing the fatal handler's.
+    static long inAbsorbedChild = 0;
+    if (::InterlockedCompareExchange(&inAbsorbedChild, 1, 0) != 0) { return; }
+    ChildFault child;
+    child.exitCode = childExitCode;
+    child.attempt = attempt;
+    // faultAddr 0 and ep nullptr, deliberately: the address that faulted is in
+    // another process's address space and means nothing in this one. The
+    // signature therefore groups on the reason and the code, which is what
+    // distinguishes one child death from another.
+    writeReport(reason != nullptr ? reason : "child process fault (contained)", childExitCode,
+                0u, nullptr, &child);
+    ::InterlockedExchange(&inAbsorbedChild, 0);
+#else
+    (void)reason;
+    (void)childExitCode;
+    (void)attempt;
+#endif
+}
+
+int captureFramesForTest(void* exceptionPointers, bool mayWalkCurrentThread) {
+#if defined(_WIN32)
+    return captureFramesGuarded(static_cast<EXCEPTION_POINTERS*>(exceptionPointers),
+                                mayWalkCurrentThread);
+#else
+    (void)exceptionPointers;
+    (void)mayWalkCurrentThread;
+    return 0;
 #endif
 }
 

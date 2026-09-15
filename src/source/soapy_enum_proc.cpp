@@ -432,10 +432,19 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // core/crash_upload.cpp forwards report FILES only, never the
             // diagnostics log, so they reached nobody. The success of the
             // containment is exactly what made the fault invisible.
-            core::reportAbsorbedFault(
+            // THE CHILD ENTRY POINT, and the distinction is load bearing. This
+            // call happens on whatever thread ran the scan - a std::async/PPL
+            // worker, in the reports - and the general reportAbsorbedFault
+            // would walk THAT thread's stack for want of an exception context.
+            // It did, twice, and the second time (0.96.3) it killed the parent
+            // the containment had just saved: a stack overflow on a nearly
+            // spent worker stack, which no __try can catch. The frames of the
+            // thread that NOTICED a child die describe the noticing; the exit
+            // code and the attempt number are the fault.
+            core::reportAbsorbedChildFault(
                 "SDR device enumeration child process died (contained: the parent "
                 "survived and re-probed)",
-                result.exitCode, nullptr, nullptr);
+                result.exitCode, i + 1);
 
             if (i + 1 < maxAttempts) {
                 core::diagWarnf(

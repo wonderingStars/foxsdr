@@ -1468,6 +1468,36 @@ holds the request, the code and that document to each other in both directions.
   none of those. If the window stops responding for five seconds, a watchdog
   captures the stack of **every** thread — a deadlock is only legible as a pair
   — and then lets the application carry on if it recovers.
+- **A machine that cannot keep up no longer freezes the interface.** Until
+  0.96.4 the panel read its settings - the tuning offset, the sample rate, the
+  channel width - through the same lock the audio chain holds while it is
+  working, several times per drawn frame. On a computer fast enough that never
+  showed; on one that was not, the display queued behind the audio and a user
+  with a slow USB dongle got a freeze report against an application that was
+  working exactly as designed. Those readings no longer wait for anything.
+- **And the device search can no longer take FoxSDR down with it.** Looking for
+  radios runs in a small separate process precisely because a driver falling
+  over there must not end the session - but the note FoxSDR wrote about each
+  such death used to be written in a way that could, and twice was, fatal to
+  the survivor. It now records what the search process died of and nothing that
+  requires walking a stack.
+- **A stalled DISPLAY is not a stalled application, and 0.96.4 stops reporting
+  it as one.** Switching a monitor off, changing resolution, a GPU driver reset
+  or a remote session reconnecting all freeze presentation inside the graphics
+  driver, and on one user's AMD machine that lasted over five seconds - long
+  enough for the watchdog to file a report about a program that was doing
+  nothing wrong. FoxSDR now stands the watchdog down for ten seconds when it
+  sees the display change, and for as long as its window is minimised; and if a
+  stall gets past both, the report is marked `stall` rather than `hang`, kept on
+  the machine, and never counted among faults in FoxSDR. What it is **not** is
+  "ignore anything that looks like presenting": a report from 0.96.2 had the
+  same call on top and was a dead radio service, which is a real fault and is
+  still reported.
+- **The update button no longer files a report about its own consent prompt.**
+  Starting the downloaded installer asks Windows for elevation, and that dialog
+  waits for you - which 0.96.2 recorded as a five-second freeze. Every place
+  FoxSDR hands something to Windows (the installer, the reports folder, the
+  privacy-policy link) now tells the watchdog it is deliberately waiting.
 - **Closing counts as well, on a longer clock.** Shutting down is where this
   product's worst freeze ever happened, so the watchdog stays armed right
   through it — but closing legitimately waits on the radio driver for a few

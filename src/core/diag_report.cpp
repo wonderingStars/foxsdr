@@ -385,8 +385,14 @@ const std::vector<std::string>& hangReportFieldNames() {
     // The header hang_watchdog.cpp captureAllThreads() emits before
     // "--- context ---". tests/test_diag_hang.cpp compares the set both ways
     // against a report written by a real stall.
-    static const std::vector<std::string> names = {"kind", "stalled-ms", "threshold-ms",
-                                                   "signature", "threads"};
+    // `note` is one sentence saying what KIND of stall this was, and it is
+    // always written - for a "hang" as well as a "stall" - precisely so this
+    // set does not depend on which. A field that appears on one path and not
+    // another fails the both-ways comparison for every report of the other
+    // kind, which is how a report with nothing wrong with it would start
+    // failing the suite.
+    static const std::vector<std::string> names = {"kind",      "note",     "stalled-ms",
+                                                   "threshold-ms", "signature", "threads"};
     return names;
 }
 

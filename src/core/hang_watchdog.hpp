@@ -124,6 +124,32 @@
 //      `cascade --frames N` prints how many pauses the run took and
 //      tests/test_diag_hang.cpp requires at least one, so this stops being
 //      true loudly rather than quietly.
+//   2d. THE DISPLAY ITSELF STOPPING, which is not the application stopping.
+//      A monitor switched off, a resolution change, a GPU driver reset, an
+//      adapter switch or a remote session taking the desktop over all stall
+//      PRESENTATION: glfwSwapBuffers does not return until the driver has
+//      somewhere to present to, and on an AMD stack that wait has been measured
+//      at over five seconds. Field report "hang ntdll.dll @
+//      cascade::gui::AppWindow::run" (0.96.3, Windows 11 26200, atio6axx.dll,
+//      1177 s uptime) is exactly that, and its log carries "GLFW error 65544:
+//      Win32: Failed to query display settings" - GLFW's own account of the
+//      display changing underneath it - immediately before the stall.
+//
+//      THE FIX IS NOT "IGNORE SwapBuffers", and that matters: an earlier
+//      0.96.2 report also showed SwapBuffers on top and was a dead SDRplay
+//      service, a real fault in this application's own dependency. What
+//      distinguishes them is what is BENEATH the wait - a display driver or
+//      OPENGL32 under the present call, or this application's own code - which
+//      is what isDisplayPresentationStall() below decides, from the frames and
+//      nothing else.
+//
+//      Three mitigations, in the order they should catch it. The application
+//      takes a bounded WatchdogPause when it learns the display changed and
+//      while its window is iconified (AppWindow::run), because a window that is
+//      not being shown is not expected to present; and if a stall gets past
+//      both, this classifies the report as kind "stall" rather than "hang" so
+//      it does not group with, or be counted among, faults in this program.
+//
 //   3. THE WHOLE MACHINE STOPPING. Sleep, hibernate, or a VM being paused
 //      freezes the watchdog thread too. The watchdog therefore checks its OWN
 //      overshoot: if its 500 ms poll took longer than the threshold, the
@@ -354,6 +380,39 @@ public:
     // and the file already on disk must still name the bug.
     enum class CaptureAbortForTest { None, AfterHeader };
     void setCaptureAbortForTest(CaptureAbortForTest mode);
+
+    // HOW LONG A DISPLAY CHANGE IS ALLOWED TO STALL PRESENTATION, in
+    // milliseconds, and it is the application that spends it (AppWindow::run
+    // takes a pause for this long when it learns the display changed). Twice
+    // the frame threshold: the measured stall in the 0.96.3 report was just
+    // over five seconds, a monitor re-negotiating a mode takes a few, and a
+    // remote session reconnecting takes longer than either. Bounded rather
+    // than open-ended because a pause that never expires is the watchdog
+    // switched off, and a display that never comes back IS worth a report.
+    static constexpr unsigned kDisplayGraceMs = 10000;
+
+    // HOW MANY FRAMES DEEP THE DISPLAY CHECK LOOKS. The present call sits a
+    // handful of frames under the top of a stalled presentation - the wait
+    // itself, one or two syscall thunks, the vendor driver, opengl32, the
+    // backend - and looking further would start finding the frame loop, which
+    // is under EVERY stall this application can have.
+    static constexpr int kDisplayStallScanFrames = 12;
+
+    // THE PURE DECISION, over module names alone, top frame first.
+    //
+    // True when the stalled thread is parked in a kernel wait AND a display
+    // driver, OpenGL or Direct3D/DXGI module appears within the first
+    // kDisplayStallScanFrames - i.e. the application is waiting for the
+    // graphics stack to present, not for anything of its own. False for a stall
+    // whose frames are this program's code, however close to SwapBuffers the
+    // top of it looks: the 0.96.2 SDRplay report is exactly that case and must
+    // stay a hang.
+    //
+    // A pure function over a frame list because it is the only part of this
+    // that a test can reach - a ctest cannot switch a monitor off - and because
+    // it is the part that would otherwise silently rot as vendors rename their
+    // drivers. `frameModules` entries may be null; they are skipped.
+    static bool isDisplayPresentationStall(const char* const* frameModules, int count);
 
     // Pauses taken by this PROCESS, counted from process start rather than
     // from start(): the first blocking work in a session - the plugin scan -
