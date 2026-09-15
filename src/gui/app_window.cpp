@@ -59,6 +59,7 @@
 // a surface prints when it is empty are decided by the census in this header
 // and by nothing else. No ImGui in it; it is tested without a graphics context.
 #include "gui/instrument_face.hpp"
+#include "gui/list_pick.hpp"
 #include "gui/module_census.hpp"
 // The two windows that replaced the plugin store and plugin inventory rail
 // sections. Included here rather than in app_window.hpp because both include
@@ -465,6 +466,33 @@ bool parseFrequencyHz(const char* text, double& outHz) {
 void glfwErrorCallback(int code, const char* description) {
     std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
                  description ? description : "(no description)");
+}
+
+// CAN THIS DISPLAY MAKE A SECOND OPENGL CONTEXT AT ALL?
+//
+// The only honest way to answer is to ask for one, so this makes a 1x1 hidden
+// window sharing `main` and throws it away again. It is exactly the call
+// ImGui_ImplGlfw_CreateWindow makes for every torn-off page, which is the
+// point: a machine whose driver answers "WGL: Failed to create OpenGL context"
+// (GLFW 65543) answers it here, at startup, where the application can turn the
+// feature off and say why - rather than on the first drag, where 0.95.0 took
+// an access violation instead.
+//
+// The hint and the current context are both put back. GLFW window hints are
+// sticky and the ImGui backend sets its own before every creation, but the
+// main window's GLFW_VISIBLE=TRUE is restored by hand a few lines after it is
+// created and this must not leave a different value behind for it.
+bool probeSecondGlContext(GLFWwindow* main) {
+    if (main == nullptr) { return false; }
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    GLFWwindow* probe = glfwCreateWindow(1, 1, "foxsdr viewport probe", nullptr, main);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+    if (probe != nullptr) { glfwDestroyWindow(probe); }
+    // glfwDestroyWindow clears the current context if it was the destroyed
+    // one's; the creation never makes its own current, but restoring is one
+    // call and a run that lost the main context would draw nothing at all.
+    glfwMakeContextCurrent(main);
+    return probe != nullptr;
 }
 
 // Applies the FoxSDR mark to the window's title-bar, taskbar and Alt-Tab
@@ -1081,11 +1109,25 @@ int AppWindow::run(int frames) {
     // own framebuffer, which the capture cannot read, so a sweep of every
     // page for clipped or overlapping lettering runs with this set and sees
     // the lot in one picture. Never set in a release.
-    if (const char* single = std::getenv("FOXSDR_SINGLE_VIEWPORT");
-        single == nullptr || single[0] == '\0' || single[0] == '0') {
+    //
+    // ...AND THE DRIVER GETS ASKED BEFORE THE FEATURE IS OFFERED (0.96.1).
+    // A tester's machine refused a second shared GL context - "GLFW error
+    // 65543: WGL: Failed to create OpenGL context" - and the application died
+    // in glfwGetWin32Window the instant a page was dragged out. The backend no
+    // longer uses the nullptr it gets, but a machine that will never allow a
+    // second context should not be offered torn-off pages at all, and the only
+    // honest way to find that out is to ASK FOR ONE: a 1x1 hidden window
+    // sharing this context, made and destroyed before the first frame. It
+    // costs one window creation at startup and it is the difference between a
+    // feature that is off with a reason in the log and a crash on the first
+    // drag. See gui/viewport_policy.hpp.
+    const bool viewportProbeOk = probeSecondGlContext(window);
+    viewportDecision_ = cascade::gui::viewportDecision(std::getenv("FOXSDR_SINGLE_VIEWPORT"),
+                                                       viewportProbeOk, 0);
+    if (cascade::gui::viewportsEnabled(viewportDecision_)) {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-    } else {
-        cascade::core::diagLogf("viewports: single (FOXSDR_SINGLE_VIEWPORT set)");
+    } else if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
+        cascade::core::diagLogf("%s", why);
     }
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // TORN-OFF WINDOWS GET NO FRAME FROM THE OPERATING SYSTEM (0.78.0). From
@@ -1356,6 +1398,28 @@ int AppWindow::run(int frames) {
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
             glfwMakeContextCurrent(restore);
+
+            // DID THE DRIVER JUST REFUSE ONE? UpdatePlatformWindows is where a
+            // torn-off page asks for its operating system window, and on a
+            // machine whose driver will not share a second GL context that
+            // request fails - which used to be an access violation one line
+            // later inside the backend (0.95.0, "crash cascade.exe @
+            // glfwGetWin32Window"). The backend counts the refusal instead of
+            // using the nullptr, and this is the application reading the
+            // count: viewports go off for the rest of the session, so the page
+            // is merged back into this window on the next frame and the log
+            // says what happened. The probe at startup catches the machine
+            // that never allows it; this catches the one that stops allowing
+            // it - a GPU reset, a display change, an adapter switch.
+            const int failures = ImGui_ImplGlfw_ViewportWindowCreationFailures();
+            if (failures > 0) {
+                viewportDecision_ = cascade::gui::viewportDecision(
+                    std::getenv("FOXSDR_SINGLE_VIEWPORT"), true, failures);
+                ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
+                if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
+                    cascade::core::diagWarnf("%s", why);
+                }
+            }
         }
 
         // SCOPE MODE IS SUPPOSED TO COVER THE WHOLE APPLICATION, NOT JUST
@@ -5072,15 +5136,30 @@ void AppWindow::drawDisplaySection() {
                     if (p.id == bandPlanSelection_) { preview = p.name.c_str(); }
                 }
                 if (ImGui::BeginCombo("Region", preview)) {
-                    for (const cascade::core::PlanInfo& p : bandPlanChoices_) {
-                        const bool selected = (p.id == bandPlanSelection_);
-                        if (ImGui::Selectable(p.name.c_str(), selected) && !selected) {
-                            bandPlanSelection_ = p.id;
-                            loadBandPlan();
-                        }
-                        if (selected) { ImGui::SetItemDefaultFocus(); }
-                    }
+                    // THE PICK IS RECORDED HERE AND APPLIED BELOW, and that
+                    // separation is the whole of a crash. This loop used to be
+                    // a range-for whose click handler called loadBandPlan(),
+                    // which does `bandPlanChoices_ = available(dir)` - so the
+                    // iterator the range-for was still holding pointed into
+                    // freed storage and the NEXT Selectable hashed a dangling
+                    // name. Three reports arrived as "crash cascade.exe @
+                    // ImHashStr" (0.90.1 twice, 0.95.1 once) before it was
+                    // read for what it was. gui::pickFromList walks by index
+                    // and stops at the click; nothing touches the list again
+                    // until EndCombo has run. See gui/list_pick.hpp.
+                    const std::size_t pick = cascade::gui::pickFromList(
+                        bandPlanChoices_,
+                        [&](const cascade::core::PlanInfo& p, std::size_t) {
+                            const bool selected = (p.id == bandPlanSelection_);
+                            const bool hit = ImGui::Selectable(p.name.c_str(), selected);
+                            if (selected) { ImGui::SetItemDefaultFocus(); }
+                            return hit && !selected;
+                        });
                     ImGui::EndCombo();
+                    if (pick != cascade::gui::kNoPick) {
+                        bandPlanSelection_ = bandPlanChoices_[pick].id;
+                        loadBandPlan();
+                    }
                 }
             }
             if (!bandPlanError_.empty()) {
@@ -16988,6 +17067,19 @@ void AppWindow::drawUsageReportingSection() {
     if (ImGui::SmallButton("What exactly is sent?")) {
         privacyNoticeOpen_ = !privacyNoticeOpen_;
     }
+    // THE POLICY ITSELF, ONE KEY AWAY. The notice below is the panel's own
+    // account of the two payloads; the page at kPrivacyPolicyUrl is the
+    // version a store listing links to and a reviewer reads, and the
+    // developer agreement behind that listing asks for the link to be
+    // reachable from inside the application, not only from the website.
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Privacy policy (foxsdr.com)")) {
+#if defined(_WIN32)
+        ::ShellExecuteA(nullptr, "open", cascade::core::kPrivacyPolicyUrl, nullptr, nullptr,
+                        SW_SHOWNORMAL);
+#endif
+    }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", cascade::core::kPrivacyPolicyUrl); }
     if (privacyNoticeOpen_) {
         telemetryNotePanel("privacy notice");
         ImGui::Indent();

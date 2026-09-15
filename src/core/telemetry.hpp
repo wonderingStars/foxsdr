@@ -140,6 +140,15 @@ std::string archDescription();
 // stub without a network.
 std::string telemetryEndpoint();
 
+// THE PRIVACY POLICY, AS A PAGE THE USER CAN OPEN FROM INSIDE THE APPLICATION.
+// The Usage reporting panel already lists both payloads field by field, but a
+// store listing (the Microsoft Store's developer agreement, and any reviewer
+// reading it) requires a prominent link to the policy itself, from within the
+// app, at the same address the listing names. One constant, so the panel, the
+// listing and the site cannot drift apart; https because the page describes
+// what leaves the machine and must not itself be tampered with on the way.
+constexpr char kPrivacyPolicyUrl[] = "https://foxsdr.com/privacy.html";
+
 // Posts one report, on a thread of its own, and forgets about it.
 //
 // Fire-and-forget, but NOT detached: the destructor joins, because a detached

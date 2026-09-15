@@ -1368,6 +1368,26 @@ static void ImGui_ImplGlfw_SetWindowFloating(ImGui_ImplGlfw_Data* bd, GLFWwindow
 }
 #endif // IMGUI_GLFW_HAS_SETWINDOWFLOATING
 
+// FoxSDR: how many times glfwCreateWindow has refused a secondary viewport,
+// and the test seam that makes it refuse. File-scope rather than on the
+// backend data because the application reads it after UpdatePlatformWindows()
+// without touching the backend, and because it must survive a Shutdown/Init.
+static int  g_ViewportWindowCreationFailures = 0;
+static bool g_FailNextViewportWindowForTest = false;
+
+int ImGui_ImplGlfw_ViewportWindowCreationFailures() { return g_ViewportWindowCreationFailures; }
+void ImGui_ImplGlfw_FailNextViewportWindowForTest() { g_FailNextViewportWindowForTest = true; }
+
+// FoxSDR: "this viewport has no platform window", which is the state
+// ImGui_ImplGlfw_CreateWindow leaves behind when the driver refused a second
+// GL context. Every platform callback asks this first; all of them used to
+// dereference vd->Window unconditionally.
+static GLFWwindow* ImGui_ImplGlfw_ViewportWindow(ImGuiViewport* viewport)
+{
+    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    return (vd != nullptr) ? vd->Window : nullptr;
+}
+
 static void ImGui_ImplGlfw_CreateWindow(ImGuiViewport* viewport)
 {
     ImGui_ImplGlfw_Data* bd = ImGui_ImplGlfw_GetBackendData();
@@ -1392,6 +1412,22 @@ static void ImGui_ImplGlfw_CreateWindow(ImGuiViewport* viewport)
 #endif
     GLFWwindow* share_window = (bd->ClientApi == GlfwClientApi_OpenGL) ? bd->Window : nullptr;
     vd->Window = glfwCreateWindow((int)viewport->Size.x, (int)viewport->Size.y, "No Title Yet", nullptr, share_window);
+    // FoxSDR: the driver may simply refuse a second shared GL context - GLFW
+    // error 65543, "WGL: Failed to create OpenGL context" - and upstream then
+    // calls glfwGetWin32Window(nullptr) on the very next line. Leave the
+    // viewport without a platform window, count it so the application can turn
+    // viewports off for the session, and return: every other callback below
+    // tolerates this state, because ImGui will keep calling them on this
+    // viewport until then. See ImGui_ImplGlfw_ViewportWindowCreationFailures.
+    if (g_FailNextViewportWindowForTest) { g_FailNextViewportWindowForTest = false; if (vd->Window) { glfwDestroyWindow(vd->Window); vd->Window = nullptr; } }
+    if (vd->Window == nullptr)
+    {
+        vd->WindowOwned = false;
+        viewport->PlatformHandle = nullptr;
+        viewport->PlatformHandleRaw = nullptr;
+        g_ViewportWindowCreationFailures++;
+        return;
+    }
     vd->WindowOwned = true;
     ImGui_ImplGlfw_ContextMap_Add(vd->Window, bd->Context);
     viewport->PlatformHandle = (void*)vd->Window;
@@ -1429,7 +1465,9 @@ static void ImGui_ImplGlfw_DestroyWindow(ImGuiViewport* viewport)
     ImGui_ImplGlfw_Data* bd = ImGui_ImplGlfw_GetBackendData();
     if (ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData)
     {
-        if (vd->WindowOwned)
+        // FoxSDR: WindowOwned is false when creation failed, so this whole
+        // block is skipped and the null window is never handed to GLFW.
+        if (vd->WindowOwned && vd->Window != nullptr)
         {
 #if !GLFW_HAS_MOUSE_PASSTHROUGH && GLFW_HAS_WINDOW_HOVERED && defined(_WIN32)
             HWND hwnd = (HWND)viewport->PlatformHandleRaw;
@@ -1454,6 +1492,8 @@ static void ImGui_ImplGlfw_DestroyWindow(ImGuiViewport* viewport)
 static void ImGui_ImplGlfw_ShowWindow(ImGuiViewport* viewport)
 {
     ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    if (vd == nullptr || vd->Window == nullptr) // FoxSDR: no window was created
+        return;
 
 #if defined(_WIN32)
     // GLFW hack: Hide icon from task bar
@@ -1489,30 +1529,38 @@ static void ImGui_ImplGlfw_ShowWindow(ImGuiViewport* viewport)
 
 static ImVec2 ImGui_ImplGlfw_GetWindowPos(ImGuiViewport* viewport)
 {
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: keep whatever ImGui last believed
+        return viewport->Pos;
     int x = 0, y = 0;
-    glfwGetWindowPos(vd->Window, &x, &y);
+    glfwGetWindowPos(window, &x, &y);
     return ImVec2((float)x, (float)y);
 }
 
 static void ImGui_ImplGlfw_SetWindowPos(ImGuiViewport* viewport, ImVec2 pos)
 {
     ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    if (vd == nullptr || vd->Window == nullptr) // FoxSDR: no window was created
+        return;
     vd->IgnoreWindowPosEventFrame = ImGui::GetFrameCount();
     glfwSetWindowPos(vd->Window, (int)pos.x, (int)pos.y);
 }
 
 static ImVec2 ImGui_ImplGlfw_GetWindowSize(ImGuiViewport* viewport)
 {
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: keep whatever ImGui last believed
+        return viewport->Size;
     int w = 0, h = 0;
-    glfwGetWindowSize(vd->Window, &w, &h);
+    glfwGetWindowSize(window, &w, &h);
     return ImVec2((float)w, (float)h);
 }
 
 static void ImGui_ImplGlfw_SetWindowSize(ImGuiViewport* viewport, ImVec2 size)
 {
     ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    if (vd == nullptr || vd->Window == nullptr) // FoxSDR: no window was created
+        return;
 #if defined(__APPLE__) && !GLFW_HAS_OSX_WINDOW_POS_FIX
     // Native OS windows are positioned from the bottom-left corner on macOS, whereas on other platforms they are
     // positioned from the upper-left corner. GLFW makes an effort to convert macOS style coordinates, however it
@@ -1529,23 +1577,29 @@ static void ImGui_ImplGlfw_SetWindowSize(ImGuiViewport* viewport, ImVec2 size)
 
 static ImVec2 ImGui_ImplGlfw_GetWindowFramebufferScale(ImGuiViewport* viewport)
 {
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: no window was created; 1:1 is the honest answer
+        return ImVec2(1.0f, 1.0f);
     ImVec2 framebuffer_scale;
-    ImGui_ImplGlfw_GetWindowSizeAndFramebufferScale(vd->Window, nullptr, &framebuffer_scale);
+    ImGui_ImplGlfw_GetWindowSizeAndFramebufferScale(window, nullptr, &framebuffer_scale);
     return framebuffer_scale;
 }
 
 static void ImGui_ImplGlfw_SetWindowTitle(ImGuiViewport* viewport, const char* title)
 {
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
-    glfwSetWindowTitle(vd->Window, title);
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: no window was created
+        return;
+    glfwSetWindowTitle(window, title);
 }
 
 static void ImGui_ImplGlfw_SetWindowFocus(ImGuiViewport* viewport)
 {
 #if GLFW_HAS_FOCUS_WINDOW
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
-    glfwFocusWindow(vd->Window);
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: no window was created
+        return;
+    glfwFocusWindow(window);
 #else
     // FIXME: What are the effect of not having this function? At the moment imgui doesn't actually call SetWindowFocus - we set that up ahead, will answer that question later.
     (void)viewport;
@@ -1554,40 +1608,50 @@ static void ImGui_ImplGlfw_SetWindowFocus(ImGuiViewport* viewport)
 
 static bool ImGui_ImplGlfw_GetWindowFocus(ImGuiViewport* viewport)
 {
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
-    return glfwGetWindowAttrib(vd->Window, GLFW_FOCUSED) != 0;
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: a window that does not exist has no focus
+        return false;
+    return glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0;
 }
 
 static bool ImGui_ImplGlfw_GetWindowMinimized(ImGuiViewport* viewport)
 {
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
-    return glfwGetWindowAttrib(vd->Window, GLFW_ICONIFIED) != 0;
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: nothing to draw into, so report it minimized
+        return true;
+    return glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0;
 }
 
 #if GLFW_HAS_WINDOW_ALPHA
 static void ImGui_ImplGlfw_SetWindowAlpha(ImGuiViewport* viewport, float alpha)
 {
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
-    glfwSetWindowOpacity(vd->Window, alpha);
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: no window was created
+        return;
+    glfwSetWindowOpacity(window, alpha);
 }
 #endif
 
 static void ImGui_ImplGlfw_RenderWindow(ImGuiViewport* viewport, void*)
 {
     ImGui_ImplGlfw_Data* bd = ImGui_ImplGlfw_GetBackendData();
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: making a null context current unbinds ours
+        return;
     if (bd->ClientApi == GlfwClientApi_OpenGL)
-        glfwMakeContextCurrent(vd->Window);
+        glfwMakeContextCurrent(window);
 }
 
 static void ImGui_ImplGlfw_SwapBuffers(ImGuiViewport* viewport, void*)
 {
     ImGui_ImplGlfw_Data* bd = ImGui_ImplGlfw_GetBackendData();
-    ImGui_ImplGlfw_ViewportData* vd = (ImGui_ImplGlfw_ViewportData*)viewport->PlatformUserData;
+    GLFWwindow* window = ImGui_ImplGlfw_ViewportWindow(viewport);
+    if (window == nullptr) // FoxSDR: no window was created
+        return;
     if (bd->ClientApi == GlfwClientApi_OpenGL)
     {
-        glfwMakeContextCurrent(vd->Window);
-        glfwSwapBuffers(vd->Window);
+        glfwMakeContextCurrent(window);
+        glfwSwapBuffers(window);
     }
 }
 
