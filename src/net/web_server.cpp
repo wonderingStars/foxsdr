@@ -15,6 +15,25 @@
 
 #include <nlohmann/json.hpp>
 
+// CPPHTTPLIB_OPENSSL_SUPPORT is defined here on non-Windows to match every
+// OTHER translation unit in this program that includes httplib.h
+// (plugin_repo.cpp, crash_upload.cpp, telemetry.cpp - all built with it for
+// their own HTTPS clients). This server is still constructed as a plain
+// httplib::Server, never an SSLServer, so nothing about its behaviour
+// changes; what changes is that httplib::ClientImpl's class layout, which
+// this macro affects, now agrees between every .cpp file the linker sees. It
+// must NOT disagree: a client built with the macro and a server built
+// without it, linked into the same binary, was reproduced (via ASan) to
+// corrupt the client's request state through shared inline/weak httplib
+// symbols and SEGV inside ClientImpl::create_client_socket. Windows is
+// unaffected either way (OpenSSL is not a Windows dependency - see
+// CMakeLists.txt - and the guard keeps this header un-openssl'd there,
+// exactly as before).
+#if !defined(_WIN32)
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
+#endif
 #include <httplib.h>
 #include "gui/font_blobs.hpp"
 

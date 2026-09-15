@@ -23,6 +23,15 @@
 
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
+#else
+// The TLS client for this platform - the same header, set up the same way,
+// as plugin_repo.cpp's catalogue client: cpp-httplib is already vendored for
+// the web server and OpenSSL is already linked here (see CMakeLists.txt), so
+// this transport adds no new third-party dependency.
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
+#include <httplib.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -658,7 +667,14 @@ void UploadCancel::cancel() {
     // exchange above means exactly one of the two threads ever closes it.
     if (h != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(h)); }
 #else
-    (void)h;
+    // httplib::Client::stop() is the documented way to abort an in-flight
+    // request from another thread: it shuts down the socket, so a blocked
+    // Post() errors out immediately instead of sitting out its timeout - the
+    // same role WinHttpCloseHandle plays above. Safe to call concurrently
+    // with the request in progress (see httplib's own comment on
+    // ClientImpl::stop()); the exchange above still guarantees exactly one of
+    // the two threads ever touches the pointer.
+    if (h != nullptr) { static_cast<httplib::ClientImpl*>(h)->stop(); }
 #endif
 }
 
@@ -673,7 +689,7 @@ bool UploadCancel::publish(void* handle) {
 #if defined(_WIN32)
         if (h != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(h)); }
 #else
-        (void)h;
+        if (h != nullptr) { static_cast<httplib::ClientImpl*>(h)->stop(); }
 #endif
         return false;
     }
@@ -707,6 +723,16 @@ std::string crashUploadEndpoint() {
     if (::GetEnvironmentVariableA("FOXSDR_DIAG_DIR", diag, sizeof(diag)) > 0) {
         return std::string();
     }
+#else
+    // The same two seams, read the POSIX way. getenv() returns nullptr when
+    // the variable is unset; an empty value is treated as unset too, which is
+    // what the Windows probe above does implicitly (a zero-length buffer
+    // result there also falls through).
+    const char* url = std::getenv("FOXSDR_CRASH_URL");
+    if (url != nullptr && url[0] != '\0') { return std::string(url); }
+
+    const char* diagDir = std::getenv("FOXSDR_DIAG_DIR");
+    if (diagDir != nullptr && diagDir[0] != '\0') { return std::string(); }
 #endif
     return std::string("https://foxsdr.com/api/crash");
 }
@@ -730,6 +756,73 @@ std::uint64_t queryRetryAfter(HINTERNET req) {
     // an unparsed value falls back to the default backoff, which is the safe
     // direction.
     return static_cast<std::uint64_t>(::_wcstoui64(buf, nullptr, 10));
+}
+
+}  // namespace
+#else
+namespace {
+
+bool isLoopbackHost(const std::string& host) {
+    return host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+// A URL split into just enough pieces to (a) apply the same loopback gate as
+// the WinHTTP branch and (b) hand httplib a client origin and a request
+// target separately - httplib::Client(scheme_host_port) wants the former,
+// Post() wants the latter.
+struct UrlParts {
+    std::string scheme;
+    std::string host;    // no port - the loopback check compares this
+    int port = 0;        // resolved to the scheme's default when absent
+    std::string target;  // path (+query), never empty
+};
+
+// Hands httplib a bare (host, port) pair rather than a "scheme://host:port"
+// string, the same way plugin_repo.cpp's SSLClient is built: it lets both
+// the plain-http and https cases share one ClientImpl* variable (see
+// postCrashReport() below) without going through the httplib::Client facade
+// at all. The facade itself turned out to be fine once every translation
+// unit in this program agreed on CPPHTTPLIB_OPENSSL_SUPPORT (see the comment
+// in web_server.cpp for the real bug this uncovered); this shape is kept
+// anyway because it is what makes a single ClientImpl* work for both
+// schemes, which UploadCancel needs for cancellation.
+bool splitUrl(const std::string& url, UrlParts& out) {
+    const std::size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos) { return false; }
+    out.scheme = url.substr(0, schemeEnd);
+    out.port = (out.scheme == "https") ? 443 : 80;
+    const std::string rest = url.substr(schemeEnd + 3);
+    const std::size_t slash = rest.find('/');
+    const std::string authority = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+    out.target = (slash == std::string::npos) ? std::string("/") : rest.substr(slash);
+    if (authority.empty()) { return false; }
+    const std::size_t colon = authority.find(':');
+    if (colon == std::string::npos) {
+        out.host = authority;
+    } else {
+        out.host = authority.substr(0, colon);
+        const std::string portText = authority.substr(colon + 1);
+        if (portText.empty() ||
+            portText.find_first_not_of("0123456789") != std::string::npos) {
+            return false;
+        }
+        const long p = std::strtol(portText.c_str(), nullptr, 10);
+        if (p <= 0 || p > 65535) { return false; }
+        out.port = static_cast<int>(p);
+    }
+    return !out.host.empty();
+}
+
+// The delta-seconds form only, same restriction as the WinHTTP branch above:
+// an HTTP-date would need a parser and a clock comparison for a header this
+// endpoint controls, and an unparsed value falls back to the default
+// backoff, which is the safe direction.
+std::uint64_t parseRetryAfterSeconds(const std::string& v) {
+    if (v.empty()) { return 0; }
+    for (char c : v) {
+        if (std::isdigit(static_cast<unsigned char>(c)) == 0) { return 0; }
+    }
+    return static_cast<std::uint64_t>(std::strtoull(v.c_str(), nullptr, 10));
 }
 
 }  // namespace
@@ -819,9 +912,70 @@ UploadResult postCrashReport(const std::string& url, const std::string& json,
     }
     ::WinHttpCloseHandle(ses);
 #else
-    (void)url;
-    (void)json;
-    (void)cancel;
+    if (url.empty() || json.empty() || !cancel) { return res; }
+
+    UrlParts parts;
+    if (!splitUrl(url, parts)) { return res; }
+    const bool secure = (parts.scheme == "https");
+    // Plain http is refused off the loopback, exactly as the WinHTTP branch
+    // refuses it: a shipped binary can never be talked into putting a
+    // report - which carries an install id - in clear on somebody's network;
+    // a test can still use a socket.
+    if (!secure && (parts.scheme != "http" || !isLoopbackHost(parts.host))) { return res; }
+
+    // A ClientImpl (plain http) or an SSLClient (https) behind the base
+    // pointer, exactly the way httplib's own Client facade picks one
+    // internally - constructed directly rather than through the facade, so
+    // `cli` is one variable of one type regardless of scheme, which is what
+    // lets UploadCancel below stay agnostic to which one it is holding.
+    const std::unique_ptr<httplib::ClientImpl> cli =
+        secure ? std::unique_ptr<httplib::ClientImpl>(
+                     new httplib::SSLClient(parts.host, parts.port))
+               : std::unique_ptr<httplib::ClientImpl>(
+                     new httplib::ClientImpl(parts.host, parts.port));
+    if (!cli->is_valid()) { return res; }
+    // Certificate verification is the default and is NOT relaxed here,
+    // exactly as plugin_repo.cpp's catalogue client (a no-op for the plain
+    // http case above).
+    cli->enable_server_certificate_verification(true);
+    // Never follow a redirect - http or https - the same way the WinHTTP
+    // branch never asks WinHttpSendRequest to. A server that wants to move
+    // its endpoint gets a new compiled-in URL, not a client that will follow
+    // it anywhere.
+    cli->set_follow_location(false);
+    // Short on purpose, matching the WinHTTP timeouts above: these bound the
+    // worst case even when cancellation is never asked for - a background
+    // thread nobody is waiting on is still a thread holding a socket open on
+    // a user's machine.
+    cli->set_connection_timeout(3, 0);
+    cli->set_read_timeout(5, 0);
+    cli->set_write_timeout(5, 0);
+
+    if (!cancel->publish(cli.get())) {
+        res.cancelled = true;
+    } else {
+        res.attempted = true;
+        const httplib::Result r = cli->Post(parts.target, json, "application/json");
+        // Taken before anything else below: once this has run, cancel() will
+        // find nullptr and touch nothing, so `cli` can safely be destroyed
+        // when this function returns right after.
+        cancel->take();
+
+        if (r) {
+            res.status = r->status;
+            res.accepted = (res.status >= 200 && res.status < 300);
+            if (res.status == 429) {
+                res.rateLimited = true;
+                res.retryAfterSeconds = parseRetryAfterSeconds(r->get_header_value("Retry-After"));
+            }
+            // The body is never read. There is nothing the server could say
+            // that this client should obey - no config, no commands, no
+            // identifiers - and not reading it is the simplest way to
+            // guarantee that stays true.
+        } else if (cancel->cancelled()) {
+            res.cancelled = true;
+        }
+    }
 #endif
     return res;
 }

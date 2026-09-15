@@ -20,6 +20,16 @@
 #include <string>
 #include <thread>
 
+// Must match every other TU in the program that includes httplib.h on
+// non-Windows (plugin_repo.cpp, crash_upload.cpp, telemetry.cpp,
+// web_server.cpp), or a client/server layout mismatch reproduces a SEGV
+// inside ClientImpl::create_client_socket - see the comment in
+// web_server.cpp for the ASan trace this was found from.
+#if !defined(_WIN32)
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
+#endif
 #include <httplib.h>
 
 #include "test_check.hpp"

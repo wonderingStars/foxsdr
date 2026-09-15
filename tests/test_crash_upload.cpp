@@ -41,6 +41,18 @@
 
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
+#else
+#include <condition_variable>
+
+// Must match every other TU in the program that includes httplib.h on
+// non-Windows (plugin_repo.cpp, crash_upload.cpp, telemetry.cpp,
+// web_server.cpp), or a client/server layout mismatch reproduces a SEGV
+// inside ClientImpl::create_client_socket - see the comment in
+// web_server.cpp for the ASan trace this was found from.
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
+#include <httplib.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -427,6 +439,142 @@ double runAppMs(const fs::path& diagDir, const fs::path& cfgPath, const std::str
     ::SetEnvironmentVariableA("FOXSDR_DIAG_DIR", nullptr);
     ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", nullptr);
     ::SetEnvironmentVariableA("FOXSDR_CRASH_URL", nullptr);
+    return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+void writeConfig(const fs::path& p, bool diagnostics) {
+    std::ofstream out(p, std::ios::binary | std::ios::trunc);
+    out << "{\n";
+    out << "  \"schemaVersion\": 1,\n";
+    out << "  \"diagnosticsEnabled\": " << (diagnostics ? "true" : "false") << ",\n";
+    out << "  \"diagnosticsMinidump\": false,\n";
+    out << "  \"telemetryEnabled\": false\n";
+    out << "}\n";
+}
+
+#else  // !_WIN32
+
+// ---------------------------------------------------------------------------
+// The POSIX mirror of the stub server above: a local httplib::Server, so
+// every transport assertion below is made against a real socket rather than a
+// mock. Same four behaviours the wire contract names plus the one it cannot:
+// a server that accepts the connection and never answers.
+// ---------------------------------------------------------------------------
+class StubServer {
+public:
+    enum class Mode { Accept204, RateLimit429, TooLarge413, Hang, Refuse };
+
+    bool start(Mode mode) {
+        mode_ = mode;
+        if (mode_ == Mode::Refuse) {
+            // Bind port 0 to learn a port number, then release it immediately -
+            // nothing is listening there, which is as close to "the server is
+            // down" as a test can get deterministically. Same trick the
+            // Windows StubServer uses for this mode.
+            //
+            // httplib::Server's destructor is `= default` - it does NOT close
+            // the listening socket, so without an explicit stop() the port
+            // stays bound and actively listening (just never accept()ed) for
+            // the rest of the process. A client connecting to it then
+            // succeeds at the TCP level and hangs until the READ timeout
+            // fires, not the connection timeout - measured at ~5000 ms
+            // against this test's 5 s read timeout before this fix, when the
+            // point of Refuse mode is to be refused in microseconds.
+            httplib::Server probe;
+            port_ = probe.bind_to_any_port("127.0.0.1");
+            probe.stop();
+            return port_ > 0;
+        }
+        port_ = server_.bind_to_any_port("127.0.0.1");
+        if (port_ <= 0) { return false; }
+        server_.Post("/api/crash", [this](const httplib::Request& req, httplib::Response& res) {
+            {
+                std::lock_guard<std::mutex> lk(mu_);
+                bodies_.push_back(req.body);
+            }
+            connections_.fetch_add(1);
+            if (mode_ == Mode::Hang) {
+                // Accepted and read, and DELIBERATELY never answered. The
+                // client must not sit here, and must not make the
+                // application sit here either. Woken early by stop() via the
+                // condition variable so tearing down this fixture is never
+                // what is slow; bounded on its own besides.
+                std::unique_lock<std::mutex> lk(hangMu_);
+                hangCv_.wait_for(lk, std::chrono::seconds(30),
+                                 [this] { return hangStop_.load(); });
+                return;
+            }
+            if (mode_ == Mode::RateLimit429) {
+                res.status = 429;
+                res.set_header("Retry-After", "120");
+            } else if (mode_ == Mode::TooLarge413) {
+                res.status = 413;
+            } else {
+                res.status = 204;
+            }
+        });
+        thread_ = std::thread([this] { server_.listen_after_bind(); });
+        server_.wait_until_ready();
+        return true;
+    }
+
+    void stop() {
+        hangStop_.store(true);
+        hangCv_.notify_all();
+        server_.stop();
+        if (thread_.joinable()) { thread_.join(); }
+    }
+
+    ~StubServer() { stop(); }
+
+    int port() const { return port_; }
+    std::string url() const {
+        return "http://127.0.0.1:" + std::to_string(port_) + "/api/crash";
+    }
+    int connections() const { return connections_.load(); }
+    std::vector<std::string> bodies() {
+        std::lock_guard<std::mutex> lk(mu_);
+        return bodies_;
+    }
+
+private:
+    Mode mode_ = Mode::Accept204;
+    httplib::Server server_;
+    int port_ = 0;
+    std::thread thread_;
+    std::atomic<int> connections_{0};
+    std::mutex mu_;
+    std::vector<std::string> bodies_;
+    std::mutex hangMu_;
+    std::condition_variable hangCv_;
+    std::atomic<bool> hangStop_{false};
+};
+
+// The POSIX mirror of runAppMs(): spawns the shipped binary with the
+// diagnostics tree and the config redirected into caller-owned scratch
+// directories, and returns how long it took. Same reason as the Windows
+// version - every unit test in this file calls the transport directly and so
+// cannot tell whether closing the window waits for it.
+double runAppMs(const fs::path& diagDir, const fs::path& cfgPath, const std::string& crashUrl,
+                int frames) {
+    ::setenv("FOXSDR_DIAG_DIR", diagDir.string().c_str(), 1);
+    ::setenv("CASCADE_CONFIG_TEST", cfgPath.string().c_str(), 1);
+    if (crashUrl.empty()) {
+        ::unsetenv("FOXSDR_CRASH_URL");
+    } else {
+        ::setenv("FOXSDR_CRASH_URL", crashUrl.c_str(), 1);
+    }
+    const std::string exe = std::string(CASCADE_APP_BINDIR) + "/cascade";
+    const std::string cmd = "\"" + exe + "\" --frames " + std::to_string(frames) + " 2>&1";
+    const auto t0 = std::chrono::steady_clock::now();
+    FILE* p = popen(cmd.c_str(), "r");
+    char buf[512];
+    while (p != nullptr && std::fgets(buf, sizeof(buf), p) != nullptr) { /* drained */ }
+    if (p != nullptr) { pclose(p); }
+    const auto t1 = std::chrono::steady_clock::now();
+    ::unsetenv("FOXSDR_DIAG_DIR");
+    ::unsetenv("CASCADE_CONFIG_TEST");
+    ::unsetenv("FOXSDR_CRASH_URL");
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
@@ -1094,6 +1242,378 @@ int main() {
         // A second of slack for process-start jitter. A client that waited out
         // its receive timeout would be several seconds over, and one that
         // waited for the server would never return at all.
+        CHECK(hung - control < 1500.0);
+
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::remove_all(root2, ec);
+    }
+#else  // !_WIN32
+    // --- crashUploadEndpoint() actually reads the two seams on POSIX -------
+    //
+    // Before this change the POSIX branch of crashUploadEndpoint() did not
+    // exist: the whole override block was compiled only under _WIN32, so
+    // FOXSDR_CRASH_URL and FOXSDR_DIAG_DIR were silently ignored here and
+    // every ctest run on Linux would have posted to the live endpoint the
+    // moment sweepCrashDir() found a report. Asserted directly rather than
+    // only through the app-level tests below, because a unit test that fails
+    // here names the exact function; one that only fails at the app level
+    // would look like a shutdown-timing regression instead.
+    {
+        ::unsetenv("FOXSDR_CRASH_URL");
+        ::unsetenv("FOXSDR_DIAG_DIR");
+        CHECK(crashUploadEndpoint() == "https://foxsdr.com/api/crash");
+
+        ::setenv("FOXSDR_CRASH_URL", "http://127.0.0.1:9", 1);
+        CHECK(crashUploadEndpoint() == "http://127.0.0.1:9");
+        ::unsetenv("FOXSDR_CRASH_URL");
+
+        // FOXSDR_DIAG_DIR alone (no URL override) means "this is a test tree,
+        // not a user's machine" - nowhere to send, on purpose.
+        ::setenv("FOXSDR_DIAG_DIR", "/tmp/does-not-matter", 1);
+        CHECK(crashUploadEndpoint().empty());
+        ::unsetenv("FOXSDR_DIAG_DIR");
+        CHECK(crashUploadEndpoint() == "https://foxsdr.com/api/crash");
+    }
+
+    // --- A real POST to a real socket, and a real 204 ----------------------
+    {
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Accept204));
+        auto cancel = std::make_shared<UploadCancel>();
+        const UploadResult res = postCrashReport(srv.url(), "{\"schema\":1}", cancel);
+        CHECK(res.attempted);
+        CHECK(res.accepted);
+        CHECK(res.status == 204);
+        CHECK(srv.connections() == 1);
+        CHECK(at(srv.bodies(), 0) == "{\"schema\":1}");
+        // ...and the content type actually sent, since the server can see it
+        // where postCrashReport() cannot check its own request.
+        srv.stop();
+    }
+
+    // --- A 429 is read, not ignored ----------------------------------------
+    {
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::RateLimit429));
+        auto cancel = std::make_shared<UploadCancel>();
+        const UploadResult res = postCrashReport(srv.url(), "{\"schema\":1}", cancel);
+        CHECK(res.attempted);
+        CHECK(!res.accepted);
+        CHECK(res.status == 429);
+        CHECK(res.rateLimited);
+        CHECK(res.retryAfterSeconds == 120);
+        srv.stop();
+    }
+
+    // --- A hanging endpoint is abandoned, not waited out --------------------
+    //
+    // The server accepts the connection, reads the body and never answers.
+    // Cancelling must return the caller in milliseconds, not at the receive
+    // timeout - that difference IS the shutdown promise, and it is what
+    // httplib::Client::stop() buys on this platform the way closing the
+    // WinHTTP handle does on Windows.
+    {
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Hang));
+        auto cancel = std::make_shared<UploadCancel>();
+        const auto t0 = std::chrono::steady_clock::now();
+        std::thread worker([&] {
+            const UploadResult res = postCrashReport(srv.url(), "{\"schema\":1}", cancel);
+            CHECK(!res.accepted);
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        cancel->cancel();
+        worker.join();
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0)
+                              .count();
+        std::printf("cancel returned after %.0f ms\n", ms);
+        CHECK(ms < 2000.0);
+        srv.stop();
+    }
+
+    // --- Plain http off the loopback is refused ----------------------------
+    {
+        auto cancel = std::make_shared<UploadCancel>();
+        const UploadResult res = postCrashReport("http://example.com/api/crash", "{}", cancel);
+        CHECK(!res.attempted);
+    }
+
+    // --- A server that is simply not listening fails closed, promptly ------
+    //
+    // The "black hole" override (FOXSDR_CRASH_URL=http://127.0.0.1:9,
+    // documented in installer/msix/README.md) relies on this: the loopback
+    // exception lets the connection attempt actually happen, and it must fail
+    // fast rather than retry or hang.
+    {
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Refuse));  // nothing is listening
+        auto cancel = std::make_shared<UploadCancel>();
+        const auto t0 = std::chrono::steady_clock::now();
+        const UploadResult res = postCrashReport(srv.url(), "{\"schema\":1}", cancel);
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0)
+                              .count();
+        std::printf("connection-refused black hole: %.0f ms\n", ms);
+        CHECK(res.attempted);
+        CHECK(!res.accepted);
+        CHECK(!res.rateLimited);
+        // Bounded by the 3 s connection timeout, not by any retry loop - a
+        // refused connection is answered by the kernel in microseconds on
+        // loopback, so this is nowhere near that ceiling in practice.
+        CHECK(ms < 3500.0);
+    }
+
+    // --- THE SWEEP: off means off ------------------------------------------
+    {
+        const fs::path dir = scratchDir("off");
+        writeFile(dir / "crash-20260825-120000-1234-1.txt", crashReportText());
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Accept204));
+
+        SweepParams p;
+        p.crashDir = dir.string();
+        p.url = srv.url();
+        p.enabled = false;  // the Settings switch
+        p.nowEpoch = 1'700'000'000ull;
+        auto cancel = std::make_shared<UploadCancel>();
+        const SweepOutcome out = sweepCrashDir(p, cancel);
+
+        CHECK(out.considered == 0);
+        CHECK(out.sent == 0);
+        // Not a single connection, and NOT A SINGLE FILE either: a sidecar
+        // saying "declined" would still be this feature writing to a machine
+        // whose owner switched it off.
+        CHECK(srv.connections() == 0);
+        int files = 0;
+        for (const auto& e : fs::directory_iterator(dir)) {
+            (void)e;
+            ++files;
+        }
+        CHECK(files == 1);
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    // --- THE SWEEP: a minidump is never uploaded ---------------------------
+    {
+        const fs::path dir = scratchDir("dump");
+        const fs::path report = dir / "crash-20260825-120000-1234-1.txt";
+        writeFile(report, crashReportText());
+        // A dump with bytes nothing else could produce, so its presence in a
+        // request body would be unmistakable.
+        writeFile(dir / "crash-20260825-120000-1234-1.dmp",
+                  "MDMP\x93\xa7SECRET-IQ-AND-FILE-PATHS-SECRET");
+
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Accept204));
+        SweepParams p;
+        p.crashDir = dir.string();
+        p.url = srv.url();
+        p.enabled = true;
+        p.installId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+        p.nowEpoch = 1'700'000'000ull;
+        auto cancel = std::make_shared<UploadCancel>();
+        const SweepOutcome out = sweepCrashDir(p, cancel);
+
+        CHECK(out.sent == 1);
+        CHECK(srv.connections() == 1);
+        const std::vector<std::string> bodies = srv.bodies();
+        CHECK(bodies.size() == 1);
+        for (const std::string& b : bodies) {
+            CHECK(b.find("SECRET-IQ-AND-FILE-PATHS-SECRET") == std::string::npos);
+            CHECK(b.find("MDMP") == std::string::npos);
+        }
+        // The dump is still exactly where the user can find it.
+        CHECK(fs::exists(dir / "crash-20260825-120000-1234-1.dmp"));
+        // ...and no sidecar was written for it: the sweep never looked at it.
+        CHECK(!fs::exists(dir / "crash-20260825-120000-1234-1.dmp.upload"));
+        // The report's own sidecar records what happened, in words.
+        const std::string side = readFile(uploadSidecarPath(report.string()));
+        CHECK(side.find("status: sent") != std::string::npos);
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    // --- THE SWEEP: a report is swept once, not on every start -------------
+    {
+        const fs::path dir = scratchDir("once");
+        writeFile(dir / "crash-20260825-120000-1234-1.txt", crashReportText());
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Accept204));
+        SweepParams p;
+        p.crashDir = dir.string();
+        p.url = srv.url();
+        p.enabled = true;
+        p.nowEpoch = 1'700'000'000ull;
+        auto cancel = std::make_shared<UploadCancel>();
+        const SweepOutcome first = sweepCrashDir(p, cancel);
+        CHECK(first.sent == 1);
+        // The next start: the same directory, the same report, the state the
+        // first sweep produced.
+        p.state = first.state;
+        const SweepOutcome second = sweepCrashDir(p, cancel);
+        CHECK(second.sent == 0);
+        CHECK(second.considered == 0);
+        CHECK(srv.connections() == 1);
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    // --- THE SWEEP: a crash loop stops itself ------------------------------
+    {
+        const fs::path dir = scratchDir("loop");
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Accept204));
+        SweepParams p;
+        p.crashDir = dir.string();
+        p.url = srv.url();
+        p.enabled = true;
+        auto cancel = std::make_shared<UploadCancel>();
+        int duplicates = 0;
+        for (int i = 0; i < 12; ++i) {
+            writeFile(dir / ("crash-20260825-1200" + std::to_string(i) + "-1234-1.txt"),
+                      crashReportText());
+            p.nowEpoch = 1'700'000'000ull + static_cast<std::uint64_t>(i) * 30ull;
+            const SweepOutcome out = sweepCrashDir(p, cancel);
+            p.state = out.state;
+            duplicates += out.duplicate;
+        }
+        CHECK(srv.connections() == 1);
+        CHECK(duplicates == 11);
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    // --- THE SWEEP: a 429 stops the rest of the sweep and is remembered ----
+    {
+        const fs::path dir = scratchDir("429");
+        writeFile(dir / "crash-20260825-120000-1234-1.txt", crashReportText("AAAA0000AAAA0000"));
+        writeFile(dir / "crash-20260825-120001-1234-1.txt", crashReportText("BBBB0000BBBB0000"));
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::RateLimit429));
+        SweepParams p;
+        p.crashDir = dir.string();
+        p.url = srv.url();
+        p.enabled = true;
+        p.nowEpoch = 1'700'000'000ull;
+        auto cancel = std::make_shared<UploadCancel>();
+        const SweepOutcome out = sweepCrashDir(p, cancel);
+        CHECK(out.sent == 0);
+        CHECK(srv.connections() == 1);
+        CHECK(out.state.blockedUntil == 1'700'000'000ull + 120ull);
+        SweepParams p2 = p;
+        p2.state = out.state;
+        p2.nowEpoch = 1'700'000'000ull + 60ull;
+        const SweepOutcome out2 = sweepCrashDir(p2, cancel);
+        CHECK(out2.sent == 0);
+        CHECK(srv.connections() == 1);
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    // --- THE SWEEP: a report that cannot be sent is neither lost nor -------
+    // --- retried for ever --------------------------------------------------
+    {
+        const fs::path dir = scratchDir("dead");
+        const fs::path report = dir / "crash-20260825-120000-1234-1.txt";
+        writeFile(report, crashReportText());
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Refuse));  // nothing is listening
+        SweepParams p;
+        p.crashDir = dir.string();
+        p.url = srv.url();
+        p.enabled = true;
+        auto cancel = std::make_shared<UploadCancel>();
+        for (int i = 0; i < kMaxAttempts + 2; ++i) {
+            p.nowEpoch = 1'700'000'000ull + static_cast<std::uint64_t>(i) * 3600ull;
+            const SweepOutcome out = sweepCrashDir(p, cancel);
+            p.state = out.state;
+        }
+        const std::string side = readFile(uploadSidecarPath(report.string()));
+        CHECK(side.find("status: abandoned") != std::string::npos);
+        CHECK(side.find("attempts: " + std::to_string(kMaxAttempts)) != std::string::npos);
+        CHECK(fs::exists(report));
+        CHECK(readFile(report) == crashReportText());
+        p.nowEpoch = 1'700'000'000ull + 100'000ull;
+        const SweepOutcome out = sweepCrashDir(p, cancel);
+        CHECK(out.considered == 0);
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    // --- THE REAL BINARY: nothing is sent with the switch off ---------------
+    {
+        const fs::path root = scratchDir("app-off");
+        const fs::path diagDir = root / "diag";
+        const fs::path cfg = root / "config.json";
+        writeConfig(cfg, false);  // diagnostics OFF
+        fs::create_directories(diagDir / "crashes");
+        writeFile(diagDir / "crashes" / "crash-20260825-120000-1234-1.txt", crashReportText());
+
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Accept204));
+        runAppMs(diagDir, cfg, srv.url(), 3);
+        CHECK(srv.connections() == 0);
+        CHECK(srv.bodies().empty());
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(root, ec);
+    }
+
+    // --- THE REAL BINARY: with the switch on, the report goes ---------------
+    {
+        const fs::path root = scratchDir("app-on");
+        const fs::path diagDir = root / "diag";
+        const fs::path cfg = root / "config.json";
+        writeConfig(cfg, true);
+        fs::create_directories(diagDir / "crashes");
+        const fs::path report = diagDir / "crashes" / "crash-20260825-120000-1234-1.txt";
+        writeFile(report, crashReportText("CAFEBABECAFEBABE"));
+
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Accept204));
+        runAppMs(diagDir, cfg, srv.url(), 20);
+        CHECK(srv.connections() == 1);
+        const std::vector<std::string> bodies = srv.bodies();
+        CHECK(bodies.size() == 1);
+        CHECK(at(bodies, 0).find("CAFEBABECAFEBABE") != std::string::npos);
+        CHECK(fs::exists(uploadSidecarPath(report.string())));
+        srv.stop();
+        std::error_code ec;
+        fs::remove_all(root, ec);
+    }
+
+    // --- THE REAL BINARY: a hanging endpoint does not delay shutdown -------
+    {
+        const fs::path root = scratchDir("app-hang");
+        const fs::path diagDir = root / "diag";
+        const fs::path cfg = root / "config.json";
+
+        writeConfig(cfg, true);
+        fs::create_directories(diagDir / "crashes");
+        const double control = runAppMs(diagDir, cfg, std::string(), 20);
+
+        const fs::path root2 = scratchDir("app-hang2");
+        const fs::path diagDir2 = root2 / "diag";
+        const fs::path cfg2 = root2 / "config.json";
+        writeConfig(cfg2, true);
+        fs::create_directories(diagDir2 / "crashes");
+        writeFile(diagDir2 / "crashes" / "crash-20260825-120000-1234-1.txt", crashReportText());
+        StubServer srv;
+        CHECK(srv.start(StubServer::Mode::Hang));
+        const double hung = runAppMs(diagDir2, cfg2, srv.url(), 20);
+        CHECK(srv.connections() == 1);  // it really did try
+        srv.stop();
+
+        std::printf("app run: control %.0f ms, hanging endpoint %.0f ms\n", control, hung);
         CHECK(hung - control < 1500.0);
 
         std::error_code ec;
