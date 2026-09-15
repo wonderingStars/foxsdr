@@ -25,6 +25,16 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
+#else
+#define UNW_LOCAL_ONLY
+#include <libunwind.h>
+
+#include <csignal>
+#include <cstdlib>
+#include <dirent.h>
+#include <semaphore.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 namespace cascade::core {
@@ -86,6 +96,159 @@ std::string frameLine(std::uintptr_t addr) {
     return std::string(buf);
 }
 
+// ---------------------------------------------------------------------------
+// LINUX: capturing a stack that is not the caller's own.
+//
+// Windows suspends a thread with SuspendThread, reads its registers, resumes
+// it, and only unwinds afterwards - because unwinding while a thread is
+// suspended can deadlock on the loader lock a suspended LoadLibrary might
+// hold (see the phase-1/phase-2 split above). There is no SuspendThread on
+// Linux; the analogous primitive is to make the TARGET THREAD run a signal
+// handler of our choosing, which is what a realtime signal plus tgkill does.
+// The handler runs on the target thread's own stack, so the unwind happens
+// WHILE that thread is "stopped" from its own point of view, in one pass, with
+// no separate suspend/resume window to get wrong.
+//
+// THE SAME LOCK RISK APPLIES HERE, in a different shape. libunwind's local
+// unwinder reads /proc/self/maps on first use and may cache DWARF unwind
+// tables, and neither is on the POSIX async-signal-safe list. A thread
+// signalled while it happens to hold glibc's malloc arena lock, or while it is
+// the very thread that is loading a shared object under ld.so's lock, could in
+// principle wedge inside the handler. This is the same trade the Windows
+// implementation makes and documents at length: there is no fully
+// async-signal-safe unwinder available without shipping a private DWARF/.eh_frame
+// reader, which is out of scope here. Two mitigations, both cheap: (1) the
+// FIRST unwind of the process happens on the healthy path, in
+// ensureHangCaptureSignalInstalled() below, so libunwind's one-time setup
+// (the /proc/self/maps read) is already paid for before any thread is
+// ever signalled; (2) every signalled capture is bounded by a 200 ms
+// sem_timedwait, so a thread that cannot answer - because it is wedged inside
+// exactly the lock this paragraph worries about - costs one stack section
+// that says so, not a watchdog that never reports at all.
+// NOT constexpr: glibc's SIGRTMIN is a function (__libc_current_sigrtmin()),
+// not a manifest constant, because the C library itself reserves the first
+// few realtime signals for internal use and the count can vary. Read once.
+int hangCaptureSignal() {
+    static const int sig = SIGRTMIN + 5;
+    return sig;
+}
+
+struct LinuxHangCapture {
+    std::uintptr_t frames[kMaxHangFrames] = {};
+    int count = 0;
+};
+LinuxHangCapture g_hangCapture;
+sem_t g_hangCaptureSem;
+std::atomic<bool> g_hangSignalReady{false};
+
+// Runs ON THE SIGNALLED THREAD. unw_getcontext captures exactly this thread's
+// live registers (there is no ucontext to borrow the way a fault handler
+// would use the one the kernel hands a SIGSEGV handler - a realtime signal
+// delivered by tgkill carries no such context), then a normal local unwind
+// walks it. sem_post is on the POSIX async-signal-safe list; storing into
+// g_hangCapture first is safe because the watchdog thread only ever has ONE
+// capture in flight; see the mutual-exclusion note at the call site.
+void hangCaptureSignalHandler(int) {
+    unw_context_t ctx;
+    unw_getcontext(&ctx);
+    unw_cursor_t cursor;
+    unw_init_local(&cursor, &ctx);
+    int n = 0;
+    do {
+        unw_word_t ip = 0;
+        if (unw_get_reg(&cursor, UNW_REG_IP, &ip) != 0) { break; }
+        g_hangCapture.frames[n++] = static_cast<std::uintptr_t>(ip);
+    } while (n < kMaxHangFrames && unw_step(&cursor) > 0);
+    g_hangCapture.count = n;
+    sem_post(&g_hangCaptureSem);
+}
+
+// Installed once, lazily, from the watchdog thread - a healthy-path call, not
+// the fault path, so there is no restriction on what it may do.
+void ensureHangCaptureSignalInstalled() {
+    if (g_hangSignalReady.load(std::memory_order_acquire)) { return; }
+    sem_init(&g_hangCaptureSem, 0, 0);
+    struct sigaction sa {};
+    sa.sa_handler = &hangCaptureSignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ::sigaction(hangCaptureSignal(), &sa, nullptr);
+    // Pays for libunwind's one-time setup (see the header comment above)
+    // before any thread is ever signalled for a real stall.
+    unw_context_t ctx;
+    unw_getcontext(&ctx);
+    unw_cursor_t cursor;
+    unw_init_local(&cursor, &ctx);
+    unw_step(&cursor);
+    g_hangSignalReady.store(true, std::memory_order_release);
+}
+
+// SYS_gettid rather than glibc's gettid() wrapper (only glibc >= 2.30):
+// nothing else in this file assumes a particular glibc version, and tgkill
+// below is already reached the same way.
+pid_t linuxGetTid() { return static_cast<pid_t>(::syscall(SYS_gettid)); }
+
+// Every numeric entry under /proc/self/task is a live thread id of this
+// process - the same enumeration ps and gdb use, and it needs no snapshot
+// handle the way CreateToolhelp32Snapshot does.
+std::vector<pid_t> listLinuxThreadIds() {
+    std::vector<pid_t> out;
+    DIR* d = ::opendir("/proc/self/task");
+    if (d == nullptr) { return out; }
+    while (struct dirent* e = ::readdir(d)) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') { continue; }
+        out.push_back(static_cast<pid_t>(std::atoi(e->d_name)));
+    }
+    ::closedir(d);
+    return out;
+}
+
+// One thread's stack, captured either directly (the calling thread) or by
+// signalling it and waiting up to 200 ms. Never suspends anything: the target
+// keeps running until the instant it takes the signal, and resumes the
+// instant the handler returns.
+ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
+    ThreadStack ts;
+    ts.tid = static_cast<unsigned long>(tid);
+    if (tid == self) {
+        unw_context_t ctx;
+        unw_getcontext(&ctx);
+        unw_cursor_t cursor;
+        unw_init_local(&cursor, &ctx);
+        int n = 0;
+        do {
+            unw_word_t ip = 0;
+            if (unw_get_reg(&cursor, UNW_REG_IP, &ip) != 0) { break; }
+            ts.frames[n++] = static_cast<std::uintptr_t>(ip);
+        } while (n < kMaxHangFrames && unw_step(&cursor) > 0);
+        ts.count = n;
+        return ts;
+    }
+
+    // Drain a stale post from an earlier, timed-out capture first: without
+    // this, a thread that answered late for a PREVIOUS victim could satisfy
+    // this wait immediately with yesterday's frames.
+    while (::sem_trywait(&g_hangCaptureSem) == 0) {}
+    g_hangCapture.count = 0;
+    if (::syscall(SYS_tgkill, ::getpid(), tid, hangCaptureSignal()) != 0) { return ts; }
+
+    struct timespec deadline{};
+    ::clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += 200 * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec += 1;
+        deadline.tv_nsec -= 1000000000L;
+    }
+    if (::sem_timedwait(&g_hangCaptureSem, &deadline) == 0) {
+        ts.count = g_hangCapture.count;
+        for (int i = 0; i < ts.count && i < kMaxHangFrames; ++i) { ts.frames[i] = g_hangCapture.frames[i]; }
+    }
+    // A timeout leaves ts.count at 0: the thread did not, or could not, answer
+    // within the window - a known limit the writer states in words, not a
+    // frame list invented to fill the gap.
+    return ts;
+}
+
 }  // namespace
 
 HangWatchdog::~HangWatchdog() { stop(); }
@@ -100,6 +263,8 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
                        std::memory_order_relaxed);
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
+#elif defined(__linux__)
+    guiThreadId_.store(static_cast<unsigned long>(linuxGetTid()), std::memory_order_relaxed);
 #endif
     // The module snapshot the capture resolves addresses against, taken HERE -
     // start() is the healthy path, and walking the loader's module list from a
@@ -172,6 +337,8 @@ void HangWatchdog::heartbeat(bool recordGap) {
     const double prev = lastBeatMs_.exchange(now, std::memory_order_relaxed);
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
+#elif defined(__linux__)
+    guiThreadId_.store(static_cast<unsigned long>(linuxGetTid()), std::memory_order_relaxed);
 #endif
     // A gap that spans a deliberate pause is not a frame gap: it is the device
     // open, or the modal dialog, that the pause was taken out for. Folding it
@@ -402,6 +569,24 @@ bool HangWatchdog::suppressed() const {
         const DWORD modal = GUI_INMOVESIZE | GUI_INMENUMODE | GUI_POPUPMENUMODE |
                             GUI_SYSTEMMENUMODE;
         if ((gi.flags & modal) != 0) { return true; }
+    }
+#elif defined(__linux__)
+    // 1. A break is not a hang, POSIX equivalent: /proc/self/status names the
+    //    tracer attached to this process, 0 when there is none. There is no
+    //    Linux equivalent of rule 2 (a Windows modal message loop) - GLFW's
+    //    own loop never hands control to the window manager the way DefWindowProc
+    //    does, so nothing here can stall the frame loop the way a caption-button
+    //    drag does on Windows.
+    {
+        std::ifstream status("/proc/self/status");
+        std::string line;
+        while (std::getline(status, line)) {
+            if (line.rfind("TracerPid:", 0) == 0) {
+                const std::string v = line.substr(10);
+                if (std::atoi(v.c_str()) != 0) { return true; }
+                break;
+            }
+        }
     }
 #endif
     // 2c. A nested loop those flags do not cover: the thread is parked in the
@@ -777,6 +962,120 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
         for (int i2 = 0; i2 < ts.count; ++i2) { out << frameLine(ts.frames[i2]); }
         // Flushed per thread: a wedge in the NEXT thread's walk still leaves
         // every stack captured before it.
+        out.flush();
+    }
+
+    const std::vector<std::string> ring = DiagLog::instance().ringSnapshot();
+    out << "--- log (last " << ring.size() << " of " << DiagLog::instance().linesWritten()
+        << " lines) ---\n";
+    for (const std::string& line : ring) { out << line << "\n"; }
+    out.flush();
+    out.close();
+#elif defined(__linux__)
+    // LINUX. No suspend/resume window to get wrong (see the header comment
+    // above captureOneLinuxThread): each thread is asked, via a realtime
+    // signal, to unwind itself and hand the result back, and it keeps running
+    // the whole time it is not actually inside that handler. So there is no
+    // Windows-shaped phase 1 (registers only, nothing suspended) / phase 2
+    // (unwind, everything running again) split - every thread's stack is
+    // final the moment captureOneLinuxThread returns.
+    //
+    // What IS kept from the Windows shape: the header, the signature and the
+    // context reach disk before any thread is asked to unwind, because the
+    // same worry applies here as there - libunwind is not on the
+    // async-signal-safe list either (see the comment above
+    // hangCaptureSignalHandler) - so a wedge in a later thread's capture must
+    // still leave a report that names the fault.
+    ensureHangCaptureSignalInstalled();
+    const pid_t self = linuxGetTid();
+    const pid_t gui = static_cast<pid_t>(guiThreadId_.load(std::memory_order_relaxed));
+
+    std::vector<pid_t> tids = listLinuxThreadIds();
+    for (std::size_t i = 0; i < tids.size(); ++i) {
+        if (tids[i] == gui) {
+            std::swap(tids[0], tids[i]);
+            break;
+        }
+    }
+
+    // THE STALLED THREAD FIRST, same reason as Windows' phase 1b: the `kind`
+    // line has to be decided before anything is written, and it needs frame 0
+    // of the thread that actually stalled. No display-stall classification is
+    // implemented on Linux (there is no equivalent graphics-driver module list
+    // to check against), so every report here is `kind: hang`.
+    ThreadStack first = tids.empty() ? ThreadStack{} : captureOneLinuxThread(tids[0], self);
+    const char* topModule = "?";
+    std::uintptr_t topOffset = 0;
+    if (first.count > 0) {
+        DiagModule m;
+        std::uintptr_t off = 0;
+        if (resolveAddress(first.frames[0], m, off)) {
+            topModule = m.name;
+            topOffset = off;
+        }
+    }
+    const std::string sig = crashSignature(0x48414E47ul, topModule, topOffset);  // 'HANG'
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) { return; }
+
+    out << "kind: hang\n";
+    out << "note: the gui thread did not complete a frame within the threshold\n";
+    out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
+    out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
+    out << "signature: " << sig << "\n";
+    out << "threads: " << tids.size() << "\n";
+    out << "--- context ---\n";
+    out << diagContextBlock();
+
+    // Same layout as crash_handler_posix.cpp and the Windows writer above, so
+    // one parser (crash_upload.cpp's parseReportText) reads all three.
+    out << "--- modules ---\n";
+    {
+        const int mods = moduleCount();
+        for (int i = 0; i < mods; ++i) {
+            DiagModule m;
+            if (!moduleAt(i, m)) { continue; }
+            char line[256];
+            std::snprintf(line, sizeof(line), "  %s base=0x%016llX size=0x%llX pdb=%s build=%s\n",
+                          m.name, static_cast<unsigned long long>(m.base),
+                          static_cast<unsigned long long>(m.size),
+                          m.pdb[0] != '\0' ? m.pdb : "(none)",
+                          m.buildId[0] != '\0' ? m.buildId : "(none)");
+            out << line;
+        }
+    }
+    out << "--- process ---\n";
+    out << "uptime-sec: " << processUptimeSec() << "\n";
+    out.flush();
+
+    {
+        std::lock_guard<std::mutex> lk(pathMutex_);
+        lastPath_ = path;
+    }
+    reports_.fetch_add(1, std::memory_order_release);
+
+    if (captureAbort_.load(std::memory_order_relaxed) ==
+        static_cast<int>(CaptureAbortForTest::AfterHeader)) {
+        out.flush();
+        out.close();
+        return;
+    }
+
+    for (std::size_t i = 0; i < tids.size(); ++i) {
+        const ThreadStack ts = (i == 0) ? first : captureOneLinuxThread(tids[i], self);
+        out << "--- thread " << ts.tid;
+        if (static_cast<pid_t>(ts.tid) == gui) {
+            out << " (gui, stalled)";
+        } else if (static_cast<pid_t>(ts.tid) == self) {
+            out << " (watchdog)";
+        }
+        out << " ---\n";
+        if (ts.count == 0) {
+            out << "  (no frames: the thread did not answer the capture signal within "
+                   "200 ms)\n";
+        }
+        for (int k = 0; k < ts.count; ++k) { out << frameLine(ts.frames[k]); }
         out.flush();
     }
 

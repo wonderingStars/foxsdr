@@ -122,6 +122,17 @@ endif()
 # External dependencies (deliberately minimal — see header comment)
 # ---------------------------------------------------------------------------
 
+# libunwind, Linux only - the LOCAL unwinder src/core/crash_handler_posix.cpp
+# and src/core/hang_watchdog.cpp use to walk a stack from a ucontext_t/live
+# thread, the same role RtlVirtualUnwind plays on Windows. Not vendored: it is
+# a system ABI-adjacent library the way SoapySDR and OpenSSL are, and pulling
+# in our own copy would strand it on whatever DWARF unwind quirks the
+# distribution's own libunwind has already been patched for.
+if(NOT WIN32)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBUNWIND REQUIRED IMPORTED_TARGET libunwind)
+endif()
+
 find_package(OpenGL REQUIRED)
 # Hardware sources (P4+). Target verified from SoapySDRExport.cmake: plain
 # `SoapySDR`, shared. Vendor support (B200 via SoapyUHD, RTL dongles, etc.)
@@ -250,6 +261,12 @@ endif()
 # ---------------------------------------------------------------------------
 
 file(GLOB CASCADE_CORE   CONFIGURE_DEPENDS src/core/*.cpp)
+# Linux-only: sigaction/libunwind/dl_iterate_phdr, none of which exist on
+# Windows, so this is never handed to MSVC even though the glob above would
+# otherwise pick it up automatically like every other src/core/*.cpp.
+if(WIN32)
+    list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crash_handler_posix.cpp")
+endif()
 file(GLOB CASCADE_DSP    CONFIGURE_DEPENDS src/dsp/*.cpp)
 file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
@@ -322,6 +339,9 @@ if(NOT WIN32)
     # CPPHTTPLIB_OPENSSL_SUPPORT). Windows takes both from the OS instead —
     # CNG and WinHTTP — which is why neither is a dependency there.
     target_link_libraries(cascade_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+    # The stack unwinder crash_handler_posix.cpp and hang_watchdog.cpp use.
+    # See the find_package(PkgConfig)/pkg_check_modules block above.
+    target_link_libraries(cascade_lib PUBLIC PkgConfig::LIBUNWIND)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -425,6 +445,23 @@ if(WIN32)
                 # left nine different build ids in symbols\index.txt all
                 # stamped with the same commit.
                 -CommitHeader "${CASCADE_COMMIT_HEADER}"
+        VERBATIM)
+else()
+    # THE LINUX MIRROR of the step above - see tools/archive-symbols-linux.sh
+    # for what differs (no PDB; a split-debug file plus the stripped module,
+    # keyed by the GNU build id note instead of a CodeView record) and why it
+    # never fails the build. Same governing rule as Windows: this is what
+    # keeps symbols/ populated by the SAME action that produces the binary,
+    # so no crash report against a Linux build is ever unreadable because
+    # someone forgot a separate archiving step existed.
+    add_custom_command(TARGET cascade POST_BUILD
+        COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/archive-symbols-linux.sh"
+                --binary "$<TARGET_FILE:cascade>"
+                --archive-root "${CASCADE_SYMBOL_ARCHIVE}"
+                --version "${CASCADE_VERSION_STRING}"
+                --commit-header "${CASCADE_COMMIT_HEADER}"
+                --module "$<TARGET_FILE_BASE_NAME:cascade>"
         VERBATIM)
 endif()
 
