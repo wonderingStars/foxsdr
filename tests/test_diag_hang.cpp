@@ -171,18 +171,12 @@ int main() {
     ParkedThreads parked;
     parked.spawn(3);
 
-    // LINUX-TODO(crash-capture): every block from here through "No report
-    // directory means no file, and no crash" below asserts that a stall
-    // produces an actual hang REPORT - HangWatchdog::captureAllThreads() is a
-    // documented no-op off Windows (core/hang_watchdog.cpp ~494-647: the
-    // whole function body is `#if defined(_WIN32)` with no #else, so
-    // reportsWritten() can never leave 0 and lastReportPath() can never leave
-    // empty). start()/stop()/running()/heartbeat() themselves are portable
-    // and do work correctly on Linux today, but every property worth
-    // asserting here is downstream of the capture that does not exist yet.
-    // Skipped as one block rather than failing forever against that missing
-    // half; see the parallel crash-capture branch this is written for.
-#if defined(_WIN32)
+    // Every block from here through "No report directory means no file, and
+    // no crash" below asserts that a stall produces an actual hang REPORT.
+    // HangWatchdog::captureAllThreads() now has a real body on both
+    // platforms (core/hang_watchdog.cpp's `#if defined(_WIN32) ... #elif
+    // defined(__linux__) ... #endif`), so these checks run unconditionally;
+    // start()/stop()/running()/heartbeat() were always portable.
     // --- A stall is noticed, reported, and survived -------------------------
     {
         const fs::path dir = scratchDir("fires");
@@ -475,12 +469,6 @@ int main() {
         CHECK(w.lastReportPath().empty());
         w.stop();
     }
-#else
-    SKIP_LINUX(
-        "HangWatchdog::captureAllThreads() is a no-op off Windows (hang_watchdog.cpp "
-        "~494-647) - a stall is detected but never produces a report to assert "
-        "against");
-#endif
 
     // The teardown's own budget (beginShutdown) and the cost of stop() itself
     // are asserted in tests/test_shutdown_budget.cpp rather than here - this

@@ -17,6 +17,7 @@
 //     field fails just as loudly as a removed one.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +35,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -64,15 +67,18 @@ std::string readFile(const fs::path& p) {
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
-// This executable's own path, used as a PE whose build id must be readable
-// both from the loaded image and from the file on disk.
+// This executable's own path, used as a PE (Windows) or ELF (Linux) whose
+// build id must be readable both from the loaded image and from the file on
+// disk.
 std::string selfExePath() {
 #if defined(_WIN32)
     char buf[MAX_PATH] = {};
     const DWORD n = ::GetModuleFileNameA(nullptr, buf, static_cast<DWORD>(sizeof(buf)));
     return std::string(buf, buf + n);
 #else
-    return std::string();
+    char buf[4096] = {};
+    const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    return (n > 0) ? std::string(buf, buf + n) : std::string();
 #endif
 }
 
@@ -372,17 +378,18 @@ int main() {
 
     // --- The module table, and the build id that makes it symbolisable ------
     //
-    // LINUX-TODO(crash-capture): refreshModuleTable()/peBuildId() read the
-    // Windows PE CodeView RSDS record (core/diag_report.cpp) - the durable
-    // key crash and hang reports resolve addresses against. Off Windows
-    // refreshModuleTable() is a documented no-op (returns 0, diag_report.cpp
-    // ~160) and peBuildId() has no PE to parse, so every assertion below
-    // would fail forever against missing infrastructure rather than a
-    // regression. The Linux equivalent (ELF module enumeration off
-    // /proc/self/maps, the .note.gnu.build-id key in place of a PE's RSDS
-    // GUID) is symbol-resolution infrastructure of the same kind the
-    // parallel crash-capture branch is adding for crash_handler.cpp and
-    // hang_watchdog.cpp - real assertions belong here once that lands.
+    // peBuildId() itself stays Windows-only below: it parses a PE's CodeView
+    // RSDS record (see diag_report.hpp's own comment), and there is no such
+    // record in an ELF file to parse - this is the one part of the block that
+    // really is PE-only, not a gap. Everything else - refreshModuleTable()
+    // populating the shared table, resolveAddress() finding this module by an
+    // address inside it, and the running image's build id matching an
+    // independent read of the same file on disk - has a real Linux
+    // implementation now (diag_report.cpp's dl_iterate_phdr +
+    // NT_GNU_BUILD_ID path) and is asserted the same way, reading the file
+    // independently with `readelf -n` (the same tool
+    // tools/archive-symbols-linux.sh and a human both reach for) rather than
+    // through a C++ peBuildId() equivalent this header does not expose.
 #if defined(_WIN32)
     {
         const int n = refreshModuleTable();
@@ -422,9 +429,62 @@ int main() {
         CHECK(!resolveAddress(static_cast<std::uintptr_t>(1), junk, junkOffset));
     }
 #else
-    SKIP_LINUX(
-        "refreshModuleTable()/peBuildId() read the Windows PE CodeView RSDS record "
-        "(diag_report.cpp) - no ELF build-id equivalent is implemented yet");
+    {
+        const int n = refreshModuleTable();
+        CHECK(n > 0);
+        CHECK(moduleCount() == n);
+
+        DiagModule m;
+        std::uintptr_t offset = 0;
+        const auto anchor = reinterpret_cast<std::uintptr_t>(&addressAnchor);
+        CHECK(resolveAddress(anchor, m, offset));
+        // No ".exe" here - the module is named after this executable's own
+        // file name, whatever ELF calls it (dl_iterate_phdr's own main-
+        // program entry has an empty dlpi_name, so diag_report.cpp resolves
+        // it via /proc/self/exe; a name is asserted, not a suffix that only
+        // ever existed on the other platform).
+        CHECK(!std::string(m.name).empty());
+        CHECK(offset < m.size);
+        CHECK(m.base != 0);
+
+        // THE SAME PROPERTY peBuildId() proves on Windows: the running
+        // image's key must be exactly the key an independent read of the
+        // file on disk produces. `readelf -n` prints the NT_GNU_BUILD_ID
+        // note as "Build ID: <hex>".
+        std::string fileId;
+        {
+            const std::string cmd = "readelf -n \"" + selfExePath() + "\" 2>/dev/null";
+            FILE* p = popen(cmd.c_str(), "r");
+            std::string out;
+            if (p != nullptr) {
+                char buf[512];
+                while (std::fgets(buf, sizeof(buf), p) != nullptr) { out += buf; }
+                pclose(p);
+            }
+            const std::size_t at = out.find("Build ID: ");
+            if (at != std::string::npos) {
+                std::size_t end = at + 10;
+                while (end < out.size() &&
+                       std::isxdigit(static_cast<unsigned char>(out[end])) != 0) {
+                    ++end;
+                }
+                fileId = out.substr(at + 10, end - (at + 10));
+            }
+        }
+        CHECK(!fileId.empty());
+        CHECK(fileId == std::string(m.buildId));
+        // 40 (SHA-1) or 32 (MD5) lowercase hex digits - the two lengths
+        // report_reader.hpp's isElfBuildId() accepts, which is what picks the
+        // addr2line resolver over dbghelp for a frame carrying this id.
+        CHECK(fileId.size() == 40 || fileId.size() == 32);
+        for (char c : fileId) {
+            CHECK((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+        }
+
+        DiagModule junk;
+        std::uintptr_t junkOffset = 0;
+        CHECK(!resolveAddress(static_cast<std::uintptr_t>(1), junk, junkOffset));
+    }
 #endif
 
     // --- ...and it is rebuilt when a DEVICE OPEN loads the vendor module ----
@@ -480,13 +540,16 @@ int main() {
     // one, <pdb name>/<build id>/<pdb name>, so the same store can be handed
     // straight to a debugger.
     //
-    // LINUX-TODO(crash-capture): the whole pipeline this exercises - a PE
-    // build id from peBuildId(), a PDB archived by the POST_BUILD step in
-    // CMakeLists.txt, tools/archive-symbols.ps1's layout - is Windows-only,
-    // and CASCADE_APP_BINDIR/"cascade.exe" is a Windows-only filename literal
-    // besides. Nothing here can pass until a Linux build-id and a Linux
-    // symbol-archiving equivalent exist; see the module-table skip above for
-    // the same reasoning.
+    // peBuildId() and tools/archive-symbols.ps1's PDB layout stay Windows-
+    // only below for the reason given at the module-table block above; the
+    // Linux half exercises the real equivalent pipeline instead -
+    // tools/archive-symbols-linux.sh's POST_BUILD step (CMakeLists.txt),
+    // which splits the DWARF with objcopy into
+    // symbols/<module>.debug/<build-id>/<module>.debug (the layout
+    // report_reader.hpp's SymbolArchive::elfSymbolPath() already looks for)
+    // and archives the stripped module itself under
+    // symbols/<module>/<build-id>/<module>, plus tools/elf_symmap.py's map
+    // beside the split-debug file.
 #if defined(_WIN32)
     {
         const fs::path exe = fs::path(CASCADE_APP_BINDIR) / "cascade.exe";
@@ -521,10 +584,78 @@ int main() {
         CHECK(!mapSizeEc && mapSize > 0);
     }
 #else
-    SKIP_LINUX(
-        "the PE build id / PDB symbol-archive pipeline (peBuildId, "
-        "tools/archive-symbols.ps1) is Windows-only - no Linux build-id or symbol "
-        "archive exists yet");
+    {
+        const fs::path exe = fs::path(CASCADE_APP_BINDIR) / "cascade";
+        CHECK(fs::exists(exe));
+
+        // The build id an INDEPENDENT readelf run reads off the shipped
+        // binary - not a value this test could get from trusting its own
+        // build's idea of the id, which is exactly the failure mode this
+        // whole check exists to catch.
+        std::string id;
+        {
+            const std::string cmd = "readelf -n \"" + exe.string() + "\" 2>/dev/null";
+            FILE* p = popen(cmd.c_str(), "r");
+            std::string out;
+            if (p != nullptr) {
+                char buf[512];
+                while (std::fgets(buf, sizeof(buf), p) != nullptr) { out += buf; }
+                pclose(p);
+            }
+            const std::size_t at = out.find("Build ID: ");
+            if (at != std::string::npos) {
+                std::size_t end = at + 10;
+                while (end < out.size() &&
+                       std::isxdigit(static_cast<unsigned char>(out[end])) != 0) {
+                    ++end;
+                }
+                id = out.substr(at + 10, end - (at + 10));
+            }
+        }
+        CHECK(!id.empty());
+
+        const fs::path archivedModule =
+            fs::path(CASCADE_SYMBOL_ARCHIVE_DIR) / "cascade" / id / "cascade";
+        std::printf("symbol archive lookup: %s\n", archivedModule.string().c_str());
+        CHECK(fs::exists(archivedModule));
+        std::error_code modSizeEc;
+        const std::uintmax_t modSize = fs::file_size(archivedModule, modSizeEc);
+        CHECK(!modSizeEc && modSize > 0);
+
+        // The split-debug file - the one with the line tables, and the one
+        // report_reader.hpp's elfSymbolPath() prefers.
+        const fs::path splitDebug =
+            fs::path(CASCADE_SYMBOL_ARCHIVE_DIR) / "cascade.debug" / id / "cascade.debug";
+        std::printf("split-debug lookup: %s\n", splitDebug.string().c_str());
+        std::error_code dbgSizeEc;
+        const std::uintmax_t dbgSize = fs::file_size(splitDebug, dbgSizeEc);
+        CHECK(!dbgSizeEc && dbgSize > 0);
+
+        // ...and the RVA->name map beside it, same role as the Windows
+        // symmap.json.gz above. Checked for MORE than existing and non-empty:
+        // it is unzipped and asked to actually resolve a function this build
+        // is guaranteed to carry (installCrashHandlers is exported and
+        // called across translation units, so no compiler can inline it
+        // away) - the property the Windows block above only checks by file
+        // size, this can check outright with one interpreter call.
+        const fs::path symmap =
+            fs::path(CASCADE_SYMBOL_ARCHIVE_DIR) / "cascade.debug" / id / "symmap.json.gz";
+        std::printf("symbol map lookup: %s\n", symmap.string().c_str());
+        std::error_code mapSizeEc;
+        const std::uintmax_t mapSize = fs::file_size(symmap, mapSizeEc);
+        CHECK(!mapSizeEc && mapSize > 0);
+
+        const std::string resolveCmd =
+            "python3 -c \"import gzip,json,sys\n"
+            "d = json.load(gzip.open('" +
+            symmap.string() +
+            "'))\n"
+            "sys.exit(0 if any('installCrashHandlers' in f[2] for f in d['functions']) else 1)\"";
+        const int resolveRc = std::system(resolveCmd.c_str());
+        std::printf("symbol map resolves installCrashHandlers: %s\n",
+                    resolveRc == 0 ? "yes" : "no");
+        CHECK(resolveRc == 0);
+    }
 #endif
 
 #if defined(_WIN32)

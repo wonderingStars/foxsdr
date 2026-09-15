@@ -78,20 +78,6 @@ void checkChildFaultReport() {
     std::error_code ec;
     fs::remove_all(dir, ec);
 
-    // LINUX-TODO(crash-capture): reportAbsorbedChildFault() and
-    // installCrashHandlers() are a documented no-op off Windows
-    // (core/crash_handler.cpp ~741-901), so nothing is ever written to `dir`
-    // here - every assertion below is about the CONTENT of a report that
-    // cannot exist yet. Skipped as one block rather than failing forever
-    // against missing infrastructure a parallel branch is adding.
-#ifndef _WIN32
-    SKIP_LINUX(
-        "core::reportAbsorbedChildFault()/installCrashHandlers() are a no-op off "
-        "Windows - no report is ever written to inspect");
-    fs::remove_all(dir, ec);
-    return;
-#endif
-
     DiagContext ctx;
     ctx.version = "0.96.4-childfaulttest";
     ctx.commit = "deadbeef9999";
@@ -222,14 +208,19 @@ void checkFrameCapturePolicy() {
     // silent report for four.
     CHECK(captureFramesForTest(nullptr, true) > 0);
 #else
-    // LINUX-TODO(crash-capture): captureFramesForTest()/captureFramesGuarded()
-    // exercise Windows structured-exception CONTEXT records
-    // (core/crash_handler.cpp); captureFramesForTest() itself is a no-op
-    // returning 0 off Windows (crash_handler.cpp ~903-912), so there is no
-    // policy here yet to assert.
-    SKIP_LINUX(
-        "captureFramesForTest()/captureFramesGuarded() are Windows CONTEXT-record "
-        "machinery and a no-op off Windows");
+    // The `exceptionPointers` half of this hook has no POSIX meaning - there
+    // is no EXCEPTION_POINTERS/CONTEXT on this platform, and
+    // crash_handler_posix.hpp says so plainly rather than pretending an
+    // EXCEPTION_POINTERS* parameter means anything here - so only the
+    // `mayWalkCurrentThread` half of the Windows contract is exercised:
+    // forbidding the calling thread's own stack yields nothing, and allowing
+    // it captures a real stack via libunwind (crash_handler_posix.cpp's
+    // captureFramesForTest -> captureFramesCurrentThread). This is a live
+    // property of the shipped Linux engine, not a placeholder: every one of
+    // terminate/purecall/the invalid-parameter stand-in on this platform
+    // reaches its report through exactly this call.
+    CHECK(captureFramesForTest(nullptr, false) == 0);
+    CHECK(captureFramesForTest(nullptr, true) > 0);
 #endif
 }
 
