@@ -64,6 +64,31 @@ IMGUI_IMPL_API void     ImGui_ImplGlfw_KeyCallback(GLFWwindow* window, int key, 
 IMGUI_IMPL_API void     ImGui_ImplGlfw_CharCallback(GLFWwindow* window, unsigned int c);
 IMGUI_IMPL_API void     ImGui_ImplGlfw_MonitorCallback(GLFWmonitor* monitor, int event);
 
+// --- FoxSDR ADDITION: A SECOND OPENGL CONTEXT THE DRIVER WOULD NOT GIVE -----
+//
+// Upstream's ImGui_ImplGlfw_CreateWindow calls glfwCreateWindow and then uses
+// the result unconditionally. On a machine whose driver refuses to share a
+// second GL context that result is nullptr, GLFW logs "65543: WGL: Failed to
+// create OpenGL context", and the very next line - glfwGetWin32Window(nullptr)
+// - takes the access violation FoxSDR received as
+// "crash cascade.exe @ glfwGetWin32Window" (0.95.0, Windows 10.0.22621).
+//
+// The backend has no logger of its own, so it counts instead. The application
+// reads the counter after ImGui::UpdatePlatformWindows(), and a rise means
+// "this display cannot do torn-off windows" - see AppWindow::run, which clears
+// ImGuiConfigFlags_ViewportsEnable for the rest of the session and says so in
+// the log, so the page is merged back into the main window rather than the
+// process dying. Every other platform callback in the backend now tolerates a
+// viewport whose window is null, because between the failure and the
+// application noticing, ImGui will still call them on it.
+IMGUI_IMPL_API int      ImGui_ImplGlfw_ViewportWindowCreationFailures();
+
+// TESTS ONLY: make the next secondary-viewport creation fail as if the driver
+// had refused it. There is no way to provoke the real refusal on a machine
+// whose driver is willing, and a guard nothing has ever exercised is a guard
+// nobody knows works. Resets itself after one use.
+IMGUI_IMPL_API void     ImGui_ImplGlfw_FailNextViewportWindowForTest();
+
 // GLFW helpers
 IMGUI_IMPL_API void     ImGui_ImplGlfw_Sleep(int milliseconds);
 IMGUI_IMPL_API float    ImGui_ImplGlfw_GetContentScaleForWindow(GLFWwindow* window);

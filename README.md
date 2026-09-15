@@ -374,6 +374,24 @@ than freezing the display.
 **Windows only**, because the SDRplay API is a Windows service. On other
 platforms enumeration returns nothing and says why in the log.
 
+**When the service itself stops answering** (0.96.1). Everything above depends
+on a Windows service that FoxSDR neither owns nor can restart, and none of the
+vendor's calls take a timeout or can be cancelled — so when that service dies
+with a radio open, every call answers `ServiceNotResponding` and anything
+waiting on one waits forever. Two field reports were exactly that: an RSP1A on
+API 3.15 whose retune, gain, AGC and shutdown calls all came back 14, and a
+scan from the Source panel that went into the vendor's device list and never
+returned, freezing the window. FoxSDR now treats both as what they are. A
+control call answered `ServiceNotResponding` releases the radio the way an
+unplugged one is released, with a message saying to restart the SDRplay API
+service — rather than retrying into a service that is gone. And a scan gives
+the vendor three seconds on a worker thread, then ABANDONS it: the panel says
+*the SDRplay service did not answer within 3 s — restart the SDRplay API
+service*, and further scans skip the SDRplay step for a minute rather than
+spend another three seconds each time the source list is opened. Restarting
+the service (Windows Services, **SDRplay API Service**) and choosing the radio
+again is the whole recovery.
+
 **A note on versions.** The driver's declarations of the API's structures were
 checked against SDRplay's published headers for 3.07, 3.11 and 3.15, compiled
 with FoxSDR's own compiler, and every size and member offset is pinned by a
@@ -390,14 +408,16 @@ the SDRplay API is not installed on it, so nothing here has met the real
 service — that is stated plainly rather than implied. What is proved is the
 driver: it reaches the API through one table of function pointers, and
 `tests/test_sdrplay_source.cpp` fills that table with a fake that answers the
-way the vendor's header says the service does. 442 checks cover the exact call
+way the vendor's header says the service does. 487 checks cover the exact call
 sequence at open, the exact parameters the radio is started with, every update
 reason against the change that caused it, the sample conversion, the per-model
 antenna, notch and bias-tee routing, the rate-and-decimation plan for every
 published rate, the refusals (no API, an API too old, a frequency out of range,
 an RSPduo another application already holds), the fault path for a removed
-device, and the teardown bound. Each was confirmed to go red against a
-deliberately broken driver before being believed.
+device, the teardown bound, and - from 0.96.1 - a service that never answers
+at all, which the fake can now imitate because the real one did. Each was
+confirmed to go red against a deliberately broken driver before being
+believed.
 
 ## The native Mirics driver
 

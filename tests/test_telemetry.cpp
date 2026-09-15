@@ -271,9 +271,21 @@ void testBeatRefusesToArmWithoutARealId() {
     CHECK(!h3.due(0.0));
 }
 
+// The in-app privacy link must name the page the site serves and the store
+// listing links to, over https, on the project's own domain. A relative path,
+// a plain-http address or a workers.dev host would each pass a reviewer's eye
+// and fail the moment the page moved or the transport was tampered with.
+void testPrivacyPolicyUrlIsTheSitePageOverHttps() {
+    const std::string url = cascade::core::kPrivacyPolicyUrl;
+    CHECK(url == "https://foxsdr.com/privacy.html");
+    CHECK(url.rfind("https://foxsdr.com/", 0) == 0);
+    CHECK(url.find("workers.dev") == std::string::npos);
+}
+
 }  // namespace
 
 int main() {
+    testPrivacyPolicyUrlIsTheSitePageOverHttps();
     testDeviceSerialIsStripped();
     testInstallIdIsRandomAndValidated();
     testPayloadContainsOnlyTheAgreedFields();

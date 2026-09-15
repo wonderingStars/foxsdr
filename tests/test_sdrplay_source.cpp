@@ -18,7 +18,9 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "sdrplay_fake_api.hpp"
@@ -1064,6 +1066,134 @@ void testSkipReasonReachesTheSourcePanel() {
     }
 }
 
+// --- 12c. a service that stops answering ----------------------------------
+//
+// TWO HANG REPORTS, ONE RSP1A, API 3.15 (0.96.1). The log showed the device
+// opened and then every call answering sdrplay_api_ServiceNotResponding (14) -
+// retune, LNA, AGC, Uninit - and then a SCAN from the Source section, on the
+// GUI thread, going into enumerateSdrPlayWith and never coming back. Both
+// halves of that are covered below: the enumeration must be bounded and must
+// say why, and the open device must declare itself dead instead of being
+// hammered for fifty seconds (the health line recorded 1910 timeouts).
+
+void testServiceNotRespondingMakesTheDeviceDead() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    CHECK(!src.faulted());
+
+    // The service goes away with the radio still open. A retune is what the
+    // user's next click produces, and it is the call the report names first.
+    fake.updateResult = abi::ServiceNotResponding;
+    CHECK(src.setCenterFrequencyHz(101100000.0) == false);
+
+    // NOT a refused request: a dead receiver. This is what lets Pipeline's
+    // source thread latch the fault and stop, which is the whole difference
+    // between a released radio and 1910 timeouts.
+    CHECK(src.faulted());
+    CHECK(src.deviceDead());
+    CHECK(src.faultedWhile() == "retune");
+    CHECK(std::string(src.lastError()).find("service stopped answering") != std::string::npos);
+
+    // ...and an ordinary refusal is still an ordinary refusal. Without this
+    // the check above would pass for any failing Update at all.
+    SdrPlaySource other;
+    FakeSdrPlayApi fake2;
+    fake2.addDevice("1811003EFC", abi::kRsp1A);
+    CHECK(openOn(other, fake2));
+    CHECK(other.start());
+    fake2.updateResult = abi::Fail;
+    CHECK(other.setCenterFrequencyHz(101100000.0) == false);
+    CHECK(!other.faulted());
+    CHECK(!other.deviceDead());
+}
+
+void testAWedgedEnumerationIsAbandonedAndThenHeldOff() {
+    // THE FAKE IS ON THE HEAP AND IS NOT DESTROYED HERE. This test abandons a
+    // worker that is parked inside the fake's GetDevices; it is released at
+    // the end and waited for, and only then would destruction be safe - but
+    // the whole point of the abandonment is that the driver has given up on
+    // ever hearing from it. Owning it for the life of the process is the same
+    // judgement the driver makes about a stranded Link, and for the same
+    // reason: a leak is survivable, a use-after-free on somebody else's thread
+    // is not.
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("1811003EFB", abi::kRsp1A);
+    fake->hangInGetDevices.store(true);
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::vector<cascade::source::NativeDeviceInfo> devs =
+        cascade::source::enumerateSdrPlayWith(fake->table);
+    const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - t0)
+                             .count();
+
+    CHECK(devs.empty());
+    // Bounded by kEnumerateWait, not by the service. The upper bound is
+    // generous because this machine builds and tests in parallel; what it
+    // rules out is the unbounded wait that produced the report.
+    CHECK(ms >= 2500);
+    CHECK(ms < 10000);
+    if (ms >= 10000) { std::printf("     enumeration took %lld ms\n", ms); }
+    CHECK(fake->insideGetDevices.load());
+
+    // The panel gets the sentence, verbatim, not a paraphrase.
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+          std::string(cascade::source::sdrPlayServiceHungSentence()));
+    CHECK(cascade::source::sdrPlayEnumerationHeldOff());
+
+    // AND THE NEXT SCAN DOES NOT TOUCH THE API AT ALL. The source combo scans
+    // every time it opens, so without the hold-off each of those would spend
+    // another three seconds and abandon another worker in a service that is
+    // still wedged.
+    const std::size_t callsBefore = fake->calls.size();
+    const auto t1 = std::chrono::steady_clock::now();
+    const std::vector<cascade::source::NativeDeviceInfo> again =
+        cascade::source::enumerateSdrPlayWith(fake->table);
+    const long long heldMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t1)
+                                 .count();
+    CHECK(again.empty());
+    CHECK(heldMs < 250);
+    CHECK(fake->calls.size() == callsBefore);
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+          std::string(cascade::source::sdrPlayServiceHungSentence()));
+
+    // Let the abandoned worker leave before this process does, so nothing is
+    // still inside the fake when the run ends.
+    fake->releaseHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftGetDevices.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftGetDevices.load());
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+}
+
+void testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence() {
+    // The bound must not have changed the ordinary path: a service that
+    // answers is enumerated on the spot and leaves nothing on the panel.
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::vector<cascade::source::NativeDeviceInfo> devs =
+        cascade::source::enumerateSdrPlayWith(fake.table);
+    const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - t0)
+                             .count();
+    CHECK(devs.size() == 1);
+    CHECK(ms < 1000);
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip().empty());
+    CHECK(!cascade::source::sdrPlayEnumerationHeldOff());
+    CHECK(fake.called("GetDevices"));
+    // The session is balanced: opened once, closed once, whichever thread did it.
+    CHECK(fake.openCount == 1);
+    CHECK(fake.closeCount == 1);
+}
+
 // --- 13. the interface description itself ---------------------------------
 
 void testAbiLayoutIsPinnedToTheVersionsWeChecked() {
@@ -1106,6 +1236,12 @@ int main() {
     testCloseWithoutOpenIsSafe();
     testFailuresOnTheOpeningPathUnwind();
     testSkipReasonReachesTheSourcePanel();
+    testServiceNotRespondingMakesTheDeviceDead();
+    testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence();
+    // LAST, and deliberately: it abandons a worker inside its own fake and
+    // releases it again, and nothing that follows should have to reason about
+    // a thread this one left running.
+    testAWedgedEnumerationIsAbandonedAndThenHeldOff();
     testAbiLayoutIsPinnedToTheVersionsWeChecked();
     return testSummary("test_sdrplay_source");
 }

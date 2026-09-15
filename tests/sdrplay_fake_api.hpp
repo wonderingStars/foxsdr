@@ -26,11 +26,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "source/sdrplay_api_decl.hpp"
@@ -113,6 +116,17 @@ public:
     // lets a test prove the driver asked for the acknowledgement without
     // waiting the full kUpdateWait for one that never comes.
     bool autoAck = true;
+
+    // THE WEDGED SERVICE. With hangInGetDevices set, GetDevices goes in and
+    // does not come out until releaseHang is set - which is how the enumeration
+    // bound (kEnumerateWait) and the hold-off after it are proved. The two
+    // observation flags let a test see the worker go in and, afterwards, come
+    // back out, so an abandoned thread is never left inside this object while
+    // it is being destroyed.
+    std::atomic<bool> hangInGetDevices{false};
+    std::atomic<bool> releaseHang{false};
+    std::atomic<bool> insideGetDevices{false};
+    std::atomic<bool> leftGetDevices{false};
 
     // --- what the tests observe ------------------------------------------
 
@@ -308,6 +322,20 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr || out == nullptr || n == nullptr) { return abi::Fail; }
         f->note("GetDevices");
+        // A SERVICE THAT NEVER ANSWERS - the one behaviour this fake could not
+        // express before, and the one that produced a hang report from the
+        // field (0.96.1). The real API takes no timeout and cannot be
+        // cancelled, so the only faithful imitation is to not return. Polled
+        // rather than parked on a condition variable so the ABANDONED worker
+        // can still leave when the test releases it, instead of holding a
+        // vendor call open past the end of the process.
+        if (f->hangInGetDevices.load()) {
+            f->insideGetDevices.store(true);
+            while (!f->releaseHang.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            f->leftGetDevices.store(true);
+        }
         unsigned int count = 0;
         for (const abi::DeviceT& d : f->devices) {
             if (count >= maxDevs) { break; }
