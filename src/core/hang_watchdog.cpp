@@ -96,6 +96,7 @@ std::string frameLine(std::uintptr_t addr) {
     return std::string(buf);
 }
 
+#if defined(__linux__)
 // ---------------------------------------------------------------------------
 // LINUX: capturing a stack that is not the caller's own.
 //
@@ -248,6 +249,7 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
     // frame list invented to fill the gap.
     return ts;
 }
+#endif  // __linux__ - the block above was unguarded once and MSVC compiled it
 
 }  // namespace
 
