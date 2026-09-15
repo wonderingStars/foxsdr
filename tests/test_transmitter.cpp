@@ -52,7 +52,13 @@ public:
         return true;
     }
     void stop() override {
-        if (running_) { ++stops; }
+        if (running_) {
+            ++stops;
+            // A test that swaps this sink out of the transmitter can no longer
+            // read `stops` afterwards: setSink() destroys the old sink, so the
+            // ledger has to live outside the sink for that one case.
+            if (stopsMirror != nullptr) { ++*stopsMirror; }
+        }
         running_ = false;
     }
     bool running() const override { return running_; }
@@ -111,6 +117,9 @@ public:
 
     std::atomic<int> starts{0};
     std::atomic<int> stops{0};
+    // Optional external ledger for stops, for a test that lets the
+    // transmitter destroy this sink and still needs the count afterwards.
+    std::atomic<int>* stopsMirror = nullptr;
     bool refuseStart = false;
     long long faultAfter = 0;
 
@@ -484,7 +493,12 @@ int main() {
     {
         Transmitter tx;
         auto first = std::make_unique<RecordingSink>(480000.0);
-        RecordingSink* a = first.get();
+        // setSink() below destroys `first`, so its stop count is read through
+        // a counter that outlives it. Reading first.get()->stops after the
+        // swap was a use-after-free that passed or failed by allocator luck
+        // (2 of 5 runs red on Linux, 2026-09-15).
+        std::atomic<int> firstStops{0};
+        first->stopsMirror = &firstStops;
         tx.setSink(std::move(first));
         tx.setInput(TxInput::Tone);
         tx.setLatched(true);
@@ -496,7 +510,7 @@ int main() {
         tx.setSink(std::move(second));
         CHECK(!tx.transmitting());
         CHECK(!tx.latched());
-        CHECK(a->stops.load() >= 1);
+        CHECK(firstStops.load() >= 1);
         tickFor(tx, 60);
         CHECK(b->starts.load() == 0);
         CHECK(b->samples() == 0);
