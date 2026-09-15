@@ -720,6 +720,11 @@ void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string&
 
 bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
     if (err != abi::ServiceNotResponding) { return false; }
+    // THE SERVICE HAS DECLARED ITSELF GONE, so nothing of ours enters the
+    // vendor DLL for this device again - including the teardown's Uninit,
+    // ReleaseDevice and Close. See vendorUnreachableLocked(). Called only from
+    // updateLocked, which holds devMutex_.
+    serviceGone_ = true;
     // The same sentence the enumeration skip uses, because it is the same
     // problem and the same remedy: the service, not the radio, is what has to
     // be restarted. Said once here rather than left to the caller's generic
@@ -1224,6 +1229,7 @@ bool SdrPlaySource::open(const std::string& args) {
     // about deviceDead, applied to the control seam. Whatever we abandoned
     // belongs to the device that was open before this one.
     controlAbandoned_ = false;
+    serviceGone_ = false;
 
     std::string error;
     if (!acquireSessionLocked(error)) {
@@ -1272,9 +1278,18 @@ bool SdrPlaySource::open(const std::string& args) {
 void SdrPlaySource::closeDevice() {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (initialised_) { stopStreamingLocked(); }
+    // THE SAME RULE AS THE TEARDOWN ABOVE, AND FOR THE SAME REASON:
+    // sdrplay_api_ReleaseDevice and sdrplay_api_Close are two more calls into
+    // a DLL that is holding a thread of ours, and the 0.96.4 stack is what one
+    // such call looks like from the outside.
+    const bool unreachable = vendorUnreachableLocked();
     if (selected_) {
         const abi::Api& a = api();
-        if (a.ReleaseDevice != nullptr) {
+        if (unreachable) {
+            core::diagWarnf(
+                "source: SDRplay closed without ReleaseDevice - the radio stays selected in the "
+                "service until it is restarted");
+        } else if (a.ReleaseDevice != nullptr) {
             const abi::ErrT err = a.ReleaseDevice(&device_);
             if (err != abi::Success) {
                 core::diagWarnf("source: SDRplay ReleaseDevice failed - %s",
@@ -1285,7 +1300,20 @@ void SdrPlaySource::closeDevice() {
     }
     deviceParams_ = nullptr;
     device_ = abi::DeviceT{};
-    releaseSessionLocked();
+    if (unreachable) {
+        // THE SESSION IS ORPHANED, NOT RELEASED. Letting go of the last
+        // reference is what calls sdrplay_api_Close, which is the third
+        // unbounded call into the wedged DLL; the reference is therefore
+        // dropped from THIS object and left standing in the process's table.
+        // The cost is that the process never closes its connection to the
+        // service - which is exactly what the abandoned worker means anyway,
+        // and the reason the log above says this process cannot use the radio
+        // again.
+        sessionHeld_ = false;
+        apiVersion_.store(0.0f, std::memory_order_relaxed);
+    } else {
+        releaseSessionLocked();
+    }
     openMirror_.store(false, std::memory_order_relaxed);
     hwVer_.store(0, std::memory_order_relaxed);
 }
@@ -1334,6 +1362,41 @@ void SdrPlaySource::stopStreamingLocked() {
     }
     const abi::Api& a = api();
     link_->accepting.store(false, std::memory_order_relaxed);
+
+    // A TEARDOWN DOES NOT ENTER A VENDOR DLL WE HAVE ALREADY LOST A THREAD IN.
+    //
+    // THE 0.96.4 REPORT, IN ONE BRANCH. The abandonment of a control raises
+    // the fault; the fault stops the pipeline; stopping the pipeline calls
+    // stop() - on the GUI thread, in the same frame, straight into the Uninit
+    // below, which the abandoned worker's device is already holding. The
+    // captured stack is ntdll <- KERNELBASE <- sdrplay_api.dll <- this
+    // function, and the user's window never came back.
+    //
+    // There is nothing to wait for and nothing to wait ON. Not the worker: it
+    // is detached by definition and joining it is the freeze we are removing.
+    // Not a callback drain either: we have not called Uninit, so the service
+    // has not been told to stop calling us and no bound could make freeing the
+    // Link safe. So the accounting is honest instead - accepting is cleared so
+    // a callback that arrives drops its block, the Link is STRANDED, the
+    // device handle stays in it for the thread that may still be inside, and
+    // this returns. See the file header for what that costs.
+    if (vendorUnreachableLocked()) {
+        initialised_ = false;
+        running_.store(false, std::memory_order_relaxed);
+        core::diagWarnf(
+            "source: SDRplay stopped without Uninit - %s, so the radio is left to the worker "
+            "still inside the API; this process cannot use it again",
+            controlAbandoned_ ? "a control was abandoned inside the vendor DLL"
+                              : "the service stopped answering");
+        strandLink(link_);
+        std::string line;
+        {
+            std::lock_guard<std::mutex> hl(link_->healthMutex);
+            line = healthLineLocked(*link_);
+        }
+        if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+        return;
+    }
 
     // UNBOUNDED BY CONSTRUCTION. sdrplay_api_Uninit takes no timeout and
     // offers no cancellation; the API's contract is that it returns with the

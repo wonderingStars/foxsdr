@@ -559,7 +559,9 @@ const KnownWait kKnownWaits[] = {
      "the bounded wait in SdrPlaySource::stopStreamingLocked() for a service callback that is "
      "still inside us after Uninit returned, after which the Link is STRANDED rather than freed "
      "under a thread we cannot join. The whole of the 250 ms SDRplay column, covered by the "
-     "3000 ms Soapy column already charged"},
+     "3000 ms Soapy column already charged. Not spent at all on the path the 0.96.4 hang report "
+     "added: a teardown that finds the vendor DLL unreachable makes no Uninit call, so there is "
+     "nothing to drain and the Link is stranded immediately"},
     {"src/source/sdrplay_source.hpp", "kReadWait", 0,
      "SdrPlaySource::read()'s wait for the service's callback to fill the ring, spent on the "
      "pipeline's source thread, which the teardown already waits for through kSourceJoinWait's "
@@ -568,8 +570,11 @@ const KnownWait kKnownWaits[] = {
      "how long a live control waits for sdrplay_api_Update ITSELF before ABANDONING the worker "
      "it ran the call on (the 0.96.2 hang report, bounded in 0.96.3). Spent on the GUI thread by "
      "a setter - a panel retune, a gain "
-     "slider, an antenna change - and NOT on the teardown path: stop() issues no Update at all, "
-     "it calls sdrplay_api_Uninit directly, and closeDevice() calls ReleaseDevice. A control "
+     "slider, an antenna change - and NOT on the teardown path: stop() issues no Update at all. "
+     "It calls sdrplay_api_Uninit directly and closeDevice() calls ReleaseDevice, both unbounded "
+     "by construction - OR, once a control has been abandoned inside the vendor DLL or the "
+     "service has declared itself gone, neither, which is the 0.96.4 hang report's fix and costs "
+     "the teardown nothing at all rather than a bounded wait. A control "
      "cannot be in flight across the teardown either, because it is synchronous on the same "
      "thread the teardown runs on, so the frame it belongs to has already finished. It composes "
      "with kUpdateWait below rather than replacing it: 1000 + 500 is the worst a single control "

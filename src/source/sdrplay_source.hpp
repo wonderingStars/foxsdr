@@ -62,9 +62,31 @@
 // will on an open radio. Every other call in that list is made with a device
 // already open and is still unbounded, because abandoning a thread that is
 // inside SelectDevice or Init would leave the service holding a radio nothing
-// in this process could ever release - and that includes the Uninit and
-// ReleaseDevice that follow an abandoned control, which is the price of
-// having a thread we cannot recall.
+// in this process could ever release.
+//
+// ...AND THE TEARDOWN AFTER AN ABANDONED CONTROL IS NO LONGER ONE OF THEM.
+// This paragraph used to end "and that includes the Uninit and ReleaseDevice
+// that follow an abandoned control, which is the price of having a thread we
+// cannot recall". That price was paid by the user, not by us: 0.96.4's hang
+// report is a GUI thread inside stopStreamingLocked's sdrplay_api_Uninit,
+// under Pipeline::quiesceSourceThreadLocked, seconds after the log recorded
+// an abandoned retune and "a worker is still inside sdrplay_api_Update". One
+// call at a time is what the API's own device lock means, so the teardown
+// queued behind the very thread we had already given up on, and the window
+// went with it - the same freeze 0.96.3 had just moved off the control.
+//
+// So the rule is now stated once, for the whole file: WHEN A WORKER HAS BEEN
+// ABANDONED INSIDE THE VENDOR DLL, OR THE SERVICE HAS DECLARED ITSELF GONE,
+// NOTHING OF OURS ENTERS THAT DLL FOR THIS DEVICE AGAIN - not Update, not
+// Uninit, not ReleaseDevice, not Close. The handle is left to the thread that
+// is still in there, the Link is stranded rather than freed (nothing has told
+// the service to stop calling us, so there is no safe moment to free it), and
+// stop() and closeDevice() return without waiting on anything at all. What
+// that costs is real and is said plainly rather than discovered: the RSP
+// stays selected in the service and this process's SDRplay session is
+// finished until FoxSDR is restarted - which is the same restart the "restart
+// the SDRplay API service, then open the radio again" sentence already asks
+// for. See vendorUnreachableLocked().
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -391,6 +413,10 @@ public:
     // never-opened instance, safe from the destructor. lastError() survives
     // it. Does NOT close the process's connection to the service: see
     // sdrplay_abi::Api's session note.
+    //
+    // ...UNLESS THE VENDOR DLL IS UNREACHABLE, in which case it makes no call
+    // into it at all - no ReleaseDevice, no Close - and the session reference
+    // is ORPHANED rather than released. See the file header.
     void closeDevice() override;
 
     bool isOpen() const override { return openMirror_.load(std::memory_order_relaxed); }
@@ -456,7 +482,9 @@ public:
     bool start() override;
 
     // sdrplay_api_Uninit, then the bounded drain. Idempotent, safe before
-    // open.
+    // open. Makes NO vendor call when the DLL is unreachable (see the file
+    // header): the Link is stranded and it returns, because the one call that
+    // could still be in flight belongs to a thread we cannot recall.
     void stop() override;
 
     bool running() const override { return running_.load(std::memory_order_relaxed); }
@@ -681,6 +709,20 @@ private:
     static void setErrorOn(Link& link, std::string msg);
     static void noteFaultOn(Link& link, const char* what, const std::string& detail);
 
+    // TRUE WHEN NO THREAD OF OURS MAY ENTER THE VENDOR DLL FOR THIS DEVICE
+    // AGAIN - the whole of the rule the file header states, in one place so
+    // that updateLocked, stopStreamingLocked and closeDevice cannot drift
+    // apart about it. devMutex_ held, like every other *Locked helper.
+    //
+    // DELIBERATELY NOT deviceDead(). That is raised by an UNPLUGGED radio too
+    // (eventCallback's DeviceRemoved), and an unplugged radio leaves a healthy
+    // service that answers Uninit and ReleaseDevice in microseconds - calls
+    // which are exactly what lets the next RSP be opened. Skipping them there
+    // would trade a hang nobody has reported for a receiver that cannot be
+    // re-plugged without restarting the application. Only the two conditions
+    // below mean the SERVICE is gone.
+    bool vendorUnreachableLocked() const { return controlAbandoned_ || serviceGone_; }
+
     // A SERVICE THAT HAS STOPPED ANSWERING IS A DEAD DEVICE, NOT A FAILED CALL.
     //
     // sdrplay_api_ServiceNotResponding (14) means the thing holding the USB
@@ -723,6 +765,18 @@ private:
     // *Locked helpers read, and cleared by open() - a fresh session is a
     // fresh device, the same judgement clearError() makes about deviceDead.
     bool controlAbandoned_ = false;
+
+    // TRUE ONCE THE SERVICE HAS ANSWERED sdrplay_api_ServiceNotResponding for
+    // this device. The other half of vendorUnreachableLocked(), and separate
+    // from controlAbandoned_ because the two are different facts: that one
+    // says a thread of ours is parked in the DLL, this one says the thing
+    // holding the USB handle has told us it is gone. Either makes a further
+    // vendor call pointless at best - 0.95.0's report is four of them in a row
+    // answering (14) - and, on the evidence of 0.96.4's stack, a frozen window
+    // at worst. Set under devMutex_ by noteIfServiceDead, cleared by open()
+    // for the same reason controlAbandoned_ is: a fresh session is a fresh
+    // device.
+    bool serviceGone_ = false;
 
     // Lock-free mirrors, so per-frame GUI readouts never wait behind an API
     // call in flight.

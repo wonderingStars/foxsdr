@@ -1274,6 +1274,170 @@ void testAWedgedControlIsAbandonedAndTheDeviceIsDead() {
     if (caller.joinable()) { caller.join(); }
 }
 
+// --- 12e. the teardown that follows an abandoned control -------------------
+//
+// A FOURTH HANG REPORT (0.96.4, RSP1B, API 3.15, Windows 10.0.22631) - and
+// the first one where the frozen call is this driver's own TEARDOWN rather
+// than a control. Its log tail is 0.96.3 working exactly as written:
+//
+//   warn source: SDRplay retune abandoned - the service did not answer
+//                within 1000 ms; the radio is released
+//   info source: SDRplay controls are refused for this device from here -
+//                a worker is still inside sdrplay_api_Update
+//
+// and its GUI thread, symbolised against the 0.96.4 map, is
+//
+//   ntdll -> KERNELBASE -> sdrplay_api.dll -> sdrplay_api.dll
+//         -> SdrPlaySource::stopStreamingLocked +129
+//         -> SdrPlaySource::stop +51
+//         -> Pipeline::quiesceSourceThreadLocked +58 -> Pipeline::start +207
+//         -> AppWindow::drawToolbar +603 -> drawUi -> run -> main
+//
+// The fault latched by the abandonment is what STOPS the pipeline, and
+// stopping the pipeline is what calls stop() - on the GUI thread, straight
+// into the sdrplay_api_Uninit the abandoned worker's device is already
+// holding. 0.96.3 bounded the control and handed the window to the teardown
+// behind it.
+//
+// So the rule this pins: once a worker has been abandoned inside the vendor
+// DLL, or the service has declared itself gone, NOTHING of ours enters that
+// DLL for this device again - not Uninit, not ReleaseDevice, not Close. The
+// handle is left to the thread that is still in there, which is the only one
+// that could ever make another call safe, and the teardown returns bounded.
+
+void testATeardownAfterAnAbandonedControlNeverEntersTheVendorDll() {
+    // THE FAKE AND THE SOURCE ARE ON THE HEAP AND NEITHER IS DESTROYED, for
+    // the reason the test above gives: a worker is abandoned inside the fake's
+    // Update, and destroying the object it is standing in would be the one
+    // thing an abandonment must never do.
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    CHECK(src->start());
+
+    // The service wedges and the user's retune is abandoned inside it: the
+    // exact state the report's last two log lines describe.
+    fake->hangInUpdate.store(true);
+    std::atomic<bool> retuneReturned{false};
+    std::thread caller([&]() {
+        src->setCenterFrequencyHz(101100000.0);
+        retuneReturned.store(true);
+    });
+    for (int i = 0; i < 400 && !retuneReturned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(retuneReturned.load());
+    if (caller.joinable()) { caller.join(); }
+    CHECK(src->deviceDead());
+    // The worker is STILL IN THERE, which is the whole premise: everything
+    // below asks what the teardown does about a device it cannot enter.
+    CHECK(fake->insideUpdate.load());
+    CHECK(!fake->leftUpdate.load());
+
+    // THE SERVICE ANSWERS EVENTUALLY, so that a teardown which does go into
+    // the DLL comes back and this test REPORTS rather than hangs. The field's
+    // user got no such rescue - the report was filed while the frame was still
+    // stuck - so this bound is generous to the defect, not to the fix.
+    std::thread rescue([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        fake->releaseUpdateHang.store(true);
+    });
+
+    const unsigned long long strandedBefore = SdrPlaySource::linksStranded();
+    const std::size_t callsBefore = fake->calls.size();
+
+    // THE TWO CALLS THE REPORT'S STACK IS INSIDE, on this test's own thread -
+    // which stands in for the GUI thread exactly as the sibling test's caller
+    // does.
+    const auto t0 = std::chrono::steady_clock::now();
+    src->stop();
+    const long long stopMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
+            .count();
+    const auto t1 = std::chrono::steady_clock::now();
+    src->closeDevice();
+    const long long closeMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1)
+            .count();
+    std::printf("     stop %lld ms, close %lld ms after an abandoned control\n", stopMs, closeMs);
+
+    // 1. NOTHING OF OURS WENT BACK INTO THE VENDOR DLL. Asserted as "did not
+    //    enter" and not only as elapsed time, because a call that is quick
+    //    today because the test released the wedge is still the call that
+    //    froze the user's window.
+    CHECK(!fake->uninitEnteredWhileWedged.load());
+    CHECK(!fake->releaseEnteredWhileWedged.load());
+    CHECK(!fake->called("Uninit"));
+    CHECK(fake->releaseCount == 0);
+    CHECK(fake->closeCount == 0);
+    CHECK(fake->calls.size() == callsBefore);
+
+    // 2. AND BOTH CAME BACK WELL INSIDE THE THRESHOLD THAT FILED THE REPORT.
+    //    This is the fault expressed as arithmetic: the teardown is on the
+    //    same thread and in the same frame as the control that preceded it.
+    CHECK(stopMs < 500);
+    CHECK(closeMs < 500);
+    CHECK(stopMs + closeMs <
+          static_cast<long long>(cascade::core::HangWatchdog::kDefaultThresholdMs));
+
+    // 3. WHAT THE CALLER IS LEFT WITH. Stopped and closed as far as this
+    //    process is concerned...
+    CHECK(!src->running());
+    CHECK(!src->isOpen());
+    // ...and the Link is STRANDED rather than freed, because we never called
+    // Uninit and therefore nothing has told the service to stop calling our
+    // callbacks. There is no moment at which freeing it would be safe.
+    CHECK(SdrPlaySource::linksStranded() == strandedBefore + 1);
+
+    // Let the abandoned worker leave before this process does.
+    rescue.join();
+    for (int i = 0; i < 500 && !fake->leftUpdate.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftUpdate.load());
+
+    // AND THE SAME RULE WITH NO ABANDONED WORKER AT ALL. A service that
+    // ANSWERS sdrplay_api_ServiceNotResponding has said the thing holding the
+    // USB handle is gone; a teardown that then calls Uninit, ReleaseDevice and
+    // Close is three more calls into it, each of which the 0.96.4 stack shows
+    // can block for as long as it likes. Nothing here is abandoned, so this
+    // fake can live and die on the stack.
+    FakeSdrPlayApi gone;
+    gone.addDevice("1811003EFC", abi::kRsp1A);
+    SdrPlaySource dead;
+    CHECK(openOn(dead, gone));
+    CHECK(dead.start());
+    gone.updateResult = abi::ServiceNotResponding;
+    CHECK(dead.setCenterFrequencyHz(101100000.0) == false);
+    CHECK(dead.deviceDead());
+    gone.calls.clear();
+    dead.stop();
+    dead.closeDevice();
+    CHECK(!gone.called("Uninit"));
+    CHECK(!gone.called("ReleaseDevice"));
+    CHECK(!gone.called("Close"));
+    CHECK(!dead.isOpen());
+    CHECK(!dead.running());
+
+    // ...WHILE A DEVICE THAT WAS MERELY UNPLUGGED IS TORN DOWN NORMALLY. The
+    // radio is gone and the service is fine, so Uninit and ReleaseDevice are
+    // the calls that let the next one be opened; skipping them here would
+    // trade a hang nobody has for a radio that cannot be re-plugged.
+    FakeSdrPlayApi pulled;
+    pulled.addDevice("1811003EFD", abi::kRsp1A);
+    SdrPlaySource unplugged;
+    CHECK(openOn(unplugged, pulled));
+    CHECK(unplugged.start());
+    pulled.fireDeviceRemoved();
+    CHECK(unplugged.deviceDead());
+    unplugged.stop();
+    unplugged.closeDevice();
+    CHECK(pulled.called("Uninit"));
+    CHECK(pulled.called("ReleaseDevice"));
+    CHECK(pulled.closeCount == 1);
+}
+
 void testAHealthyControlIsStillSynchronousAndAcknowledged() {
     // The bound must not have changed the ordinary path. A service that
     // answers is updated on the spot, the acknowledgement flag is still
@@ -1444,6 +1608,7 @@ int main() {
     // order they were written, and each releases and waits for its own before
     // it returns.
     testAWedgedControlIsAbandonedAndTheDeviceIsDead();
+    testATeardownAfterAnAbandonedControlNeverEntersTheVendorDll();
     // LAST, and deliberately: it abandons a worker inside its own fake and
     // releases it again, and nothing that follows should have to reason about
     // a thread this one left running.
