@@ -129,6 +129,7 @@ struct DemodScopeFeed;
 // and this is the object that outlives frames.
 class PluginStoreView;
 struct PluginStoreDeck;
+struct PluginStoreModel;
 struct FittedModulesDeck;
 
 // Whether a device open that finished on a worker thread should still be
@@ -2535,6 +2536,54 @@ private:
     // replace mid-transfer, so the worker takes its own COPY of the entry and
     // re-points the plan at it before calling applyUpdate.
     void startUpdate(const cascade::core::PluginUpdate& u);
+
+    // --- ADD ALL PLUGINS (0.96.0) -------------------------------------------
+    //
+    // ONE RUN, MANY TRANSFERS, AND NOT ONE NEW CODE PATH FOR THE BYTES. The
+    // store's key hands back a list of catalogue rows; this queue starts them
+    // through startInstall / startUpdate one at a time, because PluginRepo has
+    // a single progress/cancel pair and applies exactly one transfer at a
+    // time. Everything a single FIT gets - the https rule, the byte cap, the
+    // ABI test, the sha256, the manifest record, the rescan afterwards - a
+    // module in this queue gets, because it IS a single FIT.
+    //
+    // IDENTIFIED BY CATALOGUE ID, NOT BY INDEX. A run outlives many frames and
+    // a Refresh can replace catalog_ under it; an index would then name a
+    // different module. An id that is no longer in the catalogue is recorded
+    // as a failure with that reason rather than silently dropped.
+    struct AddAllRun {
+        bool active = false;
+        std::vector<std::string> ids;
+        std::vector<bool> isUpdate;
+        std::size_t next = 0;  // the next id to start
+        int installed = 0;
+        int failed = 0;
+        // "NAME: reason", verbatim from whatever refused it.
+        std::vector<std::string> failures;
+        std::string currentName;  // what is moving right now
+        std::size_t total = 0;
+    };
+    AddAllRun addAllRun_;
+    // ONE PLACE BUILDS THE STORE'S MODEL, and it has to be one place now that
+    // something other than the draw needs it: startAddAll re-plans from live
+    // state, and a second transcription of catalogue row into StoreModule
+    // would be a second set of rules about what "fitted" and "blocked" mean.
+    void buildPluginStoreModel(PluginStoreModel& model);
+    // Builds the queue from the store's own plan and starts it. Re-plans from
+    // live state rather than trusting the plan the key was drawn from.
+    void startAddAll(bool noticesAcknowledged);
+    // Starts the next module in the queue when the slot is free, and writes
+    // the summary when the queue empties. Called once per frame, after
+    // pollPluginAsync has had its chance to clear installPending_.
+    void pumpAddAll();
+    // What the store window is told about the run in flight. Empty when none
+    // is.
+    std::string addAllProgressLine() const;
+    // What a finished run left behind: "23 installed, 0 failed", or the names
+    // that failed with the reason each gave. Kept until the next run starts.
+    std::string addAllSummary_;
+    bool addAllFailed_ = false;
+
     // Consumes finished catalogue/install futures; called once per frame from
     // drawUi, right beside pollSourceAsync.
     void pollPluginAsync();

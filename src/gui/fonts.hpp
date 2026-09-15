@@ -89,6 +89,26 @@ inline constexpr float kReadingSize = 16.0f;  // a number on glass
 inline constexpr float kTinySize = 14.0f;     // the smallest engraving that
                                               // still has to be readable
 
+// THE LARGEST ENGRAVING IN THE APPLICATION, and it is deliberately used by ONE
+// surface: a PAGE whose entire content is prose a user reads before deciding
+// to put somebody else's native code into this process. The plugin store is
+// that page - its rows are module names, summaries, licences and the list of
+// what each module reaches for - and at kTinySize, which is what every one of
+// those sentences used to be set in, the owner's report was "make the plugin
+// store larger and easier to read", then "go bigger on the font".
+//
+// IT IS A NEW SIZE RATHER THAN A RAISE OF THE FOUR ABOVE, and that is the
+// whole point of adding it. The sweep this file's header warns about - keys,
+// plates, chips, drum apertures, meter faces and card heights all measured
+// against the old numbers - is what a raise of kUiSize costs, and 0.79.0 paid
+// it (kMenuWidth 268, axis pitch 104) for a change 0.84.0 then took back. A
+// size nothing else reads cannot move the rail, the spectrum axis or a meter
+// face, because none of them can see it.
+//
+// 21 px is the pre-0.84.0 kUiSize - the figure this application ran at for
+// five releases - so it is a proven size on Georgia rather than a guess.
+inline constexpr float kPanelSize = 21.0f;
+
 // --- the faces ---------------------------------------------------------------
 //
 // NONE OF THESE EVER RETURNS NULL. Before load() has run, or after it failed,

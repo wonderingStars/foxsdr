@@ -872,7 +872,27 @@ refused and why, and the keys that start, stop, remove and permit them. Each
 is a real window you can drag as large as your screen. **Fitted modules**
 comes back at the size and place you left it, because its rectangle is
 written to the configuration file with everything else; the store's is not,
-so it holds what you drag it to only until FoxSDR closes. Neither reopens by
+so it holds what you drag it to only until FoxSDR closes. Since 0.96.0 the
+store opens *inside* the main window rather than
+overhanging its right edge, where on a single monitor it could land off the
+screen entirely. Everything on that page is set in the largest engraving
+FoxSDR has, because it is a page you read before deciding to put somebody
+else's native code into this process: a module's name, the one-line summary
+the catalogue publishes, its version, its licence, what it reaches for, and a
+plain word for what it is on this machine — **NOT INSTALLED**, **CANNOT FIT**,
+**INSTALLED**, **UPDATE** or **REFUSED**. One key at the top fits the whole
+catalogue: **ADD ALL PLUGINS** fetches everything that is not installed and
+updates everything that is behind, one after another, through exactly the
+same path a single **FIT** takes — https, the byte cap, the exact ABI match,
+and the sha256 the catalogue published, which every download must hash to
+before it is moved into the modules folder. It says what it will do before you
+press it ("ADD 17 PLUGINS", "ADD 3 PLUGINS, UPDATE 2"), names any module it
+will pass over and why, and reports what happened when it finishes ("24
+installed, 0 failed", or the names that failed with the reason each gave). A
+module that fails does not stop the rest. Modules whose maker attached a legal
+notice are counted and named separately and are added only if you tick the
+acknowledgement beside the key — an "add all" is not a way to consent to
+something you were never shown. Neither window reopens by
 itself: since 0.79.1 FoxSDR always starts on the main window alone, whatever
 was showing when it was closed - no page, no map, no decoder output, and the
 bench rather than the radar scope. Every one of them is a key on the rail

@@ -28,7 +28,9 @@ int main() {
     using cascade::gui::clampPageSize;
     using cascade::gui::kPageMinH;
     using cascade::gui::kPageMinW;
+    using cascade::gui::kPageInsideMargin;
     using cascade::gui::pageNeedsReset;
+    using cascade::gui::pageOpenInside;
 
     // --- 1. Under the floor clamps up, on both axes. ------------------------
     {
@@ -126,6 +128,83 @@ int main() {
         std::uint32_t seen = 4u;
         CHECK(pageNeedsReset(seen, 4u) == false);
         CHECK(seen == 4u);
+    }
+
+    // -----------------------------------------------------------------------
+    // pageOpenInside - a page that opens INSIDE the main window
+    //
+    // THE FAULT IT REPLACES was not a size at all. The plugin store took its
+    // opening rectangle from the stagger slots, which put it a couple of
+    // hundred pixels PAST the main window's right edge - x = 1657 on this
+    // desk, on a second monitor, and off the screen entirely on a single one
+    // with the application maximised. A user who presses a key on the rail and
+    // sees nothing appear has been told nothing at all.
+    // -----------------------------------------------------------------------
+    {
+        // IT FITS: centred in the viewport, at the size asked for, and inside
+        // it on every edge.
+        float x = 0.0f;
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+        pageOpenInside(0.0f, 0.0f, 1600.0f, 1000.0f, 1000.0f, 600.0f, x, y, w, h);
+        CHECK(w == 1000.0f);
+        CHECK(h == 600.0f);
+        CHECK(x == 300.0f);
+        CHECK(y == 200.0f);
+        // The whole rectangle is inside the viewport - which is the ONE claim
+        // the old arrangement could not make.
+        CHECK(x >= 0.0f && y >= 0.0f);
+        CHECK(x + w <= 1600.0f);
+        CHECK(y + h <= 1000.0f);
+    }
+    {
+        // A VIEWPORT THAT DOES NOT SIT AT THE ORIGIN. The main window can be
+        // anywhere on a multi-monitor desktop and the page follows it, rather
+        // than centring on some absolute screen the user is not looking at.
+        float x = 0.0f;
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+        pageOpenInside(2560.0f, 100.0f, 1600.0f, 1000.0f, 1000.0f, 600.0f, x, y, w, h);
+        CHECK(x == 2860.0f);
+        CHECK(y == 300.0f);
+        CHECK(x >= 2560.0f);
+        CHECK(x + w <= 2560.0f + 1600.0f);
+    }
+    {
+        // ASKED FOR MORE THAN THERE IS: shrunk to the viewport less a margin
+        // on each side, and still wholly inside it. The store asks for
+        // 1480 x 980 and a great many desks are smaller than that.
+        float x = 0.0f;
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+        pageOpenInside(0.0f, 0.0f, 1280.0f, 720.0f, 1480.0f, 980.0f, x, y, w, h);
+        CHECK(w == 1280.0f - kPageInsideMargin * 2.0f);
+        CHECK(h == 720.0f - kPageInsideMargin * 2.0f);
+        CHECK(x == kPageInsideMargin);
+        CHECK(y == kPageInsideMargin);
+        CHECK(x + w <= 1280.0f);
+        CHECK(y + h <= 720.0f);
+    }
+    {
+        // A VIEWPORT UNDER THE DRAG FLOOR - the main window dragged to a
+        // sliver, which is a state a user can hold with the mouse button down.
+        // The floor wins, because a window sized to nothing is the trap
+        // kPageMinW exists to prevent; the page then overhangs, and being
+        // reachable beats being tidy.
+        float x = 0.0f;
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+        pageOpenInside(10.0f, 20.0f, 120.0f, 80.0f, 1480.0f, 980.0f, x, y, w, h);
+        CHECK(w == kPageMinW);
+        CHECK(h == kPageMinH);
+        // Pinned to the viewport's own corner rather than centred off the left
+        // edge of it, which would put the title strip out of reach.
+        CHECK(x == 10.0f);
+        CHECK(y == 20.0f);
     }
 
     return testSummary("test_page_geometry");

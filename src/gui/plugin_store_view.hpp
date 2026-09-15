@@ -115,6 +115,20 @@ struct ModulePlate {
                           // worth its own line rather than a shrug - but only
                           // when haveDescriptor says a licence was looked for.
     std::string blurb;    // summary, or description when there is one
+
+    // THE ONE-LINE SUMMARY, KEPT APART FROM THE DESCRIPTION, and the reason is
+    // a list nobody could read. `blurb` carries whichever of the two the
+    // catalogue gave, which in the live index means the DESCRIPTION - 528 to
+    // 2979 characters of it - and a row that wraps all of that is eleven lines
+    // tall, so one module filled the whole list and the other twenty-three
+    // were a scroll away. The summaries in the same index run 47 to 106
+    // characters: one or two lines, which is a row.
+    //
+    // EMPTY IS NORMAL and falls back to `blurb`, because a catalogue that
+    // states only a description is a catalogue this window still has to draw.
+    // Nothing is ever cut to make it fit - the row wraps what it is given.
+    std::string summary;
+
     std::string homepage;
     std::string legalNotice;  // shown verbatim; the acknowledgement gate is
                               // the store's, not the plate's
@@ -297,6 +311,21 @@ struct StoreModule {
     // declared, already installed, and an unacknowledged legal notice.
     std::string blockedReason;
 
+    // THE SAME PREDICATE ASKED AS IF THE MAKER'S NOTICE HAD BEEN ACKNOWLEDGED,
+    // and it exists for ADD ALL alone.
+    //
+    // `blockedReason` above is asked with the acknowledgement that belongs to
+    // the SELECTED row and to no other, so every other module carrying a legal
+    // notice reads "the legal notice must be acknowledged first" - seven of
+    // the twenty-four in the live catalogue. An ADD ALL that silently passed
+    // over seven modules would be a key whose word was a lie; one that
+    // installed them regardless would be taking a consent nobody gave. So the
+    // window is told BOTH answers, offers one tick that covers the notices,
+    // and names the modules it is asking about.
+    //
+    // Identical to blockedReason for every module that has no notice.
+    std::string blockedReasonIfAcknowledged;
+
     // From PluginRepo::planUpdates, when a plan exists for this id. Both empty
     // when none does - which is also the state before any catalogue has been
     // fetched, and the store says which of the two it is rather than printing
@@ -358,7 +387,67 @@ struct PluginStoreModel {
     // names both digests and must be shown exactly as PluginRepo wrote it.
     std::string resultReport;
     std::string resultError;
+
+    // --- the ADD ALL run ----------------------------------------------------
+    //
+    // An ADD ALL is not one operation: it is N transfers through the single
+    // install path, one after another, because PluginRepo applies exactly one
+    // at a time. These three say where that run has got to, and the window
+    // draws them instead of guessing from `busy`.
+    //
+    // `addAllProgress` is the line under the key while it runs - "installing 4
+    // of 23: GOES Weather Satellites (HRIT / LRIT)" - and `addAllSummary` is
+    // what is left on the panel when it ends: "23 installed, 0 failed", or the
+    // names that failed with the reason each gave. Both empty means no run has
+    // happened this session.
+    bool addAllRunning = false;
+    std::string addAllProgress;
+    std::string addAllSummary;
+    // True when the run ended with at least one failure, so the summary is
+    // lettered as trouble rather than as a result.
+    bool addAllFailed = false;
 };
+
+// ===========================================================================
+// WHAT THE STORE SAYS ABOUT A MODULE ON THIS MACHINE, in one word
+// ===========================================================================
+//
+// NOT moduleStateWord, and the two answer different questions. That one is
+// about RUNNING - started, stopped, refused, fed nothing - and it is shared
+// with the FITTED MODULES window, which is the window about running. This one
+// is the CATALOGUE's question: is this module here, and is it current. A store
+// that answers "STARTED" to "have I got this" is answering something else.
+enum class StoreInstallState {
+    NotInstalled,     // no file for it here, and one could be fetched
+    CannotFit,        // no file here, and no build this machine could run
+    Installed,        // here, loaded, and the catalogue offers nothing newer
+    UpdateAvailable,  // here, and the catalogue offers a newer build
+    Refused,          // here, and the host would not have it
+};
+
+StoreInstallState storeInstallState(const StoreModule& sm);
+
+// The word itself: NOT INSTALLED, CANNOT FIT, INSTALLED, UPDATE, REFUSED.
+// Drawn at the window's own prose size beside the key, not as a chip - "not
+// only a small icon" was the whole complaint.
+const char* storeInstallWord(StoreInstallState s);
+
+// The ink it is lettered in. NEVER kAmber: amber in this palette is a READING,
+// something the machine measured, and an install state is not a measurement.
+// Only REFUSED takes the alarm ink - not being installed is not a fault.
+ImU32 storeInstallColour(StoreInstallState s);
+
+// THE SIZE THIS WINDOW SETS ITS PROSE IN, from the theme's own ladder.
+//
+// It was fonts::kTinySize - the smallest engraving in the application - for
+// every sentence on the panel: the module summaries, the maker and licence
+// line, the reach rows on the data plate, every note and every key's label.
+// That is the right size for a word cut into a metal chip and the wrong one
+// for the paragraph a user reads before deciding to install something, which
+// is what the owner reported ("make the plugin store larger and easier to
+// read"). This is a theme size and not a number invented here; the captions
+// keep theirs.
+float storeProsePx();
 
 // The control deck's settings. Owned by the CALLER because they outlive one
 // frame and the caller may persist them; the view edits them in place and
@@ -392,7 +481,52 @@ struct PluginStoreDeck {
     // clears it whenever the selection moves, so a tick given to the plugin
     // the user just read about is never carried over to the next one.
     bool legalAck = false;
+
+    // THE ADD ALL ACKNOWLEDGEMENT, which is a DIFFERENT tick and deliberately
+    // not the one above. It covers every module in the run that carries a
+    // maker's notice, the window names them beside it, and it is not persisted
+    // anywhere - a consent that survived a restart would be a consent nobody
+    // remembers giving.
+    bool addAllAck = false;
 };
+
+// ===========================================================================
+// ADD ALL - the whole decision, in one pure function
+// ===========================================================================
+//
+// WHAT IT PICKS AND WHAT THE KEY SAYS, with no ImGui in it, so both can be
+// checked against a model built in a test rather than against a screenshot.
+// The window does nothing with this but draw it and, on a press, hand the two
+// index lists back.
+struct AddAllPlan {
+    // Indices into PluginStoreModel::modules, in catalogue order. Every one is
+    // a module whose own blockedReason was empty, so each goes through the
+    // SAME gate a single FIT goes through - and is re-tested at the moment it
+    // starts, because a plan made one frame is applied over many.
+    std::vector<int> install;
+    std::vector<int> update;
+
+    // "NAME - reason", one per module the run will pass over. NAMED, because
+    // "17 installed, 7 skipped" tells the user nothing they can act on.
+    std::vector<std::string> skipped;
+
+    // How many of `skipped` are held back by a maker's notice alone - the ones
+    // the tick beside the key would add. Zero once it is ticked.
+    int heldByNotice = 0;
+
+    // The engraving on the key. "ADD ALL PLUGINS" when the run really is all
+    // of them; otherwise the counts, so the word and the deed agree.
+    std::string label;
+
+    // Empty when the key may be pressed. A dead key ALWAYS says why - the rule
+    // the rest of this window already follows.
+    std::string blockedReason;
+};
+
+// `noticesAcknowledged` is PluginStoreDeck::addAllAck: it swaps each module's
+// blockedReason for its blockedReasonIfAcknowledged, which is the same string
+// for every module that carries no notice.
+AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged);
 
 inline constexpr int kStoreSortCount = 3;
 
@@ -434,9 +568,15 @@ public:
     // fits several at once.
     int updateRequested() const { return updateIndex_; }
 
+    // ADD ALL PLUGINS was pressed. The caller re-plans from its own state
+    // rather than trusting the plan the key was drawn from - one frame's plan
+    // applied over a run of transfers is exactly the thing that goes stale.
+    bool addAllRequested() const { return addAll_; }
+
 private:
     bool checkNow_ = false;
     bool cancel_ = false;
+    bool addAll_ = false;
     int fitIndex_ = -1;
     int updateIndex_ = -1;
 };

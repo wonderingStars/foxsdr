@@ -288,6 +288,39 @@ clock and the log write all happen on the side that is allowed to do them.
   `/api/status` (`audioPluginGaps`, `audioPluginGapFrames`), beside
   `audioSource` — the name of whatever is holding the speakers.
 
+### What ADD ALL PLUGINS writes (0.96.0)
+
+The plugin store's bulk key runs N transfers through the single install path,
+one after another, over as many seconds as the network takes — and the panel
+that reports it is a window the user may have closed by the time it finishes.
+So the run is also written to the log, and the three lines below are the whole
+of it. They are `info`, because a bulk install is a thing the user asked for
+and not a fault.
+
+- **The start line**, once per run, with the shape of the plan before anything
+  moves: `plugin store: add all starting - 24 to fetch, 0 to update, 0 passed
+  over`. A run that fetched fewer than the catalogue holds is the normal case
+  and the count says so without anybody having to work it out from what
+  followed.
+- **One line per module passed over**, naming it and the reason the store's
+  own gate gave: `plugin store: add all - passing over Inmarsat-C / EGC
+  Decoder (EXPERIMENTAL) - the legal notice must be acknowledged first`. This
+  is the line that answers "why did it not install everything", which is the
+  only question a bulk key reliably produces.
+- **One line per failure**, with whatever refused it, word for word:
+  `plugin store: add all - GOES Weather Satellites (HRIT / LRIT) FAILED:
+  sha256 mismatch …`. A module that fails does not stop the rest, so without
+  this line a single failure in the middle of twenty-four is invisible once
+  the summary scrolls away.
+- **The finish line**, once: `plugin store: add all finished - 24 installed,
+  0 failed` — the same sentence the panel shows, so the log and the window
+  cannot give two accounts of one run.
+
+There is deliberately no per-module *success* line: the host already writes
+`plugin: loaded <name> <version>` for every module it accepts on the rescan
+that follows each install, and a second "installed" line beside it would be
+two records of one event that can disagree.
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it
