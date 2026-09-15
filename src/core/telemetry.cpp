@@ -15,9 +15,21 @@
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "winhttp.lib")
 #else
+#include <cstdlib>
+
 #include <sys/utsname.h>
 
 #include <openssl/rand.h>
+
+// The TLS client for this platform - the same header, set up the same way,
+// as plugin_repo.cpp's catalogue client and crash_upload.cpp's uploader:
+// cpp-httplib is already vendored for the web server and OpenSSL is already
+// linked here (see CMakeLists.txt) for RAND_bytes, so this transport adds no
+// new third-party dependency.
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
+#include <httplib.h>
 #endif
 
 namespace cascade::core {
@@ -222,6 +234,13 @@ std::string telemetryEndpoint() {
     if (n > 0 && n < sizeof(buf)) {
         return std::string(buf, n);
     }
+#else
+    // The same seam, read the POSIX way. getenv() returns nullptr when unset;
+    // an empty value is treated as unset too, matching the Windows probe.
+    const char* env = std::getenv("FOXSDR_TELEMETRY_URL");
+    if (env != nullptr && env[0] != '\0') {
+        return std::string(env);
+    }
 #endif
     return std::string(kDefaultEndpoint);
 }
@@ -273,6 +292,47 @@ void postJson(const std::string& url, const std::string& json) {
 }
 
 }  // namespace
+#else
+namespace {
+
+// One HTTPS POST of a small JSON body, mirroring the WinHTTP version above:
+// certificate verification is left at its default (ON - not relaxed here,
+// see enable_server_certificate_verification below), https only - unlike the
+// crash uploader there is no loopback exception, matching the WinHTTP
+// branch's own refusal of any non-https scheme - and the timeouts are short
+// because this runs on a thread the destructor joins.
+void postJson(const std::string& url, const std::string& json) {
+    const std::size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos) { return; }
+    const std::string scheme = url.substr(0, schemeEnd);
+    // https only: a usage report is not secret, but sending it in clear
+    // would put an install id on the wire for any network in between to
+    // collect. FOXSDR_TELEMETRY_URL pointed at a plain http black hole (see
+    // installer/msix/README.md) is silenced by this check alone - nothing is
+    // ever connected to.
+    if (scheme != "https") { return; }
+
+    const std::string rest = url.substr(schemeEnd + 3);
+    const std::size_t slash = rest.find('/');
+    const std::string authority = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+    const std::string target = (slash == std::string::npos) ? std::string("/") : rest.substr(slash);
+    if (authority.empty()) { return; }
+
+    httplib::Client cli(std::string("https://") + authority);
+    if (!cli.is_valid()) { return; }
+    cli.enable_server_certificate_verification(true);
+    cli.set_follow_location(false);
+    cli.set_connection_timeout(4, 0);
+    cli.set_read_timeout(6, 0);
+    cli.set_write_timeout(6, 0);
+    // The response is not read and not acted on. There is nothing the server
+    // could say that this client should obey - no config, no commands, no
+    // identifiers - and not reading it is the simplest way to guarantee that
+    // stays true.
+    cli.Post(target, json, "application/json");
+}
+
+}  // namespace
 #endif
 
 TelemetryReporter::~TelemetryReporter() {
@@ -292,8 +352,13 @@ void TelemetryReporter::send(const std::string& url, const std::string& json) {
         }
     });
 #else
-    (void)url;
-    (void)json;
+    thread_ = std::thread([url, json]() {
+        try {
+            postJson(url, json);
+        } catch (...) {
+            // Silent by design: see the header.
+        }
+    });
 #endif
 }
 
@@ -349,6 +414,19 @@ void HeartbeatSender::poll(double now) {
         thread_.join();
     }
 #if defined(_WIN32)
+    done_.store(false);
+    const std::string url = url_;
+    const std::string json = beatJson(id_, v_);
+    std::atomic<bool>* done = &done_;
+    thread_ = std::thread([url, json, done]() {
+        try {
+            postJson(url, json);
+        } catch (...) {
+            // Silent by design, same as the reporter.
+        }
+        done->store(true);
+    });
+#else
     done_.store(false);
     const std::string url = url_;
     const std::string json = beatJson(id_, v_);
