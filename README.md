@@ -18,10 +18,12 @@ other radio SoapySDR can reach.
 >   test suite, the built-in signal generator and IQ-file playback. No SDR has
 >   been driven through it on a Linux machine, so the hardware path is unproven,
 >   and that is the single biggest reason not to rely on it yet.
-> - **The plugins are built and installable, but unproven on air here.** Ten of
->   the eleven catalogued plugins now ship for Linux and install from the in-app
->   catalogue, including the aircraft registry lookup and the map basemap; only
->   the example plugin is Windows-only.
+> - **The plugins are built and installable, but unproven on air here.**
+>   Seventeen of the twenty-four catalogued plugins now ship for Linux and
+>   install from the in-app catalogue, including the aircraft registry lookup
+>   and the map basemap. The seven that are still Windows-only are the newest
+>   instrument decoders — ACARS, FLEX, 406 MHz beacons, ERT utility meters,
+>   433 MHz weather sensors and WEFAX — and the example plugin.
 > - **Never run on a real Linux desktop.** It has been exercised under WSL and
 >   under a virtual display in CI — neither is a real graphical session with a
 >   real sound card.
@@ -40,6 +42,28 @@ tree. That discipline is what leaves the licensing free to choose (see
 [License](#license)); it is not itself a licence claim.
 
 Internal project/binary name: `cascade`.
+
+## Where it is now
+
+The current release is **0.95.0** (September 2026), in open beta and free for
+noncommercial use, with **24 plugins** in the catalogue. These are screenshots
+of the shipping build.
+
+![The FoxSDR receiver at 1090 MHz beside the ADS-B map: the FUNCTION SELECT rail, spectrum and waterfall, the status column, and eight aircraft plotted over the north of England.](docs/screenshots/receiver-and-adsb-map.png)
+
+*The receiver tuned to 1090 MHz with the ADS-B map open beside it: spectrum,
+waterfall and status on the bench, eight aircraft plotted on the map.*
+
+![The radar scope: a 50 NM plan-position display centred on the receiver with nine ADS-B tracks, the signal and altitude ladders either side, and the range, gain and power panels below.](docs/screenshots/radar-scope.png)
+
+*The radar scope, the full-window view of the same ADS-B traffic: 50 NM range,
+nine tracks, signal and altitude ladders, and the aircraft detail panel.*
+
+![Four plugin instrument windows drawn by the host: an ACARS printer, a 406 MHz distress-beacon receiver, a two-tone alert monitor and a VOR course indicator.](docs/screenshots/instrument-windows.png)
+
+*Four instrument windows — ACARS printer, 406 MHz beacon receiver, tone-alert
+monitor and VOR course indicator. The plugins supply the figures; the host
+draws each one as the piece of equipment it is.*
 
 ## Status
 
@@ -164,7 +188,7 @@ off-air signals** — aircraft decoded live, with ICAO address blocks and
 callsigns agreeing across independent message types. The others (AIS, APRS,
 SSTV, Morse, RTTY, POCSAG) are verified against synthesised signals and
 published constants, which is real evidence but not the same thing. The
-Inmarsat-C plugin is published at 0.1.0 and explicitly marked EXPERIMENTAL:
+Inmarsat-C plugin is published at 0.1.1 and explicitly marked EXPERIMENTAL:
 roughly ten of its air-interface constants are reconstructed guesses, and it
 will most likely decode nothing off air. Each plugin's catalogue entry says
 where it stands.
@@ -807,9 +831,11 @@ sound server rather than claiming the hardware directly.
 **Plugins: one catalogue, both platforms.** The catalogue lists every build of
 a plugin and each installation picks the one matching its own os and
 architecture, so a Windows and a Linux machine read the identical file and
-install different binaries from it. Ten of the eleven plugins ship for both;
-only the example plugin is Windows-only, and it is built from this repository
-rather than the plugin repository.
+install different binaries from it. Seventeen of the twenty-four plugins ship
+for both; the seven newest instrument decoders (ACARS, FLEX, 406 MHz beacons,
+ERT meters, 433 MHz weather sensors, WEFAX) are Windows-only so far, as is the
+example plugin, which is built from this repository rather than the plugin
+repository.
 
 ## CAT control
 
