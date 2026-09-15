@@ -188,13 +188,20 @@ public:
 
     // --- identity -----------------------------------------------------------
 
-    // A USB string descriptor by index, through a standard GET_DESCRIPTOR.
-    // Empty when the device has no such string. Used only to recognise an
-    // RTL-SDR Blog V4, whose manufacturer/product strings are the only thing
-    // that distinguishes it from any other R828D dongle.
+    // A USB string descriptor by index. Empty when the device has no such
+    // string. Used only to recognise an RTL-SDR Blog V4, whose manufacturer
+    // and product strings are the only thing that distinguishes it from any
+    // other R828D dongle - which is why "empty" must mean "the device says
+    // it has none", never "the request was one no device answers". See the
+    // 255-byte ceiling in rtl2832u.cpp.
     std::string stringDescriptor(std::uint8_t index);
-    std::string manufacturer() { return stringDescriptor(1); }
-    std::string product() { return stringDescriptor(2); }
+    // The manufacturer and product strings AT THE INDICES THE DEVICE
+    // DESCRIPTOR NAMES, not at a guessed 1 and 2: iManufacturer and iProduct
+    // are fields, and a device is free to put them anywhere. Empty when the
+    // device descriptor cannot be read AND the conventional index answers
+    // nothing.
+    std::string manufacturer();
+    std::string product();
 
     // The first `len` bytes of the configuration EEPROM. Byte 7 bit 1 clear
     // means "this dongle's bias tee is wired to be always on".
@@ -208,6 +215,10 @@ public:
 
 private:
     void note(const char* what);
+    // The string index the device descriptor names at `offset` (14
+    // iManufacturer, 15 iProduct), or `fallback` when the device descriptor
+    // cannot be read.
+    std::uint8_t stringIndex(int offset, std::uint8_t fallback);
 
     usb::UsbDevice& dev_;
     unsigned controlTimeoutMs_;
