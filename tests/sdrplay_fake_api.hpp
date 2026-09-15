@@ -128,6 +128,24 @@ public:
     std::atomic<bool> insideGetDevices{false};
     std::atomic<bool> leftGetDevices{false};
 
+    // THE SAME SERVICE, WEDGED WITH THE RADIO ALREADY OPEN. GetDevices is
+    // what a SCAN goes into; sdrplay_api_Update is what every LIVE CONTROL
+    // goes into - retune, LNA state, IF gain, AGC, set point, antenna, bias
+    // tee, notches, HDR, sample rate - and the 0.96.2 report is a retune that
+    // did not come back inside the hang watchdog's five seconds. Same shape,
+    // same polling loop, and for the same reason: an ABANDONED worker has to
+    // be able to leave when the test releases it rather than hold a vendor
+    // call open past the end of the process.
+    //
+    // The hang is taken BEFORE any acknowledgement is fired, and the call
+    // returns straight afterwards without firing one: by the time a test
+    // releases this, the driver gave up on it long ago and the Link the
+    // callback would be delivered into is no longer the fake's business.
+    std::atomic<bool> hangInUpdate{false};
+    std::atomic<bool> releaseUpdateHang{false};
+    std::atomic<bool> insideUpdate{false};
+    std::atomic<bool> leftUpdate{false};
+
     // --- what the tests observe ------------------------------------------
 
     std::vector<std::string> calls;
@@ -444,6 +462,17 @@ private:
         (void) dev;
         (void) tuner;
         f->note(updateCall(static_cast<unsigned int>(reason), static_cast<unsigned int>(ext1)));
+        // A SERVICE THAT NEVER ANSWERS A CONTROL. See hangInUpdate: noted
+        // first, so the call is on the record before it disappears, and
+        // returned without an acknowledgement once released.
+        if (f->hangInUpdate.load()) {
+            f->insideUpdate.store(true);
+            while (!f->releaseUpdateHang.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            f->leftUpdate.store(true);
+            return f->updateResult;
+        }
         if (f->updateResult != abi::Success) { return f->updateResult; }
 
         if (f->autoAck && f->streamA != nullptr) {

@@ -133,6 +133,20 @@ describe code this product can be held responsible for.
       radio open produced a run of `source: SDRplay <what> failed -
       ServiceNotResponding (14)` lines and a stream-health line counting
       thousands of timeouts, with the picture frozen and nothing saying why.
+    - From 0.96.3, and this is the one to look for when a hang report blames
+      the graphics driver: `source: SDRplay <what> abandoned - the service did
+      not answer within 1000 ms; the radio is released`, followed by `source:
+      SDRplay controls are refused for this device from here - a worker is
+      still inside sdrplay_api_Update`. The line above it is the service
+      REFUSING a control; this one is the service never answering it at all.
+      The vendor's update call takes no timeout either, so it is run on a
+      worker the same way a scan is and the worker is abandoned rather than
+      waited for. Before 0.96.3 that wait was the GUI thread's, it lasted
+      about five seconds on a dead service, and the hang watchdog filed a
+      report whose captured stack was the next frame's `SwapBuffers` inside
+      the graphics driver - because by the time the stack was walked the
+      vendor call had returned. A freeze of about five seconds per click on an
+      RSP, reported as `nvoglv64` or `atio6axx`, is this and not the GPU.
   - `rx888: opened ... (firmware loaded by FoxSDR)` when the radio was a
     Cypress bootloader and FoxSDR uploaded the image to it. An open that takes
     about five seconds and this line in the log is the NORMAL first open after

@@ -14,6 +14,7 @@
 // behaves as its header describes. No test in this file has met the service.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -23,6 +24,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/hang_watchdog.hpp"
 #include "sdrplay_fake_api.hpp"
 #include "source/sdrplay_source.hpp"
 #include "test_check.hpp"
@@ -1110,6 +1112,162 @@ void testServiceNotRespondingMakesTheDeviceDead() {
     CHECK(!other.deviceDead());
 }
 
+// --- 12d. a service that stops answering a CONTROL -------------------------
+//
+// A THIRD HANG REPORT, THE SAME RSP1A, API 3.09 (0.96.2). 0.96.1 bounded the
+// SCAN and made the device dead on the first ServiceNotResponding, and both
+// of those held: the log shows "opened SDRplay RSP1A" at 16:03:14 and, five
+// seconds later, "source: SDRplay retune failed - sdrplay_api_ServiceNotResponding
+// (14)" followed by the released-radio line. The hang was filed at 16:03:20 -
+// i.e. DURING those five seconds, not after them. sdrplay_api_Update itself
+// took about five seconds to answer, on the GUI thread, which is the hang
+// watchdog's whole threshold; by the time the watchdog walked the stack the
+// call had returned and the GUI thread was in the next frame's SwapBuffers,
+// which is what the report shows and why it reads like a graphics fault.
+//
+// So the vendor call every LIVE CONTROL makes is bounded the way the scan's
+// is: run on a worker, waited on for kControlWait, and ABANDONED on expiry.
+// The service is wedged either way; what changes is that the window does not
+// go with it.
+
+void testAWedgedControlIsAbandonedAndTheDeviceIsDead() {
+    // THE FAKE AND THE SOURCE ARE ON THE HEAP AND NEITHER IS DESTROYED, for
+    // the reason the enumeration test below gives: a worker is abandoned
+    // inside the fake's Update and the driver has given up on ever hearing
+    // from it again. It is released and waited for at the end, which is as
+    // close to safe as an abandonment gets.
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    CHECK(src->start());
+    CHECK(!src->faulted());
+
+    // The service wedges with the radio open and streaming. The user's next
+    // click is a retune - the call the report names.
+    fake->hangInUpdate.store(true);
+
+    // THE RETUNE RUNS ON ITS OWN THREAD so that this test can still report
+    // rather than hang when the bound is missing. That thread stands in for
+    // the GUI thread exactly: it is the one that calls the setter and the one
+    // whose elapsed time the watchdog would have judged.
+    std::atomic<bool> returned{false};
+    std::atomic<bool> retuned{true};
+    std::atomic<long long> elapsedMs{-1};
+    std::thread caller([&]() {
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = src->setCenterFrequencyHz(101100000.0);
+        elapsedMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count());
+        retuned.store(ok);
+        returned.store(true);
+    });
+
+    // Generous, and deliberately shorter than the vendor's own five seconds:
+    // what is being ruled out is a call that does not come back at all.
+    for (int i = 0; i < 400 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // THE DEFECT, IN ONE LINE. Before the bound this is the check that fails,
+    // because the setter is still inside sdrplay_api_Update and will be until
+    // the service answers - which in the field was five seconds and in
+    // principle is never.
+    CHECK(returned.load());
+    CHECK(fake->insideUpdate.load());
+
+    if (returned.load()) {
+        const long long ms = elapsedMs.load();
+        // Refused, not silently accepted: the radio is not where the caller
+        // asked for and must not be reported as if it were.
+        CHECK(retuned.load() == false);
+        // It waited the bound rather than returning for some unrelated
+        // reason...
+        CHECK(ms >= 900);
+        // ...and it came back inside it, with room for a machine that is
+        // building and testing in parallel.
+        CHECK(ms < 3000);
+        // AND INSIDE THE THRESHOLD THAT FILED THE REPORT. This is the whole
+        // fault expressed as arithmetic; if kControlWait ever grows past the
+        // watchdog's frame threshold, this is what goes red.
+        CHECK(ms < static_cast<long long>(cascade::core::HangWatchdog::kDefaultThresholdMs));
+        if (ms >= 3000) { std::printf("     retune took %lld ms\n", ms); }
+
+        // A DEAD RECEIVER, through the same path a returned
+        // ServiceNotResponding takes - which is what lets Pipeline's source
+        // thread latch the fault and stop instead of reading a service that
+        // is gone.
+        CHECK(src->faulted());
+        CHECK(src->deviceDead());
+        CHECK(src->faultedWhile() == "retune");
+        CHECK(std::string(src->lastError())
+                  .find(cascade::source::sdrPlayControlHungSentence()) != std::string::npos);
+
+        // ...AND NOTHING TOUCHES THE API AGAIN FOR THIS DEVICE. There is a
+        // thread of ours parked inside the vendor DLL; a second control would
+        // park another one, and the panel's sliders are not short of clicks.
+        const std::size_t callsBefore = fake->calls.size();
+        const auto t1 = std::chrono::steady_clock::now();
+        CHECK(src->setGainDb("LNA", 2.0) == false);
+        CHECK(src->setSampleRateHz(6000000.0) == false);
+        const long long deadMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - t1)
+                                     .count();
+        CHECK(fake->calls.size() == callsBefore);
+        CHECK(deadMs < 250);
+    } else {
+        std::printf(
+            "     the retune never returned - the checks that depend on it were not run\n");
+    }
+
+    // Let the abandoned worker leave before this process does.
+    fake->releaseUpdateHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftUpdate.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftUpdate.load());
+    // The caller thread is this test's own, not the driver's: it is joinable
+    // once the vendor call it may still be inside has been released.
+    for (int i = 0; i < 500 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (caller.joinable()) { caller.join(); }
+}
+
+void testAHealthyControlIsStillSynchronousAndAcknowledged() {
+    // The bound must not have changed the ordinary path. A service that
+    // answers is updated on the spot, the acknowledgement flag is still
+    // waited for, and nothing is marked dead.
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(src.setCenterFrequencyHz(101100000.0));
+    const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - t0)
+                             .count();
+    CHECK(src.centerFrequencyHz() == 101100000.0);
+    // Well inside the bound: the fake acknowledges the moment Update returns,
+    // so this is the cost of the machinery and nothing else.
+    CHECK(ms < 900);
+    CHECK(fake.called(FakeSdrPlayApi::updateCall(abi::Update_Tuner_Frf, abi::Update_Ext1_None)));
+    CHECK(!src.faulted());
+    CHECK(!src.deviceDead());
+
+    // ...and a control that is issued while nothing is streaming still makes
+    // no vendor call at all, which is the one path the worker must not take.
+    SdrPlaySource idle;
+    FakeSdrPlayApi fake2;
+    fake2.addDevice("1811003EFC", abi::kRsp1A);
+    CHECK(openOn(idle, fake2));
+    const int updatesBefore = fake2.countStarting("Update(");
+    CHECK(idle.setCenterFrequencyHz(102300000.0));
+    CHECK(fake2.countStarting("Update(") == updatesBefore);
+}
+
 void testAWedgedEnumerationIsAbandonedAndThenHeldOff() {
     // THE FAKE IS ON THE HEAP AND IS NOT DESTROYED HERE. This test abandons a
     // worker that is parked inside the fake's GetDevices; it is released at
@@ -1237,7 +1395,12 @@ int main() {
     testFailuresOnTheOpeningPathUnwind();
     testSkipReasonReachesTheSourcePanel();
     testServiceNotRespondingMakesTheDeviceDead();
+    testAHealthyControlIsStillSynchronousAndAcknowledged();
     testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence();
+    // The two that abandon a worker inside their own fake go last, in the
+    // order they were written, and each releases and waits for its own before
+    // it returns.
+    testAWedgedControlIsAbandonedAndTheDeviceIsDead();
     // LAST, and deliberately: it abandons a worker inside its own fake and
     // releases it again, and nothing that follows should have to reason about
     // a thread this one left running.

@@ -388,9 +388,22 @@ service — rather than retrying into a service that is gone. And a scan gives
 the vendor three seconds on a worker thread, then ABANDONS it: the panel says
 *the SDRplay service did not answer within 3 s — restart the SDRplay API
 service*, and further scans skip the SDRplay step for a minute rather than
-spend another three seconds each time the source list is opened. Restarting
-the service (Windows Services, **SDRplay API Service**) and choosing the radio
-again is the whole recovery.
+spend another three seconds each time the source list is opened.
+
+A third report, the same RSP1A on API 3.09, showed what neither of those
+covered (0.96.3). Marking the radio dead on the first `ServiceNotResponding`
+worked exactly as written — but the vendor's update call took about five
+seconds to SAY `ServiceNotResponding`, and it was being made on the thread
+that draws the window. So one click on a dead service froze FoxSDR for five
+seconds, which is the whole of the hang watchdog's threshold; the watchdog
+duly filed a freeze report, and by the time it walked the stack the vendor
+call had returned and the thread was back in the graphics driver, so the
+report blamed the GPU. Every live control — retune, gain, AGC, antenna, bias
+tee, notches, sample rate — now runs its vendor call on a worker and gives it
+one second, then abandons it, releases the radio and refuses further controls
+for that device. A healthy service answers in milliseconds and behaves exactly
+as before. Restarting the service (Windows Services, **SDRplay API Service**)
+and choosing the radio again is the whole recovery.
 
 **A note on versions.** The driver's declarations of the API's structures were
 checked against SDRplay's published headers for 3.07, 3.11 and 3.15, compiled

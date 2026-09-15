@@ -46,15 +46,25 @@
 // below, and the difference between the two categories is stated again in the
 // shutdown-budget notes rather than left to be discovered.
 //
+// sdrplay_api_Update belongs on that list too and was left off it, because
+// the reference makes it inline and a healthy one returns in milliseconds. A
+// wedged service took five seconds to refuse one and the window went with it
+// (0.96.2) - see kControlWait, which now treats it the way kEnumerateWait
+// treats a scan.
+//
 // AND ONE OF THOSE UNBOUNDABLE CALLS IS NO LONGER WAITED ON. ENUMERATION is
 // the only one of them a user can provoke at will - the source combo scans
 // every time it opens - and a wedged service turned that into a frozen
 // application (0.96.1, two hang reports). We still cannot cancel the call; we
 // stopped waiting on it instead, by running the vendor half on a worker that
-// is ABANDONED on expiry. See kEnumerateWait. Every other call in that list is
-// made with a device already open and is still unbounded, because abandoning a
-// thread that is inside SelectDevice or Init would leave the service holding a
-// radio nothing in this process could ever release.
+// is ABANDONED on expiry. See kEnumerateWait; 0.96.2 did the same for every
+// live CONTROL (kControlWait), which is the other thing a user can provoke at
+// will on an open radio. Every other call in that list is made with a device
+// already open and is still unbounded, because abandoning a thread that is
+// inside SelectDevice or Init would leave the service holding a radio nothing
+// in this process could ever release - and that includes the Uninit and
+// ReleaseDevice that follow an abandoned control, which is the price of
+// having a thread we cannot recall.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -170,6 +180,18 @@ inline constexpr std::chrono::seconds kEnumerateHoldOff{60};
 // instruction an RSP owner gets.
 const char* sdrPlayServiceHungSentence();
 
+// WHAT A LIVE CONTROL SAYS WHEN THE SERVICE NEVER ANSWERED IT. The same rule
+// as the sentence above and the same reason: one string, pinned by a test,
+// because it is the whole of what an RSP owner is told about a receiver that
+// has just stopped responding to its own panel. Composed by noteFaultOn into
+// "<control>: <this>", so it names the remedy and not the control.
+//
+// Separate from the ServiceNotResponding wording because the two are
+// genuinely different events: that one is the service ANSWERING a refusal,
+// this one is the service never answering at all and a thread of ours left
+// inside the vendor DLL for good. See SdrPlaySource::kControlWait.
+const char* sdrPlayControlHungSentence();
+
 // True while the hold-off above is still running, i.e. the last enumeration
 // abandoned a wedged service and the next ones are skipping it.
 bool sdrPlayEnumerationHeldOff();
@@ -269,6 +291,42 @@ public:
     // the ring before answering the IqSource contract's "nothing yet, retry"
     // zero. Spent on the PIPELINE's source thread, never the GUI's.
     static constexpr std::chrono::milliseconds kReadWait{20};
+
+    // HOW LONG A LIVE CONTROL WAITS FOR sdrplay_api_Update ITSELF.
+    //
+    // WHY THIS HAD TO EXIST (a third hang report, the same RSP1A, this one on
+    // 0.96.2 and API 3.09; bounded here in 0.96.3). 0.96.1 bounded the SCAN
+    // and made the device dead on the first
+    // sdrplay_api_ServiceNotResponding, and both of those worked
+    // exactly as written - the log has the retune failing with (14) and the
+    // released-radio line right after it. What neither of them touched is how
+    // long the vendor call took to SAY (14): about five seconds, which is the
+    // hang watchdog's whole frame threshold, spent on the GUI thread because
+    // that is the thread a panel retune or a tuner drag calls the setter on.
+    // The watchdog therefore filed a hang whose captured stack was the NEXT
+    // frame's SwapBuffers, the call having returned in the meantime - a
+    // graphics-looking report for a service fault.
+    //
+    // So this is the scan's treatment applied to every live control:
+    // updateLocked runs sdrplay_api_Update on a worker, waits this long, and
+    // on expiry ABANDONS it - detached, never joined, never spoken to again -
+    // marks the device dead and refuses every later control for it.
+    //
+    // ONE SECOND. A healthy Update only QUEUES the request and returns - the
+    // service reports completion separately through the changed flags that
+    // kUpdateWait below waits for - so on a working install it is a
+    // milliseconds-scale call, and SoapySDRPlay3 makes it inline with no
+    // bound at all. A second therefore leaves better than an order of
+    // magnitude for a service that is slow but alive, while the worst a
+    // control can now cost the GUI thread is kControlWait + kUpdateWait =
+    // 1500 ms, comfortably inside HangWatchdog::kDefaultThresholdMs's 5000
+    // and well short of the five seconds that produced the report.
+    //
+    // The cost on the healthy path is one std::thread per live control, which
+    // is tens of microseconds against a call that crosses into a Windows
+    // service; and it is paid only while STREAMING, because updateLocked
+    // sends nothing when the parameter block is not yet live.
+    static constexpr std::chrono::milliseconds kControlWait{1000};
 
     // How long a live parameter change waits for the service to CONFIRM it.
     // sdrplay_api_Update returns as soon as the request is queued; the
@@ -648,6 +706,15 @@ private:
     sdrplay_abi::DeviceParamsT* deviceParams_ = nullptr;
     bool selected_ = false;
     bool initialised_ = false;
+
+    // TRUE ONCE A CONTROL'S WORKER HAS BEEN ABANDONED INSIDE THE VENDOR DLL,
+    // and from then on no control touches the API for this device again.
+    // There is a thread of ours parked in sdrplay_api_Update that nothing can
+    // recall; a second control would park a second one, and a panel's sliders
+    // are not short of clicks. Guarded by devMutex_ like everything else the
+    // *Locked helpers read, and cleared by open() - a fresh session is a
+    // fresh device, the same judgement clearError() makes about deviceDead.
+    bool controlAbandoned_ = false;
 
     // Lock-free mirrors, so per-frame GUI readouts never wait behind an API
     // call in flight.
