@@ -16,6 +16,7 @@
 #include "gui/fonts.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -1741,7 +1742,12 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     // bound, which is the property that survives the next change to fonts.hpp.
     ImFont* cf = cascade::gui::fonts::legend();
     ImFont* vf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
+    // ...and through gui::px(), because this text goes straight into a draw
+    // list at an explicit size, which no ImGui global reaches. The caller
+    // hands this meter a px()-scaled width and height; lettering it at the
+    // desktop's 14 px inside that would be the same half-scaled interface the
+    // scale factor exists to end.
+    const float tiny = cascade::gui::px(cascade::gui::fonts::kTinySize);
     // Fitted to the meter's own width: both lines are centred on it, so
     // anything wider is drawn over the meter standing next to it rather than
     // clipped. "22 % - 3.6 ms" under a 126 px face is the tight one.
@@ -1889,8 +1895,8 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
     // The lamp sits hard against the right edge of the plate, and the chip
     // just inboard of it - so a glance down the rail reads as a column of
     // states rather than as a list of names.
-    const float lampR = std::max(3.0f, h * 0.20f);
-    const ImVec2 lampC(headerMax.x - lampR - 6.0f, cy);
+    const float lampR = std::max(cascade::gui::px(3.0f), h * 0.20f);
+    const ImVec2 lampC(headerMax.x - lampR - cascade::gui::px(6.0f), cy);
     drawBenchLamp(dl, lampC, lampR, lampColour, lampLit, nullptr);
 
     if (chipText != nullptr && chipText[0] != '\0') {
@@ -1898,11 +1904,12 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
         // the semibold engraving face, not the monospaced one. MUTED in Nova
         // Mono at this size renders its M as a solid block; see fonts.hpp.
         ImFont* cf = cascade::gui::fonts::legend();
-        const float cpx = cascade::gui::fonts::kTinySize;
+        const float cpx = cascade::gui::px(cascade::gui::fonts::kTinySize);
         const ImVec2 ts = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, chipText);
-        const float padX = 5.0f;
-        const ImVec2 cBR(lampC.x - lampR - 7.0f, cy + ts.y * 0.5f + 2.0f);
-        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f);
+        const float padX = cascade::gui::px(5.0f);
+        const ImVec2 cBR(lampC.x - lampR - cascade::gui::px(7.0f),
+                         cy + ts.y * 0.5f + cascade::gui::px(2.0f));
+        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - cascade::gui::px(2.0f));
         // ROOM LEFT FOR THE ROW'S OWN NAME, which the caller letters along the
         // same plate in the face it has bound. The 60 px this was written as
         // was measured against a sixteen-pixel UI face; held as a literal it

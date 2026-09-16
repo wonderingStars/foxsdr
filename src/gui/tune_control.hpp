@@ -19,6 +19,7 @@
 // rule has to use the SAME normalisation the driver's own open() matches on -
 // a rule stricter than the driver's would point at a device the driver then
 // refuses. See nativeSerialMatches.
+#include "gui/ui_scale.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/device_source.hpp"
 
@@ -385,6 +386,52 @@ inline constexpr float kMeterCoreClearance = 12.0f; // the fixed cluster's end t
 // Where each meter's left edge sits, measured from the bar's own left edge.
 inline constexpr float meter2XOnBar(float barW) { return barW - kMeterRightMargin - kMeterW; }
 inline constexpr float meter1XOnBar(float barW) { return meter2XOnBar(barW) - kMeterGap - kMeterW; }
+
+// --- AND WHETHER THE PAIR STANDS INSIDE THE BAR AT ALL ----------------------
+//
+// THE DEFECT THESE THREE FIGURES WERE PULLED OUT FOR. A meter is a FACE - a
+// fixed 66 units of brass and cream - with one line of TEXT above it (the
+// caption: SAMPLE RATE, FRAME TIME) and one below (the reading), and the text
+// is whatever the bound face measures. So the pair's height is part layout
+// figure and part type metric, and the two have to be scaled by the same
+// number or the block outgrows the 160-unit bar it is bolted to. On the
+// tablet emulator at x2 they were not: gui::ui_scale.hpp's factor reached the
+// type and not the layout, the block came to 170 px inside a 160 px bar, and
+// the bar's own child clipped both captions off - which is exactly what the
+// owner saw and what tests/test_ui_scale.cpp now holds in arithmetic.
+//
+// IN SCREEN PIXELS, ALL OF THEM, because that is the only system the question
+// means anything in: at 1:1 the layout figures are their own unit values, and
+// at any other scale the caller has put them through gui::px() already.
+// The bar's own height, in the reference's units. It lived in app_window.cpp
+// beside the rest of the deck's geometry and is here now for one reason: the
+// question "do the meters stand inside the bar" cannot be asked without it,
+// and that question is the defect. app_window.cpp reads it as kBarH.
+inline constexpr float kDeckBarH = 160.0f;
+
+inline constexpr float kMeterTopY = 28.0f;     // below the bar's top edge
+inline constexpr float kMeterFaceH = 66.0f;    // the face the reference measures
+inline constexpr float kMeterTextGap = 8.0f;   // air the two lines of text need
+
+inline constexpr float meterBlockH(float faceHpx, float lineHpx, float gapPx) {
+    return faceHpx + lineHpx * 2.0f + gapPx;
+}
+
+inline constexpr bool metersStandInsideBar(float barHpx, float topPx, float blockHpx) {
+    return topPx + blockHpx <= barHpx;
+}
+
+// THE COMPOSITION drawToolbar ACTUALLY MAKES, here rather than there, so the
+// test measures the code instead of a copy of it: leave gui::px() off either
+// of the two layout figures below and tests/test_ui_scale.cpp goes red on the
+// spot, which is the single-constant check the version of this that lived in
+// app_window.cpp could not offer.
+//
+// lineHpx is whatever the bound face measures - ImGui::GetTextLineHeight() at
+// the call site - and is already in screen pixels by the time it arrives.
+inline float meterBlockHAtScale(float lineHpx) {
+    return meterBlockH(px(kMeterFaceH), lineHpx, px(kMeterTextGap));
+}
 
 // WHETHER THE METERS ARE DRAWN AT ALL. They are dropped on a narrow window
 // rather than allowed to slide left into the volume dial (they are the least

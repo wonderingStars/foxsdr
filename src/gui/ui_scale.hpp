@@ -102,6 +102,56 @@ inline float fittedUiScale(int fbW, int fbH, float densityCap, const char* env) 
     return scale;
 }
 
+// --- THE FACTOR ITSELF, AND THE ONE MULTIPLICATION EVERY LAYOUT NUMBER MAKES -
+//
+// WHY THE FITTED SCALE WAS NOT ENOUGH ON ITS OWN. The first cut of this file
+// computed the scale and handed it to Dear ImGui - ScaleAllSizes for the
+// style's padding and spacing, FontScaleDpi for the type - and that scaled
+// everything ImGui owns and NOTHING THIS APPLICATION OWNS. The interface is
+// dimensioned in its own raw pixel counts: a 160-unit top bar, a 384 px rail
+// column, a 126 px meter, a 22 px cabinet rail, a 152 px axis pitch. On the
+// tablet emulator at x2 the result was an interface drawn at two sizes at
+// once - desktop-sized brass carrying double-sized lettering - and the
+// SAMPLE RATE and FRAME TIME meters, whose height is a face plus two lines of
+// TEXT, grew past the bar's own unscaled height and were cut off by it.
+//
+// So there is one factor, set once before the first frame, and every hard
+// figure in src/gui is multiplied by it AT THE POINT OF USE through px().
+// Nothing is rewritten in scaled units and stored: the constants stay the
+// desktop's own, which is what keeps them readable against the design
+// reference they were measured from, and what makes px(v) == v exactly - the
+// same bits, since multiplying a float by 1.0f is exact - on every desktop
+// that does not ask for a scale.
+//
+// units() is the inverse, for the handful of places that receive a screen
+// measurement from ImGui (an item's height, a bar's width) and have to ask a
+// pure reference-unit rule about it.
+//
+// NOT ATOMIC, AND DELIBERATELY. It is written once, on the GUI thread, before
+// the first frame; every read is on that same thread while it draws. An
+// atomic here would put a fence in the middle of the layout arithmetic of
+// every widget on the panel for a value that never changes.
+namespace detail {
+inline float gUiScale = 1.0f;
+}
+
+inline float uiScale() { return detail::gUiScale; }
+
+// Refused rather than clamped outside the legal range, for the same reason
+// uiScaleOverride refuses: a scale nobody meant must not quietly become one
+// that hides the interface. Out-of-range, NaN and zero all leave 1:1.
+inline void setUiScale(float scale) {
+    if (!(scale >= kUiScaleMin) || !(scale <= kUiScaleMax)) { return; }
+    detail::gUiScale = scale;
+}
+
+// A layout figure, in the desktop's own pixels, as it must be drawn here.
+inline float px(float units) { return units * detail::gUiScale; }
+
+// A screen measurement, back in the desktop's own pixels, so a pure rule
+// written in those units can be asked about it.
+inline float units(float pixels) { return pixels / detail::gUiScale; }
+
 }  // namespace cascade::gui
 
 #endif  // CASCADE_GUI_UI_SCALE_HPP

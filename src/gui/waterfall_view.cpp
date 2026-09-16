@@ -17,6 +17,7 @@
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 // A GL HEADER, ASKED FOR BY NAME. Everything used here is OpenGL 1.1
 // (glGenTextures / glTexImage2D / glTexSubImage2D / ...), which links straight
@@ -426,7 +427,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // one. It was the literal 48, and 48 is exactly four lines of the 12 px
     // this strip was laid out at; written this way it travels with the type
     // instead of quietly becoming three lines the next time the type grows.
-    if (stripH < fonts::kTinySize * 4.0f) {
+    if (stripH < cascade::gui::px(fonts::kTinySize) * 4.0f) {
         return 0.0f;
     }
     // How many labels the strip has ROOM for, not a fixed number: the panel
@@ -435,7 +436,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // (the literal was 38 px, which is that rule at 12 px lettering); a fixed
     // count either crowds the short panel or leaves the tall one with two
     // lonely figures.
-    const float perLabel = fonts::kTinySize * 3.0f + 2.0f;
+    const float perLabel = cascade::gui::px(fonts::kTinySize * 3.0f + 2.0f);
     const int maxLabels = std::max(2, std::min(8, static_cast<int>(stripH / perLabel)));
     const double step = WaterfallView::timeLabelStep(ages.span, maxLabels);
     const TimeTicks ticks = timeTicks(ages.newest, ages.oldest, step);
@@ -445,7 +446,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
 
     ImFont* lf = fonts::ui();
     ImFont* cf = fonts::legend();
-    const float px = fonts::kTinySize;
+    const float px = cascade::gui::px(fonts::kTinySize);
     // THE FIGURES TAKE THE FULL PHOSPHOR, the heading keeps the dim one.
     // theme.hpp's rule, applied to this gutter: "AGO" is a caption at rest and
     // may be engraved into its plate, but "2m30" is a reading, and every one
@@ -615,7 +616,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
     ImFont* uf = fonts::ui();
     ImFont* cf = fonts::legend();
     ImFont* nf = fonts::reading();
-    const float px = fonts::kTinySize;
+    const float px = cascade::gui::px(fonts::kTinySize);
 
     const char* title = "STRENGTH KEY - dB";
     const char* pairCap = "FLOOR / CEILING";
@@ -772,7 +773,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
 // part of that axis.
 void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
     ImFont* cf = fonts::legend();
-    const float px = fonts::kTinySize;
+    const float px = cascade::gui::px(fonts::kTinySize);
     const char* cap = "RANGE CHANGED";
     const float tw = textWidth(cf, px, cap);
     addBenchRail(dl, x0, x1, y);
@@ -843,8 +844,8 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
     }
 
     ImFont* sf = fonts::ui();
-    const float spx = fonts::kTinySize;
-    const float dpx = fonts::kLegendSize;
+    const float spx = cascade::gui::px(fonts::kTinySize);
+    const float dpx = cascade::gui::px(fonts::kLegendSize);
     const float sw = textWidth(sf, spx, scrollText);
     const float dw = haveDecode ? textWidth(sf, dpx, decoding) : 0.0f;
 

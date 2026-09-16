@@ -31,11 +31,16 @@
  *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
+#include "gui/app_window.hpp"
+#include "gui/fonts.hpp"
+#include "gui/page_geometry.hpp"
+#include "gui/tune_control.hpp"
 #include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 using cascade::gui::fittedUiScale;
 using cascade::gui::kUiScaleMin;
+using cascade::gui::uiScale;
 using cascade::gui::uiScaleOverride;
 
 int main() {
@@ -100,6 +105,183 @@ int main() {
     // A refused override leaves the fit exactly as it was.
     CHECK_NEAR(fittedUiScale(2264, 1080, 420.0f / 160.0f, "0"), 1.5f, 1e-6);
     CHECK_NEAR(fittedUiScale(2264, 1080, 420.0f / 160.0f, "banana"), 1.5f, 1e-6);
+
+    // -- gui::px(), WHICH IS WHERE THE SCALE ACTUALLY REACHES THE INTERFACE --
+    //
+    // THE DEFECT THIS HALF OF THE FILE EXISTS FOR. The factor above was
+    // computed correctly and then handed only to Dear ImGui - ScaleAllSizes
+    // for the style, FontScaleDpi for the type - which scaled everything ImGui
+    // owns and nothing this application owns. Every dimension of this
+    // interface is one of the application's own raw pixel counts, so on the
+    // tablet emulator at x2 the picture came out at two sizes at once:
+    // desktop-sized brass carrying double-sized lettering. The SAMPLE RATE and
+    // FRAME TIME meters were where it showed, because a meter is the only
+    // thing on the top bar whose height is part layout figure and part type
+    // metric - and the arithmetic of exactly that is the last block below.
+    //
+    // ONE MULTIPLICATION, AND THE WHOLE CONTRACT IS THAT IT IS EXACT AT 1:1.
+    // Every constant here is still the desktop's own figure; px() is applied
+    // where it is used. A float multiplied by 1.0f is the same float, bit for
+    // bit, which is what lets the desktop suite go on pinning these numbers as
+    // literals (test_app_rail, test_tune_control, test_spectrum_waterfall_type
+    // all do) without a single expectation being edited for this change.
+    CHECK(uiScale() == 1.0f);  // the default, before anything sets it
+
+    // A table rather than a paragraph of one-liners: every figure this change
+    // set now scales, named with the file it lives in, so a constant that
+    // grows a px() at its call site and is not listed here is visible as an
+    // omission rather than as nothing at all.
+    struct Figure {
+        const char* name;
+        float units;
+    };
+    const Figure figures[] = {
+        // gui/app_window.hpp - the function rail's column and its rows
+        {"kMenuWidth", cascade::gui::kMenuWidth},
+        {"kRailPlatePad", cascade::gui::kRailPlatePad},
+        {"kRailKeyInset", cascade::gui::kRailKeyInset},
+        {"kRailKeyGap", cascade::gui::kRailKeyGap},
+        {"kRailLabelPadX", cascade::gui::kRailLabelPadX},
+        {"kRailKeyMin", cascade::gui::kRailKeyMin},
+        {"kRailKeyMax", cascade::gui::kRailKeyMax},
+        {"kRailRowMinH", cascade::gui::kRailRowMinH},
+        {"kRailRowPadY", cascade::gui::kRailRowPadY},
+        // gui/tune_control.hpp - the top bar and the two meters on it
+        {"kDeckBarH", cascade::gui::kDeckBarH},
+        {"kDeckCoreW", cascade::gui::kDeckCoreW},
+        {"kMeterW", cascade::gui::kMeterW},
+        {"kMeterGap", cascade::gui::kMeterGap},
+        {"kMeterRightMargin", cascade::gui::kMeterRightMargin},
+        {"kMeterCoreClearance", cascade::gui::kMeterCoreClearance},
+        {"kMeterTopY", cascade::gui::kMeterTopY},
+        {"kMeterFaceH", cascade::gui::kMeterFaceH},
+        {"kMeterTextGap", cascade::gui::kMeterTextGap},
+        {"kMuteBannerMinW", cascade::gui::kMuteBannerMinW},
+        {"kMuteBannerEdgeClearance", cascade::gui::kMuteBannerEdgeClearance},
+        {"kFreqPlateW", cascade::gui::kFreqPlateW},
+        {"kFreqPlateH", cascade::gui::kFreqPlateH},
+        // gui/page_geometry.hpp - a torn-off page's floor
+        {"kPageMinW", cascade::gui::kPageMinW},
+        {"kPageMinH", cascade::gui::kPageMinH},
+        {"kPageInsideMargin", cascade::gui::kPageInsideMargin},
+        // gui/fonts.hpp - the four type sizes, which scale through the SAME
+        // helper because most of this bench's lettering goes straight into a
+        // draw list at an explicit size, where no ImGui global reaches it.
+        {"fonts::kUiSize", cascade::gui::fonts::kUiSize},
+        {"fonts::kLegendSize", cascade::gui::fonts::kLegendSize},
+        {"fonts::kReadingSize", cascade::gui::fonts::kReadingSize},
+        {"fonts::kTinySize", cascade::gui::fonts::kTinySize},
+    };
+
+    // At 1:1 the helper is the IDENTITY, and identity is meant literally: the
+    // same value, not a value within a tolerance of it.
+    for (const Figure& f : figures) {
+        CHECK(cascade::gui::px(f.units) == f.units);
+        CHECK(cascade::gui::units(f.units) == f.units);
+    }
+
+    // ...and at x2 every one of them is exactly double, and units() takes it
+    // back. These are the two properties every call site depends on: px() to
+    // draw with, units() to ask a rule written in reference units about a
+    // measurement ImGui handed back in screen pixels.
+    cascade::gui::setUiScale(2.0f);
+    CHECK(uiScale() == 2.0f);
+    for (const Figure& f : figures) {
+        CHECK(cascade::gui::px(f.units) == f.units * 2.0f);
+        CHECK(cascade::gui::units(cascade::gui::px(f.units)) == f.units);
+    }
+    // Two of them spelled out, because a table is easy to read past: the rail
+    // column and the deck.
+    CHECK(cascade::gui::px(cascade::gui::kMenuWidth) == 768.0f);
+    CHECK(cascade::gui::px(cascade::gui::kDeckBarH) == 320.0f);
+
+    // A composed rule, not just a constant: a rail row is sized in reference
+    // units and THEN scaled, so the word and the air round it stay in
+    // proportion. Sized from the scaled type instead - railRowHeight(34) -
+    // the answer would be 44, a row with the desktop's 5 px of padding round
+    // double-sized lettering.
+    CHECK(cascade::gui::px(cascade::gui::railRowHeight(cascade::gui::fonts::kUiSize)) ==
+          56.0f);
+    CHECK(cascade::gui::railRowHeight(cascade::gui::px(cascade::gui::fonts::kUiSize)) ==
+          44.0f);  // ...which is what NOT doing it that way gives
+
+    // -- AND THE CLIPPED CAPTIONS, IN ARITHMETIC -----------------------------
+    //
+    // Three states of the same sum, and the middle one is the bug as reported:
+    // "at scale 2.0 the SAMPLE RATE and FRAME TIME captions on the top plate
+    // are clipped by the top bar's bottom edge". A meter block is a face plus
+    // two lines of text plus their air, hung kMeterTopY below the bar's top
+    // edge, and it has to stand inside a bar kDeckBarH tall.
+    using cascade::gui::meterBlockH;
+    using cascade::gui::meterBlockHAtScale;
+    using cascade::gui::metersStandInsideBar;
+    using cascade::gui::px;
+
+    // (1) The desktop, where this was always right: 28 + 66 + 2x17 + 8 = 136,
+    // inside 160 with room to spare.
+    cascade::gui::setUiScale(1.0f);
+    {
+        const float lineH = cascade::gui::fonts::kUiSize;  // the ambient face
+        // meterBlockHAtScale is the composition drawToolbar itself makes, so
+        // a px() dropped from either layout figure inside it fails here.
+        const float block = meterBlockHAtScale(lineH);
+        CHECK(block == 136.0f - cascade::gui::kMeterTopY);
+        CHECK(metersStandInsideBar(px(cascade::gui::kDeckBarH),
+                                   px(cascade::gui::kMeterTopY), block));
+    }
+
+    // (2) THE DEFECT. The type is scaled (ImGui's own globals did that much)
+    // and the layout is not: the face stays 66, the gap 8, the top 28, the bar
+    // 160 - and the two lines of text are 34 each. 28 + 66 + 68 + 8 = 170,
+    // which is 10 px past the bottom of a bar that never grew, and the bar's
+    // child clips the difference off the captions. This is the case that goes
+    // RED against the code as it shipped, and the reason the block below is
+    // not simply "it fits at both scales".
+    {
+        const float scaledLineH = cascade::gui::fonts::kUiSize * 2.0f;
+        const float block = meterBlockH(cascade::gui::kMeterFaceH, scaledLineH,
+                                        cascade::gui::kMeterTextGap);
+        CHECK(!metersStandInsideBar(cascade::gui::kDeckBarH, cascade::gui::kMeterTopY,
+                                    block));
+    }
+
+    // (3) THE FIX: one factor, reaching the layout as well as the type.
+    // 56 + 132 + 68 + 16 = 272, inside a 320 px bar - the same proportion as
+    // (1), which is the whole claim this change set makes.
+    cascade::gui::setUiScale(2.0f);
+    {
+        const float lineH = px(cascade::gui::fonts::kUiSize);
+        const float block = meterBlockHAtScale(lineH);
+        CHECK(block == 216.0f);
+        CHECK(metersStandInsideBar(px(cascade::gui::kDeckBarH),
+                                   px(cascade::gui::kMeterTopY), block));
+        // ...and the proportion is the same one, to the pixel: twice (1).
+        CHECK(px(cascade::gui::kMeterTopY) + block ==
+              2.0f * (cascade::gui::kMeterTopY + 108.0f));
+    }
+
+    // The two meters keep their place on a bar that is itself scaled: the
+    // rules in gui/tune_control.hpp are written in reference units, so they
+    // are asked about a bar width taken back through units(). A first-launch
+    // bar at x2 is 2464 px wide and the meters fit; the SAME 1232 px bar it
+    // would have been at 1:1 no longer does, because the fixed cluster it has
+    // to clear is 1776 px now.
+    CHECK(cascade::gui::metersFitOnBar(
+        cascade::gui::units(px(cascade::gui::kFirstLaunchBarW)), cascade::gui::kDeckCoreW));
+    CHECK(!cascade::gui::metersFitOnBar(cascade::gui::units(cascade::gui::kFirstLaunchBarW),
+                                        cascade::gui::kDeckCoreW));
+
+    // An out-of-range scale is REFUSED and leaves the last good one standing,
+    // the same refusal uiScaleOverride makes, so a bad number cannot make the
+    // interface unreadable at the one moment it is set.
+    cascade::gui::setUiScale(0.25f);
+    CHECK(uiScale() == 2.0f);
+    cascade::gui::setUiScale(9.0f);
+    CHECK(uiScale() == 2.0f);
+    cascade::gui::setUiScale(nanSource / nanSource);
+    CHECK(uiScale() == 2.0f);
+    cascade::gui::setUiScale(1.0f);
+    CHECK(uiScale() == 1.0f);
 
     return testSummary("test_ui_scale");
 }
