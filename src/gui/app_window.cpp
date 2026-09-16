@@ -8488,11 +8488,40 @@ void AppWindow::drawPluginStoreSection() {
     // before that would be the clean-zero this product has been bitten by:
     // "nothing to update" and "we have not looked" are different statements.
     // IDLE is the second one.
+    //
+    // AND ON ANDROID IT SAYS NEITHER. Google Play forbids an application
+    // downloading executable code, so there is no catalogue to be idle about
+    // and no update that could ever be pending: the modules are compiled into
+    // the apk. IDLE there would invite the user to open the window and press a
+    // key that contacts nothing, so the chip is the COUNT of what is bundled -
+    // the one number about plugins that is true on this platform - and the
+    // tooltip says what the window is for.
     const bool haveCatalog = !catalog_.empty();
     const std::size_t pendingUpdates =
         haveCatalog ? plannedPluginUpdates().size() : 0u;
     const bool storeBusy = catalogPending_ || installPending_;
     char storeChip[16];
+#if defined(__ANDROID__)
+    (void)haveCatalog;
+    std::snprintf(storeChip, sizeof(storeChip), "%zu IN",
+                  static_cast<std::size_t>(pluginHost_.plugins().size()));
+    if (benchSwitchRow("Plugin store###pluginstore", pluginBrowseOpen_, storeChip,
+                       cascade::gui::theme::kPhosphor, false, true,
+                       "Opens the module list: what this build carries, what each "
+                       "one reaches for,\nand whether it is running. This build "
+                       "fetches no catalogue and installs\nnothing - the modules are "
+                       "compiled into the application.")) {
+        pluginBrowseOpen_ = !pluginBrowseOpen_;
+    }
+    // NO CATALOGUE SOURCE FIELD EITHER. It is a deployment setting for a fetch
+    // that cannot happen here, and a text box carrying an https:// URL this
+    // build will never contact is the most direct way to promise a capability
+    // the platform forbids. The retired-module rows below stay: they are a
+    // fact about a cached catalogue policy, and a build with no catalogue
+    // simply has none of them.
+    drawBlockedPluginRows();
+    return;
+#endif
     if (storeBusy) {
         // A TRANSFER IS THE MOST IMPORTANT THING THIS ROW CAN SAY, and it
         // outranks the update count: something is moving over the network on
@@ -11474,6 +11503,43 @@ void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h
 }
 
 void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
+#if defined(__ANDROID__)
+    // THERE IS NO CATALOGUE ON THIS PLATFORM, so there is no catalogue row to
+    // transcribe and the whole body below is skipped rather than fed empty
+    // inputs.
+    //
+    // Google Play forbids an application downloading executable code: the
+    // decoder modules an Android user can run are the ones compiled into this
+    // signed apk, which the host loaded out of the package's own native
+    // library directory. The store's job here is to say what those are and
+    // whether each is working - never to offer a fetch it cannot perform.
+    //
+    // `bundled` is what turns every such offer off at once, in the window
+    // rather than here: CHECK NOW goes dead, ADD ALL states why it cannot run,
+    // and no sentence tells the user to press a key that contacts nothing. See
+    // PluginStoreModel::bundled and gui/plugins_view.hpp's
+    // bundledStoreModules().
+    model.bundled = true;
+    std::vector<cascade::gui::FittedModule> fitted;
+    buildFittedModuleRecords(fitted);
+    model.modules = cascade::gui::bundledStoreModules(fitted);
+    // EVERY OTHER FIELD LEFT AT ITS DEFAULT, and each one for a reason:
+    // haveCatalogue false because no index was read; sourceUrl, sourceStatus
+    // and sourceError empty because no fetch was attempted, so there is no
+    // status and no error to quote; busy false because nothing can be in
+    // flight; and the ADD ALL run fields empty because the key that starts one
+    // is dead. A value invented for any of them would be a claim about a
+    // transfer that cannot happen.
+    model.haveCatalogue = false;
+    // THE INSTALL/REMOVE OUTCOME IS STILL CARRIED. Nothing can install here,
+    // but the pair is also written by a REMOVE, and a bundled module cannot be
+    // removed either - so in practice both are empty. They are copied rather
+    // than cleared because clearing them would be this function deciding that
+    // an outcome AppWindow recorded did not happen.
+    model.resultReport = installReport_;
+    model.resultError = installError_;
+    return;
+#else
     // EVERY FIGURE ON THAT PANEL IS TRACED BACK TO SOMETHING MEASURED HERE.
     // Lifted out of drawPluginStoreWindow unchanged when ADD ALL needed the
     // same model to plan against: one transcription of a catalogue row into a
@@ -11599,6 +11665,38 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
         }
         model.modules.push_back(std::move(sm));
     }
+#endif  // __ANDROID__
+}
+
+void AppWindow::buildFittedModuleRecords(std::vector<cascade::gui::FittedModule>& out) {
+    out.clear();
+    const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
+    const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
+    out.reserve(list.size());
+    for (const cascade::core::LoadedPlugin& p : list) {
+        const std::string file = cascade::core::pluginKey(p);
+        // THE RUNNER'S OWN SENTENCE, quoted rather than rewritten, and
+        // matched by KEY rather than by display name - two installed
+        // modules may legitimately print the same name.
+        std::string idleDetail;
+        for (const cascade::core::DecoderStatus& s : status) {
+            if (s.key != file) { continue; }
+            if (s.reason == cascade::core::DecoderIdleReason::Running) { continue; }
+            idleDetail = s.detail;
+            break;
+        }
+        cascade::gui::FittedModule m = cascade::gui::makeFittedModule(
+            p, pluginIsStopped(file), pluginRunner_.isFeeding(file), std::move(idleDetail),
+            pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
+        // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
+        // only come from stat-ing the file; a failure leaves it at 0,
+        // which the shared plate reads as "not measured" and never draws
+        // as a clean zero.
+        std::error_code sizeEc;
+        const std::uintmax_t bytes = std::filesystem::file_size(p.path, sizeEc);
+        if (!sizeEc) { m.sizeBytes = static_cast<std::uint64_t>(bytes); }
+        out.push_back(std::move(m));
+    }
 }
 
 void AppWindow::drawPluginStoreWindow() {
@@ -11698,9 +11796,30 @@ void AppWindow::drawPluginStoreWindow() {
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
                 ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop));
-                ImGui::BeginChild("##storeface", ImVec2(faceW, faceH), ImGuiChildFlags_None,
-                                  ImGuiWindowFlags_NoScrollbar |
-                                      ImGuiWindowFlags_NoScrollWithMouse);
+                // THIS FACE SCROLLS, AND IT IS THE ONLY ONE THAT DOES.
+                //
+                // It carried NoScrollbar | NoScrollWithMouse like every other
+                // page here, on the understanding that a view is handed a box
+                // and lays itself out inside it. The store cannot always keep
+                // that bargain: its control deck is wrapped prose in three
+                // wells, and measured on the Pixel Tablet emulator at
+                // 2560x1600 and UI scale x2 the deck alone is taller than the
+                // whole page - so the MODULE LIST and the DATA PLATE were
+                // drawn past the bottom edge with no way to reach them, under
+                // a heading reading "14 OF 14 MODULES SHOWN".
+                //
+                // That was invisible until Android, where the modules are
+                // compiled into the apk and this list is the only place they
+                // are described; on the desktop the window is resizable and
+                // nobody made it short enough. A scrollbar is the smallest
+                // honest answer: nothing is hidden, nothing is clipped, and
+                // the page is unchanged wherever the face already fits, which
+                // is every desktop window at its default size.
+                //
+                // NOT the whole page, deliberately. The cabinet, its rail and
+                // its keys stay put; only the face inside them moves.
+                ImGui::BeginChild("##storeface", ImVec2(faceW, faceH),
+                                  ImGuiChildFlags_None, ImGuiWindowFlags_None);
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor();
                 pluginStoreView_->draw(faceW, faceH, model, *pluginStoreDeck_);
@@ -11835,34 +11954,13 @@ void AppWindow::drawFittedModulesWindow() {
         // GATES FED FOR EVERY MODULE AT ONCE, which is why it is stated on the
         // panel rather than left to be inferred from four idle rows.
         model.receiverRunning = pipeline_.running();
-        const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
-        const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
-        model.modules.reserve(list.size());
-        for (const cascade::core::LoadedPlugin& p : list) {
-            const std::string file = cascade::core::pluginKey(p);
-            // THE RUNNER'S OWN SENTENCE, quoted rather than rewritten, and
-            // matched by KEY rather than by display name - two installed
-            // modules may legitimately print the same name.
-            std::string idleDetail;
-            for (const cascade::core::DecoderStatus& s : status) {
-                if (s.key != file) { continue; }
-                if (s.reason == cascade::core::DecoderIdleReason::Running) { continue; }
-                idleDetail = s.detail;
-                break;
-            }
-            cascade::gui::FittedModule m = cascade::gui::makeFittedModule(
-                p, pluginIsStopped(file), pluginRunner_.isFeeding(file),
-                std::move(idleDetail),
-                pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
-            // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
-            // only come from stat-ing the file; a failure leaves it at 0,
-            // which the shared plate reads as "not measured" and never draws
-            // as a clean zero.
-            std::error_code sizeEc;
-            const std::uintmax_t bytes = std::filesystem::file_size(p.path, sizeEc);
-            if (!sizeEc) { m.sizeBytes = static_cast<std::uint64_t>(bytes); }
-            model.modules.push_back(std::move(m));
-        }
+        // ONE TRANSCRIPTION, SHARED WITH THE STORE. This loop used to live
+        // here, and the plugin store now needs the identical records: on
+        // Android there is no catalogue to build its rows from, so it lists
+        // what the host loaded out of the apk - and two copies of this
+        // transcription would eventually describe one module two ways in the
+        // two windows the shared data plate exists to keep identical.
+        buildFittedModuleRecords(model.modules);
         // ONLY WHEN THE STORE DID NOT PRINT IT. installReport_/installError_
         // are written by an install AND by a remove, so both windows can hold
         // the same sentence; printing it in both reads as two separate

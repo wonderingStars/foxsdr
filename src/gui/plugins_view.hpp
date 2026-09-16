@@ -173,6 +173,63 @@ struct FittedModule {
 // AFTER reading it, and that one is refused with its identity perfectly known.
 ModulePlate makeModulePlate(const FittedModule& m);
 
+// ===========================================================================
+// THE STORE'S ROWS WHEN THERE IS NO CATALOGUE - a build that BUNDLES its
+// modules (Android)
+// ===========================================================================
+//
+// Google Play forbids an application downloading executable code, so on
+// Android there is no index to fetch, nothing to install and nothing to
+// update: the modules a user can run are the ones compiled into the signed
+// apk, and the host loads them out of the package's own native library
+// directory (see core/plugin_host.hpp's chooseAndroidPluginDir).
+//
+// THE STORE STILL HAS A JOB THERE. "What decoders has this application got,
+// what does each one do, and is it working" is the question that window
+// answers, and it is exactly as worth answering when the answer cannot change.
+// What it must NOT do is offer to fetch: a FIT key that cannot fetch, an
+// UPDATE that cannot arrive and a CHECK NOW that contacts nothing are three
+// promises the platform will not let this product keep.
+//
+// SO THE ROWS COME FROM THE HOST, NOT FROM A CATALOGUE. One row per record
+// PluginHost actually produced - loaded or refused - built through
+// makeModulePlate, so a bundled module reads identically in this window and in
+// FITTED MODULES, which is the whole reason the data plate is shared.
+//
+// WHAT IS DELIBERATELY ABSENT, and why each is left absent rather than
+// invented:
+//
+//   the catalogue id.   StoreModule::id keys an update plan against the
+//                       catalogue. There is no catalogue and no plan, so it
+//                       stays empty; the module's FILE name is on the plate,
+//                       and on this platform that is the identity everything
+//                       is keyed on anyway.
+//
+//   installableHere.    FALSE on every row, because "a build exists that this
+//                       machine could fetch and run" is a statement about a
+//                       catalogue. It is NOT a claim that the module does not
+//                       work: plate.loaded is that claim, and it comes from
+//                       the host's own record.
+//
+//   the summary, the homepage, the legal notice, the platform list, the
+//   published size and the ABI version. Every one of them is a CATALOGUE
+//                       field, and a compiled descriptor carries none of them
+//                       - the same reasoning makeModulePlate above applies for
+//                       the fitted window. The shared plate letters an absent
+//                       field as "not stated" rather than drawing a blank or a
+//                       clean zero.
+//
+// blockedReason IS FILLED IN, with the one sentence true of every row: there
+// is nothing to fetch. That is what keeps the FIT key dead - the window offers
+// it only where the reason is empty - and a dead key in this window always
+// says why. blockedReasonIfAcknowledged is the same string, because a maker's
+// notice cannot unblock something that was never a download.
+//
+// Pure and total. It lives in this header rather than the store's because it
+// reads a FittedModule: plugins_view.hpp already includes plugin_store_view.hpp
+// and the reverse would be a cycle.
+std::vector<StoreModule> bundledStoreModules(const std::vector<FittedModule>& fitted);
+
 // What the window is told, once per frame.
 struct FittedModulesModel {
     std::vector<FittedModule> modules;  // PluginHost::plugins() order

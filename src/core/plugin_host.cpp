@@ -1106,7 +1106,38 @@ std::string PluginHost::choosePluginDir(const std::string& exeDir, const std::st
     return userDir;
 }
 
+// The directory android_main handed over, or empty on every other platform.
+//
+// A FILE-SCOPE STRING RATHER THAN A MEMBER, because defaultPluginDir() is
+// static and is called before any PluginHost exists (AppWindow reads it to
+// print the path in the log). Written exactly once, from android_main, before
+// the first frame and therefore before any other thread could read it; no lock
+// for the same reason androidNetInit's globals need none once armed.
+namespace {
+std::string gAndroidPluginDir;
+}  // namespace
+
+void PluginHost::setAndroidPluginDir(const std::string& nativeLibraryDir) {
+    gAndroidPluginDir = nativeLibraryDir;
+}
+
+std::string PluginHost::androidPluginDir() { return gAndroidPluginDir; }
+
+std::string PluginHost::chooseAndroidPluginDir(const std::string& nativeLibraryDir) {
+    // EMPTY STAYS EMPTY. See the header: a fabricated path would name a
+    // directory the modules were never in.
+    return nativeLibraryDir;
+}
+
 std::string PluginHost::defaultPluginDir() {
+#if defined(__ANDROID__)
+    // THE ONLY ANSWER ON THIS PLATFORM, and the two desktop candidates are
+    // not consulted at all - not as a fallback either. See the header: one of
+    // them names a directory in /system that cannot exist, and the other is
+    // writable, which on Android makes it the wrong answer rather than a
+    // usable one.
+    return chooseAndroidPluginDir(androidPluginDir());
+#else
     const std::string exeDir = exePluginDir();
     const std::string userDir = userPluginDir();
     // THE PROBE IS SKIPPED, NOT IGNORED, when this process is packaged: the
@@ -1116,6 +1147,38 @@ std::string PluginHost::defaultPluginDir() {
         return choosePluginDir(exeDir, userDir, false, true);
     }
     return choosePluginDir(exeDir, userDir, directoryIsWritable(exeDir), false);
+#endif
+}
+
+bool PluginHost::isPluginCandidateFileName(const std::string& filename) {
+#if defined(__ANDROID__)
+    return isBundledPluginFileName(filename);
+#else
+    return hasPluginExtension(filename);
+#endif
+}
+
+bool PluginHost::isBundledPluginFileName(const std::string& filename) {
+    // "libfoxsdr_plugin_" + at least one character of id + ".so". The length
+    // test is what stops "libfoxsdr_plugin_.so" - a prefix and a suffix and no
+    // module in between - from being accepted, the same reasoning
+    // hasPluginExtension() applies to a bare ".dll".
+    static constexpr char kPrefix[] = "libfoxsdr_plugin_";
+    static constexpr char kSuffix[] = ".so";
+    const std::size_t pre = sizeof(kPrefix) - 1u;
+    const std::size_t suf = sizeof(kSuffix) - 1u;
+    if (filename.size() <= pre + suf) {
+        return false;
+    }
+    if (filename.compare(0, pre, kPrefix) != 0) {
+        return false;
+    }
+    // ".so" EXACTLY AT THE END, so the split debug file the plugin build
+    // writes beside each module - libfoxsdr_plugin_adsb-decoder.so.debug - is
+    // not a candidate. It is an ELF file that dlopen() will happily map and
+    // that exports nothing, so accepting it would mean one refusal row per
+    // bundled module.
+    return filename.compare(filename.size() - suf, suf, kSuffix) == 0;
 }
 
 bool PluginHost::hasPluginExtension(const std::string& filename) {
@@ -1175,7 +1238,7 @@ void PluginHost::scan(const std::string& dir) {
         if (!it->is_regular_file(fileEc) || fileEc) {
             continue;
         }
-        if (!hasPluginExtension(it->path().filename().string())) {
+        if (!isPluginCandidateFileName(it->path().filename().string())) {
             continue;
         }
         candidates.push_back(it->path());

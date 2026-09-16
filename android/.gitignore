@@ -20,6 +20,15 @@ app/.cxx/
 # this file is absent, which is exactly what `. ~/android-env.sh` provides.
 local.properties
 
+# THE BUNDLED DECODER PLUGINS, cross-compiled into the apk by
+# tools/build-android-plugins.sh. They are BUILT ARTEFACTS of a separate
+# repository - fourteen .so files per ABI, with their own versions and their
+# own per-module licences - and a built binary does not belong in this
+# repository's history. Gradle's default jniLibs directory is where the apk
+# packages them from, so this directory exists on a build machine and never in
+# a commit; the apk's own plugin store lists what a build actually contains.
+app/src/main/jniLibs/
+
 # A signed release needs a keystore and its passwords. Neither exists yet;
 # this is here so that the day one does, it cannot be added by accident.
 keystore.properties

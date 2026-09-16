@@ -48,6 +48,63 @@ A release APK is `./gradlew assembleRelease`. It is **unsigned** — there is no
 signing config in this project yet, because the keystore is a release-process
 decision and not a shell-slice one.
 
+### The decoder plugins, which are inside the APK
+
+**Google Play forbids an application downloading executable code**, so the
+catalogue the desktop build fetches its decoder modules from cannot exist here.
+The modules an Android user can run are the ones compiled into the signed APK,
+and nothing is fetched at runtime — which is what the plugin store page says on
+this platform, rather than offering a key that contacts nothing.
+
+They are **not committed**: `app/src/main/jniLibs/` is gitignored, because a
+built binary belonging to a separate repository does not belong in this one's
+history. Build and stage them with the plugin tree beside you:
+
+```sh
+tools/build-android-plugins.sh --plugins ../foxsdr-plugins-dev
+```
+
+…or let Gradle run the same script:
+
+```sh
+./gradlew assembleDebug -PfoxsdrPluginsDir=../foxsdr-plugins-dev
+```
+
+Without that property the APK packages whatever is already staged, and the
+configure prints how many module files that was — so "I forgot to build the
+plugins" and "this APK has no decoders in it" never look the same in the log.
+
+**WHICH modules is decided by the plugin repository, not here.** Its
+`CMakeLists.txt` carries the list (`FOXSDR_ANDROID_BUNDLED`) and the reason each
+excluded module is excluded: TLS the NDK cannot provide, a legal notice with no
+install step to show it at, a patent-encumbered codec, or a module that is not
+published yet. Today that is 14 of the tree's 27 — about 1.4 MB of module
+across both ABIs.
+
+**The APK extracts its native libraries** (`useLegacyPackaging true`, so
+`android:extractNativeLibs="true"`), and that changed with this slice. The
+plugin host finds modules by SCANNING a directory — the package's own
+`ApplicationInfo.nativeLibraryDir`, read over JNI in
+`core/android_app_info.cpp` — and under the modern packaging that directory is
+created EMPTY (measured on the emulator: `ls -l …/lib/x86_64` → `total 0`), so
+the product would have shipped with no decoder in it and nothing on screen to
+explain why. The long comment on `packaging { jniLibs { … } }` in
+`app/build.gradle` carries the measured APK and installed sizes both ways, and
+the alternative to revisit before an AAB upload.
+
+What it looks like when it worked, from a device:
+
+```sh
+adb logcat -s FoxSDR | grep -E 'plugins:|plugin: '
+I FoxSDR  : plugins: bundled in this package, at /data/app/~~…/lib/x86_64
+I FoxSDR  : plugin: loaded ADS-B 1.6.0
+…
+```
+
+(Every `diagLogf` line reaches logcat on Android, under the `FoxSDR` tag. On a
+phone the diagnostics ring is in memory and its file lives inside the sandbox,
+so logcat is the only account anyone gets.)
+
 ### Regenerating the launcher icon
 
 The mipmap PNGs are committed, so a build never needs an image tool. Re-run this

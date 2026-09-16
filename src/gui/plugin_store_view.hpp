@@ -177,6 +177,24 @@ struct ModulePlate {
     bool haveSizeBytes = false;
     std::uint64_t sizeBytes = 0;
 
+    // WHERE THAT FIGURE CAME FROM, because the plate lettered it "DOWNLOAD"
+    // whatever its source and that was wrong for half of its callers.
+    //
+    // A CATALOGUE row publishes a size for a file that has not arrived yet:
+    // "DOWNLOAD" is exactly what it is. A FITTED record has no published size
+    // at all - the caller stat()s the module on disk (see makeModulePlate in
+    // gui/plugins_view.hpp) - so for a module already installed the same
+    // caption described a transfer that had already happened, and on Android,
+    // where the modules are compiled into the apk and NOTHING is ever
+    // downloaded, it described one that never can.
+    //
+    // TRUE means measured from the file on this machine, and the plate letters
+    // it "ON DISK". False means a catalogue published it. The flag rather than
+    // an inference from `fitted`: a catalogue row for a module that IS fitted
+    // still carries the published download size, and that row is telling the
+    // truth about a download.
+    bool sizeIsOnDisk = false;
+
     // PluginCatalogEntry::abiVersion against CASCADE_PLUGIN_ABI_VERSION, or
     // InstalledPlugin::abiVersion for a fitted one. abiVersion 0 in a manifest
     // means "not recorded" and must be passed as haveAbi = false, never as a
@@ -234,6 +252,22 @@ const char* moduleKindTag(const ModulePlate& m);
 //
 // Call inside a frame: it asks the atlas to measure.
 float moduleKindTagWidth();
+
+// HOW WIDE THE CATALOGUE-SOURCE KEY HAS TO BE, measured across all three words
+// it can carry: CHECK NOW, CHECK AGAIN, and - in a build whose modules are
+// bundled (PluginStoreModel::bundled) - NO CATALOGUE, which is the longest of
+// them.
+//
+// Exported for the reason moduleKindTagWidth() is. It was a local inside
+// draw(), so the only thing that could observe it was a screenshot at one UI
+// scale; tests/test_bench_text_fits.cpp now holds it to the widest string it
+// may be asked to hold, at any scale, which is what stops a new word being
+// added to the key and not to its width. drawDeckKey centres its label and
+// neither wraps nor clips, so a key too narrow for its word does not truncate
+// - it hangs the word out over both machined edges.
+//
+// Scaled: every figure in it goes through gui::px(). Call inside a frame.
+float storeCheckKeyWidth();
 
 // The one-line REACH SUMMARY for a row: what this module declares, in the
 // fewest honest words. Never says "reaches nothing" - every plugin here is
@@ -352,6 +386,27 @@ struct PluginStoreModel {
     // The window therefore never reads this alone: see the three states
     // below, which it derives from this and the two strings that follow.
     bool haveCatalogue = false;
+
+    // THIS BUILD CARRIES ITS MODULES INSIDE ITSELF, and there is no catalogue
+    // to fetch, on this or any other day.
+    //
+    // TRUE ON ANDROID AND FALSE EVERYWHERE ELSE. Google Play forbids an
+    // application downloading executable code, so the apk ships the decoder
+    // modules it has and that set cannot change without a new apk. Everything
+    // in this window that offers to go and get something - CHECK NOW, FIT,
+    // UPDATE, ADD ALL - is therefore not merely unavailable, it is a
+    // misdescription of the product, and every sentence that says "press CHECK
+    // NOW" is an instruction that can never come true.
+    //
+    // A FIFTH CATALOGUE STATE rather than a fourth spelling of "no rows", for
+    // exactly the reason the other four are kept apart (see sourceStatus
+    // below): "nobody has asked" and "nothing will ever be asked" are opposite
+    // claims, and the one thing a user must not be told is to keep pressing a
+    // key that cannot work. The rows this window draws in that state are the
+    // modules the host actually LOADED out of the apk, so what is listed is
+    // what is running rather than what a catalogue claims exists - see
+    // bundledStoreModules() in gui/plugins_view.hpp.
+    bool bundled = false;
 
     // AppWindow::catalogStatus_ / catalogError_, verbatim. A fetch failure is
     // the user's evidence and is never paraphrased.

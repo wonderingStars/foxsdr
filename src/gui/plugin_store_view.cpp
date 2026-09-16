@@ -483,7 +483,12 @@ std::vector<PlateFact> collectFacts(const ModulePlate& m) {
     }
     f.push_back(ver);
 
-    PlateFact size{"DOWNLOAD", {}, false, theme::kAmber};
+    // "ON DISK" WHEN THE FIGURE WAS MEASURED HERE, "DOWNLOAD" when a catalogue
+    // published it. See ModulePlate::sizeIsOnDisk: one caption for both was a
+    // description of a transfer for modules that were already installed, and a
+    // description of an impossible one on a platform where every module is
+    // compiled into the application.
+    PlateFact size{m.sizeIsOnDisk ? "ON DISK" : "DOWNLOAD", {}, false, theme::kAmber};
     if (m.haveSizeBytes) {
         size.value = bytesText(m.sizeBytes);
     } else {
@@ -953,14 +958,23 @@ bool matchesQuery(const StoreModule& sm, const std::string& lowerQuery) {
 // The evidence is the pair of strings AppWindow clears at the start of every
 // fetch and fills in at the end of it; see PluginStoreModel for why status is
 // tested before error.
+// FIVE ANSWERS NOW, and the fifth is not a way of having no rows - it is a
+// build that will never have a catalogue at all. See PluginStoreModel::bundled.
 enum class CatalogueState {
     NeverAsked,  // nothing fetched this session
     Failed,      // asked, and the attempt failed. sourceError says why
     ReadEmpty,   // asked, answered, and the index listed no modules
     Read,        // asked, answered, and there are rows
+    Bundled,     // there is no catalogue: the modules are inside this build
 };
 
 CatalogueState catalogueState(const PluginStoreModel& m) {
+    // TESTED FIRST, AND IT OVERRIDES EVERY OTHER ANSWER INCLUDING Read. The
+    // rows in a bundled build are the loaded modules, not a fetched index, so
+    // reporting "the catalogue was read" would be a claim about a fetch that
+    // never happened - and it is the branch that decides whether this window
+    // tells the user to press a key that cannot work.
+    if (m.bundled) { return CatalogueState::Bundled; }
     if (m.haveCatalogue) { return CatalogueState::Read; }
     if (!m.sourceStatus.empty()) { return CatalogueState::ReadEmpty; }
     if (!m.sourceError.empty()) { return CatalogueState::Failed; }
@@ -1045,6 +1059,29 @@ const char* moduleKindTag(const ModulePlate& m) {
 // the face the chip is lettered in, plus the shoulder the chip needs either
 // side of it. The list is written out rather than derived, because a tag
 // missing from it is a chip that overflows in exactly the state nobody tests.
+float storeCheckKeyWidth() {
+    // THE THREE WORDS THIS ONE KEY CAN CARRY, and the third is why this is a
+    // function. "NO CATALOGUE" is what it is engraved with in a build whose
+    // modules are bundled (PluginStoreModel::bundled), and it is LONGER than
+    // either CHECK word - so a max that lists only those two leaves the key at
+    // the old width and drawDeckKey, which centres its label and neither wraps
+    // nor clips, hangs the longer word out over both machined edges.
+    //
+    // It was a local inside draw(), where nothing but a screenshot at one
+    // scale could observe it. Exported for exactly the reason
+    // moduleKindTagWidth() is: tests/test_bench_text_fits.cpp can then hold it
+    // to the widest string it may be asked to hold, at any UI scale.
+    static const char* const kWords[] = {"CHECK NOW", "CHECK AGAIN", "NO CATALOGUE"};
+    ImFont* f = fonts::ui();
+    const float px = prose();
+    float w = 0.0f;
+    for (const char* s : kWords) { w = std::max(w, textW(f, px, s)); }
+    // The floor is the design's own key width, so a narrow face cannot shrink
+    // the key out of the deck; the shoulder is the one every other key here
+    // uses.
+    return std::max(cascade::gui::px(92.0f), w + cascade::gui::px(22.0f));
+}
+
 float moduleKindTagWidth() {
     static const char* const kTags[] = {"NOT KNOWN", "NOT DECLARED", "DECODER",
                                         "MAP",       "PANEL",        "CONTROL",
@@ -1272,11 +1309,21 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
 
     // --- and why it may not be pressed --------------------------------------
     //
-    // THE SAME FOUR CATALOGUE STATES the rest of the window distinguishes:
+    // THE SAME FIVE CATALOGUE STATES the rest of the window distinguishes:
     // nobody has asked, it was asked and failed, it was asked and listed
-    // nothing, or it was read. Telling a user whose check just failed to press
-    // CHECK NOW is telling them to do again the thing that did not work.
-    if (!model.haveCatalogue) {
+    // nothing, it was read, or this build has no catalogue at all. Telling a
+    // user whose check just failed to press CHECK NOW is telling them to do
+    // again the thing that did not work; telling a user with a bundled build
+    // to press it is worse, because there is no key.
+    if (model.bundled) {
+        // BEFORE the haveCatalogue test, because a bundled build DOES have
+        // rows - they are the modules loaded out of the apk - and the reason
+        // ADD ALL is dead here is not "there is nothing to list", it is "there
+        // is nowhere to add from".
+        plan.blockedReason =
+            "every module in this build is already fitted: they are compiled into it "
+            "and there is nothing to fetch";
+    } else if (!model.haveCatalogue) {
         if (!model.sourceStatus.empty()) {
             plan.blockedReason = "the catalogue was read and it lists no modules at all";
         } else if (!model.sourceError.empty()) {
@@ -1388,9 +1435,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // out over both machined edges.
     const float kClearW =
         std::max(cascade::gui::px(60.0f), textW(uf, tiny, "CLEAR") + cascade::gui::px(22.0f));
-    const float kCheckW = std::max({cascade::gui::px(92.0f),
-                                    textW(uf, tiny, "CHECK NOW") + cascade::gui::px(22.0f),
-                                    textW(uf, tiny, "CHECK AGAIN") + cascade::gui::px(22.0f)});
+    // EXPORTED, LIKE THE KIND TAG'S WIDTH, because its widest word is now one
+    // no test could otherwise see - see storeCheckKeyWidth().
+    const float kCheckW = storeCheckKeyWidth();
     const float kUpdKeyW =
         std::max(cascade::gui::px(96.0f), textW(uf, tiny, "UPDATE") + cascade::gui::px(22.0f));
     // The banner's caption column: a lamp, then the longest of the five
@@ -1606,7 +1653,19 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const char* bannerNote;
     ImU32 bannerLamp;
     bool bannerLit;
-    if (catState == CatalogueState::NeverAsked) {
+    if (catState == CatalogueState::Bundled) {
+        // NOT A LAMP AND NOT AN ALARM. Nothing is wrong, nothing is pending
+        // and nothing is missing: this is what the product IS on this
+        // platform, so the banner states it and asks for nothing.
+        bannerCaption = "MODULES BUNDLED WITH THIS BUILD";
+        bannerLamp = theme::kGold;
+        bannerLit = false;
+        bannerNote =
+            "This build fetches no catalogue and installs nothing. The modules listed "
+            "below are compiled into the application and were loaded from inside it, so "
+            "what is shown is what is fitted - and it changes only when the application "
+            "itself is updated.";
+    } else if (catState == CatalogueState::NeverAsked) {
         bannerCaption = "CATALOGUE NOT READ";
         bannerLamp = theme::kGold;
         bannerLit = false;
@@ -1810,8 +1869,17 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float deckBH = kPad + legH + 8.0f + kRockerH * showRows + 8.0f +
                          noteHeight(wellInner, showNote) + kPad;
 
+    // WHERE THE MODULES CAME FROM, in one line. "no catalogue source set" is a
+    // configuration fault on the desktop and would be a lie here: a bundled
+    // build has a source, and the source is the application.
     const std::string sourceLine =
-        model.sourceUrl.empty() ? std::string("no catalogue source set") : model.sourceUrl;
+        model.bundled
+            ? std::string("this build - the modules are inside it, nothing is fetched")
+        : model.sourceUrl.empty() ? std::string("no catalogue source set")
+                                  : model.sourceUrl;
+    // px() ON THE GAP, from the scaling slice: every figure in this window is
+    // in scaled pixels, and the bundled line is drawn in the same well as the
+    // url it replaces.
     const float srcTextW = wellInner - kCheckW - cascade::gui::px(8.0f);
     const float srcLineH = std::max(kKeyH, wrapH(uf, tiny, srcTextW, sourceLine.c_str()));
     float deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
@@ -1873,7 +1941,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // a short catalogue from a filter that is hiding most of it.
         drawCountLine(dl, ImVec2(tl.x + kPad, y), static_cast<int>(visible.size()),
                       static_cast<int>(model.modules.size()),
-                      catState == CatalogueState::Read ? "MODULES SHOWN" : "MODULES KNOWN");
+                      (catState == CatalogueState::Read ||
+                       catState == CatalogueState::Bundled)
+                          ? "MODULES SHOWN"
+                          : "MODULES KNOWN");
         dl->PopClipRect();
     }
 
@@ -1977,10 +2048,21 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                         // back. A failed check and an empty catalogue have
                         // both been asked, and a key still saying NOW invites
                         // the user to do again what they just did.
-                        catState == CatalogueState::NeverAsked ? "CHECK NOW"
-                                                               : "CHECK AGAIN",
+                        //
+                        // AND NO CATALOGUE AT ALL in a bundled build. The key
+                        // is kept rather than removed - the well's layout
+                        // reserves its width, and a control that vanishes
+                        // answers no question - but it is engraved with what
+                        // is true and is dead. WHY is on the line beside it
+                        // (sourceLine) and in the banner above, in sentences,
+                        // rather than crammed onto a key: "NO CATALOGUE" is
+                        // the whole of what a key can honestly say.
+                        catState == CatalogueState::Bundled      ? "NO CATALOGUE"
+                        : catState == CatalogueState::NeverAsked ? "CHECK NOW"
+                                                                 : "CHECK AGAIN",
                         nullptr,
-                        !model.busy && !model.sourceUrl.empty(), "checknow")) {
+                        !model.bundled && !model.busy && !model.sourceUrl.empty(),
+                        "checknow")) {
             checkNow_ = true;
         }
         y += srcLineH;
@@ -2031,7 +2113,35 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // ======================= THE BODY =======================================
     ImGui::SetCursorScreenPos(ImVec2(origin.x, deckTL.y + deckH + kGap));
     const ImVec2 bodyTL = ImGui::GetCursorScreenPos();
-    const float bodyH = std::max(120.0f, origin.y + height - bodyTL.y);
+    // THE LIST'S FLOOR IS MEASURED IN ROWS AND IS SCALED - and READ THE SECOND
+    // HALF OF THIS NOTE, because it does not fix the fault that found it.
+    //
+    // 120.0f UNSCALED WAS WRONG ON ITS OWN TERMS: every other figure in this
+    // window went through gui::px() with the scaling slice, and this was the
+    // floor of the one region the window exists for. So it is derived from
+    // what a row costs - the MODULES heading plus three cards, a card being at
+    // least its action column (a key, the install word, the state word) and
+    // its padding - which holds three rows at any face size and any UI scale.
+    //
+    // WHAT IT DOES NOT FIX, stated here because a reader will otherwise assume
+    // it does. Measured on the Pixel Tablet emulator, 2560x1600 at UI scale
+    // x2: the deck above - the ADD ALL well, the banner, and the three wells
+    // whose shared height is the tallest of them - is TALLER THAN THE WHOLE
+    // PAGE, so `height - bodyTL.y` is negative and the module list and the
+    // data plate are drawn past the bottom edge. They cannot be reached by
+    // scrolling either, and that is not an oversight in the page: the window
+    // beginPage() opens and the ##storeface child the view is drawn into are
+    // BOTH ImGuiWindowFlags_NoScrollbar | NoScrollWithMouse (app_window.cpp),
+    // so this view's contract is to fit the box it is given. It currently
+    // cannot at that scale, and the window reports "14 OF 14 MODULES SHOWN"
+    // above a list nobody can see.
+    //
+    // It was harmless while Android had no catalogue and therefore no rows.
+    // The moment the modules are bundled INTO the build, that list is the only
+    // place they are described - so this needs a decision (let the face
+    // scroll, or make the deck shorter at large scales) rather than a floor.
+    const float bodyFloor = nameH + kPad * 2.0f + (kKeyH + cascade::gui::px(26.0f)) * 3.0f;
+    const float bodyH = std::max(bodyFloor, origin.y + height - bodyTL.y);
     // The plate takes a third, but never at the cost of a list too narrow to
     // read a module name in - the list is what this window is FOR, and a plate
     // beside three characters of name would be the tail wagging the dog.
@@ -2073,19 +2183,43 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
         const float childH = br.y - y - kPad;
         ImGui::SetCursorScreenPos(ImVec2(tl.x + kPad, y));
-        ImGui::BeginChild("##modlist", ImVec2(listW - kPad * 2.0f, std::max(40.0f, childH)),
+        // px() ON THE LAST-DITCH FLOOR TOO. It can only be reached if the well
+        // itself was squeezed below its own floor, but 40 desktop pixels on a
+        // x2 tablet is half a line of the face it would be showing.
+        ImGui::BeginChild("##modlist",
+                          ImVec2(listW - kPad * 2.0f,
+                                 std::max(cascade::gui::px(40.0f), childH)),
                           ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
         {
             ImDrawList* cdl = ImGui::GetWindowDrawList();
             const float cw = std::max(120.0f, ImGui::GetContentRegionAvail().x);
             if (visible.empty()) {
                 const ImVec2 at = ImGui::GetCursorScreenPos();
-                // WHY THE LIST IS EMPTY, and there are four reasons, not two.
+                // WHY THE LIST IS EMPTY, and there are five reasons, not two.
                 // "Press CHECK NOW" is the right answer to exactly one of
-                // them; said to the other three it sends the user round a loop
-                // that cannot end, because the check has already happened.
+                // them; said to the other four it sends the user round a loop
+                // that cannot end, because the check has already happened - or
+                // because there is no key to press at all.
                 const char* why = "";
                 switch (catState) {
+                    case CatalogueState::Bundled:
+                        // AN EMPTY LIST IN A BUNDLED BUILD IS A REAL FAULT,
+                        // and the only one this window can report: the modules
+                        // are inside the application, so either none was
+                        // packaged for this machine's architecture or the host
+                        // could not find the directory it was told they are
+                        // in. Both are answered in the FITTED MODULES window,
+                        // which names the directory it scanned - so the user
+                        // is sent there rather than at a key.
+                        why = (hiddenByShow > 0 || deck.search[0] != '\0')
+                                  ? "Every bundled module is hidden by the SHOW switches "
+                                    "or the search above. The counts on the switches say "
+                                    "how many each holds."
+                                  : "This build lists no modules at all. They are compiled "
+                                    "into the application, so this means none was loaded: "
+                                    "the FITTED MODULES window names the directory that "
+                                    "was scanned and what was found in it.";
+                        break;
                     case CatalogueState::NeverAsked:
                         why = "No catalogue has been read yet. Press CHECK NOW above and "
                               "this application asks the source once.";
@@ -2382,7 +2516,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
         const float childH = br.y - y - kPad;
         ImGui::SetCursorScreenPos(ImVec2(tl.x + kPad, y));
-        ImGui::BeginChild("##plate", ImVec2(plateW - kPad * 2.0f, std::max(40.0f, childH)),
+        // Scaled, for the same reason as the module list's own floor above.
+        ImGui::BeginChild("##plate",
+                          ImVec2(plateW - kPad * 2.0f,
+                                 std::max(cascade::gui::px(40.0f), childH)),
                           ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
         {
             ImDrawList* pdl = ImGui::GetWindowDrawList();
@@ -2391,6 +2528,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 deck.selected >= static_cast<int>(model.modules.size())) {
                 const char* none = "";
                 switch (catState) {
+                    case CatalogueState::Bundled:
+                        none = "Select a module on the left to read what it is. Every one "
+                               "of them is compiled into this build.";
+                        break;
                     case CatalogueState::NeverAsked:
                         none = "Nothing to describe yet. Press CHECK NOW to read the "
                                "catalogue.";

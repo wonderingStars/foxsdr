@@ -742,6 +742,80 @@ void testAddAllPlan() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ADD ALL IN A BUILD THAT HAS NO CATALOGUE (PluginStoreModel::bundled)
+// ---------------------------------------------------------------------------
+//
+// Google Play forbids an application downloading executable code, so an
+// Android build's modules are compiled into the signed apk and the store lists
+// what the host loaded out of it. The key must be dead, and - the part that
+// matters - it must be dead for the RIGHT REASON: every other dead-key
+// sentence in this window tells the user to press CHECK NOW or to read the
+// error under CATALOGUE SOURCE, and both are instructions that can never come
+// true here, because there is no catalogue to check and no error to read.
+void testAddAllBundledBuild() {
+    // A BUNDLED BUILD HAS ROWS. They are the loaded modules, not a fetched
+    // index (see bundledStoreModules in gui/plugins_view.hpp), so the reason
+    // the key is dead cannot be "there is nothing to list".
+    std::vector<StoreModule> mods(3, fittedStoreRow());
+    for (StoreModule& sm : mods) {
+        sm.id.clear();
+        sm.installableHere = false;
+        sm.blockedReason = "this module is compiled into the application - there is "
+                           "nothing to fetch";
+        sm.blockedReasonIfAcknowledged = sm.blockedReason;
+    }
+    PluginStoreModel m;
+    m.modules = mods;
+    m.bundled = true;
+    // NO FETCH EVER HAPPENED, so the three strings that describe one are all
+    // empty - exactly the state that would otherwise read as NeverAsked.
+    m.haveCatalogue = false;
+    m.sourceStatus.clear();
+    m.sourceError.clear();
+
+    const AddAllPlan p = planAddAll(m, false);
+    CHECK(p.install.empty());
+    CHECK(p.update.empty());
+    CHECK(!p.blockedReason.empty());
+    // THE SENTENCE MUST NOT SEND THE USER AT A KEY THAT CANNOT WORK. This is
+    // the assertion the whole case exists for: without the bundled branch the
+    // plan falls through to the NeverAsked text, which reads "press CHECK NOW
+    // and this application asks the source once" - an instruction with no key
+    // behind it on this platform.
+    CHECK(!has(p.blockedReason, "CHECK NOW"));
+    CHECK(!has(p.blockedReason, "CATALOGUE SOURCE"));
+    CHECK(!has(p.blockedReason, "no catalogue has been read yet"));
+    // ...and it must say what IS true.
+    CHECK(has(p.blockedReason, "compiled into it"));
+
+    // A TICK CANNOT CHANGE IT. The acknowledgement covers makers' notices on a
+    // download, and there is no download; offering one here would be a control
+    // that does nothing.
+    const AddAllPlan acked = planAddAll(m, true);
+    CHECK(acked.blockedReason == p.blockedReason);
+    CHECK(acked.heldByNotice == 0);
+    CHECK(acked.install.empty());
+
+    // AND NO ROWS AT ALL - an apk with no plugin for this architecture, or a
+    // native library directory the host was never told about - still must not
+    // reach the "press CHECK NOW" text. It is the one real fault a bundled
+    // build can have and it is answered in the FITTED MODULES window, not by a
+    // key in this one.
+    PluginStoreModel none;
+    none.bundled = true;
+    const AddAllPlan empty = planAddAll(none, false);
+    CHECK(!empty.blockedReason.empty());
+    CHECK(!has(empty.blockedReason, "CHECK NOW"));
+
+    // THE DESKTOP IS UNTOUCHED, asserted here rather than assumed: the same
+    // rows with `bundled` off must go back to the catalogue's own reasons.
+    PluginStoreModel desktop = m;
+    desktop.bundled = false;
+    const AddAllPlan d = planAddAll(desktop, false);
+    CHECK(has(d.blockedReason, "CHECK NOW"));
+}
+
 }  // namespace
 
 int main() {
@@ -754,5 +828,6 @@ int main() {
     testProseSize();
     testInstallState();
     testAddAllPlan();
+    testAddAllBundledBuild();
     return testSummary("test_plugin_store_view");
 }

@@ -128,6 +128,59 @@ void testKindTagChipHoldsEveryTag() {
                 chip, textW(uf, px, "NOT DECLARED"), px);
 }
 
+// --- the catalogue-source key ---------------------------------------------------
+//
+// ONE KEY, THREE WORDS, and the third arrived with the Android build: the store
+// engraves it NO CATALOGUE when the modules are bundled into the application
+// (PluginStoreModel::bundled) instead of fetched. That word is LONGER than
+// either CHECK word, so a width taken across only those two leaves it hanging
+// out over both machined edges - the exact fault this file exists for, and one
+// a single screenshot at one UI scale will not show.
+void testCheckKeyHoldsEveryWord() {
+    ImFont* uf = cascade::gui::fonts::ui();
+    // THE STORE'S OWN PROSE SIZE, not kTinySize, and the difference is the
+    // whole point of measuring rather than asserting a number. This window
+    // letters its keys at storeProsePx() - larger than the smallest engraving
+    // in the application, because the store is read as paragraphs before
+    // something is installed - so a check taken at kTinySize measures a
+    // narrower word than the product draws and would pass over a key that
+    // clips. Written this way after seeing it: "NO CATALOGUE" measures 47.6 px
+    // at 14 and 71.4 px at the store's size.
+    const float px = cascade::gui::storeProsePx();
+    const float key = cascade::gui::storeCheckKeyWidth();
+
+    // Every word the key can carry, kept in step with the store's own switch by
+    // hand - the same arrangement, and the same reason, as the kind-tag list
+    // above.
+    const char* const words[] = {"CHECK NOW", "CHECK AGAIN", "NO CATALOGUE"};
+    for (const char* w : words) {
+        const float tw = textW(uf, px, w);
+        CHECK(key >= tw);
+        // THE FULL SHOULDER, 22 px, AND NOT THE 8 THE CHIP TEST ABOVE ASKS FOR.
+        // That difference is what makes this test able to fail: measured here,
+        // dropping "NO CATALOGUE" from the key's own width leaves it at its
+        // 92 px floor, which still clears 71.4 + 8 and would sail past a
+        // weaker assertion while the word sat in 20.6 px of metal instead of
+        // 22. 22 is the shoulder every key in this deck is cut with, so a key
+        // that cannot give its longest word that much has not been sized for
+        // it - and at the next face size, or in another language, "still fits"
+        // becomes "clips".
+        CHECK(key >= tw + 22.0f);
+    }
+
+    // ...AND THE REASON THE THIRD WORD HAD TO BE ADDED TO THAT WIDTH AT ALL:
+    // it is the longest of the three, so a key measured across the two CHECK
+    // words alone is a key that was never sized for what it actually says in a
+    // bundled build.
+    const float widestCheck =
+        std::max(textW(uf, px, "CHECK NOW"), textW(uf, px, "CHECK AGAIN"));
+    CHECK(textW(uf, px, "NO CATALOGUE") > widestCheck);
+
+    std::printf("  catalogue-source key %.2f px, widest word \"NO CATALOGUE\" %.2f px "
+                "(widest CHECK word %.2f) at %.0f px\n",
+                key, textW(uf, px, "NO CATALOGUE"), widestCheck, px);
+}
+
 // EVERY TAG THE PRODUCTION SWITCH ACTUALLY RETURNS, asked of moduleKindTag()
 // itself rather than of the list above - so the list cannot silently fall out
 // of step with the code it is meant to cover.
@@ -198,6 +251,7 @@ void testSharedChipsAndCellsScaleWithUi() {
     const float cellW1 = cascade::gui::coordCellWidth('0');
     const float cellDot1 = cascade::gui::coordCellWidth('.');
     const float cellH1 = cascade::gui::coordCellHeight();
+    const float key1 = cascade::gui::storeCheckKeyWidth();
     // At scale 1.0, gui::px(v) == v, so this is the same figure
     // testKindTagChipHoldsEveryTag and testCoordApertureHoldsItsFigure pin.
     CHECK_NEAR(chip1,
@@ -209,6 +263,17 @@ void testSharedChipsAndCellsScaleWithUi() {
     const float cellW2 = cascade::gui::coordCellWidth('0');
     const float cellDot2 = cascade::gui::coordCellWidth('.');
     const float cellH2 = cascade::gui::coordCellHeight();
+    // THE CATALOGUE-SOURCE KEY IS IN HERE TOO, because it is a figure this
+    // window draws and the Android build gave it a new, longer word. A key that
+    // held NO CATALOGUE at desktop size and stayed there on a tablet would clip
+    // it at exactly the scale the tablet build runs at.
+    const float key2 = cascade::gui::storeCheckKeyWidth();
+    CHECK(key2 > key1 * 1.8f);
+    // ...and it still holds its longest word AT that scale, measured at the
+    // store's own prose size (see testCheckKeyHoldsEveryWord for why not
+    // kTinySize).
+    CHECK(key2 >= textW(uf, cascade::gui::px(cascade::gui::storeProsePx()),
+                        "NO CATALOGUE"));
 
     // EVERY ONE OF THEM ROUGHLY DOUBLES. Not exactly: each is a std::max of a
     // scaled floor and a scaled glyph measurement plus a scaled shoulder, and
@@ -227,8 +292,9 @@ void testSharedChipsAndCellsScaleWithUi() {
     // all four of the checks above went red, which is what proves they are
     // actually exercising gui::px() and not some other doubling.
     std::printf("  at 2.0x: kind tag chip %.2f -> %.2f, coord cell '0' %.2f -> %.2f, "
-                "'.' %.2f -> %.2f, cell height %.2f -> %.2f\n",
-                chip1, chip2, cellW1, cellW2, cellDot1, cellDot2, cellH1, cellH2);
+                "'.' %.2f -> %.2f, cell height %.2f -> %.2f, source key %.2f -> %.2f\n",
+                chip1, chip2, cellW1, cellW2, cellDot1, cellDot2, cellH1, cellH2, key1,
+                key2);
 
     cascade::gui::setUiScale(1.0f);  // as every other test in this binary finds it
 }
@@ -259,6 +325,7 @@ int main() {
         ImGui::NewFrame();
         testCoordApertureHoldsItsFigure();
         testKindTagChipHoldsEveryTag();
+        testCheckKeyHoldsEveryWord();
         testEveryTagTheSwitchReturnsFits();
         testMeasurementsTrackTheDeclaredSizes();
         testSharedChipsAndCellsScaleWithUi();

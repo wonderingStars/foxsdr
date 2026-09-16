@@ -85,9 +85,27 @@ constexpr const char* kModExt = ".dylib";
 constexpr const char* kModExt = ".so";
 #endif
 
-// Fixture filename with the platform's module extension: mod("broken") gives
-// "broken.dll" on Windows and "broken.so" elsewhere.
-std::string mod(const char* stem) { return std::string(stem) + kModExt; }
+// Fixture filename the host's scan will actually CONSIDER on this platform:
+// mod("broken") gives "broken.dll" on Windows, "broken.so" on Linux and macOS,
+// and "libfoxsdr_plugin_broken.so" on Android.
+//
+// ANDROID IS A PREFIX AS WELL AS AN EXTENSION, and that is the same trap this
+// helper was written for. There the plugins live in the apk's own native
+// library directory beside libfoxsdr.so and libc++_shared.so, so the scan
+// matches "libfoxsdr_plugin_*.so" and nothing else
+// (PluginHost::isPluginCandidateFileName). A fixture called "broken.so" is
+// discarded before the loader sees it, and the test then fails for a reason
+// that has nothing to do with what it is named after - which is exactly what
+// happened when the Android rule landed and these fixtures still used the
+// desktop spelling: ten checks in this file went red on the device and not one
+// of them was about the behaviour it named.
+std::string mod(const char* stem) {
+#if defined(__ANDROID__)
+    return "libfoxsdr_plugin_" + std::string(stem) + kModExt;
+#else
+    return std::string(stem) + kModExt;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Temp directory helpers
@@ -683,6 +701,116 @@ void testExtensionFilter() {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. ANDROID: the apk's own library directory, and the name rule that keeps
+//     the application out of its own plugin list
+// ---------------------------------------------------------------------------
+//
+// WHY THESE ARE HERE RATHER THAN IN AN ANDROID-ONLY FILE. Google Play forbids
+// an application downloading executable code, so on Android the decoder
+// modules are compiled into the signed apk and the platform installs them into
+// the package's native library directory - beside libfoxsdr.so and
+// libc++_shared.so. Both rules below are pure and are compiled on every
+// platform, and this file is in the curated Android test list
+// (tests/CMakeLists.txt), so tools/run-android-tests.sh runs these same checks
+// ON the device. The one assertion that cannot read the same on both - which
+// predicate scan() picks - is the last block, and it is the whole reason
+// isPluginCandidateFileName exists as a named function instead of an #if
+// inside the scan loop.
+void testBundledPluginNameRule() {
+    // The spelling the plugin repository's Android build emits:
+    // libfoxsdr_plugin_<catalogue id>.so.
+    CHECK(PluginHost::isBundledPluginFileName("libfoxsdr_plugin_adsb-decoder.so"));
+    CHECK(PluginHost::isBundledPluginFileName("libfoxsdr_plugin_survey-engine.so"));
+    CHECK(PluginHost::isBundledPluginFileName("libfoxsdr_plugin_a.so"));
+
+    // THE FILES THAT SHARE THAT DIRECTORY AND ARE NOT PLUGINS. This is the
+    // whole point of the rule: accepting them would dlopen the application's
+    // own library a second time and the C++ runtime once, find no
+    // cascade_plugin_query in either, and put two "not a cascade plugin"
+    // refusals in front of the user for modules that never claimed to be one.
+    CHECK(!PluginHost::isBundledPluginFileName("libfoxsdr.so"));
+    CHECK(!PluginHost::isBundledPluginFileName("libc++_shared.so"));
+    CHECK(!PluginHost::isBundledPluginFileName("libnative_app_glue.so"));
+
+    // The split debug file the plugin build writes beside each module. It is
+    // an ELF file dlopen() will map happily, exporting nothing - one refusal
+    // row per bundled module if this were accepted.
+    CHECK(!PluginHost::isBundledPluginFileName("libfoxsdr_plugin_adsb-decoder.so.debug"));
+
+    // A prefix and a suffix with no module between them, the same reasoning
+    // hasPluginExtension applies to a bare ".dll".
+    CHECK(!PluginHost::isBundledPluginFileName("libfoxsdr_plugin_.so"));
+    // The prefix has to be at the START, and the whole of it.
+    CHECK(!PluginHost::isBundledPluginFileName("foxsdr_plugin_adsb.so"));
+    CHECK(!PluginHost::isBundledPluginFileName("xlibfoxsdr_plugin_adsb.so"));
+    CHECK(!PluginHost::isBundledPluginFileName("libfoxsdr_plugi_adsb.so"));
+    // ...and ".so" at the END.
+    CHECK(!PluginHost::isBundledPluginFileName("libfoxsdr_plugin_adsb.dll"));
+    CHECK(!PluginHost::isBundledPluginFileName("libfoxsdr_plugin_adsb.so.bak"));
+    CHECK(!PluginHost::isBundledPluginFileName(""));
+    CHECK(!PluginHost::isBundledPluginFileName("libfoxsdr_plugin_"));
+
+    // WHICH RULE THE SCAN USES: the narrow one on Android, the extension
+    // everywhere else. Asserted through the function scan() itself calls, so a
+    // later edit that reaches past it for hasPluginExtension breaks this.
+#if defined(__ANDROID__)
+    CHECK(PluginHost::isPluginCandidateFileName("libfoxsdr_plugin_adsb-decoder.so"));
+    CHECK(!PluginHost::isPluginCandidateFileName("libfoxsdr.so"));
+    CHECK(!PluginHost::isPluginCandidateFileName("libc++_shared.so"));
+    CHECK(!PluginHost::isPluginCandidateFileName("anything.so"));
+#elif defined(_WIN32)
+    CHECK(PluginHost::isPluginCandidateFileName("anything.dll"));
+    CHECK(!PluginHost::isPluginCandidateFileName("anything.so"));
+#else
+    // A DESKTOP SCAN MUST NOT NARROW. Every published plugin file name is
+    // "<id>-<version>-abi3-linux-x64.so", with no "lib" prefix at all, so a
+    // host that applied the Android rule would find nothing a user installed.
+    CHECK(PluginHost::isPluginCandidateFileName("adsb-decoder-1.6.0-abi3-linux-x64.so"));
+    CHECK(PluginHost::isPluginCandidateFileName("anything.so"));
+    CHECK(!PluginHost::isPluginCandidateFileName("anything.dll"));
+#endif
+}
+
+void testAndroidPluginDirRule() {
+    // THE RULE: what the framework said, and EMPTY when it said nothing.
+    //
+    // Empty rather than a plausible path. Both desktop candidates are wrong on
+    // Android - /proc/self/exe is /system/bin/app_process64 in a
+    // NativeActivity, and the sandbox data directory IS writable, which makes
+    // it the wrong answer rather than an unusable one - so a build that was
+    // never told where its own libraries are has nothing to offer and says so.
+    CHECK(PluginHost::chooseAndroidPluginDir("/data/app/~~a/com.foxsdr-b/lib/x86_64") ==
+          "/data/app/~~a/com.foxsdr-b/lib/x86_64");
+    CHECK(PluginHost::chooseAndroidPluginDir("").empty());
+
+    // The setter is what android_main calls and the getter is what
+    // defaultPluginDir() reads on that platform, so the round trip is pinned
+    // on every platform rather than only on a device.
+    const std::string saved = PluginHost::androidPluginDir();
+    PluginHost::setAndroidPluginDir("/data/app/test/lib/arm64");
+    CHECK(PluginHost::androidPluginDir() == "/data/app/test/lib/arm64");
+    CHECK(PluginHost::chooseAndroidPluginDir(PluginHost::androidPluginDir()) ==
+          "/data/app/test/lib/arm64");
+#if defined(__ANDROID__)
+    // ON THE DEVICE THE WHOLE CHAIN IS OBSERVABLE: defaultPluginDir() is
+    // exactly what was handed over, with neither desktop candidate mixed in.
+    // Asserted here rather than left to the "plugins:" line in a logcat dump,
+    // which proves what was printed and not what would be scanned.
+    CHECK(PluginHost::defaultPluginDir() == "/data/app/test/lib/arm64");
+    PluginHost::setAndroidPluginDir("");
+    CHECK(PluginHost::defaultPluginDir().empty());
+#else
+    // AND IT CHANGES NOTHING ANYWHERE ELSE. The setter exists on every
+    // platform so this rule can be tested here; if it ever leaked into the
+    // desktop answer, a stray call would silently redirect a user's plugins
+    // directory.
+    CHECK(PluginHost::defaultPluginDir() != "/data/app/test/lib/arm64");
+#endif
+    PluginHost::setAndroidPluginDir(saved);
+    CHECK(PluginHost::androidPluginDir() == saved);
+}
+
+// ---------------------------------------------------------------------------
 // 3. Scanning - real directories, real LoadLibrary
 // ---------------------------------------------------------------------------
 
@@ -878,6 +1006,28 @@ void testUnloadAllIdempotent() {
 
 void testDefaultDirectory() {
     const std::string d = PluginHost::defaultPluginDir();
+#if defined(__ANDROID__)
+    // EVERY ASSERTION BELOW IS A DESKTOP ASSERTION, and on Android each one is
+    // false BY DESIGN rather than by accident. There is no plugins directory:
+    // the modules are inside the apk and the answer is the application's own
+    // native library directory, which is named nothing in particular, is not
+    // writable by this process, and is EMPTY until android_main hands it over
+    // - which a bare test binary is not and never will be. Asserting the
+    // desktop shape here would demand the Android build behave like a build it
+    // is not, so the Android rule is asserted in full in
+    // testAndroidPluginDirRule() instead, and this one states plainly what it
+    // is not covering.
+    std::printf("  default plugin dir (android): \"%s\" - "
+                "the rule is pinned in testAndroidPluginDirRule\n",
+                d.c_str());
+    // The one property that IS shared: scanning whatever comes back must be
+    // harmless, including when it is empty.
+    PluginHost host;
+    host.scanDefault();
+    CHECK(host.directory() == d);
+    CHECK(host.plugins().empty());
+    return;
+#else
     CHECK(!d.empty());
     CHECK(contains(d, "plugins"));
     // An absolute path, never a bare relative one - unless the process path
@@ -898,6 +1048,7 @@ void testDefaultDirectory() {
     PluginHost host;
     host.scanDefault();
     CHECK(host.directory() == d);
+#endif
 }
 
 // The DIRECTORY CHOICE, which is the decision that makes plugins possible at
@@ -2015,6 +2166,8 @@ int main() {
     testVersionOnePluginIsRefused();
     testRejectionMessages();
     testExtensionFilter();
+    testBundledPluginNameRule();
+    testAndroidPluginDirRule();
     testScanMissingDirectory();
     testScanEmptyDirectory();
     testScanGarbageModule();

@@ -30,10 +30,12 @@
 
 #include <string>
 
+#include "core/android_app_info.hpp"
 #include "core/config.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/net_post.hpp"
+#include "core/plugin_host.hpp"
 #include "core/version.hpp"
 #include "gui/app_window.hpp"
 #include "gui/platform_window_android.hpp"
@@ -110,6 +112,36 @@ extern "C" void android_main(struct android_app* app) {
     cascade::core::DiagLog::instance().configure(std::string(), false);
     cascade::core::diagLogf("FoxSDR %s (%s) starting on Android", cascade::versionString(),
                             cascade::gitCommit());
+
+    // WHERE THE DECODER PLUGINS ARE, and on this platform that is a question
+    // only the framework can answer.
+    //
+    // Google Play forbids an application downloading executable code, so there
+    // is no catalogue here and nothing is installed: the modules a user can
+    // run are the ones compiled into this signed apk, and the installer put
+    // them in the package's own native library directory beside libfoxsdr.so.
+    // PluginHost cannot find that by itself - /proc/self/exe in a
+    // NativeActivity is /system/bin/app_process64 - so it is handed over here,
+    // from the one place that has a Context to ask
+    // (core/android_app_info.hpp).
+    //
+    // AFTER the diagnostics ring is armed, deliberately: both the JNI reader
+    // and PluginHost report through diagLogf, and a failure to learn this path
+    // is exactly the kind of start-up fact a phone gives nobody any other
+    // account of. BEFORE the AppWindow is constructed, because its own
+    // start-up reads defaultPluginDir() and scans it.
+    if (app != nullptr && app->activity != nullptr) {
+        const std::string libDir =
+            cascade::core::androidNativeLibraryDir(app->activity->vm, app->activity->clazz);
+        cascade::core::PluginHost::setAndroidPluginDir(libDir);
+        if (libDir.empty()) {
+            cascade::core::diagLogf(
+                "plugins: the native library directory is not known; no bundled module "
+                "will be loaded");
+        } else {
+            cascade::core::diagLogf("plugins: bundled in this package, at %s", libDir.c_str());
+        }
+    }
 
     // THE USER'S STORED PREFERENCE, read before anything is armed - the same
     // rule main.cpp's storedDiagnosticsEnabled() follows and for the same

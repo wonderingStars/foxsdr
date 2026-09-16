@@ -116,12 +116,67 @@ android {
 
     packaging {
         jniLibs {
-            // libc++_shared.so and libfoxsdr.so are stored uncompressed and
-            // page-aligned so the loader maps them straight out of the APK
-            // instead of extracting a copy at install time. Required for
-            // minSdk 23+ installs and it is what keeps the installed footprint
-            // to one copy of the library rather than two.
-            useLegacyPackaging false
+            // TRUE, AND IT WAS FALSE UNTIL THE DECODER PLUGINS ARRIVED. This
+            // is a MEASURED change, not a preference, and the measurement is
+            // worth recording because the two settings look interchangeable
+            // and are not.
+            //
+            // `false` sets android:extractNativeLibs="false" in the merged
+            // manifest: the .so entries are stored uncompressed and
+            // page-aligned, the loader maps them straight out of the apk, and
+            // NOTHING IS WRITTEN TO THE NATIVE LIBRARY DIRECTORY AT INSTALL
+            // TIME. That last clause is the one that matters here. Measured on
+            // the x86_64 emulator with this apk installed:
+            //
+            //   legacyNativeLibraryDir=/data/app/~~.../com.foxsdr-.../lib
+            //   $ ls -l .../lib/x86_64
+            //   total 0
+            //
+            // The directory exists and is EMPTY. libfoxsdr.so itself does not
+            // care - System.loadLibrary resolves it inside the apk through the
+            // classloader's own namespace - but the decoder plugins are found
+            // by SCANNING a directory (core/plugin_host.cpp's scan(), which
+            // walks it with std::filesystem and dlopen()s what it finds), and
+            // an empty directory means no decoder in the product at all, with
+            // nothing on screen to explain it.
+            //
+            // `true` restores extractNativeLibs="true", so the installer
+            // unpacks every lib/<abi>/lib*.so of the device's own ABI into
+            // that directory - which is what the plugin host is then handed
+            // (ApplicationInfo.nativeLibraryDir, read over JNI in
+            // core/android_app_info.cpp).
+            //
+            // WHAT IT COSTS, MEASURED ON THIS APK RATHER THAN ARGUED. The .so
+            // entries become DEFLATE compressed, so the apk itself shrinks a
+            // long way, and the device then also holds an extracted copy of
+            // the primary ABI's libraries:
+            //
+            //   packaging   apk on disk    installed (code path, du -sk)
+            //   false       28 988 869     ~28 MB, nothing extracted
+            //   true        10 505 829     24 056 KB (apk + one ABI extracted)
+            //
+            // So for THIS apk - two ABIs, installed by hand - `true` is
+            // smaller on both counts, because the second ABI's 12 MB
+            // libfoxsdr.so is compressed rather than stored and is never
+            // unpacked. For a Play AAB, which delivers ONE ABI, the arithmetic
+            // reverses: `false` would be about one apk-sized download and one
+            // copy on disk, `true` a smaller download plus a second copy of
+            // the same library. That is the case to revisit before the AAB
+            // upload, and it is why the alternative below is written down.
+            //
+            // THE ALTERNATIVE, if that cost is judged too high before the AAB
+            // upload: keep `false` and load the modules from INSIDE the apk by
+            // their zip path ("<apk>!/lib/<abi>/libfoxsdr_plugin_x.so", which
+            // dlopen has accepted since Android 7). That needs a way to
+            // ENUMERATE them, because no filesystem call can list a zip - a
+            // small Java helper over java.util.zip.ZipFile, the same shape as
+            // Net.java - and it is a bigger change than this slice, so the
+            // measurement above and this note are left for whoever makes it.
+            // What is NOT an option is unpacking them ourselves into the
+            // application's own data directory: Android 10 blocks executing
+            // code from an app-writable directory for anything targeting API
+            // 29 or above, and this targets 34.
+            useLegacyPackaging true
         }
     }
 
@@ -139,4 +194,70 @@ dependencies {
     // widgets, no networking and no AndroidX components - the whole interface
     // is drawn by the native library.
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
+}
+
+// ---------------------------------------------------------------------------
+// THE DECODER PLUGINS, COMPILED INTO THIS APK
+// ---------------------------------------------------------------------------
+//
+// Google Play forbids an application downloading executable code, so the
+// modules the desktop build fetches from a catalogue are compiled into the
+// signed apk here and loaded from the package's own native library directory
+// (see core/plugin_host.hpp and tools/build-android-plugins.sh). Nothing is
+// fetched at runtime and the plugin store on Android says so.
+//
+// GRADLE'S OWN DEFAULT jniLibs DIRECTORY carries them -
+// src/main/jniLibs/<abi>/libfoxsdr_plugin_<id>.so - so no sourceSets entry is
+// needed and none is added: the fewer places the packaging is described, the
+// fewer can disagree. The directory is GITIGNORED, because a built binary does
+// not belong in this repository's history and the plugins have a repository of
+// their own.
+//
+// THE PLUGINS ARE A SEPARATE CHECKOUT, so this build does NOT reach for them
+// unconditionally: an apk that could only be built next to a sibling tree
+// would be unbuildable for anyone without it. Pass the tree and the step runs:
+//
+//     ./gradlew assembleDebug -PfoxsdrPluginsDir=/path/to/foxsdr-plugins-dev
+//
+// Without the property, whatever is already staged in jniLibs is packaged and
+// a line says which - so "I forgot to build the plugins" and "this apk has no
+// decoders in it" can never look the same in the log.
+//
+// bash IS REQUIRED, and that is why this is opt-in rather than automatic. The
+// script cross-compiles with CMake and the NDK; on Windows it needs WSL or Git
+// Bash, and a build that silently failed on a machine without either would be
+// worse than one that never tried.
+def foxsdrPluginsDir = project.findProperty('foxsdrPluginsDir')
+def foxsdrJniLibs = file('src/main/jniLibs')
+
+tasks.register('buildFoxsdrPlugins', Exec) {
+    description = 'Cross-compiles the FoxSDR decoder plugins into src/main/jniLibs'
+    group = 'build'
+    workingDir rootProject.projectDir.parentFile
+    commandLine 'bash', 'tools/build-android-plugins.sh',
+            '--plugins', foxsdrPluginsDir ? foxsdrPluginsDir.toString() : '',
+            '--out', foxsdrJniLibs.absolutePath
+    onlyIf {
+        if (foxsdrPluginsDir == null) {
+            logger.lifecycle('foxsdr: -PfoxsdrPluginsDir not set; not building plugins')
+            return false
+        }
+        return true
+    }
+}
+
+if (foxsdrPluginsDir != null) {
+    tasks.named('preBuild') { dependsOn 'buildFoxsdrPlugins' }
+}
+
+// WHAT IS ACTUALLY IN THE APK, PRINTED AT CONFIGURE TIME. A count, not a
+// promise: this is the one line that tells the difference between an apk with
+// fourteen decoders in it and an apk with none, and it is the difference a
+// tester cannot see from the outside until they open the plugin store.
+gradle.projectsEvaluated {
+    def staged = foxsdrJniLibs.exists()
+            ? fileTree(foxsdrJniLibs) { include '**/libfoxsdr_plugin_*.so' }.files.size()
+            : 0
+    logger.lifecycle("foxsdr: ${staged} bundled plugin module file(s) staged in " +
+            "${foxsdrJniLibs}")
 }

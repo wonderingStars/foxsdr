@@ -172,6 +172,12 @@ ModulePlate makeModulePlate(const FittedModule& m) {
 
     p.haveSizeBytes = (m.sizeBytes > 0u);
     p.sizeBytes = m.sizeBytes;
+    // MEASURED, NOT PUBLISHED. FittedModule::sizeBytes can only have come from
+    // the caller stat-ing the module, because no descriptor carries a size, so
+    // the plate letters it ON DISK rather than DOWNLOAD - see
+    // ModulePlate::sizeIsOnDisk for the caption that used to describe a
+    // transfer for a file that was already here.
+    p.sizeIsOnDisk = true;
 
     // NOT RECORDED, and said so rather than guessed. LoadedPlugin carries no
     // abiVersion: the host validates the descriptor's against
@@ -181,6 +187,33 @@ ModulePlate makeModulePlate(const FittedModule& m) {
     // pluginBlockReason follows and is never read as a mismatch.
     p.haveAbi = false;
     return p;
+}
+
+std::vector<StoreModule> bundledStoreModules(const std::vector<FittedModule>& fitted) {
+    // THE ONE SENTENCE THAT IS TRUE OF EVERY ROW. Written once, here, so the
+    // FIT key's silence and the row's explanation cannot drift apart.
+    static const char* const kNothingToFetch =
+        "this module is compiled into the application - there is nothing to fetch";
+
+    std::vector<StoreModule> out;
+    out.reserve(fitted.size());
+    for (const FittedModule& m : fitted) {
+        StoreModule sm;
+        // THE SAME ADAPTER THE FITTED WINDOW USES, not a second transcription:
+        // it already decides haveDescriptor, fitted, loaded, running, the
+        // refusal reason, the capability word and the tune grant from the same
+        // record, and a copy of that reasoning here would eventually disagree
+        // with it about a refused module.
+        sm.plate = makeModulePlate(m);
+        // NO CATALOGUE ID, and no update plan to key one against.
+        sm.id.clear();
+        // See the header: a statement about a catalogue, not about the module.
+        sm.installableHere = false;
+        sm.blockedReason = kNothingToFetch;
+        sm.blockedReasonIfAcknowledged = kNothingToFetch;
+        out.push_back(std::move(sm));
+    }
+    return out;
 }
 
 FittedCounts countStates(const std::vector<FittedModule>& modules, bool receiverRunning) {

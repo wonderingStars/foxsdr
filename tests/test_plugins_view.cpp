@@ -57,6 +57,7 @@
 #include "test_check.hpp"
 
 using cascade::core::LoadedPlugin;
+using cascade::gui::bundledStoreModules;
 using cascade::gui::countStates;
 using cascade::gui::FittedCounts;
 using cascade::gui::FittedModule;
@@ -68,6 +69,9 @@ using cascade::gui::makeFittedModule;
 using cascade::gui::makeModulePlate;
 using cascade::gui::ModulePlate;
 using cascade::gui::moduleStateWord;
+using cascade::gui::StoreInstallState;
+using cascade::gui::storeInstallState;
+using cascade::gui::StoreModule;
 
 namespace {
 
@@ -428,6 +432,14 @@ void testPlateAdapter() {
     CHECK(!up.haveTuneGrant);
     CHECK(!up.haveAbi);
     CHECK(!up.haveSizeBytes);
+    // A HOST RECORD'S SIZE CAN ONLY EVER BE A MEASUREMENT. No descriptor and no
+    // manifest carries one, so every size that reaches this window came from
+    // the caller stat-ing the file - which is what makes "DOWNLOAD" the wrong
+    // caption for it and "ON DISK" the right one (ModulePlate::sizeIsOnDisk).
+    // Asserted even here, where no size was measured, because the flag
+    // describes the SOURCE the plate would letter and not whether there is a
+    // figure to letter.
+    CHECK(up.sizeIsOnDisk);
 
     // THE DUPLICATE RESOLVER'S CASE, which is the one that separates
     // haveDescriptor from `loaded`: the host read this module in full and THEN
@@ -609,6 +621,113 @@ void testWindowsAgree() {
     CHECK(std::string(moduleStateWord(fedPlate)) != "NOT FED");
 }
 
+// ---------------------------------------------------------------------------
+// 9. bundledStoreModules - the STORE's rows in a build that has no catalogue
+// ---------------------------------------------------------------------------
+//
+// Google Play forbids an application downloading executable code, so on
+// Android the store lists what the HOST loaded out of the apk instead of what
+// an index claims exists. What this pins is the three properties that make
+// such a listing honest: every row is described by the same adapter the fitted
+// window uses, no row claims it could be fetched, and no row leaves a dead FIT
+// key unexplained.
+void testBundledStoreRows() {
+    std::vector<FittedModule> fitted;
+    // A loaded, started decoder; a stopped one; and a file the host refused
+    // before it could read a descriptor - which on this platform means a
+    // module that was packaged and will not run, the one real fault a bundled
+    // build can have.
+    fitted.push_back(module(true, false, kDecoderBit, true));
+    FittedModule stopped = module(true, true, kDecoderBit, false);
+    stopped.file = "libfoxsdr_plugin_ais-decoder.so";
+    stopped.name = "AIS";
+    fitted.push_back(stopped);
+    FittedModule refused = module(false, false, 0u, false);
+    refused.file = "libfoxsdr_plugin_broken.so";
+    refused.name.clear();
+    refused.error = "not a cascade plugin: it exports no cascade_plugin_query";
+    fitted.push_back(refused);
+
+    const std::vector<StoreModule> rows = bundledStoreModules(fitted);
+    CHECK(rows.size() == fitted.size());  // one row per record, refused included
+
+    for (std::size_t i = 0; i < rows.size() && i < 3u; ++i) {
+        const StoreModule& sm = rows[i];
+        // EVERY ROW IS FITTED. They are inside the application; there is no
+        // other state a bundled module can be in.
+        CHECK(sm.plate.fitted);
+        // NOTHING CAN BE FETCHED, so nothing may claim it could be...
+        CHECK(!sm.installableHere);
+        // ...and the FIT key is dead WITH A REASON on every row. An empty
+        // reason is what OFFERS the key, and a key that cannot work must never
+        // be offered; a dead key with no sentence is the other half of that
+        // fault.
+        CHECK(!sm.blockedReason.empty());
+        // A maker's notice cannot unblock something that was never a
+        // download, so the acknowledged answer is the same answer. ADD ALL
+        // counts "the modules one tick would add" from the difference between
+        // these two, and any difference here would make it offer a tick that
+        // changes nothing.
+        CHECK(sm.blockedReasonIfAcknowledged == sm.blockedReason);
+        // NO CATALOGUE ID: it keys an update plan, and there is no catalogue
+        // and no plan. Empty rather than the file name, which would make the
+        // store look as though it had matched a row to an index entry.
+        CHECK(sm.id.empty());
+        CHECK(sm.updateToVersion.empty());
+        CHECK(sm.updateReason.empty());
+        // ...and no catalogue-only field invented. haveAbi false is the
+        // plate's "not recorded"; a zero there would letter as a mismatch
+        // against the host's own ABI.
+        CHECK(!sm.plate.haveAbi);
+        CHECK(sm.plate.platforms.empty());
+        CHECK(sm.plate.legalNotice.empty());
+        CHECK(sm.plate.homepage.empty());
+        // THE SIZE IS NOT A DOWNLOAD SIZE, and the plate must not letter it as
+        // one. Nothing is fetched on this platform, so the only figure that can
+        // exist is what the caller measured on disk - which is exactly what
+        // makeModulePlate says by setting sizeIsOnDisk, and what the plate
+        // letters "ON DISK" instead of "DOWNLOAD". Observed on the emulator
+        // before this flag existed: "DOWNLOAD 42 kB" against a module compiled
+        // into the apk.
+        CHECK(sm.plate.sizeIsOnDisk);
+        // THE SAME DESCRIPTION THE FITTED WINDOW WOULD DRAW, field for field.
+        // This is the property the shared data plate exists for, so it is
+        // asserted against makeModulePlate itself rather than against a copy
+        // of what it happens to return today.
+        const ModulePlate direct = makeModulePlate(fitted[i]);
+        CHECK(sm.plate.name == direct.name);
+        CHECK(sm.plate.version == direct.version);
+        CHECK(sm.plate.maker == direct.maker);
+        CHECK(sm.plate.licence == direct.licence);
+        CHECK(sm.plate.fileName == direct.fileName);
+        CHECK(sm.plate.loaded == direct.loaded);
+        CHECK(sm.plate.running == direct.running);
+        CHECK(sm.plate.refusalReason == direct.refusalReason);
+        CHECK(sm.plate.haveDescriptor == direct.haveDescriptor);
+        CHECK(sm.plate.haveCapabilities == direct.haveCapabilities);
+        CHECK(sm.plate.capabilities == direct.capabilities);
+        // ...and therefore the same word in both windows, which is the thing a
+        // user would actually notice.
+        CHECK(std::string(moduleStateWord(sm.plate)) ==
+              std::string(moduleStateWord(direct)));
+    }
+
+    // THE STORE'S OWN VERDICT ON EACH ROW. A bundled module that loaded reads
+    // INSTALLED; one the host refused reads REFUSED. Neither may read NOT
+    // INSTALLED or CANNOT FIT, which are answers about a catalogue.
+    CHECK(rows.size() == 3u);
+    const std::vector<StoreModule> three =
+        rows.size() == 3u ? rows : std::vector<StoreModule>(3);
+    CHECK(storeInstallState(three[0]) == StoreInstallState::Installed);
+    CHECK(storeInstallState(three[1]) == StoreInstallState::Installed);
+    CHECK(storeInstallState(three[2]) == StoreInstallState::Refused);
+
+    // NO MODULES AT ALL is a legal input and must not invent a row: it is what
+    // an apk carrying no plugin for this architecture, or a native library
+    // directory the host was never told about, actually produces.
+    CHECK(bundledStoreModules({}).empty());
+}
+
 }  // namespace
 
 int main() {
@@ -620,5 +739,6 @@ int main() {
     testPlateAdapter();
     testRecordAdapter();
     testWindowsAgree();
+    testBundledStoreRows();
     return testSummary("test_plugins_view");
 }

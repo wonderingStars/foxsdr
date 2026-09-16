@@ -143,6 +143,10 @@ class PluginStoreView;
 struct PluginStoreDeck;
 struct PluginStoreModel;
 struct FittedModulesDeck;
+// ...and the record both plugin windows describe a module with, for the same
+// reason: buildFittedModuleRecords() below hands a vector of them back, and a
+// reference parameter needs no definition here.
+struct FittedModule;
 
 // Whether a device open that finished on a worker thread should still be
 // applied to the pipeline.
@@ -2708,6 +2712,17 @@ private:
     // state, and a second transcription of catalogue row into StoreModule
     // would be a second set of rules about what "fitted" and "blocked" mean.
     void buildPluginStoreModel(PluginStoreModel& model);
+    // ONE PLACE TRANSCRIBES A LOADED MODULE INTO A FittedModule, for the same
+    // reason. It was inline in the fitted-modules window, which was the only
+    // caller until the plugin store needed the identical records: on Android
+    // there is no catalogue to build store rows from (Play forbids downloading
+    // executable code), so the store lists what the HOST loaded out of the apk
+    // - and it has to be the same records the fitted window shows, or the two
+    // windows would describe one module two ways.
+    //
+    // Reads the host, the runner's status, the stop set, the tune grants and
+    // the file sizes; touches nothing.
+    void buildFittedModuleRecords(std::vector<cascade::gui::FittedModule>& out);
     // Builds the queue from the store's own plan and starts it. Re-plans from
     // live state rather than trusting the plan the key was drawn from.
     void startAddAll(bool noticesAcknowledged);

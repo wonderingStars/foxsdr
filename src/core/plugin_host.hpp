@@ -323,6 +323,12 @@ public:
     // application never attempts a write into
     // C:\Program Files\WindowsApps\<full name>, rather than attempting one
     // that is refused. See core/package_identity.hpp.
+    //
+    // ON ANDROID NEITHER CANDIDATE IS CONSULTED. The modules are inside the
+    // apk, so the answer is the application's own native library directory
+    // and nothing else - see chooseAndroidPluginDir() below for the whole
+    // rule and for why the two desktop answers are wrong here rather than
+    // merely unavailable.
     static std::string defaultPluginDir();
 
     // The two candidates defaultPluginDir() chooses between, exposed so the
@@ -359,6 +365,85 @@ public:
     // plugins use (".dll" on Windows, ".so"/".dylib" elsewhere). Case
     // insensitive on Windows, matching the filesystem. Pure and testable.
     static bool hasPluginExtension(const std::string& filename);
+
+    // =====================================================================
+    // ANDROID: THE PLUGINS ARE IN THE APK, AND THERE IS NO PLUGIN DIRECTORY
+    // =====================================================================
+    //
+    // Google Play forbids an application downloading executable code, so on
+    // Android there is no catalogue, no download and no install: the decoder
+    // modules a user can run are the ones compiled into the signed apk. The
+    // platform puts them in the application's own NATIVE LIBRARY DIRECTORY -
+    // ApplicationInfo.nativeLibraryDir, beside libfoxsdr.so itself - and that
+    // is the directory scan() looks in.
+    //
+    // NEITHER OF THE TWO DESKTOP CANDIDATES IS USABLE HERE, which is why this
+    // is a third rule rather than a value fed into choosePluginDir():
+    //
+    //   exePluginDir() reads /proc/self/exe, which in a NativeActivity is
+    //   /system/bin/app_process64 - so it answers "/system/bin/plugins", a
+    //   directory that does not exist and that no application may create.
+    //
+    //   userPluginDir() reads XDG_DATA_HOME, which android_main points inside
+    //   the sandbox (see src/platform/android/main.cpp). A real, writable
+    //   directory - and therefore the WRONG answer, because a plugin written
+    //   there would be code that arrived from somewhere other than the apk,
+    //   which is the exact thing the platform's policy forbids and which this
+    //   build has no way to have obtained.
+    //
+    // The directory is handed in rather than discovered, because only the
+    // Java side knows it: setAndroidPluginDir() is called once from
+    // android_main with what ApplicationInfo reports.
+    //
+    // NO-OP AND EMPTY ON EVERY OTHER PLATFORM. The setter and getter are
+    // compiled everywhere so the rule below can be tested on a Linux host;
+    // nothing but the Android entry point ever calls the setter.
+    static void setAndroidPluginDir(const std::string& nativeLibraryDir);
+    static std::string androidPluginDir();
+
+    // THE RULE ITSELF, pure and total: the native library directory when one
+    // was handed over, and EMPTY when it was not.
+    //
+    // Empty rather than a guess. scan("") finds nothing and says nothing,
+    // which is the honest outcome of "this build never learned where its own
+    // libraries are": a fabricated path would put a "the plugins directory
+    // does not exist" line in front of the user naming a directory that was
+    // never where the modules are, and send them looking for a fault in the
+    // wrong place.
+    static std::string chooseAndroidPluginDir(const std::string& nativeLibraryDir);
+
+    // WHICH FILES IN THAT DIRECTORY ARE PLUGINS: "libfoxsdr_plugin_*.so", and
+    // nothing else.
+    //
+    // A NAME TEST AND NOT ONLY AN EXTENSION TEST, because the apk's native
+    // library directory is shared. It also holds libfoxsdr.so - this very
+    // application - and libc++_shared.so, and on a debuggable build whatever
+    // else the packager put there. hasPluginExtension() accepts all of them:
+    // the scan would dlopen the application's own library a second time,
+    // dlopen the C++ runtime, find no cascade_plugin_query in either, and put
+    // two "not a cascade plugin" rows in the Fitted Modules window for
+    // modules that are not plugins and never claimed to be.
+    //
+    // The prefix is the one the plugin repository's Android build assigns
+    // (its CMakeLists' add_foxsdr_plugin: libfoxsdr_plugin_<catalogue id>.so).
+    // "lib" first and ".so" last is not our choice - the platform's installer
+    // only extracts entries of lib/<abi>/ named that way - so the part this
+    // rule actually contributes is the "foxsdr_plugin_" infix between them.
+    //
+    // Pure and testable, and compiled on every platform for that reason.
+    static bool isBundledPluginFileName(const std::string& filename);
+
+    // THE PREDICATE scan() ACTUALLY USES, and the only one it uses: the
+    // bundled-name rule on Android, the extension rule everywhere else.
+    //
+    // It exists so that the platform choice is made in ONE named place that a
+    // test can call. The alternative - an #if inside the scan loop - is a
+    // branch no test can reach, and this project has been bitten before by a
+    // rule that was correct in a comment and never executed. tests/
+    // test_plugin_host.cpp asks this function what it accepts, is built for
+    // both platforms, and is RUN on both (tools/run-android-tests.sh pushes it
+    // to the device), so the Android answer is observed rather than assumed.
+    static bool isPluginCandidateFileName(const std::string& filename);
 
     // Scans `dir` for candidate files and tries to load each one.
     //
