@@ -1,0 +1,24 @@
+# Line endings for the Android project.
+#
+# This repository is cloned on Windows with autocrlf=true and built from WSL,
+# and three of the files here break if the wrong one arrives.
+#
+#   gradlew          runs under sh. A CRLF shebang line gives
+#                    "/bin/sh^M: bad interpreter", which is the single most
+#                    reported Gradle-wrapper failure there is.
+#   *.sh             same reason - see android/tools/make-icons.sh.
+#   gradlew.bat      the opposite: cmd.exe wants CRLF, and Gradle generates it
+#                    that way. Pinned so a checkout on a Linux box cannot
+#                    normalise it to LF and quietly break the Windows launcher.
+#   *.jar            binary. Git detects this on its own; the rule is here
+#                    because a filtered wrapper jar is an unrunnable build with
+#                    nothing in the diff to show why.
+#
+# See the repository-root .gitattributes for the same reasoning applied to the
+# vendored typefaces.
+
+gradlew      text eol=lf
+*.sh         text eol=lf
+gradlew.bat  text eol=crlf
+*.jar        binary
+*.png        binary

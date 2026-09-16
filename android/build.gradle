@@ -1,0 +1,21 @@
+// Root build file: plugin versions, and nothing else.
+//
+// Versions are pinned rather than ranged. A build whose toolchain can change
+// under it produces binaries nobody can reproduce, and the whole diagnostics
+// story on the desktop side of this repository rests on being able to rebuild
+// exactly what a user is running.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+plugins {
+    // AGP 8.5.2 requires Gradle 8.7 (pinned in gradle/wrapper/
+    // gradle-wrapper.properties, with its distribution hash) and JDK 17.
+    id 'com.android.application' version '8.5.2' apply false
+    // Kotlin is here for ONE reason and it is a forward-looking one: the USB
+    // slice has to call into the Android framework's UsbManager to ask the user
+    // for permission to open a device, and there is no native API for that
+    // dialog. MainActivity.kt exists now, empty, so that JNI has a home to
+    // arrive in rather than the USB slice having to introduce the Kotlin
+    // toolchain and the permission plumbing in the same change.
+    id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+}

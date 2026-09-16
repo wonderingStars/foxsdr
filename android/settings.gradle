@@ -1,0 +1,38 @@
+// The FoxSDR Android build.
+//
+// ONE MODULE, and it is the app. The native code is not a Gradle module: it is
+// built by the repository's own root CMakeLists.txt through
+// externalNativeBuild, so the phone and the desktop are compiled from one
+// source of truth. See app/build.gradle.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+pluginManagement {
+    repositories {
+        // google() first: the Android Gradle Plugin lives there and nowhere
+        // else, and resolving it through Maven Central would be a longer path
+        // to the same artifact.
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    // A module that declares its own repositories is a module that can quietly
+    // resolve a dependency from somewhere this file never approved.
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "FoxSDR"
+include ":app"

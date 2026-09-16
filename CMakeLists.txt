@@ -44,6 +44,29 @@ if(NOT CASCADE_VERSION_STRING)
 endif()
 message(STATUS "cascade version string: ${CASCADE_VERSION_STRING}")
 
+# ---------------------------------------------------------------------------
+# Android — the application shell, and NOTHING of the desktop build
+# ---------------------------------------------------------------------------
+#
+# -DCASCADE_ANDROID=ON is set by android/app/build.gradle's externalNativeBuild,
+# which points Gradle at THIS file so the phone build and the desktop build come
+# out of one source of truth rather than a second CMakeLists that drifts.
+#
+# It returns immediately, and that early return is the whole design. Everything
+# below this line assumes a desktop: find_package(OpenGL), find_package
+# (SoapySDR), GLFW, PortAudio, libunwind, the Inno Setup version file, the
+# symbol-archiving POST_BUILD steps and the test tree. None of those exist on
+# an NDK sysroot, and none of them are wanted there - Android takes its GL from
+# EGL/GLESv3, its audio from AAudio later, and its radios over USB directly.
+# Guarding each of them individually would put a platform branch through the
+# whole file for the benefit of a build that shares none of it.
+#
+# The shell's own build lives in src/platform/android/CMakeLists.txt.
+if(CASCADE_ANDROID)
+    add_subdirectory(src/platform/android)
+    return()
+endif()
+
 # Hand the version to the Inno Setup script, so the installer cannot be stamped
 # with a number the binary does not carry. It used to be a literal in
 # cascade.iss and drifted the moment this file was bumped: 0.57.0 source

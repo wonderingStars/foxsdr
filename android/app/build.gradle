@@ -1,0 +1,132 @@
+// The FoxSDR application module.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    // The namespace is the R/BuildConfig package and the default for relative
+    // manifest class names; the applicationId is the identity the Play Store
+    // and the device use. They are deliberately different: com.foxsdr is the
+    // product, com.foxsdr.app is where its code lives, and changing the code's
+    // package must never be able to change the installed app's identity.
+    namespace 'com.foxsdr.app'
+
+    compileSdk 34
+    // NDK r27.2 is the one the toolchain notes in the task pin. Naming it here
+    // rather than taking whatever is installed is what stops a machine with two
+    // NDKs producing two different binaries from the same commit.
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId 'com.foxsdr'
+        // 26 (Android 8.0): the floor for the USB host APIs the radio slice
+        // needs, and for the AAudio low-latency path the audio slice will want.
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        // Kept deliberately plain. The native library reports the real product
+        // version - it is compiled in from the root CMakeLists.txt's project
+        // VERSION - and a second version string maintained by hand here would
+        // be a second thing to forget to bump.
+        versionName '0.97.0'
+
+        ndk {
+            // 64-BIT ONLY, AND THAT IS A DECISION RATHER THAN AN OMISSION.
+            // Google Play has required a 64-bit build since 2019 and permits a
+            // 64-bit-only upload; armeabi-v7a would double the APK for phones
+            // that have not shipped in years, and x86 for emulators that no
+            // longer exist. x86_64 is here for the emulator, which is how this
+            // will first be seen running.
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+
+        externalNativeBuild {
+            cmake {
+                // THE ROOT CMakeLists.txt OF THE REPOSITORY, not a copy. That
+                // file takes an early return on CASCADE_ANDROID into
+                // src/platform/android/CMakeLists.txt; see the comment there
+                // for why the desktop half is skipped wholesale rather than
+                // guarded line by line.
+                arguments '-DCASCADE_ANDROID=ON',
+                        // c++_shared, not c++_static: this process will load
+                        // decoder plugins as separate .so files later, and two
+                        // copies of a static libc++ in one process means two
+                        // sets of type_info, two operator new/delete pairs and
+                        // exceptions that cannot cross the boundary. Choosing
+                        // it now costs one 1 MB library in the APK and saves
+                        // an unfixable ABI problem later.
+                        '-DANDROID_STL=c++_shared'
+                cppFlags '-std=c++20'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('../../CMakeLists.txt')
+            // The CMake the Android SDK ships (cmake;3.22.1). The root file
+            // asks for 3.20 and the Android half for 3.22.
+            version '3.22.1'
+        }
+    }
+
+    buildTypes {
+        debug {
+            // Left unminified and debuggable: this is the build a person with
+            // a phone installs to see whether the shell runs at all.
+            minifyEnabled false
+            // Native debug symbols are NOT stripped out of the debug APK, so a
+            // logcat backtrace from a tester resolves to function names.
+            ndk { debugSymbolLevel 'FULL' }
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                    'proguard-rules.pro'
+            // SYMBOLS, for the same reason the desktop build archives PDBs in
+            // the same action that produces the binary: a stripped release
+            // whose symbols were never kept makes every crash report against it
+            // unreadable forever, and that cannot be repaired after the fact.
+            ndk { debugSymbolLevel 'FULL' }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    packaging {
+        jniLibs {
+            // libc++_shared.so and libfoxsdr.so are stored uncompressed and
+            // page-aligned so the loader maps them straight out of the APK
+            // instead of extracting a copy at install time. Required for
+            // minSdk 23+ installs and it is what keeps the installed footprint
+            // to one copy of the library rather than two.
+            useLegacyPackaging false
+        }
+    }
+
+    lint {
+        // A lint failure should stop a release, not a person trying to see
+        // whether the shell draws. The report is still written either way.
+        abortOnError false
+        warningsAsErrors false
+    }
+}
+
+dependencies {
+    // The Kotlin standard library is the only dependency, and it is here
+    // because MainActivity is Kotlin. Nothing else: this slice has no UI
+    // widgets, no networking and no AndroidX components - the whole interface
+    // is drawn by the native library.
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
+}

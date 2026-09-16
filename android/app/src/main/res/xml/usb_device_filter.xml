@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+  THE USB DEVICE FILTER, AND IT IS DELIBERATELY EMPTY.
+
+  Android matches an attached device against the <usb-device> entries here. An
+  entry grants this application permission to open that device without the
+  system dialog, and offers to launch it when the device is plugged in - which
+  is exactly the behaviour a receiver wants, and exactly the behaviour that must
+  not be granted to hardware nobody has tested against.
+
+  So the wiring is in place and matches nothing. The USB slice fills this in
+  with the identifiers it has actually opened a device with. For reference, the
+  form each entry takes, in DECIMAL (Android rejects 0x notation here, which is
+  the single most common mistake in this file):
+
+      <usb-device vendor-id="3034" product-id="10296" />   RTL2832U, 0x0BDA/0x2838
+
+  Nothing is listed until the slice that can test it says so.
+-->
+<resources>
+</resources>

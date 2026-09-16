@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+  ONE colour, and it is a transcription rather than a choice: #0D0B07 is
+  theme::kVoid from src/gui/theme.hpp, the darkest enamel in the product's
+  palette and what frame.cpp clears the framebuffer to. It is here so the
+  window the framework paints before the GL context exists is the same colour
+  as the first frame drawn into it.
+
+  IF theme.hpp's kVoid EVER MOVES, this moves with it. There is no way to share
+  a constant between a C++ header and an Android resource file, so this is the
+  one place in the Android project that duplicates a value from the core.
+-->
+<resources>
+    <color name="foxsdr_void">#FF0D0B07</color>
+</resources>

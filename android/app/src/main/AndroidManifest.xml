@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+  THERE IS NO INTERNET PERMISSION HERE, AND ITS ABSENCE IS DELIBERATE.
+
+  The desktop application uploads crash reports and a usage record, and fetches
+  the plugin catalogue. Every one of those is a later slice, and none of them
+  may arrive before PRIVACY.md has been updated to describe what an Android
+  build sends and what it does not - the payload is documented field by field
+  there and asserted by a test, and shipping a build that transmits something
+  the privacy notice does not list would break that guarantee. Adding
+  android.permission.INTERNET is therefore a change that comes WITH the slice
+  that needs it, together with the privacy text, and not in advance "so it is
+  ready".
+
+  Its absence is also load-bearing as a check: with no INTERNET permission, a
+  socket call in native code fails at the kernel. Nothing can leak from this
+  build by accident.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      USB host, for the radios. Declared required="false" ON PURPOSE: a phone
+      without USB host support must still be able to install this, because the
+      signal generator, recorded I/Q files and (later) a network receiver all
+      work without any hardware attached. required="true" would make the Play
+      Store hide the app from every device that cannot do OTG, which is a lot
+      of them and none of them are useless to this application.
+    -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
+    <!--
+      Landscape is not a preference. The desktop interface is a bench panel:
+      a function rail down one side, a spectrum well beside it and a status
+      plate under both, and every hard-coded width in it was measured against
+      a landscape window. A portrait phone would fold that layout into a column
+      that nothing in the code knows how to draw.
+    -->
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.FoxSDR">
+
+        <activity
+            android:name="com.foxsdr.app.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="landscape"
+            android:resizeableActivity="false"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation"
+            android:theme="@style/Theme.FoxSDR">
+
+            <!--
+              The name of the .so the NativeActivity loads, WITHOUT the "lib"
+              prefix and the ".so" suffix. It must match the CMake target in
+              src/platform/android/CMakeLists.txt; a mismatch is an
+              UnsatisfiedLinkError the moment the activity starts, with nothing
+              on screen to say so.
+            -->
+            <meta-data android:name="android.app.lib_name" android:value="foxsdr" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              PLACEHOLDER for the USB slice: this is what makes Android offer
+              to launch FoxSDR when a receiver is plugged in, and what grants
+              permission to that device without a dialog. The filter it points
+              at is deliberately EMPTY - it matches no device today - so the
+              wiring is in place and provably harmless until the slice that
+              adds the real vendor/product identifiers lands.
+            -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_device_filter" />
+        </activity>
+    </application>
+</manifest>

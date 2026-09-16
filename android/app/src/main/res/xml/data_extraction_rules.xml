@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+  NOTHING LEAVES THIS DEVICE, and that is the same answer android:allowBackup
+  ="false" gives for Android 11 and below. From Android 12 that attribute only
+  governs cloud backup, so device-to-device transfer needs saying separately or
+  the two disagree.
+
+  There is nothing here worth backing up - the only file the app writes is the
+  ImGui window layout - and there will shortly be something that must NOT be:
+  the install id the usage report is keyed on. Copying that to a new phone would
+  make one install look like two devices and count as one, which is precisely
+  the measurement the telemetry exists to get right.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

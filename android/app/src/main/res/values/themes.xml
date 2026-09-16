@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+  The activity's theme, and it exists to get the platform OUT OF THE WAY.
+
+  Everything the user sees is drawn by the native library into one EGL surface.
+  A platform action bar above it, or a window background flashing behind it
+  while the GL context comes up, is a second interface fighting the real one.
+  So: no action bar, no title, and the window background is the enamel black the
+  application clears its own framebuffer to (theme::kVoid, #0D0B07), which means
+  the launch window and the first drawn frame are the same colour and there is
+  no flash between them.
+-->
+<resources>
+    <style name="Theme.FoxSDR" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/foxsdr_void</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:statusBarColor">@color/foxsdr_void</item>
+        <item name="android:navigationBarColor">@color/foxsdr_void</item>
+    </style>
+</resources>
