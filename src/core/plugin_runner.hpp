@@ -300,7 +300,7 @@ private:
         std::string partial;
         // WHICH status_ ROW THIS INSTANCE IS REPORTED THROUGH. Fixed when the
         // instance is created and valid for exactly as long as the instance
-        // is: the only thing that empties status_ is destroyLocked(), which
+        // is: the only thing that empties status_ is destroyInstances(), which
         // empties these vectors in the same breath, so the index cannot come
         // to point at another plugin's row.
         std::size_t statusIndex = 0;
@@ -343,8 +343,8 @@ private:
     //
     // It holds no handle of its own because CASCADE_CAP_AUDIO_OUT has no
     // create(): `handle` is borrowed from whichever decoder instance this
-    // plugin produced, and destroyLocked() must therefore drop these BEFORE it
-    // destroys the instances they point at.
+    // plugin produced, and destroyInstances() must therefore drop these BEFORE
+    // it destroys the instances they point at.
     //
     // Everything else here exists so the real-time pull allocates nothing. The
     // plugin's rate is almost never the sink's, and a resampler emits a
@@ -416,7 +416,25 @@ private:
     // bounds the product, which is what actually gets allocated.
     static constexpr std::size_t kMaxImagePixels = 64u * 1024u * 1024u;
 
-    void destroyLocked();
+    // DESTROYS EVERY INSTANCE WITH THE LOCK DROPPED, which is why it takes the
+    // caller's lock rather than assuming one is held.
+    //
+    // A PLUGIN'S destroy() IS THIRD-PARTY CODE THAT MAY CALL THE HOST BACK.
+    // Survey Engine 0.1.0 finishes the dwell in progress from destroy(), which
+    // asks the host for the time and, when it is sweeping, asks it to retune;
+    // the host's tune service ends in AppWindow::applyRetuneNow, which calls
+    // PluginRunner::retune, which takes this same mutex_. Held across
+    // destroy(), that is a non-recursive mutex re-locked on its own thread:
+    // libc++ aborts (reported from Android on every exit of the app) and
+    // MSVC's throws "resource deadlock would occur" out of the plugin's
+    // destroy, unwinding through the plugin boundary into std::terminate.
+    //
+    // So the instances are MOVED OUT under the lock - after which the runner
+    // holds nothing, and the DSP thread, should it take the lock meanwhile,
+    // correctly finds nothing to feed - the lock is dropped, destroy() runs on
+    // the moved-out copies, and the lock is retaken before returning, so a
+    // caller sees exactly the state a function that never let go would leave.
+    void destroyInstances(std::unique_lock<std::mutex>& lock);
     void pollLocked();
     void pollIqLocked();
     // Status text from the image decoders fed by `inputKind`, into the same

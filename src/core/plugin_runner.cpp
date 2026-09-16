@@ -88,8 +88,18 @@ bool PluginRunner::isStopped(const std::string& pluginKey) const {
 
 void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz,
                            double iqRateHz, double centreHz) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    destroyLocked();
+    std::unique_lock<std::mutex> lock(mutex_);
+    // Drops the lock while the OLD instances' destroy() runs and retakes it
+    // before returning - see its declaration. Everything below therefore
+    // continues under the lock exactly as it did before.
+    //
+    // KNOWN AND DELIBERATE: the create() calls below still run with the lock
+    // held, so a plugin that asked the host to retune from inside its create()
+    // would re-enter the same mutex. No shipped plugin does, and the cure -
+    // building the whole instance set into locals and swapping it in - would
+    // give up the atomicity of a rebuild for a case that has never happened.
+    // If one ever does, this is where it is fixed, the same way as destroy.
+    destroyInstances(lock);
     audioRateHz_ = audioRateHz;
     iqRateHz_ = iqRateHz;
     centreHz_ = centreHz;
@@ -373,11 +383,11 @@ void PluginRunner::retune(double centreHz) {
 }
 
 void PluginRunner::clear() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    destroyLocked();
+    std::unique_lock<std::mutex> lock(mutex_);
+    destroyInstances(lock);
 }
 
-void PluginRunner::destroyLocked() {
+void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
     // FIRST, BEFORE ANY destroy(). An AudioInstance holds no handle of its
     // own: it borrows a decoder instance's. Dropping these after the loops
     // below would leave a borrowed pointer to a destroyed instance in the
@@ -392,23 +402,44 @@ void PluginRunner::destroyLocked() {
     audioGapsReported_ = 0;
     audioGapFramesReported_ = 0;
 
-    for (Instance& i : instances_) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    instances_.clear();
-    for (IqInstance& i : iqInstances_) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    iqInstances_.clear();
-    for (ImageInstance& i : imageInstances_) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    imageInstances_.clear();
+    // MOVED OUT, THEN DESTROYED WITH THE LOCK DROPPED. See the declaration in
+    // the header for why: a plugin's destroy() may ask the host for the time
+    // or for a retune, and the tune service comes straight back into
+    // PluginRunner::retune() and this same mutex_. The runner is left holding
+    // nothing before the lock goes, so anything that takes it in the gap - the
+    // DSP thread, or a host service re-entered by the very destroy() running
+    // below - sees an empty runner, which is the truth.
+    std::vector<Instance> deadAudio;
+    std::vector<IqInstance> deadIq;
+    std::vector<ImageInstance> deadImage;
+    deadAudio.swap(instances_);
+    deadIq.swap(iqInstances_);
+    deadImage.swap(imageInstances_);
     audioImageCount_ = 0;
     iqImageCount_ = 0;
     status_.clear();
     audioFed_ = 0;
     iqFed_ = 0;
+
+    lock.unlock();
+    // THE ORDER IS THE ABI'S: a handle is destroyed exactly once, after the
+    // last call of anything else on it. An instance that failed permanently
+    // kept its handle for precisely this moment.
+    for (Instance& i : deadAudio) {
+        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
+    }
+    for (IqInstance& i : deadIq) {
+        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
+    }
+    for (ImageInstance& i : deadImage) {
+        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
+    }
+    // The moved-out vectors are released here, with the lock still down: a
+    // resampler's buffers are a free() and belong outside it too.
+    deadAudio.clear();
+    deadIq.clear();
+    deadImage.clear();
+    lock.lock();
 }
 
 void PluginRunner::processAudio(const float* mono, std::size_t frames) {

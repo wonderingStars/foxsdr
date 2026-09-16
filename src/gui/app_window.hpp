@@ -1889,14 +1889,26 @@ private:
     // loaded modules, so it must outlive nothing in particular here — but it
     // is declared before the pipeline-dependent members so it unloads last.
     cascade::core::PluginHost pluginHost_;
-    // Drives the loaded decoders with real audio. Declared AFTER pluginHost_
-    // so it is destroyed BEFORE it: the runner's destructor calls each
-    // plugin's destroy(), which is code inside a module the host unmaps.
-    cascade::core::PluginRunner pluginRunner_;
-    // GUI-side plugin capabilities: map targets, plugin windows, host
-    // services. Declared after pluginHost_ for the same destruction-order
-    // reason as pluginRunner_.
+    // GUI-side plugin capabilities: map targets, plugin windows, and THE HOST
+    // SERVICES a plugin calls back through.
+    //
+    // DECLARED BEFORE pluginRunner_, so it is destroyed AFTER it, and the
+    // three are torn down host-services-last: runner, then UI, then host. That
+    // is the order detachAndUnloadPlugins() has always performed and the order
+    // ~AppWindow now performs explicitly; this declaration is the net under
+    // that, because reverse declaration order is what the destructor falls
+    // back on and it used to have these two the wrong way round. A decoder's
+    // destroy() may ask the host for the time (Survey Engine 0.1.0 does, to
+    // timestamp the dwell it is finishing), and with pluginUi_ destroyed first
+    // that call reached a dead host: an access violation on Windows and an
+    // abort inside libc++ on Android, both reported from the field on
+    // 2026-09-16 from the same plugin at shutdown.
     cascade::core::PluginUi pluginUi_;
+    // Drives the loaded decoders with real audio. Declared AFTER pluginHost_
+    // and pluginUi_ so it is destroyed BEFORE both: the runner's destructor
+    // calls each plugin's destroy(), which is code inside a module the host
+    // unmaps and which may call a host service on its way out.
+    cascade::core::PluginRunner pluginRunner_;
 
     // --- Per-plugin map pages ---------------------------------------------
     // ONE MAP PAGE PER PLUGIN THAT HAS A TRACK INSTANCE, replacing the single

@@ -334,6 +334,40 @@ struct HostServices {
 };
 
 // ---------------------------------------------------------------------------
+// The host bridges behind CascadeHostApi, counted
+// ---------------------------------------------------------------------------
+//
+// THE HOST'S OWN ACCOUNTING OF A PROMISE IT MAKES IN THE ABI, and the only way
+// to check that promise that is not itself undefined behaviour.
+//
+// plugin_abi.h (CascadeHostClientApi::attach) hands a plugin "a table that
+// remains valid for as long as the plugin is loaded" and tells it to store the
+// pointer. Every plugin that asks the host anything does, and one of them -
+// Survey Engine - asks for the time from inside its decoder's destroy(), to
+// timestamp the dwell it is finishing. The host used to free those tables in
+// PluginUi::clear(), while every module was still mapped, and ~AppWindow
+// destroyed the PluginUi they point at BEFORE the decoder instances that hold
+// them. What the plugin then read was freed memory: an access violation on
+// Windows, and on Android a surviving read followed by a lock of a destroyed
+// mutex, which libc++ turns into an abort. Both were reported from the field
+// on the same day, from the same plugin, at shutdown.
+//
+// A test cannot catch that by CALLING through a freed bridge - freed memory
+// usually reads back intact, so such a test passes against the defect it is
+// named for. It has to ask how many bridges EXIST, which is what these answer.
+//
+//   hostBridgeCount()          bridges handed out and not reclaimed. One per
+//                              plugin that has ever attached, reused across
+//                              rebuilds, and reclaimed only at process exit -
+//                              after every module has been unmapped, which is
+//                              the last moment a plugin's code can run.
+//   attachedHostBridgeCount()  of those, how many still have a live PluginUi
+//                              behind them. A detached bridge is safe to call
+//                              and answers the ABI's "nothing".
+std::size_t hostBridgeCount();
+std::size_t attachedHostBridgeCount();
+
+// ---------------------------------------------------------------------------
 // Audio mute while a data decoder is running on its own frequency
 // ---------------------------------------------------------------------------
 //
