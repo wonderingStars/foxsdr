@@ -146,8 +146,17 @@ public final class Net {
             // what the crash uploader's retry bookkeeping counts. A cancel
             // lands here too: disconnect() from another thread turns the
             // blocked call into an IOException.
+            //
+            // LOGGED, because on a phone this is the only account anyone gets.
+            // The native side can report that a post failed but not WHY - a
+            // refused connection, a certificate the device does not trust and
+            // a missing INTERNET permission are three completely different
+            // problems that all arrive here as "status 0". The message names
+            // the class and the endpoint and nothing else.
+            android.util.Log.w("FoxSDR", "net: post to " + url + " failed: " + e);
             return new int[] {0, 0};
         } catch (RuntimeException e) {
+            android.util.Log.w("FoxSDR", "net: post to " + url + " failed: " + e);
             return new int[] {0, 0};
         } finally {
             IN_FLIGHT.remove(token);

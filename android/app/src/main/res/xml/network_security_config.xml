@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+  THE PLATFORM'S OWN COPY OF THE RULE THIS APPLICATION ALREADY ENFORCES TWICE.
+
+  core/net_post.cpp's netPostAllowed() refuses anything but https, with one
+  exception for plain http to a loopback address; Net.java refuses the same
+  thing again on its own terms. Android has a third, independent say: since
+  Android 9 an application that targets API 28 or later may not send cleartext
+  at all unless a file like this one permits it, and with no file the platform
+  answers "Cleartext HTTP traffic to 127.0.0.1 not permitted" - which is
+  exactly what it did, and which is how this file came to exist.
+
+  WHAT THIS PERMITS, and it is deliberately the narrowest thing that works:
+  cleartext to 127.0.0.1, ::1 and localhost. Nothing else. The base
+  configuration below keeps the platform's own default - cleartext refused -
+  for every other destination, so the usage endpoint, the crash endpoint and
+  anything a later slice reaches are all still https-or-nothing, enforced by
+  the operating system rather than only by our code.
+
+  A loopback address never leaves the device: there is no network in between
+  to collect anything, which is the entire reason all three gates make this one
+  exception and no other.
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">::1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+
+</network-security-config>

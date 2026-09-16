@@ -18,17 +18,46 @@
 
 #include "core/diag_log.hpp"
 
+#include <atomic>
 #include <cctype>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 
 #if defined(__ANDROID__)
-#include <atomic>
-
+#include <android/log.h>
 #include <jni.h>
 #endif
 
 namespace cascade::core {
+
+namespace {
+
+// THE ONLY ACCOUNT ANYONE GETS OF A FAILED UPLOAD ON A PHONE. The diagnostics
+// ring is memory-only in an Android build - android_main configures DiagLog
+// with no file on purpose - and there is no console, so a transport that
+// refused or failed would be invisible to the person holding the device and to
+// anyone helping them. These lines also go to logcat, where `adb logcat -s
+// FoxSDR` finds them. There are very few of them: arming, a refusal, a failure.
+// A successful post says nothing, exactly as on every other platform.
+void netNote(bool warn, const char* fmt, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (warn) {
+        diagWarnf("%s", buf);
+    } else {
+        diagLogf("%s", buf);
+    }
+#if defined(__ANDROID__)
+    __android_log_print(warn ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, "FoxSDR", "%s", buf);
+#endif
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // The two requests this program makes
@@ -213,7 +242,7 @@ bool failed(JNIEnv* env, const char* what) {
     if (env->ExceptionCheck() == JNI_FALSE) { return false; }
     env->ExceptionDescribe();
     env->ExceptionClear();
-    diagWarnf("net: JNI %s threw; nothing sent", what);
+    netNote(true, "net: JNI %s threw; nothing sent", what);
     return true;
 }
 
@@ -275,7 +304,7 @@ void androidNetInit(void* javaVm, void* activityObject) {
     // report is sent.
     gActivity = env->NewGlobalRef(static_cast<jobject>(activityObject));
     if (detach) { gVm->DetachCurrentThread(); }
-    diagLogf("net: Java transport armed (HttpsURLConnection over JNI)");
+    netNote(false, "net: Java transport armed (HttpsURLConnection over JNI)");
 }
 
 bool androidNetReady() {
@@ -294,7 +323,7 @@ NetPostResult javaPost(const NetPost& p, int token) {
     {
         const std::lock_guard<std::mutex> lock(gJniMutex);
         if (gVm == nullptr) {
-            diagWarnf("net: no Java VM registered; nothing sent");
+            netNote(true, "net: no Java VM registered; nothing sent");
             return res;
         }
         env = attach(detach);
@@ -324,6 +353,8 @@ NetPostResult javaPost(const NetPost& p, int token) {
                 // Java refused the request before opening it (a URL it could
                 // not parse, a scheme it would not take). Not an attempt.
                 res.attempted = false;
+                netNote(true, "net: Java refused %s before opening it; nothing sent",
+                        p.url.c_str());
             } else {
                 jint vals[2] = {0, 0};
                 env->GetIntArrayRegion(static_cast<jintArray>(out), 0, 2, vals);
@@ -333,6 +364,13 @@ NetPostResult javaPost(const NetPost& p, int token) {
                         vals[1] > 0 ? static_cast<std::uint64_t>(vals[1]) : 0;
                 }
                 env->DeleteLocalRef(out);
+                // Quiet on success, exactly as the other two transports are.
+                // A status outside 2xx, or the 0 that means the connection
+                // failed after the request was opened, is the only thing worth
+                // a line - and on a phone it is the only account there is.
+                if (res.status < 200 || res.status >= 300) {
+                    netNote(true, "net: post to %s answered %d", p.url.c_str(), res.status);
+                }
             }
         }
     }
@@ -371,7 +409,7 @@ namespace {
 NetPostResult javaPost(const NetPost& p, int token) {
     (void)p;
     (void)token;
-    diagWarnf("net: the Java transport is Android-only; nothing sent");
+    netNote(true, "net: the Java transport is Android-only; nothing sent");
     return NetPostResult();
 }
 

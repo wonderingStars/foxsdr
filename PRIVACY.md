@@ -75,7 +75,7 @@ One report per launch, describing the session that just finished:
 |---|---|---|
 | Install identifier | `4f9c…` (32 random hex characters) | Tells 100 users apart from one user launching 100 times. Generated at random on your machine on first run, and **deleted when you turn reporting off**, so a later change of mind cannot be joined back to it; not derived from your hardware, network or name. |
 | Application version | `0.48.0` | Whether people update, and whether an auto-updater is needed. |
-| Operating system | `Windows 10.0.22631` | Which platforms are actually used, and whether a Linux build is worth building. |
+| Operating system | `Windows 10.0.22631`, `Linux 6.8.0`, `Android 14` | Which platforms are actually used, and whether a Linux build is worth building. On Windows this is the build number; on Linux the kernel name and release, never the distribution; on Android the platform release your own Settings screen shows, **never the kernel string** — that one carries a vendor build identifier, which would say more about your individual device than everything else in this table put together. |
 | Architecture | `x64` | As above. |
 | Launch count | `12` | Whether the software gets used more than once. |
 | Crash count | `1` | How often it fails. |
@@ -129,7 +129,7 @@ A report contains these fields and no others:
 | `generated` | `2026-08-25 14:02:11` | When the bundle was made. |
 | `version` | `0.61.0` | Which release. |
 | `commit` | `5ba13f6d0c86`, or `5ba13f6d0c86-dirty` | Which build. A version names a release; only the commit names a build, and the offsets in a report are meaningless against the wrong one. The `-dirty` suffix means the tree had uncommitted changes, so that commit is the nearest tree rather than the exact one. |
-| `os` | `Windows 10.0.22631` | Whether a fault is specific to a Windows version. |
+| `os` | `Windows 10.0.22631`, `Linux 6.8.0`, `Android 14` | Whether a fault is specific to one version of one platform. The same value, chosen the same way, as the usage report's *Operating system* row above. |
 | `arch` | `x64` | As above. |
 | `mode` | `WFM` | What the receiver was doing. |
 | `source` | `soapy` | Generator, I/Q file, or a real radio. |
@@ -236,7 +236,7 @@ One request per report, on the **next** start after the failure, to
 | `buildId` | `651FD5EB…C528` | Which *link*. Two builds of one version have different code at the same offsets. This identifies the compiled file, not you or your machine. |
 | `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. |
 | `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug. Derived from the fault kind, the faulting module and the offset — never from the time and never from anything about you. |
-| `os`, `arch` | `Windows 10.0.22631`, `x64` | Whether a fault is specific to a Windows version. |
+| `os`, `arch` | `Windows 10.0.22631`, `x64` (also `Linux 6.8.0`, `Android 14`) | Whether a fault is specific to one version of one platform. The same value, chosen the same way, as the usage report's *Operating system* row above. |
 | `reason` | `access violation`, or `fault in a third-party SDR module, absorbed…` | The report's own reason line, verbatim. This is what separates a fault the application **survived** (a driver fault absorbed by the vendor-call guard) from one that killed it — without it the two are indistinguishable rows. Empty for a freeze report, which has no such line. |
 | `code` | `0xC0000005` | The Windows exception code, verbatim from the report. A code, not content. Empty for a freeze report. |
 | `installId` | `4f9c…`, **or empty** | The same anonymous identifier the usage report uses, so the receiving end can stop one machine flooding it. **If usage reporting is off there is no identifier and this is sent empty** — a crash report never creates one. |
