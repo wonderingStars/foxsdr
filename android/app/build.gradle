@@ -18,10 +18,20 @@ plugins {
 // versionName and the compiled-in versionString() the crash/usage reports
 // carry can never say two different alpha numbers.
 def foxsdrAndroidBuildNumber = 1
-// Must match the root CMakeLists.txt's `project(cascade VERSION ...)`. There
-// is no way to read that file from here without shelling out on every
-// configure, and this is bumped in the same commit as that line anyway.
-def foxsdrAndroidBaseVersion = '0.98.0'
+// READ FROM THE ROOT CMakeLists.txt's `project(cascade VERSION ...)` line, so
+// the Android versionName can never drift from the version the native
+// library reports: the first alpha build was cut with a hand-copied '0.98.0'
+// here while the tree had already moved to 0.98.1, which would have put two
+// different versions on one APK. A build whose CMakeLists.txt has no such
+// line fails here on purpose rather than shipping "null-android.N".
+def foxsdrAndroidBaseVersion = {
+    def cmakeLists = new File(rootDir, '../CMakeLists.txt')
+    def m = (cmakeLists.text =~ /(?m)^project\(cascade VERSION ([0-9]+\.[0-9]+\.[0-9]+)/)
+    if (!m.find()) {
+        throw new GradleException("no project(cascade VERSION x.y.z) line in ${cmakeLists}")
+    }
+    m.group(1)
+}()
 def foxsdrAndroidVersionSuffix = "-android.${foxsdrAndroidBuildNumber}"
 
 // ---------------------------------------------------------------------------
