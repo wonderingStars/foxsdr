@@ -26,7 +26,10 @@
  *     of resetting it fails the three-taps case;
  *   - dropping the "selection that is no longer open falls back" line fails
  *     the vanish case (1 check: the close case survives it, because the close
- *     key moves the selection itself a frame earlier).
+ *     key moves the selection itself a frame earlier);
+ *   - taking gui::px() off the tab key's height - the mistake that is
+ *     invisible on a desktop, where px(v) == v - fails 3 checks, all of them
+ *     at scale 2.0.
  * Each of those is a rule this file is named for, and each went red on its
  * own, so no check here is decoration.
  *
@@ -286,6 +289,40 @@ int main() {
         // Offers outside a pass are ignored rather than silently published.
         d.offer(kScope, "SCOPE");
         CHECK(d.tabCount() == 1u);
+    }
+
+    // -- THE THREE FIGURES, AT 1.0 AND AT 2.0 -------------------------------
+    //
+    // Every layout figure in src/gui goes through gui::px() at the point of
+    // use, so one factor scales the whole interface; a dock figure that
+    // forgot to would be a 2 mm touch target on the tablet next to a 4 mm
+    // one, or a strip whose floor is a quarter of what it was measured to be.
+    // Checked at both scales for the reason test_ui_scale checks the fit at
+    // both: px(v) == v exactly at 1.0 (a float times 1.0f is the same bits),
+    // so the desktop's numbers are the constants themselves.
+    {
+        cascade::gui::setUiScale(1.0f);
+        // kTinySize is 14, so the lettered height (14 + 9 = 23) wins over the
+        // 22 floor - the rail's own bank-key rule.
+        CHECK_NEAR(cascade::gui::dockTabKeyHeight(14.0f), 23.0f, 1e-6);
+        CHECK_NEAR(cascade::gui::dockTabRowHeight(14.0f), 23.0f + 7.0f + 6.0f, 1e-6);
+        // Smaller type than the floor allows for: the floor wins.
+        CHECK_NEAR(cascade::gui::dockTabKeyHeight(8.0f), 22.0f, 1e-6);
+        // A quarter of the spectrum's height, and the 48 px floor under it.
+        CHECK_NEAR(cascade::gui::dockStripHeight(600.0f), 150.0f, 1e-6);
+        CHECK_NEAR(cascade::gui::dockStripHeight(100.0f), 48.0f, 1e-6);
+
+        cascade::gui::setUiScale(2.0f);
+        CHECK_NEAR(cascade::gui::dockTabKeyHeight(14.0f), 46.0f, 1e-6);
+        CHECK_NEAR(cascade::gui::dockTabRowHeight(14.0f), 72.0f, 1e-6);
+        CHECK_NEAR(cascade::gui::dockTabKeyHeight(8.0f), 44.0f, 1e-6);
+        // THE STRIP'S QUARTER IS ALREADY IN SCREEN PIXELS - it is a quarter of
+        // a height the panel measured - so only its FLOOR is scaled. Scaling
+        // the quarter as well would take a quarter of a quarter.
+        CHECK_NEAR(cascade::gui::dockStripHeight(600.0f), 150.0f, 1e-6);
+        CHECK_NEAR(cascade::gui::dockStripHeight(100.0f), 96.0f, 1e-6);
+
+        cascade::gui::setUiScale(1.0f);  // as every other test finds it
     }
 
     return testSummary("test_centre_dock");

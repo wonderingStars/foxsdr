@@ -7638,48 +7638,6 @@ void AppWindow::followInputRate() {
     refreshPluginRunner();
 }
 
-// --- THE CENTRE DOCK'S TWO MEASUREMENTS ---------------------------------------
-//
-// Both are wanted in two places - the panel that lays the strip out, and the
-// tab row above it - so they are computed once, in this file's usual style for
-// a number two call sites must agree about.
-
-// HOW MUCH BIGGER THE HAND-DRAWN FURNITURE IS DRAWN ON A TABLET.
-//
-// Everything in this interface that is DRAWN rather than laid out - a bank
-// key, a rail plate, an engraved caption - is written in raw pixels measured
-// against a ~96 dpi desktop, and nothing scales it: ImGuiStyle::FontScaleDpi
-// (set once from gui/ui_scale.hpp on Android, 1.0 everywhere else) scales the
-// widgets and the sizes ImGui itself resolves, but an explicit
-// ImDrawList::AddText(font, px, ...) is drawn at px. The tab row is a TOUCH
-// TARGET before it is furniture - a 22 px key on a 2560 x 1600 tablet is about
-// 2 mm, a quarter of Android's own 9 mm guidance - so it takes the same factor
-// the widgets took. On the desktop this is 1.0 and the arithmetic below is
-// exactly the arithmetic the rail's own bank keys use.
-//
-// (When the sweep that puts every hard-coded constant in this file through one
-// px() helper lands, this becomes that helper.)
-static float centreDockScale() {
-    const float s = ImGui::GetStyle().FontScaleDpi;
-    return (s >= 1.0f) ? s : 1.0f;  // NaN-safe
-}
-
-// WHAT IS LEFT OF THE SPECTRUM WITH A WINDOW DOCKED UNDER IT: a quarter of the
-// height it would otherwise have, which is the owner's own figure - "the
-// spectrum collapses to a strip about a quarter of its height above it". It
-// stays a REAL spectrum - the trace, the passband, the frequency scale and
-// every gesture that tunes them - because the whole reason for keeping it is
-// that the radio is still tunable while a decoder is being watched.
-//
-// The floor is what stops the quarter becoming nothing on a short window: a
-// strip under about a finger's width is a decoration, not a control.
-static float centreDockStripHeight(float fullSpectrumHeight) {
-    const float quarter = fullSpectrumHeight * 0.25f;
-    const float floorPx = 48.0f * centreDockScale();
-    if (!(quarter >= floorPx)) { return floorPx; }  // NaN-safe
-    return quarter;
-}
-
 void AppWindow::drawCenterPanels() {
     // Poll for a new spectrum frame every GUI frame. getLatestFrame compares
     // against lastFrame_.seq, so this is one mutex lock returning false when
@@ -7783,7 +7741,7 @@ void AppWindow::drawCenterPanels() {
     // the window's. The split ratio itself is untouched, so tapping SPECTRUM
     // puts the panels back exactly where the user last dragged the splitter.
     float spectrumHeight = splitRatio_ * usable;
-    if (dockedBody) { spectrumHeight = centreDockStripHeight(spectrumHeight); }
+    if (dockedBody) { spectrumHeight = cascade::gui::dockStripHeight(spectrumHeight); }
     const float waterfallHeight = usable - spectrumHeight;
 
     // Visible slice of the fftshifted spectrum, shared by BOTH panels so
@@ -9691,20 +9649,24 @@ static std::string centreDockTabLabel(const std::string& title, float maxW, floa
 float AppWindow::drawCentreDockTabs() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (dl == nullptr) { return 0.0f; }
-    const float scale = centreDockScale();
     const float w = ImGui::GetContentRegionAvail().x;
     // THE RAIL'S BANK KEYS ARE THE REFERENCE LOOK, and this is their
     // arithmetic (drawRailBankKeys): a lettered brass key that stays PRESSED
     // while its panel is showing, with a phosphor strip lit under it. The tab
     // row IS a function selector - it selects what the centre panel shows -
-    // so it is the same part, not a new one.
-    const float labelPx = cascade::gui::fonts::kTinySize * scale;
-    const float keyH = std::max(22.0f * scale, labelPx + 9.0f * scale);
-    const float gap = 4.0f * scale;
-    const float lampStrip = 7.0f * scale;  // the lit strip under a key, and its gap
-    const float barH = keyH + lampStrip + 6.0f * scale;
+    // so it is the same part, not a new one, and its two heights come from
+    // gui/centre_dock.hpp so a test can assert them at 1.0 and at 2.0.
+    //
+    // EVERY FIGURE HERE GOES THROUGH gui::px(), like every other layout figure
+    // in src/gui: the row is a TOUCH TARGET before it is furniture, and an
+    // unscaled 22 px key on a 2560 x 1600 tablet is about 2 mm against
+    // Android's own 9 mm guidance.
+    const float labelPx = cascade::gui::px(cascade::gui::fonts::kTinySize);
+    const float keyH = cascade::gui::dockTabKeyHeight(cascade::gui::fonts::kTinySize);
+    const float gap = cascade::gui::px(4.0f);
+    const float barH = cascade::gui::dockTabRowHeight(cascade::gui::fonts::kTinySize);
     const ImVec2 at = ImGui::GetCursorScreenPos();
-    if (w < 120.0f || keyH < 12.0f) { return 0.0f; }
+    if (w < cascade::gui::px(120.0f) || keyH < 12.0f) { return 0.0f; }
 
     // THE DOCKED WINDOW'S OWN CABINET KEYS, at the right-hand end of the row
     // and drawn by the same function that draws them on a page's rail, so they
@@ -9732,7 +9694,7 @@ float AppWindow::drawCentreDockTabs() {
     const std::vector<cascade::gui::DockTab>& tabs = centreDock_.tabs();
     const int count = 1 + static_cast<int>(tabs.size());  // SPECTRUM is always there
     const float room = keysLeft - at.x;
-    if (room < 40.0f || count <= 0) {
+    if (room < cascade::gui::px(40.0f) || count <= 0) {
         ImGui::SetCursorScreenPos(at);
         ImGui::Dummy(ImVec2(w, barH));
         return barH;
@@ -9741,7 +9703,7 @@ float AppWindow::drawCentreDockTabs() {
     // row of two half-screen keys would read as a split panel rather than as a
     // selector.
     float keyW = (room - gap * static_cast<float>(count - 1)) / static_cast<float>(count);
-    const float keyWMax = 190.0f * scale;
+    const float keyWMax = cascade::gui::px(190.0f);
     if (keyW > keyWMax) { keyW = keyWMax; }
 
     float x = at.x;
@@ -9754,7 +9716,8 @@ float AppWindow::drawCentreDockTabs() {
         x += keyW + gap;
         for (const cascade::gui::DockTab& t : tabs) {
             if (x + keyW > keysLeft + 0.5f) { break; }  // no room left for this one
-            const std::string label = centreDockTabLabel(t.title, keyW - 10.0f * scale, labelPx);
+            const std::string label =
+                centreDockTabLabel(t.title, keyW - cascade::gui::px(10.0f), labelPx);
             if (benchBankKey(dl, ImVec2(x, at.y), ImVec2(x + keyW, at.y + keyH), label.c_str(),
                              centreDock_.isActive(t.id), nullptr, id++)) {
                 // THE TAP, WITH THE FRAME'S OWN CLOCK: one selects, two inside
@@ -9837,7 +9800,7 @@ bool AppWindow::beginDockedPage(const char* id, const char* title, bool* open) {
                       cascade::gui::theme::kPanelRounding);
     cascade::gui::addBenchBevel(dl, tl, br, cascade::gui::theme::kPanelRounding, true);
 
-    const float inset = std::max(3.0f, 4.0f * centreDockScale());
+    const float inset = cascade::gui::px(4.0f);
     const ImVec2 wellSize(size.x - inset * 2.0f, size.y - inset * 2.0f);
     if (wellSize.x < 8.0f || wellSize.y < 8.0f) { return false; }
     ImGui::SetCursorScreenPos(ImVec2(tl.x + inset, tl.y + inset));

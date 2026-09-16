@@ -50,6 +50,10 @@
 #include <utility>
 #include <vector>
 
+// The layout scale, for the three figures at the foot of this file. It carries
+// no ImGui either, so this header stays reachable from a test.
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui {
 
 // HOW CLOSE TWO TAPS ON ONE TAB HAVE TO BE TO COUNT AS A DOUBLE TAP.
@@ -255,6 +259,47 @@ private:
     double lastTapSec_ = kNoTap;
     bool gathering_ = false;
 };
+
+// --- THE DOCK'S THREE FIGURES -------------------------------------------------
+//
+// In the desktop's own reference units, through gui::px() like every other
+// layout figure in src/gui, so one factor scales the whole interface and a tab
+// key is the same part at 1.0 and at 2.0. Pure arithmetic with no ImGui in it,
+// which is what lets tests/test_centre_dock.cpp assert them at both.
+
+// THE HEIGHT OF ONE TAB KEY. Deliberately the rail's own bank-key rule -
+// max(22, a line of the smallest type plus 9) - because the tab row IS a
+// function selector and has to be the same part as the one on the rail. The
+// type size is passed in rather than read from gui/fonts.hpp, which would drag
+// ImGui in here for one constant.
+inline float dockTabKeyHeight(float tinyTextUnits) {
+    const float lettered = tinyTextUnits + 9.0f;
+    return px(lettered > 22.0f ? lettered : 22.0f);  // NaN-safe: falls to 22
+}
+
+// THE WHOLE ROW: the key, the lit lamp strip under it, and the air below -
+// the same three pieces drawRailBankKeys lays, and the height the centre
+// panel takes off its own region before the spectrum measures what is left.
+inline float dockTabRowHeight(float tinyTextUnits) {
+    return dockTabKeyHeight(tinyTextUnits) + px(7.0f) + px(6.0f);
+}
+
+// WHAT IS LEFT OF THE SPECTRUM WITH A WINDOW DOCKED UNDER IT: a quarter of the
+// height it would otherwise have, which is the owner's own figure - "the
+// spectrum collapses to a strip about a quarter of its height above it". It
+// stays a REAL spectrum - the trace, the passband, the frequency scale and
+// every gesture that tunes them - because the whole reason for keeping it is
+// that the radio is still tunable while a decoder is being watched.
+//
+// The floor is what stops the quarter becoming nothing on a short window: a
+// strip under about a finger's width is a decoration, not a control. It is the
+// one figure here taking a SCREEN measurement (the height the spectrum would
+// have had) rather than reference units, so only the floor is scaled.
+inline float dockStripHeight(float fullSpectrumHeightPx) {
+    const float quarter = fullSpectrumHeightPx * 0.25f;
+    const float floorPx = px(48.0f);
+    return (quarter >= floorPx) ? quarter : floorPx;  // NaN-safe
+}
 
 }  // namespace cascade::gui
 
