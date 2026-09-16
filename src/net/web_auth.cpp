@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -22,6 +23,22 @@
 #include <bcrypt.h>
 
 #pragma comment(lib, "bcrypt.lib")
+#elif defined(CASCADE_ANDROID)
+// ANDROID-TODO(auth-crypto). The NDK ships no OpenSSL (see the comment on the
+// #else branch below for why this file will not hand-roll SHA-256/PBKDF2 to
+// close that gap): sha256() and pbkdf2Sha256() are therefore stubbed to fail
+// with a clear error rather than a weaker implementation, which means
+// hashPassword/verifyLogin/SessionStore are inert on this platform for now.
+// randomBytes() alone needs no crypto library - getrandom() is a raw kernel
+// syscall - so it is implemented for real below. The eventual fix routes
+// password hashing through Android's own KeyStore/JCA (PBKDF2WithHmacSHA256
+// is a standard SecretKeyFactory algorithm there) over JNI, in the slice that
+// also does HTTPS via Java (see crash_upload.cpp/telemetry.cpp/plugin_repo.cpp).
+//
+// <sys/syscall.h>, not <sys/random.h>: the getrandom() libc wrapper is
+// API 28+, below this build's android-26 floor (see randomBytes() below).
+#include <sys/syscall.h>
+#include <unistd.h>
 #else
 // POSIX builds take the same three primitives from OpenSSL. It is the system
 // crypto library everywhere this ships, it is Apache-2.0 (so it satisfies the
@@ -71,11 +88,15 @@ std::string ntStatusText(const char* what, NTSTATUS st) {
     std::snprintf(buf, sizeof(buf), "0x%08lX", static_cast<unsigned long>(st));
     return std::string(what) + " failed (NTSTATUS " + buf + ")";
 }
-#else
+#elif !defined(CASCADE_ANDROID)
 // OpenSSL reports failure through a return code rather than an NTSTATUS, so
 // the message carries only the call that failed. These paths fire on genuine
 // library faults (an unavailable digest, an entropy source that will not
-// seed), never on a wrong password.
+// seed), never on a wrong password. Not defined under CASCADE_ANDROID: the
+// three functions below that would call it build their own error strings
+// instead (see the ANDROID-TODO(auth-crypto) note near the top of this file),
+// so an OpenSSL-flavoured helper with nothing left to call it would be dead
+// code that -Wall/-Wextra would rightly flag as unused.
 std::string opensslText(const char* what) {
     return std::string(what) + " failed";
 }
@@ -225,6 +246,37 @@ bool randomBytes(std::uint8_t* out, std::size_t n, std::string& error) {
         return false;
     }
     return true;
+#elif defined(CASCADE_ANDROID)
+    // No OpenSSL on the NDK (see the crypto note near sha256() below), but this
+    // one entry point needs no crypto library at all: getrandom() is the same
+    // kernel CSPRNG RAND_bytes itself draws from on Linux, reached directly
+    // instead of through OpenSSL's wrapper. GRND_NONBLOCK is deliberately
+    // absent - the pool is guaranteed initialized well before any code this
+    // application runs gets scheduled, and a caller that got EAGAIN here would
+    // have nothing better to fall back to anyway.
+    //
+    // Via syscall(), not the bionic getrandom() libc wrapper: that wrapper
+    // was only added in API 28, and this build's floor is android-26
+    // (confirmed by an actual NDK build failing with "no member named
+    // 'getrandom'" against <sys/random.h> at that floor). The raw syscall
+    // has existed since kernel 3.17 and every Android kernel this ships to
+    // is well past that, so SYS_getrandom is available everywhere the
+    // wrapper is not.
+    std::size_t got = 0;
+    while (got < n) {
+        const ssize_t r = ::syscall(SYS_getrandom, out + got, n - got, 0);
+        if (r < 0) {
+            if (errno == EINTR) { continue; }
+            error = std::string("getrandom: ") + std::strerror(errno);
+            return false;
+        }
+        if (r == 0) {
+            error = "getrandom: returned zero bytes";
+            return false;
+        }
+        got += static_cast<std::size_t>(r);
+    }
+    return true;
 #else
     // RAND_bytes returns 1 only when the bytes are cryptographically strong;
     // anything else must fail loudly rather than hand back weak salt.
@@ -257,6 +309,15 @@ bool sha256(const std::uint8_t* data, std::size_t n, std::vector<std::uint8_t>& 
         return false;
     }
     return true;
+#elif defined(CASCADE_ANDROID)
+    // ANDROID-TODO(auth-crypto): see the comment on the CASCADE_ANDROID
+    // #include block near the top of this file. Not available means exactly
+    // that - not a weaker digest - so a caller that ignores the return value
+    // gets a cleared `out` rather than something that looks like a hash.
+    (void)data;
+    (void)n;
+    error = "sha256: not available on this platform (ANDROID-TODO(auth-crypto))";
+    return false;
 #else
     out.resize(kHashBytes);
     unsigned int written = 0;
@@ -308,6 +369,22 @@ bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,
         return false;
     }
     return true;
+}
+#elif defined(CASCADE_ANDROID)
+bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,
+                  std::size_t saltLen, std::uint32_t iterations, std::uint8_t* out,
+                  std::size_t outLen, std::string& error) {
+    // ANDROID-TODO(auth-crypto): see the comment on the CASCADE_ANDROID
+    // #include block near the top of this file.
+    g_pbkdf2Calls.fetch_add(1, std::memory_order_relaxed);
+    (void)password;
+    (void)salt;
+    (void)saltLen;
+    (void)iterations;
+    (void)out;
+    (void)outLen;
+    error = "pbkdf2Sha256: not available on this platform (ANDROID-TODO(auth-crypto))";
+    return false;
 }
 #else
 bool pbkdf2Sha256(const std::string& password, const std::uint8_t* salt,

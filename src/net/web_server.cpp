@@ -29,7 +29,14 @@
 // unaffected either way (OpenSSL is not a Windows dependency - see
 // CMakeLists.txt - and the guard keeps this header un-openssl'd there,
 // exactly as before).
-#if !defined(_WIN32)
+//
+// CASCADE_ANDROID is a second exception, for a different reason: the NDK
+// ships no OpenSSL at all (see plugin_repo.cpp/crash_upload.cpp/telemetry.cpp,
+// whose HTTPS clients are stubbed under the same macro - ANDROID-TODO
+// (uploads-via-java)), so this server's httplib.h inclusion must NOT ask for
+// OpenSSL support either - agreement across every TU that includes httplib.h
+// is the whole point of this macro, as the paragraph above explains.
+#if !defined(_WIN32) && !defined(CASCADE_ANDROID)
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #endif

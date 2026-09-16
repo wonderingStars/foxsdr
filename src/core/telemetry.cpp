@@ -2,6 +2,8 @@
 
 #include "core/telemetry.hpp"
 
+#include "core/diag_log.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -14,6 +16,22 @@
 #include <winhttp.h>
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "winhttp.lib")
+#elif defined(CASCADE_ANDROID)
+// ANDROID-TODO(uploads-via-java). No OpenSSL on the NDK, so newInstallId()
+// below draws from getrandom() directly (a raw kernel syscall, not a crypto
+// library - see net/web_auth.cpp's randomBytes() for the same move) and
+// postJson() further down is a no-op stub: no httplib, no
+// CPPHTTPLIB_OPENSSL_SUPPORT (every TU including httplib.h must agree with
+// net/web_server.cpp, which does not define it here).
+//
+// syscall(SYS_getrandom, ...), not the getrandom() libc wrapper: that
+// wrapper is API 28+, below this build's android-26 floor (see
+// net/web_auth.cpp's randomBytes() for the same fix against the same
+// build failure).
+#include <cstdlib>
+#include <sys/syscall.h>
+#include <sys/utsname.h>
+#include <unistd.h>
 #else
 #include <cstdlib>
 
@@ -115,6 +133,11 @@ std::string newInstallId() {
 #if defined(_WIN32)
     if (::BCryptGenRandom(nullptr, bytes, sizeof(bytes),
                           BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        return std::string();
+    }
+#elif defined(CASCADE_ANDROID)
+    if (::syscall(SYS_getrandom, bytes, sizeof(bytes), 0) !=
+        static_cast<ssize_t>(sizeof(bytes))) {
         return std::string();
     }
 #else
@@ -289,6 +312,22 @@ void postJson(const std::string& url, const std::string& json) {
         ::WinHttpCloseHandle(con);
     }
     ::WinHttpCloseHandle(ses);
+}
+
+}  // namespace
+#elif defined(CASCADE_ANDROID)
+namespace {
+
+// ANDROID-TODO(uploads-via-java): see the comment on the CASCADE_ANDROID
+// #include block near the top of this file. Usage reports are silently
+// dropped here, same as a network that black-holes them (see the comment
+// above HeartbeatSender::beat's call site) - the schedule still advances, so
+// this never becomes a backlog of threads.
+void postJson(const std::string& url, const std::string& json) {
+    (void)json;
+    diagWarnf("telemetry: HTTPS is not available on this platform "
+              "(ANDROID-TODO(uploads-via-java)); dropping report to %s",
+              url.c_str());
 }
 
 }  // namespace

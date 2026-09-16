@@ -47,12 +47,18 @@
 #include <intrin.h>
 #include <io.h>
 #pragma comment(lib, "dbghelp.lib")
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
 // The Linux implementation of every entry point below - see
 // crash_handler_posix.cpp for what it covers and why it is a separate file
 // rather than a parallel block in this one: it needs its own headers
 // (libunwind, <signal.h>, sigaltstack) that would otherwise sit beside
 // dbghelp.h's Windows-only equivalents above with nothing in common.
+//
+// ANDROID-TODO(crash-capture): the NDK ships no libunwind local-unwind API,
+// so crash_handler_posix.cpp is excluded from the Android build (see
+// CMakeLists.txt) and every entry point below falls through to the
+// no-op stub in its own "#else" branch - the same shape this file used
+// before the Linux port (0.97.0) added the libunwind-backed capture.
 #include "core/crash_handler_posix.hpp"
 #endif
 
@@ -808,9 +814,17 @@ void installCrashHandlers(const CrashHandlerConfig& cfg) {
     ::_set_purecall_handler(&onPureCall);
     // The net under the per-thread terminate handler. See onAbortSignal.
     std::signal(SIGABRT, &onAbortSignal);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     posix_detail::install(cfg);
 #else
+    // ANDROID-TODO(crash-capture): the NDK ships no libunwind local-unwind
+    // API, so there is no fault handler to install here (see the comment
+    // above the crash_handler_posix.hpp include near the top of this file).
+    // This is the same no-op shape the file used for every non-Windows
+    // platform before the Linux port (0.97.0) added libunwind support.
+    diagWarnf("crash capture is not available on this platform "
+              "(ANDROID-TODO(crash-capture)); a fault will terminate the "
+              "process with no report");
     (void)cfg;
 #endif
 }
@@ -836,7 +850,7 @@ void setCrashCaptureEnabled(bool enabled, bool minidump) {
                 reinterpret_cast<void*>(::GetProcAddress(dbghelp, "MiniDumpWriteDump")));
         }
     }
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     posix_detail::setEnabled(enabled, minidump);
 #else
     (void)enabled;
@@ -847,7 +861,7 @@ void setCrashCaptureEnabled(bool enabled, bool minidump) {
 std::string lastCrashReportPath() {
 #if defined(_WIN32)
     return std::string(g_lastPath);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     return posix_detail::lastReportPath();
 #else
     return std::string();
@@ -861,7 +875,7 @@ std::string activeCrashDir() {
     // not consent to write there.
     if (!g_enabled) { return std::string(); }
     return std::string(g_crashDir);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     return posix_detail::activeDir();
 #else
     return std::string();
@@ -883,7 +897,7 @@ void reportAbsorbedFault(const char* reason, unsigned long code, const void* fau
                 reinterpret_cast<std::uintptr_t>(faultAddress),
                 static_cast<EXCEPTION_POINTERS*>(exceptionPointers));
     ::InterlockedExchange(&inAbsorbed, 0);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     // No POSIX equivalent of EXCEPTION_POINTERS: every absorbed-fault caller
     // on this platform reports the calling thread's own stack, exactly as
     // reportAbsorbedFault(..., exceptionPointers=nullptr) already does on
@@ -915,7 +929,7 @@ void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, i
     writeReport(reason != nullptr ? reason : "child process fault (contained)", childExitCode,
                 0u, nullptr, &child);
     ::InterlockedExchange(&inAbsorbedChild, 0);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     posix_detail::reportAbsorbedChild(reason, childExitCode, attempt);
 #else
     (void)reason;
@@ -928,7 +942,7 @@ int captureFramesForTest(void* exceptionPointers, bool mayWalkCurrentThread) {
 #if defined(_WIN32)
     return captureFramesGuarded(static_cast<EXCEPTION_POINTERS*>(exceptionPointers),
                                 mayWalkCurrentThread);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     // exceptionPointers has no POSIX meaning (see reportAbsorbedFault above);
     // the only property this hook can exercise here is the
     // mayWalkCurrentThread half of the Windows contract.
@@ -1017,7 +1031,7 @@ void raiseTestFault(TestFaultKind kind) {
             // without ever raising an exception the SEH filter could see.
             volatile int fd = 12345;
             (void)::_get_osfhandle(fd);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
             // glibc has no CRT invalid-parameter fail-fast to invoke; see
             // crash_handler_posix.hpp for the closest honest equivalent this
             // exercises instead. [[noreturn]], so nothing here falls through.

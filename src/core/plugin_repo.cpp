@@ -7,6 +7,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_repo.hpp"
 
+#include "core/diag_log.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -38,16 +40,23 @@
 
 #include <cstdlib>
 
+#if !defined(CASCADE_ANDROID)
 // The TLS client for this platform. cpp-httplib is already vendored for the
 // web server, and OpenSSL is already a dependency here for SHA-256 and
 // PBKDF2, so the catalogue transport adds no new third-party code — it is the
 // same two libraries the build already carries.
+//
+// NOT on Android: the NDK ships neither OpenSSL nor a use of
+// CPPHTTPLIB_OPENSSL_SUPPORT (see net/web_server.cpp, which every TU
+// including httplib.h must agree with). See the ANDROID-TODO(uploads-via-java)
+// stub of httpsGet()/Sha256 further down instead.
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #endif
 #include <httplib.h>
 
 #include <openssl/evp.h>
+#endif  // !CASCADE_ANDROID
 #endif
 
 namespace fs = std::filesystem;
@@ -731,7 +740,56 @@ bool httpsGet(const std::string& url, std::uint64_t maxBytes,
     }
 }
 
-#else  // !_WIN32
+#elif defined(CASCADE_ANDROID)
+
+// ---------------------------------------------------------------------------
+// ANDROID-TODO(uploads-via-java). The NDK ships no OpenSSL, so there is no
+// HTTPS client available here (see the #if !defined(CASCADE_ANDROID) guard
+// around the httplib/openssl includes near the top of this file) and no
+// SHA-256 either (this codebase does not hand-roll digests to close a
+// platform gap - see net/web_auth.cpp's ANDROID-TODO(auth-crypto) for the
+// same call made about password hashing). Both entry points below fail
+// cleanly instead of silently disabling the catalogue's integrity checks.
+// The eventual fix routes plugin downloads through Java's
+// HttpsURLConnection (network) and MessageDigest (SHA-256) over JNI, in the
+// same later slice as crash_upload.cpp/telemetry.cpp's uploads.
+// ---------------------------------------------------------------------------
+
+class Sha256 {
+public:
+    Sha256() = default;
+    bool init(std::string& error) {
+        error = "Sha256: not available on this platform (ANDROID-TODO(uploads-via-java))";
+        return false;
+    }
+    bool update(const void* data, std::size_t n, std::string& error) {
+        (void)data;
+        (void)n;
+        error = "Sha256: not available on this platform (ANDROID-TODO(uploads-via-java))";
+        return false;
+    }
+    bool finishHex(std::string& hexOut, std::string& error) {
+        hexOut.clear();
+        error = "Sha256: not available on this platform (ANDROID-TODO(uploads-via-java))";
+        return false;
+    }
+};
+
+bool httpsGet(const std::string& url, std::uint64_t maxBytes,
+              const std::function<bool(const void*, std::size_t)>& sink,
+              std::atomic<float>* progress, std::atomic<bool>* cancel, std::string& error) {
+    (void)url;
+    (void)maxBytes;
+    (void)sink;
+    (void)progress;
+    (void)cancel;
+    diagWarnf("plugin catalogue: HTTPS is not available on this platform "
+              "(ANDROID-TODO(uploads-via-java))");
+    error = "HTTPS is not available on this platform (ANDROID-TODO(uploads-via-java))";
+    return false;
+}
+
+#else  // !_WIN32 && !CASCADE_ANDROID
 
 // ---------------------------------------------------------------------------
 // POSIX transport and digest.

@@ -142,6 +142,48 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # ---------------------------------------------------------------------------
+# CASCADE_ANDROID — the portable-core subset for the Android port.
+#
+# ON automatically when configuring through the NDK's toolchain file
+# (CMAKE_SYSTEM_NAME is "Android" in that case), so a plain
+# -DCMAKE_TOOLCHAIN_FILE=.../android.toolchain.cmake configure needs no
+# second flag. It can ALSO be set explicitly on a normal Linux x86-64
+# configure with no NDK at all — that builds and tests the exact same
+# exclusion set natively, which is how this subset is proven coherent
+# without a device (see tests/CMakeLists.txt).
+#
+# Under it: no GLFW, no PortAudio, no SoapySDR (find_package does not even
+# run — the ABI does not exist on Android), no OpenSSL (the NDK ships
+# neither; see the ANDROID-TODO(auth-crypto)/(uploads-via-java) stubs in
+# net/web_auth.cpp, core/plugin_repo.cpp, core/crash_upload.cpp,
+# core/telemetry.cpp), no cascade executable, no tests glob, no
+# symbol-archive post-build step. What remains — src/dsp, most of src/core,
+# the native SDR drivers in src/source, src/usb, src/net minus TLS — builds
+# into ONE static library, cascade_core (see the cascade_lib target below).
+#
+# This is a compile definition of cascade_lib as well as a CMake option: C++
+# code guards the same exclusions with "#if defined(CASCADE_ANDROID)" rather
+# than the compiler-supplied "__ANDROID__", precisely so the host-native
+# validation configure exercises the identical code path a real NDK build
+# takes, instead of a hand-maintained parallel one.
+option(CASCADE_ANDROID "Build the portable-core subset for Android (no GUI, audio, SoapySDR, or OpenSSL)" OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(CASCADE_ANDROID ON CACHE BOOL "" FORCE)
+endif()
+# True only for a REAL NDK cross-compile (device or emulator ABI), never for
+# the native Linux x86-64 validation configure above. tests/CMakeLists.txt
+# uses this to tell "no device to run anything on, skip tests entirely" apart
+# from "prove the subset on the host, build a curated test list".
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(CASCADE_ANDROID_CROSS_TARGET ON)
+else()
+    set(CASCADE_ANDROID_CROSS_TARGET OFF)
+endif()
+if(CASCADE_ANDROID)
+    message(STATUS "cascade: CASCADE_ANDROID is ON (cross-target: ${CASCADE_ANDROID_CROSS_TARGET})")
+endif()
+
+# ---------------------------------------------------------------------------
 # External dependencies (deliberately minimal — see header comment)
 # ---------------------------------------------------------------------------
 
@@ -151,27 +193,61 @@ endif()
 # a system ABI-adjacent library the way SoapySDR and OpenSSL are, and pulling
 # in our own copy would strand it on whatever DWARF unwind quirks the
 # distribution's own libunwind has already been patched for.
-if(NOT WIN32)
+#
+# NOT under CASCADE_ANDROID: the NDK ships no libunwind local-unwind API, so
+# crash_handler_posix.cpp is excluded from that build entirely (see the
+# CASCADE_CORE exclusion below) and hang_watchdog.cpp's equivalent capture is
+# compiled out by the same macro — see the ANDROID-TODO(crash-capture) notes
+# in both files. Skipping the lookup, not just the link, matters here: this
+# find_package is REQUIRED, and CASCADE_ANDROID's whole point (including the
+# native Linux x86-64 validation build) is not needing libunwind at all.
+if(NOT WIN32 AND NOT CASCADE_ANDROID)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBUNWIND REQUIRED IMPORTED_TARGET libunwind)
 endif()
 
-find_package(OpenGL REQUIRED)
+# Desktop OpenGL: the GUI's renderer (Dear ImGui's OpenGL3 backend). Not
+# needed under CASCADE_ANDROID, where the whole GUI is excluded (see
+# CASCADE_GUI below) — Android has no desktop GL, and the eventual on-device
+# renderer is a separate slice's concern (GLES/Vulkan via the vendored
+# imgui_impl_android backend, not yet wired to any target).
+if(NOT CASCADE_ANDROID)
+    find_package(OpenGL REQUIRED)
+endif()
 # Hardware sources (P4+). Target verified from SoapySDRExport.cmake: plain
 # `SoapySDR`, shared. Vendor support (B200 via SoapyUHD, RTL dongles, etc.)
 # arrives through SoapySDR's runtime-loaded modules, keeping this tree MIT.
 # NOT vendored, by design — the ABI-boundary exception documented above and
 # in third_party/THIRD_PARTY.md.
-find_package(SoapySDR CONFIG REQUIRED)
+#
+# NOT under CASCADE_ANDROID: SoapySDR's vendor-module ABI does not exist on
+# Android, so find_package must not even be attempted (there is no vcpkg
+# toolchain feeding it there) — every source that reaches it
+# (soapy_source.cpp, soapy_modules.cpp, soapy_enum_proc.cpp,
+# soapy_log_bridge.cpp, vendor_guard.cpp) is excluded below instead. The
+# native drivers (rtlsdr, hackrf, airspy, ...) reach hardware through
+# src/usb directly and need nothing here.
+if(NOT CASCADE_ANDROID)
+    find_package(SoapySDR CONFIG REQUIRED)
+endif()
 
-# OpenSSL, non-Windows only. Windows takes SHA-256/PBKDF2/entropy from CNG
-# (bcrypt.lib), which is part of the OS and needs no package; every other
-# platform takes the same three primitives from OpenSSL. Apache-2.0, so it
-# satisfies the permissive-only rule, and it is a system library rather than a
-# vendored one for the same reason SoapySDR is: it is the platform's crypto,
-# and shipping our own copy would strand it on the distribution's security
-# updates.
-if(NOT WIN32)
+# OpenSSL, non-Windows non-Android only. Windows takes SHA-256/PBKDF2/entropy
+# from CNG (bcrypt.lib), which is part of the OS and needs no package; every
+# other desktop platform takes the same three primitives from OpenSSL.
+# Apache-2.0, so it satisfies the permissive-only rule, and it is a system
+# library rather than a vendored one for the same reason SoapySDR is: it is
+# the platform's crypto, and shipping our own copy would strand it on the
+# distribution's security updates.
+#
+# NOT under CASCADE_ANDROID: the NDK ships no OpenSSL at all (it is not part
+# of the public NDK API on any recent version). net/web_auth.cpp's crypto,
+# core/plugin_repo.cpp's httpsGet, core/crash_upload.cpp's and
+# core/telemetry.cpp's POSIX posts, and cpp-httplib's SSL half are all
+# stubbed or narrowed under CASCADE_ANDROID instead of linking this — see the
+# ANDROID-TODO(auth-crypto) / ANDROID-TODO(uploads-via-java) comments in
+# those files. HTTPS on Android is planned to go through Java's
+# HttpsURLConnection over JNI in a later slice.
+if(NOT WIN32 AND NOT CASCADE_ANDROID)
     find_package(OpenSSL REQUIRED)
 endif()
 
@@ -181,6 +257,14 @@ endif()
 
 set(CASCADE_TP "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
+# GLFW 3.4, PortAudio 19.7 and Dear ImGui's desktop (GLFW+OpenGL3) backend are
+# all GUI/audio plumbing with no Android equivalent in this slice — the
+# vendored imgui_impl_android backend exists in third_party/ (see
+# THIRD_PARTY.md) but is not wired to any target yet, and PortAudio's
+# Android counterpart is AAudio, a different agent's slice. None of the
+# three are needed to build cascade_core, so none are built under
+# CASCADE_ANDROID.
+if(NOT CASCADE_ANDROID)
 # GLFW 3.4 (static; docs/tests/examples/install off)
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
@@ -225,6 +309,7 @@ target_include_directories(imgui SYSTEM PUBLIC
     "${CASCADE_TP}/imgui/backends"
     "${CASCADE_TP}/imgui/misc/cpp")
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+endif()  # NOT CASCADE_ANDROID
 
 # pffft v1.0.0: mirrors the vcpkg port's own CMakeLists — pffft.c only,
 # _USE_MATH_DEFINES on MSVC, no /arch flag (pffft auto-selects SSE via _M_X64
@@ -290,37 +375,82 @@ file(GLOB CASCADE_CORE   CONFIGURE_DEPENDS src/core/*.cpp)
 if(WIN32)
     list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crash_handler_posix.cpp")
 endif()
+if(CASCADE_ANDROID)
+    # crash_handler_posix.cpp: same reason as the WIN32 removal above, one
+    # level further — the NDK has no libunwind local-unwind API either, so
+    # even the Linux implementation this file provides cannot build. See the
+    # ANDROID-TODO(crash-capture) stub in core/crash_handler.cpp, which this
+    # file's absence falls through to.
+    list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crash_handler_posix.cpp")
+    # gps_reader.cpp: pulls in "gui/scope_view.hpp" — a small logic header
+    # everything else in this exclusion list is careful NOT to need — for one
+    # acceptance-rule constant. Nothing built under CASCADE_ANDROID reaches
+    # GPS yet (there is no serial port on a phone; the eventual source is
+    # Android's LocationManager, a later slice), so it is simply left out.
+    list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/gps_reader.cpp")
+endif()
 file(GLOB CASCADE_DSP    CONFIGURE_DEPENDS src/dsp/*.cpp)
-file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
+if(CASCADE_ANDROID)
+    # The whole GUI (ImGui/GLFW) is out of scope for this slice — see the
+    # "not CASCADE_ANDROID" guard around the imgui/glfw/portaudio targets
+    # above. A handful of gui/*.hpp headers are still reached from in-scope
+    # code (core/config.cpp, net/web_server.cpp) for pure data/logic they
+    # declare — demod_scope.hpp, rail_banks.hpp, scope_view.hpp,
+    # track_metrics.hpp, font_blobs.hpp, plus page_geometry.hpp,
+    # viewport_policy.hpp, list_pick.hpp and shell_open.hpp reached from
+    # elsewhere — and every one of them was checked to include no GLFW/ImGui
+    # header itself, so leaving the whole directory on the include path (see
+    # target_include_directories below) costs nothing. Only the .cpp files
+    # are excluded, because every one of them needs the renderer.
+    set(CASCADE_GUI "")
+else()
+    file(GLOB CASCADE_GUI CONFIGURE_DEPENDS src/gui/*.cpp)
+endif()
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
+if(CASCADE_ANDROID)
+    # SoapySDR-only sources — see the "NOT CASCADE_ANDROID" guard around
+    # find_package(SoapySDR) above for why the ABI itself is unavailable.
+    # vendor_guard.cpp exists solely to protect soapy_enum_proc.cpp's calls
+    # into SoapySDR::Device::enumerate(), so it goes with them. Every native
+    # driver (rtlsdr, hackrf, airspy, airspyhf, rx888, mirisdr, msi2500,
+    # pluto/iiod) reaches hardware through src/usb or a socket instead and is
+    # untouched.
+    list(FILTER CASCADE_SOURCE EXCLUDE REGEX
+         "/(soapy_source|soapy_modules|soapy_enum_proc|soapy_log_bridge|vendor_guard)\\.cpp$")
+endif()
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
-# audio_out_aaudio.cpp is the AAudio (Android) backend for
-# cascade::sink::AudioOut, sharing audio_out.hpp's interface with the
-# PortAudio backend in audio_out.cpp — see that file's own header comment
-# for the two-backends-one-class decision. Excluded here because this
-# CMakeLists has no Android target of any kind yet: it is built separately,
-# by a direct NDK clang++ invocation for the arm64-v8a compile, and by a
-# bespoke tests/CMakeLists.txt entry (test_audio_out_aaudio) for its
-# host-testable ring/priming/underrun core. Branch and-core's CASCADE_ANDROID
-# cross-build will need to reverse this filter (and exclude audio_out.cpp
-# instead) once it can actually target Android from this CMakeLists; that
-# wiring belongs to that change, not this one.
-list(FILTER CASCADE_SINK EXCLUDE REGEX "audio_out_aaudio\\.cpp$")
+# Two backends, one AudioOut class (see audio_out.hpp): audio_out.cpp is
+# PortAudio, audio_out_aaudio.cpp is AAudio. Exactly one of them is compiled
+# into the library. On Android the PortAudio pair goes (audio_in.cpp too -
+# PortAudio has no Android host API; the microphone side is a later slice,
+# and transmitter.cpp's use of AudioIn is a known link-time gap there); on
+# every other platform the AAudio file goes and is reached only by
+# tests/CMakeLists.txt's test_audio_out_aaudio, which compiles it against a
+# fake AAudio for its host-testable ring/priming/underrun core.
+if(CASCADE_ANDROID)
+    list(FILTER CASCADE_SINK EXCLUDE REGEX "/audio_(in|out)\\.cpp$")
+else()
+    list(FILTER CASCADE_SINK EXCLUDE REGEX "audio_out_aaudio\\.cpp$")
+endif()
 file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
 # Native radio drivers talk to the hardware through our own USB transport
 # (src/usb) - WinUSB on Windows, usbfs directly on Linux - not through
 # SoapySDR modules or libusb: see src/usb/usb_device.hpp.
 file(GLOB CASCADE_USB    CONFIGURE_DEPENDS src/usb/*.cpp)
 # usbfs_device.cpp includes <linux/usbdevice_fs.h> and friends, which exist
-# nowhere else; it is compiled ONLY on Linux; every other platform (Windows,
-# macOS, *BSD) keeps building against winusb_device.cpp's portable stub for
+# nowhere else; it is compiled ONLY on Linux (Android included — Android IS
+# Linux, __linux__ stays defined, and CMake's own UNIX test is not relied on
+# here for exactly that reason); every other platform (Windows, macOS, *BSD)
+# keeps building against winusb_device.cpp's portable stub for
 # enumerateWinUsb()/enumerateUnbound()/openWinUsb() exactly as before this
 # file existed. usb_android_bridge.cpp is the extern "C" wrapper the Android
 # JNI layer calls into the adopted-device registry declared alongside
 # usbfs_device.cpp's own header (src/usb/usbfs_device.hpp) - it has no
 # purpose without that registry and #errors on any non-Linux build the same
-# way, so it is excluded right beside it.
-if(NOT (UNIX AND NOT APPLE))
+# way, so it is excluded right beside it. CASCADE_ANDROID is named as well
+# as UNIX because the NDK toolchain sets CMAKE_SYSTEM_NAME to Android, for
+# which CMake's UNIX is true but is not something this file wants to rely on.
+if(NOT ((UNIX AND NOT APPLE) OR CASCADE_ANDROID))
     list(FILTER CASCADE_USB EXCLUDE REGEX "usbfs_device\\.cpp$")
     list(FILTER CASCADE_USB EXCLUDE REGEX "usb_android_bridge\\.cpp$")
 endif()
@@ -328,6 +458,12 @@ endif()
 add_library(cascade_lib STATIC
     ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_GUI} ${CASCADE_SOURCE} ${CASCADE_SINK}
     ${CASCADE_NET} ${CASCADE_USB})
+# The name the Android port knows this library by: everything above and below
+# this line still calls it cascade_lib (renaming it would touch every test
+# target in tests/CMakeLists.txt for no behavioural gain), but under
+# CASCADE_ANDROID it is exactly the portable core the port's build scripts
+# and CI ask for as `cascade_core`.
+add_library(cascade_core ALIAS cascade_lib)
 
 target_include_directories(cascade_lib PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
 # See src/core/version.cpp: the reported version is injected, never written in.
@@ -336,34 +472,54 @@ target_compile_definitions(cascade_lib PRIVATE
 # The commit comes from the generated header instead, so it is re-read on every
 # build rather than frozen at configure time.
 add_dependencies(cascade_lib cascade_git_commit)
-# PUBLIC, and only these two: the test binaries need to find the application
-# binary and the symbol archive in order to assert that this build's PDB was
-# actually archived under the build id a report would quote. Nothing in the
-# library itself reads them.
+if(CASCADE_ANDROID)
+    # The single macro every "#if defined(CASCADE_ANDROID)" branch in src/
+    # tests for — see net/web_auth.cpp, core/plugin_repo.cpp,
+    # core/crash_upload.cpp, core/telemetry.cpp, core/crash_handler.cpp and
+    # core/hang_watchdog.cpp. PUBLIC so a test binary built against
+    # cascade_lib in the host-subset configuration (tests/CMakeLists.txt)
+    # sees the same definition the library itself was compiled with.
+    target_compile_definitions(cascade_lib PUBLIC CASCADE_ANDROID)
+else()
+    # PUBLIC, and only these two: the test binaries need to find the application
+    # binary and the symbol archive in order to assert that this build's PDB was
+    # actually archived under the build id a report would quote. Nothing in the
+    # library itself reads them. Meaningless under CASCADE_ANDROID, where
+    # neither `cascade` nor the symbol archive step exist — see the
+    # "Application" section below.
+    target_compile_definitions(cascade_lib PUBLIC
+        CASCADE_APP_BINDIR="$<TARGET_FILE_DIR:cascade>"
+        CASCADE_SYMBOL_ARCHIVE_DIR="${CASCADE_SYMBOL_ARCHIVE}")
+endif()
+# ...and these three so tests/test_diagnostics.cpp can hold the commit a
+# report quotes to what git says HEAD is RIGHT NOW, and can run the commit
+# generator against a scratch repository whose HEAD moves under it. Paths
+# rather than a PATH lookup: a test that silently found a different git (or
+# none) would pass by not testing anything. Kept PUBLIC under CASCADE_ANDROID
+# too: nothing about reading git depends on the desktop GUI/audio/SoapySDR
+# exclusions, and the host-subset build still has this test's dependencies.
 target_compile_definitions(cascade_lib PUBLIC
-    CASCADE_APP_BINDIR="$<TARGET_FILE_DIR:cascade>"
-    CASCADE_SYMBOL_ARCHIVE_DIR="${CASCADE_SYMBOL_ARCHIVE}"
-    # ...and these three so tests/test_diagnostics.cpp can hold the commit a
-    # report quotes to what git says HEAD is RIGHT NOW, and can run the commit
-    # generator against a scratch repository whose HEAD moves under it. Paths
-    # rather than a PATH lookup: a test that silently found a different git (or
-    # none) would pass by not testing anything.
     CASCADE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     CASCADE_GIT_EXECUTABLE="${GIT_EXECUTABLE}"
     CASCADE_CMAKE_COMMAND="${CMAKE_COMMAND}")
 # Vendored targets are listed BEFORE SoapySDR so third_party/ include dirs
 # always precede vcpkg's shared installed-include root (which still contains
-# same-named headers for other consumers of that vcpkg tree).
+# same-named headers for other consumers of that vcpkg tree). Under
+# CASCADE_ANDROID none of imgui/glfw/OpenGL/portaudio_static/SoapySDR were
+# even built above, so linking them is skipped along with them.
 target_link_libraries(cascade_lib PUBLIC
     cascade_flags
-    imgui
-    glfw
-    OpenGL::GL
-    portaudio_static
     cascade_json
     cascade_pffft
-    cascade_httplib
-    SoapySDR)
+    cascade_httplib)
+if(NOT CASCADE_ANDROID)
+    target_link_libraries(cascade_lib PUBLIC
+        imgui
+        glfw
+        OpenGL::GL
+        portaudio_static
+        SoapySDR)
+endif()
 
 if(WIN32)
     # The native drivers' USB transport: SetupAPI/CfgMgr for enumeration by
@@ -373,11 +529,13 @@ if(WIN32)
     target_link_libraries(cascade_lib PUBLIC winusb setupapi cfgmgr32)
 endif()
 
-if(NOT WIN32)
+if(NOT WIN32 AND NOT CASCADE_ANDROID)
     # Crypto for the password/digest primitives, SSL for the plugin
     # catalogue's HTTPS client (cpp-httplib built with
     # CPPHTTPLIB_OPENSSL_SUPPORT). Windows takes both from the OS instead —
-    # CNG and WinHTTP — which is why neither is a dependency there.
+    # CNG and WinHTTP — which is why neither is a dependency there. Android
+    # takes neither: see the find_package(OpenSSL)/pkg_check_modules(LIBUNWIND)
+    # guards above and the ANDROID-TODO stubs they point at.
     target_link_libraries(cascade_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL)
     # The stack unwinder crash_handler_posix.cpp and hang_watchdog.cpp use.
     # See the find_package(PkgConfig)/pkg_check_modules block above.
@@ -386,7 +544,16 @@ endif()
 
 # ---------------------------------------------------------------------------
 # Application
+#
+# NONE of this exists under CASCADE_ANDROID: no `cascade` executable (Android
+# has no desktop GUI/audio to run one against — see the GLFW/PortAudio/ImGui
+# guard above), so nothing here that references the `cascade` target — the
+# icon, the delay-load, staging SoapySDR.dll beside it, staging the band
+# plans, the symbol-archive POST_BUILD step — has anything to attach to.
+# foxsdr-reports goes with it: it exists to resolve a `cascade` crash report
+# against `symbols/`, neither of which this configuration produces.
 # ---------------------------------------------------------------------------
+if(NOT CASCADE_ANDROID)
 
 # Windows executable icon (Explorer, taskbar, Alt-Tab, Add/Remove Programs).
 # The .rc must be a SOURCE of the EXECUTABLE target - rc.exe compiles it and
@@ -504,6 +671,8 @@ else()
                 --module "$<TARGET_FILE_BASE_NAME:cascade>"
         VERBATIM)
 endif()
+
+endif()  # NOT CASCADE_ANDROID (Application)
 
 # ---------------------------------------------------------------------------
 # Tests

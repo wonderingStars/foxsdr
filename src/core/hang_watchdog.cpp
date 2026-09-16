@@ -25,7 +25,7 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
-#else
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
 
@@ -35,6 +35,14 @@
 #include <semaphore.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#else
+// ANDROID-TODO(crash-capture): the NDK ships no libunwind local-unwind API
+// (see the "#elif defined(__linux__) && !defined(CASCADE_ANDROID)" blocks
+// below, all of which this branch skips), so other-thread stack capture is
+// inert on Android. <cstdlib> alone is kept: the /proc/self/status tracer
+// check further down has no libunwind dependency and keeps working
+// unchanged here (Android is Linux; __linux__ stays defined).
+#include <cstdlib>
 #endif
 
 namespace cascade::core {
@@ -96,7 +104,7 @@ std::string frameLine(std::uintptr_t addr) {
     return std::string(buf);
 }
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(CASCADE_ANDROID)
 // ---------------------------------------------------------------------------
 // LINUX: capturing a stack that is not the caller's own.
 //
@@ -249,7 +257,9 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
     // frame list invented to fill the gap.
     return ts;
 }
-#endif  // __linux__ - the block above was unguarded once and MSVC compiled it
+#endif  // __linux__ && !CASCADE_ANDROID - the block above was unguarded once
+        // and MSVC compiled it; the NDK equally cannot, see the ANDROID-TODO
+        // near the top of this file
 
 }  // namespace
 
@@ -265,7 +275,7 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
                        std::memory_order_relaxed);
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     guiThreadId_.store(static_cast<unsigned long>(linuxGetTid()), std::memory_order_relaxed);
 #endif
     // The module snapshot the capture resolves addresses against, taken HERE -
@@ -339,7 +349,7 @@ void HangWatchdog::heartbeat(bool recordGap) {
     const double prev = lastBeatMs_.exchange(now, std::memory_order_relaxed);
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     guiThreadId_.store(static_cast<unsigned long>(linuxGetTid()), std::memory_order_relaxed);
 #endif
     // A gap that spans a deliberate pause is not a frame gap: it is the device
@@ -973,7 +983,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     for (const std::string& line : ring) { out << line << "\n"; }
     out.flush();
     out.close();
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(CASCADE_ANDROID)
     // LINUX. No suspend/resume window to get wrong (see the header comment
     // above captureOneLinuxThread): each thread is asked, via a realtime
     // signal, to unwind itself and hand the result back, and it keeps running
@@ -1088,6 +1098,12 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out.flush();
     out.close();
 #else
+    // ANDROID-TODO(crash-capture): no libunwind local-unwind API on the NDK,
+    // so a stalled thread's other-thread stacks cannot be captured here. The
+    // watchdog still detects and reports the stall's timing (threadMain()
+    // above) - only the per-thread frame dump is unavailable.
+    diagWarnf("watchdog: other-thread stack capture is not available on this "
+              "platform (ANDROID-TODO(crash-capture)); no hang report written");
     (void)path;
     (void)stalledMs;
 #endif

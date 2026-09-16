@@ -23,11 +23,16 @@
 
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
-#else
+#elif !defined(CASCADE_ANDROID)
 // The TLS client for this platform - the same header, set up the same way,
 // as plugin_repo.cpp's catalogue client: cpp-httplib is already vendored for
 // the web server and OpenSSL is already linked here (see CMakeLists.txt), so
 // this transport adds no new third-party dependency.
+//
+// NOT on Android: the NDK ships no OpenSSL, so this TU takes the
+// ANDROID-TODO(uploads-via-java) stub of postCrashReport() further down
+// instead, and must not define CPPHTTPLIB_OPENSSL_SUPPORT (see
+// net/web_server.cpp, which every TU including httplib.h must agree with).
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #endif
@@ -666,6 +671,11 @@ void UploadCancel::cancel() {
     // which is what keeps a hanging server from delaying shutdown. The
     // exchange above means exactly one of the two threads ever closes it.
     if (h != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(h)); }
+#elif defined(CASCADE_ANDROID)
+    // postCrashReport() never calls publish() with a real handle on this
+    // platform (see its ANDROID-TODO(uploads-via-java) branch below), so `h`
+    // is always nullptr here; nothing to close.
+    (void)h;
 #else
     // httplib::Client::stop() is the documented way to abort an in-flight
     // request from another thread: it shuts down the socket, so a blocked
@@ -688,6 +698,8 @@ bool UploadCancel::publish(void* handle) {
         void* h = request_.exchange(nullptr, std::memory_order_acq_rel);
 #if defined(_WIN32)
         if (h != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(h)); }
+#elif defined(CASCADE_ANDROID)
+        (void)h;  // always nullptr here; see UploadCancel::cancel() above
 #else
         if (h != nullptr) { static_cast<httplib::ClientImpl*>(h)->stop(); }
 #endif
@@ -759,7 +771,7 @@ std::uint64_t queryRetryAfter(HINTERNET req) {
 }
 
 }  // namespace
-#else
+#elif !defined(CASCADE_ANDROID)
 namespace {
 
 bool isLoopbackHost(const std::string& host) {
@@ -911,6 +923,18 @@ UploadResult postCrashReport(const std::string& url, const std::string& json,
         ::WinHttpCloseHandle(con);
     }
     ::WinHttpCloseHandle(ses);
+#elif defined(CASCADE_ANDROID)
+    // ANDROID-TODO(uploads-via-java): the NDK ships no OpenSSL, so there is no
+    // HTTPS client here (see the #if !defined(CASCADE_ANDROID) guard around
+    // the httplib/openssl includes near the top of this file). The report
+    // stays on disk - sweepCrashDir() above never deletes what it could not
+    // send - so nothing is lost, just not uploaded, until this is routed
+    // through Java's HttpsURLConnection over JNI.
+    (void)url;
+    (void)json;
+    (void)cancel;
+    diagWarnf("crash upload: HTTPS is not available on this platform "
+              "(ANDROID-TODO(uploads-via-java)); report kept on disk");
 #else
     if (url.empty() || json.empty() || !cancel) { return res; }
 
