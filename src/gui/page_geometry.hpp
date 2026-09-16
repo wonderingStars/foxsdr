@@ -96,6 +96,35 @@ inline bool pageNeedsReset(std::uint32_t& seenGen, std::uint32_t currentGen) {
     return true;
 }
 
+// THE HARD CEILING ON A PAGE'S OWN CONTROL DECK, when that page has one: the
+// deck may never claim more than half of the body it was handed, because the
+// other half is the reason the page exists - the module list, the map, the
+// scope, whatever the deck is a set of controls FOR.
+//
+// Written down here, ImGui-free, because a page's deck had already grown
+// silently past this line once before anyone measured it. The PLUGIN STORE's
+// upper deck (the ADD ALL key, the state banner and the three control wells)
+// came out TALLER THAN THE WHOLE PAGE on the Pixel Tablet emulator at UI
+// scale 2.0 - the MODULE LIST and the DATA PLATE were pushed past the bottom
+// edge of a face that (until that page's own fix) could not even scroll to
+// reach them. See PluginStoreView::upperDeckHeight() and
+// tests/test_plugin_store_deck.cpp, which pins a real draw() at both the
+// tablet's own body size and a desktop one against exactly this rule.
+//
+// ONE NUMBER, not a per-page fraction: half is the point at which a "deck"
+// stops being a set of controls beside the content and starts being the
+// content, so it is the same line for every page that ever measures itself
+// against it rather than a figure to be argued down page by page.
+inline constexpr float kPageDeckMaxBodyFraction = 0.5f;
+
+// `bodyH` is the page's own body height - whatever a page's draw() was
+// handed as `height`, already in that page's own scaled pixels, so the
+// caller passes gui::px() figures straight through with nothing further to
+// convert.
+inline float pageDeckHeightCap(float bodyH) {
+    return bodyH * kPageDeckMaxBodyFraction;
+}
+
 }  // namespace cascade::gui
 
 #endif  // CASCADE_GUI_PAGE_GEOMETRY_HPP

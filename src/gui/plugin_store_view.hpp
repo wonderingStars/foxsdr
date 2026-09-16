@@ -628,12 +628,33 @@ public:
     // applied over a run of transfers is exactly the thing that goes stale.
     bool addAllRequested() const { return addAll_; }
 
+    // --- what the last draw() measured, not asked for -----------------------
+    //
+    // THE WHOLE UPPER DECK'S HEIGHT: the ADD ALL well, the state banner and
+    // the three control wells (CATALOGUE SEARCH / SHOW / SORT + CATALOGUE
+    // SOURCE) together, in the same scaled pixels `draw()` laid them out in -
+    // exactly bodyTL.y - origin.y, the space taken before the MODULE LIST and
+    // DATA PLATE begin. Recorded rather than recomputed, for the same reason
+    // storeCheckKeyWidth() and moduleKindTagWidth() are exported instead of
+    // re-derived: the only thing that could otherwise see this figure was a
+    // screenshot at one window size and one UI scale, which is exactly how it
+    // grew taller than the whole page on the docked tablet before anyone
+    // noticed (see the note above THE CONTROL DECK). Zero until the first
+    // draw() that gets past the "too narrow to lay out honestly" bail-out.
+    //
+    // Checked against gui::pageDeckHeightCap() in
+    // tests/test_plugin_store_deck.cpp, which drives a real draw() at the
+    // tablet's and the desktop's own sizes rather than re-deriving the
+    // formula a second time.
+    float upperDeckHeight() const { return upperDeckHeight_; }
+
 private:
     bool checkNow_ = false;
     bool cancel_ = false;
     bool addAll_ = false;
     int fitIndex_ = -1;
     int updateIndex_ = -1;
+    float upperDeckHeight_ = 0.0f;
 };
 
 }  // namespace cascade::gui

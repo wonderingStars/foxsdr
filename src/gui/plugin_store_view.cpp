@@ -28,6 +28,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_repo.hpp"
 #include "gui/fonts.hpp"
+#include "gui/page_geometry.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_scale.hpp"
@@ -316,26 +317,41 @@ void addHatch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 // A note: a coloured rule down the left, a wash behind it and the sentence
 // itself. `accent` carries the meaning - phosphor for something working, gold
 // for something the user should look at, rust for something refused.
-float noteHeight(float width, const char* text) {
+//
+// AT AN EXPLICIT SIZE, because THE CONTROL DECK's compact mode (see the note
+// above `compact` in PluginStoreView::draw()) draws its longest explanatory
+// paragraphs a size down from the window's own prose when the full size would
+// push the deck past gui::pageDeckHeightCap() - never the interactive
+// controls beside them, which stay legible at the size every key and label in
+// this window uses. noteHeight()/drawNote() below are the ordinary case,
+// unchanged, calling straight through at prose().
+float noteHeightAt(float width, const char* text, float px) {
     ImFont* f = fonts::ui();
-    const float px = prose();
     if (text == nullptr || text[0] == '\0') { return 0.0f; }
     return wrapH(f, px, width - cascade::gui::px(12.0f), text) + cascade::gui::px(9.0f);
 }
 
-void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
-              const char* text) {
+void drawNoteAt(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent, const char* text,
+               float px) {
     if (dl == nullptr || width < cascade::gui::px(30.0f) || text == nullptr ||
         text[0] == '\0') {
         return;
     }
     ImFont* f = fonts::ui();
-    const float px = prose();
-    const float h = noteHeight(width, text);
+    const float h = noteHeightAt(width, text, px);
     dl->AddRectFilled(tl, ImVec2(tl.x + width, tl.y + h), theme::withAlpha(accent, 0.10f));
     dl->AddRectFilled(tl, ImVec2(tl.x + cascade::gui::px(2.0f), tl.y + h), accent);
     dl->AddText(f, px, ImVec2(tl.x + cascade::gui::px(9.0f), tl.y + cascade::gui::px(4.0f)),
                 accent, text, nullptr, width - cascade::gui::px(12.0f));
+}
+
+// THE ORDINARY CASE - every call site in this file bar THE CONTROL DECK's
+// compact-mode texts - at the window's own prose size, unchanged from before
+// noteHeightAt()/drawNoteAt() existed.
+float noteHeight(float width, const char* text) { return noteHeightAt(width, text, prose()); }
+
+void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent, const char* text) {
+    drawNoteAt(dl, tl, width, accent, text, prose());
 }
 
 // "3 OF 11 SHOWN": the figures in the monospaced face and in amber because
@@ -1363,6 +1379,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     addAll_ = false;
     fitIndex_ = -1;
     updateIndex_ = -1;
+    // Zeroed rather than left stale: the "too narrow" bail-out below returns
+    // before the deck is measured at all, and 0 says so honestly where the
+    // previous frame's figure would claim a deck that was never laid out.
+    upperDeckHeight_ = 0.0f;
 
     ImGui::PushID("pluginstore");
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1827,22 +1847,20 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const ImGuiStyle& style = ImGui::GetStyle();
     const float fieldH = uiPx + style.FramePadding.y * 2.0f + cascade::gui::px(6.0f);
     const char* searchLegend = "Searches name, maker and description.";
-    // WRAPPED, NOT ASSUMED SINGLE-LINE. This sentence is drawn wrapped to
-    // wellInner (below), and wellInner is a third of the page less two lots
-    // of padding - narrow enough, at a large enough face, that the sentence
-    // can take two lines. A height that assumed one (tinyH alone) let the
-    // count line under it print through the sentence's own second line the
-    // moment that happened, which is exactly what a bigger UI scale does to
-    // it: the well and the face do not grow by quite the same factor, so the
-    // line count this sentence takes is not fixed across scales.
-    const float searchLegendH = wrapH(uf, tiny, wellInner, searchLegend);
-    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + searchLegendH + 4.0f +
-                         countLineHeight() + kPad;
 
     const char* showNote =
         "Three states and three kinds, and every module is in exactly one of each. NOT "
         "DECLARED is not a gap in this window: the catalogue index carries no capability "
         "field, so a module's kind is only known once it is fitted.";
+    // THE SAME TWO FACTS, SHORTER - used ONLY in `compact` below, never in the
+    // ordinary case, so the desktop at UI scale 1.0 keeps the sentence above
+    // verbatim. Both wordings say the states-and-kinds partition is disjoint
+    // and exhaustive and both name the reason NOT DECLARED exists; this one
+    // says it in fewer words because it is the last thing standing between
+    // the deck and gui::pageDeckHeightCap() on the docked tablet.
+    const char* showNoteCompact =
+        "Three states, three kinds - each module is one of each. NOT DECLARED: no "
+        "capability field until fitted.";
     // TWO COLUMNS WHEN THEY FIT, ONE WHEN THEY DO NOT. A rocker whose label
     // plate has been squeezed off the row is a switch nobody can read, so the
     // well grows taller rather than letting that happen.
@@ -1854,6 +1872,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // of the row. At 14 px the longest of these six needs about 82 px of
     // column before its count, so 74 was already the wrong side of the line
     // and said so nowhere.
+    //
+    // THE COUNT RESERVE IS TWO DIGITS, NOT THREE, and this is a measured
+    // change and not a fudge: the largest of the six groups this rocker can
+    // ever report is bounded by model.modules.size(), and the largest
+    // catalogue this window has ever been handed a figure for is 27 (the
+    // desktop's live index, post-Android) against 14 bundled on Android. Two
+    // digits covers up to 99 - more than triple the biggest catalogue this
+    // product has shipped.
     const float showRockerMinW = cascade::gui::px(16.0f) + cascade::gui::px(7.0f) +
                                  std::max({textW(uf, tiny, "NOT DECLARED"),
                                            textW(uf, tiny, "OTHER KINDS"),
@@ -1862,12 +1888,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                                            textW(uf, tiny, "DECODERS"),
                                            textW(uf, tiny, "FITTED")}) +
                                  cascade::gui::px(12.0f) + cascade::gui::px(6.0f) +
-                                 textW(rf, tiny, "000");
-    const float showColW = (wellInner - cascade::gui::px(12.0f)) * 0.5f;
-    const bool showTwoCols = showColW >= showRockerMinW;
-    const float showRows = showTwoCols ? 3.0f : 6.0f;
-    const float deckBH = kPad + legH + 8.0f + kRockerH * showRows + 8.0f +
-                         noteHeight(wellInner, showNote) + kPad;
+                                 textW(rf, tiny, "00");
 
     // WHERE THE MODULES CAME FROM, in one line. "no catalogue source set" is a
     // configuration fault on the desktop and would be a lie here: a bundled
@@ -1877,38 +1898,152 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             ? std::string("this build - the modules are inside it, nothing is fetched")
         : model.sourceUrl.empty() ? std::string("no catalogue source set")
                                   : model.sourceUrl;
-    // px() ON THE GAP, from the scaling slice: every figure in this window is
-    // in scaled pixels, and the bundled line is drawn in the same well as the
-    // url it replaces.
-    const float srcTextW = wellInner - kCheckW - cascade::gui::px(8.0f);
-    const float srcLineH = std::max(kKeyH, wrapH(uf, tiny, srcTextW, sourceLine.c_str()));
-    float deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
-                   srcLineH + kPad;
-    if (!model.sourceStatus.empty()) {
-        deckCH += 6.0f + wrapH(uf, tiny, wellInner, model.sourceStatus.c_str());
-    }
-    if (!model.sourceError.empty()) {
-        deckCH += 6.0f + noteHeight(wellInner, model.sourceError.c_str());
-    }
-    if (model.busy) { deckCH += 6.0f + 14.0f + 4.0f + kKeyH; }
+
+    // THE SEARCH WELL'S OWN FLOOR, measured rather than felt: the CLEAR key at
+    // its own measured width, a gap, and roughly a dozen characters of typed
+    // query - enough to type a plugin's name or its maker and still read it
+    // back, which is what this field is actually for (see searchLegend just
+    // above: "Searches name, maker and description."). Only spent when
+    // `compact` below says the deck needs it; the search well is exactly a
+    // third of the page otherwise, unchanged from before this existed.
+    const float searchFloorInner =
+        kClearW + cascade::gui::px(8.0f) + textW(uf, uiPx, "a plugin name") +
+        cascade::gui::px(16.0f);
+
+    // ONE FORMULA FOR THE THREE WELLS' HEIGHT, CALLED TWICE - once to find
+    // out whether their usual, full-size explanatory prose at an equal-thirds
+    // split fits under gui::pageDeckHeightCap(), and again (at `notePx` and
+    // the possibly-narrower `searchInnerW` below, which the first call's own
+    // verdict decides) to lay out the wells for real. A second,
+    // independently-typed copy of this arithmetic is exactly the kind of
+    // drift the rest of this window measures rather than guesses at - see
+    // storeCheckKeyWidth() and moduleKindTagWidth() for the same reasoning
+    // applied to a single figure rather than a whole well.
+    //
+    // `notePx` touches ONLY the wrapped explanatory sentences (this well's own
+    // caption paragraph, the catalogue source line, its status and its
+    // error) - never the rocker LABELS, the field, the keys or the captions,
+    // which are short, functional, and stay at the size every other control
+    // in this window reads at. Shrinking a paragraph nobody has to act on
+    // this second is a legibility trade a fully hidden module list does not
+    // let this window avoid making; shrinking a switch's own label is not
+    // the same trade and is not made here.
+    struct DeckWellHeights {
+        float deckAH = 0.0f;
+        float deckBH = 0.0f;
+        float deckCH = 0.0f;
+        bool showTwoCols = false;
+        float showRows = 6.0f;
+        float showColW = 0.0f;
+        float searchLegendH = 0.0f;
+        float srcLineH = 0.0f;
+        float srcTextW = 0.0f;
+    };
+    auto computeWellHeights = [&](float notePx, float searchInnerW, float showInnerW,
+                                  float sortInnerW, const char* showNoteText) {
+        DeckWellHeights r;
+        // WRAPPED, NOT ASSUMED SINGLE-LINE - this sentence is drawn wrapped to
+        // its own well's width, narrow enough at a large enough face to take
+        // more than one line, and the line count it takes is not fixed
+        // across scales or across the search well's own width.
+        r.searchLegendH = wrapH(uf, notePx, searchInnerW, searchLegend);
+        r.deckAH = kPad + legH + 8.0f + fieldH + 9.0f + r.searchLegendH + 4.0f +
+                  countLineHeight() + kPad;
+
+        r.showColW = (showInnerW - cascade::gui::px(12.0f)) * 0.5f;
+        r.showTwoCols = r.showColW >= showRockerMinW;
+        r.showRows = r.showTwoCols ? 3.0f : 6.0f;
+        r.deckBH = kPad + legH + 8.0f + kRockerH * r.showRows + 8.0f +
+                  noteHeightAt(showInnerW, showNoteText, notePx) + kPad;
+
+        // px() ON THE GAP, from the scaling slice: every figure in this
+        // window is in scaled pixels, and the bundled line is drawn in the
+        // same well as the url it replaces.
+        r.srcTextW = sortInnerW - kCheckW - cascade::gui::px(8.0f);
+        r.srcLineH = std::max(kKeyH, wrapH(uf, notePx, r.srcTextW, sourceLine.c_str()));
+        r.deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
+                  r.srcLineH + kPad;
+        if (!model.sourceStatus.empty()) {
+            r.deckCH += 6.0f + wrapH(uf, notePx, sortInnerW, model.sourceStatus.c_str());
+        }
+        if (!model.sourceError.empty()) {
+            r.deckCH += 6.0f + noteHeightAt(sortInnerW, model.sourceError.c_str(), notePx);
+        }
+        if (model.busy) { r.deckCH += 6.0f + 14.0f + 4.0f + kKeyH; }
+        return r;
+    };
+
+    const DeckWellHeights atFullProse =
+        computeWellHeights(tiny, wellInner, wellInner, wellInner, showNote);
+    const float deckH_atFullProse =
+        std::max(atFullProse.deckAH, std::max(atFullProse.deckBH, atFullProse.deckCH));
+    // COMPACT: the deck's usual equal-thirds split, at this window's usual
+    // full prose size, would push the whole upper deck (the ADD ALL well, the
+    // state banner already drawn above by this point, and these three wells)
+    // past gui::pageDeckHeightCap() - which pushes the MODULE LIST and the
+    // DATA PLATE below it, the whole reason this window exists. Two things
+    // give way together, and only as far as each is measured to need to:
+    // the SEARCH well gives up width down to its own floor (searchFloorInner
+    // above) and the SHOW well takes it, since the SHOW well's caption and
+    // rocker rows are what a narrow well costs the most; and every wrapped
+    // explanatory sentence across all three wells drops to `notePx`. Nothing
+    // about this triggers on the desktop: at UI scale 1.0 the trial above is
+    // already comfortably under the cap at every width this window can be
+    // dragged to (proven down to its own 640 px floor), so `compact` is
+    // provably always false there and every existing pinned figure at scale
+    // 1.0 - including the equal three-way well split - is untouched.
+    const bool compact = (addAllTotal + bannerH + kGap + deckH_atFullProse + kGap) >
+                         cascade::gui::pageDeckHeightCap(height);
+    const float notePx = compact ? cascade::gui::px(fonts::kTinySize) : tiny;
+    const float searchBorrow =
+        compact ? std::max(0.0f, wellInner - searchFloorInner) : 0.0f;
+    const float searchInnerFinal = wellInner - searchBorrow;
+    const float showInnerFinal = wellInner + searchBorrow;
+    const DeckWellHeights wh =
+        compact ? computeWellHeights(notePx, searchInnerFinal, showInnerFinal, wellInner,
+                                     showNoteCompact)
+                : atFullProse;
+
+    const float deckAH = wh.deckAH;
+    const float deckBH = wh.deckBH;
+    const float deckCH = wh.deckCH;
+    const bool showTwoCols = wh.showTwoCols;
+    const float showRows = wh.showRows;
+    const float showColW = wh.showColW;
+    const float searchLegendH = wh.searchLegendH;
+    const float srcLineH = wh.srcLineH;
+    const float srcTextW = wh.srcTextW;
+    // THE THREE WELLS' OWN WIDTHS - equal thirds unless `compact` moved
+    // width from SEARCH to SHOW, per the note above.
+    const float searchWellW = searchInnerFinal + kPad * 2.0f;
+    const float showWellW = showInnerFinal + kPad * 2.0f;
+    const float sortWellW = wellInner + kPad * 2.0f;
 
     const float deckH = std::max(deckAH, std::max(deckBH, deckCH));
+    // THE WHOLE UPPER DECK, MEASURED HERE AND NOWHERE ELSE - see
+    // PluginStoreView::upperDeckHeight() in the header. Exactly
+    // bodyTL.y - origin.y below: addAllTotal already carries the gap after
+    // the ADD ALL well (addAllTotal = addAllH + kGap), one more kGap sits
+    // between the banner and THE CONTROL DECK (the SetCursorScreenPos that
+    // produced deckTL), and a third sits between the three wells and the
+    // body (the SetCursorScreenPos that produces bodyTL, right after this).
+    upperDeckHeight_ = addAllTotal + bannerH + kGap + deckH + kGap;
     ImGui::Dummy(ImVec2(width, deckH));
 
     // ---- CATALOGUE SEARCH ---------------------------------------------------
     {
         const ImVec2 tl(deckTL.x, deckTL.y);
-        const ImVec2 br(tl.x + wellW, tl.y + deckH);
+        const ImVec2 br(tl.x + searchWellW, tl.y + deckH);
         addDeckWell(dl, tl, br);
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "CATALOGUE SEARCH");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), searchInnerFinal, "CATALOGUE SEARCH");
         y += legH + 8.0f;
 
         const float clearW = kClearW;
         const ImVec2 fTL(tl.x + kPad, y);
-        const ImVec2 fBR(fTL.x + wellInner - clearW - 8.0f, y + fieldH);
+        const ImVec2 fBR(fTL.x + searchInnerFinal - clearW - 8.0f, y + fieldH);
         drawFreqDrumWell(dl, fTL, fBR);
         // THE QUERY IS LETTERED IVORY, not amber. Amber in this palette is a
         // READING - something the radio or the machine measured - and what the
@@ -1934,9 +2069,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             deck.search[0] = '\0';
         }
         y += fieldH + 9.0f;
-        dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted, searchLegend,
-                    nullptr, wellInner);
-        y += wrapH(uf, tiny, wellInner, searchLegend) + 4.0f;
+        dl->AddText(uf, notePx, ImVec2(tl.x + kPad, y), theme::kInkMuted, searchLegend,
+                    nullptr, searchInnerFinal);
+        y += searchLegendH + 4.0f;
         // WHAT IS ON SCREEN AND WHAT EXISTS, both. "3 shown" alone cannot tell
         // a short catalogue from a filter that is hiding most of it.
         drawCountLine(dl, ImVec2(tl.x + kPad, y), static_cast<int>(visible.size()),
@@ -1950,13 +2085,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
     // ---- SHOW ---------------------------------------------------------------
     {
-        const ImVec2 tl(deckTL.x + wellW + kGap, deckTL.y);
-        const ImVec2 br(tl.x + wellW, tl.y + deckH);
+        const ImVec2 tl(deckTL.x + searchWellW + kGap, deckTL.y);
+        const ImVec2 br(tl.x + showWellW, tl.y + deckH);
         addDeckWell(dl, tl, br);
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "SHOW");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), showInnerFinal, "SHOW");
         y += legH + 8.0f;
 
         int nFitted = 0;
@@ -1977,7 +2112,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 case KindGroup::Undeclared: ++nUndec; break;
             }
         }
-        const float colW = showTwoCols ? showColW : wellInner;
+        const float colW = showTwoCols ? showColW : showInnerFinal;
         struct Row {
             const char* label;
             bool* flag;
@@ -1993,8 +2128,20 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             {"NOT DECLARED", &deck.showUndeclared, nUndec, "su"},
         };
         for (int i = 0; i < 6; ++i) {
-            const float rx =
-                tl.x + kPad + ((showTwoCols && i % 2 == 1) ? (colW + 12.0f) : 0.0f);
+            // px() ON THE COLUMN GAP TOO. This literal was the one figure in
+            // the second column's position that never went through gui::px()
+            // - every desktop pixel here does, per ui_scale.hpp's own rule -
+            // so at UI scale 2.0 the gap the layout RESERVED (showColW above
+            // subtracts px(12.0f)) and the gap actually DRAWN diverged: 24 px
+            // reserved, 12 drawn, and the second column sat 12 scaled pixels
+            // closer to the first than the space allotted for it. Harmless in
+            // that it never overlapped anything - showColW's own reservation
+            // covers it - but a gap that quietly stops scaling with everything
+            // beside it is exactly the fault this application keeps a whole
+            // header (gui/ui_scale.hpp) to prevent.
+            const float rx = tl.x + kPad + ((showTwoCols && i % 2 == 1)
+                                                ? (colW + cascade::gui::px(12.0f))
+                                                : 0.0f);
             const float ry =
                 y + kRockerH * static_cast<float>(showTwoCols ? (i / 2) : i);
             char cnt[16];
@@ -2005,14 +2152,15 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             }
         }
         y += kRockerH * showRows + 8.0f;
-        drawNote(dl, ImVec2(tl.x + kPad, y), wellInner, theme::kInkMuted, showNote);
+        drawNoteAt(dl, ImVec2(tl.x + kPad, y), showInnerFinal, theme::kInkMuted,
+                  compact ? showNoteCompact : showNote, notePx);
         dl->PopClipRect();
     }
 
     // ---- SORT and CATALOGUE SOURCE -----------------------------------------
     {
-        const ImVec2 tl(deckTL.x + (wellW + kGap) * 2.0f, deckTL.y);
-        const ImVec2 br(tl.x + wellW, tl.y + deckH);
+        const ImVec2 tl(deckTL.x + searchWellW + kGap + showWellW + kGap, deckTL.y);
+        const ImVec2 br(tl.x + sortWellW, tl.y + deckH);
         addDeckWell(dl, tl, br);
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
@@ -2040,7 +2188,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // WHERE THE MODULES WOULD COME FROM, printed before the key that goes
         // and gets them. A store that will not say what it is about to contact
         // is asking for a decision it has withheld the facts for.
-        dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted,
+        dl->AddText(uf, notePx, ImVec2(tl.x + kPad, y), theme::kInkMuted,
                     sourceLine.c_str(), nullptr, srcTextW);
         if (drawDeckKey(dl, ImVec2(br.x - kPad - kCheckW, y),
                         ImVec2(br.x - kPad, y + kKeyH),
@@ -2095,17 +2243,17 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         }
         if (!model.sourceStatus.empty()) {
             y += 6.0f;
-            dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted,
+            dl->AddText(uf, notePx, ImVec2(tl.x + kPad, y), theme::kInkMuted,
                         model.sourceStatus.c_str(), nullptr, wellInner);
-            y += wrapH(uf, tiny, wellInner, model.sourceStatus.c_str());
+            y += wrapH(uf, notePx, wellInner, model.sourceStatus.c_str());
         }
         if (!model.sourceError.empty()) {
             // VERBATIM AND IN RUST. A private repository answers 404, a TLS
             // failure says so, and the text PluginRepo wrote is the only
             // evidence the user has.
             y += 6.0f;
-            drawNote(dl, ImVec2(tl.x + kPad, y), wellInner, theme::kAlarm,
-                     model.sourceError.c_str());
+            drawNoteAt(dl, ImVec2(tl.x + kPad, y), wellInner, theme::kAlarm,
+                      model.sourceError.c_str(), notePx);
         }
         dl->PopClipRect();
     }
