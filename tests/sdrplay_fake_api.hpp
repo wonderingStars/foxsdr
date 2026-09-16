@@ -110,6 +110,12 @@ public:
     abi::ErrT initResult = abi::Success;
     abi::ErrT updateResult = abi::Success;
     abi::ErrT swapResult = abi::Success;
+    // What Uninit itself answers - Success on every prior test, because
+    // nothing before the 0.97.1 hang report needed stop()'s OWN teardown call
+    // to refuse. See uninitResult's use below: a stop() whose Uninit answers
+    // sdrplay_api_ServiceNotResponding is the service declaring itself gone
+    // through a DIFFERENT call than the one updateLocked already watches.
+    abi::ErrT uninitResult = abi::Success;
     // The service acknowledges a queued Update through the changed flags in
     // the next stream callback. With this on, the fake fires an empty callback
     // carrying the right flag the instant the Update returns - which is what
@@ -171,6 +177,21 @@ public:
     std::atomic<bool> wedgedDeviceBlocksTeardown{true};
     std::atomic<bool> uninitEnteredWhileWedged{false};
     std::atomic<bool> releaseEnteredWhileWedged{false};
+
+    // A WEDGED ReleaseDevice ON ITS OWN, with no Update involved at all.
+    //
+    // Added for the 0.97.1 hang report: a GUI thread inside closeDevice's
+    // ReleaseDevice, with the log showing stop()'s OWN Uninit had already
+    // answered sdrplay_api_ServiceNotResponding three lines earlier. That is a
+    // third way the service goes quiet - not a wedged scan (hangInGetDevices)
+    // and not a wedged live control (hangInUpdate) - so it needs its own knob
+    // rather than reusing either. Modelled exactly like hangInGetDevices:
+    // polled, so a caller released later can still leave, and observed
+    // through flags so a test can say WHO went in.
+    std::atomic<bool> hangInReleaseDevice{false};
+    std::atomic<bool> releaseReleaseDeviceHang{false};
+    std::atomic<bool> insideReleaseDevice{false};
+    std::atomic<bool> leftReleaseDevice{false};
 
     // --- what the tests observe ------------------------------------------
 
@@ -420,6 +441,16 @@ private:
         if (f == nullptr || d == nullptr) { return abi::Fail; }
         f->note("ReleaseDevice");
         queueBehindWedgedDevice(f, f->releaseEnteredWhileWedged);
+        // A SERVICE THAT NEVER ANSWERS ReleaseDevice ON ITS OWN - see
+        // hangInReleaseDevice. Noted first, so the call is on the record
+        // before it disappears, exactly like hangInGetDevices.
+        if (f->hangInReleaseDevice.load()) {
+            f->insideReleaseDevice.store(true);
+            while (!f->releaseReleaseDeviceHang.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            f->leftReleaseDevice.store(true);
+        }
         ++f->releaseCount;
         d->dev = nullptr;
         return abi::Success;
@@ -489,6 +520,15 @@ private:
         // Noted first, then queued behind a wedged device - so the call is on
         // the record even when it never comes back out. See updateHangDepth.
         queueBehindWedgedDevice(f, f->uninitEnteredWhileWedged);
+        if (f->uninitResult != abi::Success) {
+            // A REFUSAL, NOT A HANG: the service answered - the same shape
+            // sdrplay_api_Update refuses with (updateResult) - so the
+            // callbacks are not promised stopped and initialised_ is left for
+            // the caller to decide about. This is what stop()'s OWN Uninit
+            // does in the 0.97.1 report: comes back fast with
+            // sdrplay_api_ServiceNotResponding, not a hang.
+            return f->uninitResult;
+        }
         // The API's contract: Uninit returns with the callbacks stopped.
         f->streamA = nullptr;
         f->streamB = nullptr;

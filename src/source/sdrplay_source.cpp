@@ -722,8 +722,10 @@ bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
     if (err != abi::ServiceNotResponding) { return false; }
     // THE SERVICE HAS DECLARED ITSELF GONE, so nothing of ours enters the
     // vendor DLL for this device again - including the teardown's Uninit,
-    // ReleaseDevice and Close. See vendorUnreachableLocked(). Called only from
-    // updateLocked, which holds devMutex_.
+    // ReleaseDevice and Close. See vendorUnreachableLocked(). Called from
+    // updateLocked for its own Update, and from stopStreamingLocked for its
+    // own Uninit (0.97.1) - every caller holds devMutex_, which every
+    // *Locked helper requires.
     serviceGone_ = true;
     // The same sentence the enumeration skip uses, because it is the same
     // problem and the same remedy: the service, not the radio, is what has to
@@ -1405,6 +1407,21 @@ void SdrPlaySource::stopStreamingLocked() {
     const abi::ErrT err = a.Uninit(device_.dev);
     if (err != abi::Success && err != abi::NotInitialised) {
         core::diagWarnf("source: SDRplay Uninit failed - %s", errText(a, err).c_str());
+        // THE SAME RULE updateLocked ALREADY FOLLOWS FOR ITS OWN FAILURES
+        // (0.96.1), applied to this call too (0.97.1's hang report).
+        // sdrplay_api_ServiceNotResponding means the thing holding the USB
+        // handle is gone NO MATTER WHICH CALL SAYS SO, and until this line
+        // only updateLocked's own failures ever reached noteIfServiceDead -
+        // stop()'s own Uninit answering it here left serviceGone_ false, so
+        // vendorUnreachableLocked() stayed false and the very next thing that
+        // touched this device (closeDevice()'s ReleaseDevice below, called
+        // moments later when the user picked a different source) walked
+        // straight into the vendor DLL with no guard at all. The report's log
+        // is exactly that order: "SDRplay Uninit failed -
+        // sdrplay_api_ServiceNotResponding (14)", then two refused/abandoned
+        // calls, then "closing SDRplay RSPdx before opening another device" -
+        // and the GUI thread never came back from that ReleaseDevice.
+        noteIfServiceDead(err, "stop");
     }
     initialised_ = false;
     running_.store(false, std::memory_order_relaxed);
