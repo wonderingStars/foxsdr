@@ -33,4 +33,42 @@
         <domain includeSubdomains="false">localhost</domain>
     </domain-config>
 
+    <!--
+      A DEBUGGABLE BUILD MAY TRUST A CERTIFICATE THE PERSON TESTING IT
+      INSTALLED, AND A SHIPPED ONE MAY NOT. The platform enforces that split
+      itself: everything inside <debug-overrides> applies only when the
+      INSTALLED package carries android:debuggable, which is exactly the flag
+      core/net_post.cpp already reads to decide whether this build may post at
+      all (readDebuggableFlag). A release APK ignores this block entirely -
+      aapt2 keeps it in the resource, and the platform does not consult it - so
+      the shipped application still trusts the system store and nothing else.
+
+      WHY IT IS NEEDED. Both uploads are https, and the crash endpoint's
+      certificate is a public one - which means there is no way to watch a real
+      upload arrive at a real server on a development machine: the server an
+      emulator can reach is the host at 10.0.2.2, and no public CA will name
+      that address. Testing it over cleartext instead tests a different
+      transport (HttpURLConnection, not HttpsURLConnection) and therefore
+      proves nothing about the one that ships. With this block, the host can
+      present a certificate for 10.0.2.2 from a CA installed on the device, and
+      the SAME code path that posts to foxsdr.com is the one under test. See
+      tools/android_tls_front.py, which is the other half of that arrangement.
+
+      THE SYSTEM ANCHORS ARE LISTED FIRST AND ON PURPOSE: a trust-anchors block
+      REPLACES the default set rather than adding to it, so omitting them would
+      leave a debuggable build unable to verify any public certificate - which
+      would silently turn every real-endpoint test into a failure whose cause
+      is this file.
+
+      tests/test_android_network_config.cpp holds all of this: cleartext
+      refused by default, the loopback exception unchanged, and - the assertion
+      that matters - a user trust anchor only ever inside this block.
+    -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+
 </network-security-config>

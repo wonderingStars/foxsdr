@@ -214,6 +214,12 @@ set(CASCADE_ANDROID_TEST_NAMES
     # a different implementation of the same GNU unwind ABI this file's
     # header explains crash_handler_posix.cpp relies on.
     test_crash_capture test_crash_absorbed_child
+    # ...and where a written stack begins, which is the one part of the report
+    # the two unwinders disagree about: the Android walk starts inside the
+    # handler, so the rule that trims it back to the faulting instruction is
+    # pure logic worth running in BOTH configurations (it is what stopped every
+    # Android report grouping under captureFramesFromContext).
+    test_crash_stack_start
     # The hang watchdog: other-thread stack capture over tgkill + a realtime
     # signal, same as desktop Linux, differing only in which unwinder the
     # signalled thread calls on itself (see hang_watchdog.cpp's file header).

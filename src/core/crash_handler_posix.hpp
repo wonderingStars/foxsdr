@@ -49,6 +49,35 @@ void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int at
 // mayWalkCurrentThread half of the Windows hook's contract.
 int captureFramesForTest(bool mayWalkCurrentThread);
 
+// How far into a captured walk the faulting instruction is looked for. Small
+// on purpose: the frames ahead of it are this handler's own and the kernel's
+// trampoline, and a walk whose shape this rule does not recognise inside the
+// first few frames is one nobody has measured - it is written whole instead.
+constexpr int kStackStartSearchFrames = 8;
+
+// WHERE A WRITTEN STACK BEGINS, and why the answer is not always frame zero.
+//
+// The Android branch's _Unwind_Backtrace unwinds from where it is CALLED -
+// there is no supplied-context form of it - so a captured walk starts inside
+// this handler and only reaches the fault three or four frames down; the
+// desktop libunwind branch walks the signal's own ucontext and starts AT the
+// fault. Written out raw, an Android report therefore names
+// captureFramesFromContext as its first frame, which is what the crash
+// dashboard groups a report by (foxsdrWebsite symbols.go walks DOWN to the
+// first frame it can put a name to) - so every Android fault, whatever broke,
+// shared one group. Measured on emulator-5556 against the real site; see
+// tests/test_crash_stack_start.cpp for the frames that came off the wire.
+//
+// The faulting instruction is already known independently: it is read from the
+// ucontext and written as the report's `address:` field. This returns the index
+// of the first frame equal to that address, or 0 - meaning "write everything" -
+// when the address is zero, absent, or further down than
+// kStackStartSearchFrames. On desktop that is frame 0, and nothing changes.
+//
+// Called from the fault path, so it allocates nothing, locks nothing, and
+// touches no global state.
+int stackStartIndex(const unsigned long* frames, int frameCount, std::uintptr_t faultAddress);
+
 // The Linux stand-in for TestFaultKind::InvalidParameter. glibc has no CRT
 // invalid-parameter fail-fast to exercise, so this is the closest honest
 // equivalent: a runtime-detected fatal condition (a direct abort()) reported
