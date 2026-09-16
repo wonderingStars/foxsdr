@@ -1438,6 +1438,125 @@ void testATeardownAfterAnAbandonedControlNeverEntersTheVendorDll() {
     CHECK(pulled.closeCount == 1);
 }
 
+// --- 12f. stop()'s OWN Uninit is a THIRD way the service goes quiet --------
+//
+// THE 0.97.1 HANG REPORT (RSPdx, Windows 10.0.28000), and a third shape after
+// 12c's dead-on-a-control and 12e's abandoned-control-then-teardown. Its log
+// tail is
+//
+//   warn source: SDRplay Uninit failed - sdrplay_api_ServiceNotResponding (14)
+//   info source: stream health - reads 10, with samples 10, timeouts 2012, ...
+//   warn source: SDRplay start failed - SDRplay Init failed:
+//                sdrplay_api_AlreadyInitialised (9)
+//   warn source: SDRplay enumeration abandoned - the SDRplay service did not
+//                answer within 3 s - restart the SDRplay API service
+//   info source: SDRplay scans are held off for 60 s
+//   info source: closing SDRplay RSPdx before opening another device
+//
+// and the GUI thread, symbolised against the 0.97.0 map, is
+//
+//   ntdll -> KERNELBASE -> sdrplay_api.dll -> sdrplay_api.dll
+//         -> SdrPlaySource::closeDevice +189
+//         -> SdrPlaySource::~SdrPlaySource -> `scalar deleting destructor'
+//         -> Pipeline::setSource -> AppWindow::selectSource
+//         -> AppWindow::drawSourceSection -> drawMenuColumn -> drawUi -> run
+//         -> main
+//
+// stopStreamingLocked() had already set initialised_ = false by the time
+// closeDevice() ran (the log's Uninit failure is stop()'s own, minutes
+// earlier), so closeDevice() skipped stopStreamingLocked() entirely and went
+// straight to its OWN unguarded call: sdrplay_api_ReleaseDevice, gated only by
+// vendorUnreachableLocked(). That gate was false, because nothing before this
+// fix ever told it stop()'s Uninit had already heard the service was gone -
+// noteIfServiceDead was wired to updateLocked's failures only. The user
+// picking a different source in the Source combo is what destroys the old one
+// and calls closeDevice(); the log's last line is that exact click.
+
+void testStopsOwnUninitGoingServiceNotRespondingKeepsCloseDeviceOffTheVendorDll() {
+    // THE FAKE AND THE SOURCE ARE ON THE HEAP AND NEITHER IS DESTROYED before
+    // the hang is released, for the same reason the sibling tests give: this
+    // test proves the defect by letting the wedge actually run, on a thread
+    // this test owns, so a build without the fix REPORTS rather than hangs
+    // the whole suite.
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("1810012345", abi::kRspDx);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    CHECK(src->start());
+    CHECK(!src->faulted());
+
+    // stop()'s OWN Uninit answers the service-is-gone error - the report's
+    // first log line, and a DIFFERENT call than the one 12c/12d/12e already
+    // cover (those are updateLocked's Update, not stopStreamingLocked's
+    // Uninit).
+    fake->uninitResult = abi::ServiceNotResponding;
+    src->stop();
+    CHECK(!src->running());
+
+    // ...AND THE SERVICE STAYS WEDGED FOR THE NEXT CALL IN, which in the
+    // field was closeDevice()'s ReleaseDevice a few log lines later (a start()
+    // and an enumeration were refused/abandoned in between; neither touches
+    // this device's ReleaseDevice, so this test skips straight to the call
+    // the report's stack is actually inside).
+    fake->hangInReleaseDevice.store(true);
+
+    std::atomic<bool> returned{false};
+    std::atomic<long long> elapsedMs{-1};
+    std::thread caller([&]() {
+        const auto t0 = std::chrono::steady_clock::now();
+        src->closeDevice();
+        elapsedMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count());
+        returned.store(true);
+    });
+
+    // Generous, and deliberately shorter than "forever": what is being ruled
+    // out is a call that does not come back at all.
+    for (int i = 0; i < 400 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // THE DEFECT, IN ONE LINE. Before the fix this is the check that fails:
+    // closeDevice() is still inside sdrplay_api_ReleaseDevice, because
+    // vendorUnreachableLocked() never learned the service was already gone.
+    CHECK(returned.load());
+
+    if (returned.load()) {
+        const long long ms = elapsedMs.load();
+        CHECK(ms < static_cast<long long>(cascade::core::HangWatchdog::kDefaultThresholdMs));
+        if (ms >= static_cast<long long>(cascade::core::HangWatchdog::kDefaultThresholdMs)) {
+            std::printf("     closeDevice() took %lld ms\n", ms);
+        }
+        // FIXED THE RIGHT WAY, NOT BY LUCK: closeDevice() never entered
+        // ReleaseDevice at all, because stop()'s Uninit failure now marks the
+        // service gone the same way a control's failure already does -
+        // vendorUnreachableLocked() correctly skipped the call rather than
+        // happening to win a race against the fake's hang.
+        CHECK(!fake->insideReleaseDevice.load());
+        CHECK(!fake->called("ReleaseDevice"));
+        CHECK(src->deviceDead());
+        CHECK(std::string(src->lastError()).find("service stopped answering") !=
+              std::string::npos);
+        CHECK(!src->isOpen());
+    } else {
+        std::printf(
+            "     closeDevice() never returned - the checks that depend on it were not run\n");
+    }
+
+    // Let a worker that DID go in leave before this process does (only
+    // reachable on the unfixed code path, where insideReleaseDevice went
+    // true).
+    fake->releaseReleaseDeviceHang.store(true);
+    for (int i = 0; i < 500 && fake->insideReleaseDevice.load() && !fake->leftReleaseDevice.load();
+         ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    for (int i = 0; i < 500 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (caller.joinable()) { caller.join(); }
+}
+
 void testAHealthyControlIsStillSynchronousAndAcknowledged() {
     // The bound must not have changed the ordinary path. A service that
     // answers is updated on the spot, the acknowledgement flag is still
@@ -1604,11 +1723,12 @@ int main() {
     testServiceNotRespondingMakesTheDeviceDead();
     testAHealthyControlIsStillSynchronousAndAcknowledged();
     testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence();
-    // The two that abandon a worker inside their own fake go last, in the
-    // order they were written, and each releases and waits for its own before
-    // it returns.
+    // The three that abandon or hang a worker inside their own fake go last,
+    // in the order they were written, and each releases and waits for its own
+    // before it returns.
     testAWedgedControlIsAbandonedAndTheDeviceIsDead();
     testATeardownAfterAnAbandonedControlNeverEntersTheVendorDll();
+    testStopsOwnUninitGoingServiceNotRespondingKeepsCloseDeviceOffTheVendorDll();
     // LAST, and deliberately: it abandons a worker inside its own fake and
     // releases it again, and nothing that follows should have to reason about
     // a thread this one left running.

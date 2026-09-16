@@ -218,6 +218,31 @@ struct AppConfig {
     // and the picker is one click from the right regional plan.
     std::string bandPlanSelection = "world";
 
+    // Ribbon size and segment-colour palette for the overlay above (issue #1:
+    // "Band plan I think needs to be a bit bigger on the top, would be nice
+    // to see a few options for size and maybe colour"). Both default to
+    // today's only behaviour, so an existing install looks exactly as it did
+    // until the user opens the picker in the Display section.
+    //
+    // "small" | "medium" | "large" — see gui::bandRibbonGeometry for the
+    // actual figures each one draws.
+    std::string bandPlanSize = "small";
+    // "classic" | "vivid" | "mono" — see gui::bandPlanPaletteColor.
+    std::string bandPlanPalette = "classic";
+    // WHICH FACE THE FREQUENCY COUNTER WEARS: "nixie" (the plate as it has
+    // been drawn since 0.88.0), "neon" or "plain". GitHub issue #1 asked to
+    // "swap the frequency display for easier to read display? Maybe a neon
+    // effect or something that stands out", so the two new faces letter a
+    // much larger, higher-contrast figure in the same ten cells.
+    //
+    // DEFAULTS TO THE EXISTING PLATE, and an unknown value loads as that
+    // default rather than as nothing: this file is user-editable, and a typo
+    // must leave the deck looking like itself. The vocabulary itself lives
+    // with the painter, in gui/tune_control.hpp (tunerStyleFromName) - a
+    // config string is the NAME of a style, and what the name means belongs
+    // where the cells are painted.
+    std::string tunerDisplayStyle = "nixie";
+
     // --- Map trails -----------------------------------------------------------
     // TWO SWITCHES, because the request behind them was ambiguous and both
     // readings deserve an answer. A beta tester asked for the flight trail to
@@ -851,6 +876,38 @@ public:
     // On failure returns false with `error` set and the previous target
     // content — if any — intact; the temp file is cleaned up.
     static bool save(const std::string& path, const AppConfig& cfg, std::string& error);
+
+    // THE TWO HALVES save() COMPOSES, SPLIT OUT FOR gui::ConfigWriter (0.97.2).
+    //
+    // Field report "hang ntdll.dll @ cascade::core::ConfigStore::save"
+    // (0.96.3): the GUI thread's periodic debounced save (AppWindow::
+    // maybeSaveConfig, called once a frame) went through the ucrtbase buffered
+    // file write and stopped there - a slow or cloud-synced %APPDATA%, an
+    // antivirus holding the file, and every one of them things the
+    // application has to survive rather than merely hope never happens. The
+    // fix follows this product's established shape for blocking work on the
+    // GUI thread (gui/audio_open.hpp): the write moves to a worker, and the
+    // worker needs the JSON text and the byte-write done as two separate
+    // steps so the CHEAP one (building the JSON) can stay on the GUI thread -
+    // where it belongs, because the config being saved is CURRENT state read
+    // off live objects - while the EXPENSIVE one (the actual file I/O) runs
+    // off it entirely.
+    //
+    // serialize() is everything save() does before it touches the
+    // filesystem: build the JSON text, in the exact on-disk shape save() has
+    // always produced. Pure and fast - it is still called synchronously by
+    // save() itself and by every existing caller of that function, which is
+    // why this split changes nothing about save()'s own behaviour or the
+    // bytes it writes.
+    static std::string serialize(const AppConfig& cfg);
+
+    // writeFile() is everything save() does AFTER the JSON exists: the
+    // atomic temp-file-then-rename this class has always used (see the
+    // header comment above), with no AppConfig in sight. THIS is the
+    // blocking part - the one a slow disk or a locked target can stall on -
+    // and it is the seam gui::ConfigWriter's worker calls: the same
+    // atomicity guarantee, on a thread that is not the GUI thread's.
+    static bool writeFile(const std::string& path, const std::string& text, std::string& error);
 };
 
 }  // namespace cascade::core

@@ -251,14 +251,30 @@ public:
     // devices across one teardown - Transmitter::kThreadJoinWait 500 plus
     // PlutoTx::kWriterJoinWait 1500 = 2000 ms, spent AS WELL AS the source
     // column's 3000. 7000 -> 9000, and kShutdownThresholdMs with it.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 9000;
+    //
+    // AND THE CONFIG SAVE IS THE SECOND (0.97.2). Field report "hang
+    // ntdll.dll @ cascade::core::ConfigStore::save" (0.96.3): the periodic
+    // debounced save used to write the file synchronously ON the GUI thread,
+    // which is also true of the two saves the teardown always performs (the
+    // final-state save and the clean-exit marker, see AppWindow::run()) -
+    // they simply never showed up here because "milliseconds in a healthy
+    // run" was true until a slow or cloud-synced %APPDATA%, or an antivirus
+    // holding the file, made it false. gui/config_writer.hpp moves all three
+    // off the GUI thread and gives the LAST one a single bounded, charged
+    // wait at the very end of the teardown (ConfigWriter::kSaveBound, spent
+    // once no matter how many saves were requested during the teardown,
+    // because they coalesce to the last content - see that file). 9000 ->
+    // 10500, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 10500;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
-    // cancel, two config writes, both ImGui shutdowns, glfwDestroyWindow and
-    // glfwTerminate. None of them has a named bound and all of them together
-    // are milliseconds in a healthy run - the field log that produced the
-    // false report crossed the old threshold 478 ms after the last bounded
-    // guard returned. Three seconds is six times that.
+    // cancel, queuing the teardown's two config saves (the WRITE is
+    // ConfigWriter::kSaveBound above; requesting it is a string copy), both
+    // ImGui shutdowns, glfwDestroyWindow and glfwTerminate. None of them has
+    // a named bound and all of them together are milliseconds in a healthy
+    // run - the field log that produced the false report crossed the old
+    // threshold 478 ms after the last bounded guard returned. Three seconds
+    // is six times that.
     static constexpr unsigned kShutdownReserveMs = 3000;
 
     // The threshold in force from beginShutdown() until stop(). At least
@@ -266,8 +282,9 @@ public:
     // report written against it means something really did wedge rather than
     // that a guard was slow; and short enough that the report is written
     // while the user is still looking at a window that will not close.
-    // tests/test_shutdown_budget.cpp pins the "at least twice".
-    static constexpr unsigned kShutdownThresholdMs = 24000;
+    // tests/test_shutdown_budget.cpp pins the "at least twice". 24000 ->
+    // 27000 with kShutdownBoundedWaitsMs's 9000 -> 10500 above (0.97.2).
+    static constexpr unsigned kShutdownThresholdMs = 27000;
 
     HangWatchdog() = default;
     ~HangWatchdog();

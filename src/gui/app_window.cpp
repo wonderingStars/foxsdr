@@ -48,6 +48,7 @@
 // The MSIX question, asked in exactly two places in this file: whether the
 // startup update check runs at all, and what the Settings > Updates row says.
 #include "core/package_identity.hpp"
+#include "gui/band_plan_style.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
@@ -383,6 +384,29 @@ constexpr const char* kDeemphLabels[3] = {"50 us (EU/world)", "75 us (Americas)"
 constexpr double kDeemphUs[3] = {50.0, 75.0, 0.0};
 constexpr int kDeemphCount = 3;
 
+// Band plan Size/Colour pickers (issue #1). AppConfig::bandPlanSize and
+// ::bandPlanPalette carry these exact spellings — index i here is index i
+// there, in both directions, so the two tables and the int mirrors beside
+// them (AppWindow::bandPlanSizeIndex_/bandPlanPaletteIndex_) can never drift.
+constexpr const char* kBandPlanSizeKeys[3] = {"small", "medium", "large"};
+constexpr const char* kBandPlanSizeLabels[3] = {"Small", "Medium", "Large"};
+constexpr const char* kBandPlanPaletteKeys[3] = {"classic", "vivid", "mono"};
+constexpr const char* kBandPlanPaletteLabels[3] = {"Classic", "Vivid", "Mono"};
+
+int bandPlanSizeIndexFromKey(const std::string& key) {
+    for (int i = 0; i < 3; ++i) {
+        if (key == kBandPlanSizeKeys[i]) { return i; }
+    }
+    return 0;
+}
+
+int bandPlanPaletteIndexFromKey(const std::string& key) {
+    for (int i = 0; i < 3; ++i) {
+        if (key == kBandPlanPaletteKeys[i]) { return i; }
+    }
+    return 0;
+}
+
 // Tick capacity. FreqScale spaces ticks >= 80 px apart, so 128 slots cover a
 // panel over 10K pixels wide before the HIGH end of the axis would truncate.
 constexpr int kMaxTicks = 128;
@@ -521,9 +545,12 @@ bool parseFrequencyHz(const char* text, double& outHz) {
 // place for one of them to be wrong. Both now come from gui/track_metrics.hpp,
 // which is where they are tested against known pairs.
 
-// Field-wise AppConfig comparison for the save debounce. Exact float
-// compares are correct here: both sides come from the same currentConfig()
-// code path, so any difference is a real user-visible change, never noise.
+}  // namespace
+
+// Field-wise AppConfig comparison for the save debounce. DECLARED IN
+// app_window.hpp - see the comment there for why it is not file-local: a
+// field missing from this list is a setting that reaches the file only by
+// accident, and tests/test_config.cpp asks this function directly.
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
            a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
@@ -541,6 +568,11 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.bandPlanSelection == b.bandPlanSelection &&
+           a.bandPlanSize == b.bandPlanSize && a.bandPlanPalette == b.bandPlanPalette &&
+           // The frequency display style: picked in the VIEW bank, so without
+           // it here a choice would reach the file only when something else
+           // changed in the same session.
+           a.tunerDisplayStyle == b.tunerDisplayStyle &&
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
@@ -618,6 +650,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.diagnosticsMinidump == b.diagnosticsMinidump;
 }
 
+namespace {
+
 // --- Plugin browser helpers (P9) ---------------------------------------------
 
 // ASCII case-insensitive equality. Used only to compare plugin FILE NAMES,
@@ -689,11 +723,15 @@ bool readLocalCatalogue(const std::string& path,
 // and waterfall amber. The band is now a RIBBON along the top edge at full
 // palette alpha, plus faint full-height edge lines — same information (extent,
 // boundaries, name), none of the damage to the trace underneath.
-constexpr float kBandRibbonPx = 6.0f;
+//
+// The ribbon's HEIGHT, its label size and its label-min-width rule now come
+// from gui::bandRibbonGeometry (issue #1: "a bit bigger on the top, a few
+// options for size"), keyed by AppConfig::bandPlanSize /
+// bandPlanSizeIndex_ — see kBandPlanSizeKeys above. Only kBandEdgeAlphaScale
+// stays a fixed constant here: it darkens whatever colour the palette
+// resolved to (gui::bandPlanPaletteColor), so it applies the same way
+// whatever size or palette is chosen.
 constexpr float kBandEdgeAlphaScale = 0.55f;
-// A band narrower than this many pixels gets no label — there is nowhere to
-// put one that would not spill over its neighbours.
-constexpr float kBandLabelMinPx = 46.0f;
 
 // Index of the value in arr[0..n) closest to x (ties resolve low). Used to
 // point preset combos at whatever a config file or device readback holds.
@@ -903,6 +941,13 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // spends. Bound here, before anything can ask for a device.
     audioOpen_.bind(pipeline_.audioOpener(), [this] { watchdog_.pause(); },
                     [this] { watchdog_.resume(); });
+
+    // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
+    // EITHER. gui/config_writer.hpp carries the field report ("hang ntdll.dll
+    // @ cascade::core::ConfigStore::save", 0.96.3) and the whole argument.
+    // Unlike audioOpen_ above, no watchdog hooks: config_writer.hpp never
+    // blocks the requesting frame, so there is nothing here to bracket.
+    configWriter_.bind(cascade::core::ConfigStore::writeFile);
 
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
@@ -1504,6 +1549,14 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
 
         drawUi();
 
+        // Collects a config write configWriter_ finished, whether it was
+        // requested by maybeSaveConfig() below, by saveConfigNow(), or by the
+        // teardown - see requestConfigSave()/pollConfigWriter() in
+        // gui/config_writer.hpp's callers. A no-op every frame nothing was
+        // ever requested (hermetic runs, or a session that never changed a
+        // setting), so it costs nothing to call unconditionally.
+        pollConfigWriter();
+
         // Debounced runtime persistence: the config file follows the session
         // ~2 s after the last change, so a crash loses almost nothing.
         // Hermetic runs (empty configPath_) never touch the disk.
@@ -1850,13 +1903,37 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
     // stopped last as ever, is what covers that stretch.
     telemetryCleanExit_ = true;
     if (!configPath_.empty()) {
-        cascade::core::AppConfig marked = savedCfg_;
+        // Built on lastRequestedConfig_, not savedCfg_: the final-state save
+        // just above (still async - see gui/config_writer.hpp) may not have
+        // been collected yet, so savedCfg_ can still be one save behind.
+        // lastRequestedConfig_ is not - it is set the instant a save is
+        // REQUESTED, which is exactly the "what did we just ask to be
+        // written" this rewrite needs, and nothing has requested another
+        // save between that call and this one.
+        cascade::core::AppConfig marked = lastRequestedConfig_;
         marked.telemetryCleanExit = true;
-        std::string err;
-        if (cascade::core::ConfigStore::save(configPath_, marked, err)) {
-            savedCfg_ = marked;
+        requestConfigSave(marked);
+    }
+
+    // THE LAST SAVE MUST BE GIVEN A REAL CHANCE TO LAND, OR BE SEEN NOT TO -
+    // see gui/config_writer.hpp. Everything above this point only QUEUED
+    // bytes; this is the one place that WAITS, bounded and charged in the
+    // shutdown budget (HangWatchdog::kShutdownBoundedWaitsMs,
+    // tests/test_shutdown_budget.cpp). Past the bound the write is
+    // ABANDONED rather than joined - the same choice AudioOpen::reap() makes
+    // for a wedged device open at quit - and logged, so a config that never
+    // reached disk is a line in the log instead of a silent gap.
+    if (!configPath_.empty()) {
+        if (configWriter_.finishOrAbandon(cascade::gui::ConfigWriter::kSaveBound)) {
+            if (configWriter_.lastOk()) {
+                savedCfg_ = lastRequestedConfig_;
+            } else {
+                std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
+            }
         } else {
-            std::fprintf(stderr, "cascade: %s\n", err.c_str());
+            cascade::core::diagLogf(
+                "config: final save abandoned - the disk did not answer within %lld ms",
+                static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
         }
     }
 
@@ -4651,8 +4728,19 @@ void drawTunerFooter(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateB
 // tunes. bright is false for a leading zero, which is drawn as a barely-lit
 // figure with no glow: the deck's own rule that the zeros ahead of the first
 // significant digit carry no value and are dimmed.
+//
+// WHAT THE PAINT STRUCT DOES HERE (0.97.x, GitHub issue #1). Every number
+// this function used to carry as a literal that a STYLE could legitimately
+// change - the figure's size as a fraction of the tube, its colour, a leading
+// zero's alpha, the cell's own ground, the reach of the two glows and the
+// tightest glow's colour - now comes from cascade::gui::tunerCellPaint, whose
+// Nixie row is a transcription of exactly those literals. So this tube draws
+// pixel-for-pixel what it always did, and the numbers that describe it are
+// somewhere a test can pin. The reference's OTHER two shadows (the wider ring
+// and the soft disc behind the figure) keep their own colours below: they are
+// the reference's, not the style's.
 void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digit, bool bright,
-                   float s) {
+                   float s, const cascade::gui::TunerCellPaint& paint) {
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
     if (w < 4.0f || h < 4.0f) { return; }
@@ -4672,11 +4760,11 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
     // "ellipse at 50% 20%" gradient as concentric ellipses clipped to the
     // glass - "#2a1d10 0%, #120c06 60%, #050403 100%".
     tubePath(dl, tl, br, rTop, rBot);
-    dl->PathFillConvex(hexCol(0x050403));
+    dl->PathFillConvex(hexCol(paint.cellRgb));
     dl->PushClipRect(tl, br, true);
     {
         const GradStop glass[3] = {{0.0f, hexCol(0x2a1d10)}, {0.6f, hexCol(0x120c06)},
-                                   {1.0f, hexCol(0x050403)}};
+                                   {1.0f, hexCol(paint.cellRgb)}};
         const ImVec2 gc(tl.x + w * 0.5f, tl.y + h * 0.2f);
         const float rx = w * 0.71f;
         const float ry = h * 1.13f;
@@ -4706,7 +4794,7 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
         // face had in the 41-unit tube of the first cut (0.62 of 41), kept
         // when the plate was compacted: the digit is the one thing on the
         // plate that was not made smaller.
-        const float fontPx = std::max(12.0f, cascade::gui::kFreqTubeH * s * 0.635f);
+        const float fontPx = std::max(12.0f, cascade::gui::kFreqTubeH * s * paint.digitFrac);
         const char txt[2] = {digit, '\0'};
         const ImVec2 sz8 = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, "8");
         const ImVec2 sz = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, txt);
@@ -4723,29 +4811,128 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
             const ImVec2 gc2(at.x + sz.x * 0.5f, at.y + sz.y * 0.5f);
             for (int i = 5; i >= 1; --i) {
                 const float t = static_cast<float>(i) / 5.0f;
-                dl->AddEllipseFilled(gc2, ImVec2(sz.x * 0.45f + 10.0f * s * t, sz.y * 0.45f + 10.0f * s * t),
+                dl->AddEllipseFilled(gc2,
+                                     ImVec2(sz.x * 0.45f + paint.haloUnits * s * t,
+                                            sz.y * 0.45f + paint.haloUnits * s * t),
                                      IM_COL32(255, 90, 0, 14), 0.0f, 0);
             }
-            const float o2 = std::max(1.5f, 3.0f * s);
+            // The two rings' reach is the style's (glowSpread, whose half is
+            // also the floor the outer ring had); the WIDER ring's colour stays
+            // the reference's second shadow, while the tighter one - the ring a
+            // reader actually sees around the figure - is the style's.
+            const float o2 = std::max(paint.glowSpread * 0.5f, paint.glowSpread * s);
             const float o1 = std::max(1.0f, 1.5f * s);
             const ImU32 wide = IM_COL32(255, 106, 0, 36);
-            const ImU32 tight = IM_COL32(255, 138, 31, 70);
+            const ImU32 tight = hexCol(paint.glowRgb, paint.glowAlpha);
             const float diag = 0.7071f;
             const ImVec2 ring[8] = {ImVec2(1, 0), ImVec2(-1, 0), ImVec2(0, 1), ImVec2(0, -1),
                                     ImVec2(diag, diag), ImVec2(-diag, diag), ImVec2(diag, -diag),
                                     ImVec2(-diag, -diag)};
-            for (const ImVec2& d : ring) {
-                dl->AddText(font, fontPx, ImVec2(at.x + d.x * o2, at.y + d.y * o2), wide, txt);
+            if (paint.glowLayers >= 2) {
+                for (const ImVec2& d : ring) {
+                    dl->AddText(font, fontPx, ImVec2(at.x + d.x * o2, at.y + d.y * o2), wide,
+                                txt);
+                }
             }
-            for (const ImVec2& d : ring) {
-                dl->AddText(font, fontPx, ImVec2(at.x + d.x * o1, at.y + d.y * o1), tight, txt);
+            if (paint.glowLayers >= 1) {
+                for (const ImVec2& d : ring) {
+                    dl->AddText(font, fontPx, ImVec2(at.x + d.x * o1, at.y + d.y * o1), tight,
+                                txt);
+                }
             }
-            dl->AddText(font, fontPx, at, hexCol(0xffb347), txt);
+            dl->AddText(font, fontPx, at, hexCol(paint.digitRgb, paint.digitAlpha), txt);
         } else {
             // A leading zero: lit only enough to be read as a figure that is
             // there, with none of the glow that says it carries value.
-            dl->AddText(font, fontPx, at, hexCol(0xffb347, 96), txt);
+            dl->AddText(font, fontPx, at, hexCol(paint.digitRgb, paint.dimAlpha), txt);
         }
+    }
+    dl->PopClipRect();
+}
+
+// --- one FLAT digit cell (the "neon" and "plain" styles) -----------------------
+//
+// WHY A SECOND PAINTER RATHER THAN A FLAG IN THE FIRST. GitHub issue #1 asked
+// for a frequency display that is easier to read, and what makes the Nixie
+// harder to read is not its colour - it is the furniture: a 25 px figure in a
+// 40 px cell, behind a radial glass, two sets of mesh hairlines and the ghost
+// of an unlit "8". None of that can be turned down to nothing without leaving
+// a function that is mostly disabled branches, so the two flat styles get
+// their own painter and the tube keeps its own.
+//
+// SAME RECTANGLE, SAME GESTURES. tl/br is the tube rectangle - the
+// InvisibleButton's own registered rectangle, exactly as above - so the wheel,
+// the click that opens the typed editor and both switch halves beneath are
+// untouched by the choice of style. Only the ink inside this rectangle differs.
+//
+// EVERY NUMBER COMES FROM THE PAINT STRUCT (gui/tune_control.hpp), which is
+// pinned in tests/test_tune_control.cpp: a later edit here cannot quietly make
+// the neon figure small or the plain one grey.
+void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digit, bool bright,
+                       float s, const cascade::gui::TunerCellPaint& paint) {
+    const float w = br.x - tl.x;
+    const float h = br.y - tl.y;
+    if (w < 4.0f || h < 4.0f) { return; }
+    // THE CELL. A near-black ground with a soft rim, no rounded-top envelope:
+    // the envelope is the tube's silhouette and the tube is what these styles
+    // trade away. The corner radius is the plate's own 4-unit corner, halved,
+    // which keeps ten cells reading as ten cells rather than as one bar.
+    const float r = std::max(1.0f, 2.0f * s);
+    dl->AddRectFilled(tl, br, hexCol(paint.cellRgb), r);
+    dl->AddRect(tl, br, IM_COL32(255, 255, 255, 18), r, 0, std::max(1.0f, 1.0f * s));
+    dl->PushClipRect(tl, br, true);
+    {
+        // The same monospaced digit face the counter has always used, so a 1
+        // sits where an 8 did and a digit cannot dance sideways as it changes.
+        ImFont* font = cascade::gui::fonts::reading();
+        const float fontPx = std::max(12.0f, cascade::gui::kFreqTubeH * s * paint.digitFrac);
+        const char txt[2] = {digit, '\0'};
+        const ImVec2 sz = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, txt);
+        const ImVec2 at(tl.x + (w - sz.x) * 0.5f, tl.y + (h - sz.y) * 0.5f);
+        const float diag = 0.7071f;
+        const ImVec2 ring[8] = {ImVec2(1, 0),     ImVec2(-1, 0),       ImVec2(0, 1),
+                                ImVec2(0, -1),    ImVec2(diag, diag),  ImVec2(-diag, diag),
+                                ImVec2(diag, -diag), ImVec2(-diag, -diag)};
+        if (bright && paint.glowLayers > 0) {
+            // THE HALO, a soft disc behind the figure, the same stand-in for a
+            // radial blur the tube uses. Skipped entirely when the style asks
+            // for no reach, which is what makes "plain" plain.
+            if (paint.haloUnits > 0.0f) {
+                const ImVec2 gc(at.x + sz.x * 0.5f, at.y + sz.y * 0.5f);
+                for (int i = 5; i >= 1; --i) {
+                    const float t = static_cast<float>(i) / 5.0f;
+                    dl->AddEllipseFilled(
+                        gc,
+                        ImVec2(sz.x * 0.45f + paint.haloUnits * s * t,
+                               sz.y * 0.45f + paint.haloUnits * s * t),
+                        hexCol(paint.glowRgb,
+                               static_cast<unsigned>(paint.glowAlpha) / 6u),
+                        0.0f, 0);
+                }
+            }
+            // THE RINGS, outermost first, each a ring of eight offset copies of
+            // the glyph. The outer ones are fainter, so the ink thickens toward
+            // the figure the way a real tube's bloom does - the innermost ring
+            // is the style's own glowAlpha, and the rest are fractions of it.
+            for (int k = 0; k < paint.glowLayers; ++k) {
+                const float frac =
+                    static_cast<float>(paint.glowLayers - k) / static_cast<float>(paint.glowLayers);
+                const float off = std::max(1.0f, paint.glowSpread * frac * s);
+                const unsigned a = std::max(
+                    1u, static_cast<unsigned>(paint.glowAlpha) * static_cast<unsigned>(k + 1) /
+                            static_cast<unsigned>(paint.glowLayers));
+                const ImU32 col = hexCol(paint.glowRgb, a);
+                for (const ImVec2& d : ring) {
+                    dl->AddText(font, fontPx, ImVec2(at.x + d.x * off, at.y + d.y * off), col, txt);
+                }
+            }
+        }
+        // THE FIGURE. Drawn last, over its own glow, so the glow never washes
+        // out the shape a reader is actually reading - which is the whole
+        // difference between a neon sign and a smear. A leading zero carries no
+        // value and is dimmed, the deck's own rule in every style.
+        dl->AddText(font, fontPx, at,
+                    hexCol(paint.digitRgb, bright ? paint.digitAlpha : paint.dimAlpha), txt);
     }
     dl->PopClipRect();
 }
@@ -4977,6 +5164,12 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // switchHalfButton's own comment for what it draws when this is set.
     const char* dbgInputEnv = std::getenv("FOXSDR_DEBUG_INPUT");
     const bool debugSwitchOutline = dbgInputEnv != nullptr && dbgInputEnv[0] != '\0';
+    // WHICH FACE THE CELLS WEAR, read once per frame rather than per cell so
+    // ten cells cannot disagree inside one picture. The choice reaches only
+    // this - the plate, the name plate, the bezel, the screws, the footer, the
+    // MHz readout and the RCVR lamp are drawn above and do not know about it,
+    // and neither do the tubes' own InvisibleButtons or the switch halves.
+    const cascade::gui::TunerCellPaint cellPaint = cascade::gui::tunerCellPaint(tunerStyle_);
     bool significant = false;
     bool hoveredDigit = false;
     for (int i = 0; i < kFreqCells; ++i) {
@@ -4988,7 +5181,13 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         ImGui::SetCursorScreenPos(ImVec2(tube.x0, tube.y0));
         ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
                                ImVec2(tube.x1 - tube.x0, tube.y1 - tube.y0));
-        drawNixieTube(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i], significant, s);
+        if (cellPaint.glassFurniture) {
+            drawNixieTube(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i],
+                          significant, s, cellPaint);
+        } else {
+            drawFlatDigitCell(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i],
+                              significant, s, cellPaint);
+        }
 
         // Per-digit wheel tuning. Fractional wheel deltas (touchpads) below
         // one notch still step once, in the delta's direction. Not while the
@@ -5462,12 +5661,55 @@ void AppWindow::drawDisplaySection() {
         if (maxChanged && dbMax_ < dbMin_ + kMinDbSpan) { dbMax_ = dbMin_ + kMinDbSpan; }
         if (minChanged || maxChanged) { spectrum_->setRange(dbMin_, dbMax_); }
 
+        // THE FREQUENCY DISPLAY (GitHub issue #1: "Would be nice to be able
+        // to swap the frequency display for easier to read display? Maybe a
+        // neon effect or something that stands out."). Three faces for the
+        // counter's ten cells; the default is the Nixie plate, so the deck
+        // looks exactly as it did for anybody who never opens this row.
+        //
+        // A COMBO, because that is what a three-way choice looks like in this
+        // panel - "De-emph" a section above (kDeemphLabels) and "Reachable
+        // from" in the web section are both ImGui::Combo, and the two-way
+        // trail style in the map deck is one too. The rockers and segment
+        // keys this application also has belong to the drawn decks (the map's
+        // own panel, the plugin store), not to the menu column, and putting
+        // one here would make this row the odd control out.
+        //
+        // APPLIED LIVE: the counter reads tunerStyle_ every frame, so the
+        // plate changes under the cursor as the pick is made; currentConfig()
+        // writes the NAME, and the debounce notices through configsEqual.
+        int styleIndex = static_cast<int>(tunerStyle_);
+        if (ImGui::Combo("Frequency display", &styleIndex,
+                         cascade::gui::kTunerStyleLabels,
+                         cascade::gui::kTunerStyleCount)) {
+            // Through the name, not by casting the index back: the name is
+            // the vocabulary both ends agree on, and a label list that ever
+            // gets reordered would otherwise silently select a different
+            // style.
+            tunerStyle_ = cascade::gui::tunerStyleFromName(
+                cascade::gui::kTunerStyleNames[std::clamp(
+                    styleIndex, 0, cascade::gui::kTunerStyleCount - 1)]);
+        }
+
         // Band plan overlay (P7). Always offered, even with no plan
         // installed — the checkbox is a display preference that persists, and
         // hiding it when resources/bandplans is missing would make the
         // feature look broken rather than simply idle.
         ImGui::Checkbox("Band plan", &bandPlanOverlay_);
         if (bandPlanOverlay_) {
+            // Ribbon size and segment-colour palette (issue #1: "a bit bigger
+            // on the top, a few options for size and maybe colour"). Plain
+            // Combo boxes, the same control the De-emph and Trail style rows
+            // elsewhere in this panel use for a small fixed set of choices —
+            // there is no separate "bench segment key" widget for a settings
+            // row like this one; that custom-drawn control is reserved for
+            // the physical rail's bank buttons. Both apply live (the next
+            // frame's drawBandPlanOverlay call reads the index straight back)
+            // and are picked up by currentConfig() like every other setting
+            // here, so they save on the same debounce.
+            ImGui::Combo("Size", &bandPlanSizeIndex_, kBandPlanSizeLabels, 3);
+            ImGui::Combo("Colour", &bandPlanPaletteIndex_, kBandPlanPaletteLabels, 3);
+
             // The REGION PICKER. Allocations genuinely contradict each other
             // between ITU regions, so this is a choice the user has to make
             // and not something the application can merge its way out of —
@@ -7875,6 +8117,18 @@ void AppWindow::drawCenterPanels() {
     chrome.freqTicks = (tickCount > 0) ? axisTicks : nullptr;
     chrome.freqTickCount = tickCount;
     chrome.spanHz = scale_.viewHighHz() - scale_.viewLowHz();
+    // Room for a taller band-plan ribbon (issue #1), rather than a thicker
+    // wash over the trace: only the GROWTH beyond the ribbon's original 6px
+    // is reserved. That keeps "small" (still 6px) drawing into exactly the
+    // same pixels it always has — the overlap the comment above
+    // drawBandPlanOverlay explains — while "medium"/"large" push the trace
+    // down by the extra height instead of painting further into it.
+    if (bandPlanOverlay_) {
+        const cascade::gui::BandRibbonGeometry ribbonGeom = cascade::gui::bandRibbonGeometry(
+            static_cast<cascade::gui::BandPlanSizeTier>(bandPlanSizeIndex_));
+        constexpr float kBandRibbonPxSmall = 6.0f;
+        chrome.reservedTopPx = std::max(0.0f, ribbonGeom.ribbonPx - kBandRibbonPxSmall);
+    }
 
     // Before the first frame lastFrame_.dbBins is empty; SpectrumView renders
     // the background + grid for null bins, which is the wanted idle look.
@@ -15718,6 +15972,19 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         bandPlan_.visible(scale_.viewLowHz(), scale_.viewHighHz());
     if (vis.empty()) { return; }
 
+    // Size and palette (issue #1). The two enums are declared in the same
+    // Small/Medium/Large and Classic/Vivid/Mono order as the Combo boxes
+    // that set these indexes (kBandPlanSizeKeys/kBandPlanPaletteKeys), so the
+    // int mirrors cast straight across without another lookup.
+    const auto sizeTier = static_cast<cascade::gui::BandPlanSizeTier>(bandPlanSizeIndex_);
+    const auto paletteKind = static_cast<cascade::gui::BandPlanPaletteKind>(bandPlanPaletteIndex_);
+    const cascade::gui::BandRibbonGeometry geom = cascade::gui::bandRibbonGeometry(sizeTier);
+    // The label font, EXPLICITLY, at the tier's own size: "small" uses
+    // ui()/kUiSize, the exact face and size AddText's no-font overload drew
+    // at before this change (ui() is the default bound font — see fonts.hpp)
+    // — so a small-tier screenshot is byte-identical to one before issue #1.
+    ImFont* labelFont = cascade::gui::fonts::ui();
+
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
     // The rectangles the names drawn so far occupy (x0, y0, x1, y1), so a
@@ -15734,7 +16001,10 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         bx1 = std::min(bx1, x0 + width);
         if (!(bx1 > bx0)) { continue; }
 
-        const std::uint32_t rgba = b->colorRgba;  // 0xRRGGBBAA
+        // The palette resolves per SERVICE class, not per plan, so switching
+        // Colour repaints every installed plan identically (see
+        // bandPlanPaletteColor). "classic" reproduces b->colorRgba exactly.
+        const std::uint32_t rgba = cascade::gui::bandPlanPaletteColor(paletteKind, b->service);
         const int r = static_cast<int>((rgba >> 24) & 0xFFu);
         const int g = static_cast<int>((rgba >> 16) & 0xFFu);
         const int bl = static_cast<int>((rgba >> 8) & 0xFFu);
@@ -15745,7 +16015,7 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         // and destroys the trace's readability. A ribbon says exactly the same
         // thing (where the band starts, ends and what it is called) while
         // leaving the signal untouched.
-        const float ribbonH = std::min(kBandRibbonPx, height * 0.25f);
+        const float ribbonH = std::min(geom.ribbonPx, height * 0.25f);
         drawList->AddRectFilled(ImVec2(bx0, y0), ImVec2(bx1, y0 + ribbonH),
                                 IM_COL32(r, g, bl, a));
         // Faint full-height edges still mark the boundaries down the panel, so
@@ -15757,8 +16027,10 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         drawList->AddLine(ImVec2(bx1, y0), ImVec2(bx1, y0 + height),
                           IM_COL32(r, g, bl, edgeA));
 
-        if (bx1 - bx0 >= kBandLabelMinPx) {
-            const ImVec2 sz = ImGui::CalcTextSize(b->name.c_str());
+        if (bx1 - bx0 >= geom.labelMinPx) {
+            const ImVec2 sz = (labelFont != nullptr)
+                ? labelFont->CalcTextSizeA(geom.labelPx, FLT_MAX, 0.0f, b->name.c_str())
+                : ImGui::CalcTextSize(b->name.c_str());
             if (sz.x <= bx1 - bx0 - 4.0f) {
                 // Label sits just under its ribbon, in near-white: coloured
                 // text on the coloured ribbon was the least legible part of
@@ -15800,8 +16072,13 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
                     }
                 }
                 placedLabels.push_back(ImVec4(labelX, labelY, labelX + sz.x, labelY + sz.y));
-                drawList->AddText(ImVec2(labelX, labelY), IM_COL32(235, 235, 235, 200),
-                                  b->name.c_str());
+                if (labelFont != nullptr) {
+                    drawList->AddText(labelFont, geom.labelPx, ImVec2(labelX, labelY),
+                                      IM_COL32(235, 235, 235, 200), b->name.c_str());
+                } else {
+                    drawList->AddText(ImVec2(labelX, labelY), IM_COL32(235, 235, 235, 200),
+                                      b->name.c_str());
+                }
             }
         }
     }
@@ -16745,6 +17022,9 @@ void AppWindow::publishWebSnapshot() {
     s.volume = volume_;
     s.dbMin = dbMin_;
     s.dbMax = dbMax_;
+    // The frequency readout's face, as the NAME the page and the config file
+    // both speak - see RadioStatus::tunerDisplayStyle.
+    s.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
     s.deemphasisIndex = deemphIndex_;
     s.nrEnabled = nrEnabled_;
     s.nrStrength = nrStrength_;
@@ -18510,6 +18790,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     autoNotch_ = cfg.autoNotch;
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
+    bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
+    bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
     // applyConfig runs AFTER the startup loadBandPlan(), so a restored
     // selection that differs from the default has to re-load or the user's
     // chosen region silently reverts to "world" on every launch. Guarded on
@@ -18518,6 +18800,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         bandPlanSelection_ = cfg.bandPlanSelection;
         loadBandPlan();
     }
+    // THE FREQUENCY DISPLAY STYLE, name to style, once, here. ConfigStore has
+    // already rejected a name nothing knows, and tunerStyleFromName would
+    // answer Nixie for one anyway - two guards for a user-editable file, and
+    // neither of them in the draw loop.
+    tunerStyle_ = cascade::gui::tunerStyleFromName(cfg.tunerDisplayStyle);
     // The trail switches. Not pushed into any MapView here: a page may not
     // exist yet (they are created as track-capable plugins appear), and the
     // page loop hands both to every view it draws anyway - which is also what
@@ -19110,6 +19397,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.autoNotch = autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
     cfg.bandPlanSelection = bandPlanSelection_;
+    cfg.bandPlanSize = kBandPlanSizeKeys[std::clamp(bandPlanSizeIndex_, 0, 2)];
+    cfg.bandPlanPalette = kBandPlanPaletteKeys[std::clamp(bandPlanPaletteIndex_, 0, 2)];
+    cfg.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
@@ -19198,26 +19488,41 @@ void AppWindow::maybeSaveConfig(double nowS) {
         return;
     }
     if (nowS - lastChangeTimeS_ >= kConfigDebounceS) {
-        std::string err;
-        if (cascade::core::ConfigStore::save(configPath_, cur, err)) {
-            savedCfg_ = cur;
-            lastChangeTimeS_ = -1.0;
-        } else {
-            // Retry no sooner than the next debounce window — a locked file
-            // must not turn into one save attempt per rendered frame.
-            lastChangeTimeS_ = nowS;
-            std::fprintf(stderr, "cascade: %s\n", err.c_str());
-        }
+        // THE REQUEST NEVER BLOCKS (see gui/config_writer.hpp) - this is the
+        // exact call the 0.96.3 field report's stack ran synchronously
+        // instead. lastChangeTimeS_ resets to -1.0 optimistically: if the
+        // write goes on to fail, savedCfg_ stays stale (pollConfigWriter()
+        // only advances it on success), so the very next frame's
+        // configsEqual(cur, savedCfg_) reads false again and this function's
+        // first branch restarts a fresh debounce window - the same "retry no
+        // sooner than the next window" behaviour the old synchronous failure
+        // path spelled out explicitly, reproduced here without a special
+        // case.
+        requestConfigSave(cur);
+        lastChangeTimeS_ = -1.0;
     }
 }
 
 void AppWindow::saveConfigNow() {
-    cascade::core::AppConfig cur = currentConfig();
-    std::string err;
-    if (cascade::core::ConfigStore::save(configPath_, cur, err)) {
-        savedCfg_ = cur;
+    requestConfigSave(currentConfig());
+}
+
+void AppWindow::requestConfigSave(const cascade::core::AppConfig& cfg) {
+    lastRequestedConfig_ = cfg;
+    configWriter_.requestAsync(configPath_, cascade::core::ConfigStore::serialize(cfg));
+}
+
+void AppWindow::pollConfigWriter() {
+    if (!configWriter_.poll()) { return; }
+    if (configWriter_.lastOk()) {
+        // Only when fully drained: a write that just finished but has
+        // another coalesced behind it is not yet the LAST requested content
+        // (poll() has already started that queued write by the time this
+        // runs) - see gui/config_writer.hpp's finishOrAbandon() comment for
+        // the same reasoning applied to the shutdown drain below.
+        if (!configWriter_.inFlight()) { savedCfg_ = lastRequestedConfig_; }
     } else {
-        std::fprintf(stderr, "cascade: %s\n", err.c_str());
+        std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
     }
 }
 

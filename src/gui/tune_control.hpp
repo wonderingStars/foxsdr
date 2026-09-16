@@ -343,6 +343,151 @@ inline FreqRect switchRectForCell(float plateTLx, float plateTLy, int cellIndex,
     return FreqRect{x0, y0, x0 + kFreqCellW * scale, y0 + kFreqSwitchHalfH * scale};
 }
 
+// --- HOW A DIGIT CELL IS PAINTED -------------------------------------------
+//
+// WHY THIS IS A SETTING AT ALL. GitHub issue #1: "Would be nice to be able to
+// swap the frequency display for easier to read display? Maybe a neon effect
+// or something that stands out." The Nixie plate is the deck's own face and
+// stays the default, so nobody's application changes under them; the two new
+// styles trade the reference's glass, mesh and ghost cathode for a figure
+// that is simply bigger and higher in contrast.
+//
+// ONLY THE PAINT INSIDE A TUBE RECTANGLE CHANGES. The rectangles above are
+// the same for every style, so every gesture the counter has - the wheel over
+// a tube, the typed editor, both switch halves, the MHz readout and the RCVR
+// lamp - is untouched by the choice. The name plate, the screws, the bezel
+// and the footer are the plate, not the cell, and they do not change either.
+enum class TunerStyle {
+    Nixie = 0,  // the plate as drawn since 0.88.0 - the default, unchanged
+    Neon,       // a large glowing figure on a near-black cell
+    Plain,      // a large plain white figure on black, no glow at all
+};
+
+// THE NAME IS WHAT THE CONFIG FILE CARRIES, so it is the name that decides.
+// An unknown or empty value is the DEFAULT, never a refusal: the file is
+// user-editable and a typo must leave the application looking like itself
+// rather than drawing nothing. Matching is exact and lower-case - the names
+// are written by this application, not typed by a user.
+inline TunerStyle tunerStyleFromName(const std::string& name) {
+    if (name == "neon") { return TunerStyle::Neon; }
+    if (name == "plain") { return TunerStyle::Plain; }
+    return TunerStyle::Nixie;
+}
+
+inline const char* tunerStyleName(TunerStyle style) {
+    switch (style) {
+        case TunerStyle::Neon: return "neon";
+        case TunerStyle::Plain: return "plain";
+        case TunerStyle::Nixie: break;
+    }
+    return "nixie";
+}
+
+// The three names in the order the menu offers them, so the picker and the
+// config vocabulary cannot drift apart.
+inline constexpr int kTunerStyleCount = 3;
+inline const char* kTunerStyleNames[kTunerStyleCount] = {"nixie", "neon", "plain"};
+// What the picker LABELS them. Separate from the stored names because the
+// stored name is a token in a file and the label is prose on a bench panel.
+inline const char* kTunerStyleLabels[kTunerStyleCount] = {"Nixie tubes", "Neon", "Plain"};
+
+// EVERY NUMBER ONE CELL IS PAINTED WITH, for one style. Kept here, with no
+// ImGui dependency, so a later edit to the drawing cannot silently change a
+// style's look: tests/test_tune_control.cpp pins all three sets, and the
+// painters in app_window.cpp read every field from here rather than carrying
+// literals of their own. Colours are 0xRRGGBB with a separate 8-bit alpha,
+// because this header has no ImU32 and needs none.
+struct TunerCellPaint {
+    // The digit's pixel size as a fraction of the tube's height. 0.635 is
+    // the Nixie plate's own figure (0.635 of a 40-unit tube = 25.4 px at
+    // scale 1); the flat styles go much larger, which is the whole point of
+    // the request - the figure, not the furniture, is what is read.
+    float digitFrac = 0.635f;
+    // Offset translucent copies of the glyph, drawn as rings around it to
+    // stand in for a blur ImDrawList cannot do. 0 means no glow of any kind.
+    int glowLayers = 0;
+    // The outermost ring's offset in plate units (scaled by the bar's scale
+    // at the call site). Inner rings step in evenly from here.
+    float glowSpread = 0.0f;
+    // How far out the soft disc behind the figure reaches, in plate units.
+    // 0 means no disc.
+    float haloUnits = 0.0f;
+    unsigned digitRgb = 0xffb347u;     // the lit figure
+    unsigned char digitAlpha = 255u;
+    unsigned char dimAlpha = 96u;      // a leading zero, which carries no value
+    // THE TIGHTEST GLOW RING - the one nearest the glyph, and so the brightest
+    // one. Outer rings are this colour at a lower alpha. The Nixie's two
+    // further shadows (the wider ring and the soft disc) are the reference's
+    // own and stay with the painter; only their REACH (glowSpread, haloUnits)
+    // is a parameter, because that is the part a style changes.
+    unsigned glowRgb = 0xff8a1fu;
+    unsigned char glowAlpha = 70u;
+    unsigned cellRgb = 0x050403u;      // the cell's ground
+    // Whether the cell carries the reference's glass: the rounded envelope,
+    // the radial interior, the two mesh line sets and the ghost "8" cathode.
+    // False draws a flat cell, which is what makes a figure at this contrast
+    // legible at a glance.
+    bool glassFurniture = true;
+};
+
+inline TunerCellPaint tunerCellPaint(TunerStyle style) {
+    TunerCellPaint p;
+    switch (style) {
+        case TunerStyle::Nixie:
+            // The values the plate has drawn with since 0.88.0, moved here
+            // unchanged - the default must stay pixel-identical, so these are
+            // transcriptions, not choices.
+            p.digitFrac = 0.635f;
+            p.glowLayers = 2;
+            p.glowSpread = 3.0f;
+            p.haloUnits = 10.0f;
+            p.digitRgb = 0xffb347u;
+            p.digitAlpha = 255u;
+            p.dimAlpha = 96u;
+            p.glowRgb = 0xff8a1fu;  // "0 0 6px #ff8a1f", the tightest shadow
+            p.glowAlpha = 70u;
+            p.cellRgb = 0x050403u;  // the glass gradient's own outer colour
+            p.glassFurniture = true;
+            break;
+        case TunerStyle::Neon:
+            // CYAN, NOT AMBER. The amber IS the Nixie, and a setting whose
+            // two positions look like the same lamp at two brightnesses is
+            // not a setting anybody can see working. Cyan on near-black is
+            // also the highest-contrast pairing available here, which is
+            // what the request actually asked for.
+            p.digitFrac = 0.84f;
+            p.glowLayers = 3;
+            p.glowSpread = 4.5f;
+            p.haloUnits = 7.0f;
+            p.digitRgb = 0xd6feffu;  // the tube's own near-white core
+            p.digitAlpha = 255u;
+            p.dimAlpha = 70u;
+            p.glowRgb = 0x00d0ffu;
+            p.glowAlpha = 90u;
+            p.cellRgb = 0x04070au;
+            p.glassFurniture = false;
+            break;
+        case TunerStyle::Plain:
+            // NO DECORATION AT ALL. White on black at the same size as the
+            // neon figure: the reading for somebody who wants the number and
+            // nothing else, and the one style that cannot be accused of
+            // costing contrast for atmosphere.
+            p.digitFrac = 0.84f;
+            p.glowLayers = 0;
+            p.glowSpread = 0.0f;
+            p.haloUnits = 0.0f;
+            p.digitRgb = 0xffffffu;
+            p.digitAlpha = 255u;
+            p.dimAlpha = 80u;
+            p.glowRgb = 0xffffffu;
+            p.glowAlpha = 0u;
+            p.cellRgb = 0x000000u;
+            p.glassFurniture = false;
+            break;
+    }
+    return p;
+}
+
 // --- The deck's fixed cluster, and the two meters at the bar's right --------
 //
 // kDeckCoreW is the width of the fixed cluster on the top bar - transport

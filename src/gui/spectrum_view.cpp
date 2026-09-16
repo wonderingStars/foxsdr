@@ -611,6 +611,15 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     panelY_ = p0.y;
     panelValid_ = true;
 
+    // Chrome::reservedTopPx (see header): the gridlines and the trace start
+    // this far below p0.y instead of at it, leaving a blank strip a taller
+    // band-plan ribbon draws into. Clamped so a caller cannot invert the
+    // panel; the background/frame/header below are unaffected — only the
+    // two things that would otherwise sit UNDER the reserved strip move.
+    const float gridTopY =
+        p0.y + ((chrome != nullptr) ? std::clamp(chrome->reservedTopPx, 0.0f, height - 1.0f)
+                                     : 0.0f);
+
     // The ground, twice: square in the void black so a rounded corner can
     // never show the window behind it, then the tube's near-black green with
     // the well's own radius. Callers rely on this panel being opaque (the
@@ -626,7 +635,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     float gridDb[64];
     const int gridCount = gridlineDbs(dbMin_, dbMax_, gridDb, 64);
     for (int i = 0; i < gridCount; ++i) {
-        const float y = dbToY(gridDb[i], dbMin_, dbMax_, p0.y, p1.y);
+        const float y = dbToY(gridDb[i], dbMin_, dbMax_, gridTopY, p1.y);
         drawList->AddLine(ImVec2(p0.x, y), ImVec2(p1.x, y), kGridLine);
     }
 
@@ -640,7 +649,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
             double b = firstBin;
             if (b < 0.0) { b = 0.0; }
             if (b > static_cast<double>(n - 1)) { b = static_cast<double>(n - 1); }
-            const float y = dbToY(binValueAt(dbBins, n, b), dbMin_, dbMax_, p0.y, p1.y);
+            const float y = dbToY(binValueAt(dbBins, n, b), dbMin_, dbMax_, gridTopY, p1.y);
             const ImVec2 flat[2] = {ImVec2(p0.x, y), ImVec2(p1.x, y)};
             drawList->AddPolyline(flat, 2, kTrace, ImDrawFlags_None, 1.5f);
         } else {
@@ -656,7 +665,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
                 // Left cut vertex: interpolated exactly at the window edge.
                 points.push_back(ImVec2(
                     p0.x + binToXFrac(visLo, firstBin, lastBin) * width,
-                    dbToY(binValueAt(dbBins, n, visLo), dbMin_, dbMax_, p0.y, p1.y)));
+                    dbToY(binValueAt(dbBins, n, visLo), dbMin_, dbMax_, gridTopY, p1.y)));
                 // Whole bins strictly inside the cut points (the cuts already
                 // carry the boundary values, including exact whole-bin cuts).
                 int i = static_cast<int>(std::ceil(visLo));
@@ -664,14 +673,14 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
                 for (; static_cast<double>(i) < visHi; ++i) {
                     // dbToY clamps, so out-of-range bins ride the panel edges
                     // rather than drawing outside the clip rect.
-                    const float y = dbToY(dbBins[i], dbMin_, dbMax_, p0.y, p1.y);
+                    const float y = dbToY(dbBins[i], dbMin_, dbMax_, gridTopY, p1.y);
                     points.push_back(
                         ImVec2(p0.x + binToXFrac(static_cast<double>(i), firstBin, lastBin) * width, y));
                 }
                 // Right cut vertex.
                 points.push_back(ImVec2(
                     p0.x + binToXFrac(visHi, firstBin, lastBin) * width,
-                    dbToY(binValueAt(dbBins, n, visHi), dbMin_, dbMax_, p0.y, p1.y)));
+                    dbToY(binValueAt(dbBins, n, visHi), dbMin_, dbMax_, gridTopY, p1.y)));
                 drawList->AddPolyline(points.data(), static_cast<int>(points.size()),
                                       kTrace, ImDrawFlags_None, 1.5f);
             }
@@ -708,7 +717,7 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
         // values as the panel is resized instead of shuffling.
         const int decade = static_cast<int>(std::lround(gridDb[i] / 10.0f));
         if (labelStride > 1 && decade % labelStride != 0) { continue; }
-        const float y = dbToY(gridDb[i], dbMin_, dbMax_, p0.y, p1.y) + 2.0f;
+        const float y = dbToY(gridDb[i], dbMin_, dbMax_, gridTopY, p1.y) + 2.0f;
         if (y < headerBottom || y + dbLabelH > axisTop) { continue; }
         char label[16];
         std::snprintf(label, sizeof(label), "%.0f", static_cast<double>(gridDb[i]));

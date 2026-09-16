@@ -105,6 +105,20 @@ struct RadioStatus {
     float dbMin = -110.0f;
     float dbMax = 0.0f;
 
+    // WHICH FACE THE FREQUENCY READOUT WEARS: "nixie", "neon" or "plain"
+    // (gui/tune_control.hpp). The browser has a readout of its own - ten
+    // spans, one per digit, carrying the same per-digit wheel gesture - and
+    // GitHub issue #1 was about being able to READ the frequency, which is as
+    // true of a phone propped beside the radio as it is of the desk. So the
+    // choice made at the desk travels, the same way dbMin/dbMax do: a remote
+    // that ignored it would be a second place to set the same preference.
+    //
+    // A NAME, never an index: it is the config file's own vocabulary, and a
+    // page switching on a number would break silently if a style were ever
+    // inserted into the middle of the list. The page falls back to the Nixie
+    // look for any name it does not recognise, exactly as the desk does.
+    std::string tunerDisplayStyle = "nixie";
+
     // --- Audio processing ------------------------------------------------
     int deemphasisIndex = 0;   // 0 = 50 us, 1 = 75 us, 2 = off
     bool nrEnabled = false;

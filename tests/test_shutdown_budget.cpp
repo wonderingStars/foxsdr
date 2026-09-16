@@ -375,6 +375,11 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 // still how many there are; what changed is that the sources are no longer
 // the only devices a teardown can wait on.
 //
+// AND THE CONFIG SAVE IS THE SECOND THING THAT ADDS (0.97.2), for the same
+// shape of reason: it is not a source or a transmit sink, it runs regardless
+// of what either of those is, and its own block in the table below is where
+// kShutdownBoundedWaitsMs going 9000 -> 10500 is argued.
+//
 // WHEN THIS HAS TO BE RE-DERIVED, and it is not optional:
 //   - any of the seven constants above changing value;
 //   - a native path growing a wait, which makes its column longer and could
@@ -842,6 +847,38 @@ const KnownWait kKnownWaits[] = {
      "not the close() call itself, the same shape as SdrPlaySource's kCallbackDrainWait. Zero "
      "because no desktop shutdown path can ever reach this Android-only file, not because "
      "another column already covers it"},
+    // THE CONFIG SAVE (0.97.2), AND THE THIRD THING THAT ADDS RATHER THAN
+    // REPLACES. Field report "hang ntdll.dll @ cascade::core::ConfigStore::
+    // save" (0.96.3): the periodic debounced save ran the atomic file write
+    // synchronously on the GUI thread, and so - unremarked, because it was
+    // always fast until it was not - did the teardown's own two saves (the
+    // final-state save before pipeline_.stop() and the clean-exit marker
+    // after it; see AppWindow::run()). gui/config_writer.hpp moves all three
+    // off the GUI thread: a save REQUEST never blocks and a burst of them
+    // coalesces to the last content asked for, so however many of the
+    // teardown's two calls land while the worker is already busy, there is
+    // still only ONE write outstanding by the time AppWindow::run() reaches
+    // the drain below. That drain - ConfigWriter::finishOrAbandon(), called
+    // once, right after the clean-exit marker is requested - is the ONLY
+    // wait this driver spends on the shutdown path, and it is unconditional
+    // rather than mutually exclusive with anything else here: it runs
+    // whatever source or transmitter is or is not installed. 9000 -> 10500,
+    // and kShutdownThresholdMs with it.
+    {"src/gui/config_writer.hpp", "kSaveBound", 1,
+     "ConfigWriter::finishOrAbandon()'s bound, spent once by AppWindow::run() right after the "
+     "clean-exit marker save is requested - the ONE drain that waits for whatever the "
+     "teardown's saves coalesced down to. Not spent by the two requestAsync() calls "
+     "themselves: neither one blocks"},
+    {"src/gui/config_writer.hpp", "kNoWait", 0,
+     "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. "
+     "The frame loop has ended before beginShutdown() raises the threshold, so poll() is not "
+     "even called on the teardown path; finishOrAbandon() above does its own waiting"},
+    {"src/gui/config_writer.hpp", "kQuitGrace", 0,
+     "~ConfigWriter's safety-net grace before a save still blocked at object destruction is "
+     "abandoned: reached from ~AppWindow, which runs after watchdog_.stop() - outside the "
+     "budgeted stretch, exactly like app_window.cpp's kQuitGrace and audio_open.hpp's. A "
+     "session that reaches this at all already had its one deliberate chance, at "
+     "kSaveBound above"},
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {

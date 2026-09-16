@@ -116,6 +116,17 @@ public:
         // Width of the view in Hz, for the boxed SPAN readout at the foot of
         // the well. Zero, negative or non-finite omits the box.
         double spanHz = 0.0;
+
+        // Blank strip, in pixels, left along the TOP of the well before the
+        // dB gridlines and the trace begin — the room a taller band-plan
+        // ribbon needs so it stops painting over live trace pixels instead
+        // of just the top few. The panel's background still fills the whole
+        // rectangle and the header still anchors at the true top, so a
+        // caller drawing a ribbon into this strip gets a clean backdrop with
+        // nothing else competing for it. Zero (the default) reproduces the
+        // panel exactly as it always drew: the trace starts at the very top.
+        // Clamped internally to [0, height); never negative.
+        float reservedTopPx = 0.0f;
     };
 
     // Draws the well and its frame, 10 dB gridlines with labels, one polyline

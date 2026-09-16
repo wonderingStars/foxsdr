@@ -135,6 +135,15 @@ AppConfig junkConfig() {
     c.notchQ = 1e9;
     c.autoNotch = true;
     c.bandPlanOverlay = false;
+    // Both a closed three-way choice, away from their "small"/"classic"
+    // defaults and NOT the value the round-trip fixture below picks either,
+    // so a load path that forgot either field is caught here rather than by
+    // the two of them happening to already agree.
+    c.bandPlanSize = "large";
+    c.bandPlanPalette = "vivid";
+    // Not a style name the painter knows, so a load path that forgets the
+    // assignment leaves this junk in place instead of the default face.
+    c.tunerDisplayStyle = "bogus";
     // Both trail switches default ON, so false is the away-from-default value
     // a load path that forgets to assign them would have to overwrite.
     c.mapTrails = false;
@@ -271,6 +280,9 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.notchQ == b.notchQ);
     CHECK(a.autoNotch == b.autoNotch);
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
+    CHECK(a.bandPlanSize == b.bandPlanSize);
+    CHECK(a.bandPlanPalette == b.bandPlanPalette);
+    CHECK(a.tunerDisplayStyle == b.tunerDisplayStyle);
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
@@ -472,6 +484,17 @@ int main() {
         in.notchQ = 42.25;
         in.autoNotch = true;
         in.bandPlanOverlay = false;
+        // A legal value for each, distinct from BOTH the default
+        // ("small"/"classic") and junkConfig()'s ("large"/"vivid"), so the
+        // roundtrip proves the FILE is what came back rather than either
+        // end's fallback.
+        in.bandPlanSize = "medium";
+        in.bandPlanPalette = "mono";
+        // The frequency display style: a REAL name that is neither the default
+        // ("nixie") nor junkConfig()'s value, so the roundtrip proves the file is
+        // what came back rather than either end's fallback - and proves the
+        // unknown-name guard did not "correct" a style the user actually chose.
+        in.tunerDisplayStyle = "neon";
         // The two trail switches. A bool has only one value that is not its
         // default, so these necessarily match junkConfig()'s - the same
         // position bandPlanOverlay is in above. What proves the SAVE half is
@@ -1127,6 +1150,125 @@ int main() {
         CHECK(d.deemphasisIndex == 0);
         CHECK(d.stereoEnabled);
         CHECK(d.bandPlanOverlay);
+        CHECK(d.bandPlanSize == "small");
+        CHECK(d.bandPlanPalette == "classic");
+        // The frequency counter opens on the face it has always had.
+        CHECK(d.tunerDisplayStyle == "nixie");
+    }
+
+    // --- bandPlanSize / bandPlanPalette: a closed three-way choice each,
+    // unlike bandPlanSelection (validated elsewhere, against whatever band
+    // plans are actually installed) -------------------------------------------
+    {
+        const std::string path = p("band_plan_style.json");
+        AppConfig out;
+        std::string err;
+
+        // Every legal value survives, both fields independently.
+        for (const char* v : {"small", "medium", "large"}) {
+            CHECK(writeText(path, std::string("{\"bandPlanSize\":\"") + v + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.bandPlanSize == v);
+            CHECK(out.bandPlanPalette == "classic");  // untouched key: default
+        }
+        for (const char* v : {"classic", "vivid", "mono"}) {
+            CHECK(writeText(path, std::string("{\"bandPlanPalette\":\"") + v + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.bandPlanPalette == v);
+            CHECK(out.bandPlanSize == "small");  // untouched key: default
+        }
+
+        // Hand-edited / future-build garbage falls back to the default
+        // rather than reaching the GUI as an unrecognised string.
+        CHECK(writeText(path, "{\"bandPlanSize\":\"huge\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+        CHECK(writeText(path, "{\"bandPlanPalette\":\"rainbow\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanPalette == "classic");
+
+        // Case is significant: "Small" is not "small" and must not sneak
+        // through as though it were the legal spelling.
+        CHECK(writeText(path, "{\"bandPlanSize\":\"Small\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+
+        // Wrong JSON type: absent, per the header's own rule for every
+        // string field, so it is the default that survives here too.
+        CHECK(writeText(path, "{\"bandPlanSize\":5,\"bandPlanPalette\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+        CHECK(out.bandPlanPalette == "classic");
+
+        // Empty string is exactly as unrecognised as any other garbage.
+        CHECK(writeText(path, "{\"bandPlanSize\":\"\",\"bandPlanPalette\":\"\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+        CHECK(out.bandPlanPalette == "classic");
+    }
+
+    // --- the frequency display style (GitHub issue #1) ----------------------
+    //
+    // "Would be nice to be able to swap the frequency display for easier to
+    // read display? Maybe a neon effect or something that stands out." Three
+    // faces, stored by name; the DEFAULT is the plate the application has
+    // always drawn, so nobody's deck changes under them on upgrade.
+    {
+        const std::string path = p("tuner_style.json");
+        AppConfig out;
+        std::string err;
+
+        // ABSENT: an upgraded install that has never heard of the key keeps
+        // the face it had.
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.tunerDisplayStyle == "nixie");
+
+        // EACH REAL NAME SURVIVES THE FILE. Asserted one at a time rather
+        // than through the roundtrip alone, because the roundtrip only ever
+        // carries one of the three and a loader that accepted just that one
+        // would pass it.
+        for (const char* name : {"nixie", "neon", "plain"}) {
+            CHECK(writeText(path, std::string("{\"tunerDisplayStyle\":\"") + name +
+                                      "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.tunerDisplayStyle == name);
+            // And the painter agrees the stored name names a style: a value
+            // the file accepts but the painter reads as the default would be a
+            // setting that saves and then does nothing.
+            CHECK(std::string(cascade::gui::tunerStyleName(
+                      cascade::gui::tunerStyleFromName(out.tunerDisplayStyle))) == name);
+        }
+
+        // AN UNKNOWN NAME IS THE DEFAULT, NOT A REFUSAL AND NOT A GAP. The
+        // file is user-editable and a typo must leave the deck looking like
+        // itself; a value carried through unchanged would reach the painter,
+        // which would then have to make the same decision a second time.
+        // Wrong TYPE too - getString leaves the default for a non-string, and
+        // the clamp must not turn that into something else.
+        for (const char* bad : {"\"\"", "\"neno\"", "\"NEON\"", "\"plain \"", "7",
+                                "null", "[\"neon\"]"}) {
+            CHECK(writeText(path, std::string("{\"tunerDisplayStyle\":") + bad + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.tunerDisplayStyle == "nixie");
+        }
+
+        // THE SAVE DEBOUNCE HAS TO SEE IT. configsEqual is the whole of the
+        // decision about whether the file is written at all, so a field
+        // missing from it persists only when something ELSE changes in the
+        // same session - the subtlest way a preference is lost, and not a
+        // compile error. Two configs identical but for this one field must
+        // compare unequal, in both directions, for every pair of styles.
+        {
+            const AppConfig base;
+            CHECK(cascade::gui::configsEqual(base, base));  // control
+            for (const char* name : {"neon", "plain", "bogus"}) {
+                AppConfig other = base;
+                other.tunerDisplayStyle = name;
+                CHECK(!cascade::gui::configsEqual(base, other));
+                CHECK(!cascade::gui::configsEqual(other, base));
+            }
+        }
     }
 
     // --- the two map trail switches (documented in config.hpp) ---------------

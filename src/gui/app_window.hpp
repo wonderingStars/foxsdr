@@ -52,6 +52,7 @@
 #include "gui/centre_dock.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/audio_open.hpp"
+#include "gui/config_writer.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -424,6 +425,19 @@ inline bool mapGeometryOnScreen(int x, int y, int w, int h,
                                 const std::vector<ScreenRect>& workAreas) {
     return mapReachableMonitor(x, y, w, h, workAreas) >= 0;
 }
+
+// FIELD-WISE AppConfig COMPARISON - the whole of the save debounce's decision
+// about whether anything changed. Declared here, rather than left file-local
+// in app_window.cpp, for the reason the pure decisions above are: a field
+// MISSING from this comparison is not a compile error and not a visible bug -
+// it is a setting that reaches the file only when something else happens to
+// change in the same session, which is the subtlest way a preference can be
+// lost. tests/test_config.cpp asks it directly, one field at a time.
+//
+// Exact float compares are correct: both sides come from the same
+// currentConfig() code path, so any difference is a real user-visible change,
+// never noise.
+bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b);
 
 // The share of a monitor's work area the map window OPENS at when nothing was
 // saved. A DEFAULT ONLY: a window that exactly fills the work area looks
@@ -1232,6 +1246,28 @@ private:
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
 
+    // THE ASYNC SAVE (0.97.2). Field report "hang ntdll.dll @
+    // cascade::core::ConfigStore::save" (0.96.3): both functions above used
+    // to write the file directly, on the GUI thread, inside whichever of
+    // them called them - see gui/config_writer.hpp for the whole argument.
+    // requestConfigSave() is now the ONE place either of them hands bytes to
+    // configWriter_, so pollConfigWriter() has one place to apply the result
+    // to savedCfg_ from. `cfg` is remembered as lastRequestedConfig_
+    // unconditionally: because configWriter_ coalesces bursts to the LAST
+    // content asked for, whichever write is on disk once configWriter_ has
+    // fully drained (poll()/finishOrAbandon() returned with nothing left
+    // in flight or queued) is guaranteed to be this content - so savedCfg_
+    // never needs to be paired with a specific request, only compared
+    // against "drained and ok".
+    void requestConfigSave(const cascade::core::AppConfig& cfg);
+    // Collects a finished configWriter_ write, applies it to savedCfg_ on
+    // success (see requestConfigSave above), and logs a failure exactly as
+    // the old synchronous save() call sites did. Called once a frame; a
+    // failed save is retried automatically because savedCfg_ stays stale,
+    // so the next frame's maybeSaveConfig() sees "still different" and
+    // restarts the debounce window on its own.
+    void pollConfigWriter();
+
     // Opens a radio of `kind` ("soapy" or one of the eight native driver keys)
     // by its args on
     // THIS thread, pushes the requested rate and the default gains, and fills
@@ -1788,6 +1824,17 @@ private:
     double lastChangeTimeS_ = -1.0;  // glfwGetTime() of the last observed
                                      // change; < 0 = nothing pending
 
+    // THE WRITE, OFF THIS THREAD. Field report "hang ntdll.dll @
+    // cascade::core::ConfigStore::save" (0.96.3): the debounced save above
+    // put the GUI thread inside the file write itself. See
+    // gui/config_writer.hpp for the whole argument; requestConfigSave() and
+    // pollConfigWriter() are the only callers.
+    cascade::gui::ConfigWriter configWriter_;
+    // The config content behind whatever configWriter_ is currently holding
+    // (in flight or coalesced-and-queued) - see requestConfigSave()'s
+    // comment on the header for why one variable is enough.
+    cascade::core::AppConfig lastRequestedConfig_;
+
     // --- Recorder state (P6) --------------------------------------------------
     // Two independent Recorder instances so IQ and audio takes can run
     // simultaneously (each records ONE kind at a time by its contract). The
@@ -1847,6 +1894,20 @@ private:
     // inside a combo box.
     std::string bandPlanSelection_ = "world";
     std::vector<cascade::core::PlanInfo> bandPlanChoices_;
+    // Ribbon size / segment-colour picker (issue #1). Int mirrors for the
+    // two Combo boxes, the same pattern deemphIndex_ uses beside kDeemphUs —
+    // see kBandPlanSizeKeys/kBandPlanPaletteKeys in app_window.cpp for what
+    // each index means and currentConfig()/applyConfig() for the string
+    // AppConfig fields these round-trip through.
+    int bandPlanSizeIndex_ = 0;
+    int bandPlanPaletteIndex_ = 0;
+
+    // WHICH FACE THE FREQUENCY COUNTER WEARS (GitHub issue #1). Held as the
+    // STYLE, not as the name: the name is the config file's vocabulary and
+    // the enum is what the painter switches on, so the one conversion happens
+    // where the config arrives and nowhere else. Defaults to the plate the
+    // deck has always had.
+    cascade::gui::TunerStyle tunerStyle_ = cascade::gui::TunerStyle::Nixie;
 
     // Plugin host: scanned once at construction and on Rescan. Owns the
     // loaded modules, so it must outlive nothing in particular here — but it

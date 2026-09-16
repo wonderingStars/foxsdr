@@ -1185,5 +1185,132 @@ int main() {
         CHECK(!cascade::gui::isNativeSourceKind("file"));
     }
 
+    // --- THE FREQUENCY DISPLAY STYLE (GitHub issue #1) -----------------------
+    //
+    // WHY THE NUMBERS ARE PINNED RATHER THAN THE LOOK. Nobody can assert "the
+    // neon digit is easier to read" from a test, so what is asserted is the
+    // three things that make it so - the figure's size relative to its cell,
+    // whether a glow is drawn, and the colours - each against the value the
+    // style was designed with. A later edit that makes the neon figure Nixie-
+    // sized, or drops its glow, or paints the plain style on a grey ground,
+    // fails here rather than shipping as a style that no longer stands out.
+    //
+    // The Nixie set is the one that matters most: it is a TRANSCRIPTION of
+    // what the plate has drawn since 0.88.0, so any drift in it is a change
+    // to the default face of the application, which this feature promised not
+    // to make.
+    {
+        using cascade::gui::kTunerStyleCount;
+        using cascade::gui::kTunerStyleLabels;
+        using cascade::gui::kTunerStyleNames;
+        using cascade::gui::TunerCellPaint;
+        using cascade::gui::tunerCellPaint;
+        using cascade::gui::TunerStyle;
+        using cascade::gui::tunerStyleFromName;
+        using cascade::gui::tunerStyleName;
+
+        // THE NAME IS THE CONFIG VOCABULARY, and an unknown one falls back to
+        // the default rather than to nothing. The file is user-editable, so
+        // "neno" must leave the deck looking like itself.
+        CHECK(tunerStyleFromName("nixie") == TunerStyle::Nixie);
+        CHECK(tunerStyleFromName("neon") == TunerStyle::Neon);
+        CHECK(tunerStyleFromName("plain") == TunerStyle::Plain);
+        CHECK(tunerStyleFromName("") == TunerStyle::Nixie);
+        CHECK(tunerStyleFromName("neno") == TunerStyle::Nixie);
+        CHECK(tunerStyleFromName("NEON") == TunerStyle::Nixie);
+        CHECK(tunerStyleFromName("nixie ") == TunerStyle::Nixie);
+
+        // Round trip, both ways, so the name written to the file is a name
+        // the loader will accept.
+        CHECK(std::string(tunerStyleName(TunerStyle::Nixie)) == "nixie");
+        CHECK(std::string(tunerStyleName(TunerStyle::Neon)) == "neon");
+        CHECK(std::string(tunerStyleName(TunerStyle::Plain)) == "plain");
+        for (int i = 0; i < kTunerStyleCount; ++i) {
+            CHECK(std::string(tunerStyleName(tunerStyleFromName(kTunerStyleNames[i]))) ==
+                  kTunerStyleNames[i]);
+            // The picker's own two lists: one entry per style, none empty.
+            CHECK(kTunerStyleNames[i] != nullptr && kTunerStyleNames[i][0] != '\0');
+            CHECK(kTunerStyleLabels[i] != nullptr && kTunerStyleLabels[i][0] != '\0');
+        }
+        // The first entry is the DEFAULT, because the picker's index 0 and the
+        // fallback have to be the same style or a fresh config would select
+        // something the file does not say.
+        CHECK(std::string(kTunerStyleNames[0]) == "nixie");
+
+        // THE NIXIE SET - transcribed from drawNixieTube, not chosen.
+        const TunerCellPaint nixie = tunerCellPaint(TunerStyle::Nixie);
+        CHECK(nixie.digitFrac == 0.635f);
+        CHECK(nixie.glowLayers == 2);
+        CHECK(nixie.glowSpread == 3.0f);
+        CHECK(nixie.haloUnits == 10.0f);
+        CHECK(nixie.digitRgb == 0xffb347u);
+        CHECK(nixie.digitAlpha == 255u);
+        CHECK(nixie.dimAlpha == 96u);
+        CHECK(nixie.glowRgb == 0xff8a1fu);
+        CHECK(nixie.glowAlpha == 70u);
+        CHECK(nixie.cellRgb == 0x050403u);
+        CHECK(nixie.glassFurniture);
+
+        const TunerCellPaint neon = tunerCellPaint(TunerStyle::Neon);
+        CHECK(neon.digitFrac == 0.84f);
+        CHECK(neon.glowLayers == 3);
+        CHECK(neon.glowSpread == 4.5f);
+        CHECK(neon.haloUnits == 7.0f);
+        CHECK(neon.digitRgb == 0xd6feffu);
+        CHECK(neon.digitAlpha == 255u);
+        CHECK(neon.dimAlpha == 70u);
+        CHECK(neon.glowRgb == 0x00d0ffu);
+        CHECK(neon.glowAlpha == 90u);
+        CHECK(neon.cellRgb == 0x04070au);
+        CHECK(!neon.glassFurniture);
+
+        const TunerCellPaint plain = tunerCellPaint(TunerStyle::Plain);
+        CHECK(plain.digitFrac == 0.84f);
+        CHECK(plain.glowLayers == 0);
+        CHECK(plain.glowSpread == 0.0f);
+        CHECK(plain.haloUnits == 0.0f);
+        CHECK(plain.digitRgb == 0xffffffu);
+        CHECK(plain.digitAlpha == 255u);
+        CHECK(plain.dimAlpha == 80u);
+        CHECK(plain.glowAlpha == 0u);
+        CHECK(plain.cellRgb == 0x000000u);
+        CHECK(!plain.glassFurniture);
+
+        // THE PROPERTIES THE REQUEST ACTUALLY ASKED FOR, asserted as
+        // relations rather than as numbers, so they survive a deliberate
+        // retune of any single value above:
+        //
+        //   both new styles letter a MARKEDLY BIGGER figure than the Nixie
+        //   (a third again, at least) - that is what "easier to read" meant;
+        CHECK(neon.digitFrac >= nixie.digitFrac * 1.3f);
+        CHECK(plain.digitFrac >= nixie.digitFrac * 1.3f);
+        //   the figure still FITS its cell, which a fraction of 1.0 or more
+        //   would not - the glyph box is the font's requested size;
+        CHECK(neon.digitFrac < 1.0f);
+        CHECK(plain.digitFrac < 1.0f);
+        //   neither new style carries the glass, because the glass is the
+        //   decoration the request offered to trade away;
+        CHECK(!neon.glassFurniture);
+        CHECK(!plain.glassFurniture);
+        //   neon GLOWS and plain does not, which is the whole difference
+        //   between the two new choices;
+        CHECK(neon.glowLayers > 0 && neon.glowAlpha > 0u);
+        CHECK(plain.glowLayers == 0 && plain.glowAlpha == 0u);
+        //   and every style's cell is NEAR BLACK while its figure is bright,
+        //   measured as the sum of the three channels rather than by eye.
+        const auto channelSum = [](unsigned rgb) {
+            return static_cast<int>((rgb >> 16) & 0xFFu) +
+                   static_cast<int>((rgb >> 8) & 0xFFu) + static_cast<int>(rgb & 0xFFu);
+        };
+        for (const TunerCellPaint& p : {nixie, neon, plain}) {
+            CHECK(channelSum(p.cellRgb) <= 60);
+            CHECK(channelSum(p.digitRgb) >= 400);
+            // A leading zero is dimmer than a live figure in every style -
+            // the deck's own rule that the zeros ahead of the first
+            // significant digit carry no value.
+            CHECK(p.dimAlpha < p.digitAlpha);
+        }
+    }
+
     return testSummary("test_tune_control");
 }
