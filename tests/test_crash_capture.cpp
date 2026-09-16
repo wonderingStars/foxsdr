@@ -270,6 +270,37 @@ void checkReportContent(const CaughtReport& r, const char* what) {
     CHECK(r.text.find("build=") != std::string::npos);
     CHECK(r.text.find("pdb=") != std::string::npos);
 
+#if !defined(_WIN32)
+    // THE EXACT PROPERTY AN ANDROID SYMBOLICATION PIPELINE NEEDS: at least one
+    // STACK FRAME names THIS test binary (not a bare address, not only a
+    // system library), and the MODULES section carries a real GNU build id -
+    // 40 lowercase hex digits, never "(none)" - for that same module. That id
+    // is the durable key tools/elf_symmap.py archives symbols under, so a
+    // report with a frame but no matching build id would be exactly as
+    // unreadable in the field as one with neither.
+    const std::string self = fs::path(selfExePath()).filename().string();
+    CHECK(!self.empty());
+    CHECK(r.text.find(self + "+0x") != std::string::npos);
+
+    const std::string moduleLine = "  " + self + " base=";
+    const std::size_t moduleAt = r.text.find(moduleLine);
+    CHECK(moduleAt != std::string::npos);
+    if (moduleAt != std::string::npos) {
+        const std::size_t buildAt = r.text.find("build=", moduleAt);
+        const std::size_t lineEnd = r.text.find('\n', moduleAt);
+        CHECK(buildAt != std::string::npos && buildAt < lineEnd);
+        if (buildAt != std::string::npos) {
+            const std::size_t hexStart = buildAt + 6;  // strlen("build=")
+            const std::size_t hexEnd = r.text.find_first_not_of(
+                "0123456789abcdef", hexStart);
+            const std::string buildId = r.text.substr(hexStart, hexEnd - hexStart);
+            std::printf("own module build id: %s\n", buildId.c_str());
+            CHECK(buildId.size() == 40);
+            CHECK(buildId != "(none)");
+        }
+    }
+#endif
+
     // The process block, after the stack: the session's age, and whether the
     // faulting thread was one of ours. The child faulted from this test's own
     // code (raiseTestFault, linked into this executable), so the walked stack

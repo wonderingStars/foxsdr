@@ -31,6 +31,7 @@
 #include <string>
 
 #include "core/config.hpp"
+#include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/version.hpp"
 #include "gui/app_window.hpp"
@@ -95,6 +96,36 @@ extern "C" void android_main(struct android_app* app) {
     cascade::core::diagLogf("FoxSDR %s (%s) starting on Android", cascade::versionString(),
                             cascade::gitCommit());
 
+    // THE USER'S STORED PREFERENCE, read before anything is armed - the same
+    // rule main.cpp's storedDiagnosticsEnabled() follows and for the same
+    // reason: a user who opted out must not get a crashes directory created
+    // on their behalf just because a fault happened before Settings was ever
+    // opened. ConfigStore::defaultPath() already resolves inside the sandbox
+    // (XDG_CONFIG_HOME was pointed at internalDataPath/config just above), and
+    // a missing or corrupt file leaves AppConfig's default in place, which is
+    // "on" - a user who has never chosen has not opted out.
+    cascade::core::AppConfig startupCfg;
+    std::string startupCfgErr;
+    cascade::core::ConfigStore::load(cascade::core::ConfigStore::defaultPath(), startupCfg,
+                                     startupCfgErr);
+    const bool wantDiagnostics = startupCfg.diagnosticsEnabled;
+
+    // REGISTRATIONS FIRST, ON-DISK CAPTURE SECOND - exactly main.cpp's
+    // two-step, and for the same reason: AndroidPlatformWindow's EGL bring-up
+    // and AppWindow's own construction below are exactly the kind of
+    // fault-prone start-up work a report needs to cover, and both run before
+    // AppWindow::run() ever reaches its internal applyDiagnosticsEnabled()
+    // call (see app_window.cpp, armed once the frame loop starts). Crash
+    // capture is no longer stubbed here - crash_handler_posix.cpp builds
+    // under CASCADE_ANDROID too now; see its file header for the
+    // _Unwind_Backtrace-based unwinder that replaces the libunwind package
+    // the NDK does not ship.
+    cascade::core::CrashHandlerConfig crashCfg;
+    crashCfg.crashDir = cascade::core::diagCrashDir();
+    crashCfg.enabled = false;
+    cascade::core::installCrashHandlers(crashCfg);
+    cascade::core::setCrashCaptureEnabled(wantDiagnostics, false);
+
     // DECLARED BEFORE THE AppWindow, exactly as on the desktop and for the
     // same reason: AppWindow reads the session clock off the platform window
     // from its destructor's neighbourhood as well as from run(), so a platform
@@ -105,13 +136,16 @@ extern "C" void android_main(struct android_app* app) {
     cascade::gui::AppWindow window(cascade::core::ConfigStore::defaultPath(),
                                    /*announceConfig=*/false);
 
-    // NO CRASH DIRECTORY HANDED OVER, and that is not an oversight: crash and
-    // hang CAPTURE is stubbed on Android - ANDROID-TODO(crash-capture) in
-    // core/crash_handler.cpp and core/hang_watchdog.cpp, because the NDK has
-    // no libunwind local-unwind API - so a directory would only ever collect
-    // empty reports. An empty string is what the desktop hands a run that may
-    // not write, and AppWindow already reads it as "write nothing".
-    window.setDiagnosticsDir(std::string());
+    // THE CRASH DIRECTORY, HANDED OVER. diagCrashDir() resolves under
+    // XDG_STATE_HOME (pointed at internalDataPath/state above), which is the
+    // SAME directory the existing Diagnostics page already reads through
+    // core::diagCrashDir() - no separate wiring needed there, and no risk of
+    // the two ever disagreeing. run()'s own applyDiagnosticsEnabled(), fed
+    // from the config AppWindow's constructor just loaded (the same file
+    // `startupCfg` above already read), re-applies `wantDiagnostics` onto the
+    // crash handler, the disk log and the watchdog together - the same single
+    // call the desktop's app.setDiagnosticsDir()+run() relies on.
+    window.setDiagnosticsDir(cascade::core::diagCrashDir());
 
     // -1: run until the activity is finished. There is no --frames on a phone.
     const int rc = window.run(-1, platform);

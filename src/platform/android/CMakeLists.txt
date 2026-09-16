@@ -46,3 +46,34 @@ target_link_libraries(foxsdr PRIVATE cascade_lib)
 # common way a NativeActivity build fails silently at runtime rather than at
 # link.
 target_link_options(foxsdr PRIVATE "-u" "ANativeActivity_onCreate")
+
+# libfoxsdr.so already carries a GNU build-id note without any extra linker
+# flag - confirmed by reading a built .so with llvm-readelf -n: the NDK's lld
+# defaults to --build-id for an Android target the way it does not always for
+# a bare desktop Linux link. Nothing to add here for that; this step is the
+# other half - actually ARCHIVING symbols under that id, the same way the
+# desktop `cascade` target does (see the root CMakeLists.txt's POST_BUILD
+# step). Without it, crash_handler_posix.cpp's reports are exactly as
+# symbolisable in principle as the desktop's and exactly as unreadable in
+# practice, because nothing kept a copy of THIS build's debug info anywhere
+# a symbolication pass could find it again.
+#
+# tools/archive-symbols-linux.sh is reused UNCHANGED rather than forked: it is
+# already keyed by the GNU build-id note (not a version or file name) and
+# reads it with elf_symmap.py's own note parser, which does not care what
+# produced the ELF file - confirmed by running host objcopy/nm directly
+# against a cross-compiled Android x86_64 .so before wiring this in (same
+# ELFCLASS64/EM_X86_64 as a native Linux binary; only the ELF OSABI/interp
+# differ, and neither tool reads those fields). `--module foxsdr` keys the
+# archive under a name distinct from the desktop's `cascade`, so the two
+# never collide even though nothing stops a report from either platform
+# reaching the same symbols/ tree.
+add_custom_command(TARGET foxsdr POST_BUILD
+    COMMAND bash
+            "${CMAKE_SOURCE_DIR}/tools/archive-symbols-linux.sh"
+            --binary "$<TARGET_FILE:foxsdr>"
+            --archive-root "${CASCADE_SYMBOL_ARCHIVE}"
+            --version "${CASCADE_VERSION_STRING}"
+            --commit-header "${CASCADE_COMMIT_HEADER}"
+            --module foxsdr
+    VERBATIM)

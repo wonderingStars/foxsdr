@@ -4,14 +4,21 @@
 // crash_handler.hpp) and by crash_handler_posix.cpp itself. Everything here is
 // implementation detail: the public promises - what is covered, what a report
 // contains, the allocation-free discipline on the fault path - are all in
-// crash_handler.hpp and apply identically on Linux. See crash_handler_posix.cpp
-// for how they are kept: sigaction on an alternate stack for SIGSEGV/SIGBUS/
-// SIGILL/SIGFPE/SIGTRAP, a SIGABRT net under std::set_terminate exactly as the
-// Windows implementation describes (libstdc++'s terminate handler is process-
-// wide rather than the MSVC per-thread one, but the net is kept anyway: a
-// thread that dies through __cxa_pure_virtual or a direct abort() never goes
-// through std::terminate at all), and a libunwind walk of the ucontext the
-// kernel hands every signal handler registered with SA_SIGINFO.
+// crash_handler.hpp and apply identically on Linux AND Android (the NDK build
+// takes this same file - see CMakeLists.txt's CASCADE_ANDROID guard around
+// crash_handler_posix.cpp, which used to exclude it entirely before this was
+// written). See crash_handler_posix.cpp for how the contract is kept:
+// sigaction on an alternate stack for SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGTRAP, a
+// SIGABRT net under std::set_terminate exactly as the Windows implementation
+// describes (libstdc++'s terminate handler is process-wide rather than the
+// MSVC per-thread one, but the net is kept anyway: a thread that dies through
+// __cxa_pure_virtual or a direct abort() never goes through std::terminate at
+// all), and a LOCAL unwind of the ucontext the kernel hands every signal
+// handler registered with SA_SIGINFO - libunwind's unw_init_local/unw_step on
+// desktop Linux, or clang's compiler-runtime _Unwind_Backtrace (<unwind.h>,
+// no separate library) on Android, where the NDK ships no libunwind
+// local-unwind package. See that file's header for why the two are equivalent
+// in what they capture despite the very different API.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_CRASH_HANDLER_POSIX_HPP

@@ -27,11 +27,23 @@ namespace cascade::core {
 
 namespace {
 
-// 256 modules is roughly four times what a fully loaded session carries (the
+// 256 was roughly four times what a fully loaded DESKTOP session carries (the
 // application, the CRT, the GL driver, SoapySDR and its vendor modules, and
-// every decoder plugin). Fixed so the table is a plain array the fault path
-// can search with no allocation.
-constexpr int kMaxDiagModules = 256;
+// every decoder plugin) - and far too small for Android, where it silently
+// dropped our OWN module out of a real report. Measured on the x86_64
+// emulator (2026-09-15): a stock FoxSDR activity with nothing more than
+// AAudio and the framework libraries ART maps into every app process has 296
+// distinct shared objects loaded (counted from /proc/<pid>/maps), so
+// dl_iterate_phdr's 257th-and-later entries - including libfoxsdr.so itself
+// in the run that found this - never reached the table at all: the crash was
+// caught and a report was written, correctly, but with every frame a bare
+// address and no build id to symbolise it against. 600 keeps the same
+// "roughly double the largest real count seen" headroom the original number
+// used, on a platform whose framework library count is dictated by the OS,
+// not by this application, and can only be measured, not bounded from first
+// principles. Fixed so the table is a plain array the fault path can search
+// with no allocation.
+constexpr int kMaxDiagModules = 600;
 
 DiagModule g_modules[kMaxDiagModules];
 std::atomic<int> g_moduleCount{0};

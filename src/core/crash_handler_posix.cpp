@@ -9,26 +9,56 @@
 //
 // WHAT THIS FILE TOUCHES, so the claim above can be checked rather than
 // believed: sigaction, sigaltstack, open/write/close (kernel calls, not
-// buffered stdio), clock_gettime, getpid, the SYS_gettid syscall, libunwind's
-// LOCAL unwinder (UNW_LOCAL_ONLY) fed the ucontext_t the kernel hands every
-// SA_SIGINFO handler, and memcpy/hand-written integer rendering exactly as
-// crash_handler.cpp uses on Windows. It allocates nothing, takes no lock the
-// rest of the process could be holding, and calls no snprintf (glibc's can
-// take a lock for wide-character/locale state, which is still a lock).
+// buffered stdio), clock_gettime, getpid, the SYS_gettid syscall, a LOCAL
+// unwind of the ucontext_t the kernel hands every SA_SIGINFO handler, and
+// memcpy/hand-written integer rendering exactly as crash_handler.cpp uses on
+// Windows. It allocates nothing, takes no lock the rest of the process could
+// be holding, and calls no snprintf (glibc's can take a lock for
+// wide-character/locale state, which is still a lock).
 //
-// THE ONE HONEST CAVEAT, and it has the same shape as crash_handler.cpp's:
-// libunwind's local unwinder is not on the POSIX async-signal-safe list -
-// unw_init_local can read /proc/self/maps on its first call and may cache
-// unwind tables it parsed from .eh_frame, and neither operation is guaranteed
-// safe to perform inside a signal handler. This is not avoidable without
-// shipping a private DWARF/.eh_frame reader, which is out of scope; the
-// mitigation is the same one crash_handler.cpp applies to the equivalent
-// Windows risk (RtlLookupFunctionEntry under the loader lock): the report is
-// written INCREMENTALLY, most valuable first, so a wedge inside the unwinder
-// still leaves the fault kind, the address and the application context on
-// disk. install() additionally performs one throwaway local unwind on the
-// healthy path (see warmUpUnwinder()) so libunwind's one-time setup is paid
-// for before any real fault can be blocked behind it.
+// TWO UNWINDERS BEHIND ONE INTERFACE, chosen by CASCADE_ANDROID exactly as
+// every other platform split in this file is - never __ANDROID__, so the
+// host-native validation configure (-DCASCADE_ANDROID=ON, no NDK) takes the
+// identical branch a real device build does:
+//
+//   DESKTOP LINUX (glibc, libunwind installed)   unw_init_local/unw_step over
+//     the ucontext_t directly, as before.
+//   ANDROID (the NDK ships no libunwind LOCAL-unwind package - see
+//     CMakeLists.txt's guard around pkg_check_modules(LIBUNWIND))
+//     _Unwind_Backtrace from <unwind.h>, part of the compiler runtime clang
+//     links into every Android binary automatically (no separate library,
+//     confirmed by linking a throwaway translation unit against it and
+//     reading its NEEDED entries - libclang_rt.builtins supplies it
+//     statically, nothing dynamic to find at runtime). Called DIRECTLY from
+//     inside the signal handler rather than fed the ucontext_t: on both
+//     shipped ABIs (arm64-v8a, x86_64 - see android/app/build.gradle's
+//     abiFilters) bionic's kernel-installed sigreturn trampoline carries the
+//     CFI "this is a signal frame" annotation the GNU unwind ABI defines, so
+//     _Unwind_Backtrace transparently continues PAST the trampoline into the
+//     interrupted frame and its full caller chain - verified empirically
+//     against a real SIGSEGV on the x86_64 emulator (frame[2] landed exactly
+//     on the faulting instruction three levels below main()) before this was
+//     relied on rather than assumed. The faulting INSTRUCTION for the
+//     `address:` field is still read directly out of the ucontext_t, exactly
+//     as the desktop branch does with UNW_REG_IP - just through
+//     ucontext_t.uc_mcontext's platform-specific register field
+//     (gregs[REG_RIP] on x86_64, .pc on aarch64) instead of libunwind's
+//     UNW_REG_IP, because _Unwind_Backtrace's own first frame is inside this
+//     handler, not the fault.
+//
+// THE ONE HONEST CAVEAT, and it has the same shape as crash_handler.cpp's and
+// applies to BOTH unwinders above: neither libunwind's local unwinder nor
+// _Unwind_Backtrace is on the POSIX async-signal-safe list - both can read
+// /proc/self/maps or process loaded unwind tables on their first call, and
+// neither operation is guaranteed safe to perform inside a signal handler.
+// This is not avoidable without shipping a private DWARF/.eh_frame reader,
+// which is out of scope; the mitigation is the same one crash_handler.cpp
+// applies to the equivalent Windows risk (RtlLookupFunctionEntry under the
+// loader lock): the report is written INCREMENTALLY, most valuable first, so
+// a wedge inside the unwinder still leaves the fault kind, the address and
+// the application context on disk. install() additionally performs one
+// throwaway local unwind on the healthy path so either unwinder's one-time
+// setup is paid for before any real fault can be blocked behind it.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/crash_handler_posix.hpp"
@@ -36,8 +66,13 @@
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 
+#if defined(CASCADE_ANDROID)
+#include <ucontext.h>
+#include <unwind.h>
+#else
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
+#endif
 
 #include <atomic>
 #include <cerrno>
@@ -51,6 +86,7 @@
 #include <system_error>
 #include <thread>
 
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -73,6 +109,20 @@ constexpr int kMaxFrames = 62;
 constexpr unsigned long kCodeTerminate = 0xE1000001ul;
 constexpr unsigned long kCodePureCall = 0xE1000002ul;
 constexpr unsigned long kCodeInvalidParameter = 0xE1000003ul;
+
+// unw_context_t IS ucontext_t on Linux/x86_64 (see the comment further down
+// where this was walked directly), so the desktop branch never needed a name
+// of its own for it. Android has no unw_context_t at all, so this file needs
+// ONE name for "the type the kernel hands a SA_SIGINFO handler" that both
+// branches can share in call sites and signatures - PlatformSigContext is
+// that name, and it is the ONLY new type this Android branch introduces.
+// Declared here, ahead of everything that names it, rather than beside
+// ChildFault further down where it used to live.
+#if defined(CASCADE_ANDROID)
+using PlatformSigContext = ucontext_t;
+#else
+using PlatformSigContext = unw_context_t;
+#endif
 
 // ALL FIXED STORAGE, prepared while the process is still healthy. See
 // crash_handler.cpp's file header for why: a stack overflow is exactly the
@@ -271,6 +321,65 @@ void writeRing(const Emit& e) {
     e.raw(g_ringBuf, used);
 }
 
+#if defined(CASCADE_ANDROID)
+
+// The faulting INSTRUCTION, read straight out of the register file the
+// kernel wrote into the ucontext_t - the same fact UNW_REG_IP answers on the
+// desktop branch, just reached through bionic's per-ABI mcontext_t instead of
+// libunwind. Only the two shipped ABIs are handled (android/app/build.gradle
+// abiFilters: arm64-v8a, x86_64) - a third would need its own register field
+// name verified against bionic's sys/ucontext.h before being trusted here,
+// so this intentionally does not guess at one.
+std::uintptr_t androidContextPc(const PlatformSigContext* ctx) {
+    if (ctx == nullptr) { return 0; }
+#if defined(__x86_64__)
+    return static_cast<std::uintptr_t>(ctx->uc_mcontext.gregs[REG_RIP]);
+#elif defined(__aarch64__)
+    return static_cast<std::uintptr_t>(ctx->uc_mcontext.pc);
+#else
+#error "crash_handler_posix.cpp: unhandled Android ABI (only arm64-v8a and x86_64 ship - see android/app/build.gradle)"
+#endif
+}
+
+struct AndroidUnwindState {
+    unsigned long* frames;
+    int n;
+    int max;
+};
+
+_Unwind_Reason_Code androidUnwindCallback(struct _Unwind_Context* uctx, void* argVoid) {
+    auto* st = static_cast<AndroidUnwindState*>(argVoid);
+    if (st->n >= st->max) { return _URC_END_OF_STACK; }
+    st->frames[st->n++] = static_cast<unsigned long>(::_Unwind_GetIP(uctx));
+    return _URC_NO_REASON;
+}
+
+// `ctx` is accepted (and ignored for the walk itself) purely so this
+// function has the same signature as the desktop branch's and every call
+// site below needs no #ifdef of its own. _Unwind_Backtrace always starts
+// unwinding from wherever IT is called - never from an arbitrary supplied
+// context - so the walk's starting point is "here", inside the signal
+// handler on the alternate stack. What makes that useful rather than
+// useless is the file header's CFI claim: bionic's sigreturn trampoline is
+// itself a valid unwind frame, so the walk continues straight through it
+// into the code that faulted and every one of its callers. The instruction
+// that actually faulted is read separately, from `ctx`, by the caller (see
+// faultSignalHandler) - not recovered from this walk - because the first
+// entries this produces are this handler's own frames and the trampoline,
+// not the fault.
+int captureFramesFromContext(PlatformSigContext* ctx, unsigned long* frames, int maxFrames) {
+    (void)ctx;
+    AndroidUnwindState st{frames, 0, maxFrames};
+    ::_Unwind_Backtrace(&androidUnwindCallback, &st);
+    return st.n;
+}
+
+int captureFramesCurrentThread(unsigned long* frames, int maxFrames) {
+    return captureFramesFromContext(nullptr, frames, maxFrames);
+}
+
+#else  // !CASCADE_ANDROID - desktop Linux, libunwind
+
 // unw_context_t IS ucontext_t on Linux/x86_64 (libunwind typedefs it so), so
 // the ucontext_t* a signal handler is handed by the kernel can be walked
 // directly with no copy - unlike crash_handler.cpp's Windows CONTEXT, which
@@ -295,6 +404,8 @@ int captureFramesCurrentThread(unsigned long* frames, int maxFrames) {
     return captureFramesFromContext(&ctx, frames, maxFrames);
 }
 
+#endif  // CASCADE_ANDROID
+
 struct ChildFault {
     unsigned long exitCode = 0;
     int attempt = 0;
@@ -309,7 +420,7 @@ struct ChildFault {
 // those, `mayWalkCurrentThread` says whether the CALLING thread's own stack is
 // the answer, matching captureFramesGuarded's contract on Windows.
 void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAddr,
-                 unw_context_t* ctx, bool mayWalkCurrentThread, const ChildFault* child) {
+                 PlatformSigContext* ctx, bool mayWalkCurrentThread, const ChildFault* child) {
     if (!g_enabled || g_crashDir[0] == '\0') { return; }
 
     const long seq = g_reportSeq.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -442,8 +553,11 @@ void faultSignalHandler(int sig, siginfo_t* /*info*/, void* ucontextVoid) {
         // A fault INSIDE the handler. Die quietly rather than recursing.
         ::_exit(0xE2);
     }
-    auto* ctx = static_cast<unw_context_t*>(ucontextVoid);
+    auto* ctx = static_cast<PlatformSigContext*>(ucontextVoid);
     std::uintptr_t addr = 0;
+#if defined(CASCADE_ANDROID)
+    addr = androidContextPc(ctx);
+#else
     {
         unw_cursor_t cursor;
         if (::unw_init_local(&cursor, ctx) == 0) {
@@ -453,6 +567,7 @@ void faultSignalHandler(int sig, siginfo_t* /*info*/, void* ucontextVoid) {
             }
         }
     }
+#endif
     writeReport(reasonForSignal(sig), static_cast<unsigned long>(sig), addr, ctx, true, nullptr);
     exitHandler();
     finish(static_cast<unsigned long>(sig));
@@ -555,11 +670,54 @@ void install(const CrashHandlerConfig& cfg) {
 
     if (moduleCount() == 0) { refreshModuleTable(); }
     {
-        DiagModule m;
-        // dl_iterate_phdr always visits the main program first (see
-        // diag_report.cpp's elfModuleCallback), so index 0 is this process's
-        // own image whenever the table is non-empty.
-        if (moduleAt(0, m)) { g_selfBase = m.base; }
+        // NEITHER "index 0" NOR "/proc/self/exe" - both were tried, in that
+        // order, and both were proven wrong against real faults rather than
+        // assumed correct:
+        //
+        //   "index 0 is the main program" (dl_iterate_phdr's glibc ordering)
+        //   is Android-wrong a first way - bionic visits the DYNAMIC LINKER
+        //   first ("linker64" on a 64-bit ABI), so index 0 named the linker's
+        //   base and every `fault-thread-own` line read "no" for a fault
+        //   genuinely in this process's own code (measured on the x86_64
+        //   emulator's on-device test binaries).
+        //
+        //   "/proc/self/exe names our own module" is Android-wrong a SECOND,
+        //   different way, one the test binaries above never exercise: this
+        //   code does not always run in a process whose EXECUTABLE is the
+        //   module that matters. The real application is libfoxsdr.so,
+        //   dlopen'd by app_process64 (Zygote/ART) as a NativeActivity
+        //   library - /proc/self/exe there is app_process64, which is
+        //   present in the module table (every Android app shares it) but
+        //   contains none of our code, so this fix still shipped a real
+        //   fault reading "fault-thread-own: no" against a report whose own
+        //   stack frames were plainly "libfoxsdr.so+0x...". Caught by
+        //   inspecting a REAL app crash pulled off the emulator, not by the
+        //   on-device test binaries, which are plain executables and could
+        //   not have shown this.
+        //
+        // dladdr() on our OWN CODE is correct under both shapes: it answers
+        // "which loaded module contains this address", which is
+        // test_crash_capture itself when this file is linked into an
+        // executable and libfoxsdr.so when it is linked into a shared
+        // library loaded by a host process - exactly the "own module" this
+        // line exists to name, by construction rather than by inference from
+        // process identity.
+        Dl_info selfInfo{};
+        const char* selfName = nullptr;
+        if (::dladdr(reinterpret_cast<void*>(&install), &selfInfo) != 0 &&
+            selfInfo.dli_fname != nullptr) {
+            const char* slash = std::strrchr(selfInfo.dli_fname, '/');
+            selfName = (slash != nullptr) ? (slash + 1) : selfInfo.dli_fname;
+        }
+        const int n = moduleCount();
+        for (int i = 0; i < n; ++i) {
+            DiagModule m;
+            if (!moduleAt(i, m)) { continue; }
+            if (selfName != nullptr && std::strcmp(selfName, m.name) == 0) {
+                g_selfBase = m.base;
+                break;
+            }
+        }
     }
 
     // Pays for libunwind's one-time setup (see the file header) on the

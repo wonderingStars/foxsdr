@@ -198,12 +198,14 @@ endif()
 # distribution's own libunwind has already been patched for.
 #
 # NOT under CASCADE_ANDROID: the NDK ships no libunwind local-unwind API, so
-# crash_handler_posix.cpp is excluded from that build entirely (see the
-# CASCADE_CORE exclusion below) and hang_watchdog.cpp's equivalent capture is
-# compiled out by the same macro — see the ANDROID-TODO(crash-capture) notes
-# in both files. Skipping the lookup, not just the link, matters here: this
-# find_package is REQUIRED, and CASCADE_ANDROID's whole point (including the
-# native Linux x86-64 validation build) is not needing libunwind at all.
+# crash_handler_posix.cpp uses clang's compiler-runtime _Unwind_Backtrace
+# there instead (<unwind.h>, no separate library — see that file's header)
+# and needs this package not at all; hang_watchdog.cpp's equivalent capture
+# is still compiled out under CASCADE_ANDROID — see its own
+# ANDROID-TODO(crash-capture) notes; that slice is unaffected by this one.
+# Skipping the lookup, not just the link, matters here: this find_package is
+# REQUIRED, and CASCADE_ANDROID's whole point (including the native Linux
+# x86-64 validation build) is not needing libunwind at all.
 if(NOT WIN32 AND NOT CASCADE_ANDROID)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBUNWIND REQUIRED IMPORTED_TARGET libunwind)
@@ -440,12 +442,20 @@ if(WIN32)
     list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crash_handler_posix.cpp")
 endif()
 if(CASCADE_ANDROID)
-    # crash_handler_posix.cpp: same reason as the WIN32 removal above, one
-    # level further — the NDK has no libunwind local-unwind API either, so
-    # even the Linux implementation this file provides cannot build. See the
-    # ANDROID-TODO(crash-capture) stub in core/crash_handler.cpp, which this
-    # file's absence falls through to.
-    list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crash_handler_posix.cpp")
+    # crash_handler_posix.cpp USED TO BE REMOVED HERE, one level past the
+    # WIN32 removal above: the NDK ships no libunwind local-unwind API, so it
+    # looked like the same exclusion for the same reason. It compiles fine —
+    # the file picks between libunwind and clang's compiler-runtime
+    # _Unwind_Backtrace (<unwind.h>, part of every Android binary, no
+    # separate library) internally via "#if defined(CASCADE_ANDROID)", the
+    # same macro this whole file filters on, so the host-native validation
+    # configure below (no NDK) exercises the identical branch a real device
+    # build does. See crash_handler_posix.cpp's file header for the two
+    # unwinders and why the technique is safe on both. libunwind itself is
+    # still never looked for under CASCADE_ANDROID (the pkg_check_modules
+    # guard above) or linked (the target_link_libraries guard near the
+    # bottom of this file) — Android's branch needs neither.
+    #
     # gps_reader.cpp used to be removed here: it pulls in "gui/scope_view.hpp"
     # for one acceptance-rule constant, and nothing in a GUI-less core build
     # reached GPS. Both halves of that reasoning went when src/gui was
