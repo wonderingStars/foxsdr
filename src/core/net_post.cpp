@@ -26,7 +26,8 @@
 #include <mutex>
 
 #if defined(__ANDROID__)
-#include <android/log.h>
+// NO <android/log.h> any more: netNote below writes through diagLogf/diagWarnf
+// only, and DiagLog is what reaches logcat on this platform.
 #include <jni.h>
 #endif
 
@@ -41,6 +42,13 @@ namespace {
 // anyone helping them. These lines also go to logcat, where `adb logcat -s
 // FoxSDR` finds them. There are very few of them: arming, a refusal, a failure.
 // A successful post says nothing, exactly as on every other platform.
+//
+// THE __android_log_print THAT USED TO BE HERE IS GONE, and that is a repair
+// rather than a removal. DiagLog::write now copies every line to logcat under
+// this same tag on Android (see core/diag_log.cpp for why a phone needs that
+// and a desktop does not), so this function printed each of its notes TWICE -
+// measured on the emulator, where "net: Java transport armed" appeared twice
+// in one launch. One place decides what reaches logcat.
 void netNote(bool warn, const char* fmt, ...) {
     char buf[512];
     va_list args;
@@ -52,9 +60,6 @@ void netNote(bool warn, const char* fmt, ...) {
     } else {
         diagLogf("%s", buf);
     }
-#if defined(__ANDROID__)
-    __android_log_print(warn ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, "FoxSDR", "%s", buf);
-#endif
 }
 
 }  // namespace

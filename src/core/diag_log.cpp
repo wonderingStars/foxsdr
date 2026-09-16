@@ -20,6 +20,12 @@
 #include <io.h>
 #endif
 
+#if defined(__ANDROID__)
+// For the logcat copy of every line in DiagLog::write - see the comment there
+// for why a phone needs one and the desktop does not.
+#include <android/log.h>
+#endif
+
 namespace cascade::core {
 
 namespace {
@@ -164,6 +170,28 @@ void DiagLog::write(const char* level, const char* msg) {
     const std::size_t maxLen = static_cast<std::size_t>(kLineBytes) - 1u;
     if (len > maxLen) { len = maxLen; }
     line[len] = '\0';
+
+#if defined(__ANDROID__)
+    // AND TO LOGCAT, ON THIS PLATFORM ONLY, because on a phone the ring is not
+    // reachable. On the desktop a diagnostic line lands in a file in the
+    // user's own profile and on the console of a developer's run; here the
+    // file lives inside the application sandbox, which only a debuggable build
+    // lets anyone read (`adb shell run-as`), and there is no console at all.
+    // So the one account a tester, a bug report or a device log can offer is
+    // logcat, and this is the two lines that put it there.
+    //
+    // The MESSAGE, not the formatted line: logcat stamps its own time, adds
+    // the pid and the tag, and printing ours as well would double every field.
+    // The same tag and the same shape core/net_post.cpp already uses for its
+    // own notes, so one `logcat -s FoxSDR` catches everything this application
+    // says about itself.
+    //
+    // Warnings go to ANDROID_LOG_WARN so `logcat *:W` keeps them.
+    __android_log_print((level != nullptr && std::strcmp(level, "warn") == 0)
+                            ? ANDROID_LOG_WARN
+                            : ANDROID_LOG_INFO,
+                        "FoxSDR", "%s", (msg != nullptr) ? msg : "");
+#endif
 
     std::lock_guard<std::mutex> lk(mutex_);
     const int slot = next_.load(std::memory_order_relaxed);
