@@ -12737,8 +12737,21 @@ void AppWindow::drawPluginWindows() {
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             // The face takes the window when there is no memory to show, and
             // otherwise the upper part, leaving the memory at least a few rows.
-            const float faceH = hasMemory ? std::max(160.0f, std::min(avail.y * 0.6f, 360.0f))
-                                          : avail.y;
+            //
+            // BOTH FLOORS GO THROUGH gui::px(): left as the desktop's own
+            // 160/360 reference pixels, this cap - not any face's own
+            // arithmetic - is what starved a docked instrument of room on a
+            // tablet. avail.y there is a screen measurement several times
+            // the desktop's own (the docked body fills a much larger centre
+            // panel), so an unscaled 360 px ceiling left every face with
+            // rows below it stuck at the desktop's own physical height while
+            // the panel around it kept growing - which is the "small in the
+            // top-left with empty brass around it" defect one call site
+            // higher than any individual face.
+            const float faceH =
+                hasMemory ? std::max(cascade::gui::px(160.0f),
+                                     std::min(avail.y * 0.6f, cascade::gui::px(360.0f)))
+                          : avail.y;
             const ImVec2 br(tl.x + avail.x, tl.y + faceH);
             const float used =
                 cascade::gui::drawInstrumentFace(ImGui::GetWindowDrawList(), tl, br, in, cue);
