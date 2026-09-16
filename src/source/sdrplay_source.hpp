@@ -88,6 +88,19 @@
 // the SDRplay API service, then open the radio again" sentence already asks
 // for. See vendorUnreachableLocked().
 //
+// ...AND THE RULE ONLY WORKS IF EVERY FAILURE THAT MEANS IT GETS RECORDED.
+// 0.97.1's hang report is the same freeze one call further round: a GUI
+// thread inside closeDevice's sdrplay_api_ReleaseDevice, with the log's
+// PREVIOUS line reading "SDRplay Uninit failed -
+// sdrplay_api_ServiceNotResponding (14)" - stop()'s own Uninit, not a
+// control's Update. noteIfServiceDead had only ever been wired to
+// updateLocked's failures, so that Uninit answering the exact error the rule
+// above is about left serviceGone_ false, and closeDevice() a few log lines
+// later found vendorUnreachableLocked() still saying it was safe to call
+// ReleaseDevice. It was not. Every call that can answer
+// sdrplay_api_ServiceNotResponding now reports it through noteIfServiceDead,
+// not only the one that first needed it.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
