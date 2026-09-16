@@ -41,7 +41,13 @@
 //   deliberate blocking work, so it is bracketed in the watchdog pause rule 2b
 //   asks for: it cannot reach the 5 s threshold, and the pause also keeps a
 //   1.5 s frame out of HangWatchdog::worstGapMs, which is the measurement the
-//   threshold is justified against.
+//   threshold is justified against. The pause is taken BEFORE the worker is
+//   started, not merely before the wait: std::async's worker can be scheduled
+//   the instant it is launched, and a pause taken only once request() reaches
+//   its wait leaves a window - however small - in which the worker is already
+//   inside the driver call with the watchdog still armed. That is the exact
+//   case rule 2b exists for, so the pause has to cover it from the first
+//   instruction, not from the wait.
 //
 //   PAST THE BOUND THE FRAME GOES ON WITHOUT IT. The wait expires, the pause is
 //   released, the loop keeps rendering and beating, and the panel says "audio
@@ -123,6 +129,13 @@ public:
         resume_ = std::move(resume);
     }
 
+    // TEST-ONLY. Sets the hook request() runs after the in-flight check but
+    // before it pauses the watchdog - see the call site in request() and
+    // tests/test_audio_open.cpp's checkPauseOrderIsDeterministic(). Left
+    // unbound (the default), this is a no-op and production behaviour is
+    // unaffected.
+    void setTestBeforePause(std::function<void()> hook) { testBeforePause_ = std::move(hook); }
+
     ~AudioOpen() { reap(); }
 
     AudioOpen(const AudioOpen&) = delete;
@@ -146,8 +159,9 @@ public:
         int tag = 0;
     };
 
-    // Ask for `deviceIndex`. Starts the worker, then waits up to kOpenBound for
-    // it with the watchdog paused.
+    // Ask for `deviceIndex`. Pauses the watchdog, starts the worker, then
+    // waits up to kOpenBound for it - in that order. See "THE BRACKET IS THE
+    // POINT" on waitBounded() below for why the pause has to come first.
     //
     // A request made while another open is in flight is QUEUED rather than
     // started: two waveOutOpen calls racing on one AudioOut is the corruption
@@ -162,6 +176,18 @@ public:
             hasQueued_ = true;
             return Outcome::Queued;
         }
+        // Test-only: lets a test hold this thread here, after the queue check
+        // but before the pause, so it can force the pre-0.96.5-fix ordering
+        // (worker started before the watchdog is paused) deterministically
+        // instead of racing the scheduler for it. Empty in production.
+        if (testBeforePause_) { testBeforePause_(); }
+        // THE PAUSE COMES BEFORE THE WORKER STARTS. HangWatchdog counts its
+        // pauses, so the resume has to be unconditional on every path out of
+        // here (Finished, and Busy when the wait expires) - Bracket's
+        // destructor is what guarantees that regardless of which one this
+        // call takes.
+        if (pause_) { pause_(); }
+        Bracket bracket{resume_};
         start(deviceIndex, tag);
         return waitBounded();
     }
@@ -178,10 +204,14 @@ public:
         collect();
         if (hasQueued_) {
             hasQueued_ = false;
+            // NOT waitBounded(), and NOT preceded by a pause: this is a
+            // polling frame, not the frame the user clicked in, so it does no
+            // bounded wait at all - it starts the worker and returns
+            // immediately, the same as any other frame, and takes the answer
+            // on whichever later frame collects it. A pause exists to bracket
+            // deliberate blocking work (rule 2b); a call that blocks on
+            // nothing has nothing to bracket.
             start(queued_, queuedTag_);
-            // NOT waitBounded(): this is a polling frame, not the frame the
-            // user clicked in, and a frame that renders is worth more here
-            // than shaving one frame off a switch nobody is waiting on.
         }
         return true;
     }
@@ -215,6 +245,24 @@ public:
     }
 
 private:
+    // THE BRACKET IS THE POINT, and its order is what a test can hold: pausing
+    // AFTER the worker has already been started - even if that is still
+    // "before the wait" - fixes nothing, because the worker can be running
+    // inside the driver call the instant std::async launches it. request()
+    // therefore constructs this BEFORE calling start(), not around the wait
+    // alone, so the pause is in force for the worker's entire lifetime, not
+    // just the bounded portion of it. The resume is unconditional - it fires
+    // from the destructor on every path out of request() (Finished, and Busy
+    // when kOpenBound expires) - because HangWatchdog counts its pauses, and
+    // one that is never released disarms the watchdog for the rest of the
+    // session.
+    struct Bracket {
+        const std::function<void()>& resume;
+        ~Bracket() {
+            if (resume) { resume(); }
+        }
+    };
+
     void start(int deviceIndex, int tag) {
         pendingDevice_ = deviceIndex;
         pendingTag_ = tag;
@@ -224,23 +272,11 @@ private:
         });
     }
 
-    // THE BRACKET IS THE POINT, and its order is what a test can hold: pausing
-    // AFTER the wait has already blocked would fix nothing. The resume is
-    // unconditional - HangWatchdog counts its pauses, so one that is not
-    // released disarms the watchdog for the rest of the session.
+    // Waits up to kOpenBound for the worker request() just started. Called
+    // with the watchdog already paused and Bracket already alive in the
+    // caller's scope - this function owns neither.
     Outcome waitBounded() {
-        struct Bracket {
-            const std::function<void()>& resume;
-            ~Bracket() {
-                if (resume) { resume(); }
-            }
-        };
-        std::future_status status;
-        {
-            if (pause_) { pause_(); }
-            Bracket bracket{resume_};
-            status = future_.wait_for(kOpenBound);
-        }
+        const std::future_status status = future_.wait_for(kOpenBound);
         if (status != std::future_status::ready) { return Outcome::Busy; }
         collect();
         return Outcome::Finished;
@@ -257,6 +293,9 @@ private:
     Opener opener_;
     std::function<void()> pause_;
     std::function<void()> resume_;
+    // Test-only seam; see the comment at its call site in request(). Never
+    // set outside tests/test_audio_open.cpp.
+    std::function<void()> testBeforePause_;
     std::future<bool> future_;
     int pendingDevice_ = -1;
     int pendingTag_ = 0;
