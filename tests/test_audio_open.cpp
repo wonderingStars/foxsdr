@@ -254,6 +254,52 @@ void checkBoundedWaitIsBracketed() {
     CHECK(resumed2.load() == 1);
 }
 
+// --- 3b. THE ORDER, MADE DETERMINISTIC --------------------------------------
+//
+// checkBoundedWaitIsBracketed() above samples the real race and is only right
+// about nine times in ten on this machine: the worker is a brand-new OS
+// thread racing the calling thread's very next statement, and thread creation
+// is usually - not always - slower than one function call. A regression back
+// to the 0.96.4-era order (the worker started before the watchdog was paused)
+// would therefore only be caught on roughly one CI run in ten.
+//
+// This removes the luck with AudioOpen::setTestBeforePause(), a test-only
+// hook request() runs immediately before it (now) pauses the watchdog. The
+// hook sleeps 50 ms - far longer than a 0 ms-blocking FakeDriver needs to run
+// to completion. With the fix in place that sleep proves nothing changes: on
+// the requesting thread, pause_() unconditionally runs and RETURNS before
+// start() is even called, so the worker cannot exist yet when the hook fires
+// - there is a true happens-before edge here, not odds. Moving the pause to
+// AFTER start() (the bug) turns that same 50 ms sleep into the opposite
+// proof: the worker is already running when the hook begins, 50 ms is
+// enormously more than it needs to finish and sample `paused`, so the sample
+// is certain to read 0. Verified by hand against that reverted ordering (the
+// hook moved to sit where that code called pause_(), inside the old
+// waitBounded()): 30/30 runs failed this check. See the commit message for
+// both counts.
+void checkPauseOrderIsDeterministic() {
+    for (int i = 0; i < 10; ++i) {
+        FakeDriver driver;
+        driver.blockMs.store(0);
+
+        std::atomic<int> paused{0};
+        std::atomic<int> pausedWhenDriverRan{-1};
+
+        AudioOpen gate;
+        gate.bind(
+            [&driver, &paused, &pausedWhenDriverRan](int dev) {
+                pausedWhenDriverRan.store(paused.load());
+                return driver.opener()(dev);
+            },
+            [&paused] { ++paused; }, [] {});
+        gate.setTestBeforePause(
+            [] { std::this_thread::sleep_for(std::chrono::milliseconds(50)); });
+
+        CHECK(gate.request(1) == AudioOpen::Outcome::Finished);
+        CHECK(pausedWhenDriverRan.load() == 1);
+    }
+}
+
 // --- 4. NEVER TWO OPENS AT ONCE --------------------------------------------
 //
 // Two waveOutOpen calls racing on one AudioOut is worse than the hang: open()
@@ -428,6 +474,7 @@ int main() {
     checkBlockingOpenDoesNotStallTheFrameLoop();
     checkFastOpenFinishesInTheRequestingFrame();
     checkBoundedWaitIsBracketed();
+    checkPauseOrderIsDeterministic();
     checkRequestsAreQueuedNotRaced();
     checkQuitAbandonsAWedgedOpen();
     checkRealOpenerOnAWorkerThread();
