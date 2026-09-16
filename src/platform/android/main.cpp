@@ -33,6 +33,7 @@
 #include "core/config.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
+#include "core/net_post.hpp"
 #include "core/version.hpp"
 #include "gui/app_window.hpp"
 #include "gui/platform_window_android.hpp"
@@ -83,6 +84,20 @@ extern "C" void android_main(struct android_app* app) {
     const char* dataPath =
         (app != nullptr && app->activity != nullptr) ? app->activity->internalDataPath : nullptr;
     pointStorageAtTheSandbox(dataPath);
+
+    // THE ONLY WAY OFF THIS DEVICE, handed over once, here, because here is
+    // the only place that has it. The NDK ships no OpenSSL, so crash and usage
+    // reports go through Java's HttpsURLConnection over JNI
+    // (core/net_post.hpp); that needs the JavaVM and - less obviously - the
+    // ACTIVITY OBJECT, because a native worker thread resolves classes through
+    // the system class loader, which cannot see com.foxsdr.app.Net at all. The
+    // activity is what the transport asks for the application's own loader.
+    //
+    // Arming it does not send anything and cannot: both senders are still
+    // governed by the user's switch, and both are still off until it is on.
+    if (app != nullptr && app->activity != nullptr) {
+        cascade::core::androidNetInit(app->activity->vm, app->activity->clazz);
+    }
 
     // THE DIAGNOSTICS RING, ON; THE FILE BEHIND IT, OFF. A deliberate
     // difference from the desktop, where main() reads the user's stored switch

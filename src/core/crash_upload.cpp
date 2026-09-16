@@ -5,6 +5,7 @@
 #include "core/crash_upload.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/net_post.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -29,10 +30,11 @@
 // the web server and OpenSSL is already linked here (see CMakeLists.txt), so
 // this transport adds no new third-party dependency.
 //
-// NOT on Android: the NDK ships no OpenSSL, so this TU takes the
-// ANDROID-TODO(uploads-via-java) stub of postCrashReport() further down
-// instead, and must not define CPPHTTPLIB_OPENSSL_SUPPORT (see
-// net/web_server.cpp, which every TU including httplib.h must agree with).
+// NOT on Android: the NDK ships no OpenSSL, so this TU takes the Java
+// transport branch of postCrashReport() further down instead
+// (core/net_post.hpp - HttpsURLConnection over JNI), and must not define
+// CPPHTTPLIB_OPENSSL_SUPPORT (see net/web_server.cpp, which every TU
+// including httplib.h must agree with).
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #endif
@@ -672,10 +674,13 @@ void UploadCancel::cancel() {
     // exchange above means exactly one of the two threads ever closes it.
     if (h != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(h)); }
 #elif defined(CASCADE_ANDROID)
-    // postCrashReport() never calls publish() with a real handle on this
-    // platform (see its ANDROID-TODO(uploads-via-java) branch below), so `h`
-    // is always nullptr here; nothing to close.
-    (void)h;
+    // The handle here is the Java transport's call TOKEN, not a pointer (see
+    // core/net_post.cpp's androidNetPost). Cancelling disconnects the
+    // HttpURLConnection from this thread, which turns the worker's blocked
+    // read into an immediate failure - the same role WinHttpCloseHandle plays
+    // above. The exchange above still means exactly one of the two threads
+    // ever acts on it.
+    if (h != nullptr) { androidNetCancel(h); }
 #else
     // httplib::Client::stop() is the documented way to abort an in-flight
     // request from another thread: it shuts down the socket, so a blocked
@@ -699,7 +704,7 @@ bool UploadCancel::publish(void* handle) {
 #if defined(_WIN32)
         if (h != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(h)); }
 #elif defined(CASCADE_ANDROID)
-        (void)h;  // always nullptr here; see UploadCancel::cancel() above
+        if (h != nullptr) { androidNetCancel(h); }  // see UploadCancel::cancel()
 #else
         if (h != nullptr) { static_cast<httplib::ClientImpl*>(h)->stop(); }
 #endif
@@ -774,56 +779,15 @@ std::uint64_t queryRetryAfter(HINTERNET req) {
 #elif !defined(CASCADE_ANDROID)
 namespace {
 
-bool isLoopbackHost(const std::string& host) {
-    return host == "127.0.0.1" || host == "localhost" || host == "::1";
-}
-
-// A URL split into just enough pieces to (a) apply the same loopback gate as
-// the WinHTTP branch and (b) hand httplib a client origin and a request
-// target separately - httplib::Client(scheme_host_port) wants the former,
-// Post() wants the latter.
-struct UrlParts {
-    std::string scheme;
-    std::string host;    // no port - the loopback check compares this
-    int port = 0;        // resolved to the scheme's default when absent
-    std::string target;  // path (+query), never empty
-};
-
-// Hands httplib a bare (host, port) pair rather than a "scheme://host:port"
-// string, the same way plugin_repo.cpp's SSLClient is built: it lets both
-// the plain-http and https cases share one ClientImpl* variable (see
-// postCrashReport() below) without going through the httplib::Client facade
-// at all. The facade itself turned out to be fine once every translation
-// unit in this program agreed on CPPHTTPLIB_OPENSSL_SUPPORT (see the comment
-// in web_server.cpp for the real bug this uncovered); this shape is kept
-// anyway because it is what makes a single ClientImpl* work for both
-// schemes, which UploadCancel needs for cancellation.
-bool splitUrl(const std::string& url, UrlParts& out) {
-    const std::size_t schemeEnd = url.find("://");
-    if (schemeEnd == std::string::npos) { return false; }
-    out.scheme = url.substr(0, schemeEnd);
-    out.port = (out.scheme == "https") ? 443 : 80;
-    const std::string rest = url.substr(schemeEnd + 3);
-    const std::size_t slash = rest.find('/');
-    const std::string authority = (slash == std::string::npos) ? rest : rest.substr(0, slash);
-    out.target = (slash == std::string::npos) ? std::string("/") : rest.substr(slash);
-    if (authority.empty()) { return false; }
-    const std::size_t colon = authority.find(':');
-    if (colon == std::string::npos) {
-        out.host = authority;
-    } else {
-        out.host = authority.substr(0, colon);
-        const std::string portText = authority.substr(colon + 1);
-        if (portText.empty() ||
-            portText.find_first_not_of("0123456789") != std::string::npos) {
-            return false;
-        }
-        const long p = std::strtol(portText.c_str(), nullptr, 10);
-        if (p <= 0 || p > 65535) { return false; }
-        out.port = static_cast<int>(p);
-    }
-    return !out.host.empty();
-}
+// The URL split and the loopback rule MOVED to core/net_post.cpp, where the
+// Android transport applies exactly the same pair. What used to be a private
+// splitUrl()/isLoopbackHost() here is now netPostSplitUrl()/netPostAllowed(),
+// so there is one answer to "may this be sent, and where to" rather than one
+// per platform. The httplib client below is still built from a bare (host,
+// port) pair rather than a "scheme://host:port" string, the same way
+// plugin_repo.cpp's SSLClient is: that is what lets both the plain-http and
+// https cases share one ClientImpl* variable, which UploadCancel needs for
+// cancellation.
 
 // The delta-seconds form only, same restriction as the WinHTTP branch above:
 // an HTTP-date would need a parser and a clock comparison for a header this
@@ -924,28 +888,72 @@ UploadResult postCrashReport(const std::string& url, const std::string& json,
     }
     ::WinHttpCloseHandle(ses);
 #elif defined(CASCADE_ANDROID)
-    // ANDROID-TODO(uploads-via-java): the NDK ships no OpenSSL, so there is no
-    // HTTPS client here (see the #if !defined(CASCADE_ANDROID) guard around
-    // the httplib/openssl includes near the top of this file). The report
-    // stays on disk - sweepCrashDir() above never deletes what it could not
-    // send - so nothing is lost, just not uploaded, until this is routed
-    // through Java's HttpsURLConnection over JNI.
-    (void)url;
-    (void)json;
-    (void)cancel;
-    diagWarnf("crash upload: HTTPS is not available on this platform "
-              "(ANDROID-TODO(uploads-via-java)); report kept on disk");
+    // THE JAVA TRANSPORT. The NDK ships no OpenSSL, so there is no HTTPS
+    // client in native code here (see the #if !defined(CASCADE_ANDROID) guard
+    // around the httplib/openssl includes near the top of this file); the
+    // platform's own stack is reached through
+    // android/app/src/main/java/com/foxsdr/app/Net.java over JNI.
+    //
+    // THE REQUEST IS BUILT BY crashPost(), the same call the cpp-httplib
+    // branch below makes: same body, same content type, same 3 s/5 s timeouts,
+    // same https-or-loopback rule. A report this cannot send still stays on
+    // disk - sweepCrashDir() above never deletes what it could not send.
+    if (url.empty() || json.empty() || !cancel) { return res; }
+    const NetPost p = crashPost(url, json);
+
+    // The cancellation seam, as three closures (see core/net_post.hpp). The
+    // handle published is the transport's call token, which UploadCancel::
+    // cancel() hands straight back to androidNetCancel().
+    NetPostCancel hooks;
+    hooks.publish = [&cancel](void* h) { return cancel->publish(h); };
+    hooks.take = [&cancel]() { return cancel->take(); };
+    hooks.cancelled = [&cancel]() { return cancel->cancelled(); };
+
+    const NetPostResult out = androidNetPost(p, &hooks);
+    res.attempted = out.attempted;
+    res.cancelled = out.cancelled;
+    res.status = out.status;
+    res.accepted = (res.status >= 200 && res.status < 300);
+    if (res.status == 429) {
+        res.rateLimited = true;
+        res.retryAfterSeconds = out.retryAfterSeconds;
+    }
+    // The body is never read, exactly as on the other two transports - see
+    // Net.java, which never asks for the input stream.
 #else
     if (url.empty() || json.empty() || !cancel) { return res; }
 
-    UrlParts parts;
-    if (!splitUrl(url, parts)) { return res; }
+    // BUILT BY THE SHARED SHAPER, not inline any more - crashPost() is the one
+    // description of this request on every platform and netPostAllowed() is
+    // the one gate, which is what makes tests/test_net_post.cpp's "the Android
+    // build sends the same bytes to the same endpoint" assertion mean
+    // something. The rule itself is unchanged: plain http is refused off the
+    // loopback, exactly as the WinHTTP branch refuses it, so a shipped binary
+    // can never be talked into putting a report - which carries an install
+    // id - in clear on somebody's network; a test can still use a socket.
+    const NetPost p = crashPost(url, json);
+    if (!netPostAllowed(p)) { return res; }
+
+    NetPostUrl parts;
+    if (!netPostSplitUrl(p.url, parts)) { return res; }
     const bool secure = (parts.scheme == "https");
-    // Plain http is refused off the loopback, exactly as the WinHTTP branch
-    // refuses it: a shipped binary can never be talked into putting a
-    // report - which carries an install id - in clear on somebody's network;
-    // a test can still use a socket.
-    if (!secure && (parts.scheme != "http" || !isLoopbackHost(parts.host))) { return res; }
+
+    // THE FAKE TRANSPORT GOES HERE, in the place the client is built, so a
+    // test observes exactly what would have been handed to a socket. Never
+    // installed in a shipped run.
+    bool handled = false;
+    const NetPostResult hooked = runNetPostHook(p, handled);
+    if (handled) {
+        res.attempted = hooked.attempted;
+        res.cancelled = hooked.cancelled;
+        res.status = hooked.status;
+        res.accepted = (res.status >= 200 && res.status < 300);
+        if (res.status == 429) {
+            res.rateLimited = true;
+            res.retryAfterSeconds = hooked.retryAfterSeconds;
+        }
+        return res;
+    }
 
     // A ClientImpl (plain http) or an SSLClient (https) behind the base
     // pointer, exactly the way httplib's own Client facade picks one
@@ -971,15 +979,18 @@ UploadResult postCrashReport(const std::string& url, const std::string& json,
     // worst case even when cancellation is never asked for - a background
     // thread nobody is waiting on is still a thread holding a socket open on
     // a user's machine.
-    cli->set_connection_timeout(3, 0);
-    cli->set_read_timeout(5, 0);
-    cli->set_write_timeout(5, 0);
+    // 3 s / 5 s / 5 s, now taken from the shared request rather than written
+    // here a second time - so a change to either platform's timeouts has to be
+    // a change to both.
+    cli->set_connection_timeout(p.connectTimeoutMs / 1000, (p.connectTimeoutMs % 1000) * 1000);
+    cli->set_read_timeout(p.readTimeoutMs / 1000, (p.readTimeoutMs % 1000) * 1000);
+    cli->set_write_timeout(p.writeTimeoutMs / 1000, (p.writeTimeoutMs % 1000) * 1000);
 
     if (!cancel->publish(cli.get())) {
         res.cancelled = true;
     } else {
         res.attempted = true;
-        const httplib::Result r = cli->Post(parts.target, json, "application/json");
+        const httplib::Result r = cli->Post(parts.target, p.body, p.contentType);
         // Taken before anything else below: once this has run, cancel() will
         // find nullptr and touch nothing, so `cli` can safely be destroyed
         // when this function returns right after.

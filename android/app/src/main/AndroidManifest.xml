@@ -2,23 +2,33 @@
 <!--
   SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-  THERE IS NO INTERNET PERMISSION HERE, AND ITS ABSENCE IS DELIBERATE.
-
-  The desktop application uploads crash reports and a usage record, and fetches
-  the plugin catalogue. Every one of those is a later slice, and none of them
-  may arrive before PRIVACY.md has been updated to describe what an Android
-  build sends and what it does not - the payload is documented field by field
-  there and asserted by a test, and shipping a build that transmits something
-  the privacy notice does not list would break that guarantee. Adding
-  android.permission.INTERNET is therefore a change that comes WITH the slice
-  that needs it, together with the privacy text, and not in advance "so it is
-  ready".
-
-  Its absence is also load-bearing as a check: with no INTERNET permission, a
-  socket call in native code fails at the kernel. Nothing can leak from this
-  build by accident.
+  THE INTERNET PERMISSION IS BELOW, AND IT ARRIVED WITH THE SLICE THAT NEEDS
+  IT. This file used to carry, in place of it, the rule that nothing may be
+  transmitted before PRIVACY.md describes it field by field. It now does - see
+  the OS row of both tables there, which lists the Android value - and
+  tests/test_telemetry.cpp still holds the payload to that inventory,
+  unchanged, because an Android build sends the SAME fields to the SAME
+  endpoints as every other build. Only the transport differs.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Crash reports and the usage record, and nothing else. Both go through
+      Java's HttpsURLConnection over JNI
+      (android/app/src/main/java/com/foxsdr/app/Net.java) rather than through
+      native code, because the NDK ships no OpenSSL and so cpp-httplib has no
+      TLS on this platform - see core/net_post.hpp.
+
+      WHAT THIS PERMISSION IS NOT FOR, yet: the plugin catalogue
+      (core/plugin_repo.cpp) is still refused here. It needs SHA-256 as well
+      as HTTPS, and there is no crypto library on this platform either; see
+      its own ANDROID-TODO(uploads-via-java) note.
+
+      AND IT DECIDES NOTHING ON ITS OWN. The permission says what is POSSIBLE;
+      core/telemetry.cpp and core/crash_upload.cpp say what happens, and both
+      are governed by the user's switch, which is what it always was.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
       USB host, for the radios. Declared required="false" ON PURPOSE: a phone

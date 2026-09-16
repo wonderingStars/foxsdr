@@ -3,6 +3,7 @@
 #include "core/telemetry.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/net_post.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,10 +18,11 @@
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "winhttp.lib")
 #elif defined(CASCADE_ANDROID)
-// ANDROID-TODO(uploads-via-java). No OpenSSL on the NDK, so newInstallId()
-// below draws from getrandom() directly (a raw kernel syscall, not a crypto
-// library - see net/web_auth.cpp's randomBytes() for the same move) and
-// postJson() further down is a no-op stub: no httplib, no
+// No OpenSSL on the NDK, so newInstallId() below draws from getrandom()
+// directly (a raw kernel syscall, not a crypto library - see
+// net/web_auth.cpp's randomBytes() for the same move), and postJson() further
+// down goes through core/net_post.hpp's Java transport (HttpsURLConnection
+// over JNI) rather than cpp-httplib: no httplib here, no
 // CPPHTTPLIB_OPENSSL_SUPPORT (every TU including httplib.h must agree with
 // net/web_server.cpp, which does not define it here).
 //
@@ -30,8 +32,15 @@
 // build failure).
 #include <cstdlib>
 #include <sys/syscall.h>
-#include <sys/utsname.h>
 #include <unistd.h>
+
+// The platform release for osDescription(), read from the system property
+// rather than uname - see osDescription() for why. Only under __ANDROID__:
+// CASCADE_ANDROID is also set by the host-native validation configure, which
+// has no NDK and no such header.
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 #else
 #include <cstdlib>
 
@@ -186,6 +195,36 @@ std::string osDescription() {
         }
     }
     return "Windows";
+#elif defined(CASCADE_ANDROID)
+    // THE PLATFORM RELEASE, NOT THE KERNEL. uname() on Android answers
+    // "Linux 5.15.123-android14-11-g0123456-ab12345678" - which would file
+    // every phone under the same row as a desktop Linux install while ALSO
+    // carrying a vendor build id that says more about the individual device
+    // than the whole rest of this payload does. ro.build.version.release is
+    // the number the user's own Settings screen shows ("14"), shared by
+    // hundreds of millions of devices, and it is what makes the OS row in
+    // PRIVACY.md answer "which platforms are actually used" for this port.
+    std::string release;
+#if defined(__ANDROID__)
+    char prop[PROP_VALUE_MAX] = {0};
+    if (::__system_property_get("ro.build.version.release", prop) > 0) {
+        // BOUNDED AND FILTERED, because this is a vendor-supplied string: a
+        // manufacturer is free to put anything in it, and what reaches the
+        // payload must stay a version number. Digits and dots only, and never
+        // more than eight of them ("15.1.2" is the longest real shape).
+        for (char c : std::string(prop)) {
+            if (release.size() >= 8) { break; }
+            const bool ok = (c >= '0' && c <= '9') || c == '.';
+            if (!ok) { break; }
+            release += c;
+        }
+    }
+#endif
+    // "Android" alone when the property is missing, unreadable or rubbish -
+    // which is also what the host-native validation build (CASCADE_ANDROID
+    // with no NDK, so no system properties at all) reports. Still says which
+    // platform, which is the whole point of the field.
+    return release.empty() ? std::string("Android") : ("Android " + release);
 #else
     // Kernel name and release only ("Linux 6.8.0"). The distribution name is
     // deliberately not read from /etc/os-release: it is more identifying than
@@ -318,16 +357,36 @@ void postJson(const std::string& url, const std::string& json) {
 #elif defined(CASCADE_ANDROID)
 namespace {
 
-// ANDROID-TODO(uploads-via-java): see the comment on the CASCADE_ANDROID
-// #include block near the top of this file. Usage reports are silently
-// dropped here, same as a network that black-holes them (see the comment
-// above HeartbeatSender::beat's call site) - the schedule still advances, so
-// this never becomes a backlog of threads.
+// One HTTPS POST of a small JSON body, through Java's HttpsURLConnection over
+// JNI - the only TLS stack that exists on this platform (the NDK ships no
+// OpenSSL; see core/net_post.hpp for the whole reasoning and
+// android/app/src/main/java/com/foxsdr/app/Net.java for the transport).
+//
+// THE REQUEST IS BUILT BY telemetryPost(), the same call the cpp-httplib
+// branch below makes, so the body, the content type, the timeouts and the
+// scheme rule are one piece of code rather than three - which is what
+// tests/test_net_post.cpp pins. Certificate validation is the platform's own
+// and is not relaxed anywhere; the response body is never read.
+//
+// Still silent on failure, and the schedule still advances whether or not a
+// beat can be sent (see HeartbeatSender::poll), so a network that black-holes
+// produces MISSING reports, never a backlog of threads.
 void postJson(const std::string& url, const std::string& json) {
-    (void)json;
-    diagWarnf("telemetry: HTTPS is not available on this platform "
-              "(ANDROID-TODO(uploads-via-java)); dropping report to %s",
-              url.c_str());
+    const NetPost p = telemetryPost(url, json);
+    if (!netPostAllowed(p)) {
+        // https, or plain http to loopback (see telemetryPost). Reached only
+        // by an explicit FOXSDR_TELEMETRY_URL that names something else - the
+        // compiled-in endpoint is https - so saying so is useful rather than
+        // noise.
+        diagWarnf("telemetry: %s is not a destination this build will post to; "
+                  "report dropped",
+                  url.c_str());
+        return;
+    }
+    const NetPostResult r = androidNetPost(p, nullptr);
+    if (!r.attempted) {
+        diagWarnf("telemetry: the Java transport did not run; report dropped");
+    }
 }
 
 }  // namespace
@@ -341,34 +400,47 @@ namespace {
 // branch's own refusal of any non-https scheme - and the timeouts are short
 // because this runs on a thread the destructor joins.
 void postJson(const std::string& url, const std::string& json) {
-    const std::size_t schemeEnd = url.find("://");
-    if (schemeEnd == std::string::npos) { return; }
-    const std::string scheme = url.substr(0, schemeEnd);
-    // https only: a usage report is not secret, but sending it in clear
-    // would put an install id on the wire for any network in between to
+    // BUILT BY THE SHARED SHAPER, not inline any more. telemetryPost() is the
+    // one description of this request on every platform (body, content type,
+    // timeouts, scheme rule); netPostAllowed() is the one gate. Both are
+    // compiled identically here and in the Android branch above, which is what
+    // makes tests/test_net_post.cpp's "the same bytes to the same endpoint"
+    // assertion mean something.
+    //
+    // https only, unchanged: a usage report is not secret, but sending it in
+    // clear would put an install id on the wire for any network in between to
     // collect. FOXSDR_TELEMETRY_URL pointed at a plain http black hole (see
     // installer/msix/README.md) is silenced by this check alone - nothing is
     // ever connected to.
-    if (scheme != "https") { return; }
+    const NetPost p = telemetryPost(url, json);
+    if (!netPostAllowed(p)) { return; }
 
-    const std::string rest = url.substr(schemeEnd + 3);
-    const std::size_t slash = rest.find('/');
-    const std::string authority = (slash == std::string::npos) ? rest : rest.substr(0, slash);
-    const std::string target = (slash == std::string::npos) ? std::string("/") : rest.substr(slash);
-    if (authority.empty()) { return; }
+    // THE FAKE TRANSPORT GOES HERE, in the place the client is built, so a
+    // test observes exactly what would have been handed to a socket. Never
+    // installed in a shipped run.
+    bool handled = false;
+    (void)runNetPostHook(p, handled);
+    if (handled) { return; }
 
-    httplib::Client cli(std::string("https://") + authority);
+    NetPostUrl u;
+    if (!netPostSplitUrl(p.url, u)) { return; }
+    const std::string& target = u.target;
+
+    httplib::Client cli(std::string("https://") + u.authority);
     if (!cli.is_valid()) { return; }
     cli.enable_server_certificate_verification(true);
     cli.set_follow_location(false);
-    cli.set_connection_timeout(4, 0);
-    cli.set_read_timeout(6, 0);
-    cli.set_write_timeout(6, 0);
+    // 4 s / 6 s / 6 s, now taken from the shared request rather than written
+    // here a second time - so a change to either platform's timeouts has to be
+    // a change to both.
+    cli.set_connection_timeout(p.connectTimeoutMs / 1000, (p.connectTimeoutMs % 1000) * 1000);
+    cli.set_read_timeout(p.readTimeoutMs / 1000, (p.readTimeoutMs % 1000) * 1000);
+    cli.set_write_timeout(p.writeTimeoutMs / 1000, (p.writeTimeoutMs % 1000) * 1000);
     // The response is not read and not acted on. There is nothing the server
     // could say that this client should obey - no config, no commands, no
     // identifiers - and not reading it is the simplest way to guarantee that
     // stays true.
-    cli.Post(target, json, "application/json");
+    cli.Post(target, p.body, p.contentType);
 }
 
 }  // namespace

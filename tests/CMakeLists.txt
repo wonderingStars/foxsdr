@@ -193,6 +193,13 @@ set(CASCADE_ANDROID_TEST_NAMES
     test_cat_server test_cat_protocol
     # net, minus auth/TLS
     test_web_control test_web_audio
+    # The outbound-POST seam (core/net_post.hpp). In BOTH lists on purpose:
+    # what it pins is that the Android build hands its transport the same
+    # bytes, headers and endpoint the desktop one does, and an assertion like
+    # that is worth nothing if it only ever runs in one of the two
+    # configurations. It opens no socket and reaches no Java - the transport
+    # it drives is a fake installed in the place the real client is built.
+    test_net_post
     # bonus: pure-logic, zero risk, exercises code this port also keeps
     test_serial_port test_json_dump_policy
     # crash capture: forks this test binary, makes it fault for real (SIGSEGV,
