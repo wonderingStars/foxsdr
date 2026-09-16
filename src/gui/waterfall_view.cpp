@@ -18,11 +18,38 @@
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 
-// glfw3.h pulls in GL/gl.h on Windows. Everything used here is OpenGL 1.1
+// A GL HEADER, ASKED FOR BY NAME. Everything used here is OpenGL 1.1
 // (glGenTextures / glTexImage2D / glTexSubImage2D / ...), which links straight
-// from opengl32.lib — no loader, no GLEW, and no conflict with the ImGui
-// opengl3 backend because this file never includes that backend's header.
-#include <GLFW/glfw3.h>
+// from opengl32.lib on Windows and from libGL elsewhere — no loader, no GLEW,
+// and no conflict with the ImGui opengl3 backend because this file never
+// includes that backend's header.
+//
+// This used to be <GLFW/glfw3.h>, purely because that header pulls in
+// <GL/gl.h> for you and sorts out the Windows calling-convention macros it
+// needs. It was the last GLFW include outside gui/platform_window_glfw.cpp and
+// gui/win_frame.cpp, and it had to go: there is no GLFW in an NDK sysroot, and
+// a waterfall is not a window-system concern. The windows.h-then-GL/gl.h
+// ordering below is the same pair gui/app_window.cpp already uses for exactly
+// the same reason (<GL/gl.h> on Windows is written against windows.h - it uses
+// APIENTRY and WINGDIAPI and will not compile without them).
+#if defined(__ANDROID__)
+// Every GL call in this file is in ES3's core profile with the same
+// signature, and the texture it uploads is GL_RGBA / GL_UNSIGNED_BYTE, which
+// ES3 accepts unchanged - see the packing assertion just below.
+#include <GLES3/gl3.h>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+#include <GL/gl.h>
+#else
+#include <GL/gl.h>
+#endif
 
 // The GL upload below hands IM_COL32-packed pixels to glTexImage2D as
 // GL_RGBA / GL_UNSIGNED_BYTE, which is only correct while ImU32 stores bytes

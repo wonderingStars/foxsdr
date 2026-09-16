@@ -1,10 +1,32 @@
 // PortAudio mono float32 audio input - implementation. See audio_in.hpp for
 // the threading model and for why it lives beside audio_out.cpp.
 //
+// ANDROID, AND WHY THIS FILE IS GUARDED RATHER THAN TWINNED. The output side
+// has two whole files (audio_out.cpp for PortAudio, audio_out_aaudio.cpp for
+// AAudio) because an AAudio OUTPUT stream is a real second implementation,
+// with its own priming, ring and underrun accounting. There is no second
+// implementation here yet: Android has no microphone path in this slice at
+// all - AAudio input needs the RECORD_AUDIO runtime permission, which needs a
+// Java permission request, which is a slice of its own. So what differs is
+// exactly the six entry points that name PortAudio, and they differ by
+// REFUSING: an empty device list and a failed open, which is the same pair a
+// desktop with no input device produces and which the TRANSMIT page already
+// knows how to show.
+//
+// The four members that are NOT guarded are the ones with no platform in them
+// - read, drain, takePeak and the realtime pushBlock core - and they stay
+// shared on purpose: they are the half a test can exercise (there is no
+// microphone on the bench either), and an Android twin holding a second copy
+// of the peak arithmetic would be a second place for it to drift.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "sink/audio_in.hpp"
 
+#if defined(CASCADE_ANDROID)
+#include "core/diag_log.hpp"
+#else
 #include <portaudio.h>
+#endif
 
 #include <cmath>
 
@@ -17,6 +39,8 @@ static_assert(std::atomic<float>::is_always_lock_free,
               "the peak atomic must be lock-free for the audio callback");
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "the overrun counter must be lock-free for the audio callback");
+
+#if !defined(CASCADE_ANDROID)
 
 namespace {
 
@@ -32,6 +56,41 @@ int paInCallback(const void* input, void* /*output*/, unsigned long frameCount,
 }
 
 }  // namespace
+
+#endif  // !CASCADE_ANDROID
+
+#if defined(CASCADE_ANDROID)
+
+// -- ANDROID: NO MICROPHONE YET, SAID OUT LOUD ----------------------------
+//
+// paOk_ stays false, which is the flag every other method already branches
+// on: an object that failed to initialise its audio library. The desktop has
+// always had that state (PortAudio refusing to start) and every caller
+// already copes with it, so nothing above this layer needed a new branch.
+
+AudioIn::AudioIn() : ring_(kRingCapacity) {}
+
+AudioIn::~AudioIn() = default;
+
+std::vector<AudioDevice> AudioIn::listInputDevices() { return {}; }
+
+bool AudioIn::open(int deviceIndex, double sampleRateHz) {
+    (void)deviceIndex;
+    (void)sampleRateHz;
+    // Once per attempt, and in the log rather than only as a false return:
+    // the TRANSMIT page shows "no input device", which is true but does not
+    // say WHY, and the diagnostics ring is where the why belongs.
+    cascade::core::diagWarnf(
+        "audio in: Android has no microphone path yet (AAudio input needs the "
+        "RECORD_AUDIO runtime permission) - transmit audio is unavailable");
+    return false;
+}
+
+void AudioIn::close() {}
+
+bool AudioIn::streamAlive() const { return false; }
+
+#else
 
 AudioIn::AudioIn() : ring_(kRingCapacity) { paOk_ = (Pa_Initialize() == paNoError); }
 
@@ -123,6 +182,13 @@ bool AudioIn::streamAlive() const {
     // means a microphone is actually being heard.
     return Pa_IsStreamActive(static_cast<PaStream*>(stream_)) == 1;
 }
+
+#endif  // CASCADE_ANDROID
+
+// -- PLATFORM-FREE FROM HERE ON --------------------------------------------
+//
+// Everything below is the ring, the meter and the realtime callback core, and
+// none of it names an audio library. Shared by both branches above.
 
 std::size_t AudioIn::read(float* dst, std::size_t n) {
     if (dst == nullptr || n == 0) { return 0; }

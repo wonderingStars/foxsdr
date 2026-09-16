@@ -5,10 +5,18 @@
 #include <algorithm>
 #include <cstring>
 
+#if defined(__ANDROID__)
+// No <GL/gl.h> in an NDK sysroot; the calls here (glGenTextures,
+// glTexImage2D, glTexParameteri, glDeleteTextures) are all ES3 core with the
+// same signatures, and GL_CLAMP_TO_EDGE is a real enum there rather than the
+// fallback #define below.
+#include <GLES3/gl3.h>
+#else
 #if defined(_WIN32)
 #include <windows.h>
 #endif
 #include <GL/gl.h>
+#endif
 
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F

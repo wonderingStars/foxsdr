@@ -98,9 +98,35 @@
 // desktop GL and GLES ES3 share the same ImGui backend. LAST, and below the
 // _WIN32 block above, because on Windows <GL/gl.h> is written against
 // windows.h - it uses APIENTRY and WINGDIAPI and will not compile without it.
+#if defined(__ANDROID__)
+// ...AND ON ANDROID THE SAME NAMES COME FROM GLES. There is no <GL/gl.h> in an
+// NDK sysroot. The entry points this file uses are the same set with the same
+// signatures in ES3, with one exception worth naming: glReadBuffer is ES 3.0
+// rather than GL 1.1, and both uses of it are inside the torn-off-window half
+// of the self-capture, which is behind the viewports branch Android declines.
+#include <GLES3/gl3.h>
+#else
 #include <GL/gl.h>
+#endif
 
 namespace cascade::gui {
+
+// THE SHADER PROLOGUE THE ImGui RENDERER BACKEND IS ASKED FOR, and the only
+// difference between this file's GL on a desktop and on a phone.
+//
+// "#version 130" is desktop GLSL 1.30 (OpenGL 3.0). GLES has its own version
+// namespace: the ES3 build of imgui_impl_opengl3.cpp (IMGUI_IMPL_OPENGL_ES3,
+// set PUBLIC on the `imgui` target) writes "#version 300 es" into its own
+// shader sources and would be handed a desktop string it cannot use, failing
+// at glCompileShader - a black surface with one line in logcat. Passing
+// nullptr would let the backend choose, which is tempting and wrong: it also
+// chooses for the desktop, where this string is the one this application has
+// shipped and been tested against for every release.
+#if defined(__ANDROID__)
+constexpr const char* kGlslVersion = "#version 300 es";
+#else
+constexpr const char* kGlslVersion = "#version 130";
+#endif
 
 // The ImGui identity of an INSTRUMENT window. ImGui hashes only what follows
 // "###", so the plugin name alone would fold two instruments from one module
@@ -1135,7 +1161,7 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
         platform.destroy();
         return 1;
     }
-    if (!ImGui_ImplOpenGL3_Init("#version 130")) {
+    if (!ImGui_ImplOpenGL3_Init(kGlslVersion)) {
         std::fprintf(stderr, "cascade: ImGui OpenGL3 backend init failed\n");
         platform.imguiBackendShutdown();
         ImGui::DestroyContext();

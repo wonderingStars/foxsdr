@@ -46,18 +46,15 @@ android {
 
         externalNativeBuild {
             cmake {
-                // THE ROOT CMakeLists.txt OF THE REPOSITORY, not a copy. That
-                // file takes an early return on CASCADE_ANDROID into
-                // src/platform/android/CMakeLists.txt; see the comment there
-                // for why the desktop half is skipped wholesale rather than
-                // guarded line by line.
+                // THE ROOT CMakeLists.txt OF THE REPOSITORY, not a copy, and
+                // the WHOLE of it: CASCADE_ANDROID_SHELL_ONLY is gone. That
+                // flag used to make the root file return early into
+                // src/platform/android, where a placeholder target drew a
+                // first screen out of two files of src/gui; the configure now
+                // reads to the end and builds cascade_lib for Android with the
+                // real interface (src/gui) compiled into it, which
+                // src/platform/android links into libfoxsdr.so.
                 arguments '-DCASCADE_ANDROID=ON',
-                        // The shell-only entry point: the root CMakeLists
-                        // returns early into src/platform/android with this
-                        // set, and reads on into the full portable-core
-                        // library (cascade_lib under CASCADE_ANDROID) without
-                        // it. The next slice drops this and links that library.
-                        '-DCASCADE_ANDROID_SHELL_ONLY=ON',
                         // c++_shared, not c++_static: this process will load
                         // decoder plugins as separate .so files later, and two
                         // copies of a static libc++ in one process means two
@@ -67,6 +64,13 @@ android {
                         // an unfixable ABI problem later.
                         '-DANDROID_STL=c++_shared'
                 cppFlags '-std=c++20'
+                // ONLY THE LIBRARY THE APK NEEDS. The root CMakeLists now also
+                // defines the on-device test subset (tests/CMakeLists.txt under
+                // CASCADE_ANDROID), and without this AGP would build all of it
+                // for every ABI on every `assembleDebug` - minutes of work for
+                // binaries no APK packages. tools/run-android-tests.sh builds
+                // those from its own configure when they are wanted.
+                targets 'foxsdr'
             }
         }
     }

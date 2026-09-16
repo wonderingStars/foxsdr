@@ -182,44 +182,11 @@ bool AudioOut::streamAlive() const {
     return Pa_IsStreamActive(static_cast<PaStream*>(stream_)) == 1;
 }
 
-int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
-                        const std::vector<AudioDevice>& present) {
-    if (lastRequested < 0) { return -1; }  // "follow the default" is the intent
-    // Exact pairing first. PortAudio lists one physical device once per host
-    // API, so names are NOT unique — matching on the name alone would answer
-    // with whichever duplicate came first and quietly move the stream to a
-    // different host API than the one that was open. If the remembered index
-    // still carries the remembered name, nothing moved: reopen it as it was.
-    for (const auto& d : present) {
-        if (d.index == lastRequested && d.name == lastName) { return d.index; }
-    }
-    // The pairing is gone, so the list renumbered (or the device did move
-    // host APIs). Now the name is the best handle there is.
-    for (const auto& d : present) {
-        if (d.name == lastName) { return d.index; }
-    }
-    return -1;  // the chosen device is gone; the default is the only fallback
-}
-
-int clampDeviceRow(int row, const std::vector<AudioDevice>& present) {
-    const int n = static_cast<int>(present.size());
-    if (n == 0) {
-        return -1;  // the combo's "No audio output devices" branch
-    }
-    if (row >= 0 && row < n) {
-        return row;  // still valid: a selection that works is never moved
-    }
-    // Out of range: the list shrank under a remembered row (or nothing has
-    // been chosen yet). Prefer the default device's row; LAST match wins, as
-    // the panel's own default-seeking loop has always done.
-    int fallback = 0;
-    for (int i = 0; i < n; ++i) {
-        if (present[static_cast<std::size_t>(i)].isDefault) {
-            fallback = i;
-        }
-    }
-    return fallback;
-}
+// recoveryDeviceIndex() and clampDeviceRow() used to stand here. They are now
+// `inline` in sink/audio_out.hpp - unchanged, bodies moved verbatim - because
+// they belong to neither audio backend and the GUI calls them on both
+// platforms; this translation unit is the PortAudio one and is not compiled
+// for Android. See the note above each of them in the header.
 
 std::size_t AudioOut::write(const float* samples, std::size_t n) {
     // SpscRing::write already caps at free space and never blocks; the

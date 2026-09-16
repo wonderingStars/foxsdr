@@ -45,36 +45,30 @@ endif()
 message(STATUS "cascade version string: ${CASCADE_VERSION_STRING}")
 
 # ---------------------------------------------------------------------------
-# Android — the application shell, and NOTHING of the desktop build
+# Android — ONE tree, and no early return
 # ---------------------------------------------------------------------------
 #
 # -DCASCADE_ANDROID=ON is set by android/app/build.gradle's externalNativeBuild,
 # which points Gradle at THIS file so the phone build and the desktop build come
 # out of one source of truth rather than a second CMakeLists that drifts.
 #
-# It returns immediately, and that early return is the whole design. Everything
-# below this line assumes a desktop: find_package(OpenGL), find_package
-# (SoapySDR), GLFW, PortAudio, libunwind, the Inno Setup version file, the
-# symbol-archiving POST_BUILD steps and the test tree. None of those exist on
-# an NDK sysroot, and none of them are wanted there - Android takes its GL from
-# EGL/GLESv3, its audio from AAudio later, and its radios over USB directly.
-# Guarding each of them individually would put a platform branch through the
-# whole file for the benefit of a build that shares none of it.
+# THERE USED TO BE AN EARLY RETURN HERE, and removing it is the point of this
+# slice. Gradle passed CASCADE_ANDROID_SHELL_ONLY as well and got a return
+# straight into src/platform/android, where a placeholder target compiled just
+# enough of src/dsp and two files of src/gui to draw a first screen; the
+# portable-core cross-build read on through the whole file and produced a
+# library that shell could not use. Both halves now come out of ONE configure:
+# the file is read to the end, cascade_lib is built for Android with the
+# desktop-only units excluded (see the CASCADE_ANDROID option below and every
+# `if(CASCADE_ANDROID)` filter), src/gui is compiled INTO it, and
+# src/platform/android at the very bottom links the lot into libfoxsdr.so.
+# CASCADE_ANDROID_SHELL_ONLY is gone from this file and from build.gradle.
 #
-# The shell's own build lives in src/platform/android/CMakeLists.txt.
-#
-# TWO ANDROID ENTRY POINTS, deliberately, until the next slice joins them:
-# Gradle passes CASCADE_ANDROID_SHELL_ONLY as well and gets this early return
-# (the first-screen shell over its own minimal target); the NDK cross-build
-# of the whole portable core (option CASCADE_ANDROID further down, a
-# cascade_lib with the desktop-only units excluded, plus its on-device test
-# subset) does not set it and reads on through the whole file. The slice
-# that runs the real AppWindow on Android replaces the shell's minimal
-# target with that library and removes this variable.
-if(CASCADE_ANDROID AND CASCADE_ANDROID_SHELL_ONLY)
-    add_subdirectory(src/platform/android)
-    return()
-endif()
+# What is still not built for Android is guarded where it lives rather than
+# skipped wholesale: find_package(OpenGL)/(SoapySDR)/(OpenSSL) and libunwind
+# are never looked for, GLFW and PortAudio are not built, the `cascade`
+# executable, the Inno Setup version file and the symbol-archiving POST_BUILD
+# steps do not exist, and the test tree takes a curated subset.
 
 # Hand the version to the Inno Setup script, so the installer cannot be stamped
 # with a number the binary does not carry. It used to be a literal in
@@ -318,7 +312,68 @@ target_include_directories(imgui SYSTEM PUBLIC
     "${CASCADE_TP}/imgui/backends"
     "${CASCADE_TP}/imgui/misc/cpp")
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
-endif()  # NOT CASCADE_ANDROID
+
+elseif(CASCADE_ANDROID_CROSS_TARGET)
+
+# THE SAME LIBRARY, THE OTHER PLATFORM BACKEND. `imgui` is deliberately the
+# same TARGET NAME as the desktop's: everything downstream (cascade_lib, the
+# gui sources' `#include <imgui.h>`) then needs no Android branch at all, and
+# the only difference is which two backends are compiled in.
+#
+#   imgui_impl_android replaces imgui_impl_glfw - it is what turns an
+#   AInputEvent into ImGui's mouse and keys; there is no GLFW here.
+#
+#   imgui_impl_opengl3 is the SAME renderer backend as the desktop, compiled in
+#   GLES mode. That is the whole reason the platform seam was drawn where it
+#   was (see gui/platform_window.hpp): desktop GL and GLES ES3 share this
+#   backend and differ only in the shader version string.
+#
+# IMGUI_IMPL_OPENGL_ES3 is PUBLIC and it is load-bearing in both directions:
+# it is what makes imgui_impl_opengl3.cpp include <GLES3/gl3.h> instead of
+# trying to load desktop GL entry points, and what makes it emit the
+# "#version 300 es" shader prologue. Any translation unit of ours that includes
+# imgui_impl_opengl3.h - gui/app_window.cpp does - must see the same define, or
+# the two disagree about which GL they are talking to.
+#
+# imgui_demo.cpp is absent on purpose: a megabyte of example code nothing on
+# the phone calls.
+add_library(imgui STATIC
+    "${CASCADE_TP}/imgui/imgui.cpp"
+    "${CASCADE_TP}/imgui/imgui_draw.cpp"
+    "${CASCADE_TP}/imgui/imgui_tables.cpp"
+    "${CASCADE_TP}/imgui/imgui_widgets.cpp"
+    "${CASCADE_TP}/imgui/misc/cpp/imgui_stdlib.cpp"
+    "${CASCADE_TP}/imgui/backends/imgui_impl_android.cpp"
+    "${CASCADE_TP}/imgui/backends/imgui_impl_opengl3.cpp")
+target_include_directories(imgui SYSTEM PUBLIC
+    "${CASCADE_TP}/imgui"
+    "${CASCADE_TP}/imgui/backends"
+    "${CASCADE_TP}/imgui/misc/cpp")
+target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_ES3)
+# imgui_impl_android.cpp needs <android/native_window.h> and friends; the
+# renderer needs GLESv3. EGL is the platform window's rather than ImGui's, and
+# comes along for anything that links this.
+target_link_libraries(imgui PUBLIC android log GLESv3 EGL)
+
+# android_native_app_glue: the NDK's own NativeActivity <-> native-thread glue.
+# NDK-PROVIDED, not vendored - it ships inside the NDK and is compiled from
+# there, so there is no copy in this repository to go stale and nothing to
+# record in THIRD_PARTY.md. It is C and it is upstream, so it builds at its own
+# defaults with none of our warning flags imposed on it.
+#
+# Built HERE rather than in src/platform/android because gui/
+# platform_window_android.cpp - which is part of cascade_lib - includes
+# <android_native_app_glue.h>: the platform window IS the thing that pumps the
+# activity's looper.
+set(CASCADE_GLUE_DIR "${ANDROID_NDK}/sources/android/native_app_glue")
+if(NOT EXISTS "${CASCADE_GLUE_DIR}/android_native_app_glue.c")
+    message(FATAL_ERROR "native_app_glue not found at ${CASCADE_GLUE_DIR}")
+endif()
+add_library(native_app_glue STATIC "${CASCADE_GLUE_DIR}/android_native_app_glue.c")
+target_include_directories(native_app_glue PUBLIC "${CASCADE_GLUE_DIR}")
+target_link_libraries(native_app_glue PUBLIC android log)
+
+endif()  # NOT CASCADE_ANDROID / CASCADE_ANDROID_CROSS_TARGET
 
 # pffft v1.0.0: mirrors the vcpkg port's own CMakeLists — pffft.c only,
 # _USE_MATH_DEFINES on MSVC, no /arch flag (pffft auto-selects SSE via _M_X64
@@ -391,29 +446,63 @@ if(CASCADE_ANDROID)
     # ANDROID-TODO(crash-capture) stub in core/crash_handler.cpp, which this
     # file's absence falls through to.
     list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crash_handler_posix.cpp")
-    # gps_reader.cpp: pulls in "gui/scope_view.hpp" — a small logic header
-    # everything else in this exclusion list is careful NOT to need — for one
-    # acceptance-rule constant. Nothing built under CASCADE_ANDROID reaches
-    # GPS yet (there is no serial port on a phone; the eventual source is
-    # Android's LocationManager, a later slice), so it is simply left out.
-    list(REMOVE_ITEM CASCADE_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/core/gps_reader.cpp")
+    # gps_reader.cpp used to be removed here: it pulls in "gui/scope_view.hpp"
+    # for one acceptance-rule constant, and nothing in a GUI-less core build
+    # reached GPS. Both halves of that reasoning went when src/gui was
+    # compiled for Android - AppWindow owns a GpsReader and starts it from the
+    # rail - so the file is built, and the honest degradation is a RUNTIME one
+    # rather than a link-time absence: there is no serial port on a phone, so
+    # the port list is empty and the page says so. (Android's own position
+    # source is LocationManager over JNI, still a later slice.)
 endif()
 file(GLOB CASCADE_DSP    CONFIGURE_DEPENDS src/dsp/*.cpp)
-if(CASCADE_ANDROID)
-    # The whole GUI (ImGui/GLFW) is out of scope for this slice — see the
-    # "not CASCADE_ANDROID" guard around the imgui/glfw/portaudio targets
-    # above. A handful of gui/*.hpp headers are still reached from in-scope
-    # code (core/config.cpp, net/web_server.cpp) for pure data/logic they
-    # declare — demod_scope.hpp, rail_banks.hpp, scope_view.hpp,
-    # track_metrics.hpp, font_blobs.hpp, plus page_geometry.hpp,
-    # viewport_policy.hpp, list_pick.hpp and shell_open.hpp reached from
-    # elsewhere — and every one of them was checked to include no GLFW/ImGui
-    # header itself, so leaving the whole directory on the include path (see
-    # target_include_directories below) costs nothing. Only the .cpp files
-    # are excluded, because every one of them needs the renderer.
+file(GLOB CASCADE_GUI CONFIGURE_DEPENDS src/gui/*.cpp)
+if(CASCADE_ANDROID_CROSS_TARGET)
+    # THE WHOLE GUI IS COMPILED FOR ANDROID, and lifting this exclusion is the
+    # point of this slice: app_window.cpp, the spectrum, the waterfall, the
+    # instrument faces, the pages - the real desktop interface, on the phone,
+    # because the owner asked for the same layout rather than a phone-shaped
+    # one. It builds against the SAME `imgui` target name (the Android
+    # backends, above) and the platform seam gui/platform_window.hpp, so not
+    # one of those files needed an Android branch for the WINDOW.
+    #
+    # Exactly one file goes: platform_window_glfw.cpp, which IS GLFW. Its
+    # counterpart gui/platform_window_android.cpp is in this same glob and is
+    # compiled only here - it includes EGL, ANativeWindow and
+    # android_native_app_glue, so the desktop build must never see it either
+    # (the exclusion below, in the NOT-Android branch).
+    list(REMOVE_ITEM CASCADE_GUI
+         "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/platform_window_glfw.cpp")
+    # The touch translation the platform window drives: a long press becomes a
+    # right click and a two-finger drag becomes the wheel, because the desktop
+    # interface uses both and a touchscreen has neither. It lives under
+    # src/platform/android with the rest of the shell, so the glob above does
+    # not reach it.
+    list(APPEND CASCADE_GUI "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/input.cpp")
+elseif(CASCADE_ANDROID)
+    # THE HOST-NATIVE VALIDATION CONFIGURE (-DCASCADE_ANDROID=ON with no NDK)
+    # keeps the GUI out, and it has to: gui/platform_window_android.cpp and
+    # app_window.cpp's Android branches need EGL, GLESv3 and the NDK's
+    # android/* headers, none of which exist on a Linux host, and the desktop
+    # ImGui target is not built in this configuration either. What this
+    # configure is FOR is unchanged - proving the portable core's exclusion set
+    # is coherent without a device - and the GUI half is proved by the real
+    # cross-build instead.
+    #
+    # A handful of gui/*.hpp headers are still reached from in-scope code
+    # (core/config.cpp, net/web_server.cpp) for pure data/logic they declare —
+    # demod_scope.hpp, rail_banks.hpp, scope_view.hpp, track_metrics.hpp,
+    # font_blobs.hpp, plus page_geometry.hpp, viewport_policy.hpp,
+    # list_pick.hpp, ui_scale.hpp, android_window_logic.hpp and
+    # shell_open.hpp reached from elsewhere — and every one of them includes no
+    # GLFW/ImGui/NDK header itself, so leaving the whole directory on the
+    # include path (see target_include_directories below) costs nothing.
     set(CASCADE_GUI "")
 else()
-    file(GLOB CASCADE_GUI CONFIGURE_DEPENDS src/gui/*.cpp)
+    # The desktop never sees the Android window: EGL, ANativeWindow and
+    # android_native_app_glue are NDK sysroot headers.
+    list(REMOVE_ITEM CASCADE_GUI
+         "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/platform_window_android.cpp")
 endif()
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 if(CASCADE_ANDROID)
@@ -426,6 +515,22 @@ if(CASCADE_ANDROID)
     # untouched.
     list(FILTER CASCADE_SOURCE EXCLUDE REGEX
          "/(soapy_source|soapy_modules|soapy_enum_proc|soapy_log_bridge|vendor_guard)\\.cpp$")
+    # ...and, once src/gui is compiled here, the CLASS still has to exist:
+    # AppWindow reaches SoapySource::enumerate(), moduleSearchPaths(),
+    # vendorInstalls() and anyDeviceOpen() from a dozen places that have
+    # nothing to do with opening a device. soapy_source_android.cpp is the
+    # honest refusal - the same shape audio_out/audio_out_aaudio use, one
+    # class with two implementations and exactly one compiled. Only added for
+    # the cross-target: the host validation configure has no GUI to reference
+    # it, and linking two definitions of the class there would be an ODR
+    # violation the moment anything else changed.
+    if(CASCADE_ANDROID_CROSS_TARGET)
+        list(APPEND CASCADE_SOURCE
+             "${CMAKE_CURRENT_SOURCE_DIR}/src/source/soapy_source_android.cpp")
+    endif()
+else()
+    # The desktop builds the real SoapySDR-backed class, never the refusal.
+    list(FILTER CASCADE_SOURCE EXCLUDE REGEX "/soapy_source_android\\.cpp$")
 endif()
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
 # Two backends, one AudioOut class (see audio_out.hpp): audio_out.cpp is
@@ -437,7 +542,15 @@ file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
 # tests/CMakeLists.txt's test_audio_out_aaudio, which compiles it against a
 # fake AAudio for its host-testable ring/priming/underrun core.
 if(CASCADE_ANDROID)
-    list(FILTER CASCADE_SINK EXCLUDE REGEX "/audio_(in|out)\\.cpp$")
+    # audio_out.cpp (PortAudio) goes; audio_in.cpp STAYS, and that changed
+    # with this slice. It was excluded as "the microphone side is a later
+    # slice", which was true and stopped being sufficient the moment src/gui
+    # was compiled here: the TRANSMIT page holds an AudioIn and would not
+    # link. The file now carries a CASCADE_ANDROID branch for exactly the six
+    # members that name PortAudio - an empty device list and a refused open,
+    # which is how the page degrades honestly - and shares the ring, the meter
+    # and the realtime core with the desktop. See its own header comment.
+    list(FILTER CASCADE_SINK EXCLUDE REGEX "/audio_out\\.cpp$")
 else()
     list(FILTER CASCADE_SINK EXCLUDE REGEX "audio_out_aaudio\\.cpp$")
 endif()
@@ -528,6 +641,19 @@ if(NOT CASCADE_ANDROID)
         OpenGL::GL
         portaudio_static
         SoapySDR)
+elseif(CASCADE_ANDROID_CROSS_TARGET)
+    # The same ImGui (with the Android backends), the NativeActivity glue the
+    # platform window pumps, GLES for the renderer and EGL for the surface.
+    # aaudio is the sink's: src/sink/audio_out_aaudio.cpp replaces the
+    # PortAudio one in this configuration.
+    target_link_libraries(cascade_lib PUBLIC
+        imgui
+        native_app_glue
+        GLESv3
+        EGL
+        aaudio
+        android
+        log)
 endif()
 
 if(WIN32)
@@ -682,6 +808,21 @@ else()
 endif()
 
 endif()  # NOT CASCADE_ANDROID (Application)
+
+# ---------------------------------------------------------------------------
+# The Android application — libfoxsdr.so
+#
+# The counterpart of the `cascade` executable above: the same cascade_lib,
+# entered through android_main instead of main(). LAST, because it links
+# cascade_lib and every target cascade_lib links, and CMake wants those
+# defined first.
+#
+# Cross-target only. The host-native validation configure has no NDK, no
+# NativeActivity and nothing to run an activity on.
+# ---------------------------------------------------------------------------
+if(CASCADE_ANDROID_CROSS_TARGET)
+    add_subdirectory(src/platform/android)
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests

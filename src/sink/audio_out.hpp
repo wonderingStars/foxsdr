@@ -320,8 +320,34 @@ private:
 // intent to preserve, not a device to pin. If the named device is gone, the
 // default is the only honest fallback — sound somewhere beats sound nowhere,
 // and the caller says so in the UI.
-int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
-                        const std::vector<AudioDevice>& present);
+//
+// DEFINED HERE RATHER THAN IN audio_out.cpp, and the reason is a link error
+// rather than taste. There are two backends for this class and exactly one is
+// compiled (audio_out.cpp is PortAudio, audio_out_aaudio.cpp is AAudio), but
+// these two functions belong to NEITHER: they are pure arithmetic over a list
+// of rows, and it is the GUI that calls them - on both platforms. Living in
+// the PortAudio translation unit made them vanish from an Android build,
+// which is exactly what happened the moment src/gui was compiled for Android.
+// `inline` in the header is one copy of one body that both backends, the GUI
+// and every test see.
+inline int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
+                               const std::vector<AudioDevice>& present) {
+    if (lastRequested < 0) { return -1; }  // "follow the default" is the intent
+    // Exact pairing first. PortAudio lists one physical device once per host
+    // API, so names are NOT unique — matching on the name alone would answer
+    // with whichever duplicate came first and quietly move the stream to a
+    // different host API than the one that was open. If the remembered index
+    // still carries the remembered name, nothing moved: reopen it as it was.
+    for (const auto& d : present) {
+        if (d.index == lastRequested && d.name == lastName) { return d.index; }
+    }
+    // The pairing is gone, so the list renumbered (or the device did move
+    // host APIs). Now the name is the best handle there is.
+    for (const auto& d : present) {
+        if (d.name == lastName) { return d.index; }
+    }
+    return -1;  // the chosen device is gone; the default is the only fallback
+}
 
 // Makes a remembered ROW of a device list safe to subscript against the list
 // as it is NOW. Returns -1 only when `present` is empty.
@@ -339,6 +365,26 @@ int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
 // the first row when nothing is flagged default: whatever is shown may be the
 // wrong device, but the panel says so through the watchdog note, and a wrong
 // name is survivable where reading past the end of the vector is not.
-int clampDeviceRow(int row, const std::vector<AudioDevice>& present);
+//
+// `inline` for the same reason as recoveryDeviceIndex above.
+inline int clampDeviceRow(int row, const std::vector<AudioDevice>& present) {
+    const int n = static_cast<int>(present.size());
+    if (n == 0) {
+        return -1;  // the combo's "No audio output devices" branch
+    }
+    if (row >= 0 && row < n) {
+        return row;  // still valid: a selection that works is never moved
+    }
+    // Out of range: the list shrank under a remembered row (or nothing has
+    // been chosen yet). Prefer the default device's row; LAST match wins, as
+    // the panel's own default-seeking loop has always done.
+    int fallback = 0;
+    for (int i = 0; i < n; ++i) {
+        if (present[static_cast<std::size_t>(i)].isDefault) {
+            fallback = i;
+        }
+    }
+    return fallback;
+}
 
 }  // namespace cascade::sink
