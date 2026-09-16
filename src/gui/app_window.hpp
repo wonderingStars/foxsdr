@@ -17,10 +17,15 @@
 #include <string>
 #include <vector>
 
-// Forward-declared rather than including GLFW here: this header is included
-// by the tests, and pulling a windowing library into them would make a
-// headless build depend on one.
-struct GLFWwindow;
+// THE WINDOW, BEHIND AN INTERFACE. This line used to be `struct GLFWwindow;`,
+// forward-declared rather than included because this header is compiled into
+// the tests and pulling a windowing library into them would make a headless
+// build depend on one. gui/platform_window.hpp keeps that property - it is
+// pure virtual declarations and <string>, no GLFW and no ImGui - and adds the
+// one the Android port needs: nothing below this line names GLFW at all, so
+// run() can be handed an EGL/NativeActivity window instead of a GLFW one. The
+// GLFW implementation (gui/platform_window_glfw.hpp) is named only by main().
+#include "gui/platform_window.hpp"
 
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
@@ -502,9 +507,12 @@ inline void mapPlaceDefaultRect(float& x, float& y, float& w, float& h,
     if (y < r.y) { y = r.y; }
 }
 
-// Owns the GLFW window, the ImGui context and the top-level panel layout.
-// All GLFW/ImGui usage stays behind this interface so main() (and any future
-// headless harness) never needs GUI headers.
+// Drives a PlatformWindow, owns the ImGui context and the top-level panel
+// layout. All window-system and ImGui usage stays behind this interface so
+// main() (and any future headless harness) never needs GUI headers. The window
+// itself is not owned here any more and not created here: main() constructs the
+// implementation (GLFW on the desktop) and run() brings it up and takes it down
+// - see gui/platform_window.hpp for why.
 class AppWindow {
 public:
     // Constructs the render pipeline with the demo SigGen signal already
@@ -533,9 +541,17 @@ public:
     // `--frames N` self-test contract that the app_smoke ctest entry relies
     // on: render N frames, shut down cleanly, exit 0.
     //
-    // Returns the process exit code: 0 on clean shutdown, 1 when GLFW or the
-    // ImGui backends fail to initialize (the reason is printed to stderr).
-    int run(int frames = -1);
+    // Returns the process exit code: 0 on clean shutdown, 1 when the window
+    // system or the ImGui backends fail to initialize (the reason is printed
+    // to stderr).
+    //
+    // `platform` is created by run() and destroyed by it, in that order and
+    // nowhere else, so the teardown sequence the shutdown budget is measured
+    // against - config save, pipeline join, GL teardown, watchdog stop - keeps
+    // the shape tests/test_shutdown_budget.cpp pins. IT MUST OUTLIVE THIS
+    // AppWindow: the telemetry clock is read from it, and the destructor runs
+    // after run() returns.
+    int run(int frames, PlatformWindow& platform);
 
     // Where hang reports go, and whether the frame loop should stage a
     // deliberate stall. Both are decided in main(), because only main() knows
@@ -2056,7 +2072,23 @@ private:
     bool scopeWasOn_ = false;
     bool scopeLeftThisFrame_ = false;
 
-    GLFWwindow* mainWindow_ = nullptr;
+    // THE WINDOW, or null before run() has one. Not owned: main() owns it, so
+    // it outlives this object; run() assigns this only after create() has
+    // succeeded, which is what makes "platform_ != nullptr" mean exactly what
+    // "mainWindow_ != nullptr" meant at every site that used to test it.
+    PlatformWindow* platform_ = nullptr;
+
+    // THE CLOCK, AND WHY IT IS A HELPER RATHER THAN platform_->time().
+    //
+    // telemetryStartup() and currentConfig() run from the CONSTRUCTOR, before
+    // run() and therefore before any window exists - savedCfg_ is taken there,
+    // and telemetrySessionStart_ with it. glfwGetTime() answered 0.0 that
+    // early (GLFW was not initialised yet) and the telemetry has always been
+    // built on that; this returns the same 0.0 without asking a window that is
+    // not there. After the teardown it is 0.0 again for the same reason, which
+    // is precisely why the clean-exit marker rewrites the snapshot instead of
+    // re-deriving it - see the teardown in run().
+    double platformTime() const { return platform_ != nullptr ? platform_->time() : 0.0; }
 
     // WHETHER A TORN-OFF PAGE GETS AN OPERATING SYSTEM WINDOW, and why not
     // when it does not. Decided once at startup from FOXSDR_SINGLE_VIEWPORT

@@ -32,6 +32,9 @@
 #include "dsp/vfo.hpp"
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
+// The desktop window, constructed at the bottom of main() and handed to
+// AppWindow::run(). No GLFW header comes with it - see its own note.
+#include "gui/platform_window_glfw.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_source.hpp"
@@ -1158,6 +1161,19 @@ int main(int argc, char** argv) {
     // declines a console someone else is attached to - see diag_log.hpp).
     if (frames < 0) { cascade::core::installStderrCapture(); }
 
+    // THE WINDOW, CHOSEN HERE AND NOWHERE ELSE. This is the one line in the
+    // application that names a windowing library: AppWindow takes a
+    // PlatformWindow& and never learns which implementation it got, so an
+    // Android build swaps this declaration for its EGL/NativeActivity shell and
+    // changes nothing else. See gui/platform_window.hpp.
+    //
+    // DECLARED BEFORE `app`, and that is not tidiness. AppWindow reads the
+    // session clock off this object, and it does so from its DESTRUCTOR's
+    // neighbourhood as well as from run(); a platform window destroyed first
+    // would leave a dangling reference for exactly as long as it takes the
+    // destructor to run. Reverse declaration order is what makes that
+    // impossible.
+    cascade::gui::GlfwPlatformWindow platform;
     cascade::gui::AppWindow app(configPath, announceConfig);
     // Empty unless this run is ALLOWED to write - which is not the same as
     // whether the user wants it. run() gates the writing on the stored switch;
@@ -1168,5 +1184,5 @@ int main(int argc, char** argv) {
     app.setDiagnosticsDir(mayWrite ? cascade::core::diagCrashDir() : std::string());
     app.setDiagStallMs(diagStallMs);
     app.setDiagToggle(diagToggle);
-    return app.run(frames);
+    return app.run(frames, platform);
 }

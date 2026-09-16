@@ -27,12 +27,11 @@
 // rail has to drag the page through the same machinery a title bar uses, or a
 // page could no longer be torn out of the main window and merged back into it.
 #include <imgui_internal.h>
-#include <imgui_impl_glfw.h>
+// The RENDERER backend only. The PLATFORM backend (imgui_impl_glfw) is reached
+// through PlatformWindow, because which one pairs with the window is the
+// window's business - imgui_impl_glfw on the desktop, imgui_impl_android on
+// Android - and this file must not know which.
 #include <imgui_impl_opengl3.h>
-
-// After the ImGui backends: glfw3.h pulls in GL/gl.h on Windows, which the
-// opengl3 backend must not see before its own embedded loader.
-#include <GLFW/glfw3.h>
 
 #include "core/version.hpp"
 #include "core/crash_handler.hpp"
@@ -42,6 +41,8 @@
 // because resources/ is deliberately not on any target's include path — the
 // icon is an asset, not a source root, and adding an include directory for one
 // generated header would be a worse trade than a two-segment relative include.
+// The WINDOW icon is applied by the platform window now; these pixels are still
+// wanted here for the nameplate texture the scope's plinth carries.
 #include "../../resources/icon/foxsdr_icon_rgba.hpp"
 #include "core/image_write.hpp"
 // The MSIX question, asked in exactly two places in this file: whether the
@@ -87,6 +88,17 @@
 
 #include <shellapi.h>
 #endif
+
+// THE OPENGL 1.1 ENTRY POINTS THE FRAME LOOP USES - glViewport, glClearColor,
+// glClear, glPixelStorei, glReadBuffer and glReadPixels - asked for by name.
+//
+// They used to arrive with <GLFW/glfw3.h>, which includes <GL/gl.h> for you.
+// That header has gone (the window is behind gui/platform_window.hpp now) and
+// the GL calls have not: they are the renderer's, not the window system's, and
+// desktop GL and GLES ES3 share the same ImGui backend. LAST, and below the
+// _WIN32 block above, because on Windows <GL/gl.h> is written against
+// windows.h - it uses APIENTRY and WINGDIAPI and will not compile without it.
+#include <GL/gl.h>
 
 namespace cascade::gui {
 
@@ -464,98 +476,14 @@ bool parseFrequencyHz(const char* text, double& outHz) {
     return true;
 }
 
-// GLFW reports failures through this callback *before* glfwInit/CreateWindow
-// return their error codes, so printing here is what gives the user an actual
-// reason instead of a bare "init failed".
-// A DISPLAY-SETTINGS ERROR IS A DISPLAY CHANGE IN PROGRESS, and it is counted.
-//
-// GLFW error 65544 (GLFW_PLATFORM_ERROR) with "Failed to query display
-// settings" is EnumDisplaySettingsW failing, which is what happens while the
-// desktop is being re-configured underneath the process. It is the line
-// immediately before the five-second SwapBuffers stall in field report "hang
-// ntdll.dll @ cascade::gui::AppWindow::run" (0.96.3, atio6axx.dll), so it is
-// the earliest warning this application gets - earlier, sometimes, than the
-// WM_DISPLAYCHANGE the window procedure counts, because GLFW queries monitors
-// from inside glfwPollEvents.
-//
-// A free counter rather than a member, because GLFW's error callback is a plain
-// function pointer with no user data. Atomic because GLFW may report from
-// whichever thread called in.
-std::atomic<unsigned> g_glfwDisplayErrors{0};
-
-void glfwErrorCallback(int code, const char* description) {
-    std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
-                 description ? description : "(no description)");
-    // Matched on the MESSAGE as well as the code: GLFW_PLATFORM_ERROR covers
-    // most of what the Win32 backend can refuse, and only the display-settings
-    // one says the desktop is being reconfigured. Anything else keeps the
-    // watchdog armed, which is the safe direction.
-    if (code == 0x00010008 && description != nullptr &&
-        std::strstr(description, "display settings") != nullptr) {
-        g_glfwDisplayErrors.fetch_add(1u, std::memory_order_relaxed);
-        cascade::core::diagWarnf(
-            "display: GLFW could not query display settings - presentation may stall "
-            "briefly; hang reports are suppressed for the next %u ms",
-            cascade::core::HangWatchdog::kDisplayGraceMs);
-    }
-}
-
-// CAN THIS DISPLAY MAKE A SECOND OPENGL CONTEXT AT ALL?
-//
-// The only honest way to answer is to ask for one, so this makes a 1x1 hidden
-// window sharing `main` and throws it away again. It is exactly the call
-// ImGui_ImplGlfw_CreateWindow makes for every torn-off page, which is the
-// point: a machine whose driver answers "WGL: Failed to create OpenGL context"
-// (GLFW 65543) answers it here, at startup, where the application can turn the
-// feature off and say why - rather than on the first drag, where 0.95.0 took
-// an access violation instead.
-//
-// The hint and the current context are both put back. GLFW window hints are
-// sticky and the ImGui backend sets its own before every creation, but the
-// main window's GLFW_VISIBLE=TRUE is restored by hand a few lines after it is
-// created and this must not leave a different value behind for it.
-bool probeSecondGlContext(GLFWwindow* main) {
-    if (main == nullptr) { return false; }
-    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    GLFWwindow* probe = glfwCreateWindow(1, 1, "foxsdr viewport probe", nullptr, main);
-    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
-    if (probe != nullptr) { glfwDestroyWindow(probe); }
-    // glfwDestroyWindow clears the current context if it was the destroyed
-    // one's; the creation never makes its own current, but restoring is one
-    // call and a run that lost the main context would draw nothing at all.
-    glfwMakeContextCurrent(main);
-    return probe != nullptr;
-}
-
-// Applies the FoxSDR mark to the window's title-bar, taskbar and Alt-Tab
-// slots. The executable's own RT_GROUP_ICON (resources/icon/foxsdr.rc) is what
-// Explorer shows; this is the separate, runtime-owned window icon, and setting
-// both is what stops the shipped app ever showing the blank default.
-//
-// The pixels are COMPILED IN from resources/icon/foxsdr_icon_rgba.hpp rather
-// than decoded from a .ico at runtime or pulled back out of the executable's
-// resources with LoadImage/GetIconInfo. A raw RGBA array needs no
-// image-decoding dependency (this tree's whole premise is a small,
-// licence-audited dependency set), no Win32-only code path in an otherwise
-// portable shell, and no GDI/DIB handle lifetime to leak. GLFW copies the
-// pixel data before returning, so the arrays need no lifetime management.
-//
-// Best-effort by construction: glfwSetWindowIcon returns void, and any
-// platform-level refusal surfaces through glfwErrorCallback as one printed
-// line. Nothing here can fail the caller — a missing icon must never stop the
-// app starting.
-void applyWindowIcon(GLFWwindow* window) {
-    if (window == nullptr) { return; }
-    // GLFWimage::pixels is a non-const unsigned char*; the cast is safe
-    // because GLFW only reads the buffer (it copies it during the call).
-    const GLFWimage images[] = {
-        {icon::kSize16, icon::kSize16, const_cast<unsigned char*>(icon::kPixels16)},
-        {icon::kSize32, icon::kSize32, const_cast<unsigned char*>(icon::kPixels32)},
-        {icon::kSize48, icon::kSize48, const_cast<unsigned char*>(icon::kPixels48)},
-    };
-    glfwSetWindowIcon(window, static_cast<int>(sizeof(images) / sizeof(images[0])),
-                      images);
-}
+// THE WINDOW-SYSTEM ERROR CALLBACK, THE DISPLAY-ERROR COUNTER, THE
+// SECOND-CONTEXT PROBE AND THE WINDOW ICON ALL MOVED, unchanged, to
+// gui/platform_window_glfw.cpp. Each was a GLFW body with a GLFWwindow* in its
+// signature, which is exactly what this file is no longer allowed to name; the
+// frame loop reaches the first two through PlatformWindow::displayErrorCount()
+// and the third through PlatformWindow::probeSecondRenderContext(), and the
+// icon is applied by create(). Nothing about what they do changed - the
+// reasoning that earned each of them travelled with the code.
 
 // The private great-circle helper that used to live here is gone: the track
 // table needs a BEARING as well as a distance, the coverage accumulator needs
@@ -1072,52 +1000,38 @@ AppWindow::~AppWindow() {
     stopAudioRecording();
 }
 
-int AppWindow::run(int frames) {
-    glfwSetErrorCallback(&glfwErrorCallback);
-    if (!glfwInit()) {
-        std::fprintf(stderr, "cascade: glfwInit failed\n");
-        return 1;
-    }
-
-    const std::string title =
-        std::string(cascade::appName()) + " " + cascade::versionString();
-    // HIDDEN UNTIL ITS FRAME IS SETTLED. The title bar comes off the window's
-    // style after creation (frame::install below), and a window that has
-    // already been shown - and presented once - with the caption on has
-    // given every layer beneath it a first look at a client area that is
-    // about to change. A tester's 0.84.1 opened with the top of the picture
-    // off the top of the window and every click landing below its control,
-    // until a resize made the layers agree again. Nothing sees this window
-    // until the style it will keep is the style it has.
-    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
-    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
-    mainWindow_ = window;
-    if (window == nullptr) {
-        std::fprintf(stderr, "cascade: glfwCreateWindow failed\n");
-        glfwTerminate();
-        return 1;
-    }
+int AppWindow::run(int frames, PlatformWindow& platform) {
+    // THE WINDOW, ASKED FOR RATHER THAN MADE HERE. Everything the twelve lines
+    // that used to stand here did - the error callback, the library init, the
+    // hidden creation, the size floor, the icon, the current context and vsync
+    // - is inside create(); see gui/platform_window_glfw.cpp, where those lines
+    // now live with the reasoning each of them earned. It prints its own reason
+    // to stderr and leaves nothing behind when it fails, which is why this
+    // returns 1 with no teardown of its own.
+    //
+    // The window comes up HIDDEN and stays hidden until show() below: the title
+    // bar comes off its style a few lines further down (installNativeFrame),
+    // and a window already shown - and presented once - with the caption on has
+    // given every layer beneath it a first look at a client area that is about
+    // to change. A tester's 0.84.1 opened with the top of the picture off the
+    // top of the window and every click landing below its control, until a
+    // resize made the layers agree again.
+    PlatformWindow::CreateInfo want;
+    want.width = 1280;
+    want.height = 720;
     // A FLOOR ON THE WIDTH, because the top bar has one and could not keep it
     // alone: narrower than this and the volume dial is drawn outside the bar's
-    // own child and clipped away, leaving no volume control at all.
-    //
-    // BOTH MINIMA HAVE TO BE GIVEN OR NEITHER IS APPLIED. GLFW's Win32 backend
-    // fills ptMinTrackSize only when minwidth AND minheight are both set
-    // (win32_window.c, WM_GETMINMAXINFO), so passing GLFW_DONT_CARE for the
-    // height silently threw the width limit away too - which is exactly what
-    // the first version of this line did, and it read as a working fix. The
-    // height chosen is the modest one that keeps the bar and the head of the
-    // rail on screen together; nothing on this face disappears below it, it
-    // only gets less room to scroll in.
-    glfwSetWindowSizeLimits(window, kMinWindowW, kMinWindowH, GLFW_DONT_CARE,
-                            GLFW_DONT_CARE);
-    // Before the context is made current: purely a window-manager property,
-    // independent of GL, so even a run that fails at backend init has already
-    // shown the right icon.
-    applyWindowIcon(window);
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);  // vsync: the GUI thread paces itself off the display
+    // own child and clipped away, leaving no volume control at all. The height
+    // is the modest one that keeps the bar and the head of the function rail on
+    // screen together. Both are given because on Win32 both are required or
+    // neither applies - see create().
+    want.minWidth = kMinWindowW;
+    want.minHeight = kMinWindowH;
+    want.title = std::string(cascade::appName()) + " " + cascade::versionString();
+    if (!platform.create(want)) { return 1; }
+    // Only once it exists: every site that used to ask "mainWindow_ != nullptr"
+    // asks this instead, and must get the same answer.
+    platform_ = &platform;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1169,7 +1083,12 @@ int AppWindow::run(int frames) {
     // costs one window creation at startup and it is the difference between a
     // feature that is off with a reason in the log and a crash on the first
     // drag. See gui/viewport_policy.hpp.
-    const bool viewportProbeOk = probeSecondGlContext(window);
+    // ...and a platform that has no notion of a second window at all (Android)
+    // declines the probe outright, which lands on exactly the same decision as
+    // a driver that refuses one: every page stays inside the main window, and
+    // the log says so.
+    const bool viewportProbeOk =
+        platform.supportsMultiViewport() && platform.probeSecondRenderContext();
     viewportDecision_ = cascade::gui::viewportDecision(std::getenv("FOXSDR_SINGLE_VIEWPORT"),
                                                        viewportProbeOk, 0);
     if (cascade::gui::viewportsEnabled(viewportDecision_)) {
@@ -1206,19 +1125,21 @@ int AppWindow::run(int frames) {
     // ImGui corner disagree.
     cascade::gui::theme::applyTheme();
 
-    if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
+    // The PLATFORM backend, whichever one this window pairs with. The message
+    // still names GLFW because on every platform that reaches this line it IS
+    // the GLFW backend, and a user pasting that line into a report is quoting
+    // something searchable.
+    if (!platform.imguiBackendInit()) {
         std::fprintf(stderr, "cascade: ImGui GLFW backend init failed\n");
         ImGui::DestroyContext();
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        platform.destroy();
         return 1;
     }
     if (!ImGui_ImplOpenGL3_Init("#version 130")) {
         std::fprintf(stderr, "cascade: ImGui OpenGL3 backend init failed\n");
-        ImGui_ImplGlfw_Shutdown();
+        platform.imguiBackendShutdown();
         ImGui::DestroyContext();
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        platform.destroy();
         return 1;
     }
 
@@ -1227,8 +1148,8 @@ int AppWindow::run(int frames) {
     // hit test first - see gui/win_frame.hpp. Where it cannot go (every
     // platform but Windows) the window keeps the frame the desktop gave it
     // and drawCabinetRail draws no keys.
-    cascade::gui::frame::install(window);
-    glfwShowWindow(window);
+    platform.installNativeFrame();
+    platform.show();
 
     // A previous run() tore the waterfall down with its GL context (see the
     // teardown below); re-create it against the new context so run() stays
@@ -1395,12 +1316,11 @@ int AppWindow::run(int frames) {
         [this] { watchdog_.pause(); }, [this] { watchdog_.resume(); },
         cascade::core::HangWatchdog::kDisplayGraceMs / 1000.0);
     unsigned lastDisplayChanges =
-        cascade::gui::frame::displayChangeCount() +
-        g_glfwDisplayErrors.load(std::memory_order_relaxed);
+        cascade::gui::frame::displayChangeCount() + platform.displayErrorCount();
 
     int rendered = 0;
     frameCounter_ = 0;
-    while (!glfwWindowShouldClose(window) && !closeRequested_) {
+    while (!platform.shouldClose() && !closeRequested_) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
         if (frames >= 0 && rendered >= frames) { break; }
@@ -1411,9 +1331,9 @@ int AppWindow::run(int frames) {
         watchdog_.heartbeat(!diagSkipNextGap_);
         diagSkipNextGap_ = false;
 
-        glfwPollEvents();
+        platform.pollEvents();
 
-        // AFTER THE PUMP, BEFORE THE FRAME. glfwPollEvents is where the window
+        // AFTER THE PUMP, BEFORE THE FRAME. The event pump is where the window
         // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
         // been counted by the time this reads it - and the pause is therefore
         // in force for the very first present after the change, which is the
@@ -1421,8 +1341,8 @@ int AppWindow::run(int frames) {
         // moving means the desktop is being reconfigured, and the counters are
         // monotonic so a sum cannot go backwards.
         {
-            const unsigned changes = cascade::gui::frame::displayChangeCount() +
-                                     g_glfwDisplayErrors.load(std::memory_order_relaxed);
+            const unsigned changes =
+                cascade::gui::frame::displayChangeCount() + platform.displayErrorCount();
             const bool displayChanged = changes != lastDisplayChanges;
             if (displayChanged) {
                 lastDisplayChanges = changes;
@@ -1430,17 +1350,16 @@ int AppWindow::run(int frames) {
                     "display changed - presentation stalls for the next %u ms are not reported",
                     cascade::core::HangWatchdog::kDisplayGraceMs);
             }
-            // A window nobody can see is not expected to present. GLFW_VISIBLE
-            // is false while the window is still being built (it is created
-            // hidden on purpose, see above) and true for the whole session
-            // afterwards; GLFW_ICONIFIED is the minimise.
-            const bool hidden = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0 ||
-                                glfwGetWindowAttrib(window, GLFW_VISIBLE) == 0;
-            presentGrace.update(glfwGetTime(), displayChanged, hidden);
+            // A window nobody can see is not expected to present. visible() is
+            // false while the window is still being built (it is created hidden
+            // on purpose, see above) and true for the whole session afterwards;
+            // iconified() is the minimise.
+            const bool hidden = platform.iconified() || !platform.visible();
+            presentGrace.update(platform.time(), displayChanged, hidden);
         }
 
         ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
+        platform.imguiBackendNewFrame();
         ImGui::NewFrame();
 
         frameCounter_ = rendered;
@@ -1466,12 +1385,12 @@ int AppWindow::run(int frames) {
         // Debounced runtime persistence: the config file follows the session
         // ~2 s after the last change, so a crash loses almost nothing.
         // Hermetic runs (empty configPath_) never touch the disk.
-        if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
+        if (!configPath_.empty()) { maybeSaveConfig(platform.time()); }
 
         ImGui::Render();
         int fbWidth = 0;
         int fbHeight = 0;
-        glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+        platform.framebufferSize(fbWidth, fbHeight);
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.05f, 0.05f, 0.06f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -1483,10 +1402,10 @@ int AppWindow::run(int frames) {
         // platform window it drew last current, and the next frame's
         // glClear/RenderDrawData above would then paint the main UI into it.
         if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
-            GLFWwindow* const restore = glfwGetCurrentContext();
+            void* const restore = platform.currentRenderContext();
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
-            glfwMakeContextCurrent(restore);
+            platform.setCurrentRenderContext(restore);
 
             // DID THE DRIVER JUST REFUSE ONE? UpdatePlatformWindows is where a
             // torn-off page asks for its operating system window, and on a
@@ -1500,7 +1419,7 @@ int AppWindow::run(int frames) {
             // says what happened. The probe at startup catches the machine
             // that never allows it; this catches the one that stops allowing
             // it - a GPU reset, a display change, an adapter switch.
-            const int failures = ImGui_ImplGlfw_ViewportWindowCreationFailures();
+            const int failures = platform.viewportWindowCreationFailures();
             if (failures > 0) {
                 viewportDecision_ = cascade::gui::viewportDecision(
                     std::getenv("FOXSDR_SINGLE_VIEWPORT"), true, failures);
@@ -1587,7 +1506,7 @@ int AppWindow::run(int frames) {
                 // suffixed -vp<n>, so a store or a map dragged onto another
                 // screen is photographed with the same key as the bench.
                 if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
-                    GLFWwindow* const restore = glfwGetCurrentContext();
+                    void* const restore = platform.currentRenderContext();
                     const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
                     int vpIndex = 0;
                     for (int i = 0; i < pio.Viewports.Size; ++i) {
@@ -1597,11 +1516,14 @@ int AppWindow::run(int frames) {
                             (vp->Flags & ImGuiViewportFlags_IsMinimized) != 0) {
                             continue;
                         }
-                        GLFWwindow* vw = static_cast<GLFWwindow*>(vp->PlatformHandle);
+                        void* const vw = vp->PlatformHandle;
                         int vw_w = 0, vw_h = 0;
-                        glfwGetFramebufferSize(vw, &vw_w, &vw_h);
+                        platform.viewportFramebufferSize(vw, vw_w, vw_h);
                         if (vw_w <= 0 || vw_h <= 0) { continue; }
-                        glfwMakeContextCurrent(vw);
+                        // On GLFW the window handle IS the context handle, so
+                        // the same setter that restores the main context below
+                        // selects this page's.
+                        platform.setCurrentRenderContext(vw);
                         cascade::core::HostImage vimg;
                         vimg.plugin = "self";
                         vimg.width = static_cast<std::uint32_t>(vw_w);
@@ -1630,12 +1552,12 @@ int AppWindow::run(int frames) {
                             cascade::core::diagWarnf("shot: %s", err.c_str());
                         }
                     }
-                    glfwMakeContextCurrent(restore);
+                    platform.setCurrentRenderContext(restore);
                 }
             }
         }
 
-        glfwSwapBuffers(window);
+        platform.swapBuffers();
         ++rendered;
 
         // The context follows the session rather than being frozen at
@@ -1793,9 +1715,9 @@ int AppWindow::run(int frames) {
     // changed, rather than calling saveConfigNow() again, and that shape is
     // the point. A second currentConfig() would re-derive every value at a
     // moment when the session is half torn down: it rebuilds the pending
-    // usage report through telemetryJournal, whose clock is glfwGetTime()
-    // (0.0 once GLFW is terminated — every session would then report zero
-    // seconds), and it re-reads live source state through a pipeline that has
+    // usage report through telemetryJournal, whose clock is platformTime()
+    // (0.0 once the window system is down — every session would then report
+    // zero seconds), and it re-reads live source state through a pipeline that has
     // just been stopped. Neither can happen to a snapshot taken while
     // everything was still alive. Residual, stated plainly: a death in the
     // GL/GLFW teardown below still counts as a clean exit — the watchdog,
@@ -1819,10 +1741,15 @@ int AppWindow::run(int frames) {
     waterfall_.reset();
 
     ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
+    platform.imguiBackendShutdown();
     ImGui::DestroyContext();
-    glfwDestroyWindow(window);
-    glfwTerminate();
+    // The window and the window system, in one call: this is where
+    // glfwDestroyWindow and glfwTerminate went (gui/platform_window_glfw.cpp),
+    // and it stays HERE - inside the budgeted stretch, after the pipeline join
+    // and before watchdog_.stop() - because that ordering is what keeps a
+    // shutdown that wedges reportable. tests/test_shutdown_budget.cpp reads
+    // this file and pins it.
+    platform.destroy();
 
     // THE WATCHDOG IS STOPPED LAST, ON PURPOSE. Everything above - the config
     // save, the pipeline join, the GL teardown - runs with no heartbeat, so a
@@ -2637,11 +2564,11 @@ void AppWindow::drawUi() {
         const ImGuiViewport* mv = ImGui::GetMainViewport();
         int wx = 0, wy = 0, ww = 0, wh = 0, fw = 0, fh = 0;
         double cx = 0.0, cy = 0.0;
-        if (mainWindow_ != nullptr) {
-            glfwGetWindowPos(mainWindow_, &wx, &wy);
-            glfwGetWindowSize(mainWindow_, &ww, &wh);
-            glfwGetFramebufferSize(mainWindow_, &fw, &fh);
-            glfwGetCursorPos(mainWindow_, &cx, &cy);
+        if (platform_ != nullptr) {
+            platform_->windowPos(wx, wy);
+            platform_->windowSize(ww, wh);
+            platform_->framebufferSize(fw, fh);
+            platform_->cursorPos(cx, cy);
         }
         char line[512];
         int n = std::snprintf(line, sizeof(line),
@@ -9283,27 +9210,27 @@ RailPress drawRailChrome(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, flo
 // test every frame (gui/win_frame.hpp), which is what makes the rail a handle
 // and the keys not.
 void AppWindow::drawCabinetRail(float x0, float y0, float x1, float y1, float margin) {
-    if (!cascade::gui::frame::installed() || mainWindow_ == nullptr) { return; }
+    if (!cascade::gui::frame::installed() || platform_ == nullptr) { return; }
     const ImVec2 tl(x0, y0);
     const ImVec2 br(x1, y1);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const bool maximised = glfwGetWindowAttrib(mainWindow_, GLFW_MAXIMIZED) != 0;
+    const bool maximised = platform_->maximised();
     const std::string title =
         std::string(cascade::appName()) + " " + cascade::versionString();
     cascade::gui::frame::Rect keys;
     const RailPress press =
         drawRailChrome(dl, tl, br, margin, title.c_str(), maximised, true, "##mainrail", &keys);
-    if (press.minimise) { glfwIconifyWindow(mainWindow_); }
+    if (press.minimise) { platform_->iconify(); }
     if (press.maximise) {
         if (maximised) {
-            glfwRestoreWindow(mainWindow_);
+            platform_->restore();
         } else {
-            glfwMaximizeWindow(mainWindow_);
+            platform_->maximise();
         }
     }
     // The same path the desktop's close button took: the run loop sees the
     // window asked to close and shuts the receiver down cleanly.
-    if (press.close) { glfwSetWindowShouldClose(mainWindow_, GLFW_TRUE); }
+    if (press.close) { platform_->requestClose(); }
 
     // THE RAIL DRAGS THE WINDOW BY TWO ROUTES, and a machine takes whichever
     // it offers. On the desk this was built at, WM_NCHITTEST calls the rail
@@ -9351,15 +9278,15 @@ void AppWindow::drawCabinetRail(float x0, float y0, float x1, float y1, float ma
                     mainDragCarryY_ -= static_cast<float>(dy);
                     int wx = 0;
                     int wy = 0;
-                    glfwGetWindowPos(mainWindow_, &wx, &wy);
-                    glfwSetWindowPos(mainWindow_, wx + dx, wy + dy);
+                    platform_->windowPos(wx, wy);
+                    platform_->setWindowPos(wx + dx, wy + dy);
                 }
             }
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 if (maximised) {
-                    glfwRestoreWindow(mainWindow_);
+                    platform_->restore();
                 } else {
-                    glfwMaximizeWindow(mainWindow_);
+                    platform_->maximise();
                 }
             }
             ImGui::SetCursorScreenPos(savedCursor);
@@ -9533,8 +9460,9 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
         if (ownWindow) {
             // To the taskbar, which it has a button on (ConfigViewportsNoTaskBarIcon
             // is off for exactly this).
-            GLFWwindow* w = static_cast<GLFWwindow*>(self->Viewport->PlatformHandle);
-            if (w != nullptr) { glfwIconifyWindow(w); }
+            // A null handle is tolerated by iconifyViewport and is exactly
+            // what a refused window leaves behind, so no check is needed here.
+            if (platform_ != nullptr) { platform_->iconifyViewport(self->Viewport->PlatformHandle); }
         } else if (pc.collapsed) {
             pc.collapsed = false;
             pc.pendingRestore = true;
@@ -15617,11 +15545,11 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // borderless-fullscreen mode to enter - the window has no OS frame
             // to begin with (see win_frame.cpp) - so maximised IS full screen
             // here, and the same key restores it.
-            if (mainWindow_ != nullptr) {
-                if (glfwGetWindowAttrib(mainWindow_, GLFW_MAXIMIZED) != 0) {
-                    glfwRestoreWindow(mainWindow_);
+            if (platform_ != nullptr) {
+                if (platform_->maximised()) {
+                    platform_->restore();
                 } else {
-                    glfwMaximizeWindow(mainWindow_);
+                    platform_->maximise();
                 }
             }
             break;
@@ -16438,17 +16366,17 @@ void AppWindow::applyScopeWindowVisibility() {
         // rather than hiding it, so it is skipped here along with anything
         // else that is not a torn-off window.
         if ((vp->Flags & ImGuiViewportFlags_IsPlatformWindow) == 0) { continue; }
-        GLFWwindow* w = static_cast<GLFWwindow*>(vp->PlatformHandle);
-        if (w == nullptr || w == mainWindow_) { continue; }
+        void* const w = vp->PlatformHandle;
+        if (w == nullptr || platform_ == nullptr || platform_->isMainWindowHandle(w)) { continue; }
         // SCOPE MODE HIDES THEM. It is a full-screen instrument - the user
         // asked for the panel with as little around it as possible - and a
         // torn-off decoder window floating over the middle of the tube is the
         // opposite of that. Seen the first time the compact cabinet was
         // drawn: the scope was correct and completely covered.
         if (scopeMode_) {
-            glfwHideWindow(w);
+            platform_->setViewportVisible(w, false);
         } else if (scopeLeftThisFrame_) {
-            glfwShowWindow(w);
+            platform_->setViewportVisible(w, true);
         }
     }
     // Showing is a one-shot: after the frame that restores them, ImGui owns
@@ -18299,7 +18227,7 @@ void AppWindow::telemetryAccrueMode() {
     // The accrual carries the sub-second remainder between calls. It has to:
     // a frame is ~17 ms, so every individual delta truncates to zero seconds
     // and nothing would ever be banked.
-    const std::uint64_t secs = telemetryModeAccrual_.advance(glfwGetTime());
+    const std::uint64_t secs = telemetryModeAccrual_.advance(platformTime());
     if (secs > 0) { telemetryModeSeconds_[kModeNames[modeIndex_]] += secs; }
 }
 
@@ -18342,7 +18270,10 @@ void AppWindow::telemetryStartup(const cascade::core::AppConfig& cfg) {
     crashUploadState_ = cascade::core::decodePolicyState(
         cfg.crashUploadRecent, cfg.crashUploadWindowStart, cfg.crashUploadWindowCount,
         cfg.crashUploadBlockedUntil);
-    telemetrySessionStart_ = glfwGetTime();
+    // Zero here, and deliberately: this runs from the CONSTRUCTOR, before the
+    // window exists, exactly as glfwGetTime() answered 0.0 before glfwInit.
+    // The session length is measured from it against the same clock later.
+    telemetrySessionStart_ = platformTime();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
@@ -18428,7 +18359,7 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.arch = cascade::core::archDescription();
     r.launches = telemetryLaunches_;
     r.crashes = telemetryCrashes_;
-    const double now = glfwGetTime();
+    const double now = platformTime();
     r.session.seconds = static_cast<std::uint64_t>(
         now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);
     r.session.modeSeconds = telemetryModeSeconds_;

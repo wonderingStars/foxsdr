@@ -1306,9 +1306,17 @@ int main() {
 
         const std::size_t pipelineStop =
             haveAnchors ? text.find("pipeline_.stop();", begin) : std::string::npos;
+        // THE WINDOW TEARDOWN. This anchor used to be "glfwTerminate();" in
+        // app_window.cpp and is now "platform.destroy();", because that file no
+        // longer names GLFW at all: the window is behind gui/platform_window.hpp
+        // so the same AppWindow can run over an Android EGL shell. The PROPERTY
+        // is unchanged and is what the two CHECKs below still pin - the window
+        // system comes down inside the budgeted stretch, after the pipeline
+        // join - and the block that follows this one closes the gap the rename
+        // would otherwise open, by proving destroy() is the GLFW teardown.
         const std::size_t glfwTerm =
-            haveAnchors ? text.find("glfwTerminate();", begin) : std::string::npos;
-        std::printf("teardown wiring: beginShutdown@%zu pipeline_.stop@%zu glfwTerminate@%zu "
+            haveAnchors ? text.find("platform.destroy();", begin) : std::string::npos;
+        std::printf("teardown wiring: beginShutdown@%zu pipeline_.stop@%zu platform.destroy@%zu "
                     "watchdog_.stop@%zu\n",
                     begin, pipelineStop, glfwTerm, stop);
         // The two bounded guards and the GL teardown are inside the budgeted
@@ -1326,6 +1334,57 @@ int main() {
         const std::size_t pause = haveAnchors ? text.find("WatchdogPause", begin)
                                               : std::string::npos;
         CHECK(pause == std::string::npos || (stop != std::string::npos && pause > stop));
+    }
+
+    // --- ...AND platform.destroy() REALLY IS THE WINDOW-SYSTEM TEARDOWN -----
+    //
+    // The block above pins WHERE the teardown sits. On its own that is now one
+    // indirection short of the promise it used to make: "platform.destroy();"
+    // is a call through an interface, and an implementation that quietly
+    // stopped terminating the window system would leave the ordering check
+    // green while the thing being ordered had gone. So the desktop
+    // implementation is read too, and required to do both halves.
+    //
+    // Deliberately a source read rather than a run: glfwTerminate's cost is
+    // what is being budgeted, and a test cannot call it twice in one process to
+    // measure it. Same device as the block above, for the same reason.
+    {
+        const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" /
+                             "platform_window_glfw.cpp";
+        const std::string text = readFile(src);
+        CHECK(!text.empty());
+
+        const std::size_t destroy = text.find("void GlfwPlatformWindow::destroy()");
+        CHECK(destroy != std::string::npos);
+        // Both calls, inside destroy() and nowhere else in the file: the window
+        // first, then the library, which is the order GLFW documents and the
+        // order app_window.cpp used before the move.
+        const std::size_t destroyWindow =
+            destroy != std::string::npos ? text.find("glfwDestroyWindow(window_);", destroy)
+                                         : std::string::npos;
+        const std::size_t terminate =
+            destroy != std::string::npos ? text.find("glfwTerminate();", destroy)
+                                         : std::string::npos;
+        std::printf("destroy() wiring: fn@%zu glfwDestroyWindow@%zu glfwTerminate@%zu\n", destroy,
+                    destroyWindow, terminate);
+        CHECK(destroyWindow != std::string::npos);
+        CHECK(terminate != std::string::npos);
+        CHECK(destroyWindow != std::string::npos && terminate != std::string::npos &&
+              destroyWindow < terminate);
+        // ...and it is torn down in exactly TWO places in the whole file: here,
+        // and on create()'s own failure path, where there is no window yet and
+        // no budget to be inside of. A third would be a teardown route this
+        // block's ordering check cannot see.
+        std::size_t terminations = 0;
+        for (std::size_t at = text.find("glfwTerminate();"); at != std::string::npos;
+             at = text.find("glfwTerminate();", at + 1)) {
+            ++terminations;
+        }
+        std::printf("destroy() wiring: glfwTerminate call sites %zu\n", terminations);
+        CHECK(terminations == 2);
+        // The other one is create()'s, which is BEFORE destroy() in the file -
+        // so the site found above really is the teardown's and not that one.
+        CHECK(text.find("glfwTerminate();") < destroy);
     }
 
 #if defined(_WIN32)
