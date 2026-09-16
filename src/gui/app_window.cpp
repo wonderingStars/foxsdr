@@ -13656,7 +13656,8 @@ void AppWindow::drawTargetDetailsWindow() {
     // every frame, which is what a block whose line count depends on the target
     // requires; the minimum width stops the "no longer being heard" state,
     // which is two short lines, from collapsing to a sliver.
-    ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(cascade::gui::px(300.0f), 0.0f),
+                                        ImVec2(FLT_MAX, FLT_MAX));
     if (beginPage("Target details", "TARGET DETAILS", &detailsOpen_,
                   ImGuiWindowFlags_AlwaysAutoResize)) {
         const cascade::core::HostTrack* found = findVisibleTrack(detailsTrackId_);
@@ -14788,7 +14789,7 @@ void AppWindow::drawTransmitPage() {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%s", transmitArgs_.c_str());
         ImGui::BeginDisabled(have);
-        ImGui::SetNextItemWidth(260.0f);
+        ImGui::SetNextItemWidth(cascade::gui::px(260.0f));
         if (ImGui::InputText("##txargs", buf, sizeof(buf))) { transmitArgs_ = buf; }
         ImGui::EndDisabled();
     }
@@ -14832,7 +14833,7 @@ void AppWindow::drawTransmitPage() {
     double mhz = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_,
                                              std::max(0.0, currentAbsoluteHz())) /
                  1e6;
-    ImGui::SetNextItemWidth(180.0f);
+    ImGui::SetNextItemWidth(cascade::gui::px(180.0f));
     ImGui::BeginDisabled(!transmitSplit_);
     if (ImGui::InputDouble("MHz##txfreq", &mhz, 0.001, 0.1, "%.6f")) {
         transmitSplitHz_ = mhz * 1e6;
@@ -14850,7 +14851,7 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kIvory));
         }
-        if (ImGui::Button("SPLIT##txsplit", ImVec2(80.0f, 0.0f))) {
+        if (ImGui::Button("SPLIT##txsplit", ImVec2(cascade::gui::px(80.0f), 0.0f))) {
             transmitSplit_ = !transmitSplit_;
             // Coming OUT of split puts the transmitter back on the receiver
             // immediately; going INTO it starts from wherever the receiver
@@ -14884,7 +14885,7 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
         }
-        if (ImGui::Button(cascade::dsp::txModeName(m), ImVec2(64.0f, 0.0f))) {
+        if (ImGui::Button(cascade::dsp::txModeName(m), ImVec2(cascade::gui::px(64.0f), 0.0f))) {
             transmitModeIndex_ = i;
             transmitter_.setMode(m);
         }
@@ -14907,7 +14908,7 @@ void AppWindow::drawTransmitPage() {
         // the whole reason gui/transmit_page.hpp exists: it happens once, in
         // one place, with a test on it.
         float t = cascade::gui::txPowerFraction(transmitPowerDb_, quiet, loud);
-        ImGui::SetNextItemWidth(240.0f);
+        ImGui::SetNextItemWidth(cascade::gui::px(240.0f));
         if (ImGui::SliderFloat("##txpower", &t, 0.0f, 1.0f, "")) {
             transmitPowerDb_ = cascade::gui::txPowerFromFraction(t, quiet, loud);
             transmitter_.setPowerDb(transmitPowerDb_);
@@ -14935,7 +14936,7 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
         }
-        if (ImGui::Button(cascade::core::txInputName(in), ImVec2(70.0f, 0.0f))) {
+        if (ImGui::Button(cascade::core::txInputName(in), ImVec2(cascade::gui::px(70.0f), 0.0f))) {
             transmitInputIndex_ = i;
             transmitter_.setInput(in);
             if (in == cascade::core::TxInput::Microphone &&
@@ -14953,7 +14954,7 @@ void AppWindow::drawTransmitPage() {
     if (transmitInputIndex_ == static_cast<int>(cascade::core::TxInput::Tone)) {
         ImGui::SameLine();
         double tone = transmitToneHz_;
-        ImGui::SetNextItemWidth(110.0f);
+        ImGui::SetNextItemWidth(cascade::gui::px(110.0f));
         if (ImGui::InputDouble("Hz##txtone", &tone, 50.0, 500.0, "%.0f")) {
             transmitToneHz_ = tone;
             transmitter_.setToneHz(tone);
@@ -14970,8 +14971,8 @@ void AppWindow::drawTransmitPage() {
         transmitPeak_ = std::max(peak, transmitPeak_ * 0.90f);
         ImGui::TextUnformatted("AUDIO");
         ImGui::SameLine();
-        ImGui::ProgressBar(cascade::gui::txMeterFraction(transmitPeak_), ImVec2(240.0f, 0.0f),
-                           "");
+        ImGui::ProgressBar(cascade::gui::txMeterFraction(transmitPeak_),
+                          ImVec2(cascade::gui::px(240.0f), 0.0f), "");
     }
 
     ImGui::Separator();
@@ -14997,7 +14998,7 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kIvory));
         }
-        ImGui::Button("PTT##txptt", ImVec2(160.0f, 56.0f));
+        ImGui::Button("PTT##txptt", ImVec2(cascade::gui::px(160.0f), cascade::gui::px(56.0f)));
         // HELD, NOT CLICKED. IsItemActive is true for exactly as long as the
         // pointer is down on the key, so letting go - anywhere, including off
         // the key and outside the window - opens it.
@@ -15034,7 +15035,7 @@ void AppWindow::drawTransmitPage() {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kIvory));
         }
-        if (ImGui::Button("LATCH##txlatch", ImVec2(100.0f, 56.0f))) {
+        if (ImGui::Button("LATCH##txlatch", ImVec2(cascade::gui::px(100.0f), cascade::gui::px(56.0f)))) {
             transmitLatched_ = !transmitLatched_;
         }
         if (transmitLatched_) { ImGui::PopStyleColor(2); }

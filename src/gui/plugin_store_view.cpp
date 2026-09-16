@@ -30,6 +30,7 @@
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -74,7 +75,7 @@ ImFont* faceForValue(const char* s) {
 // engraving - and note that every measured height and every key width in here
 // already derives from it, which is what made the raise one change rather than
 // a sweep of literals.
-float prose() { return storeProsePx(); }
+float prose() { return cascade::gui::px(storeProsePx()); }
 
 // --- the vocabulary this window adds ------------------------------------------
 
@@ -82,7 +83,10 @@ float prose() { return storeProsePx(); }
 // panel, a brass lip around it and the bevel lit from below, which is what
 // makes it read as a hole rather than as a dark rectangle.
 void addDeckWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(8.0f) ||
+        br.y - tl.y < cascade::gui::px(8.0f)) {
+        return;
+    }
     const float r = theme::kPanelRounding;
     dl->AddRectFilled(tl, br, theme::kEnamelDark, r);
     if (br.x - tl.x > r * 2.0f) {
@@ -98,7 +102,10 @@ void addDeckWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 // hairline in. Flat rather than gradient, so a box inside a well does not read
 // as a second well.
 void addPlateBox(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(8.0f) ||
+        br.y - tl.y < cascade::gui::px(8.0f)) {
+        return;
+    }
     dl->AddRectFilled(tl, br, theme::kWell, theme::kKeyRounding);
     dl->AddRect(tl, br, theme::withAlpha(theme::kBrassDark, 0.9f), theme::kKeyRounding, 0,
                 theme::kHairline);
@@ -109,7 +116,10 @@ void addPlateBox(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 // greyed key with no explanation is the fault this redesign exists to remove.
 bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* line1,
                  const char* line2, bool enabled, const char* id) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return false; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(8.0f) ||
+        br.y - tl.y < cascade::gui::px(8.0f)) {
+        return false;
+    }
     ImGui::PushID(id);
     ImGui::SetCursorScreenPos(tl);
     ImGui::BeginDisabled(!enabled);
@@ -129,8 +139,8 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
         if (!held) {
             // Proud metal casts a shadow; a pressed key does not. That one
             // difference is the state indication before any colour is used.
-            dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f),
-                              ImVec2(br.x + 1.0f, br.y + 2.0f),
+            dl->AddRectFilled(ImVec2(tl.x + cascade::gui::px(1.0f), tl.y + cascade::gui::px(2.0f)),
+                              ImVec2(br.x + cascade::gui::px(1.0f), br.y + cascade::gui::px(2.0f)),
                               theme::withAlpha(theme::kVoid, 0.45f), r);
         }
         const ImU32 top = held ? theme::kBrassMid : (hovered ? theme::kIvory : theme::kCream);
@@ -143,7 +153,8 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
         addBenchBevel(dl, tl, br, r, !held);
     }
     if (focused) {
-        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+        dl->AddRect(ImVec2(tl.x - cascade::gui::px(2.0f), tl.y - cascade::gui::px(2.0f)),
+                    ImVec2(br.x + cascade::gui::px(2.0f), br.y + cascade::gui::px(2.0f)),
                     theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
     }
 
@@ -163,7 +174,7 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     const float lh = faceH(f, px);
     const int lines = (line2 != nullptr && line2[0] != '\0') ? 2 : 1;
     float y = (tl.y + br.y) * 0.5f - lh * static_cast<float>(lines) * 0.5f +
-              (held ? 1.0f : 0.0f);
+              (held ? cascade::gui::px(1.0f) : 0.0f);
     const float cx = (tl.x + br.x) * 0.5f;
     dl->AddText(f, px, ImVec2(cx - textW(f, px, line1) * 0.5f, y), ink, line1);
     if (lines == 2) {
@@ -179,7 +190,9 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
 // in twelve for whom colour alone is not a signal.
 bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
                    const char* label, const char* trailing, bool on, const char* id) {
-    if (dl == nullptr || width < 50.0f || rowH < 10.0f) { return false; }
+    if (dl == nullptr || width < cascade::gui::px(50.0f) || rowH < cascade::gui::px(10.0f)) {
+        return false;
+    }
     ImGui::PushID(id);
     ImGui::SetCursorScreenPos(tl);
     const bool pressed = ImGui::InvisibleButton("##rocker", ImVec2(width, rowH));
@@ -187,15 +200,16 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
     const bool focused = ImGui::IsItemFocused();
     ImGui::PopID();
 
-    const float rw = 16.0f;
-    const ImVec2 rTL(tl.x, tl.y + 1.0f);
-    const ImVec2 rBR(tl.x + rw, tl.y + rowH - 1.0f);
+    const float rw = cascade::gui::px(16.0f);
+    const ImVec2 rTL(tl.x, tl.y + cascade::gui::px(1.0f));
+    const ImVec2 rBR(tl.x + rw, tl.y + rowH - cascade::gui::px(1.0f));
     dl->AddRectFilled(rTL, rBR, theme::kVoid, theme::kKeyRounding);
     dl->AddRect(rTL, rBR, theme::withAlpha(theme::kBrassMid, 0.9f), theme::kKeyRounding, 0,
                 theme::kHairline);
     const float ph = (rBR.y - rTL.y) * 0.42f;
-    const ImVec2 pTL(rTL.x + 2.0f, on ? rTL.y + 2.0f : rBR.y - 2.0f - ph);
-    const ImVec2 pBR(rBR.x - 2.0f, pTL.y + ph);
+    const ImVec2 pTL(rTL.x + cascade::gui::px(2.0f),
+                     on ? rTL.y + cascade::gui::px(2.0f) : rBR.y - cascade::gui::px(2.0f) - ph);
+    const ImVec2 pBR(rBR.x - cascade::gui::px(2.0f), pTL.y + ph);
     dl->AddRectFilled(pTL, pBR, on ? theme::kCream : theme::kBrassMid, 1.0f);
     addBenchBevel(dl, pTL, pBR, 1.0f, true);
 
@@ -203,8 +217,9 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
     const float px = prose();
     const float lw = textW(f, px, label);
     const float lh = faceH(f, px);
-    const ImVec2 lTL(tl.x + rw + 7.0f, tl.y + (rowH - lh - 5.0f) * 0.5f);
-    const ImVec2 lBR(lTL.x + lw + 12.0f, lTL.y + lh + 5.0f);
+    const ImVec2 lTL(tl.x + rw + cascade::gui::px(7.0f),
+                     tl.y + (rowH - lh - cascade::gui::px(5.0f)) * 0.5f);
+    const ImVec2 lBR(lTL.x + lw + cascade::gui::px(12.0f), lTL.y + lh + cascade::gui::px(5.0f));
     if (on) {
         dl->AddRectFilled(lTL, lBR, theme::kBrassBright, theme::kKeyRounding);
         addBenchBevel(dl, lTL, lBR, theme::kKeyRounding, true);
@@ -212,16 +227,16 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
         dl->AddRect(lTL, lBR, theme::withAlpha(theme::kBrassDark, 0.9f), theme::kKeyRounding,
                     0, theme::kHairline);
     }
-    dl->AddText(f, px, ImVec2(lTL.x + 6.0f, lTL.y + 2.0f),
+    dl->AddText(f, px, ImVec2(lTL.x + cascade::gui::px(6.0f), lTL.y + cascade::gui::px(2.0f)),
                 on ? theme::kEnamel : theme::kCream, label);
     if (hovered) {
         dl->AddRect(lTL, lBR, theme::withAlpha(theme::kBrassBright, 0.7f),
                     theme::kKeyRounding, 0, theme::kHairline);
     }
     if (focused) {
-        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 1.0f),
-                    ImVec2(tl.x + width + 2.0f, tl.y + rowH + 1.0f), theme::kBrassBright,
-                    theme::kKeyRounding, 0, theme::kHairline);
+        dl->AddRect(ImVec2(tl.x - cascade::gui::px(2.0f), tl.y - cascade::gui::px(1.0f)),
+                    ImVec2(tl.x + width + cascade::gui::px(2.0f), tl.y + rowH + cascade::gui::px(1.0f)),
+                    theme::kBrassBright, theme::kKeyRounding, 0, theme::kHairline);
     }
     // HOW MANY ROWS THIS SWITCH IS HOLDING BACK, on the switch itself. A
     // filter that hides things without saying how many is how a user comes to
@@ -230,7 +245,7 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
         ImFont* rf = faceForValue(trailing);
         const float rW = textW(rf, px, trailing);
         const float rx = tl.x + width - rW;
-        if (rx > lBR.x + 6.0f) {
+        if (rx > lBR.x + cascade::gui::px(6.0f)) {
             dl->AddText(rf, px, ImVec2(rx, tl.y + (rowH - faceH(rf, px)) * 0.5f),
                         on ? theme::kAmber : theme::kInkFaint, trailing);
         }
@@ -243,7 +258,7 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
 // rust in this palette means trouble, and a sort order is not trouble.
 bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
                  bool selected, const char* id) {
-    if (dl == nullptr || br.x - tl.x < 6.0f) { return false; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(6.0f)) { return false; }
     ImGui::PushID(id);
     ImGui::SetCursorScreenPos(tl);
     const bool pressed = ImGui::InvisibleButton("##seg", ImVec2(br.x - tl.x, br.y - tl.y));
@@ -260,20 +275,23 @@ bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
                                     theme::withAlpha(theme::kVoid, 0.0f),
                                     theme::withAlpha(theme::kVoid, 0.0f));
     } else {
-        dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
+        dl->AddRectFilled(ImVec2(tl.x + cascade::gui::px(1.0f), tl.y + cascade::gui::px(2.0f)),
+                          ImVec2(br.x + cascade::gui::px(1.0f), br.y + cascade::gui::px(2.0f)),
                           theme::withAlpha(theme::kVoid, 0.40f), r);
         dl->AddRectFilled(tl, br, hovered ? theme::kBrassBright : theme::kBrassMid, r);
     }
     addBenchBevel(dl, tl, br, r, !selected);
     if (focused) {
-        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+        dl->AddRect(ImVec2(tl.x - cascade::gui::px(2.0f), tl.y - cascade::gui::px(2.0f)),
+                    ImVec2(br.x + cascade::gui::px(2.0f), br.y + cascade::gui::px(2.0f)),
                     theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
     }
     ImFont* f = fonts::ui();
     const float px = prose();
     dl->AddText(f, px,
                 ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
-                       (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f + (selected ? 1.0f : 0.0f)),
+                       (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f +
+                           (selected ? cascade::gui::px(1.0f) : 0.0f)),
                 selected ? theme::kCream : theme::kEnamel, label);
     return pressed;
 }
@@ -282,11 +300,14 @@ bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
 // it would occupy if there were. Diagonal ruling rather than a zero, because
 // "0 bytes" and "nobody told us the size" are opposite statements.
 void addHatch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    if (dl == nullptr || br.x - tl.x < 4.0f || br.y - tl.y < 4.0f) { return; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(4.0f) ||
+        br.y - tl.y < cascade::gui::px(4.0f)) {
+        return;
+    }
     dl->PushClipRect(tl, br, true);
     const float h = br.y - tl.y;
     const ImU32 col = theme::withAlpha(theme::kInkMuted, 0.24f);
-    for (float x = tl.x - h; x < br.x; x += 6.0f) {
+    for (float x = tl.x - h; x < br.x; x += cascade::gui::px(6.0f)) {
         dl->AddLine(ImVec2(x, br.y), ImVec2(x + h, tl.y), col, 2.0f);
     }
     dl->PopClipRect();
@@ -299,19 +320,22 @@ float noteHeight(float width, const char* text) {
     ImFont* f = fonts::ui();
     const float px = prose();
     if (text == nullptr || text[0] == '\0') { return 0.0f; }
-    return wrapH(f, px, width - 12.0f, text) + 9.0f;
+    return wrapH(f, px, width - cascade::gui::px(12.0f), text) + cascade::gui::px(9.0f);
 }
 
 void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
               const char* text) {
-    if (dl == nullptr || width < 30.0f || text == nullptr || text[0] == '\0') { return; }
+    if (dl == nullptr || width < cascade::gui::px(30.0f) || text == nullptr ||
+        text[0] == '\0') {
+        return;
+    }
     ImFont* f = fonts::ui();
     const float px = prose();
     const float h = noteHeight(width, text);
     dl->AddRectFilled(tl, ImVec2(tl.x + width, tl.y + h), theme::withAlpha(accent, 0.10f));
-    dl->AddRectFilled(tl, ImVec2(tl.x + 2.0f, tl.y + h), accent);
-    dl->AddText(f, px, ImVec2(tl.x + 9.0f, tl.y + 4.0f), accent, text, nullptr,
-                width - 12.0f);
+    dl->AddRectFilled(tl, ImVec2(tl.x + cascade::gui::px(2.0f), tl.y + h), accent);
+    dl->AddText(f, px, ImVec2(tl.x + cascade::gui::px(9.0f), tl.y + cascade::gui::px(4.0f)),
+                accent, text, nullptr, width - cascade::gui::px(12.0f));
 }
 
 // "3 OF 11 SHOWN": the figures in the monospaced face and in amber because
@@ -339,7 +363,7 @@ void drawCountLine(ImDrawList* dl, const ImVec2& at, int n, int m, const char* t
     x += textW(uf, px, " OF ");
     dl->AddText(rf, px, ImVec2(x, base), theme::kAmber, mBuf);
     x += textW(rf, px, mBuf);
-    dl->AddText(uf, px, ImVec2(x + 4.0f, uOff), theme::kInkMuted, trail);
+    dl->AddText(uf, px, ImVec2(x + cascade::gui::px(4.0f), uOff), theme::kInkMuted, trail);
 }
 
 float countLineHeight() {
@@ -665,8 +689,8 @@ const char* kReachNoTuneNote =
 // One pass that both measures and draws, so the two can never drift apart.
 float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePlate& m,
                   bool draw) {
-    constexpr float kBoxPad = 12.0f;
-    constexpr float kBoxGap = 10.0f;
+    const float kBoxPad = cascade::gui::px(12.0f);
+    const float kBoxGap = cascade::gui::px(10.0f);
 
     ImFont* uf = fonts::ui();
     ImFont* lf = fonts::legend();
@@ -680,7 +704,7 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
     const float tinyH = faceH(uf, tiny);
     const float legH = faceH(lf, tiny);
     const float inner = width - kBoxPad * 2.0f;
-    if (inner < 60.0f) { return 0.0f; }
+    if (inner < cascade::gui::px(60.0f)) { return 0.0f; }
     // THE PLATE'S NAME WRAPS TOO, and for the same reason the row's does: this
     // column is a third of the window, "406 MHz Distress Beacon Decoder (EPIRB
     // / ELT / PLB)" does not fit across it at any size worth reading, and the
@@ -695,7 +719,7 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
     // WHICH KIND OF "NOT KNOWN" THIS IS. Chosen once, so the pass that
     // measures the box and the pass that letters it cannot pick differently.
     const char* unknownReach = (m.fitted && !m.loaded) ? kReachRefused : kReachUnknown;
-    const float colW = (inner - 14.0f) * 0.5f;
+    const float colW = (inner - cascade::gui::px(14.0f)) * 0.5f;
 
     // --- box 1: identity ----------------------------------------------------
     // THE LINE UNDER THE NAME IS THE SAME CLAIM AS THE CELLS BELOW IT, and it
@@ -732,7 +756,7 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
     box1H += homeH;
 
     // --- box 2: what this module reaches -------------------------------------
-    const float markW = 18.0f;
+    const float markW = cascade::gui::px(18.0f);
     float box2H = kBoxPad + legH + 8.0f + wrapH(uf, tiny, inner, kReachLead) + 10.0f;
     if (reach.empty()) {
         box2H += noteHeight(inner, unknownReach);
@@ -1026,12 +1050,12 @@ float moduleKindTagWidth() {
                                         "MAP",       "PANEL",        "CONTROL",
                                         "MODULE"};
     ImFont* f = fonts::ui();
-    const float px = fonts::kTinySize;
+    const float px = cascade::gui::px(fonts::kTinySize);
     float w = 0.0f;
     for (const char* t : kTags) { w = std::max(w, textW(f, px, t)); }
     // The floor is the width the store's card used before this was measured,
     // so a narrow face cannot shrink the chip out of the design.
-    return std::max(84.0f, w + 14.0f);
+    return std::max(cascade::gui::px(84.0f), w + cascade::gui::px(14.0f));
 }
 
 std::string moduleReachSummary(const ModulePlate& m) {
@@ -1332,8 +1356,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float legH = faceH(lf, tiny);
     const float nameH = faceH(lf, uiPx);
 
-    constexpr float kPad = 10.0f;
-    constexpr float kGap = 10.0f;
+    const float kPad = cascade::gui::px(10.0f);
+    const float kGap = cascade::gui::px(10.0f);
     // THE CONTROL HEIGHTS, MEASURED RATHER THAN TYPED. Each was fitted around
     // a 12 px engraving and each holds a different amount of it, so no single
     // adjustment would have been right for all three:
@@ -1353,25 +1377,29 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     //
     // The old figures stay as floors: they are the design's proportions and
     // nothing here should shrink if a future face happens to be short.
-    const float kKeyH = std::max(28.0f, tinyH + 12.0f);
-    const float kRockerH = std::max(22.0f, tinyH + 10.0f);
-    const float kSegH = std::max(24.0f, tinyH + 10.0f);
-    const float kPlateKeyH = std::max(34.0f, tinyH * 2.0f + 8.0f);
+    const float kKeyH = std::max(cascade::gui::px(28.0f), tinyH + cascade::gui::px(12.0f));
+    const float kRockerH = std::max(cascade::gui::px(22.0f), tinyH + cascade::gui::px(10.0f));
+    const float kSegH = std::max(cascade::gui::px(24.0f), tinyH + cascade::gui::px(10.0f));
+    const float kPlateKeyH =
+        std::max(cascade::gui::px(34.0f), tinyH * 2.0f + cascade::gui::px(8.0f));
     // AND THE FIXED KEY WIDTHS, each from the widest word it can carry. Every
     // one of these was a literal, and a key whose word no longer fits does not
     // wrap or clip - drawDeckKey CENTRES its label, so the word simply hangs
     // out over both machined edges.
-    const float kClearW = std::max(60.0f, textW(uf, tiny, "CLEAR") + 22.0f);
-    const float kCheckW = std::max({92.0f, textW(uf, tiny, "CHECK NOW") + 22.0f,
-                                    textW(uf, tiny, "CHECK AGAIN") + 22.0f});
-    const float kUpdKeyW = std::max(96.0f, textW(uf, tiny, "UPDATE") + 22.0f);
+    const float kClearW =
+        std::max(cascade::gui::px(60.0f), textW(uf, tiny, "CLEAR") + cascade::gui::px(22.0f));
+    const float kCheckW = std::max({cascade::gui::px(92.0f),
+                                    textW(uf, tiny, "CHECK NOW") + cascade::gui::px(22.0f),
+                                    textW(uf, tiny, "CHECK AGAIN") + cascade::gui::px(22.0f)});
+    const float kUpdKeyW =
+        std::max(cascade::gui::px(96.0f), textW(uf, tiny, "UPDATE") + cascade::gui::px(22.0f));
     // The banner's caption column: a lamp, then the longest of the five
     // headings it can show, then the "n MODULES" line under it. Sized for the
     // widest so the divider and the note beside it do not move when the
     // catalogue's state changes.
     const float kBannerCapW =
-        std::max({178.0f,
-                  6.0f * 2.0f + 8.0f +
+        std::max({cascade::gui::px(178.0f),
+                  cascade::gui::px(6.0f) * 2.0f + cascade::gui::px(8.0f) +
                       std::max({textW(lf, tiny, "CATALOGUE NOT READ"),
                                 textW(lf, tiny, "LAST CHECK FAILED"),
                                 textW(lf, tiny, "CATALOGUE IS EMPTY"),
@@ -1459,10 +1487,11 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // from the one it happens to have: drawDeckKey CENTRES its label and does
     // not clip, so a key too narrow does not shorten the word - it hangs it
     // out over both machined edges.
-    const float addKeyW = std::max({320.0f, textW(uf, tiny, plan.label.c_str()) + 40.0f,
-                                    textW(uf, tiny, "ADD ALL PLUGINS") + 40.0f});
-    const float addKeyH = std::max(54.0f, tinyH * 2.0f + 18.0f);
-    const float addNoteW = width - kPad * 3.0f - addKeyW - 12.0f;
+    const float addKeyW =
+        std::max({cascade::gui::px(320.0f), textW(uf, tiny, plan.label.c_str()) + cascade::gui::px(40.0f),
+                  textW(uf, tiny, "ADD ALL PLUGINS") + cascade::gui::px(40.0f)});
+    const float addKeyH = std::max(cascade::gui::px(54.0f), tinyH * 2.0f + cascade::gui::px(18.0f));
+    const float addNoteW = width - kPad * 3.0f - addKeyW - cascade::gui::px(12.0f);
 
     std::string addLead;
     ImU32 addAccent = theme::kInkMuted;
@@ -1501,7 +1530,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     }
 
     const bool addAckRow = noticeModules > 0 && !model.addAllRunning;
-    const float addAckH = addAckRow ? (tinyH + 12.0f) : 0.0f;
+    const float addAckH = addAckRow ? (tinyH + cascade::gui::px(12.0f)) : 0.0f;
     float addTextH = noteHeight(addNoteW, addLead.c_str());
     if (!addSkipLine.empty()) { addTextH += 4.0f + noteHeight(addNoteW, addSkipLine.c_str()); }
     if (!model.addAllSummary.empty()) {
@@ -1634,10 +1663,11 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     }
 
     const float capW = kBannerCapW;
-    const float bannerNoteW = width - capW - kPad * 3.0f - 12.0f;
-    const float bannerHeadH = std::max(20.0f, noteHeight(bannerNoteW, bannerNote));
+    const float bannerNoteW = width - capW - kPad * 3.0f - cascade::gui::px(12.0f);
+    const float bannerHeadH =
+        std::max(cascade::gui::px(20.0f), noteHeight(bannerNoteW, bannerNote));
     const float updKeyW = kUpdKeyW;
-    const float updNoteW = width - kPad * 2.0f - updKeyW - 12.0f;
+    const float updNoteW = width - kPad * 2.0f - updKeyW - cascade::gui::px(12.0f);
 
     std::vector<int> updRows;
     for (int i = 0; i < static_cast<int>(model.modules.size()); ++i) {
@@ -1651,8 +1681,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         const StoreModule& sm = model.modules[static_cast<std::size_t>(updRows[k])];
         const float textH = faceH(uf, uiPx) + 3.0f + tinyH + 3.0f +
                             wrapH(uf, tiny, updNoteW, sm.updateReason.c_str());
-        updRowH[k] = std::max(kKeyH + 6.0f, textH) + 14.0f;
-        updBlockH += updRowH[k] + 6.0f;
+        updRowH[k] = std::max(kKeyH + cascade::gui::px(6.0f), textH) + cascade::gui::px(14.0f);
+        updBlockH += updRowH[k] + cascade::gui::px(6.0f);
     }
     const float bannerH = kPad + bannerHeadH + (updRows.empty() ? 0.0f : (8.0f + updBlockH)) +
                           kPad;
@@ -1665,7 +1695,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         const ImVec2 tl(origin.x, origin.y + addAllTotal);
         const ImVec2 br(tl.x + width, tl.y + bannerH);
         addDeckWell(dl, tl, br);
-        const float lampR = 6.0f;
+        const float lampR = cascade::gui::px(6.0f);
         const ImVec2 lampC(tl.x + kPad + lampR, tl.y + kPad + lampR + 2.0f);
         drawBenchLamp(dl, lampC, lampR, bannerLamp, bannerLit, nullptr);
         // THE WORD IS DRAWN WHATEVER THE LAMP DOES. A state carried by colour
@@ -1736,7 +1766,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float wellInner = wellW - kPad * 2.0f;
 
     const ImGuiStyle& style = ImGui::GetStyle();
-    const float fieldH = uiPx + style.FramePadding.y * 2.0f + 6.0f;
+    const float fieldH = uiPx + style.FramePadding.y * 2.0f + cascade::gui::px(6.0f);
     const char* searchLegend = "Searches name, maker and description.";
     const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + tinyH + 4.0f +
                          countLineHeight() + kPad;
@@ -1756,15 +1786,16 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // of the row. At 14 px the longest of these six needs about 82 px of
     // column before its count, so 74 was already the wrong side of the line
     // and said so nowhere.
-    const float showRockerMinW = 16.0f + 7.0f +
+    const float showRockerMinW = cascade::gui::px(16.0f) + cascade::gui::px(7.0f) +
                                  std::max({textW(uf, tiny, "NOT DECLARED"),
                                            textW(uf, tiny, "OTHER KINDS"),
                                            textW(uf, tiny, "NOT FITTED"),
                                            textW(uf, tiny, "CANNOT FIT"),
                                            textW(uf, tiny, "DECODERS"),
                                            textW(uf, tiny, "FITTED")}) +
-                                 12.0f + 6.0f + textW(rf, tiny, "000");
-    const float showColW = (wellInner - 12.0f) * 0.5f;
+                                 cascade::gui::px(12.0f) + cascade::gui::px(6.0f) +
+                                 textW(rf, tiny, "000");
+    const float showColW = (wellInner - cascade::gui::px(12.0f)) * 0.5f;
     const bool showTwoCols = showColW >= showRockerMinW;
     const float showRows = showTwoCols ? 3.0f : 6.0f;
     const float deckBH = kPad + legH + 8.0f + kRockerH * showRows + 8.0f +
@@ -1772,7 +1803,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
     const std::string sourceLine =
         model.sourceUrl.empty() ? std::string("no catalogue source set") : model.sourceUrl;
-    const float srcTextW = wellInner - kCheckW - 8.0f;
+    const float srcTextW = wellInner - kCheckW - cascade::gui::px(8.0f);
     const float srcLineH = std::max(kKeyH, wrapH(uf, tiny, srcTextW, sourceLine.c_str()));
     float deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
                    srcLineH + kPad;
@@ -2086,17 +2117,20 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             // to row.
             const float kTagW = moduleKindTagWidth();
             const float kActW = std::max(
-                {150.0f, textW(uf, tiny, "FIT") + 28.0f, textW(uf, tiny, "UPDATE") + 28.0f,
-                 textW(uf, tiny, "FITTED") + 28.0f,
-                 textW(uf, tiny, "NOT INSTALLED") + 18.0f,
-                 textW(uf, tiny, "CANNOT FIT") + 18.0f,
-                 textW(uf, tiny, "INSTALLED") + 18.0f, textW(uf, tiny, "REFUSED") + 18.0f});
-            constexpr float kCardPad = 14.0f;
+                {cascade::gui::px(150.0f), textW(uf, tiny, "FIT") + cascade::gui::px(28.0f),
+                 textW(uf, tiny, "UPDATE") + cascade::gui::px(28.0f),
+                 textW(uf, tiny, "FITTED") + cascade::gui::px(28.0f),
+                 textW(uf, tiny, "NOT INSTALLED") + cascade::gui::px(18.0f),
+                 textW(uf, tiny, "CANNOT FIT") + cascade::gui::px(18.0f),
+                 textW(uf, tiny, "INSTALLED") + cascade::gui::px(18.0f),
+                 textW(uf, tiny, "REFUSED") + cascade::gui::px(18.0f)});
+            const float kCardPad = cascade::gui::px(14.0f);
             for (int idx : visible) {
                 const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
                 const ModulePlate& p = sm.plate;
                 const bool isSel = idx == deck.selected;
-                const float midW = std::max(120.0f, cw - kTagW - kActW - kCardPad * 3.0f);
+                const float midW =
+                    std::max(cascade::gui::px(120.0f), cw - kTagW - kActW - kCardPad * 3.0f);
                 const std::string reach = moduleReachSummary(p);
                 // THE SUMMARY ON THE ROW, THE DESCRIPTION ON THE PLATE. See
                 // ModulePlate::summary: the live catalogue's descriptions run
@@ -2192,9 +2226,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
                 // --- the kind tag ------------------------------------------
                 {
+                    const float tagPx = cascade::gui::px(fonts::kTinySize);
                     const ImVec2 tTL(cTL.x + kCardPad, cTL.y + kCardPad);
                     const ImVec2 tBR(tTL.x + kTagW,
-                                     tTL.y + faceH(uf, fonts::kTinySize) + 6.0f);
+                                     tTL.y + faceH(uf, tagPx) + cascade::gui::px(6.0f));
                     cdl->AddRectFilled(tTL, tBR, theme::kBrassBright, 1.0f);
                     addBenchBevel(cdl, tTL, tBR, 1.0f, true);
                     const char* tag = moduleKindTag(p);
@@ -2203,10 +2238,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // window: one chip drawn two sizes in two windows is exactly
                     // the inconsistency that function was written to end. It is
                     // a category label on metal, not a sentence.
-                    cdl->AddText(uf, fonts::kTinySize,
+                    cdl->AddText(uf, tagPx,
                                  ImVec2((tTL.x + tBR.x) * 0.5f -
-                                            textW(uf, fonts::kTinySize, tag) * 0.5f,
-                                        tTL.y + 3.0f),
+                                            textW(uf, tagPx, tag) * 0.5f,
+                                        tTL.y + cascade::gui::px(3.0f)),
                                  theme::kEnamel, tag);
                 }
 

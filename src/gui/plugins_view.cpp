@@ -16,6 +16,7 @@
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -270,7 +271,10 @@ ImFont* faceForValue(const char* s) {
 // panel, a brass lip around it and the bevel lit from below, which is what
 // makes it read as a hole rather than as a dark rectangle.
 void addDeckWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(8.0f) ||
+        br.y - tl.y < cascade::gui::px(8.0f)) {
+        return;
+    }
     const float r = theme::kPanelRounding;
     dl->AddRectFilled(tl, br, theme::kEnamelDark, r);
     // AddRectFilledMultiColor cannot round its corners, so the shape is laid
@@ -291,7 +295,10 @@ void addDeckWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 // the fault this window exists to remove.
 bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
                  bool enabled, const char* id) {
-    if (dl == nullptr || br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return false; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(8.0f) ||
+        br.y - tl.y < cascade::gui::px(8.0f)) {
+        return false;
+    }
     ImGui::PushID(id);
     ImGui::SetCursorScreenPos(tl);
     ImGui::BeginDisabled(!enabled);
@@ -311,8 +318,8 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
         if (!held) {
             // Proud metal casts a shadow; a pressed key does not. That one
             // difference is the state indication before any colour is used.
-            dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f),
-                              ImVec2(br.x + 1.0f, br.y + 2.0f),
+            dl->AddRectFilled(ImVec2(tl.x + cascade::gui::px(1.0f), tl.y + cascade::gui::px(2.0f)),
+                              ImVec2(br.x + cascade::gui::px(1.0f), br.y + cascade::gui::px(2.0f)),
                               theme::withAlpha(theme::kVoid, 0.45f), r);
         }
         const ImU32 top = held ? theme::kBrassMid : (hovered ? theme::kIvory : theme::kCream);
@@ -325,7 +332,8 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
         addBenchBevel(dl, tl, br, r, !held);
     }
     if (focused) {
-        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+        dl->AddRect(ImVec2(tl.x - cascade::gui::px(2.0f), tl.y - cascade::gui::px(2.0f)),
+                    ImVec2(br.x + cascade::gui::px(2.0f), br.y + cascade::gui::px(2.0f)),
                     theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
     }
 
@@ -339,11 +347,12 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     // words are the last ones that should be hard to read. kInkMuted is about
     // 6:1 there and stays a clear step below a live key's cream.
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::px(cascade::gui::fonts::kTinySize);
     const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     dl->AddText(f, px,
                 ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
-                       (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f + (held ? 1.0f : 0.0f)),
+                       (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f +
+                           (held ? cascade::gui::px(1.0f) : 0.0f)),
                 ink, label);
     return pressed;
 }
@@ -353,7 +362,7 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
 // legible before any colour is read.
 bool drawFilterKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* label,
                    bool on, ImU32 lamp, const char* id) {
-    if (dl == nullptr || br.x - tl.x < 8.0f) { return false; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(8.0f)) { return false; }
     ImGui::PushID(id);
     ImGui::SetCursorScreenPos(tl);
     const bool pressed = ImGui::InvisibleButton("##filter", ImVec2(br.x - tl.x, br.y - tl.y));
@@ -375,15 +384,18 @@ bool drawFilterKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const cha
     }
 
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
-    const float lampR = 3.5f;
-    const float lx = tl.x + 9.0f;
+    const float px = cascade::gui::px(cascade::gui::fonts::kTinySize);
+    const float lampR = cascade::gui::px(3.5f);
+    const float lx = tl.x + cascade::gui::px(9.0f);
     drawBenchLamp(dl, ImVec2(lx, (tl.y + br.y) * 0.5f), lampR, lamp, on, nullptr);
     // CLIPPED TO THE KEY. The user can make this window narrow enough that a
     // word does not fit its key, and a legend running out across the panel is
     // worse than one that is cut - the lamp beside it still says the state.
-    dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y), ImVec2(br.x - 2.0f, br.y), true);
-    dl->AddText(f, px, ImVec2(lx + lampR + 6.0f, (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f),
+    dl->PushClipRect(ImVec2(tl.x + cascade::gui::px(2.0f), tl.y),
+                     ImVec2(br.x - cascade::gui::px(2.0f), br.y), true);
+    dl->AddText(f, px,
+                ImVec2(lx + lampR + cascade::gui::px(6.0f),
+                       (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f),
                 on ? theme::kEnamel : theme::kInkMuted, label);
     dl->PopClipRect();
     return pressed;
@@ -391,21 +403,22 @@ bool drawFilterKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const cha
 
 float noteHeight(float width, const char* text) {
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
-    const float wrap = width - 12.0f;
-    if (wrap < 20.0f) { return faceH(f, px) + 8.0f; }
-    return f->CalcTextSizeA(px, FLT_MAX, wrap, text).y + 8.0f;
+    const float px = cascade::gui::px(cascade::gui::fonts::kTinySize);
+    const float wrap = width - cascade::gui::px(12.0f);
+    if (wrap < cascade::gui::px(20.0f)) { return faceH(f, px) + cascade::gui::px(8.0f); }
+    return f->CalcTextSizeA(px, FLT_MAX, wrap, text).y + cascade::gui::px(8.0f);
 }
 
 void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
               const char* text) {
-    if (dl == nullptr || width < 30.0f) { return; }
+    if (dl == nullptr || width < cascade::gui::px(30.0f)) { return; }
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::px(cascade::gui::fonts::kTinySize);
     const float h = noteHeight(width, text);
     dl->AddRectFilled(tl, ImVec2(tl.x + width, tl.y + h), theme::withAlpha(accent, 0.10f));
-    dl->AddRectFilled(tl, ImVec2(tl.x + 2.0f, tl.y + h), accent);
-    dl->AddText(f, px, ImVec2(tl.x + 9.0f, tl.y + 4.0f), accent, text, nullptr, width - 12.0f);
+    dl->AddRectFilled(tl, ImVec2(tl.x + cascade::gui::px(2.0f), tl.y + h), accent);
+    dl->AddText(f, px, ImVec2(tl.x + cascade::gui::px(9.0f), tl.y + cascade::gui::px(4.0f)),
+                accent, text, nullptr, width - cascade::gui::px(12.0f));
 }
 
 // The lamp colour for a state.
@@ -450,25 +463,31 @@ bool stateLampLit(FittedState s) { return s == FittedState::Fed || s == FittedSt
 // row-height floor that has to allow for the first of them - and the three had
 // to agree or the floor stopped being a floor.
 float oneLineKeyH() {
-    return std::max(24.0f, faceH(cascade::gui::fonts::ui(),
-                                 cascade::gui::fonts::kTinySize) + 10.0f);
+    return std::max(cascade::gui::px(24.0f),
+                    faceH(cascade::gui::fonts::ui(),
+                         cascade::gui::px(cascade::gui::fonts::kTinySize)) +
+                        cascade::gui::px(10.0f));
 }
 
 // One row's height, measured from the text that will actually be in it. A row
 // sized from a different string to the one drawn is a row that clips itself.
 float rowHeight(const std::string& body, float bodyWidth) {
     ImFont* uf = cascade::gui::fonts::ui();
-    const float titleH = faceH(uf, cascade::gui::fonts::kUiSize);
-    const float tinyH = faceH(uf, cascade::gui::fonts::kTinySize);
-    const float wrap = std::max(40.0f, bodyWidth);
+    const float titleH = faceH(uf, cascade::gui::px(cascade::gui::fonts::kUiSize));
+    const float tinyH = faceH(uf, cascade::gui::px(cascade::gui::fonts::kTinySize));
+    const float wrap = std::max(cascade::gui::px(40.0f), bodyWidth);
     const float bodyH =
-        uf->CalcTextSizeA(cascade::gui::fonts::kTinySize, FLT_MAX, wrap, body.c_str()).y;
+        uf->CalcTextSizeA(cascade::gui::px(cascade::gui::fonts::kTinySize), FLT_MAX, wrap,
+                          body.c_str())
+            .y;
     // The floor is what the right-hand column needs: the state word on the
     // title line and the START/STOP key beneath it - and the key's own height
     // is asked for rather than repeated, so the row cannot come to be a
     // pixel short of the control it was sized around.
-    const float needed = 9.0f + titleH + 4.0f + bodyH + 3.0f + tinyH + 9.0f;
-    return std::max(needed, 9.0f + titleH + 6.0f + oneLineKeyH() + 9.0f);
+    const float needed = cascade::gui::px(9.0f) + titleH + cascade::gui::px(4.0f) + bodyH +
+                         cascade::gui::px(3.0f) + tinyH + cascade::gui::px(9.0f);
+    return std::max(needed, cascade::gui::px(9.0f) + titleH + cascade::gui::px(6.0f) +
+                                oneLineKeyH() + cascade::gui::px(9.0f));
 }
 
 }  // namespace
@@ -501,24 +520,25 @@ namespace {
 float drawOperatingWell(ImDrawList* dl, float x, float y, float width,
                         const FittedModule& m, bool receiverRunning) {
     ImFont* uf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
+    const float tiny = cascade::gui::px(cascade::gui::fonts::kTinySize);
     // MEASURED IN THE FACE IT IS DRAWN IN. addBenchGroupCaption letters in the
     // LEGEND face; advancing by the ui face's height would leave the caption
     // and what follows it a pixel out at every size.
     const float capH = faceH(cascade::gui::fonts::legend(), tiny);
-    const float pad = 12.0f;
+    const float pad = cascade::gui::px(12.0f);
     const float inner = width - pad * 2.0f;
-    if (inner < 60.0f) { return y; }
+    if (inner < cascade::gui::px(60.0f)) { return y; }
 
     const FittedState st = fittedState(m, receiverRunning);
     const std::string sentence = fittedStateSentence(m, receiverRunning);
     const std::string path = m.path.empty() ? std::string("not recorded") : m.path;
     const float pathH = uf->CalcTextSizeA(tiny, FLT_MAX, inner, path.c_str()).y;
 
-    const float wellH = pad + capH + 6.0f + noteHeight(inner, sentence.c_str()) + 12.0f +
-                        capH + 4.0f + pathH + pad;
+    const float wellH = pad + capH + cascade::gui::px(6.0f) + noteHeight(inner, sentence.c_str()) +
+                        cascade::gui::px(12.0f) + capH + cascade::gui::px(4.0f) + pathH + pad;
     addDeckWell(dl, ImVec2(x, y), ImVec2(x + width, y + wellH));
-    dl->PushClipRect(ImVec2(x + 2.0f, y + 2.0f), ImVec2(x + width - 2.0f, y + wellH - 2.0f),
+    dl->PushClipRect(ImVec2(x + cascade::gui::px(2.0f), y + cascade::gui::px(2.0f)),
+                     ImVec2(x + width - cascade::gui::px(2.0f), y + wellH - cascade::gui::px(2.0f)),
                      true);
 
     float ty = y + pad;
@@ -528,12 +548,12 @@ float drawOperatingWell(ImDrawList* dl, float x, float y, float width,
     char caption[64];
     std::snprintf(caption, sizeof caption, "WHAT IT IS DOING - %s", fittedStateWord(st));
     addBenchGroupCaption(dl, ImVec2(x + pad, ty), inner, caption);
-    ty += capH + 6.0f;
+    ty += capH + cascade::gui::px(6.0f);
     drawNote(dl, ImVec2(x + pad, ty), inner, stateInk(st), sentence.c_str());
-    ty += noteHeight(inner, sentence.c_str()) + 12.0f;
+    ty += noteHeight(inner, sentence.c_str()) + cascade::gui::px(12.0f);
 
     addBenchGroupCaption(dl, ImVec2(x + pad, ty), inner, "LOADED FROM");
-    ty += capH + 4.0f;
+    ty += capH + cascade::gui::px(4.0f);
     dl->AddText(uf, tiny, ImVec2(x + pad, ty),
                 m.path.empty() ? theme::kInkFaint : theme::kInkMuted, path.c_str(), nullptr,
                 inner);
@@ -552,7 +572,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    if (avail.x < 240.0f || avail.y < 160.0f) {
+    if (avail.x < cascade::gui::px(240.0f) || avail.y < cascade::gui::px(160.0f)) {
         // Too small to letter honestly. Say why rather than drawing a clipped
         // panel that looks broken.
         ImGui::TextDisabled("Too narrow to draw. Widen the window.");
@@ -561,9 +581,9 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     }
 
     ImFont* uf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
-    const float uiPx = cascade::gui::fonts::kUiSize;
-    const float readPx = cascade::gui::fonts::kReadingSize;
+    const float tiny = cascade::gui::px(cascade::gui::fonts::kTinySize);
+    const float uiPx = cascade::gui::px(cascade::gui::fonts::kUiSize);
+    const float readPx = cascade::gui::px(cascade::gui::fonts::kReadingSize);
     const float tinyH = faceH(uf, tiny);
     // The engraved captions letter in the LEGEND face, so their line advance
     // is measured in that face and not in the ui one.
@@ -580,11 +600,13 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // furniture, and 40 was that sum computed once for a 14 px legend. Too
     // short and the rail is drawn outside the plate it belongs to.
     const float titlePlateH =
-        std::max(40.0f, faceH(cascade::gui::fonts::legend(),
-                              cascade::gui::fonts::kLegendSize) + 24.0f);
+        std::max(cascade::gui::px(40.0f),
+                 faceH(cascade::gui::fonts::legend(),
+                      cascade::gui::px(cascade::gui::fonts::kLegendSize)) +
+                     cascade::gui::px(24.0f));
     addBenchPlate(dl, origin, ImVec2(origin.x + avail.x, origin.y + titlePlateH),
                   "FITTED MODULES");
-    float y = origin.y + titlePlateH + 10.0f;
+    float y = origin.y + titlePlateH + cascade::gui::px(10.0f);
 
     // ======================= THE STRIP ======================================
     //
@@ -595,13 +617,15 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             ? "The receiver is running, so a module with a matched decoder is being fed."
             : "The receiver is stopped, so NOTHING is being fed to any module however it "
               "is set. That is why no module below reads FED.";
-    const float stripInner = avail.x - 24.0f;
+    const float stripInner = avail.x - cascade::gui::px(24.0f);
     // MEASURED FROM THE WORDS ON IT. drawDeckKey CENTRES its label and does
     // not clip, so a key too narrow for its word does not shorten it - the
     // word hangs out over both machined edges and, here, over the engraved
     // caption to its left.
-    const float rescanW = std::max(96.0f, textW(uf, tiny, "SCAN AGAIN") + 22.0f);
-    const float resetW = std::max(96.0f, textW(uf, tiny, "RESET WINDOW SIZES") + 22.0f);
+    const float rescanW =
+        std::max(cascade::gui::px(96.0f), textW(uf, tiny, "SCAN AGAIN") + cascade::gui::px(22.0f));
+    const float resetW = std::max(cascade::gui::px(96.0f),
+                                  textW(uf, tiny, "RESET WINDOW SIZES") + cascade::gui::px(22.0f));
     const float stripNoteW = stripInner;
     constexpr int kGroups = 5;
     const float groupW = stripInner / static_cast<float>(kGroups);
@@ -631,13 +655,14 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // THE TALLEST. The user can narrow this window until "NOT DECODING" needs
     // two lines, and a strip measured from one line would then print the
     // second through the sentence beneath it.
-    const float wordWrap = std::max(30.0f, groupW - 24.0f);
+    const float wordWrap = std::max(cascade::gui::px(30.0f), groupW - cascade::gui::px(24.0f));
     float wordH = 0.0f;
     for (const Group& g : groups) {
         wordH = std::max(wordH, uf->CalcTextSizeA(tiny, FLT_MAX, wordWrap, g.word).y);
     }
-    const float stripH = 12.0f + capH + 8.0f + readH + 2.0f + wordH + 10.0f +
-                         noteHeight(stripNoteW, rxNote) + 12.0f;
+    const float stripH = cascade::gui::px(12.0f) + capH + cascade::gui::px(8.0f) + readH +
+                         cascade::gui::px(2.0f) + wordH + cascade::gui::px(10.0f) +
+                         noteHeight(stripNoteW, rxNote) + cascade::gui::px(12.0f);
     {
         const ImVec2 tl(origin.x, y);
         const ImVec2 br(origin.x + avail.x, y + stripH);
@@ -735,7 +760,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // ======================= THE FILTER KEYS ================================
     {
         const float keyH = oneLineKeyH();
-        const float gap = 8.0f;
+        const float gap = cascade::gui::px(8.0f);
         constexpr int kFilters = 5;
         // THE CAP IS THE WIDEST WORD, NOT 150. drawFilterKey clips its label
         // to the key on purpose - the user can narrow this window past any
@@ -746,14 +771,14 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         // arithmetic that told anyone if it stopped being. The lamp and its
         // shoulder are inside the measurement because the word starts after
         // them.
-        const float lampRun = 9.0f + 3.5f + 6.0f;
+        const float lampRun = cascade::gui::px(9.0f) + cascade::gui::px(3.5f) + cascade::gui::px(6.0f);
         const float widestLabel = std::max({textW(uf, tiny, "TAKES NO SIGNAL"),
                                             textW(uf, tiny, "NOT DECODING"),
                                             textW(uf, tiny, "STOPPED"),
                                             textW(uf, tiny, "REFUSED"),
                                             textW(uf, tiny, "FED")});
         const float keyW =
-            std::min(std::max(150.0f, lampRun + widestLabel + 10.0f),
+            std::min(std::max(cascade::gui::px(150.0f), lampRun + widestLabel + cascade::gui::px(10.0f)),
                      (avail.x - gap * static_cast<float>(kFilters - 1)) /
                          static_cast<float>(kFilters));
         struct Filter {
@@ -817,12 +842,16 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // NARROW WINDOWS STACK. A 430 px plate beside a list needs about 800 px to
     // be two readable columns; below that the plate goes under the list rather
     // than both being squeezed into unreadable ones.
-    const bool narrow = avail.x < 760.0f;
-    const float gap = 10.0f;
-    const float plateW = narrow ? avail.x : std::clamp(avail.x * 0.42f, 330.0f, 460.0f);
+    const bool narrow = avail.x < cascade::gui::px(760.0f);
+    const float gap = cascade::gui::px(10.0f);
+    const float plateW = narrow ? avail.x
+                                : std::clamp(avail.x * 0.42f, cascade::gui::px(330.0f),
+                                            cascade::gui::px(460.0f));
     const float listW = narrow ? avail.x : (avail.x - plateW - gap);
-    const float listH = narrow ? std::max(120.0f, remainingH * 0.45f) : remainingH;
-    const float plateColH = narrow ? std::max(120.0f, remainingH - listH - gap) : remainingH;
+    const float listH =
+        narrow ? std::max(cascade::gui::px(120.0f), remainingH * 0.45f) : remainingH;
+    const float plateColH =
+        narrow ? std::max(cascade::gui::px(120.0f), remainingH - listH - gap) : remainingH;
 
     // ---- the list ----------------------------------------------------------
     ImGui::SetCursorScreenPos(ImVec2(origin.x, y));
@@ -860,13 +889,14 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // the shared plate exists to keep identical. Both were wide enough
             // for their words and neither was measured from them;
             // moduleKindTagWidth() is now the only answer either window has.
-            const float tagW = moduleKindTagWidth() + 16.0f;
+            const float tagW = moduleKindTagWidth() + cascade::gui::px(16.0f);
             // START and STOP, measured across both, so the key does not change
             // width when it is pressed and drag the row's title with it.
-            const float keyW = std::max({78.0f, textW(uf, tiny, "START") + 26.0f,
-                                         textW(uf, tiny, "STOP") + 26.0f});
-            const float bodyX = tagW + 12.0f;
-            const float bodyW = innerW - bodyX - keyW - 20.0f;
+            const float keyW = std::max({cascade::gui::px(78.0f),
+                                         textW(uf, tiny, "START") + cascade::gui::px(26.0f),
+                                         textW(uf, tiny, "STOP") + cascade::gui::px(26.0f)});
+            const float bodyX = tagW + cascade::gui::px(12.0f);
+            const float bodyW = innerW - bodyX - keyW - cascade::gui::px(20.0f);
             float ry = lo.y;
             for (std::size_t vi = 0; vi < visible.size(); ++vi) {
                 const FittedModule& m = model.modules[static_cast<std::size_t>(visible[vi])];
@@ -929,14 +959,15 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 // and in the store; the column around it is that plus its
                 // margins, which is where the two layouts are allowed to
                 // differ and the chip itself is not.
-                const ImVec2 ttl(tl.x + 8.0f, tl.y + 9.0f);
-                const ImVec2 tbr(ttl.x + moduleKindTagWidth(), ttl.y + tinyH + 6.0f);
+                const ImVec2 ttl(tl.x + cascade::gui::px(8.0f), tl.y + cascade::gui::px(9.0f));
+                const ImVec2 tbr(ttl.x + moduleKindTagWidth(),
+                                 ttl.y + tinyH + cascade::gui::px(6.0f));
                 ldl->AddRectFilled(ttl, tbr, theme::kBrassBright, theme::kKeyRounding);
                 addBenchBevel(ldl, ttl, tbr, theme::kKeyRounding, true);
                 const char* tag = moduleKindTag(rowPlate);
                 ldl->AddText(uf, tiny,
                              ImVec2((ttl.x + tbr.x) * 0.5f - textW(uf, tiny, tag) * 0.5f,
-                                    ttl.y + 3.0f),
+                                    ttl.y + cascade::gui::px(3.0f)),
                              theme::kEnamel, tag);
 
                 // The lamp and the state word sit at the right of the title
@@ -946,11 +977,12 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 // would be unreadable.
                 const char* word = fittedStateWord(st);
                 const float wordW = textW(uf, tiny, word);
-                const float lampX = br.x - keyW - 18.0f;
+                const float lampX = br.x - keyW - cascade::gui::px(18.0f);
                 const float titleRight =
-                    std::max(tl.x + bodyX + 40.0f, lampX - 10.0f - wordW - 10.0f);
+                    std::max(tl.x + bodyX + cascade::gui::px(40.0f),
+                             lampX - cascade::gui::px(10.0f) - wordW - cascade::gui::px(10.0f));
 
-                float ty = tl.y + 9.0f;
+                float ty = tl.y + cascade::gui::px(9.0f);
                 const char* shown = m.loaded ? m.name.c_str() : m.file.c_str();
                 ldl->PushClipRect(ImVec2(tl.x + bodyX, tl.y), ImVec2(titleRight, br.y), true);
                 ldl->AddText(uf, uiPx, ImVec2(tl.x + bodyX, ty),
@@ -962,36 +994,41 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                     // reserved for a measurement.
                     ldl->AddText(faceForValue(m.version.c_str()),
                                  figureLike(m.version.c_str()) ? readPx : tiny,
-                                 ImVec2(tl.x + bodyX + nameW + 10.0f, ty + 2.0f),
+                                 ImVec2(tl.x + bodyX + nameW + cascade::gui::px(10.0f),
+                                        ty + cascade::gui::px(2.0f)),
                                  theme::kInkMuted, m.version.c_str());
                 }
                 ldl->PopClipRect();
-                ty += faceH(uf, uiPx) + 4.0f;
+                ty += faceH(uf, uiPx) + cascade::gui::px(4.0f);
 
-                const float bodyH =
-                    uf->CalcTextSizeA(tiny, FLT_MAX, std::max(40.0f, bodyW), body.c_str()).y;
+                const float bodyH = uf->CalcTextSizeA(tiny, FLT_MAX,
+                                                      std::max(cascade::gui::px(40.0f), bodyW),
+                                                      body.c_str())
+                                        .y;
                 ldl->AddText(uf, tiny, ImVec2(tl.x + bodyX, ty),
                              st == FittedState::Refused ? theme::kAlarmHot
                                                         : moduleReachColour(rowPlate),
-                             body.c_str(), nullptr, std::max(40.0f, bodyW));
-                ty += bodyH + 3.0f;
+                             body.c_str(), nullptr, std::max(cascade::gui::px(40.0f), bodyW));
+                ty += bodyH + cascade::gui::px(3.0f);
                 // THE FILE NAME IS THE MODULE'S IDENTITY - every per-module
                 // decision in this product keys on it, and it is what a user
                 // reads back when they go looking in the folder. Muted rather
                 // than faint for that: it is a string to be transcribed, and a
                 // run of punctuation at 4:1 is where legibility fails first.
                 ldl->AddText(uf, tiny, ImVec2(tl.x + bodyX, ty), theme::kInkMuted,
-                             m.file.c_str(), nullptr, std::max(40.0f, bodyW));
+                             m.file.c_str(), nullptr, std::max(cascade::gui::px(40.0f), bodyW));
 
                 // The lamp and the state word, right of the name. Both are
                 // drawn whatever the colour says: a lamp whose meaning is
                 // carried by colour alone cannot be read in a greyscale
                 // screenshot and is unreadable to about one man in twelve.
-                drawBenchLamp(ldl, ImVec2(lampX, tl.y + 9.0f + faceH(uf, uiPx) * 0.5f), 4.5f,
-                              stateLamp(st), stateLampLit(st), nullptr);
+                drawBenchLamp(ldl,
+                             ImVec2(lampX, tl.y + cascade::gui::px(9.0f) + faceH(uf, uiPx) * 0.5f),
+                             cascade::gui::px(4.5f), stateLamp(st), stateLampLit(st), nullptr);
                 ldl->AddText(uf, tiny,
-                             ImVec2(lampX - 10.0f - wordW,
-                                    tl.y + 9.0f + faceH(uf, uiPx) * 0.5f - tinyH * 0.5f),
+                             ImVec2(lampX - cascade::gui::px(10.0f) - wordW,
+                                    tl.y + cascade::gui::px(9.0f) + faceH(uf, uiPx) * 0.5f -
+                                        tinyH * 0.5f),
                              stateInk(st), word);
 
                 // START / STOP on the row, because it is the action a user
@@ -1000,7 +1037,9 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 // "RUNNING" leaves the user guessing whether pressing it stops
                 // the module or is simply a badge.
                 if (m.loaded) {
-                    const ImVec2 ktl(br.x - keyW - 8.0f, tl.y + 9.0f + faceH(uf, uiPx) + 6.0f);
+                    const ImVec2 ktl(br.x - keyW - cascade::gui::px(8.0f),
+                                     tl.y + cascade::gui::px(9.0f) + faceH(uf, uiPx) +
+                                         cascade::gui::px(6.0f));
                     if (drawDeckKey(ldl, ktl, ImVec2(ktl.x + keyW, ktl.y + oneLineKeyH()),
                                     m.stopped ? "START" : "STOP", true, "rowstop")) {
                         act.kind = m.stopped ? FittedModulesAction::Kind::Start
@@ -1011,7 +1050,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 }
 
                 ImGui::PopID();
-                ry += h + 6.0f;
+                ry += h + cascade::gui::px(6.0f);
             }
             ImGui::SetCursorScreenPos(ImVec2(lo.x, ry));
             ImGui::Dummy(ImVec2(innerW, 0.0f));
@@ -1060,8 +1099,8 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // Taller than a row key because these are the consequential ones -
             // and measured, because "consequential" is no protection against a
             // face that outgrows the box.
-            const float keyH = std::max(32.0f, tinyH + 14.0f);
-            const float half = (innerW - 8.0f) * 0.5f;
+            const float keyH = std::max(cascade::gui::px(32.0f), tinyH + cascade::gui::px(14.0f));
+            const float half = (innerW - cascade::gui::px(8.0f)) * 0.5f;
             if (m.loaded) {
                 if (drawDeckKey(pdl, ImVec2(po.x, py), ImVec2(po.x + half, py + keyH),
                                 m.stopped ? "START MODULE" : "STOP MODULE", true,
@@ -1081,7 +1120,8 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // downloaded and may not be able to get back, so a single mis-click
             // must not do it.
             const bool armed = (deck.confirmRemove == m.file);
-            if (drawDeckKey(pdl, ImVec2(po.x + half + 8.0f, py), ImVec2(po.x + innerW, py + keyH),
+            if (drawDeckKey(pdl, ImVec2(po.x + half + cascade::gui::px(8.0f), py),
+                            ImVec2(po.x + innerW, py + keyH),
                             armed ? "CONFIRM DELETE" : "REMOVE MODULE", true,
                             "plateremove")) {
                 if (armed) {

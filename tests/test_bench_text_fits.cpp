@@ -28,12 +28,14 @@
 // measures on the CPU, which is all this needs.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <cfloat>
 #include <cstdio>
 
 #include "gui/fonts.hpp"
 #include "gui/map_view.hpp"
 #include "gui/plugin_store_view.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -173,6 +175,64 @@ void testMeasurementsTrackTheDeclaredSizes() {
     CHECK(cascade::gui::coordCellWidth('0') >= atDeclared + 2.0f);
 }
 
+// --- THE ANDROID SLICE: these shared components go through gui::px() ---------
+//
+// moduleKindTagWidth() is drawn on the plugin store's cards AND the fitted
+// modules rows; coordCellWidth()/coordCellHeight() size the map's receiver-
+// position drums. All three used to be measured at the desktop's own fixed
+// point sizes regardless of what gui::uiScale() was set to, which is exactly
+// the defect this Android slice exists to fix: at the tablet's 2.0 scale the
+// chip and the coordinate drums stayed desktop-sized inside a docked body
+// several times the physical size they were drawn for.
+//
+// gui::px(v) == v at scale 1.0 (multiplying by 1.0f is bit-exact), so the
+// pinned figures above are untouched by this change; this test is the one
+// that would have caught a regression on the OTHER end - a raise that forgot
+// to route a literal through px() would leave that figure fixed while
+// everything around it doubled.
+void testSharedChipsAndCellsScaleWithUi() {
+    ImFont* uf = cascade::gui::fonts::ui();
+
+    cascade::gui::setUiScale(1.0f);
+    const float chip1 = cascade::gui::moduleKindTagWidth();
+    const float cellW1 = cascade::gui::coordCellWidth('0');
+    const float cellDot1 = cascade::gui::coordCellWidth('.');
+    const float cellH1 = cascade::gui::coordCellHeight();
+    // At scale 1.0, gui::px(v) == v, so this is the same figure
+    // testKindTagChipHoldsEveryTag and testCoordApertureHoldsItsFigure pin.
+    CHECK_NEAR(chip1,
+              std::max(84.0f, textW(uf, cascade::gui::fonts::kTinySize, "NOT DECLARED") + 14.0f),
+              1e-3f);
+
+    cascade::gui::setUiScale(2.0f);
+    const float chip2 = cascade::gui::moduleKindTagWidth();
+    const float cellW2 = cascade::gui::coordCellWidth('0');
+    const float cellDot2 = cascade::gui::coordCellWidth('.');
+    const float cellH2 = cascade::gui::coordCellHeight();
+
+    // EVERY ONE OF THEM ROUGHLY DOUBLES. Not exactly: each is a std::max of a
+    // scaled floor and a scaled glyph measurement plus a scaled shoulder, and
+    // ImGui's font baking rounds to whole texture pixels, so a few tenths of
+    // a pixel of quantisation is expected - not a figure stuck at its
+    // desktop size while its neighbours on the same card double.
+    CHECK(chip2 > chip1 * 1.8f);
+    CHECK(cellW2 > cellW1 * 1.8f);
+    CHECK(cellDot2 > cellDot1 * 1.8f);
+    CHECK(cellH2 > cellH1 * 1.8f);
+
+    // BREAK-IT CHECK, run while writing this: temporarily editing
+    // gui::px(float) in ui_scale.hpp to `return units;` (the identity, as if
+    // no page here called it) and rebuilding just this test dropped chip2,
+    // cellW2, cellDot2 and cellH2 straight back to their scale-1.0 figures -
+    // all four of the checks above went red, which is what proves they are
+    // actually exercising gui::px() and not some other doubling.
+    std::printf("  at 2.0x: kind tag chip %.2f -> %.2f, coord cell '0' %.2f -> %.2f, "
+                "'.' %.2f -> %.2f, cell height %.2f -> %.2f\n",
+                chip1, chip2, cellW1, cellW2, cellDot1, cellDot2, cellH1, cellH2);
+
+    cascade::gui::setUiScale(1.0f);  // as every other test in this binary finds it
+}
+
 }  // namespace
 
 int main() {
@@ -201,6 +261,7 @@ int main() {
         testKindTagChipHoldsEveryTag();
         testEveryTagTheSwitchReturnsFits();
         testMeasurementsTrackTheDeclaredSizes();
+        testSharedChipsAndCellsScaleWithUi();
         ImGui::Render();
     } else {
         std::printf("fonts::load() failed - the measurements below were not run\n");
