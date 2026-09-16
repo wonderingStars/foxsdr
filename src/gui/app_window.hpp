@@ -43,6 +43,7 @@ struct GLFWwindow;
 #include "gui/page_geometry.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/audio_open.hpp"
+#include "gui/config_writer.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -1221,6 +1222,28 @@ private:
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
 
+    // THE ASYNC SAVE (0.97.2). Field report "hang ntdll.dll @
+    // cascade::core::ConfigStore::save" (0.96.3): both functions above used
+    // to write the file directly, on the GUI thread, inside whichever of
+    // them called them - see gui/config_writer.hpp for the whole argument.
+    // requestConfigSave() is now the ONE place either of them hands bytes to
+    // configWriter_, so pollConfigWriter() has one place to apply the result
+    // to savedCfg_ from. `cfg` is remembered as lastRequestedConfig_
+    // unconditionally: because configWriter_ coalesces bursts to the LAST
+    // content asked for, whichever write is on disk once configWriter_ has
+    // fully drained (poll()/finishOrAbandon() returned with nothing left
+    // in flight or queued) is guaranteed to be this content - so savedCfg_
+    // never needs to be paired with a specific request, only compared
+    // against "drained and ok".
+    void requestConfigSave(const cascade::core::AppConfig& cfg);
+    // Collects a finished configWriter_ write, applies it to savedCfg_ on
+    // success (see requestConfigSave above), and logs a failure exactly as
+    // the old synchronous save() call sites did. Called once a frame; a
+    // failed save is retried automatically because savedCfg_ stays stale,
+    // so the next frame's maybeSaveConfig() sees "still different" and
+    // restarts the debounce window on its own.
+    void pollConfigWriter();
+
     // Opens a radio of `kind` ("soapy" or one of the eight native driver keys)
     // by its args on
     // THIS thread, pushes the requested rate and the default gains, and fills
@@ -1776,6 +1799,17 @@ private:
     cascade::core::AppConfig pendingCfg_;  // debounce comparator
     double lastChangeTimeS_ = -1.0;  // glfwGetTime() of the last observed
                                      // change; < 0 = nothing pending
+
+    // THE WRITE, OFF THIS THREAD. Field report "hang ntdll.dll @
+    // cascade::core::ConfigStore::save" (0.96.3): the debounced save above
+    // put the GUI thread inside the file write itself. See
+    // gui/config_writer.hpp for the whole argument; requestConfigSave() and
+    // pollConfigWriter() are the only callers.
+    cascade::gui::ConfigWriter configWriter_;
+    // The config content behind whatever configWriter_ is currently holding
+    // (in flight or coalesced-and-queued) - see requestConfigSave()'s
+    // comment on the header for why one variable is enough.
+    cascade::core::AppConfig lastRequestedConfig_;
 
     // --- Recorder state (P6) --------------------------------------------------
     // Two independent Recorder instances so IQ and audio takes can run
