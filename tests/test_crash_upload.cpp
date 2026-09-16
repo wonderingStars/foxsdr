@@ -657,6 +657,69 @@ int main() {
         CHECK(at(r.threads, 0).frames.size() == 3);
     }
 
+    // --- THE MODULE THAT FAULTED MUST RESOLVE PAST THE GENERAL CAP ----------
+    //
+    // Found on a real Android crash: dl_iterate_phdr visits every loaded
+    // shared library, and libfoxsdr.so - dlopen'd LAST by the NativeActivity
+    // glue, after every framework and system .so - landed at module #319 of
+    // 320 in a real report pulled off the x86_64 emulator. The general
+    // module-table cap (used for third-party PLUGIN build-id matching, where
+    // "first N by file order" is a fine, arbitrary bound) silently dropped it,
+    // so the uploaded JSON carried buildId:"" for the one module PRIVACY.md's
+    // "which link" promise is about - on every Android crash report ever
+    // filed, not just this one. This reproduces that shape directly (a
+    // report whose crashing module sits well past any plausible fixed cap)
+    // rather than only against a fixture sized to fit inside one.
+    {
+        std::string text = "kind: crash\n"
+                            "reason: access violation (SIGSEGV)\n"
+                            "code: 0x0000000B\n"
+                            "address: libfoxsdr.so+0x544AC4\n"
+                            "signature: 1F7BC2718A39D44B\n"
+                            "thread: 14224\n"
+                            "--- context ---\n"
+                            "version: 0.97.0\n"
+                            "--- stack (thread 14224) ---\n"
+                            "  libfoxsdr.so+0x544AC4\n"
+                            "  libc.so+0x5D9D0\n"
+                            "--- process ---\n"
+                            "uptime-sec: 0\n"
+                            "fault-thread-own: yes\n"
+                            "--- modules ---\n";
+        // 300 filler modules ahead of the one that actually faulted - well
+        // past any cap smaller than the real Android module count this bug
+        // was found against (320).
+        for (int i = 0; i < 300; ++i) {
+            text += "  filler" + std::to_string(i) +
+                    ".so base=0x0000000000000000 size=0x1000 pdb=(none) build=deadbeef" +
+                    std::to_string(i) + "\n";
+        }
+        text += "  libc.so base=0x0000000000000000 size=0x1000 pdb=(none) "
+                "build=fa337969c798946280caa45e2d71a2e7\n";
+        text += "  libfoxsdr.so base=0x0000000000000000 size=0x1000 pdb=(none) "
+                "build=40d5b13e6d24ca3751315efe3f0ad65554935e8b\n";
+        text += "--- log (last 0 of 0 lines) ---\n";
+
+        ParsedReport r;
+        CHECK(parseReportText(text, r));
+        CHECK(r.module == "libfoxsdr.so");
+        // THE ACTUAL PROPERTY: past the cap and still resolved.
+        CHECK(r.buildId == "40d5b13e6d24ca3751315efe3f0ad65554935e8b");
+        CHECK(r.threads.size() == 1);
+        CHECK(at(r.threads, 0).frames.size() == 2);
+        CHECK(at(at(r.threads, 0).frames, 0).module == "libfoxsdr.so");
+        CHECK(at(at(r.threads, 0).frames, 0).buildId ==
+              "40d5b13e6d24ca3751315efe3f0ad65554935e8b");
+        // The second frame's module (libc.so) is comfortably inside the cap
+        // and must still resolve normally - the fix must not have broken the
+        // ordinary path while patching the extraordinary one.
+        CHECK(at(at(r.threads, 0).frames, 1).module == "libc.so");
+        CHECK(at(at(r.threads, 0).frames, 1).buildId == "fa337969c798946280caa45e2d71a2e7");
+        // ...and it reaches the wire payload, not just the parsed struct.
+        const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+        CHECK(j.value("buildId", std::string()) == "40d5b13e6d24ca3751315efe3f0ad65554935e8b");
+    }
+
     // --- A freeze report is the same payload from a different writer --------
     {
         ParsedReport r;

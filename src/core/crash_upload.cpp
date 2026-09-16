@@ -16,6 +16,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
@@ -352,6 +353,66 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
         }
         return std::string();
     };
+
+    // THE MODULE THAT ACTUALLY FAILED MUST NEVER LOSE ITS BUILD ID TO THE
+    // GENERAL CAP ABOVE. kMaxModules bounds the table used for PLUGIN
+    // build-id matching (comparableName() against an unpredictable set of
+    // third-party names, where "first 256 by file order" is a fine, arbitrary
+    // bound), but a real Android crash report loads 300+ shared libraries
+    // (measured: 320 on the x86_64 emulator, an ordinary launch, no plugins) -
+    // and dl_iterate_phdr visits them in LOAD order, which puts the
+    // application's OWN library (dlopen'd last, after every framework and
+    // system .so) past position 256. The general loop above then silently
+    // drops libfoxsdr.so from out.modules, and every frame naming it - the
+    // header's own faulting address included - uploads with buildId:"" for
+    // the one module PRIVACY.md's "which link" promise is about. Caught by
+    // reading a REAL crash payload off the emulator's stub server, not by
+    // inspection: the JSON's top-level "buildId" and every "libfoxsdr.so"
+    // frame entry were empty while the report text on disk plainly carried
+    // "build=<40 hex chars>" for it.
+    //
+    // Fixed with a second, TARGETED pass over the modules section, scoped to
+    // exactly the module names the payload will actually reference (the
+    // header's faulting module, and every frame's module across every
+    // thread) that the general cap missed - never unbounded, because the set
+    // of names worth resolving is bounded by kMaxThreads*kMaxFramesPerThread
+    // regardless of how many modules a process has loaded.
+    {
+        std::set<std::string> needed;
+        for (const ReportThread& t : out.threads) {
+            for (const ReportFrame& f : t.frames) {
+                if (!f.module.empty() && lookup(f.module).empty()) { needed.insert(f.module); }
+            }
+        }
+        if (!addressText.empty()) {
+            std::string m;
+            std::uint64_t off = 0;
+            std::uint64_t rawAddr = 0;
+            if (parseAddressText(addressText, m, off, rawAddr) && !m.empty() &&
+                lookup(m).empty()) {
+                needed.insert(m);
+            }
+        }
+        if (!needed.empty()) {
+            bool inModules = false;
+            for (const std::string& raw : lines) {
+                if (raw.rfind("--- ", 0) == 0) {
+                    inModules = (raw.rfind("--- modules ---", 0) == 0);
+                    continue;
+                }
+                if (!inModules || needed.empty()) { continue; }
+                std::string n, b;
+                parseModuleLine(raw, n, b);
+                if (n.empty()) { continue; }
+                const auto it = needed.find(n);
+                if (it != needed.end()) {
+                    out.modules.emplace_back(n, b);
+                    needed.erase(it);
+                }
+            }
+        }
+    }
+
     for (ReportThread& t : out.threads) {
         for (ReportFrame& f : t.frames) {
             if (!f.module.empty()) { f.buildId = lookup(f.module); }
