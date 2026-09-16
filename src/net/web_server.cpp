@@ -519,6 +519,19 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
 #freqDigits span { padding:0 .04em; border-radius:2px; }
 #freqDigits span.d:hover { background:var(--accent); }
 #freqDigits span.lead { color:var(--read-dim); }
+/* THE THREE FACES (GitHub issue #1), chosen at the desk and carried here in
+   the status payload. The default is the readout this page has always had -
+   the amber "read" ink of the Nixie plate - so a remote whose desk never
+   touched the setting is unchanged. The two others letter the SAME spans
+   larger and higher-contrast, because the request was about reading the
+   number, and CSS has a real blur, so the neon glow is text-shadow rather
+   than the offset copies the desk has to fake. */
+#freqDigits[data-style="neon"] { font-size:2.1rem; color:#d6feff;
+    text-shadow:0 0 4px #00d0ff, 0 0 12px #00d0ff, 0 0 26px rgba(0,208,255,.6); }
+#freqDigits[data-style="neon"] span.lead { color:rgba(214,254,255,.3);
+    text-shadow:none; }
+#freqDigits[data-style="plain"] { font-size:2.1rem; color:#fff; text-shadow:none; }
+#freqDigits[data-style="plain"] span.lead { color:rgba(255,255,255,.32); }
 
 .modes { display:grid; grid-template-columns:repeat(4,1fr); gap:.25rem; }
 .modes button { padding:.28rem 0; font-size:.78rem; }
@@ -2199,6 +2212,16 @@ function reflectExtras(s) {
 function reflect(s) {
   $('playstop').textContent = s.running ? 'Stop' : 'Start';
   syncControl($('centre'), (s.centerHz / 1e6).toFixed(6));
+  // THE READOUT'S FACE, from the desk (GitHub issue #1). Written as a data
+  // attribute and left to CSS, so nothing here has to know what a style
+  // looks like. An unrecognised name - an older desk that does not send the
+  // field at all included - falls back to the readout this page has always
+  // had, exactly as the desk falls back to its Nixie plate.
+  const tunerStyle = (s.tunerDisplayStyle === 'neon' || s.tunerDisplayStyle === 'plain')
+      ? s.tunerDisplayStyle : 'nixie';
+  if ($('freqDigits').dataset.style !== tunerStyle) {
+    $('freqDigits').dataset.style = tunerStyle;
+  }
   renderFreqDigits(s.centerHz);
   syncControl($('vfo'), Math.round(s.vfoOffsetHz / 1000));
   $('vfoVal').textContent = (s.vfoOffsetHz / 1000).toFixed(0) + ' kHz';
@@ -3241,6 +3264,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         j["volume"] = s.volume;
         j["dbMin"] = s.dbMin;
         j["dbMax"] = s.dbMax;
+        j["tunerDisplayStyle"] = s.tunerDisplayStyle;
         j["deemphasisIndex"] = s.deemphasisIndex;
         j["nrEnabled"] = s.nrEnabled;
         j["nrStrength"] = s.nrStrength;
