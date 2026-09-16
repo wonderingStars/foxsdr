@@ -282,6 +282,11 @@ bool AndroidPlatformWindow::attachSurface(ANativeWindow* window) {
     // destroyed. Init is two assignments and a name - there is nothing to
     // leak by calling it again - so re-pointing is exactly this.
     if (imguiBackendUp_) { ImGui_ImplAndroid_Init(window); }
+    // LOGGED BOTH WAYS, because "the surface came back" is otherwise
+    // indistinguishable from "it never went" - and the two have completely
+    // different failure modes. A resume that draws a live picture is only
+    // evidence that this path works if the log shows the path was taken.
+    __android_log_print(ANDROID_LOG_INFO, kTag, "surface attached: %dx%d", width_, height_);
     return true;
 }
 
@@ -303,6 +308,8 @@ void AndroidPlatformWindow::detachSurface() {
         surface_ = EGL_NO_SURFACE;
     }
     hasSurface_ = false;
+    __android_log_print(ANDROID_LOG_INFO, kTag,
+                        "surface detached - context parked on the pbuffer, GL objects kept");
     // width_/height_ are deliberately LEFT ALONE: they are the last size the
     // interface was laid out at, and the frames drawn while the window is gone
     // must be laid out at the same size or every panel's remembered geometry

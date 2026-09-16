@@ -75,6 +75,26 @@ PackageIdentity queryWindows() {
     std::wstring wide(buf.data());
     return identityFromApiResult(ERROR_SUCCESS, narrow(wide));
 }
+#elif defined(__ANDROID__)
+// AN ANDROID INSTALL IS A PACKAGED INSTALL, and saying so here is what stands
+// the updater down on the phone.
+//
+// The question this module asks - "is this copy updated by a store, or by me
+// downloading an installer?" - has one answer on Android, and it is the same
+// answer an MSIX install gives on Windows: the package manager put this APK
+// here and the package manager replaces it. The in-app update path exists to
+// download and run foxsdr-setup-<ver>.exe, which on a phone is not merely
+// unwanted but impossible, so the check must never start - and
+// updateCheckDisposition() already turns `packaged` into exactly that, with a
+// line in the log and a sentence in Settings that both read correctly here
+// ("the Store delivers updates").
+//
+// NO NAME, deliberately. What Windows reports is the AppModel identity
+// string; the equivalent here is the applicationId, which lives in
+// android/app/build.gradle and would have to be duplicated into this file as
+// a literal to be reported - a second place to keep in step, for one line of
+// diagnostic text that reads perfectly sensibly as empty.
+PackageIdentity queryWindows() { return PackageIdentity{true, {}}; }
 #else
 PackageIdentity queryWindows() { return {}; }
 #endif

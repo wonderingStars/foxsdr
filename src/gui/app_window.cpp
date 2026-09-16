@@ -74,6 +74,10 @@
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
 #include "gui/tune_control.hpp"
+// The phone's layout scale. Included unconditionally - it is a pure header
+// with no platform in it - so a desktop build still compiles the rule and a
+// desktop test still covers it.
+#include "gui/ui_scale.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/win_frame.hpp"
@@ -1150,6 +1154,67 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
     // background must be opaque and its corners square or the OS frame and the
     // ImGui corner disagree.
     cascade::gui::theme::applyTheme();
+
+#if defined(__ANDROID__)
+    // -- THE SCALE, AND IT IS THE WHOLE DIFFERENCE BETWEEN THIS LAYOUT BEING
+    // USABLE ON A PHONE AND BEING A CURIOSITY ----------------------------
+    //
+    // Everything above this line drew the same interface it draws on a
+    // desktop, at the same raw pixel sizes: a 384 px menu column, faces
+    // lettered at 21/19/20/17 px, a window measured for 1280 x 720 at ~96 dpi.
+    // A phone has four times the density and a fraction of the room, so 1:1
+    // puts a rail key at about 4 mm - under Android's own 9 mm touch target -
+    // while the screen's full density leaves the layout 412 logical pixels of
+    // height against the 720 it wants.
+    //
+    // gui/ui_scale.hpp picks the answer between them (the largest factor at
+    // which 1280 x 720 still fits the framebuffer, capped at the density,
+    // floored at 1:1, FOXSDR_UI_SCALE overriding outright) and this applies
+    // it, ONCE, through the one path ImGui offers:
+    //
+    //   ScaleAllSizes multiplies the style's existing metrics IN PLACE, so it
+    //   may be called exactly once on a freshly default-constructed style.
+    //   applyTheme() above is the only thing that has touched this style and
+    //   the context was created a few lines earlier, so this is that moment.
+    //
+    //   FontScaleDpi is the global ImGui multiplies every PushFont size by,
+    //   so every call site keeps pushing the desktop's own 21/19/20/17 and
+    //   gets a thumb-sized rail for free - no font call site is scaled by
+    //   hand, which is what keeps the two platforms' layout arithmetic
+    //   identical.
+    //
+    // THE TOUCH PADDING IS NOT PART OF THE SCALE and is applied on top: a
+    // finger is about 9 mm across and hides what it is touching, so ImGui's
+    // desktop-sized hit areas need widening beyond what a uniform
+    // magnification gives. These four lines are carried over from the
+    // first-screen shell, where they were arrived at on the emulator.
+    {
+        int fbW = 0;
+        int fbH = 0;
+        platform.framebufferSize(fbW, fbH);
+        float densityX = 1.0f;
+        float densityY = 1.0f;
+        platform.contentScale(densityX, densityY);
+        const char* scaleEnv = std::getenv("FOXSDR_UI_SCALE");
+        const float uiScale = cascade::gui::fittedUiScale(fbW, fbH, densityX, scaleEnv);
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.ScaleAllSizes(uiScale);
+        style.FontScaleDpi = uiScale;
+        style.FontSizeBase = cascade::gui::fonts::kUiSize;
+        style.TouchExtraPadding = ImVec2(4.0f * uiScale, 6.0f * uiScale);
+        style.FramePadding = ImVec2(style.FramePadding.x, style.FramePadding.y + 4.0f * uiScale);
+        style.ScrollbarSize = 18.0f * uiScale;
+        style.GrabMinSize = 24.0f * uiScale;
+        // In the log because it is the first number anyone will want when a
+        // screenshot looks wrong, and because it names its own override.
+        cascade::core::diagLogf(
+            "android: ui scale x%.3f for %dx%d (density x%.2f, layout wants %.0fx%.0f)%s",
+            static_cast<double>(uiScale), fbW, fbH, static_cast<double>(densityX),
+            static_cast<double>(cascade::gui::kLayoutRefW),
+            static_cast<double>(cascade::gui::kLayoutRefH),
+            (scaleEnv != nullptr && scaleEnv[0] != '\0') ? " [FOXSDR_UI_SCALE]" : "");
+    }
+#endif
 
     // The PLATFORM backend, whichever one this window pairs with. The message
     // still names GLFW because on every platform that reaches this line it IS

@@ -102,7 +102,38 @@ inline bool runShellOpen(const ShellPauseHooks& hooks, const std::function<bool(
     return call();
 }
 
-#if !defined(_WIN32)
+#if defined(__ANDROID__)
+
+// ANDROID: THE REFUSAL, AND WHY IT IS A REFUSAL RATHER THAN A FORK.
+//
+// There is no xdg-open on Android and there is no equivalent a process can
+// exec: opening a link or a folder is an INTENT, which is a Java object
+// delivered through the framework, and reaching it from here means a JNI
+// attach, a JavaVM, an Activity reference and a hop to the UI thread - the
+// same slice the clipboard note in gui/android_window_logic.hpp describes.
+//
+// So this does not fork. The POSIX body below would fork twice, fail to exec
+// a file that is not there, and answer false after a syscall or three - the
+// same answer, arrived at by doing work and by leaving a moment where the
+// forked child of a multithreaded process is alive on a phone. Answering
+// straight away is both cheaper and more honest, and the CALLER ALREADY
+// HANDLES IT: every shellOpen site reports "could not open" from this return
+// value, which is precisely true here.
+//
+// The sentence is a function rather than a comment so a test can hold the
+// behaviour and the explanation together - see tests/test_shell_open_android.cpp,
+// which runs on the device.
+inline const char* androidShellOpenReason() {
+    return "FoxSDR cannot open links or folders on Android yet - that needs an Android "
+           "intent, which this build does not send";
+}
+
+inline bool posixShellOpen(const std::string& target) {
+    (void)target;
+    return false;
+}
+
+#elif !defined(_WIN32)
 // Hands `target` to xdg-open (or, when FOXSDR_SHELL_OPEN_EXE names one, a
 // test's stand-in) as a single argv entry, exec'd directly - never through
 // system()/popen() - so a target containing shell metacharacters (a folder

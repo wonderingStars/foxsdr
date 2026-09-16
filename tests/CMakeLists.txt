@@ -193,6 +193,17 @@ set(CASCADE_ANDROID_TEST_NAMES
     test_web_control test_web_audio
     # bonus: pure-logic, zero risk, exercises code this port also keeps
     test_serial_port test_json_dump_policy
+    # The Android port's own pure halves. They are in BOTH lists - the desktop
+    # glob above picks them up too - because they are header-only logic with
+    # no ImGui, no GLFW and no NDK in them, and what they pin (how big the
+    # desktop layout is drawn on this screen, the density clamp, the
+    # clipboard's contract) is exactly what a wrong answer would be VISIBLE in
+    # on the device.
+    test_ui_scale test_android_window
+    # ...and the one that can only be observed ON the device: that
+    # gui/shell_open.hpp takes its Android branch rather than forking and
+    # failing to exec. It SKIPS, loudly, in the host-subset build.
+    test_shell_open_android
 )
 
 foreach(name IN LISTS CASCADE_ANDROID_TEST_NAMES)
