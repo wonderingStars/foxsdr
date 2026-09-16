@@ -276,9 +276,24 @@ double hostRate(void* ctx);
 std::int32_t hostTune(void* ctx, double centreHz);
 std::int64_t hostTime(void* ctx);
 
+// Points every bridge issued on behalf of `owner` at no host at all, leaving
+// the storage in place. Declared here for ~PluginUi, defined with the store.
+void detachBridges(const PluginUi* owner);
+
 }  // namespace
 
-PluginUi::~PluginUi() { clear(); }
+PluginUi::~PluginUi() {
+    clear();
+    // DETACHED, NOT FREED. A plugin may still be loaded and still holding a
+    // bridge that points here; once this object is gone, a call through it
+    // would lock a destroyed mutex and read a destroyed std::function - which
+    // is what aborted inside libc++ on Android on every exit of the app. The
+    // storage stays (the module may still read it) and answers the ABI's
+    // "nothing" from here on. See detachBridges below for the reason this is
+    // a net rather than the main defence: AppWindow now clears the runner,
+    // and so destroys every decoder instance, while this object is alive.
+    detachBridges(this);
+}
 
 void PluginUi::setServices(HostServices services) {
     std::lock_guard<std::mutex> lk(servicesMutex_);
@@ -288,10 +303,36 @@ void PluginUi::setServices(HostServices services) {
 namespace {
 
 // Storage for the bridges. Kept in a file-scope owner rather than in the class
-// so the header does not have to expose HostCtx; cleared by PluginUi::clear.
+// so the header does not have to expose HostCtx.
+//
+// NOTHING SHORTER THAN THE PROCESS FREES ONE, and that is the fix for two
+// crash reports (see hostBridgeCount in the header). plugin_abi.h promises a
+// plugin a table "valid for as long as the plugin is loaded" and tells it to
+// store the pointer; Survey Engine 0.1.0 reads that table from inside its
+// decoder's destroy(). PluginUi::clear() used to free the bridges while every
+// module was still mapped, so the plugin read freed memory - 0xC0000005 on
+// Windows, an abort inside libc++ on Android. A static vector is reclaimed
+// after main() returns, which is after ~PluginHost has unmapped every module:
+// the last moment any plugin code could run. One bridge per plugin, reused
+// across rebuilds, so this is bounded by the number of distinct plugins that
+// have ever attached rather than by how often the user changes source.
 std::vector<std::unique_ptr<HostCtx>>& ctxStore() {
     static std::vector<std::unique_ptr<HostCtx>> store;
     return store;
+}
+
+// The bridge already issued to `plugin` on behalf of `owner`, or null.
+HostCtx* findBridge(const PluginUi* owner, const std::string& plugin) {
+    for (const std::unique_ptr<HostCtx>& c : ctxStore()) {
+        if (c != nullptr && c->self == owner && c->plugin == plugin) { return c.get(); }
+    }
+    return nullptr;
+}
+
+void detachBridges(const PluginUi* owner) {
+    for (const std::unique_ptr<HostCtx>& c : ctxStore()) {
+        if (c != nullptr && c->self == owner) { c->self = nullptr; }
+    }
 }
 
 // NOTHING THROWS ACROSS THE BOUNDARY IN THIS DIRECTION EITHER. The ABI makes
@@ -344,6 +385,16 @@ std::int64_t hostTime(void* ctx) {
 
 }  // namespace
 
+std::size_t hostBridgeCount() { return ctxStore().size(); }
+
+std::size_t attachedHostBridgeCount() {
+    std::size_t n = 0;
+    for (const std::unique_ptr<HostCtx>& c : ctxStore()) {
+        if (c != nullptr && c->self != nullptr) { ++n; }
+    }
+    return n;
+}
+
 void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
     destroyInstances();
 
@@ -359,21 +410,34 @@ void PluginUi::rebuild(const std::vector<LoadedPlugin>& plugins) {
         // capability's create(), so a tracker can read the receiver while
         // building its initial state instead of waiting a frame for it.
         if (lp.hostClient != nullptr && lp.hostClient->attach != nullptr) {
-            auto bridge = std::make_unique<HostCtx>();
-            bridge->self = this;
             // The permission key, NOT the display name: the name is the
             // plugin's own to choose, so keying on it would let any module
             // inherit a granted one's permission by adopting its name.
-            bridge->plugin = tuneKey(lp);
-            bridge->api.structSize = static_cast<std::uint32_t>(sizeof(CascadeHostApi));
-            bridge->api.ctx = bridge.get();
-            bridge->api.centre_hz = &hostCentre;
-            bridge->api.sample_rate_hz = &hostRate;
-            bridge->api.request_tune = &hostTune;
-            bridge->api.unix_time_ms = &hostTime;
-            const CascadeHostApi* apiPtr = &bridge->api;
-            ctxStore().push_back(std::move(bridge));
-            lp.hostClient->attach(apiPtr);
+            const std::string key = tuneKey(lp);
+            // ONE BRIDGE PER PLUGIN, REUSED, not a fresh one per rebuild.
+            //
+            // rebuild() runs on every source change, so a bridge per call grew
+            // the store without limit and - worse - left the plugin holding
+            // the table from its FIRST attach while the host considered a
+            // later one current. The ABI says attach() is called once with a
+            // table valid for as long as the plugin is loaded; handing back
+            // the same table makes the host's repeated call the no-op the
+            // plugin is entitled to assume it is.
+            HostCtx* bridge = findBridge(this, key);
+            if (bridge == nullptr) {
+                auto owned = std::make_unique<HostCtx>();
+                owned->self = this;
+                owned->plugin = key;
+                owned->api.structSize = static_cast<std::uint32_t>(sizeof(CascadeHostApi));
+                owned->api.ctx = owned.get();
+                owned->api.centre_hz = &hostCentre;
+                owned->api.sample_rate_hz = &hostRate;
+                owned->api.request_tune = &hostTune;
+                owned->api.unix_time_ms = &hostTime;
+                bridge = owned.get();
+                ctxStore().push_back(std::move(owned));
+            }
+            lp.hostClient->attach(&bridge->api);
         }
 
         if (lp.trackSource != nullptr) {
@@ -763,10 +827,12 @@ void PluginUi::stepDemos(double nowSec) {
 
 void PluginUi::clear() {
     destroyInstances();
-    // The bridges outlive the instances by design (a plugin may hold the
-    // pointer), but not the unload: they are freed here, before the host
-    // unmaps anything.
-    ctxStore().clear();
+    // THE BRIDGES ARE NOT TOUCHED HERE, and that is the whole of the fix for
+    // the Survey Engine crash. They used to be freed on this line, which runs
+    // BEFORE PluginHost::unloadAll() and therefore while every plugin is still
+    // loaded and still holding the table the ABI promised it - a table read
+    // moments later by a decoder's destroy(). They are reused by the next
+    // rebuild and reclaimed at process exit, after the modules are unmapped.
     tuneRequesters_.clear();
     tuneAllowed_.clear();
     lastDenied_.clear();

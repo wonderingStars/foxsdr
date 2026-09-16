@@ -1109,6 +1109,24 @@ AppWindow::~AppWindow() {
     // flight at quit — it starts the moment the source combo is opened.
     reapPendingSoapyScan();
 
+    // THE PLUGIN SYSTEM COMES DOWN IN ONE STATED ORDER, HERE, and not as a
+    // by-product of reverse member-declaration order.
+    //
+    // detachAndUnloadPlugins() exists because that order is the feature:
+    // detach the runner from the pipeline, destroy the decoder instances,
+    // then take the GUI half and the host services away, then unmap the
+    // modules. Every OTHER path that unloads plugins (a rescan, removing an
+    // installed plugin) calls it. This one did not - it let the members fall
+    // apart on their own, and their declaration order had pluginUi_ destroyed
+    // BEFORE pluginRunner_, which is the exact reverse. A decoder's destroy()
+    // that asks the host anything therefore reached a destroyed PluginUi and
+    // a freed host-API table: Survey Engine 0.1.0 does exactly that (it
+    // timestamps the dwell it is finishing) and it crashed on 0.96.3 with an
+    // access violation on Windows and an abort inside libc++ on Android.
+    //
+    // Idempotent: whatever it clears, the member destructors below find empty.
+    detachAndUnloadPlugins();
+
     // Safety net (run()'s teardown already does this on the normal path):
     // the recorder members are destroyed before pipeline_ (reverse
     // declaration order), so any tap still installed must be uninstalled
@@ -1888,6 +1906,24 @@ int AppWindow::run(int frames) {
                 static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
         }
     }
+
+    // THE PLUGINS COME DOWN HERE, ON THE NORMAL PATH, and for the same reason
+    // the waterfall does just below: this is the last moment at which the
+    // whole object graph is still alive and the GL context is still current.
+    //
+    // The pipeline is stopped and joined above, so no DSP thread can be inside
+    // a plugin; the config has been written, so nothing further reads the stop
+    // list or the tune grants. detachAndUnloadPlugins() then destroys the
+    // decoder instances BEFORE the host services they may call on their way
+    // out (Survey Engine 0.1.0 asks the host for the time from inside
+    // destroy()) and unmaps the modules last. ~AppWindow calls it again as a
+    // net for the paths that never reach here - a failed backend init, a test
+    // that never entered the frame loop - and finds nothing left to do.
+    //
+    // A basemap plugin's tiles are GL textures, which is the other half of why
+    // it is here rather than in the destructor: glDeleteTextures needs this
+    // context current, and by ~AppWindow it is gone.
+    detachAndUnloadPlugins();
 
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys
