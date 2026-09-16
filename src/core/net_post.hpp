@@ -149,6 +149,47 @@ void setNetPostHookForTest(NetPostHook hook);
 NetPostResult runNetPostHook(const NetPost& p, bool& handled);
 
 // --------------------------------------------------------------------------
+// A DEBUGGABLE BUILD POSTS NOWHERE
+// --------------------------------------------------------------------------
+//
+// THE HAZARD THIS CLOSES, and it is not hypothetical. Usage reporting is ON by
+// default, so every launch of a development APK on an emulator - one a
+// developer installs a dozen times an afternoon - would mint an install id and
+// post it to the live endpoint. The dataset behind that endpoint is
+// APPEND-ONLY: a fabricated "Android 14" install, and the phantom crash count
+// that comes of killing a test build, cannot be deleted afterwards. This
+// project has been here before on the desktop (0.66.0: eight interactive test
+// launches landed in the owner's own analytics under the owner's own install
+// id), and the desktop's answer - FOXSDR_TELEMETRY_URL pointed at a black
+// hole - relies on a developer remembering. On a phone that is not good
+// enough, because the launch comes from a tap on an icon.
+//
+// So the rule is ENFORCED rather than documented: a DEBUGGABLE build with no
+// FOXSDR_TELEMETRY_URL sends nothing at all. With the variable set it posts to
+// what the variable names, exactly as before - which is how this transport is
+// exercised on a device. A release build is untouched either way.
+//
+// IT LIVES IN THE SHELL, NOT IN THE SENDERS. core/telemetry.cpp and
+// core/crash_upload.cpp know nothing about it and must stay that way: two
+// senders each checking a rule is two places for a third sender to forget it,
+// and androidNetPost() is the single door every Android upload goes through.
+
+// The application's own ApplicationInfo.FLAG_DEBUGGABLE, read once by
+// androidNetInit(). FALSE by default, which is what a release build and every
+// non-Android build are - so nothing changes anywhere this is not set.
+// Exposed because the refusal below is compiled on every platform, and
+// tests/test_net_post.cpp drives it on a Linux host.
+void setNetPostDebuggableBuild(bool debuggable);
+bool netPostDebuggableBuild();
+
+// TRUE when this build must not post anywhere: debuggable, and no
+// FOXSDR_TELEMETRY_URL naming somewhere it may post to. That one variable is
+// the whole declaration for BOTH uploads on Android - a crash-upload test on a
+// device sets it too, even though the crash sender has its own
+// FOXSDR_CRASH_URL, because one switch is one thing to get right.
+bool netPostUploadsGoNowhere();
+
+// --------------------------------------------------------------------------
 // The Android transport
 // --------------------------------------------------------------------------
 

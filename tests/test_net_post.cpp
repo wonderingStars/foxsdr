@@ -24,9 +24,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include "core/crash_upload.hpp"
 #include "core/net_post.hpp"
@@ -51,6 +56,27 @@ struct Recorder {
     }
     static void remove() { setNetPostHookForTest(NetPostHook()); }
 };
+
+// FOXSDR_TELEMETRY_URL, set and cleared FOR REAL rather than through a seam:
+// netPostUploadsGoNowhere() reads it with getenv(), which is the same probe
+// telemetryEndpoint() makes, and a test that faked the read would not be
+// testing the thing that decides.
+void setSinkUrl(const char* value) {
+#if defined(_WIN32)
+    // Both, for the reason this project has already been bitten by: a
+    // statically linked binary reads the CRT's copy of the environment while a
+    // DLL reads the OS one, and SetEnvironmentVariableA alone never reaches
+    // getenv().
+    _putenv_s("FOXSDR_TELEMETRY_URL", value == nullptr ? "" : value);
+    ::SetEnvironmentVariableA("FOXSDR_TELEMETRY_URL", value);
+#else
+    if (value == nullptr) {
+        ::unsetenv("FOXSDR_TELEMETRY_URL");
+    } else {
+        ::setenv("FOXSDR_TELEMETRY_URL", value, 1);
+    }
+#endif
+}
 
 bool same(const NetPost& a, const NetPost& b) {
     return a.url == b.url && a.body == b.body && a.contentType == b.contentType &&
@@ -466,6 +492,94 @@ void testAPublishedTokenIsNeverNull() {
 }
 
 // ---------------------------------------------------------------------------
+// A debuggable build posts nowhere
+// ---------------------------------------------------------------------------
+
+void testADebuggableBuildPostsNowhereWithoutAnOverride() {
+    // THE ONE THAT PROTECTS THE LIVE DATASET. Usage reporting is on by
+    // default, so without this rule every launch of a development APK on an
+    // emulator posts a fabricated install to an APPEND-ONLY dataset that
+    // cannot be cleaned up afterwards.
+    Recorder rec;
+    rec.reply.attempted = true;
+    rec.reply.status = 204;
+    rec.install();
+    setSinkUrl(nullptr);
+    setNetPostDebuggableBuild(true);
+    CHECK(netPostDebuggableBuild());
+    CHECK(netPostUploadsGoNowhere());
+
+    // Neither sender gets out, and neither reaches the transport AT ALL - not
+    // even the fake one, because "a development build sends nothing" has to
+    // hold for every transport this door leads to.
+    const NetPostResult crash = androidNetPost(crashPost(kCrashUrl, kCrashBody), nullptr);
+    const NetPostResult usage = androidNetPost(telemetryPost(kUsageUrl, kUsageBody), nullptr);
+    CHECK(rec.seen.empty());
+    CHECK(!crash.attempted);
+    CHECK(!usage.attempted);
+    // Refused, not cancelled and not a failed attempt: nothing was tried.
+    CHECK(!crash.cancelled);
+    CHECK(crash.status == 0);
+
+    // ...AND THE OVERRIDE LETS IT THROUGH, which is what keeps the transport
+    // testable on a device. Same build, same flag, one variable different.
+    setSinkUrl("http://127.0.0.1:8099/u");
+    CHECK(!netPostUploadsGoNowhere());
+    androidNetPost(crashPost(kCrashUrl, kCrashBody), nullptr);
+    CHECK(rec.seen.size() == 1);
+    if (rec.seen.size() == 1) {
+        // ...and it is still the same request, byte for byte.
+        CHECK(same(rec.seen[0], crashPost(kCrashUrl, kCrashBody)));
+    }
+
+    // An empty value is "unset", matching every other reader of this variable.
+    setSinkUrl("");
+    CHECK(netPostUploadsGoNowhere());
+    androidNetPost(crashPost(kCrashUrl, kCrashBody), nullptr);
+    CHECK(rec.seen.size() == 1);
+
+    // A RELEASE BUILD IS UNTOUCHED either way - the rule must not be able to
+    // silence a real user's reports.
+    setSinkUrl(nullptr);
+    setNetPostDebuggableBuild(false);
+    CHECK(!netPostUploadsGoNowhere());
+    androidNetPost(crashPost(kCrashUrl, kCrashBody), nullptr);
+    CHECK(rec.seen.size() == 2);
+
+    Recorder::remove();
+}
+
+void testTheRuleIsOffUnlessTheBuildSaysItIsDebuggable() {
+    // The default matters more than it looks: every non-Android build, and
+    // every Android build whose ApplicationInfo could not be read, lands here.
+    // A build that cannot be identified must still be able to report.
+    CHECK(!netPostDebuggableBuild());
+    setSinkUrl(nullptr);
+    CHECK(!netPostUploadsGoNowhere());
+
+    // And the rule does not leak into the DESKTOP senders: it lives in the
+    // Android door alone, so a debuggable flag set by accident cannot silence
+    // the cpp-httplib or WinHTTP transports.
+    Recorder rec;
+    rec.reply.attempted = true;
+    rec.reply.status = 204;
+    rec.install();
+    setNetPostDebuggableBuild(true);
+    auto cancel = std::make_shared<UploadCancel>();
+    const UploadResult res = postCrashReport(kCrashUrl, kCrashBody, cancel);
+    setNetPostDebuggableBuild(false);
+    Recorder::remove();
+#if defined(CASCADE_ANDROID)
+    // ...except in an Android build, where postCrashReport IS that door.
+    CHECK(rec.seen.empty());
+    CHECK(!res.attempted);
+#else
+    CHECK(rec.seen.size() == 1);
+    CHECK(res.attempted);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // The hook itself
 // ---------------------------------------------------------------------------
 
@@ -532,6 +646,8 @@ int main() {
     testACancelBeforeThePostSendsNothing();
     testACancelDuringThePostIsReported();
     testAPublishedTokenIsNeverNull();
+    testADebuggableBuildPostsNowhereWithoutAnOverride();
+    testTheRuleIsOffUnlessTheBuildSaysItIsDebuggable();
     testTheHookIsAbsentUnlessATestInstalledIt();
     testTheOsFieldNamesThePlatform();
     return testSummary("test_net_post");

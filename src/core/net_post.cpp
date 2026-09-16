@@ -188,6 +188,31 @@ NetPostResult runNetPostHook(const NetPost& p, bool& handled) {
 }
 
 // ---------------------------------------------------------------------------
+// A debuggable build posts nowhere - see the long comment in net_post.hpp
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::atomic<bool> gDebuggableBuild{false};
+
+}  // namespace
+
+void setNetPostDebuggableBuild(bool debuggable) { gDebuggableBuild.store(debuggable); }
+
+bool netPostDebuggableBuild() { return gDebuggableBuild.load(); }
+
+bool netPostUploadsGoNowhere() {
+    if (!gDebuggableBuild.load()) { return false; }
+    // Read through getenv on every call rather than cached at init, and that
+    // is deliberate: it is the SAME probe telemetryEndpoint() makes, so "where
+    // this build would post" and "whether it may post at all" cannot drift
+    // apart. An empty value counts as unset, matching every other reader of
+    // this variable in the program.
+    const char* sink = std::getenv("FOXSDR_TELEMETRY_URL");
+    return sink == nullptr || sink[0] == '\0';
+}
+
+// ---------------------------------------------------------------------------
 // The Android transport
 // ---------------------------------------------------------------------------
 
@@ -287,6 +312,38 @@ bool resolveNetClass(JNIEnv* env) {
     return gNetClass != nullptr;
 }
 
+// Reads ApplicationInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE off the
+// activity. Answers FALSE on any failure, and that direction is chosen rather
+// than defaulted: a build this could not identify is treated as a release
+// build and is allowed to post. The alternative silences a real user's reports
+// because one JNI call failed, and this call cannot realistically fail on a
+// device where the rest of the transport works - it is two framework classes
+// and a field.
+// Caller holds gJniMutex.
+bool readDebuggableFlag(JNIEnv* env) {
+    if (gActivity == nullptr) { return false; }
+    jclass ctxCls = env->FindClass("android/content/Context");
+    if (ctxCls == nullptr || failed(env, "FindClass(Context)")) { return false; }
+    jmethodID getInfo = env->GetMethodID(ctxCls, "getApplicationInfo",
+                                         "()Landroid/content/pm/ApplicationInfo;");
+    if (getInfo == nullptr || failed(env, "getApplicationInfo id")) { return false; }
+    jobject info = env->CallObjectMethod(gActivity, getInfo);
+    if (info == nullptr || failed(env, "getApplicationInfo()")) { return false; }
+
+    jclass infoCls = env->FindClass("android/content/pm/ApplicationInfo");
+    if (infoCls == nullptr || failed(env, "FindClass(ApplicationInfo)")) { return false; }
+    jfieldID flagsId = env->GetFieldID(infoCls, "flags", "I");
+    jfieldID debugId = env->GetStaticFieldID(infoCls, "FLAG_DEBUGGABLE", "I");
+    if (flagsId == nullptr || debugId == nullptr || failed(env, "ApplicationInfo fields")) {
+        return false;
+    }
+    const jint flags = env->GetIntField(info, flagsId);
+    const jint debugBit = env->GetStaticIntField(infoCls, debugId);
+    env->DeleteLocalRef(info);
+    if (failed(env, "ApplicationInfo.flags")) { return false; }
+    return (flags & debugBit) != 0;
+}
+
 }  // namespace
 
 void androidNetInit(void* javaVm, void* activityObject) {
@@ -303,8 +360,21 @@ void androidNetInit(void* javaVm, void* activityObject) {
     // local ref belonging to a frame that is long gone by the time a usage
     // report is sent.
     gActivity = env->NewGlobalRef(static_cast<jobject>(activityObject));
+    // THE APPLICATION'S OWN DEBUGGABLE FLAG, read here because here is the one
+    // place that has a Context to ask. Not BuildConfig.DEBUG and not a
+    // compile-time macro: what decides is the flag the INSTALLED package
+    // carries, which is what actually separates an APK a developer sideloaded
+    // from one a user downloaded.
+    //
+    // getApplicationInfo() is declared on android.content.Context and the
+    // activity is a Context; a method id resolved on the base class dispatches
+    // virtually, which is ordinary JNI. FLAG_DEBUGGABLE is read from the class
+    // rather than written as 0x2, so a magic number cannot go stale.
+    const bool debuggable = readDebuggableFlag(env);
+    setNetPostDebuggableBuild(debuggable);
     if (detach) { gVm->DetachCurrentThread(); }
-    netNote(false, "net: Java transport armed (HttpsURLConnection over JNI)");
+    netNote(false, "net: Java transport armed (HttpsURLConnection over JNI)%s",
+            debuggable ? "; this is a DEBUGGABLE build" : "");
 }
 
 bool androidNetReady() {
@@ -434,6 +504,25 @@ NetPostResult androidNetPost(const NetPost& p, const NetPostCancel* cancel) {
     // THE GATE FIRST, before the hook: a request the rules refuse must never
     // be visible to a transport, real or fake.
     if (!netPostAllowed(p)) { return res; }
+
+    // ...AND THE DEBUGGABLE-BUILD RULE SECOND, still before the hook and still
+    // before any token is minted. Nothing is attempted, nothing is published
+    // to the cancel, and the fake transport a test installs never sees the
+    // request either - because "a development build sends nothing" has to be
+    // true of every transport this door leads to, not only the real one.
+    //
+    // Said on EVERY refusal rather than once per process. logcat is a ring
+    // buffer: a line printed at the first heartbeat and never again is gone by
+    // the time anyone wonders why their dataset is empty, and one line per
+    // report in a build that is by definition on a developer's desk is not a
+    // cost worth optimising away.
+    if (netPostUploadsGoNowhere()) {
+        netNote(true,
+                "net: debuggable build: uploads go nowhere unless FOXSDR_TELEMETRY_URL "
+                "names a sink (dropping a %zu-byte report for %s)",
+                p.body.size(), p.url.c_str());
+        return res;
+    }
 
     const int token = nextCallToken();
     if (cancel != nullptr && cancel->publish) {
