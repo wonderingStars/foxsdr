@@ -17,13 +17,39 @@
 // comparison is the whole point of the file: it is what makes "Android sends
 // the same bytes to the same endpoint" a test result instead of a claim.
 //
-// NOTHING HERE OPENS A SOCKET, and nothing here can reach the real endpoints:
-// every URL is either a fake hostname or is refused by the gate before any
-// transport sees it.
+// WHAT RUNS ON WINDOWS, AND WHAT DOES NOT.
+//
+// Windows keeps its own WinHTTP transports, untouched by this port and
+// deliberately so - the owner's rule is that the Windows senders are
+// byte-for-byte unchanged by it - and those transports do not consult this
+// seam. So the cases that drive telemetry.cpp's and crash_upload.cpp's REAL
+// senders through the hook cannot hold there, and they are skipped with a
+// printed, counted line rather than made to hold by editing the _WIN32
+// branches. That is not a hole in the coverage: the Windows senders have their
+// own end-to-end tests against real sockets in tests/test_telemetry.cpp and
+// tests/test_crash_upload.cpp (a local stub, a self-signed certificate and a
+// deliberately-refused port), which is a better test of a transport than a
+// fake ever is.
+//
+// Everything else in this file runs everywhere, because it is compiled
+// identically everywhere: the request shapes, the scheme gate, the URL split,
+// the whole androidNetPost skeleton and the debuggable-build rule. Those are
+// the parts a Windows build could break.
+//
+// NOTHING HERE OPENS A SOCKET, ON ANY PLATFORM, and nothing here can reach the
+// real endpoints. Two rules keep that true: every URL that reaches a sender is
+// a reserved .invalid hostname, and the only cases that name a real endpoint
+// (https://telemetry.foxsdr.com, https://foxsdr.com/api/crash, in the gate
+// table) pass it to netPostAllowed(), which is a string comparison and does no
+// I/O at all. A case that drives a sender on a platform where the hook is not
+// consulted WOULD reach the network stack - it did, and cost twenty seconds of
+// DNS on Windows - which is the second reason those cases are guarded rather
+// than left to fail.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -77,6 +103,22 @@ void setSinkUrl(const char* value) {
     }
 #endif
 }
+
+// A PER-CASE SKIP, PRINTED AND COUNTED, in the shape
+// tests/test_shell_open_posix.cpp uses for its whole-file one. It goes through
+// g_checksSkipped so testSummary's line can never read the same as a case that
+// ran: "0 failed" and "nothing was checked" mean opposite things, and this file
+// deliberately checks fewer things on Windows than it does elsewhere.
+#if defined(_WIN32)  // ...and nowhere else, or it is an unused function
+void skippedOnWindows(const char* what) {
+    ++g_checksSkipped;
+    std::printf("test_net_post: %s SKIPPED (the Windows senders keep their own "
+                "WinHTTP transport, which does not consult this seam; they are "
+                "covered end-to-end by test_telemetry's and test_crash_upload's "
+                "own socket servers instead)\n",
+                what);
+}
+#endif
 
 bool same(const NetPost& a, const NetPost& b) {
     return a.url == b.url && a.body == b.body && a.contentType == b.contentType &&
@@ -212,6 +254,13 @@ void testTheUrlSplit() {
 // What the real senders hand a transport
 // ---------------------------------------------------------------------------
 
+// THE FOUR CASES BELOW DRIVE THE REAL DESKTOP SENDERS, so they exist only
+// where those senders go through this seam - see "WHAT RUNS ON WINDOWS" at the
+// top of the file. Compiled out rather than guarded inside, because on Windows
+// there is nothing left of them to run: every line is either the drive or an
+// assertion about what the drive produced.
+#if !defined(_WIN32)
+
 void testTheUsageSenderHandsTheTransportExactlyThePayload() {
     Recorder rec;
     rec.reply.attempted = true;
@@ -294,6 +343,8 @@ void testRateLimitingSurvivesTheSeam() {
     CHECK(res.retryAfterSeconds == 3600);
 }
 
+#endif  // !defined(_WIN32)
+
 void testARefusedDestinationNeverReachesTheTransport() {
     // THE NEGATIVE THAT MATTERS. It is not enough that a plain-http report
     // fails; nothing may be handed to a transport at all, because a transport
@@ -303,27 +354,36 @@ void testARefusedDestinationNeverReachesTheTransport() {
     rec.reply.status = 204;
     rec.install();
 
+    // The Android entry point applies the gate before its own hook, and this
+    // half runs on every platform: androidNetPost is compiled everywhere and
+    // consults the seam everywhere.
+    const NetPostResult a = androidNetPost(crashPost("http://crash.invalid/", kCrashBody), nullptr);
+    CHECK(rec.seen.empty());
+    CHECK(!a.attempted);
+
+#if !defined(_WIN32)
+    // ...and so do the desktop senders. NOT asserted on Windows, and the
+    // reason is worth stating: WinHTTP never consults the hook, so
+    // "rec.seen.empty()" would pass there whatever the gate did - a green
+    // check that proves nothing is worse than a skipped one. Windows' own
+    // refusal of a non-https destination is asserted where it can be seen, in
+    // tests/test_telemetry.cpp and tests/test_crash_upload.cpp.
     auto cancel = std::make_shared<UploadCancel>();
     const UploadResult res = postCrashReport("http://crash.invalid/api/crash", kCrashBody, cancel);
     CHECK(rec.seen.empty());
     CHECK(!res.attempted);
 
     {
+        // Android's usage sender permits loopback, and telemetry.foxsdr.com is
+        // not loopback, so this is refused in both configurations. It reaches
+        // no network in either: the gate is a string comparison.
         TelemetryReporter r;
         r.send("http://telemetry.foxsdr.com/", kUsageBody);
     }
-#if defined(CASCADE_ANDROID)
-    // Android's usage sender permits loopback, and telemetry.foxsdr.com is
-    // not loopback, so this is still refused.
     CHECK(rec.seen.empty());
 #else
-    CHECK(rec.seen.empty());
+    skippedOnWindows("a refused destination reaching neither desktop sender");
 #endif
-
-    // And the Android entry point applies the same gate before its own hook.
-    const NetPostResult a = androidNetPost(crashPost("http://crash.invalid/", kCrashBody), nullptr);
-    CHECK(rec.seen.empty());
-    CHECK(!a.attempted);
     Recorder::remove();
 }
 
@@ -332,32 +392,43 @@ void testARefusedDestinationNeverReachesTheTransport() {
 // ---------------------------------------------------------------------------
 
 void testAndroidSendsTheSameBytesToTheSameEndpoint() {
-    // THE ASSERTION THIS FILE EXISTS FOR. Capture what the desktop senders
-    // hand a transport, then capture what the Android entry point hands the
-    // same transport for the same input, and require the two to be equal in
-    // every field - endpoint, body, content type, timeouts, scheme rule and
-    // user agent.
+    // THE ASSERTION THIS FILE EXISTS FOR, and it is stated twice over: every
+    // door out of this program hands the transport exactly what the shared
+    // shaper built. The Android door is checked against the shaper on every
+    // platform - that is the half a wrong Android build would break - and
+    // where the desktop senders reach this seam they are checked against the
+    // Android captures directly, which is the stronger statement of the two.
     Recorder rec;
     rec.reply.attempted = true;
     rec.reply.status = 204;
     rec.install();
+
+    androidNetPost(telemetryPost(kUsageUrl, kUsageBody), nullptr);
+    androidNetPost(crashPost(kCrashUrl, kCrashBody), nullptr);
+    CHECK(rec.seen.size() == 2);
+    if (rec.seen.size() == 2) {
+        CHECK(same(rec.seen[0], telemetryPost(kUsageUrl, kUsageBody)));
+        CHECK(same(rec.seen[1], crashPost(kCrashUrl, kCrashBody)));
+        CHECK(rec.seen[0].body == kUsageBody);
+        CHECK(rec.seen[1].body == kCrashBody);
+    }
+
+#if !defined(_WIN32)
     {
         TelemetryReporter r;
         r.send(kUsageUrl, kUsageBody);
     }
     auto cancel = std::make_shared<UploadCancel>();
     postCrashReport(kCrashUrl, kCrashBody, cancel);
-    androidNetPost(telemetryPost(kUsageUrl, kUsageBody), nullptr);
-    androidNetPost(crashPost(kCrashUrl, kCrashBody), nullptr);
-    Recorder::remove();
-
     CHECK(rec.seen.size() == 4);
     if (rec.seen.size() == 4) {
-        CHECK(same(rec.seen[0], rec.seen[2]));  // usage: desktop vs Android
-        CHECK(same(rec.seen[1], rec.seen[3]));  // crash: desktop vs Android
-        CHECK(rec.seen[2].body == kUsageBody);
-        CHECK(rec.seen[3].body == kCrashBody);
+        CHECK(same(rec.seen[0], rec.seen[2]));  // usage: Android vs desktop
+        CHECK(same(rec.seen[1], rec.seen[3]));  // crash: Android vs desktop
     }
+#else
+    skippedOnWindows("desktop-against-Android request equality");
+#endif
+    Recorder::remove();
 }
 
 void testTheAndroidTransportRefusesHonestlyWithNoJavaSide() {
@@ -559,7 +630,17 @@ void testTheRuleIsOffUnlessTheBuildSaysItIsDebuggable() {
 
     // And the rule does not leak into the DESKTOP senders: it lives in the
     // Android door alone, so a debuggable flag set by accident cannot silence
-    // the cpp-httplib or WinHTTP transports.
+    // the cpp-httplib transport.
+    //
+    // NOT ON WINDOWS, and for a sharper reason than the other skips: WinHTTP
+    // does not consult the hook, so this case would drive a REAL request to
+    // crash.invalid - twenty seconds of DNS across the file, which is how the
+    // Windows failure was first noticed - and then assert
+    // rec.seen.size() == 1 against a transport that was never asked. The
+    // property it pins (the rule cannot reach a desktop sender) is true on
+    // Windows by construction: the _WIN32 branches were not touched by this
+    // port and contain no reference to it.
+#if !defined(_WIN32)
     Recorder rec;
     rec.reply.attempted = true;
     rec.reply.status = 204;
@@ -576,6 +657,9 @@ void testTheRuleIsOffUnlessTheBuildSaysItIsDebuggable() {
 #else
     CHECK(rec.seen.size() == 1);
     CHECK(res.attempted);
+#endif
+#else
+    skippedOnWindows("the rule not leaking into the desktop crash sender");
 #endif
 }
 
@@ -636,10 +720,21 @@ int main() {
     testTheCrashRequestIsPinned();
     testTheGateRefusesEverythingButHttpsAndLoopbackHttp();
     testTheUrlSplit();
+#if !defined(_WIN32)
     testTheUsageSenderHandsTheTransportExactlyThePayload();
     testTheHeartbeatSenderHandsTheTransportTheBeat();
     testTheCrashSenderHandsTheTransportExactlyTheReport();
     testRateLimitingSurvivesTheSeam();
+#else
+    // See "WHAT RUNS ON WINDOWS" at the top of the file. Named one by one
+    // rather than as a single line, so the summary says exactly which four
+    // properties this platform did not check here and where they are checked
+    // instead.
+    skippedOnWindows("the usage sender's request");
+    skippedOnWindows("the heartbeat sender's request");
+    skippedOnWindows("the crash sender's request");
+    skippedOnWindows("the 429/Retry-After mapping");
+#endif
     testARefusedDestinationNeverReachesTheTransport();
     testAndroidSendsTheSameBytesToTheSameEndpoint();
     testTheAndroidTransportRefusesHonestlyWithNoJavaSide();
