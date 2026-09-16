@@ -44,6 +44,19 @@ if(NOT CASCADE_VERSION_STRING)
 endif()
 message(STATUS "cascade version string: ${CASCADE_VERSION_STRING}")
 
+# Appended to CASCADE_VERSION_STRING at compile time (src/core/version.cpp).
+# Empty by default, which is a normal desktop build and leaves the string
+# unchanged. android/app/build.gradle passes "-android.<buildNumber>" here
+# through externalNativeBuild arguments, so every report a sideloaded Android
+# alpha sends is distinguishable from a desktop release of the same version -
+# the site's version comparator treats "-<anything>" as a pre-release, which
+# is what we want. A CACHE STRING (unlike CASCADE_VERSION_STRING above) is
+# correct here: it is genuinely a build-time knob set once per configure
+# (Gradle reconfigures Android builds itself), not a value this file derives
+# from something that can move underneath a stale cache entry.
+set(CASCADE_VERSION_SUFFIX "" CACHE STRING
+    "Suffix appended to the reported version string (e.g. -android.1)")
+
 # ---------------------------------------------------------------------------
 # Android — ONE tree, and no early return
 # ---------------------------------------------------------------------------
@@ -600,7 +613,8 @@ add_library(cascade_core ALIAS cascade_lib)
 target_include_directories(cascade_lib PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
 # See src/core/version.cpp: the reported version is injected, never written in.
 target_compile_definitions(cascade_lib PRIVATE
-    CASCADE_VERSION_STRING="${CASCADE_VERSION_STRING}")
+    CASCADE_VERSION_STRING="${CASCADE_VERSION_STRING}"
+    CASCADE_VERSION_SUFFIX="${CASCADE_VERSION_SUFFIX}")
 # The commit comes from the generated header instead, so it is re-read on every
 # build rather than frozen at configure time.
 add_dependencies(cascade_lib cascade_git_commit)

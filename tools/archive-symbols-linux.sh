@@ -39,6 +39,44 @@ set -u
 
 warn() { echo "archive-symbols-linux: $*" >&2; }
 
+# Splits debug info out of $1 into $2, stderr captured to $3. Tries the host's
+# own objcopy first (the common case: a native desktop Linux build, or an
+# Android build whose target ABI happens to match the host's), then falls
+# back to the NDK's llvm-objcopy.
+#
+# WHY A FALLBACK IS NEEDED AT ALL: this script's header used to claim host
+# objcopy/nm work on a cross-compiled Android .so "because neither tool reads
+# the ELF OSABI/interp fields" - true, but incomplete. That claim was only
+# ever verified against an Android x86_64 .so, whose ELF MACHINE TYPE
+# (EM_X86_64) matches the host's. It does NOT hold for arm64-v8a: this
+# machine's `objcopy` (Ubuntu's binutils-x86-64-linux-gnu package, native
+# BFD backend only) answers "objcopy: Unable to recognise the architecture of
+# the input file" on an EM_AARCH64 .so and the script silently archived the
+# module copy with NO split-debug file beside it (confirmed 2026-09-16,
+# building the Android alpha release: x86_64 got a debug split, arm64-v8a did
+# not, from the same build). llvm-objcopy has no such gap - LLVM's object
+# tooling does not need a per-target BFD backend the way GNU binutils does -
+# and the NDK always ships one.
+run_objcopy_only_keep_debug() {
+    local bin="$1" dest="$2" errfile="$3"
+    if command -v objcopy >/dev/null 2>&1 && objcopy --only-keep-debug "$bin" "$dest" 2>"$errfile"; then
+        return 0
+    fi
+    local ndk_root="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
+    if [ -n "$ndk_root" ]; then
+        local llvm_objcopy
+        for llvm_objcopy in \
+            "$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy" \
+            "$ndk_root/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-objcopy"
+        do
+            if [ -x "$llvm_objcopy" ] && "$llvm_objcopy" --only-keep-debug "$bin" "$dest" 2>"$errfile"; then
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+
 BINARY=""
 ARCHIVE_ROOT=""
 VERSION=""
@@ -109,29 +147,28 @@ MODULE_DEST="$MODULE_DIR/$MODULE"
 
 # Only when it differs: a rebuild that did not relink keeps the same build
 # id, and re-splitting/re-copying on every incremental build would be noticed
-# on a binary this size.
+# on a binary this size. ALSO redo it if a previous run archived the module
+# but never managed the debug split (the host-objcopy-vs-arm64 gap above) -
+# otherwise a build id archived incomplete once stays incomplete forever,
+# because the size-only check would call it done.
 NEED=1
-if [ -f "$MODULE_DEST" ]; then
+if [ -f "$MODULE_DEST" ] && [ -f "$DEBUG_DEST" ]; then
     if [ "$(stat -c%s "$BINARY" 2>/dev/null)" = "$(stat -c%s "$MODULE_DEST" 2>/dev/null)" ]; then
         NEED=0
     fi
 fi
 
 if [ "$NEED" = "1" ]; then
-    if command -v objcopy >/dev/null 2>&1; then
+    if run_objcopy_only_keep_debug "$BINARY" "$DEBUG_DEST" "/tmp/.objcopy_err.$$"; then
         # --only-keep-debug then --add-gnu-debuglink is the standard split-debug
         # recipe; the copy left in the archive as "the module" also keeps its
         # full symbol table (no --strip-debug applied to it) so tools/elf_symmap.py
         # can read it even on a machine that has only this half of the archive.
-        if objcopy --only-keep-debug "$BINARY" "$DEBUG_DEST" 2>/tmp/.objcopy_err.$$; then
-            chmod 644 "$DEBUG_DEST" 2>/dev/null || true
-        else
-            warn "objcopy --only-keep-debug failed: $(cat /tmp/.objcopy_err.$$ 2>/dev/null)"
-        fi
-        rm -f /tmp/.objcopy_err.$$
+        chmod 644 "$DEBUG_DEST" 2>/dev/null || true
     else
-        warn "objcopy not found; no split-debug file archived for build id $BUILD_ID (the module copy below still carries its symbol table)"
+        warn "objcopy --only-keep-debug failed: $(cat "/tmp/.objcopy_err.$$" 2>/dev/null)"
     fi
+    rm -f "/tmp/.objcopy_err.$$"
     cp -f "$BINARY" "$MODULE_DEST"
 fi
 

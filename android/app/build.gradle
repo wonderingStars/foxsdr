@@ -7,6 +7,61 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// ---------------------------------------------------------------------------
+// THE ANDROID ALPHA BUILD NUMBER - the ONE place it is written.
+// ---------------------------------------------------------------------------
+//
+// Bump this when the alpha needs a new distinguishable build without the
+// product version itself changing (a re-signed rebuild, a native fix that
+// does not warrant a version bump). It feeds both the version NAME below and
+// the native CASCADE_VERSION_SUFFIX passed to CMake, so the app's own
+// versionName and the compiled-in versionString() the crash/usage reports
+// carry can never say two different alpha numbers.
+def foxsdrAndroidBuildNumber = 1
+// Must match the root CMakeLists.txt's `project(cascade VERSION ...)`. There
+// is no way to read that file from here without shelling out on every
+// configure, and this is bumped in the same commit as that line anyway.
+def foxsdrAndroidBaseVersion = '0.98.0'
+def foxsdrAndroidVersionSuffix = "-android.${foxsdrAndroidBuildNumber}"
+
+// ---------------------------------------------------------------------------
+// RELEASE SIGNING
+// ---------------------------------------------------------------------------
+//
+// Read from ~/.gradle/gradle.properties (Windows: %USERPROFILE%\.gradle\
+// gradle.properties) rather than from anything in this repository, because a
+// keystore path and its passwords must never be committed:
+//
+//   FOXSDR_KEYSTORE       absolute path to the .jks
+//   FOXSDR_KEYSTORE_PASS  keystore password
+//   FOXSDR_KEY_ALIAS      key alias inside it (foxsdr-alpha for the alpha)
+//   FOXSDR_KEY_PASS       key password (same as the keystore password here)
+//
+// tools/build-android-release.sh generates that keystore and writes these
+// four properties into WSL's ~/.gradle/gradle.properties; a Windows build
+// needs the same four properties written into
+// C:\Users\<you>\.gradle\gradle.properties by hand.
+//
+// ABSENT ON PURPOSE IS NOT A BUILD FAILURE. A debug build, a CI checkout with
+// no keystore, or a machine nobody has provisioned yet must still be able to
+// run `assembleRelease` and get an (unsigned, uninstallable-as-an-update)
+// APK out the other end with a clear warning - never a hard Gradle failure
+// that reads like something is broken.
+def foxsdrKeystorePath = project.findProperty('FOXSDR_KEYSTORE')
+def foxsdrKeystorePass = project.findProperty('FOXSDR_KEYSTORE_PASS')
+def foxsdrKeyAlias = project.findProperty('FOXSDR_KEY_ALIAS')
+def foxsdrKeyPass = project.findProperty('FOXSDR_KEY_PASS')
+def foxsdrCanSignRelease = foxsdrKeystorePath && foxsdrKeystorePass &&
+        foxsdrKeyAlias && foxsdrKeyPass && file(foxsdrKeystorePath).exists()
+
+if (!foxsdrCanSignRelease) {
+    logger.warn('foxsdr: RELEASE BUILD IS UNSIGNED. Set FOXSDR_KEYSTORE, ' +
+            'FOXSDR_KEYSTORE_PASS, FOXSDR_KEY_ALIAS and FOXSDR_KEY_PASS in ' +
+            '~/.gradle/gradle.properties (see android/app/build.gradle) to ' +
+            'sign it. An unsigned release APK cannot be installed as an ' +
+            'update over a previously signed alpha.')
+}
+
 android {
     // The namespace is the R/BuildConfig package and the default for relative
     // manifest class names; the applicationId is the identity the Play Store
@@ -27,12 +82,19 @@ android {
         // needs, and for the AAudio low-latency path the audio slice will want.
         minSdk 26
         targetSdk 34
-        versionCode 1
-        // Kept deliberately plain. The native library reports the real product
-        // version - it is compiled in from the root CMakeLists.txt's project
-        // VERSION - and a second version string maintained by hand here would
-        // be a second thing to forget to bump.
-        versionName '0.97.0'
+        // Bumped from the stale 1 alongside the alpha versionName below - a
+        // versionCode that never moved would let Android refuse this as an
+        // "older" build than nothing at all.
+        versionCode 2
+        // NOT the plain product version any more. This is a SIDELOADABLE
+        // ALPHA: every report it sends must be distinguishable from a
+        // desktop 0.98.0 release, so the name carries the same
+        // "-android.<buildNumber>" suffix as the native versionString()
+        // (CASCADE_VERSION_SUFFIX below) - built from the two `def`s above so
+        // the app's own version and the compiled-in one can never drift apart.
+        // The site's version comparator treats "-<anything>" as a
+        // pre-release, which is exactly what an alpha must look like.
+        versionName "${foxsdrAndroidBaseVersion}${foxsdrAndroidVersionSuffix}"
 
         ndk {
             // 64-BIT ONLY, AND THAT IS A DECISION RATHER THAN AN OMISSION.
@@ -62,7 +124,12 @@ android {
                         // exceptions that cannot cross the boundary. Choosing
                         // it now costs one 1 MB library in the APK and saves
                         // an unfixable ABI problem later.
-                        '-DANDROID_STL=c++_shared'
+                        '-DANDROID_STL=c++_shared',
+                        // Makes the NATIVE versionString() (src/core/version.cpp)
+                        // say "0.98.0-android.1", matching versionName above -
+                        // built from the same two `def`s so a bumped build
+                        // number can never update one and not the other.
+                        "-DCASCADE_VERSION_SUFFIX=${foxsdrAndroidVersionSuffix}"
                 cppFlags '-std=c++20'
                 // ONLY THE LIBRARY THE APK NEEDS. The root CMakeLists now also
                 // defines the on-device test subset (tests/CMakeLists.txt under
@@ -84,6 +151,17 @@ android {
         }
     }
 
+    signingConfigs {
+        if (foxsdrCanSignRelease) {
+            release {
+                storeFile file(foxsdrKeystorePath)
+                storePassword foxsdrKeystorePass
+                keyAlias foxsdrKeyAlias
+                keyPassword foxsdrKeyPass
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // Left unminified and debuggable: this is the build a person with
@@ -102,6 +180,10 @@ android {
             // whose symbols were never kept makes every crash report against it
             // unreadable forever, and that cannot be repaired after the fact.
             ndk { debugSymbolLevel 'FULL' }
+            if (foxsdrCanSignRelease) {
+                signingConfig signingConfigs.release
+            }
+            // else: left unsigned - see the foxsdrCanSignRelease warning above.
         }
     }
 
@@ -260,4 +342,15 @@ gradle.projectsEvaluated {
             : 0
     logger.lifecycle("foxsdr: ${staged} bundled plugin module file(s) staged in " +
             "${foxsdrJniLibs}")
+}
+
+// A plain string on its own line on stdout, for tools/build-android-release.sh
+// to capture without parsing Gradle's own log formatting - the alternative
+// (grepping the APK listing file or re-deriving the two `def`s above in
+// shell) is a second place this version could drift from the one actually
+// built.
+tasks.register('printVersionName') {
+    doLast {
+        println(android.defaultConfig.versionName)
+    }
 }

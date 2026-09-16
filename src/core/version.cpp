@@ -20,7 +20,29 @@ namespace cascade {
 #define CASCADE_VERSION_STRING "0.0.0-unconfigured"
 #endif
 
-const char* versionString() { return CASCADE_VERSION_STRING; }
+// CASCADE_VERSION_SUFFIX is appended to CASCADE_VERSION_STRING - empty for a
+// normal desktop build, "-android.<buildNumber>" for the Android alpha (set
+// by android/app/build.gradle's externalNativeBuild arguments, via the
+// CASCADE_VERSION_SUFFIX cache variable in the root CMakeLists.txt), so a
+// sideloaded alpha's crash and usage reports are never mistaken for a
+// desktop release of the same version. The site's version comparator treats
+// "-<anything>" as a pre-release, which is what an alpha needs.
+#ifndef CASCADE_VERSION_SUFFIX
+#define CASCADE_VERSION_SUFFIX ""
+#endif
+
+std::string appendVersionSuffix(std::string base, const char* suffix) {
+    if (suffix != nullptr && suffix[0] != '\0') {
+        base += suffix;
+    }
+    return base;
+}
+
+const char* versionString() {
+    static const std::string s =
+        appendVersionSuffix(CASCADE_VERSION_STRING, CASCADE_VERSION_SUFFIX);
+    return s.c_str();
+}
 
 // The commit - a sharper version of the same reason. A version identifies a
 // RELEASE; a commit identifies a BUILD. An engineer handed a crash report has
