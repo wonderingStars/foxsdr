@@ -62,7 +62,16 @@ message(STATUS "cascade version string: ${CASCADE_VERSION_STRING}")
 # whole file for the benefit of a build that shares none of it.
 #
 # The shell's own build lives in src/platform/android/CMakeLists.txt.
-if(CASCADE_ANDROID)
+#
+# TWO ANDROID ENTRY POINTS, deliberately, until the next slice joins them:
+# Gradle passes CASCADE_ANDROID_SHELL_ONLY as well and gets this early return
+# (the first-screen shell over its own minimal target); the NDK cross-build
+# of the whole portable core (option CASCADE_ANDROID further down, a
+# cascade_lib with the desktop-only units excluded, plus its on-device test
+# subset) does not set it and reads on through the whole file. The slice
+# that runs the real AppWindow on Android replaces the shell's minimal
+# target with that library and removes this variable.
+if(CASCADE_ANDROID AND CASCADE_ANDROID_SHELL_ONLY)
     add_subdirectory(src/platform/android)
     return()
 endif()

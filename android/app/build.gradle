@@ -52,6 +52,12 @@ android {
                 // for why the desktop half is skipped wholesale rather than
                 // guarded line by line.
                 arguments '-DCASCADE_ANDROID=ON',
+                        // The shell-only entry point: the root CMakeLists
+                        // returns early into src/platform/android with this
+                        // set, and reads on into the full portable-core
+                        // library (cascade_lib under CASCADE_ANDROID) without
+                        // it. The next slice drops this and links that library.
+                        '-DCASCADE_ANDROID_SHELL_ONLY=ON',
                         // c++_shared, not c++_static: this process will load
                         // decoder plugins as separate .so files later, and two
                         // copies of a static libc++ in one process means two
