@@ -1768,7 +1768,16 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const ImGuiStyle& style = ImGui::GetStyle();
     const float fieldH = uiPx + style.FramePadding.y * 2.0f + cascade::gui::px(6.0f);
     const char* searchLegend = "Searches name, maker and description.";
-    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + tinyH + 4.0f +
+    // WRAPPED, NOT ASSUMED SINGLE-LINE. This sentence is drawn wrapped to
+    // wellInner (below), and wellInner is a third of the page less two lots
+    // of padding - narrow enough, at a large enough face, that the sentence
+    // can take two lines. A height that assumed one (tinyH alone) let the
+    // count line under it print through the sentence's own second line the
+    // moment that happened, which is exactly what a bigger UI scale does to
+    // it: the well and the face do not grow by quite the same factor, so the
+    // line count this sentence takes is not fixed across scales.
+    const float searchLegendH = wrapH(uf, tiny, wellInner, searchLegend);
+    const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + searchLegendH + 4.0f +
                          countLineHeight() + kPad;
 
     const char* showNote =
@@ -1859,7 +1868,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         y += fieldH + 9.0f;
         dl->AddText(uf, tiny, ImVec2(tl.x + kPad, y), theme::kInkMuted, searchLegend,
                     nullptr, wellInner);
-        y += tinyH + 4.0f;
+        y += wrapH(uf, tiny, wellInner, searchLegend) + 4.0f;
         // WHAT IS ON SCREEN AND WHAT EXISTS, both. "3 shown" alone cannot tell
         // a short catalogue from a filter that is hiding most of it.
         drawCountLine(dl, ImVec2(tl.x + kPad, y), static_cast<int>(visible.size()),
