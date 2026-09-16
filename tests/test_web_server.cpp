@@ -120,6 +120,10 @@ RadioStatus sampleStatus() {
     s.mode = "WFM";
     s.sourceName = "SigGen";
     s.signalDb = -42.5f;
+    // AWAY FROM THE DEFAULT ("nixie"), so the status assertion below proves
+    // the field is SERIALISED rather than merely matching what a page with no
+    // field at all would fall back to.
+    s.tunerDisplayStyle = "neon";
     return s;
 }
 
@@ -153,8 +157,23 @@ void testLoopbackWithoutPasswordServesOpenly() {
         CHECK(page->get_header_value("X-Content-Type-Options") == "nosniff");
     }
 
-    CHECK(static_cast<bool>(cli.Get("/app.css")));
-    CHECK(static_cast<bool>(cli.Get("/app.js")));
+    auto css = cli.Get("/app.css");
+    auto js = cli.Get("/app.js");
+    CHECK(static_cast<bool>(css));
+    CHECK(static_cast<bool>(js));
+    // THE READOUT'S THREE FACES have to be IN the sheet and IN the script,
+    // not only in the status payload: the style travels as a data attribute
+    // and CSS is what turns it into a look, so a sheet that lost those rules
+    // leaves a remote that accepts the setting and ignores it - and, like the
+    // font routes above, does so silently.
+    if (css) {
+        CHECK(css->body.find("#freqDigits[data-style=\"neon\"]") != std::string::npos);
+        CHECK(css->body.find("#freqDigits[data-style=\"plain\"]") != std::string::npos);
+    }
+    if (js) {
+        CHECK(js->body.find("tunerDisplayStyle") != std::string::npos);
+        CHECK(js->body.find("dataset.style") != std::string::npos);
+    }
 
     // THE THREE FACES, and the policy that lets the browser fetch them.
     //
@@ -191,6 +210,11 @@ void testLoopbackWithoutPasswordServesOpenly() {
         CHECK(status->status == 200);
         CHECK(status->body.find("\"mode\":\"WFM\"") != std::string::npos);
         CHECK(status->body.find("\"centerHz\":1") != std::string::npos);
+        // THE FREQUENCY READOUT'S FACE reaches the browser (GitHub issue #1).
+        // The remote draws its own ten-digit readout, so the choice made at the
+        // desk has to travel or the setting would be a desk-only preference
+        // with a second, silently different readout beside it.
+        CHECK(status->body.find("\"tunerDisplayStyle\":\"neon\"") != std::string::npos);
     }
 
     server.stop();

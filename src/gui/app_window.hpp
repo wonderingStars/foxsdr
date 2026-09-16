@@ -412,6 +412,19 @@ inline bool mapGeometryOnScreen(int x, int y, int w, int h,
     return mapReachableMonitor(x, y, w, h, workAreas) >= 0;
 }
 
+// FIELD-WISE AppConfig COMPARISON - the whole of the save debounce's decision
+// about whether anything changed. Declared here, rather than left file-local
+// in app_window.cpp, for the reason the pure decisions above are: a field
+// MISSING from this comparison is not a compile error and not a visible bug -
+// it is a setting that reaches the file only when something else happens to
+// change in the same session, which is the subtlest way a preference can be
+// lost. tests/test_config.cpp asks it directly, one field at a time.
+//
+// Exact float compares are correct: both sides come from the same
+// currentConfig() code path, so any difference is a real user-visible change,
+// never noise.
+bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b);
+
 // The share of a monitor's work area the map window OPENS at when nothing was
 // saved. A DEFAULT ONLY: a window that exactly fills the work area looks
 // maximised, and the user then cannot see what it is covering - which is a
@@ -1830,6 +1843,13 @@ private:
     // AppConfig fields these round-trip through.
     int bandPlanSizeIndex_ = 0;
     int bandPlanPaletteIndex_ = 0;
+
+    // WHICH FACE THE FREQUENCY COUNTER WEARS (GitHub issue #1). Held as the
+    // STYLE, not as the name: the name is the config file's vocabulary and
+    // the enum is what the painter switches on, so the one conversion happens
+    // where the config arrives and nowhere else. Defaults to the plate the
+    // deck has always had.
+    cascade::gui::TunerStyle tunerStyle_ = cascade::gui::TunerStyle::Nixie;
 
     // Plugin host: scanned once at construction and on Rescan. Owns the
     // loaded modules, so it must outlive nothing in particular here — but it
