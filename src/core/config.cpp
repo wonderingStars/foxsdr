@@ -636,23 +636,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     return true;
 }
 
-bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::string& error) {
-    error.clear();
-    const fs::path target(path);
-
-    std::error_code ec;
-    const fs::path parent = target.parent_path();
-    if (!parent.empty()) {
-        fs::create_directories(parent, ec);
-        // create_directories is a no-op without error on an existing
-        // directory, but reports one if a FILE squats on the path.
-        if (ec || !fs::is_directory(parent)) {
-            error = "config: cannot create directory \"" + parent.string() +
-                    "\": " + (ec ? ec.message() : "path exists and is not a directory");
-            return false;
-        }
-    }
-
+std::string ConfigStore::serialize(const AppConfig& cfg) {
     json j;
     j["schemaVersion"] = cfg.schemaVersion;
     j["sourceKind"] = cfg.sourceKind;
@@ -784,13 +768,36 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     // includes user-entered or remote strings, and a byte that is not valid
     // UTF-8 must cost one replacement character, never a throw out of a save
     // path. tests/test_json_dump_policy.cpp holds every site to this.
-    const std::string text =
-        j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+    return j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+}
+
+bool ConfigStore::writeFile(const std::string& path, const std::string& text,
+                             std::string& error) {
+    error.clear();
+    const fs::path target(path);
+
+    std::error_code ec;
+    const fs::path parent = target.parent_path();
+    if (!parent.empty()) {
+        fs::create_directories(parent, ec);
+        // create_directories is a no-op without error on an existing
+        // directory, but reports one if a FILE squats on the path.
+        if (ec || !fs::is_directory(parent)) {
+            error = "config: cannot create directory \"" + parent.string() +
+                    "\": " + (ec ? ec.message() : "path exists and is not a directory");
+            return false;
+        }
+    }
 
     // ATOMIC WRITE. The temp file lives in the target's own directory so the
     // final rename is a same-volume move — cross-volume "renames" degrade to
     // copy+delete, which is exactly the partial-write window this exists to
-    // close. The pid suffix keeps parallel test suites from colliding.
+    // close. The pid suffix keeps parallel test suites from colliding. It is
+    // NOT a thread id: gui::ConfigWriter runs this on a worker thread, but
+    // that worker is the only writer of this process's temp file at a time
+    // (requests are coalesced, never raced - see the file header there), so
+    // the process-wide pid is still the right scope for "don't collide with
+    // another cascade.exe", which is what this suffix has always been for.
 #ifdef _WIN32
     const int pid = _getpid();
 #else
@@ -825,6 +832,15 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
         return false;
     }
     return true;
+}
+
+bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::string& error) {
+    // UNCHANGED BEHAVIOUR, SPLIT IN TWO. Every existing caller of save() -
+    // this file's own tests among them - gets exactly the bytes and the
+    // atomicity it always got; the split exists so gui::ConfigWriter can call
+    // the two halves from different threads (see the header comment on both
+    // functions above).
+    return writeFile(path, serialize(cfg), error);
 }
 
 AppConfig startupState(AppConfig cfg) {

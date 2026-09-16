@@ -984,6 +984,13 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     audioOpen_.bind(pipeline_.audioOpener(), [this] { watchdog_.pause(); },
                     [this] { watchdog_.resume(); });
 
+    // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
+    // EITHER. gui/config_writer.hpp carries the field report ("hang ntdll.dll
+    // @ cascade::core::ConfigStore::save", 0.96.3) and the whole argument.
+    // Unlike audioOpen_ above, no watchdog hooks: config_writer.hpp never
+    // blocks the requesting frame, so there is nothing here to bracket.
+    configWriter_.bind(cascade::core::ConfigStore::writeFile);
+
     devices_ = pipeline_.audio().listOutputDevices();
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
         if (devices_[static_cast<std::size_t>(i)].isDefault) { deviceIndex_ = i; }
@@ -1501,6 +1508,14 @@ int AppWindow::run(int frames) {
 
         drawUi();
 
+        // Collects a config write configWriter_ finished, whether it was
+        // requested by maybeSaveConfig() below, by saveConfigNow(), or by the
+        // teardown - see requestConfigSave()/pollConfigWriter() in
+        // gui/config_writer.hpp's callers. A no-op every frame nothing was
+        // ever requested (hermetic runs, or a session that never changed a
+        // setting), so it costs nothing to call unconditionally.
+        pollConfigWriter();
+
         // Debounced runtime persistence: the config file follows the session
         // ~2 s after the last change, so a crash loses almost nothing.
         // Hermetic runs (empty configPath_) never touch the disk.
@@ -1840,13 +1855,37 @@ int AppWindow::run(int frames) {
     // stopped last as ever, is what covers that stretch.
     telemetryCleanExit_ = true;
     if (!configPath_.empty()) {
-        cascade::core::AppConfig marked = savedCfg_;
+        // Built on lastRequestedConfig_, not savedCfg_: the final-state save
+        // just above (still async - see gui/config_writer.hpp) may not have
+        // been collected yet, so savedCfg_ can still be one save behind.
+        // lastRequestedConfig_ is not - it is set the instant a save is
+        // REQUESTED, which is exactly the "what did we just ask to be
+        // written" this rewrite needs, and nothing has requested another
+        // save between that call and this one.
+        cascade::core::AppConfig marked = lastRequestedConfig_;
         marked.telemetryCleanExit = true;
-        std::string err;
-        if (cascade::core::ConfigStore::save(configPath_, marked, err)) {
-            savedCfg_ = marked;
+        requestConfigSave(marked);
+    }
+
+    // THE LAST SAVE MUST BE GIVEN A REAL CHANCE TO LAND, OR BE SEEN NOT TO -
+    // see gui/config_writer.hpp. Everything above this point only QUEUED
+    // bytes; this is the one place that WAITS, bounded and charged in the
+    // shutdown budget (HangWatchdog::kShutdownBoundedWaitsMs,
+    // tests/test_shutdown_budget.cpp). Past the bound the write is
+    // ABANDONED rather than joined - the same choice AudioOpen::reap() makes
+    // for a wedged device open at quit - and logged, so a config that never
+    // reached disk is a line in the log instead of a silent gap.
+    if (!configPath_.empty()) {
+        if (configWriter_.finishOrAbandon(cascade::gui::ConfigWriter::kSaveBound)) {
+            if (configWriter_.lastOk()) {
+                savedCfg_ = lastRequestedConfig_;
+            } else {
+                std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
+            }
         } else {
-            std::fprintf(stderr, "cascade: %s\n", err.c_str());
+            cascade::core::diagLogf(
+                "config: final save abandoned - the disk did not answer within %lld ms",
+                static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
         }
     }
 
@@ -18841,26 +18880,41 @@ void AppWindow::maybeSaveConfig(double nowS) {
         return;
     }
     if (nowS - lastChangeTimeS_ >= kConfigDebounceS) {
-        std::string err;
-        if (cascade::core::ConfigStore::save(configPath_, cur, err)) {
-            savedCfg_ = cur;
-            lastChangeTimeS_ = -1.0;
-        } else {
-            // Retry no sooner than the next debounce window — a locked file
-            // must not turn into one save attempt per rendered frame.
-            lastChangeTimeS_ = nowS;
-            std::fprintf(stderr, "cascade: %s\n", err.c_str());
-        }
+        // THE REQUEST NEVER BLOCKS (see gui/config_writer.hpp) - this is the
+        // exact call the 0.96.3 field report's stack ran synchronously
+        // instead. lastChangeTimeS_ resets to -1.0 optimistically: if the
+        // write goes on to fail, savedCfg_ stays stale (pollConfigWriter()
+        // only advances it on success), so the very next frame's
+        // configsEqual(cur, savedCfg_) reads false again and this function's
+        // first branch restarts a fresh debounce window - the same "retry no
+        // sooner than the next window" behaviour the old synchronous failure
+        // path spelled out explicitly, reproduced here without a special
+        // case.
+        requestConfigSave(cur);
+        lastChangeTimeS_ = -1.0;
     }
 }
 
 void AppWindow::saveConfigNow() {
-    cascade::core::AppConfig cur = currentConfig();
-    std::string err;
-    if (cascade::core::ConfigStore::save(configPath_, cur, err)) {
-        savedCfg_ = cur;
+    requestConfigSave(currentConfig());
+}
+
+void AppWindow::requestConfigSave(const cascade::core::AppConfig& cfg) {
+    lastRequestedConfig_ = cfg;
+    configWriter_.requestAsync(configPath_, cascade::core::ConfigStore::serialize(cfg));
+}
+
+void AppWindow::pollConfigWriter() {
+    if (!configWriter_.poll()) { return; }
+    if (configWriter_.lastOk()) {
+        // Only when fully drained: a write that just finished but has
+        // another coalesced behind it is not yet the LAST requested content
+        // (poll() has already started that queued write by the time this
+        // runs) - see gui/config_writer.hpp's finishOrAbandon() comment for
+        // the same reasoning applied to the shutdown drain below.
+        if (!configWriter_.inFlight()) { savedCfg_ = lastRequestedConfig_; }
     } else {
-        std::fprintf(stderr, "cascade: %s\n", err.c_str());
+        std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
     }
 }
 
