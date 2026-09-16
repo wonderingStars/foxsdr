@@ -587,9 +587,12 @@ void applyWindowIcon(GLFWwindow* window) {
 // place for one of them to be wrong. Both now come from gui/track_metrics.hpp,
 // which is where they are tested against known pairs.
 
-// Field-wise AppConfig comparison for the save debounce. Exact float
-// compares are correct here: both sides come from the same currentConfig()
-// code path, so any difference is a real user-visible change, never noise.
+}  // namespace
+
+// Field-wise AppConfig comparison for the save debounce. DECLARED IN
+// app_window.hpp - see the comment there for why it is not file-local: a
+// field missing from this list is a setting that reaches the file only by
+// accident, and tests/test_config.cpp asks this function directly.
 bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
     return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
            a.nativeArgs == b.nativeArgs && a.nativeBiasT == b.nativeBiasT &&
@@ -608,6 +611,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.bandPlanSelection == b.bandPlanSelection &&
            a.bandPlanSize == b.bandPlanSize && a.bandPlanPalette == b.bandPlanPalette &&
+           // The frequency display style: picked in the VIEW bank, so without
+           // it here a choice would reach the file only when something else
+           // changed in the same session.
+           a.tunerDisplayStyle == b.tunerDisplayStyle &&
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
@@ -684,6 +691,8 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.diagnosticsEnabled == b.diagnosticsEnabled &&
            a.diagnosticsMinidump == b.diagnosticsMinidump;
 }
+
+namespace {
 
 // --- Plugin browser helpers (P9) ---------------------------------------------
 
@@ -4516,8 +4525,19 @@ void drawTunerFooter(ImDrawList* dl, const ImVec2& plateTL, const ImVec2& plateB
 // tunes. bright is false for a leading zero, which is drawn as a barely-lit
 // figure with no glow: the deck's own rule that the zeros ahead of the first
 // significant digit carry no value and are dimmed.
+//
+// WHAT THE PAINT STRUCT DOES HERE (0.97.x, GitHub issue #1). Every number
+// this function used to carry as a literal that a STYLE could legitimately
+// change - the figure's size as a fraction of the tube, its colour, a leading
+// zero's alpha, the cell's own ground, the reach of the two glows and the
+// tightest glow's colour - now comes from cascade::gui::tunerCellPaint, whose
+// Nixie row is a transcription of exactly those literals. So this tube draws
+// pixel-for-pixel what it always did, and the numbers that describe it are
+// somewhere a test can pin. The reference's OTHER two shadows (the wider ring
+// and the soft disc behind the figure) keep their own colours below: they are
+// the reference's, not the style's.
 void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digit, bool bright,
-                   float s) {
+                   float s, const cascade::gui::TunerCellPaint& paint) {
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
     if (w < 4.0f || h < 4.0f) { return; }
@@ -4537,11 +4557,11 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
     // "ellipse at 50% 20%" gradient as concentric ellipses clipped to the
     // glass - "#2a1d10 0%, #120c06 60%, #050403 100%".
     tubePath(dl, tl, br, rTop, rBot);
-    dl->PathFillConvex(hexCol(0x050403));
+    dl->PathFillConvex(hexCol(paint.cellRgb));
     dl->PushClipRect(tl, br, true);
     {
         const GradStop glass[3] = {{0.0f, hexCol(0x2a1d10)}, {0.6f, hexCol(0x120c06)},
-                                   {1.0f, hexCol(0x050403)}};
+                                   {1.0f, hexCol(paint.cellRgb)}};
         const ImVec2 gc(tl.x + w * 0.5f, tl.y + h * 0.2f);
         const float rx = w * 0.71f;
         const float ry = h * 1.13f;
@@ -4571,7 +4591,7 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
         // face had in the 41-unit tube of the first cut (0.62 of 41), kept
         // when the plate was compacted: the digit is the one thing on the
         // plate that was not made smaller.
-        const float fontPx = std::max(12.0f, cascade::gui::kFreqTubeH * s * 0.635f);
+        const float fontPx = std::max(12.0f, cascade::gui::kFreqTubeH * s * paint.digitFrac);
         const char txt[2] = {digit, '\0'};
         const ImVec2 sz8 = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, "8");
         const ImVec2 sz = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, txt);
@@ -4588,29 +4608,128 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
             const ImVec2 gc2(at.x + sz.x * 0.5f, at.y + sz.y * 0.5f);
             for (int i = 5; i >= 1; --i) {
                 const float t = static_cast<float>(i) / 5.0f;
-                dl->AddEllipseFilled(gc2, ImVec2(sz.x * 0.45f + 10.0f * s * t, sz.y * 0.45f + 10.0f * s * t),
+                dl->AddEllipseFilled(gc2,
+                                     ImVec2(sz.x * 0.45f + paint.haloUnits * s * t,
+                                            sz.y * 0.45f + paint.haloUnits * s * t),
                                      IM_COL32(255, 90, 0, 14), 0.0f, 0);
             }
-            const float o2 = std::max(1.5f, 3.0f * s);
+            // The two rings' reach is the style's (glowSpread, whose half is
+            // also the floor the outer ring had); the WIDER ring's colour stays
+            // the reference's second shadow, while the tighter one - the ring a
+            // reader actually sees around the figure - is the style's.
+            const float o2 = std::max(paint.glowSpread * 0.5f, paint.glowSpread * s);
             const float o1 = std::max(1.0f, 1.5f * s);
             const ImU32 wide = IM_COL32(255, 106, 0, 36);
-            const ImU32 tight = IM_COL32(255, 138, 31, 70);
+            const ImU32 tight = hexCol(paint.glowRgb, paint.glowAlpha);
             const float diag = 0.7071f;
             const ImVec2 ring[8] = {ImVec2(1, 0), ImVec2(-1, 0), ImVec2(0, 1), ImVec2(0, -1),
                                     ImVec2(diag, diag), ImVec2(-diag, diag), ImVec2(diag, -diag),
                                     ImVec2(-diag, -diag)};
-            for (const ImVec2& d : ring) {
-                dl->AddText(font, fontPx, ImVec2(at.x + d.x * o2, at.y + d.y * o2), wide, txt);
+            if (paint.glowLayers >= 2) {
+                for (const ImVec2& d : ring) {
+                    dl->AddText(font, fontPx, ImVec2(at.x + d.x * o2, at.y + d.y * o2), wide,
+                                txt);
+                }
             }
-            for (const ImVec2& d : ring) {
-                dl->AddText(font, fontPx, ImVec2(at.x + d.x * o1, at.y + d.y * o1), tight, txt);
+            if (paint.glowLayers >= 1) {
+                for (const ImVec2& d : ring) {
+                    dl->AddText(font, fontPx, ImVec2(at.x + d.x * o1, at.y + d.y * o1), tight,
+                                txt);
+                }
             }
-            dl->AddText(font, fontPx, at, hexCol(0xffb347), txt);
+            dl->AddText(font, fontPx, at, hexCol(paint.digitRgb, paint.digitAlpha), txt);
         } else {
             // A leading zero: lit only enough to be read as a figure that is
             // there, with none of the glow that says it carries value.
-            dl->AddText(font, fontPx, at, hexCol(0xffb347, 96), txt);
+            dl->AddText(font, fontPx, at, hexCol(paint.digitRgb, paint.dimAlpha), txt);
         }
+    }
+    dl->PopClipRect();
+}
+
+// --- one FLAT digit cell (the "neon" and "plain" styles) -----------------------
+//
+// WHY A SECOND PAINTER RATHER THAN A FLAG IN THE FIRST. GitHub issue #1 asked
+// for a frequency display that is easier to read, and what makes the Nixie
+// harder to read is not its colour - it is the furniture: a 25 px figure in a
+// 40 px cell, behind a radial glass, two sets of mesh hairlines and the ghost
+// of an unlit "8". None of that can be turned down to nothing without leaving
+// a function that is mostly disabled branches, so the two flat styles get
+// their own painter and the tube keeps its own.
+//
+// SAME RECTANGLE, SAME GESTURES. tl/br is the tube rectangle - the
+// InvisibleButton's own registered rectangle, exactly as above - so the wheel,
+// the click that opens the typed editor and both switch halves beneath are
+// untouched by the choice of style. Only the ink inside this rectangle differs.
+//
+// EVERY NUMBER COMES FROM THE PAINT STRUCT (gui/tune_control.hpp), which is
+// pinned in tests/test_tune_control.cpp: a later edit here cannot quietly make
+// the neon figure small or the plain one grey.
+void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digit, bool bright,
+                       float s, const cascade::gui::TunerCellPaint& paint) {
+    const float w = br.x - tl.x;
+    const float h = br.y - tl.y;
+    if (w < 4.0f || h < 4.0f) { return; }
+    // THE CELL. A near-black ground with a soft rim, no rounded-top envelope:
+    // the envelope is the tube's silhouette and the tube is what these styles
+    // trade away. The corner radius is the plate's own 4-unit corner, halved,
+    // which keeps ten cells reading as ten cells rather than as one bar.
+    const float r = std::max(1.0f, 2.0f * s);
+    dl->AddRectFilled(tl, br, hexCol(paint.cellRgb), r);
+    dl->AddRect(tl, br, IM_COL32(255, 255, 255, 18), r, 0, std::max(1.0f, 1.0f * s));
+    dl->PushClipRect(tl, br, true);
+    {
+        // The same monospaced digit face the counter has always used, so a 1
+        // sits where an 8 did and a digit cannot dance sideways as it changes.
+        ImFont* font = cascade::gui::fonts::reading();
+        const float fontPx = std::max(12.0f, cascade::gui::kFreqTubeH * s * paint.digitFrac);
+        const char txt[2] = {digit, '\0'};
+        const ImVec2 sz = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, txt);
+        const ImVec2 at(tl.x + (w - sz.x) * 0.5f, tl.y + (h - sz.y) * 0.5f);
+        const float diag = 0.7071f;
+        const ImVec2 ring[8] = {ImVec2(1, 0),     ImVec2(-1, 0),       ImVec2(0, 1),
+                                ImVec2(0, -1),    ImVec2(diag, diag),  ImVec2(-diag, diag),
+                                ImVec2(diag, -diag), ImVec2(-diag, -diag)};
+        if (bright && paint.glowLayers > 0) {
+            // THE HALO, a soft disc behind the figure, the same stand-in for a
+            // radial blur the tube uses. Skipped entirely when the style asks
+            // for no reach, which is what makes "plain" plain.
+            if (paint.haloUnits > 0.0f) {
+                const ImVec2 gc(at.x + sz.x * 0.5f, at.y + sz.y * 0.5f);
+                for (int i = 5; i >= 1; --i) {
+                    const float t = static_cast<float>(i) / 5.0f;
+                    dl->AddEllipseFilled(
+                        gc,
+                        ImVec2(sz.x * 0.45f + paint.haloUnits * s * t,
+                               sz.y * 0.45f + paint.haloUnits * s * t),
+                        hexCol(paint.glowRgb,
+                               static_cast<unsigned>(paint.glowAlpha) / 6u),
+                        0.0f, 0);
+                }
+            }
+            // THE RINGS, outermost first, each a ring of eight offset copies of
+            // the glyph. The outer ones are fainter, so the ink thickens toward
+            // the figure the way a real tube's bloom does - the innermost ring
+            // is the style's own glowAlpha, and the rest are fractions of it.
+            for (int k = 0; k < paint.glowLayers; ++k) {
+                const float frac =
+                    static_cast<float>(paint.glowLayers - k) / static_cast<float>(paint.glowLayers);
+                const float off = std::max(1.0f, paint.glowSpread * frac * s);
+                const unsigned a = std::max(
+                    1u, static_cast<unsigned>(paint.glowAlpha) * static_cast<unsigned>(k + 1) /
+                            static_cast<unsigned>(paint.glowLayers));
+                const ImU32 col = hexCol(paint.glowRgb, a);
+                for (const ImVec2& d : ring) {
+                    dl->AddText(font, fontPx, ImVec2(at.x + d.x * off, at.y + d.y * off), col, txt);
+                }
+            }
+        }
+        // THE FIGURE. Drawn last, over its own glow, so the glow never washes
+        // out the shape a reader is actually reading - which is the whole
+        // difference between a neon sign and a smear. A leading zero carries no
+        // value and is dimmed, the deck's own rule in every style.
+        dl->AddText(font, fontPx, at,
+                    hexCol(paint.digitRgb, bright ? paint.digitAlpha : paint.dimAlpha), txt);
     }
     dl->PopClipRect();
 }
@@ -4842,6 +4961,12 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // switchHalfButton's own comment for what it draws when this is set.
     const char* dbgInputEnv = std::getenv("FOXSDR_DEBUG_INPUT");
     const bool debugSwitchOutline = dbgInputEnv != nullptr && dbgInputEnv[0] != '\0';
+    // WHICH FACE THE CELLS WEAR, read once per frame rather than per cell so
+    // ten cells cannot disagree inside one picture. The choice reaches only
+    // this - the plate, the name plate, the bezel, the screws, the footer, the
+    // MHz readout and the RCVR lamp are drawn above and do not know about it,
+    // and neither do the tubes' own InvisibleButtons or the switch halves.
+    const cascade::gui::TunerCellPaint cellPaint = cascade::gui::tunerCellPaint(tunerStyle_);
     bool significant = false;
     bool hoveredDigit = false;
     for (int i = 0; i < kFreqCells; ++i) {
@@ -4853,7 +4978,13 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         ImGui::SetCursorScreenPos(ImVec2(tube.x0, tube.y0));
         ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
                                ImVec2(tube.x1 - tube.x0, tube.y1 - tube.y0));
-        drawNixieTube(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i], significant, s);
+        if (cellPaint.glassFurniture) {
+            drawNixieTube(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i],
+                          significant, s, cellPaint);
+        } else {
+            drawFlatDigitCell(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i],
+                              significant, s, cellPaint);
+        }
 
         // Per-digit wheel tuning. Fractional wheel deltas (touchpads) below
         // one notch still step once, in the delta's direction. Not while the
@@ -5326,6 +5457,36 @@ void AppWindow::drawDisplaySection() {
         if (minChanged && dbMin_ > dbMax_ - kMinDbSpan) { dbMin_ = dbMax_ - kMinDbSpan; }
         if (maxChanged && dbMax_ < dbMin_ + kMinDbSpan) { dbMax_ = dbMin_ + kMinDbSpan; }
         if (minChanged || maxChanged) { spectrum_->setRange(dbMin_, dbMax_); }
+
+        // THE FREQUENCY DISPLAY (GitHub issue #1: "Would be nice to be able
+        // to swap the frequency display for easier to read display? Maybe a
+        // neon effect or something that stands out."). Three faces for the
+        // counter's ten cells; the default is the Nixie plate, so the deck
+        // looks exactly as it did for anybody who never opens this row.
+        //
+        // A COMBO, because that is what a three-way choice looks like in this
+        // panel - "De-emph" a section above (kDeemphLabels) and "Reachable
+        // from" in the web section are both ImGui::Combo, and the two-way
+        // trail style in the map deck is one too. The rockers and segment
+        // keys this application also has belong to the drawn decks (the map's
+        // own panel, the plugin store), not to the menu column, and putting
+        // one here would make this row the odd control out.
+        //
+        // APPLIED LIVE: the counter reads tunerStyle_ every frame, so the
+        // plate changes under the cursor as the pick is made; currentConfig()
+        // writes the NAME, and the debounce notices through configsEqual.
+        int styleIndex = static_cast<int>(tunerStyle_);
+        if (ImGui::Combo("Frequency display", &styleIndex,
+                         cascade::gui::kTunerStyleLabels,
+                         cascade::gui::kTunerStyleCount)) {
+            // Through the name, not by casting the index back: the name is
+            // the vocabulary both ends agree on, and a label list that ever
+            // gets reordered would otherwise silently select a different
+            // style.
+            tunerStyle_ = cascade::gui::tunerStyleFromName(
+                cascade::gui::kTunerStyleNames[std::clamp(
+                    styleIndex, 0, cascade::gui::kTunerStyleCount - 1)]);
+        }
 
         // Band plan overlay (P7). Always offered, even with no plan
         // installed — the checkbox is a display preference that persists, and
@@ -16217,6 +16378,9 @@ void AppWindow::publishWebSnapshot() {
     s.volume = volume_;
     s.dbMin = dbMin_;
     s.dbMax = dbMax_;
+    // The frequency readout's face, as the NAME the page and the config file
+    // both speak - see RadioStatus::tunerDisplayStyle.
+    s.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
     s.deemphasisIndex = deemphIndex_;
     s.nrEnabled = nrEnabled_;
     s.nrStrength = nrStrength_;
@@ -17992,6 +18156,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
         bandPlanSelection_ = cfg.bandPlanSelection;
         loadBandPlan();
     }
+    // THE FREQUENCY DISPLAY STYLE, name to style, once, here. ConfigStore has
+    // already rejected a name nothing knows, and tunerStyleFromName would
+    // answer Nixie for one anyway - two guards for a user-editable file, and
+    // neither of them in the draw loop.
+    tunerStyle_ = cascade::gui::tunerStyleFromName(cfg.tunerDisplayStyle);
     // The trail switches. Not pushed into any MapView here: a page may not
     // exist yet (they are created as track-capable plugins appear), and the
     // page loop hands both to every view it draws anyway - which is also what
@@ -18583,6 +18752,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.bandPlanSelection = bandPlanSelection_;
     cfg.bandPlanSize = kBandPlanSizeKeys[std::clamp(bandPlanSizeIndex_, 0, 2)];
     cfg.bandPlanPalette = kBandPlanPaletteKeys[std::clamp(bandPlanPaletteIndex_, 0, 2)];
+    cfg.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;

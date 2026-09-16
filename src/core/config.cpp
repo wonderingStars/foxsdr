@@ -262,6 +262,25 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.bandPlanPalette != "mono") {
         out.bandPlanPalette = "classic";
     }
+    // THE FREQUENCY DISPLAY STYLE, CLAMPED ON LOAD to a name the painter
+    // knows - the same rule mapTrailStyle below follows, and for the same
+    // reason: the file is user-editable, and an unknown value would otherwise
+    // travel all the way to the draw loop for it to make the fallback
+    // decision a second time. getString already leaves the default in place
+    // for a non-string, so this only has to reject a string that is not one
+    // of the three names.
+    //
+    // THE THREE NAMES ARE MIRRORED FROM gui/tune_control.hpp's
+    // tunerStyleFromName, deliberately rather than by including it: core must
+    // not depend on gui. tests/test_config.cpp loads each name in turn and
+    // asserts the painter reads back the SAME style, so a name added on one
+    // side and not the other fails there rather than becoming a setting that
+    // saves and then does nothing.
+    getString(j, "tunerDisplayStyle", out.tunerDisplayStyle);
+    if (out.tunerDisplayStyle != "nixie" && out.tunerDisplayStyle != "neon" &&
+        out.tunerDisplayStyle != "plain") {
+        out.tunerDisplayStyle = "nixie";
+    }
     // Both default true, so an older config that has never heard of them
     // arrives with trails drawn and coloured - see AppConfig for why the two
     // are separate switches. Neither has a range to clamp: a bool read by
@@ -665,6 +684,7 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["bandPlanSize"] = cfg.bandPlanSize;
     j["bandPlanPalette"] = cfg.bandPlanPalette;
+    j["tunerDisplayStyle"] = cfg.tunerDisplayStyle;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
