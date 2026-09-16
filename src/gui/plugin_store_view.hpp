@@ -260,6 +260,20 @@ float moduleKindTagWidth();
 // need the identical figure. Call inside a frame.
 float moduleActionColumnWidth();
 
+// THE NARROW VARIANT - the key's OWN word (FIT / UPDATE / FITTED) and a
+// storeCheckKeyWidth()-style shoulder, nothing else. moduleActionColumnWidth()
+// above also has to fit the INSTALL WORDS (NOT INSTALLED, CANNOT FIT,
+// INSTALLED, REFUSED) in the same max(), which forces the column open to
+// "NOT INSTALLED" (13 characters) even on the common row whose key is just
+// "FIT" (3) - fine on a desktop-width card, but on the docked tablet's real
+// body it left the row's own text column less than half the card.
+// moduleRowColumns() below selects this one instead when the wide figure
+// would leave the text column under 60% of the card, at which point the
+// install word moves to sharing a line with the key's own state lamp (see
+// the row's drawing code) rather than needing this column's own width.
+// Call inside a frame.
+float moduleActionColumnWidthNarrow();
+
 // A MODULE CARD'S THREE COLUMNS: the kind tag, the text column (name,
 // version, summary, maker/licence), and the action column, as widths and
 // offsets from the card's own left edge (`cw`).
@@ -272,6 +286,12 @@ struct ModuleRowColumns {
     float ax = 0.0f;    // the action column's own left edge - always
                        // mx + midW, so a caller that clips or wraps to
                        // midW cannot draw past it
+    bool narrow = false;  // true when moduleActionColumnWidthNarrow() was
+                          // used instead of the wide figure - the row's own
+                          // drawing reads this to decide whether the
+                          // INSTALLED word may be dropped and the lamp moved
+                          // onto the install word's own line; see the note
+                          // on moduleActionColumnWidthNarrow() above.
 };
 
 // HOW THE MODULE LIST'S ROW (plugin_store_view.cpp) DIVIDES ITS OWN WIDTH,

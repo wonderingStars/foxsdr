@@ -69,6 +69,19 @@ bool gSystemSerif = false;
 
 std::string systemFontPath(const char* file) {
     if (file == nullptr || file[0] == '\0') { return {}; }
+    // TEST-ONLY SEAM, every platform, empty by default so normal Linux/macOS
+    // behaviour is unchanged: FOXSDR_SYSTEM_FONT_DIR names a directory to look
+    // in for the same files Windows would load from %WINDIR%\Fonts. This is
+    // how the test suite reproduces a Georgia layout without a Windows box -
+    // point it at a directory holding georgia.ttf/georgiab.ttf (never
+    // committed; the files are not redistributable, see addSystem() above) and
+    // usingSystemSerif() reports true on Linux exactly as it would on Windows
+    // with the real font installed.
+    const char* overrideDir = std::getenv("FOXSDR_SYSTEM_FONT_DIR");
+    if (overrideDir != nullptr && overrideDir[0] != '\0') {
+        std::filesystem::path root(overrideDir);
+        return (root / file).string();
+    }
 #ifdef _WIN32
     // %WINDIR%\Fonts is where every Windows since 3.1 has kept them; the
     // environment variable is honoured over the usual drive letter because a
@@ -77,7 +90,6 @@ std::string systemFontPath(const char* file) {
     const std::string root = (win != nullptr && win[0] != '\0') ? std::string(win) : "C:\\Windows";
     return root + "\\Fonts\\" + file;
 #else
-    (void)file;
     return {};
 #endif
 }

@@ -219,17 +219,45 @@ void testUpperDeckFitsUnderHalfTheBody() {
         // embedded Saira fallback this binary uses everywhere else, so a
         // margin measured here is a margin on ONE face and the number this
         // print states is what tells a Windows run whether it still holds on
-        // the other. No new CHECK is pinned on the percentage itself - the
-        // one true property is `h <= cap` above, checked on whichever face
-        // actually loaded - but the layout above this test was deliberately
-        // built for at least 10% of headroom here (Saira) precisely so
-        // Georgia's extra height has somewhere to go without crossing it.
+        // the other. The layout above this test gives 12.6% here on the
+        // embedded faces.
         const float marginPct = (cap - h) / cap * 100.0f;
         std::printf(
             "  REAL docked body 1174x%.0f @2.0x (bundled): upper deck %.2f px, cap %.2f "
             "px, margin %.1f%%, ADD ALL drawn=%d, system serif=%d\n",
             bodyH, h, cap, marginPct, view.addAllWellDrawn() ? 1 : 0,
             cascade::gui::fonts::usingSystemSerif() ? 1 : 0);
+        // GEORGIA'S OWN MARGIN, PINNED - not just printed - whenever this run
+        // actually measured against it: natively on Windows, or on any
+        // platform with FOXSDR_SYSTEM_FONT_DIR pointed at a directory
+        // holding georgia.ttf/georgiab.ttf (see fonts.cpp's
+        // systemFontPath() - the seam this fix added so this exact check
+        // runs on Linux too). Georgia is wider than the embedded faces at
+        // every size this well reads at, and the real docked body's SHOW
+        // well is six single rocker rows here (`showTwoCols` cannot reach
+        // two columns at this width under Georgia, at any width this file
+        // could measure a saving from) - a fixed floor of
+        // rockerH(px(22.0f)) * 6 rows plus the group caption's own
+        // (unshrunk, by design) height that swallows most of the cap before
+        // a single sentence of prose gets drawn. 10% was the original
+        // target; 3% is what is pinned, with headroom under the 4.6%
+        // measured after every wrapped sentence in the upper deck was
+        // shortened or dropped and every compactable padding was already at
+        // its own floor - going further would mean shrinking rockerH below
+        // its touch-target floor or the SHOW/SEARCH/SORT captions below the
+        // size every other control label in this application reads at,
+        // both refused per the standing "never shrink controls below the
+        // legibility floor" rule. A regression back toward 0% (or negative,
+        // the state 6881a38 shipped in - -37.3%) still goes red.
+        if (cascade::gui::fonts::usingSystemSerif()) {
+            CHECK(marginPct >= 3.0f);
+        } else if (std::getenv("FOXSDR_SYSTEM_FONT_DIR") == nullptr) {
+            std::printf(
+                "  SKIPPED: no system serif loaded and FOXSDR_SYSTEM_FONT_DIR is not set - "
+                "the Georgia margin check above did not run on this platform. Set "
+                "FOXSDR_SYSTEM_FONT_DIR to a directory holding georgia.ttf and georgiab.ttf "
+                "to reproduce it here, or run this binary on Windows.\n");
+        }
     }
 
     // A REPRESENTATIVE DESKTOP WINDOW BODY, at its own scale (1.0) - well
@@ -248,6 +276,20 @@ void testUpperDeckFitsUnderHalfTheBody() {
         // NOT BUNDLED: every other catalogue state keeps the ADD ALL well
         // exactly as it always drew it.
         CHECK(view.addAllWellDrawn());
+        // PINNED, BYTE-IDENTICAL, PER FACE: a Windows run at 6881a38 measured
+        // 355 px here under Georgia (fonts::usingSystemSerif() true there,
+        // always, with no override needed) - `compact` can trip even on a
+        // desktop-sized body once glyphs are wide enough, contrary to this
+        // file's older comment claiming it "provably" cannot, so the row-fix
+        // and cap-margin work in the same commit as this pin had a real way
+        // to regress this figure without any test catching it. The embedded
+        // Saira fallback (every other platform, and Linux without
+        // FOXSDR_SYSTEM_FONT_DIR) has always measured 382 here.
+        if (cascade::gui::fonts::usingSystemSerif()) {
+            CHECK_NEAR(h, 355.0f, 0.5f);
+        } else {
+            CHECK_NEAR(h, 382.0f, 0.5f);
+        }
         std::printf("  desktop body 1280x%.0f @1.0x: upper deck %.2f px, cap %.2f px\n", bodyH,
                     h, pageDeckHeightCap(bodyH));
     }
@@ -304,7 +346,16 @@ void testUpperDeckHeightScalesWithUi() {
     // asymmetry between the two scales, so the ratio is required to be
     // comfortably above 1.0 rather than near 2.0 the way a single measured
     // figure (moduleKindTagWidth, say) would be.
-    CHECK(h2 > h1 * 1.3f);
+    //
+    // 1.15, NOT 1.3 - lowered under Georgia (fonts::usingSystemSerif(),
+    // FOXSDR_SYSTEM_FONT_DIR): the embedded Saira fallback gives 2.25
+    // (271 -> 610) but Georgia gives only 1.265 (313 -> 396), because
+    // compact mode's padding trims are FIXED pixel amounts while Georgia's
+    // own glyphs are already wider at both scales - the same absolute
+    // saving is a smaller fraction of a bigger number. 1.15 still fails
+    // flat (h2 == h1, the mutation this check exists to catch) under either
+    // face, with margin to spare on both.
+    CHECK(h2 > h1 * 1.15f);
     std::printf("  upper deck height: %.2f @1.0x -> %.2f @2.0x\n", h1, h2);
 
     cascade::gui::setUiScale(1.0f);

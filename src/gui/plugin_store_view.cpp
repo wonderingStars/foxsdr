@@ -51,6 +51,29 @@ float wrapH(ImFont* f, float px, float wrapWidth, const char* s) {
     return f->CalcTextSizeA(px, FLT_MAX, wrapWidth, s).y;
 }
 
+// ELLIPSISE, NOT CUT MID-GLYPH - the same technique app_window.cpp's
+// centreDockTabLabel uses for a dock tab title (arbitrary third-party text,
+// nothing else bounding it), a UTF-8 ellipsis ("\xe2\x80\xa6") in place of
+// centreDockTabLabel's own "." suffix, for a single-colour line this file
+// draws in one AddText call - the module row's own maker/licence line, a
+// real maker's name plus a real licence identifier, neither of which this
+// file gets to shorten. Backs off whole characters, never half of a
+// multi-byte one. Returns `s` unchanged when it already fits.
+std::string ellipsiseToWidth(ImFont* f, float px, const std::string& s, float maxW) {
+    if (f == nullptr || s.empty()) { return s; }
+    if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, s.c_str()).x <= maxW) { return s; }
+    std::string cut = s;
+    while (!cut.empty()) {
+        cut.pop_back();
+        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0u) == 0x80u) {
+            cut.pop_back();
+        }
+        const std::string probe = cut + "\xe2\x80\xa6";
+        if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, probe.c_str()).x <= maxW) { return probe; }
+    }
+    return std::string();
+}
+
 // A figure is a figure only if it is made of figures. fonts.hpp is narrow
 // about this for a measured reason - Nova Mono's capitals merge into solid
 // blocks below about 20px - so the monospaced face is chosen by TESTING the
@@ -1141,6 +1164,19 @@ float moduleActionColumnWidth() {
                      textW(uf, tiny, "REFUSED") + cascade::gui::px(18.0f)});
 }
 
+// SEE THE HEADER. Only the three words the KEY ITSELF ever draws
+// (drawDeckKey's own label, centred and unwrapped) - never the install
+// words, which is exactly what made moduleActionColumnWidth() above too wide
+// for a card this narrow to spare on every row regardless of what its own
+// key says.
+float moduleActionColumnWidthNarrow() {
+    ImFont* uf = fonts::ui();
+    const float tiny = prose();
+    return std::max({cascade::gui::px(92.0f), textW(uf, tiny, "FIT") + cascade::gui::px(22.0f),
+                     textW(uf, tiny, "UPDATE") + cascade::gui::px(22.0f),
+                     textW(uf, tiny, "FITTED") + cascade::gui::px(22.0f)});
+}
+
 // HOW ONE MODULE CARD'S THREE COLUMNS DIVIDE `cw` - the card's own width,
 // which is the module list's content width and is NOT the desktop's 1280 px
 // store this row was first drawn for. A pure function of `cw` (font metrics
@@ -1167,14 +1203,29 @@ float moduleActionColumnWidth() {
 // unrelated px() shortfall of its own that this change does not touch; see
 // the note there for why.)
 ModuleRowColumns moduleRowColumns(float cw) {
-    ModuleRowColumns r;
     const float kTagW = moduleKindTagWidth();
-    const float kActW = moduleActionColumnWidth();
     const float kCardPad = cascade::gui::px(14.0f);
-    r.mx = kCardPad + kTagW + kCardPad;
-    r.ax = cw - kCardPad - kActW;
-    r.midW = std::max(0.0f, r.ax - r.mx);
-    return r;
+    const float mx = kCardPad + kTagW + kCardPad;
+
+    auto withActionWidth = [&](float actW, bool narrow) {
+        ModuleRowColumns r;
+        r.mx = mx;
+        r.ax = cw - kCardPad - actW;
+        r.midW = std::max(0.0f, r.ax - r.mx);
+        r.narrow = narrow;
+        return r;
+    };
+
+    const ModuleRowColumns wide = withActionWidth(moduleActionColumnWidth(), false);
+    // NARROW WHEN THE WIDE FIGURE WOULD LEAVE THE TEXT COLUMN UNDER 60% OF
+    // THE CARD - gated on the width actually available, never on platform or
+    // catalogue state (Round 4's own instruction): a desktop window dragged
+    // narrow enough gets exactly the same treatment a tablet's docked body
+    // does, and every width this file has pinned a desktop figure at (827,
+    // 1256 px cards) is comfortably clear of the threshold, so this is a
+    // no-op there - see tests/test_plugin_store_row.cpp's own desktop cases.
+    if (cw <= 0.0f || wide.midW >= cw * 0.6f) { return wide; }
+    return withActionWidth(moduleActionColumnWidthNarrow(), true);
 }
 
 std::string moduleReachSummary(const ModulePlate& m) {
@@ -1849,9 +1900,48 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             "as the file: it proves the download arrived unaltered, and it is not a "
             "signature and vouches for nobody.";
     }
+    // THE SAME CAPTION, SHORTER - used ONLY in `compact` below, never in the
+    // ordinary case, for the same reason showNoteCompact exists. Of the five
+    // captions this heading can show, only the bundled one is five words
+    // ("MODULES BUNDLED WITH THIS BUILD") rather than two or three, and it is
+    // the one this file measured wrapping to two lines under Georgia at the
+    // real docked body even after `bannerCapTextW` below stopped it
+    // overflowing the divider outright. The note directly beside it already
+    // spells out what bundled means ("Bundled with this build - nothing is
+    // fetched or added."), so the caption only has to name the state.
+    const char* bannerCaptionCompact =
+        catState == CatalogueState::Bundled ? "MODULES BUNDLED" : bannerCaption;
 
     const float capW = kBannerCapW;
     const float bannerNoteW = width - capW - kPad * 3.0f - cascade::gui::px(12.0f);
+    // THE CAPTION'S OWN AVAILABLE WIDTH, before the lamp and the divider - and
+    // WRAPPED, not just measured and hoped: kBannerCapW's own max() (above)
+    // never included "MODULES BUNDLED WITH THIS BUILD", the one caption added
+    // for the bundled state, so capW was never actually sized for it. Under
+    // Georgia at the real docked body that caption measured 794.9 px against
+    // a 551.1 px capW - it was overflowing the divider into the note's own
+    // territory by 244 px, unwrapped, on every build before this one; this is
+    // the same "measured on one face, wrong on the wider one" fault as the
+    // rest of this note, just discovered by an actual pixel-collision instead
+    // of a cap check. Wrapping it here, at the same width every OTHER
+    // caption already fits in unwrapped, fixes it for all five without
+    // touching the wording the store's copy already settled on.
+    const float bannerCapTextW =
+        std::max(cascade::gui::px(40.0f),
+                 capW - cascade::gui::px(6.0f) * 2.0f - cascade::gui::px(8.0f) - 18.0f);
+    // NOT FOLDED INTO `bannerHeadH` BELOW - `bannerHeadH` is the WORST-CASE,
+    // always-computed figure the `compact` decision itself is measured
+    // against (see the note on `compact`), and every non-ultra-compact state
+    // this window can be in today already draws this caption unwrapped, at
+    // whatever height `bannerHeadH` allocates from the note alone. Making
+    // that allocation caption-aware too would grow the banner in states that
+    // do not need it - measured on the real docked body under Saira, it
+    // pushed the margin from 12.6% down to 7.3% for no reason: the caption
+    // already fits capW's box unwrapped there, at this size, in every state
+    // this window is actually tested in. The wrap this width protects
+    // against is real (see `bannerCaptionHFinal` below) but it is spent only
+    // where `ultraCompact` says the page cannot draw the caption any other
+    // way.
     const float bannerHeadH =
         std::max(cascade::gui::px(20.0f), noteHeight(bannerNoteW, bannerNote));
     const float updKeyW = kUpdKeyW;
@@ -1872,84 +1962,24 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         updRowH[k] = std::max(kKeyH + cascade::gui::px(6.0f), textH) + cascade::gui::px(14.0f);
         updBlockH += updRowH[k] + cascade::gui::px(6.0f);
     }
+    // AT FULL PROSE SIZE, ALWAYS - this is the WORST-CASE banner height fed
+    // into `compact`'s own decision just below (THE CONTROL DECK), which is
+    // hoisted up to run before the banner actually draws for exactly this
+    // reason: the banner's own sentence is wrapped explanatory text no
+    // different from the three wells', and it needs the same COMPACT-AWARE
+    // font size once `compact` says the page cannot afford full prose
+    // anywhere - see `bannerHeadHFinal` below, after the wells' own sizing.
     const float bannerH = kPad + bannerHeadH + (updRows.empty() ? 0.0f : (8.0f + updBlockH)) +
                           kPad;
 
-    ImGui::Dummy(ImVec2(width, bannerH));
-    {
-        // BELOW THE ADD ALL WELL, not at the page's own origin: the two wells
-        // are stacked and a banner still drawn at origin.y would simply paint
-        // over the key. (It did, on the first run of this page.)
-        const ImVec2 tl(origin.x, origin.y + addAllTotal);
-        const ImVec2 br(tl.x + width, tl.y + bannerH);
-        addDeckWell(dl, tl, br);
-        const float lampR = cascade::gui::px(6.0f);
-        const ImVec2 lampC(tl.x + kPad + lampR, tl.y + kPad + lampR + 2.0f);
-        drawBenchLamp(dl, lampC, lampR, bannerLamp, bannerLit, nullptr);
-        // THE WORD IS DRAWN WHATEVER THE LAMP DOES. A state carried by colour
-        // alone is unreadable in a greyscale photograph and to about one man
-        // in twelve.
-        dl->AddText(lf, tiny, ImVec2(lampC.x + lampR + 8.0f, lampC.y - legH * 0.5f),
-                    bannerLit ? bannerLamp : theme::kInkMuted, bannerCaption);
-        if (updateCount > 0) {
-            char n[16];
-            std::snprintf(n, sizeof n, "%d", updateCount);
-            dl->AddText(rf, tiny,
-                        ImVec2(lampC.x + lampR + 8.0f, lampC.y - legH * 0.5f + legH + 3.0f),
-                        theme::kAmber, n);
-            dl->AddText(uf, tiny,
-                        ImVec2(lampC.x + lampR + 8.0f + textW(rf, tiny, n) + 4.0f,
-                               lampC.y - legH * 0.5f + legH + 3.0f),
-                        theme::kInkMuted, updateCount == 1 ? "MODULE" : "MODULES");
-        }
-        addBenchDivider(dl, tl.x + kPad + capW - 10.0f, tl.y + kPad,
-                        tl.y + kPad + bannerHeadH);
-        drawNote(dl, ImVec2(tl.x + kPad + capW, tl.y + kPad), bannerNoteW,
-                 bannerLit ? bannerLamp : theme::kInkMuted, bannerNote);
-
-        float y = tl.y + kPad + bannerHeadH + 8.0f;
-        for (std::size_t k = 0; k < updRows.size(); ++k) {
-            const int idx = updRows[k];
-            const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
-            const ImVec2 rTL(tl.x + kPad, y);
-            const ImVec2 rBR(br.x - kPad, y + updRowH[k]);
-            addPlateBox(dl, rTL, rBR);
-            float ry = rTL.y + 7.0f;
-            dl->AddText(uf, uiPx, ImVec2(rTL.x + 10.0f, ry), theme::kIvory,
-                        sm.plate.name.c_str());
-            ry += faceH(uf, uiPx) + 3.0f;
-            // FROM and TO, both drawn: an update that only names where it is
-            // going does not let anyone tell a step from a leap.
-            float vx = rTL.x + 10.0f;
-            dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kInkMuted,
-                        sm.plate.version.c_str());
-            vx += textW(rf, tiny, sm.plate.version.c_str()) + 8.0f;
-            dl->AddText(uf, tiny, ImVec2(vx, ry), theme::kInkFaint, "to");
-            vx += textW(uf, tiny, "to") + 8.0f;
-            dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kAmber,
-                        sm.updateToVersion.c_str());
-            ry += tinyH + 3.0f;
-            if (!sm.updateReason.empty()) {
-                // PluginUpdate::reason, verbatim - it is user-facing copy the
-                // planner already wrote, and two wordings of one decision is
-                // how a product comes to give two answers.
-                dl->AddText(uf, tiny, ImVec2(rTL.x + 10.0f, ry), theme::kInkMuted,
-                            sm.updateReason.c_str(), nullptr, updNoteW);
-            }
-            char keyId[24];
-            std::snprintf(keyId, sizeof keyId, "upd%d", idx);
-            const ImVec2 kTL(rBR.x - 10.0f - updKeyW, rTL.y + (updRowH[k] - kKeyH) * 0.5f);
-            if (drawDeckKey(dl, kTL, ImVec2(kTL.x + updKeyW, kTL.y + kKeyH), "UPDATE",
-                            nullptr, !model.busy, keyId)) {
-                updateIndex_ = idx;
-            }
-            y += updRowH[k] + 6.0f;
-        }
-    }
-
-    // ======================= THE CONTROL DECK ===============================
-    ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + addAllTotal + bannerH + kGap));
-    const ImVec2 deckTL = ImGui::GetCursorScreenPos();
+    // ======================= THE CONTROL DECK'S OWN SIZE =====================
+    // HOISTED ABOVE THE BANNER'S DRAWING (not above its STATE, which stays
+    // where catState decided it): the three wells' sizing is pure arithmetic,
+    // no drawing, and `compact` - the one bit the banner needs before it can
+    // choose its own font size - falls out of it. Nothing below this point
+    // and above `bannerHeadHFinal` touches the draw list or the ImGui cursor;
+    // THE CONTROL DECK's own draw calls still run in their original place,
+    // after the banner, using the sizes already settled here.
     const float wellW = (width - kGap * 2.0f) / 3.0f;
     const float wellInner = wellW - kPad * 2.0f;
 
@@ -1968,6 +1998,36 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // says it in fewer words because it is the last thing standing between
     // the deck and gui::pageDeckHeightCap() on the docked tablet.
     const char* showNoteCompact = "Three states, three kinds. NOT DECLARED: no capability yet.";
+    // THE THIRD, TERSEST WORDING - spent only when even `showNoteCompact`
+    // does not fit: a wide enough face (Georgia, at the real docked body) can
+    // still fail `showTwoCols` at `showNoteCompact`'s own width, forcing the
+    // SHOW well to six single rows instead of three two-column ones, and a
+    // well already paying for six rows of its own has nothing left over for
+    // a two-line note. This wording keeps the one fact `showNoteCompact` adds
+    // over the rocker labels themselves - what NOT DECLARED means - and
+    // drops the "three states, three kinds" preamble the six rockers already
+    // show by being six rockers.
+    // DROPPED ENTIRELY, NOT JUST SHORTENED - the case this fires for (six
+    // single rocker rows, the SHOW well's own tallest, most cramped state)
+    // has already spent every px this file could measure a saving from: even
+    // "Kind unknown until fitted." (26 chars), the shortest wording tried
+    // that still says the fact, measured 289.8 px against the 339.9 px
+    // available here and so was cheap ONE line rather than free - and the
+    // real docked body's bundled deck under Georgia was still 57 px over cap
+    // with it. The six rockers this note explains are labelled well enough
+    // to stand alone (FITTED / NOT FITTED / CANNOT FIT / DECODERS / OTHER
+    // KINDS / NOT DECLARED read as states and kinds without a caption
+    // spelling that out), so the well this narrow keeps the rockers and
+    // loses the paragraph under them instead of asking `compact` for a
+    // number it does not have.
+    const char* showNoteUltraCompact = "";
+    // THE BUNDLED BANNER NOTE'S OWN ULTRA-COMPACT WORDING - measured the same
+    // way: "Bundled with this build - nothing is fetched or added." still
+    // wrapped to two lines at `bannerNoteW` under Georgia on the real docked
+    // body (579.9 px against roughly 515 px available), and the caption
+    // right beside it already says BUNDLED (`bannerCaptionCompact` below), so
+    // this keeps only the one fact the caption does not carry.
+    const char* bannerNoteUltraCompact = "Nothing is fetched or added here.";
     // TWO COLUMNS WHEN THEY FIT, ONE WHEN THEY DO NOT. A rocker whose label
     // plate has been squeezed off the row is a switch nobody can read, so the
     // well grows taller rather than letting that happen.
@@ -2036,11 +2096,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float searchFloorInner =
         kClearW + cascade::gui::px(8.0f) + textW(uf, uiPx, "ADS-B") + cascade::gui::px(16.0f);
 
-    // ONE FORMULA FOR THE THREE WELLS' HEIGHT, CALLED TWICE - once to find
-    // out whether their usual, full-size explanatory prose at an equal-thirds
-    // split fits under gui::pageDeckHeightCap(), and again (at `notePx` and
-    // the possibly-narrower `searchInnerW` below, which the first call's own
-    // verdict decides) to lay out the wells for real. A second,
+    // ONE FORMULA FOR THE THREE WELLS' HEIGHT, CALLED TWICE OR THREE TIMES -
+    // once to find out whether their usual, full-size explanatory prose at an
+    // equal-thirds split fits under gui::pageDeckHeightCap(), again (at
+    // `notePx` and the possibly-narrower `searchInnerW` below, which the
+    // first call's own verdict decides) to lay out the wells for real, and a
+    // third time ONLY if that second call still could not fit SHOW's rockers
+    // into two columns - see `showNoteUltraCompact` above. A second,
     // independently-typed copy of this arithmetic is exactly the kind of
     // drift the rest of this window measures rather than guesses at - see
     // storeCheckKeyWidth() and moduleKindTagWidth() for the same reasoning
@@ -2072,7 +2134,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     };
     auto computeWellHeights = [&](float notePx, float searchInnerW, float showInnerW,
                                   float sortInnerW, const char* showNoteText,
-                                  const std::string& sourceLineText, bool compactCall) {
+                                  const std::string& sourceLineText, bool compactCall,
+                                  bool ultraCall) {
         DeckWellHeights r;
         // WRAPPED, NOT ASSUMED SINGLE-LINE - this sentence is drawn wrapped to
         // its own well's width, narrow enough at a large enough face to take
@@ -2085,8 +2148,18 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // OTHER page still gets it, but on the docked tablet's real body it
         // was six pixels of margin the deck did not have (two wells, top and
         // bottom, at the difference between px(10.0f) and px(4.0f) each).
+        //
+        // AND ONCE MORE, ONLY ON THE ultraCall PASS - the SAME trade again,
+        // one notch further: `ultraCall` is true only for the third,
+        // last-resort measurement (see `ultraCompact` below), reached only
+        // when the SHOW well is already down to six single rocker rows and
+        // still over cap with every wrapped sentence this file could
+        // shorten or drop. This is gated on `ultraCall`, NOT `compactCall`,
+        // so it never touches the desktop-under-Georgia or 1860 px tablet
+        // cases that reach `compactCall` but not `ultraCall` - both pinned
+        // byte-identical to what they already drew.
         const float wellPad =
-            compactCall ? cascade::gui::px(4.0f) : kPad;
+            ultraCall ? cascade::gui::px(2.0f) : compactCall ? cascade::gui::px(4.0f) : kPad;
         r.searchLegendH = wrapH(uf, notePx, searchInnerW, searchLegend);
         r.deckAH = wellPad + legH + 8.0f + fieldH + 9.0f + r.searchLegendH + 4.0f +
                   countLineHeight() + wellPad;
@@ -2105,8 +2178,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         r.showColW = (showInnerW - cascade::gui::px(12.0f)) * 0.5f;
         r.showTwoCols = r.showColW >= showRockerMinWAt(notePx);
         r.showRows = r.showTwoCols ? 3.0f : 6.0f;
-        r.deckBH = wellPad + legH + 8.0f + r.rockerH * r.showRows + 8.0f +
-                  noteHeightAt(showInnerW, showNoteText, notePx) + wellPad;
+        // NO GAP RESERVED BEFORE AN EMPTY NOTE - `showNoteUltraCompact` above
+        // is "" in the one state that reaches here with nothing left to say,
+        // and 8 px of breathing room before a paragraph that never draws is
+        // 8 px this well does not have to spend.
+        const bool hasShowNote = showNoteText != nullptr && showNoteText[0] != '\0';
+        r.deckBH = wellPad + legH + 8.0f + r.rockerH * r.showRows +
+                  (hasShowNote ? 8.0f + noteHeightAt(showInnerW, showNoteText, notePx) : 0.0f) +
+                  wellPad;
 
         // px() ON THE GAP, from the scaling slice: every figure in this
         // window is in scaled pixels, and the bundled line is drawn in the
@@ -2132,8 +2211,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         return r;
     };
 
-    const DeckWellHeights atFullProse =
-        computeWellHeights(tiny, wellInner, wellInner, wellInner, showNote, sourceLine, false);
+    const DeckWellHeights atFullProse = computeWellHeights(
+        tiny, wellInner, wellInner, wellInner, showNote, sourceLine, false, false);
     const float deckH_atFullProse =
         std::max(atFullProse.deckAH, std::max(atFullProse.deckBH, atFullProse.deckCH));
     // COMPACT: the deck's usual equal-thirds split, at this window's usual
@@ -2158,10 +2237,35 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         compact ? std::max(0.0f, wellInner - searchFloorInner) : 0.0f;
     const float searchInnerFinal = wellInner - searchBorrow;
     const float showInnerFinal = wellInner + searchBorrow;
-    const DeckWellHeights wh =
+    const DeckWellHeights whCompactNote =
         compact ? computeWellHeights(notePx, searchInnerFinal, showInnerFinal, wellInner,
-                                     showNoteCompact, sourceLineCompact, true)
+                                     showNoteCompact, sourceLineCompact, true, false)
                 : atFullProse;
+    // THE ULTRA-COMPACT SHOW NOTE, ONLY WHEN EVEN THE COMPACT ONE COULD NOT
+    // BUY TWO COLUMNS - a third measured pass, not a guess: `showTwoCols`
+    // above already answers whether the width borrowed from SEARCH was
+    // enough, at the font actually in use, so this only fires when it truly
+    // was not (the case that motivated it: Georgia, at the real docked body).
+    // A SHOW well already paying for six single rows has no line to spare
+    // for a two-line note, so the note itself gives up its "three states,
+    // three kinds" preamble rather than push the well taller still.
+    // ULTRA COMPACT: `compact` on its own also covers cases (a desktop window
+    // under Georgia, the 1860 px tablet body) where the wells' usual
+    // three-way compaction was already enough - `showTwoCols` came back true
+    // and the deck already fit. Only when it did NOT - the SHOW well forced
+    // to six single rows, the case that actually blew the cap on the real
+    // docked body - does the banner ALSO need to give up space; gating the
+    // banner's own shrink on this narrower condition (rather than on
+    // `compact` itself) is what keeps every OTHER compact-but-comfortable
+    // case - including the desktop's own 1280x820 body under Georgia,
+    // pinned at 355 px - byte-identical to what it already drew.
+    const bool ultraCompact = compact && !whCompactNote.showTwoCols;
+    const DeckWellHeights wh =
+        ultraCompact ? computeWellHeights(notePx, searchInnerFinal, showInnerFinal, wellInner,
+                                          showNoteUltraCompact, sourceLineCompact, true, true)
+                     : whCompactNote;
+    const char* showNoteFinal =
+        ultraCompact ? showNoteUltraCompact : compact ? showNoteCompact : showNote;
 
     const float deckAH = wh.deckAH;
     const float deckBH = wh.deckBH;
@@ -2175,7 +2279,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // THE SAME wellPad computeWellHeights used, so the space the three wells'
     // drawing blocks start their content at (just below) agrees with the
     // space their own height was measured against above.
-    const float wellPad = compact ? cascade::gui::px(4.0f) : kPad;
+    const float wellPad =
+        ultraCompact ? cascade::gui::px(2.0f) : compact ? cascade::gui::px(4.0f) : kPad;
     const float srcTextW = wh.srcTextW;
     // THE THREE WELLS' OWN WIDTHS - equal thirds unless `compact` moved
     // width from SEARCH to SHOW, per the note above.
@@ -2184,6 +2289,133 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float sortWellW = wellInner + kPad * 2.0f;
 
     const float deckH = std::max(deckAH, std::max(deckBH, deckCH));
+
+    // THE BANNER'S FINAL SIZE - see the long note on `bannerH` above: at
+    // `ultraCompact` (not merely `compact` - see the note on that above), the
+    // same sentence that measured 142 px of banner under Georgia at the real
+    // docked body (against 100 under embedded Saira, 6881a38's Windows
+    // regression) is re-measured at `notePx`, the exact size the three
+    // wells' own explanatory prose already dropped to. UNCHANGED
+    // (byte-identical) whenever `ultraCompact` is false - which covers every
+    // desktop body at UI scale 1.0 under the embedded faces (provably, as
+    // before) AND, now that Georgia's wider glyphs can trip `compact` even
+    // there, the desktop body under Georgia too, pinned at 355 px.
+    //
+    // STILL BESIDE THE CAPTION, NOT BELOW IT: a stacked layout was tried
+    // (caption line, then the note spanning the banner's full width below
+    // it) and MEASURED worse, not better - it does let the one-sentence
+    // bundled note fit on a single line at this width, but the caption's own
+    // row height (legH, unrelated to `notePx`) is then paid ONCE MORE as a
+    // second row rather than shared with the note's column, which cost more
+    // than the wrap it saved (94 px stacked against 74 px still beside the
+    // caption and wrapped to two lines, measured on the real docked body
+    // under Georgia). Side by side, wrapped, stays the smaller number.
+    // ONLY EVER READ WHEN `ultraCompact` (below) - `bannerHeadHFinal` falls
+    // straight back to the untouched `bannerHeadH` otherwise.
+    const float bannerCaptionHFinal = wrapH(lf, tiny, bannerCapTextW, bannerCaptionCompact);
+    // BUNDLED ONLY - the one banner note this file has measured wrapping to
+    // two lines under Georgia at this width; the other four states' notes
+    // are shorter and untouched.
+    const char* bannerNoteFinal =
+        (catState == CatalogueState::Bundled) ? bannerNoteUltraCompact : bannerNote;
+    const float bannerHeadHFinal =
+        ultraCompact
+            ? std::max({cascade::gui::px(20.0f), noteHeightAt(bannerNoteW, bannerNoteFinal, notePx),
+                       bannerCaptionHFinal})
+            : bannerHeadH;
+    // THE BANNER'S OWN TOP/BOTTOM PADDING, ONE MORE NOTCH - the same trade
+    // `wellPad` makes in computeWellHeights, for the same real-body reason:
+    // kPad (px(10.0f)) is comfortable breathing room around the banner's
+    // content, and it is what this banner draws at in every state but this
+    // one. Gated on `ultraCompact` alone, so every other state's banner -
+    // including the desktop's own under Georgia, pinned at 355 px - keeps
+    // its full padding untouched.
+    const float bannerPad = ultraCompact ? cascade::gui::px(6.0f) : kPad;
+    const float bannerHFinal =
+        bannerPad + bannerHeadHFinal + (updRows.empty() ? 0.0f : (8.0f + updBlockH)) + bannerPad;
+
+    ImGui::Dummy(ImVec2(width, bannerHFinal));
+    {
+        // BELOW THE ADD ALL WELL, not at the page's own origin: the two wells
+        // are stacked and a banner still drawn at origin.y would simply paint
+        // over the key. (It did, on the first run of this page.)
+        const ImVec2 tl(origin.x, origin.y + addAllTotal);
+        const ImVec2 br(tl.x + width, tl.y + bannerHFinal);
+        addDeckWell(dl, tl, br);
+        const float lampR = cascade::gui::px(6.0f);
+        const ImVec2 lampC(tl.x + bannerPad + lampR, tl.y + bannerPad + lampR + 2.0f);
+        drawBenchLamp(dl, lampC, lampR, bannerLamp, bannerLit, nullptr);
+        // THE WORD IS DRAWN WHATEVER THE LAMP DOES. A state carried by colour
+        // alone is unreadable in a greyscale photograph and to about one man
+        // in twelve.
+        dl->AddText(lf, tiny, ImVec2(lampC.x + lampR + 8.0f, lampC.y - legH * 0.5f),
+                    bannerLit ? bannerLamp : theme::kInkMuted,
+                    ultraCompact ? bannerCaptionCompact : bannerCaption, nullptr,
+                    ultraCompact ? bannerCapTextW : 0.0f);
+        if (updateCount > 0) {
+            char n[16];
+            std::snprintf(n, sizeof n, "%d", updateCount);
+            dl->AddText(rf, tiny,
+                        ImVec2(lampC.x + lampR + 8.0f, lampC.y - legH * 0.5f + legH + 3.0f),
+                        theme::kAmber, n);
+            dl->AddText(uf, tiny,
+                        ImVec2(lampC.x + lampR + 8.0f + textW(rf, tiny, n) + 4.0f,
+                               lampC.y - legH * 0.5f + legH + 3.0f),
+                        theme::kInkMuted, updateCount == 1 ? "MODULE" : "MODULES");
+        }
+        addBenchDivider(dl, tl.x + bannerPad + capW - 10.0f, tl.y + bannerPad,
+                        tl.y + bannerPad + bannerHeadHFinal);
+        drawNoteAt(dl, ImVec2(tl.x + bannerPad + capW, tl.y + bannerPad), bannerNoteW,
+                  bannerLit ? bannerLamp : theme::kInkMuted,
+                  ultraCompact ? bannerNoteFinal : bannerNote, ultraCompact ? notePx : prose());
+
+        float y = tl.y + bannerPad + bannerHeadHFinal + 8.0f;
+        for (std::size_t k = 0; k < updRows.size(); ++k) {
+            const int idx = updRows[k];
+            const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
+            const ImVec2 rTL(tl.x + kPad, y);
+            const ImVec2 rBR(br.x - kPad, y + updRowH[k]);
+            addPlateBox(dl, rTL, rBR);
+            float ry = rTL.y + 7.0f;
+            dl->AddText(uf, uiPx, ImVec2(rTL.x + 10.0f, ry), theme::kIvory,
+                        sm.plate.name.c_str());
+            ry += faceH(uf, uiPx) + 3.0f;
+            // FROM and TO, both drawn: an update that only names where it is
+            // going does not let anyone tell a step from a leap.
+            float vx = rTL.x + 10.0f;
+            dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kInkMuted,
+                        sm.plate.version.c_str());
+            vx += textW(rf, tiny, sm.plate.version.c_str()) + 8.0f;
+            dl->AddText(uf, tiny, ImVec2(vx, ry), theme::kInkFaint, "to");
+            vx += textW(uf, tiny, "to") + 8.0f;
+            dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kAmber,
+                        sm.updateToVersion.c_str());
+            ry += tinyH + 3.0f;
+            if (!sm.updateReason.empty()) {
+                // PluginUpdate::reason, verbatim - it is user-facing copy the
+                // planner already wrote, and two wordings of one decision is
+                // how a product comes to give two answers.
+                dl->AddText(uf, tiny, ImVec2(rTL.x + 10.0f, ry), theme::kInkMuted,
+                            sm.updateReason.c_str(), nullptr, updNoteW);
+            }
+            char keyId[24];
+            std::snprintf(keyId, sizeof keyId, "upd%d", idx);
+            const ImVec2 kTL(rBR.x - 10.0f - updKeyW, rTL.y + (updRowH[k] - kKeyH) * 0.5f);
+            if (drawDeckKey(dl, kTL, ImVec2(kTL.x + updKeyW, kTL.y + kKeyH), "UPDATE",
+                            nullptr, !model.busy, keyId)) {
+                updateIndex_ = idx;
+            }
+            y += updRowH[k] + 6.0f;
+        }
+    }
+
+    // ======================= THE CONTROL DECK ===============================
+    // ITS OWN SIZE WAS ALREADY SETTLED ABOVE, before the banner drew - see
+    // the note on `bannerHeadHFinal`. Only the POSITION (which needs the
+    // banner's final, possibly-compact height) and the actual drawing happen
+    // here.
+    ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + addAllTotal + bannerHFinal + kGap));
+    const ImVec2 deckTL = ImGui::GetCursorScreenPos();
     // THE WHOLE UPPER DECK, MEASURED HERE AND NOWHERE ELSE - see
     // PluginStoreView::upperDeckHeight() in the header. Exactly
     // bodyTL.y - origin.y below: addAllTotal already carries the gap after
@@ -2191,7 +2423,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // between the banner and THE CONTROL DECK (the SetCursorScreenPos that
     // produced deckTL), and a third sits between the three wells and the
     // body (the SetCursorScreenPos that produces bodyTL, right after this).
-    upperDeckHeight_ = addAllTotal + bannerH + kGap + deckH + kGap;
+    upperDeckHeight_ = addAllTotal + bannerHFinal + kGap + deckH + kGap;
     ImGui::Dummy(ImVec2(width, deckH));
 
     // ---- CATALOGUE SEARCH ---------------------------------------------------
@@ -2316,8 +2548,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             }
         }
         y += rockerH * showRows + 8.0f;
-        drawNoteAt(dl, ImVec2(tl.x + kPad, y), showInnerFinal, theme::kInkMuted,
-                  compact ? showNoteCompact : showNote, notePx);
+        drawNoteAt(dl, ImVec2(tl.x + kPad, y), showInnerFinal, theme::kInkMuted, showNoteFinal,
+                  notePx);
         dl->PopClipRect();
     }
 
@@ -2582,7 +2814,6 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             // had left was what let this row's own text run under the action
             // column on the docked tablet's real body.
             const float kTagW = moduleKindTagWidth();
-            const float kActW = moduleActionColumnWidth();
             const float kCardPad = cascade::gui::px(14.0f);
             for (int idx : visible) {
                 const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
@@ -2590,6 +2821,11 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const bool isSel = idx == deck.selected;
                 const ModuleRowColumns cols = moduleRowColumns(cw);
                 const float midW = cols.midW;
+                // THE SAME WIDTH moduleRowColumns() JUST CHOSE - recovered
+                // from `cols.ax` rather than called a second time, so this
+                // row's key, install word and state lamp are always sized
+                // against the SAME figure the column split itself used.
+                const float kActW = cw - kCardPad - cols.ax;
                 const std::string reach = moduleReachSummary(p);
                 // THE SUMMARY ON THE ROW, THE DESCRIPTION ON THE PLATE. See
                 // ModulePlate::summary: the live catalogue's descriptions run
@@ -2610,8 +2846,16 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 std::snprintf(foot, sizeof foot, "%s  \xc2\xb7  %s",
                               p.maker.empty() ? "maker not stated" : p.maker.c_str(),
                               p.licence.empty() ? "no licence declared" : p.licence.c_str());
+                // ELLIPSISED TO THE TEXT COLUMN, not clipped mid-glyph - a real
+                // maker's name plus a real licence identifier can still clear
+                // `midW` even at the card's own widened text column, and
+                // `footEllipsised` (not `foot`) is what reachBeside measures
+                // and what the drawing block below actually draws, so the two
+                // cannot disagree.
+                const std::string footEllipsised = ellipsiseToWidth(uf, tiny, foot, midW);
                 const bool reachBeside =
-                    textW(uf, tiny, foot) + 14.0f + textW(uf, tiny, reach.c_str()) <
+                    textW(uf, tiny, footEllipsised.c_str()) + 14.0f +
+                        textW(uf, tiny, reach.c_str()) <
                     midW + 6.0f;
 
                 // WHY THE FIT KEY ON THIS ROW IS DEAD. A greyed key with no
@@ -2647,10 +2891,49 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // column, because "NOT INSTALLED" and "TAKES NO SIGNAL" do not
                 // fit on one line there and a word running out over the card's
                 // edge is worse than a word on two lines.
+                //
+                // NARROW ONLY (cols.narrow): a FITTED key beside an INSTALLED
+                // word says the same thing twice, so the word is dropped -
+                // but ONLY for that one state; a module that is NOT INSTALLED
+                // or CANNOT FIT still needs its own word beside a FIT key
+                // that reads the same on every row, and UPDATE's key already
+                // names the state its install word repeats too, so it stays
+                // (an update pending is worth a second look, not a
+                // suppression). When the word is kept, it tries to share the
+                // state lamp's own line before falling back to the three-line
+                // stack every row drew before this - see the drawing block
+                // below, which mirrors this exactly so what is measured and
+                // what is drawn cannot disagree. NEVER on a wide card: this
+                // whole block reduces to the untouched three-line formula
+                // whenever `cols.narrow` is false, which is provably always
+                // the case on the desktop at UI scale 1.0 - see the note on
+                // `moduleRowColumns`.
                 const char* stateWord = moduleStateWord(p);
                 const float stateWordW = std::max(40.0f, kActW - 18.0f);
-                const float actH = kKeyH + 8.0f + wrapH(uf, tiny, stateWordW, instWord) +
-                                   6.0f + wrapH(uf, tiny, stateWordW, stateWord);
+                const bool instRedundant =
+                    cols.narrow && instState == StoreInstallState::Installed;
+                // NOT PUT THROUGH px() - matching the lamp's own drawing
+                // below (the "6.0f" / "4.5f" / "9.0f" this row's lamp has
+                // always used, unscaled, on every card this window has ever
+                // drawn). `lampSpan` is the lamp radius plus its own gap to
+                // the state word's text (4.5f + 9.0f, `lampC.x + 9.0f`
+                // below), so this measures exactly the space the drawing
+                // block spends between the install word and the state word.
+                const float inlineGap = 8.0f;
+                const float lampSpan = 13.5f;
+                const bool inlineFits =
+                    cols.narrow && !instRedundant &&
+                    (textW(uf, tiny, instWord) + inlineGap + lampSpan + textW(uf, tiny, stateWord) <=
+                     kActW);
+                float actH;
+                if (instRedundant) {
+                    actH = kKeyH + 8.0f + wrapH(uf, tiny, stateWordW, stateWord);
+                } else if (inlineFits) {
+                    actH = kKeyH + 8.0f + std::max(faceH(uf, tiny), tinyH);
+                } else {
+                    actH = kKeyH + 8.0f + wrapH(uf, tiny, stateWordW, instWord) + 6.0f +
+                          wrapH(uf, tiny, stateWordW, stateWord);
+                }
                 const float cardH = std::max(rowsH, actH) + kCardPad * 2.0f;
 
                 const ImVec2 cTL = ImGui::GetCursorScreenPos();
@@ -2753,21 +3036,24 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // above says why they are on the row at all. A line worth
                     // putting there is a line worth being able to read.
                     //
-                    // CLIPPED, per-glyph, to the text column - `foot` is a
-                    // maker's own name and licence string, third-party text
-                    // with nothing else bounding it, and `reachBeside`'s own
-                    // check only ever asked whether foot-plus-reach fit
-                    // TOGETHER; a foot long enough on its own (a real maker
-                    // name plus a real licence identifier easily clears 160 px
-                    // at the docked tablet's own width) still ran under the
-                    // action column with nothing to stop it.
+                    // ELLIPSISED, not clipped mid-glyph - `footEllipsised` is
+                    // the same string `reachBeside` above measured, a real
+                    // maker's own name and licence string with a "..." where
+                    // it stopped fitting `midW` (a foot long enough on its
+                    // own - a real maker name plus a real licence identifier
+                    // easily clears 160 px at the docked tablet's own width -
+                    // used to run under the action column with nothing to
+                    // stop it). Still clipped too, belt and braces: the
+                    // reach summary drawn beside it on the same line must
+                    // never bleed past `ax` either.
                     const ImVec4 footClip(mx, my, ax, my + tinyH);
                     cdl->AddText(uf, tiny, ImVec2(mx, my),
-                                 p.licence.empty() ? theme::kGold : theme::kInkMuted, foot,
-                                 nullptr, 0.0f, &footClip);
+                                 p.licence.empty() ? theme::kGold : theme::kInkMuted,
+                                 footEllipsised.c_str(), nullptr, 0.0f, &footClip);
                     if (reachBeside) {
                         cdl->AddText(uf, tiny,
-                                     ImVec2(mx + textW(uf, tiny, foot) + 14.0f, my),
+                                     ImVec2(mx + textW(uf, tiny, footEllipsised.c_str()) + 14.0f,
+                                            my),
                                      moduleReachColour(p), reach.c_str(), nullptr, 0.0f,
                                      &footClip);
                         my += tinyH;
@@ -2825,15 +3111,45 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // question this window is FOR ("have I got this, and is it
                     // current"), and the running state below answers a
                     // different one.
-                    float ly = ay + kKeyH + 8.0f;
-                    cdl->AddText(uf, tiny, ImVec2(ax, ly), storeInstallColour(instState),
-                                 instWord, nullptr, stateWordW);
-                    ly += wrapH(uf, tiny, stateWordW, instWord) + 6.0f;
-                    const ImVec2 lampC(ax + 6.0f, ly + tinyH * 0.5f);
-                    drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
-                                  moduleStateLampLit(p), nullptr);
-                    cdl->AddText(uf, tiny, ImVec2(lampC.x + 9.0f, ly), moduleStateColour(p),
-                                 stateWord, nullptr, stateWordW);
+                    //
+                    // MIRRORS actH's OWN THREE-WAY SPLIT EXACTLY (see the
+                    // note there) - `instRedundant`, then `inlineFits`, then
+                    // the untouched three-line stack - so what was measured
+                    // and what is drawn never disagree.
+                    const float ly0 = ay + kKeyH + 8.0f;
+                    if (instRedundant) {
+                        // NO INSTALL WORD LINE AT ALL: FITTED already said it.
+                        const ImVec2 lampC(ax + 6.0f, ly0 + tinyH * 0.5f);
+                        drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
+                                      moduleStateLampLit(p), nullptr);
+                        cdl->AddText(uf, tiny, ImVec2(lampC.x + 9.0f, ly0),
+                                     moduleStateColour(p), stateWord, nullptr, stateWordW);
+                    } else if (inlineFits) {
+                        // INSTALL WORD, THEN THE LAMP, THEN THE STATE - one
+                        // line, where the width this row actually has allows
+                        // it, rather than a line each.
+                        cdl->AddText(uf, tiny, ImVec2(ax, ly0), storeInstallColour(instState),
+                                     instWord);
+                        const float afterInst = ax + textW(uf, tiny, instWord) + inlineGap;
+                        const ImVec2 lampC(afterInst + 4.5f, ly0 + tinyH * 0.5f);
+                        drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
+                                      moduleStateLampLit(p), nullptr);
+                        cdl->AddText(uf, tiny, ImVec2(lampC.x + 9.0f, ly0),
+                                     moduleStateColour(p), stateWord);
+                    } else {
+                        // THE ORIGINAL THREE-LINE STACK - byte-identical to
+                        // every row this window has ever drawn on a card wide
+                        // enough for `cols.narrow` to be false.
+                        float ly = ly0;
+                        cdl->AddText(uf, tiny, ImVec2(ax, ly), storeInstallColour(instState),
+                                     instWord, nullptr, stateWordW);
+                        ly += wrapH(uf, tiny, stateWordW, instWord) + 6.0f;
+                        const ImVec2 lampC(ax + 6.0f, ly + tinyH * 0.5f);
+                        drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
+                                      moduleStateLampLit(p), nullptr);
+                        cdl->AddText(uf, tiny, ImVec2(lampC.x + 9.0f, ly), moduleStateColour(p),
+                                     stateWord, nullptr, stateWordW);
+                    }
                 }
                 ImGui::PopID();
                 ImGui::SetCursorScreenPos(ImVec2(cTL.x, cBR.y + 10.0f));
