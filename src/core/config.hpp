@@ -218,6 +218,20 @@ struct AppConfig {
     // and the picker is one click from the right regional plan.
     std::string bandPlanSelection = "world";
 
+    // WHICH FACE THE FREQUENCY COUNTER WEARS: "nixie" (the plate as it has
+    // been drawn since 0.88.0), "neon" or "plain". GitHub issue #1 asked to
+    // "swap the frequency display for easier to read display? Maybe a neon
+    // effect or something that stands out", so the two new faces letter a
+    // much larger, higher-contrast figure in the same ten cells.
+    //
+    // DEFAULTS TO THE EXISTING PLATE, and an unknown value loads as that
+    // default rather than as nothing: this file is user-editable, and a typo
+    // must leave the deck looking like itself. The vocabulary itself lives
+    // with the painter, in gui/tune_control.hpp (tunerStyleFromName) - a
+    // config string is the NAME of a style, and what the name means belongs
+    // where the cells are painted.
+    std::string tunerDisplayStyle = "nixie";
+
     // --- Map trails -----------------------------------------------------------
     // TWO SWITCHES, because the request behind them was ambiguous and both
     // readings deserve an answer. A beta tester asked for the flight trail to
