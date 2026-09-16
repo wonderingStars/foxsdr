@@ -19,6 +19,8 @@
 #include <cmath>
 #include <cstddef>
 
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui::pager {
 
 // The Motorola Advisor's screen, and the two numbers the whole face is laid
@@ -316,6 +318,44 @@ inline CaseSize caseSize(float availW, float availH) {
         c.h = c.w / kAspect;
     }
     return c;
+}
+
+// --- THE BENCH'S OWN COLUMN, AND WHETHER THE BAY HAS ROOM FOR ONE -----------
+//
+// THE DEFECT THIS WAS PULLED OUT FOR. instrument_pager.cpp decides how wide
+// the equipment stands and whether the engraved column beside it is drawn at
+// all from a fixed-in-desktop-pixels rule (46% of the bay, clamped between
+// 120 and 560, with a 150 px column floor and a 28 px gap) - the same shape
+// of rule as gui::tune_control.hpp's meter block, and the same defect if the
+// clamp bounds are left in the desktop's own pixels while the bay they are
+// judged against is a tablet's: a 560 px ceiling reached at scale 1.0 stays
+// 560 PHYSICAL px at scale 2.0, on a bay drawn twice as large, and the case
+// stops growing while the bay still has brass to spare - which is exactly
+// "small in the top-left with empty brass around it".
+//
+// All five bounds are ALREADY IN SCREEN PIXELS here, exactly as
+// gui::tune_control.hpp's meterBlockH is: the `AtScale` wrapper below is
+// where gui::px() actually reaches them, so this function stays pure enough
+// for a test with no ImGui in the process.
+struct ColumnLayout {
+    float caseW = 0.0f;
+    bool haveColumn = false;
+};
+inline ColumnLayout columnLayout(float bayW, float caseMinPx, float caseMaxPx,
+                                 float columnMinPx, float columnGapPx, float edgeGapPx) {
+    ColumnLayout c;
+    if (!(bayW > 0.0f)) { return c; }
+    const float wantW = std::clamp(bayW * 0.46f, caseMinPx, caseMaxPx);
+    c.haveColumn = bayW - wantW - columnGapPx >= columnMinPx;
+    c.caseW = c.haveColumn ? wantW : std::max(caseMinPx, bayW - edgeGapPx);
+    return c;
+}
+
+// THE COMPOSITION drawPagerFace ACTUALLY MAKES: leave gui::px() off any one
+// of the five reference figures and tests/test_instrument_pager.cpp goes red
+// at scale 2.0, the same guarantee meterBlockHAtScale gives the top bar.
+inline ColumnLayout columnLayoutAtScale(float bayW) {
+    return columnLayout(bayW, px(120.0f), px(560.0f), px(150.0f), px(28.0f), px(24.0f));
 }
 
 }  // namespace cascade::gui::pager

@@ -30,6 +30,7 @@
 
 #include "gui/instrument_face.hpp"
 #include "gui/instrument_meter_math.hpp"
+#include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -321,6 +322,62 @@ void testDegenerate() {
           0.0f);
 }
 
+// -- THE DIAL'S OWN SCALE, AT BOTH UI SCALES --------------------------------
+//
+// instrument_meter.cpp draws the whole face off dialGeometryAtScale's answer:
+// the local resize scale `s`, the two type-size clamps, whether the column
+// fits, and the dial's own radius (floored AND capped, because "A METER IS A
+// PHYSICAL SIZE"). Every one of those bounds is a desktop reference figure,
+// and left unscaled the dial's 150 px ceiling stays 150 PHYSICAL px on a
+// tablet whose docked body is several times that in raw screen pixels before
+// this face draws a single brass ring - exactly the "small in the top-left
+// with empty brass around it" defect this change exists to fix.
+void testDialGeometryScaling() {
+    cascade::gui::setUiScale(1.0f);
+    // A box generous enough that the resize scale `s` and every floor/ceiling
+    // it feeds are all pinned at their caps (hand-verified against
+    // dialGeometry's own arithmetic).
+    const DialGeometry a = dialGeometryAtScale(900.0f, 500.0f, 14.0f, 16.0f);
+    CHECK_NEAR(a.s, 1.5f, 1e-6);       // the resize-scale ceiling
+    CHECK_NEAR(a.capPx, 18.0f, 1e-6);  // the type-size ceiling
+    CHECK_NEAR(a.readPx, 20.0f, 1e-6);
+    CHECK(a.haveCol);
+    CHECK_NEAR(a.radius, 150.0f, 1e-6);  // the dial's own ceiling
+    // At scale 1.0, dialGeometryAtScale is dialGeometry: gui::px(v) == v.
+    const DialGeometry a2 = dialGeometry(900.0f, 500.0f);
+    CHECK_NEAR(a.radius, a2.radius, 1e-6);
+
+    cascade::gui::setUiScale(2.0f);
+    // THE SAME BOX, TWICE AS BIG - a tablet handing this face the same
+    // proportion of a docked body twice the size - and dialGeometry is
+    // homogeneous of degree 1 in its box dimensions and its bounds taken
+    // together, so every output figure is exactly double: the dial that was
+    // stuck at a 150 px ceiling now fills a 300 px one.
+    const DialGeometry b = dialGeometryAtScale(1800.0f, 1000.0f, 14.0f, 16.0f);
+    CHECK_NEAR(b.s, 1.5f, 1e-6);
+    CHECK_NEAR(b.capPx, 36.0f, 1e-2);
+    CHECK_NEAR(b.readPx, 40.0f, 1e-2);
+    CHECK(b.haveCol);
+    CHECK_NEAR(b.radius, 300.0f, 1e-2);
+
+    // BREAK-IT CHECK, run while writing this: dialGeometry() called directly
+    // on the doubled box - the unscaled rule, exactly as instrument_meter.cpp
+    // computed it inline before this change - clamps the dial to the
+    // desktop's own 150 px ceiling and the type to 18 px, both half what the
+    // properly scaled answer measures.
+    const DialGeometry unscaled = dialGeometry(1800.0f, 1000.0f);
+    CHECK_NEAR(unscaled.radius, 150.0f, 1e-6);
+    CHECK_NEAR(unscaled.capPx, 18.0f, 1e-6);
+    CHECK(unscaled.radius != b.radius);
+    CHECK(unscaled.capPx != b.capPx);
+
+    // A box too small to draw anything at all, at either scale.
+    const DialGeometry none = dialGeometry(0.0f, 0.0f);
+    CHECK(!none.haveCol && none.radius == 0.0f);
+
+    cascade::gui::setUiScale(1.0f);  // as every other test finds it
+}
+
 }  // namespace
 
 int main() {
@@ -331,5 +388,6 @@ int main() {
     testHeard();
     testChip();
     testDegenerate();
+    testDialGeometryScaling();
     return testSummary("test_instrument_meter");
 }

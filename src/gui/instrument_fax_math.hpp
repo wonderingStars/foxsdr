@@ -22,6 +22,8 @@
 #include <cstddef>
 #include <cstdio>
 
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui::faxmath {
 
 // --- the phase ladder --------------------------------------------------------
@@ -301,9 +303,41 @@ struct Layout {
     int drumDigits = 0;        // 0 = no counter
 };
 
-inline Layout layout(float w, float h) {
+// Every absolute pixel figure layout() judges the deck against, gathered so
+// gui::px() can reach all of them in ONE place (layoutAtScale below) rather
+// than at each of the fourteen call sites inside the function - the same
+// defect class as instrument_pager.cpp's column bounds: left in the
+// desktop's own pixels, a 210 px deck ceiling stays 210 PHYSICAL px on a
+// tablet drawn twice as large, and the deck stops growing while the paper
+// below it inherits height the deck could have used. The struct's own
+// in-class initialisers ARE the desktop's reference figures, so
+// `LayoutBounds{}` is exactly what `layout(w, h)` always computed.
+struct LayoutBounds {
+    float minW = 80.0f;
+    float minH = 56.0f;
+    float gap = 6.0f;
+    float paperMax = 150.0f;
+    float paperMin = 40.0f;
+    float deckFloorSqueeze = 92.0f;   // below this, squeeze the paper first
+    float deckFloorDrop = 64.0f;      // below this, drop the paper entirely
+    float deckCap = 210.0f;           // the deck stops growing past here
+    float paperCap = 420.0f;          // ...and so does the paper it feeds
+    float meterMinW = 360.0f;
+    float meterMinDeck = 84.0f;
+    float meterFloor = 104.0f;
+    float meterCap = 168.0f;
+    float meterGap = 24.0f;
+    float groupCaptionDeck = 132.0f;
+    float lampLadderLeftW = 260.0f;
+    float lampLadderDeck = 104.0f;
+    float statusWithLadderLeftW = 308.0f;
+    float statusNoLadderLeftW = 260.0f;
+    float drumMinLeftW = 150.0f;
+};
+
+inline Layout layout(float w, float h, const LayoutBounds& b) {
     Layout L;
-    if (!(w >= 80.0f) || !(h >= 56.0f)) { return L; }
+    if (!(w >= b.minW) || !(h >= b.minH)) { return L; }
     L.ok = true;
 
     // The paper takes a little over two fifths. Measured rather than
@@ -312,19 +346,18 @@ inline Layout layout(float w, float h) {
     // chart strip inside it was fifteen pixels of solid cream with room for
     // one rule - it read as a lit bar rather than as paper. Two fifths is
     // where the ruling and the tear bar both survive that rectangle.
-    constexpr float kGap = 6.0f;
     float paper = h * 0.42f;
-    if (paper > 150.0f) { paper = 150.0f; }
-    if (paper < 40.0f) { paper = 40.0f; }
-    float deck = h - kGap - paper;
-    if (deck < 92.0f) {
+    if (paper > b.paperMax) { paper = b.paperMax; }
+    if (paper < b.paperMin) { paper = b.paperMin; }
+    float deck = h - b.gap - paper;
+    if (deck < b.deckFloorSqueeze) {
         // Squeeze the paper to its minimum before taking anything off the
         // deck: the lamps, the counter and the meter are what an operator
         // actually watches.
-        paper = 40.0f;
-        deck = h - kGap - paper;
+        paper = b.paperMin;
+        deck = h - b.gap - paper;
     }
-    if (deck < 64.0f) {
+    if (deck < b.deckFloorDrop) {
         paper = 0.0f;
         deck = h;
     }
@@ -335,25 +368,25 @@ inline Layout layout(float w, float h) {
     // part of a fax machine that is genuinely mostly paper. Past 420 px of
     // well the face simply returns less than it was offered, which the
     // contract in instrument_face.hpp explicitly allows.
-    if (deck > 210.0f) {
-        deck = 210.0f;
-        paper = h - kGap - deck;
-        if (paper > 420.0f) { paper = 420.0f; }
+    if (deck > b.deckCap) {
+        deck = b.deckCap;
+        paper = h - b.gap - deck;
+        if (paper > b.paperCap) { paper = b.paperCap; }
     }
     L.deckH = deck;
     L.paperH = paper;
 
     L.meterW = 0.0f;
-    if (w >= 360.0f && deck >= 84.0f) {
+    if (w >= b.meterMinW && deck >= b.meterMinDeck) {
         float m = w * 0.26f;
-        if (m < 104.0f) { m = 104.0f; }
-        if (m > 168.0f) { m = 168.0f; }
+        if (m < b.meterFloor) { m = b.meterFloor; }
+        if (m > b.meterCap) { m = b.meterCap; }
         L.meterW = m;
     }
 
-    const float leftW = w - L.meterW - 24.0f;
-    L.groupCaption = deck >= 132.0f;
-    L.lampLadder = leftW >= 260.0f && deck >= 104.0f;
+    const float leftW = w - L.meterW - b.meterGap;
+    L.groupCaption = deck >= b.groupCaptionDeck;
+    L.lampLadder = leftW >= b.lampLadderLeftW && deck >= b.lampLadderDeck;
     // NEW and LOCK - the two lamps that belong to the WINDOW rather than to
     // the machine - stand at the end of the same row as the phase ladder,
     // behind a divider. They were tried on a strip of their own above the
@@ -361,9 +394,43 @@ inline Layout layout(float w, float h) {
     // the host gives this face when the plugin also has a log, the well came
     // out 40 px deep and the chart in it was a scratch. Seven lamps in one
     // row want 44 px each to keep PHASING legible under them.
-    L.statusLamps = L.lampLadder ? (leftW >= 308.0f) : (leftW >= 260.0f);
-    L.drumDigits = (leftW >= 150.0f) ? kDrumDigits : 0;
+    L.statusLamps = L.lampLadder ? (leftW >= b.statusWithLadderLeftW)
+                                 : (leftW >= b.statusNoLadderLeftW);
+    L.drumDigits = (leftW >= b.drumMinLeftW) ? kDrumDigits : 0;
     return L;
+}
+
+// UNSCALED: the desktop's own rule, exactly as it always read. Every
+// existing caller and every pinned test in tests/test_instrument_fax.cpp
+// keeps working off this signature without editing a single expectation.
+inline Layout layout(float w, float h) { return layout(w, h, LayoutBounds{}); }
+
+// THE ONE PLACE gui::px() REACHES THE DECK'S OWN CEILINGS AND FLOORS -
+// instrument_fax.cpp calls this instead of layout() directly, the same
+// relationship meterBlockHAtScale has to meterBlockH.
+inline Layout layoutAtScale(float w, float h) {
+    LayoutBounds b;
+    b.minW = px(b.minW);
+    b.minH = px(b.minH);
+    b.gap = px(b.gap);
+    b.paperMax = px(b.paperMax);
+    b.paperMin = px(b.paperMin);
+    b.deckFloorSqueeze = px(b.deckFloorSqueeze);
+    b.deckFloorDrop = px(b.deckFloorDrop);
+    b.deckCap = px(b.deckCap);
+    b.paperCap = px(b.paperCap);
+    b.meterMinW = px(b.meterMinW);
+    b.meterMinDeck = px(b.meterMinDeck);
+    b.meterFloor = px(b.meterFloor);
+    b.meterCap = px(b.meterCap);
+    b.meterGap = px(b.meterGap);
+    b.groupCaptionDeck = px(b.groupCaptionDeck);
+    b.lampLadderLeftW = px(b.lampLadderLeftW);
+    b.lampLadderDeck = px(b.lampLadderDeck);
+    b.statusWithLadderLeftW = px(b.statusWithLadderLeftW);
+    b.statusNoLadderLeftW = px(b.statusNoLadderLeftW);
+    b.drumMinLeftW = px(b.drumMinLeftW);
+    return layout(w, h, b);
 }
 
 }  // namespace cascade::gui::faxmath

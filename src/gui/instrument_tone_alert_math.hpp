@@ -16,10 +16,13 @@
 #ifndef CASCADE_GUI_INSTRUMENT_TONE_ALERT_MATH_HPP
 #define CASCADE_GUI_INSTRUMENT_TONE_ALERT_MATH_HPP
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui::tone_alert {
 
@@ -164,6 +167,13 @@ inline Result resultOf(const char* text) {
 // The smallest deck this face will draw into. Below it the face draws the
 // plate and its lamps only, which is still an instrument that says whether
 // anything is ringing - and is a great deal better than three unreadable bays.
+//
+// UNLIKE THE DESKTOP'S OWN NUMBERS, THESE ARE NOT constexpr any more: read
+// through gui::px() in columnsForAtScale/barsForAtScale/typeScaleAtScale
+// below, the same defect class as instrument_pager.cpp's column bounds. A
+// 300 x 96 desktop floor stays that many PHYSICAL pixels on a tablet whose
+// docked body is several times that in raw screen pixels, which is not "too
+// small to draw" on that screen at all.
 inline constexpr float kMinDeckW = 300.0f;
 inline constexpr float kMinDeckH = 96.0f;
 
@@ -175,21 +185,40 @@ struct Columns {
     float glassW = 0.0f;
 };
 
+struct ColumnBounds {
+    float minDeckW = kMinDeckW;
+    float minDeckH = kMinDeckH;
+    float gap = 10.0f;
+};
+
 // Splits `w` into the three bays. The two gaps are taken off the top and the
 // remainder divided; lamp and bars are held to their fractions and the glass
 // takes what is left, so the sum is EXACTLY w whatever the rounding does -
 // a face whose bays add up to less than its own panel leaves a seam, and one
 // that adds up to more draws over the edge, which rule 3 forbids.
-inline Columns columnsFor(float w, float h) {
+inline Columns columnsFor(float w, float h, const ColumnBounds& b) {
     Columns c;
-    if (!(w >= kMinDeckW) || !(h >= kMinDeckH)) { return c; }
+    if (!(w >= b.minDeckW) || !(h >= b.minDeckH)) { return c; }
     c.valid = true;
-    c.gap = 10.0f;
+    c.gap = b.gap;
     const float inner = w - 2.0f * c.gap;
     c.lampW = inner * 0.22f;
     c.barsW = inner * 0.34f;
     c.glassW = inner - c.lampW - c.barsW;
     return c;
+}
+
+// UNSCALED: the desktop's own rule, exactly as it always read. Every
+// existing caller and every pinned test in tests/test_instrument_tone_alert
+// .cpp keeps working off this two-argument signature.
+inline Columns columnsFor(float w, float h) { return columnsFor(w, h, ColumnBounds{}); }
+
+inline Columns columnsForAtScale(float w, float h) {
+    ColumnBounds b;
+    b.minDeckW = px(b.minDeckW);
+    b.minDeckH = px(b.minDeckH);
+    b.gap = px(b.gap);
+    return columnsFor(w, h, b);
 }
 
 // The middle bay again: two bars with the engraved scale cut between them.
@@ -202,16 +231,32 @@ struct BarColumns {
     float gap = 0.0f;
 };
 
-inline BarColumns barsFor(float barsW) {
-    BarColumns b;
-    if (!(barsW >= 96.0f)) { return b; }
-    b.valid = true;
-    b.gap = 6.0f;
-    const float inner = barsW - 2.0f * b.gap;
-    b.scaleW = inner * 0.34f;
-    if (b.scaleW > 62.0f) { b.scaleW = 62.0f; }
-    b.barW = (inner - b.scaleW) * 0.5f;
-    return b;
+struct BarBounds {
+    float minBarsW = 96.0f;
+    float gap = 6.0f;
+    float scaleCap = 62.0f;
+};
+
+inline BarColumns barsFor(float barsW, const BarBounds& b) {
+    BarColumns o;
+    if (!(barsW >= b.minBarsW)) { return o; }
+    o.valid = true;
+    o.gap = b.gap;
+    const float inner = barsW - 2.0f * o.gap;
+    o.scaleW = inner * 0.34f;
+    if (o.scaleW > b.scaleCap) { o.scaleW = b.scaleCap; }
+    o.barW = (inner - o.scaleW) * 0.5f;
+    return o;
+}
+
+inline BarColumns barsFor(float barsW) { return barsFor(barsW, BarBounds{}); }
+
+inline BarColumns barsForAtScale(float barsW) {
+    BarBounds b;
+    b.minBarsW = px(b.minBarsW);
+    b.gap = px(b.gap);
+    b.scaleCap = px(b.scaleCap);
+    return barsFor(barsW, b);
 }
 
 // --- type ---------------------------------------------------------------------
@@ -222,14 +267,37 @@ inline BarColumns barsFor(float barsW) {
 // and a smaller one shrinks rather than clips. The floor is where a caption
 // stops being readable at all, and below it the face gives up bays instead of
 // setting type nobody can read.
-inline float typeScale(float w, float h) {
-    if (!(w > 0.0f) || !(h > 0.0f)) { return 0.72f; }
-    const float byW = w / 580.0f;
-    const float byH = h / 270.0f;
+struct TypeScaleBounds {
+    float refW = 580.0f;
+    float refH = 270.0f;
+    float sMin = 0.72f;  // dimensionless, like instrument_meter.cpp's `s`
+    float sMax = 1.30f;
+};
+
+inline float typeScale(float w, float h, const TypeScaleBounds& b) {
+    if (!(w > 0.0f) || !(h > 0.0f)) { return b.sMin; }
+    const float byW = w / b.refW;
+    const float byH = h / b.refH;
     float s = byW < byH ? byW : byH;
-    if (s < 0.72f) { s = 0.72f; }
-    if (s > 1.30f) { s = 1.30f; }
+    if (s < b.sMin) { s = b.sMin; }
+    if (s > b.sMax) { s = b.sMax; }
     return s;
+}
+
+inline float typeScale(float w, float h) { return typeScale(w, h, TypeScaleBounds{}); }
+
+// THE REFERENCE FOOTPRINT ITSELF GOES THROUGH gui::px() here, exactly for
+// the reason instrument_meter_math.hpp's dialGeometryAtScale scales its
+// 210 x 540 reference: without it, `s` reads a device-scaled body against
+// the desktop's own unscaled reference and pegs at its ceiling immediately
+// on a tablet, and the sMin/sMax bounds themselves stay dimensionless (they
+// already express "how far a resize may shrink or grow the face", not a
+// pixel count).
+inline float typeScaleAtScale(float w, float h) {
+    TypeScaleBounds b;
+    b.refW = px(b.refW);
+    b.refH = px(b.refH);
+    return typeScale(w, h, b);
 }
 
 // The smallest lettering this face will draw. Anything that will not fit at

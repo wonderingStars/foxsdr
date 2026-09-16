@@ -74,6 +74,7 @@
 #include "gui/instrument_fax_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -87,12 +88,13 @@ constexpr float kPiF = 3.14159265358979323846f;
 // The largest size at which `s` fits in `room`, never below a nine pixel
 // floor. Every word on this face is fitted rather than clipped, because the
 // window is the user's to make narrow.
-float fitPx(ImFont* f, float px, const char* s, float room) {
-    if (f == nullptr || s == nullptr || s[0] == '\0' || !(room > 0.0f)) { return px; }
-    const float w = f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x;
-    if (w <= room) { return px; }
-    const float scaled = px * room / w;
-    return scaled < 9.0f ? 9.0f : scaled;
+float fitPx(ImFont* f, float sizePx, const char* s, float room) {
+    if (f == nullptr || s == nullptr || s[0] == '\0' || !(room > 0.0f)) { return sizePx; }
+    const float w = f->CalcTextSizeA(sizePx, FLT_MAX, 0.0f, s).x;
+    if (w <= room) { return sizePx; }
+    const float scaled = sizePx * room / w;
+    const float floor = cascade::gui::px(9.0f);
+    return scaled < floor ? floor : scaled;
 }
 
 // A caption cut into a dark deck: the legend face, the void beneath it and
@@ -113,13 +115,15 @@ float engrave(ImDrawList* dl, const ImVec2& at, const char* s, float px) {
 // format offers is half of what makes it readable.
 void drawSelectorCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                       const char* text, bool lit) {
-    if (br.x - tl.x < 8.0f || br.y - tl.y < 8.0f) { return; }
+    if (br.x - tl.x < cascade::gui::px(8.0f) || br.y - tl.y < cascade::gui::px(8.0f)) {
+        return;
+    }
     dl->AddRectFilled(tl, br, theme::kWell, 2.0f);
     dl->AddRect(tl, br, theme::kBrassDark, 2.0f, 0, theme::kHairline);
     addBenchBevel(dl, tl, br, 2.0f, false);
     if (text == nullptr || text[0] == '\0') { return; }
     ImFont* f = fonts::reading();
-    const float room = br.x - tl.x - 6.0f;
+    const float room = br.x - tl.x - cascade::gui::px(6.0f);
     const float px = fitPx(f, (br.y - tl.y) * 0.62f, text, room);
     const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, text);
     const ImVec2 at((tl.x + br.x) * 0.5f - sz.x * 0.5f,
@@ -140,18 +144,19 @@ void drawSelectorCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 // Returns the x it ended at, so the next group can be laid beside it.
 float drawSelector(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                    const char* caption, const fx::Selector& sel) {
-    const float capPx = fonts::kTinySize * 0.82f;
+    const float capPx = cascade::gui::px(fonts::kTinySize) * 0.82f;
     engrave(dl, tl, caption, capPx);
-    const float y = tl.y + capPx + 4.0f;
+    const float y = tl.y + capPx + cascade::gui::px(4.0f);
+    const float gap = cascade::gui::px(3.0f);
     float x = tl.x;
     for (int i = 0; i < sel.count; ++i) {
         char txt[16];
         fx::formatSelector(sel.v[i], txt, sizeof txt);
         drawSelectorCell(dl, ImVec2(x, y), ImVec2(x + cellW, y + cellH), txt,
                          i == sel.lit);
-        x += cellW + 3.0f;
+        x += cellW + gap;
     }
-    return x - 3.0f;
+    return x - gap;
 }
 
 // The line counter, in the same drums the tuned-frequency counter uses. With
@@ -160,9 +165,9 @@ float drawSelector(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
 // would make them look identical.
 void drawLineCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                      int digits, bool have, double lines) {
-    const float capPx = fonts::kTinySize * 0.82f;
+    const float capPx = cascade::gui::px(fonts::kTinySize) * 0.82f;
     engrave(dl, tl, "LINES", capPx);
-    const float y = tl.y + capPx + 4.0f;
+    const float y = tl.y + capPx + cascade::gui::px(4.0f);
     // THE DRUMS ARE BUTTED, THE SELECTORS ARE SPACED, and that is the whole
     // difference between a counter and a ladder of positions at a glance:
     // spaced apart and the same width as the cells beside them, the four
@@ -170,8 +175,10 @@ void drawLineCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
     // one mechanism, which is what they are.
     const float dW = cellW * 0.74f;
     const float groupW = static_cast<float>(digits) * dW;
-    drawFreqDrumWell(dl, ImVec2(tl.x - 5.0f, y - 4.0f),
-                     ImVec2(tl.x + groupW + 5.0f, y + cellH + 4.0f));
+    const float wellPad = cascade::gui::px(5.0f);
+    const float wellPad2 = cascade::gui::px(4.0f);
+    drawFreqDrumWell(dl, ImVec2(tl.x - wellPad, y - wellPad2),
+                     ImVec2(tl.x + groupW + wellPad, y + cellH + wellPad2));
     char cells[fx::kDrumDigits + 1] = {0};
     int firstSig = digits;
     if (have) { fx::drumCells(fx::drumValue(lines), cells, digits, &firstSig); }
@@ -202,23 +209,24 @@ void drawLineCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
 // tuned receiver on the strength of an empty slot.
 void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                      float frac01, bool haveReading, const char* valueLine) {
-    if (width < 56.0f || height < 46.0f) { return; }
+    if (width < cascade::gui::px(56.0f) || height < cascade::gui::px(46.0f)) { return; }
     ImFont* cf = fonts::legend();
     ImFont* vf = fonts::ui();
-    const float tiny = fonts::kTinySize;
+    const float tiny = cascade::gui::px(fonts::kTinySize);
     const char* cap = "TUNING";
     const char* val = (valueLine != nullptr) ? valueLine : "";
-    const float cpx = fitPx(cf, tiny, cap, width - 4.0f);
-    const float vpx = fitPx(vf, tiny, val, width - 4.0f);
+    const float textRoom = width - cascade::gui::px(4.0f);
+    const float cpx = fitPx(cf, tiny, cap, textRoom);
+    const float vpx = fitPx(vf, tiny, val, textRoom);
     const ImVec2 cs = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, cap);
     const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, val);
     const float valH = (val[0] != '\0') ? vs.y : 0.0f;
 
     engrave(dl, ImVec2(tl.x + width * 0.5f - cs.x * 0.5f, tl.y), cap, cpx);
 
-    const float faceTop = tl.y + cs.y + 3.0f;
-    const float faceH = height - cs.y - valH - 8.0f;
-    if (faceH < 22.0f) { return; }
+    const float faceTop = tl.y + cs.y + cascade::gui::px(3.0f);
+    const float faceH = height - cs.y - valH - cascade::gui::px(8.0f);
+    if (faceH < cascade::gui::px(22.0f)) { return; }
     const ImVec2 fTL(tl.x, faceTop);
     const ImVec2 fBR(tl.x + width, faceTop + faceH);
 
@@ -228,11 +236,12 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
                                 IM_COL32(0xD8, 0xCF, 0xB4, 255));
     dl->AddRect(fTL, fBR, theme::kBrassBright, 3.0f, 0, 2.0f);
 
-    const ImVec2 pivot(tl.x + width * 0.5f, fBR.y - 4.0f);
+    const ImVec2 pivot(tl.x + width * 0.5f, fBR.y - cascade::gui::px(4.0f));
     constexpr float kHalfSweepDeg = 52.0f;
     const float armByHeight = faceH * 0.78f;
     const float reach = std::sin(kHalfSweepDeg * kPiF / 180.0f) * 0.94f;
-    const float armByWidth = (width * 0.5f - 3.0f) / std::max(0.01f, reach);
+    const float armByWidth =
+        (width * 0.5f - cascade::gui::px(3.0f)) / std::max(0.01f, reach);
     const float armR = std::min(armByHeight, armByWidth);
 
     for (int i = 0; i < 9; ++i) {
@@ -252,7 +261,7 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
 
     // The two ends named, so the scale says which way the needle is leaning
     // rather than leaving the sign to the line underneath.
-    const float endPx = std::max(9.0f, tiny * 0.72f);
+    const float endPx = std::max(cascade::gui::px(9.0f), tiny * 0.72f);
     ImFont* ef = fonts::ui();
     const float ea = kHalfSweepDeg * kPiF / 180.0f;
     const float ex = std::sin(ea) * armR * 0.99f;
@@ -274,22 +283,24 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
         const float sy = -std::cos(a);
         dl->AddLine(pivot, ImVec2(pivot.x + sx * armR * 0.88f, pivot.y + sy * armR * 0.88f),
                     theme::kAlarm, 1.8f);
-        dl->AddCircleFilled(pivot, 3.4f, theme::kEnamel, 12);
+        dl->AddCircleFilled(pivot, cascade::gui::px(3.4f), theme::kEnamel, 12);
     } else {
-        dl->AddCircleFilled(pivot, 3.4f, theme::kInkMuted, 12);
+        dl->AddCircleFilled(pivot, cascade::gui::px(3.4f), theme::kInkMuted, 12);
     }
 
     // The unit beside the pivot rather than above it: above is where the
     // needle sweeps through the only reading that matters.
-    const float upx = std::max(9.0f, tiny * 0.72f);
+    const float upx = std::max(cascade::gui::px(9.0f), tiny * 0.72f);
     const ImVec2 us = ef->CalcTextSizeA(upx, FLT_MAX, 0.0f, "Hz");
     const float ux = pivot.x + armR * 0.16f;
-    if (ux + us.x < fBR.x - 3.0f) {
-        dl->AddText(ef, upx, ImVec2(ux, pivot.y - us.y - 2.0f), theme::kEngraved, "Hz");
+    if (ux + us.x < fBR.x - cascade::gui::px(3.0f)) {
+        dl->AddText(ef, upx, ImVec2(ux, pivot.y - us.y - cascade::gui::px(2.0f)),
+                    theme::kEngraved, "Hz");
     }
 
     if (val[0] != '\0') {
-        dl->AddText(vf, vpx, ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),
+        dl->AddText(vf, vpx,
+                    ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + cascade::gui::px(3.0f)),
                     haveReading ? theme::kIvory : theme::kCream, val);
     }
 }
@@ -306,7 +317,7 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
                    double lines) {
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
-    if (w < 40.0f || h < 22.0f) { return; }
+    if (w < cascade::gui::px(40.0f) || h < cascade::gui::px(22.0f)) { return; }
 
     // The well the paper comes out into: cut into the panel, not painted on,
     // and darkest just under the lip so it reads as a cavity with a machine
@@ -321,13 +332,13 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
     // The exit slot and its tear bar, across the top of the well - the one
     // feature every machine in this family shares: a serrated cutter screwed
     // across a full-width slot, with the chart emerging from behind it.
-    const float barH = std::min(11.0f, h * 0.24f);
-    const ImVec2 barTL(tl.x + 4.0f, tl.y + 3.0f);
-    const ImVec2 barBR(br.x - 4.0f, tl.y + 3.0f + barH);
+    const float barH = std::min(cascade::gui::px(11.0f), h * 0.24f);
+    const ImVec2 barTL(tl.x + cascade::gui::px(4.0f), tl.y + cascade::gui::px(3.0f));
+    const ImVec2 barBR(br.x - cascade::gui::px(4.0f), tl.y + cascade::gui::px(3.0f) + barH);
     dl->AddRectFilled(barTL, barBR, theme::kBrassMid, 2.0f);
     addBenchBevel(dl, barTL, barBR, 2.0f, true);
     // The serrations of the cutting edge, along the bar's lower lip.
-    const float toothPitch = 6.0f;
+    const float toothPitch = cascade::gui::px(6.0f);
     for (float x = barTL.x + 2.0f; x < barBR.x - 2.0f; x += toothPitch) {
         dl->AddTriangleFilled(ImVec2(x, barBR.y),
                               ImVec2(std::min(x + toothPitch * 0.5f, barBR.x), barBR.y),
@@ -335,16 +346,18 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
                               theme::withAlpha(theme::kBrassTint, 0.55f));
     }
     // The two round-head screws that hold it on, one at each end.
-    const float screwR = std::min(3.4f, barH * 0.34f);
+    const float screwR = std::min(cascade::gui::px(3.4f), barH * 0.34f);
     if (screwR >= 2.0f) {
         const float scy = (barTL.y + barBR.y) * 0.5f;
-        addCabinetScrew(dl, ImVec2(barTL.x + screwR + 3.0f, scy), screwR, 24.0f);
-        addCabinetScrew(dl, ImVec2(barBR.x - screwR - 3.0f, scy), screwR, -62.0f);
+        addCabinetScrew(dl, ImVec2(barTL.x + screwR + cascade::gui::px(3.0f), scy), screwR,
+                        24.0f);
+        addCabinetScrew(dl, ImVec2(barBR.x - screwR - cascade::gui::px(3.0f), scy), screwR,
+                        -62.0f);
     }
 
     const float paperTop = barBR.y + 1.0f;
-    const float room = br.y - 5.0f - paperTop;
-    if (room < 6.0f) { return; }
+    const float room = br.y - cascade::gui::px(5.0f) - paperTop;
+    if (room < cascade::gui::px(6.0f)) { return; }
     const float frac = have ? fx::paperFrac(lines) : 0.0f;
     if (!(frac > 0.0f)) { return; }
     // A PEDESTAL UNDER THE PROGRESS, and only once there is progress to show.
@@ -352,11 +365,12 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
     // a scratch on the panel rather than as paper; five pixels is the least
     // that reads as a sheet, and it is added only when the count is genuinely
     // above zero, so an empty machine still shows an empty slot.
-    const float len = 5.0f + frac * std::max(0.0f, room - 5.0f);
+    const float pedestal = cascade::gui::px(5.0f);
+    const float len = pedestal + frac * std::max(0.0f, room - pedestal);
 
-    const ImVec2 pTL(tl.x + 14.0f, paperTop);
-    const ImVec2 pBR(br.x - 14.0f, paperTop + len);
-    if (pBR.x - pTL.x < 12.0f) { return; }
+    const ImVec2 pTL(tl.x + cascade::gui::px(14.0f), paperTop);
+    const ImVec2 pBR(br.x - cascade::gui::px(14.0f), paperTop + len);
+    if (pBR.x - pTL.x < cascade::gui::px(12.0f)) { return; }
 
     // The chart. Paper white at the lip, going to the cream of a thermal roll
     // further down, with the slot's own shadow across the top of it.
@@ -364,7 +378,7 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
                                 IM_COL32(0xF6, 0xF1, 0xE2, 255),
                                 IM_COL32(0xDE, 0xD6, 0xBE, 255),
                                 IM_COL32(0xDE, 0xD6, 0xBE, 255));
-    const float shade = std::min(6.0f, len * 0.4f);
+    const float shade = std::min(cascade::gui::px(6.0f), len * 0.4f);
     dl->AddRectFilledMultiColor(pTL, ImVec2(pBR.x, pTL.y + shade),
                                 IM_COL32(0, 0, 0, 120), IM_COL32(0, 0, 0, 120),
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
@@ -373,10 +387,11 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
     // the same interval the plugin's own log reports at, so a rule crossing
     // the lip and a row appearing in the memory below are the same event.
     dl->PushClipRect(pTL, pBR, true);
-    const float pitch = 7.0f;
+    const float pitch = cascade::gui::px(7.0f);
     const float off = fx::ruleOffset(lines, pitch, 50.0);
+    const float ruleInset = cascade::gui::px(4.0f);
     for (float y = pTL.y + off; y < pBR.y; y += pitch) {
-        dl->AddLine(ImVec2(pTL.x + 4.0f, y), ImVec2(pBR.x - 4.0f, y),
+        dl->AddLine(ImVec2(pTL.x + ruleInset, y), ImVec2(pBR.x - ruleInset, y),
                     IM_COL32(0x6E, 0x65, 0x52, 64), 1.0f);
     }
     dl->PopClipRect();
@@ -401,15 +416,19 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (dl == nullptr) { return 0.0f; }
     const float w = br.x - tl.x;
     const float hAll = br.y - tl.y;
-    if (w < 80.0f || hAll < 60.0f) { return 0.0f; }
+    if (w < cascade::gui::px(80.0f) || hAll < cascade::gui::px(60.0f)) { return 0.0f; }
 
     float y = addBenchPlate(dl, tl, br, in.title.c_str());
 
-    const float bx0 = tl.x + 10.0f;
-    const float bx1 = br.x - 10.0f;
-    const float by0 = y + 4.0f;
-    const float by1 = br.y - 8.0f;
-    const fx::Layout L = fx::layout(bx1 - bx0, by1 - by0);
+    const float bx0 = tl.x + cascade::gui::px(10.0f);
+    const float bx1 = br.x - cascade::gui::px(10.0f);
+    const float by0 = y + cascade::gui::px(4.0f);
+    const float by1 = br.y - cascade::gui::px(8.0f);
+    // fx::layoutAtScale, not fx::layout: the deck's own ceilings and floors -
+    // 210 px, 420 px, the meter's 104..168 - are the desktop's own pixels,
+    // and left unscaled they stop the equipment growing once the tablet's
+    // much larger body has room to spare. See instrument_fax_math.hpp.
+    const fx::Layout L = fx::layoutAtScale(bx1 - bx0, by1 - by0);
     if (!L.ok) { return y - tl.y; }
 
     // --- what the plugin actually said ---------------------------------------
@@ -435,10 +454,11 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const ImVec2 dTL(bx0, by0);
     const ImVec2 dBR(bx1, by0 + L.deckH);
     addScopeBay(dl, dTL, dBR, false);
-    const float ix0 = dTL.x + 10.0f;
-    const float ix1 = dBR.x - 10.0f;
-    float iy = dTL.y + 8.0f;
-    const float iyEnd = dBR.y - 8.0f;
+    const float ix0 = dTL.x + cascade::gui::px(10.0f);
+    const float ix1 = dBR.x - cascade::gui::px(10.0f);
+    float iy = dTL.y + cascade::gui::px(8.0f);
+    const float iyEnd = dBR.y - cascade::gui::px(8.0f);
+    const float col60 = cascade::gui::px(60.0f);
 
     float leftX1 = ix1;
     if (L.meterW > 0.0f) {
@@ -451,14 +471,14 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const float mx0 = ix1 - L.meterW;
         drawTuningMeter(dl, ImVec2(mx0, iy), L.meterW, iyEnd - iy,
                         fx::tuningFrac(offsetHz), haveTuning, offText);
-        addBenchDivider(dl, mx0 - 9.0f, iy, iyEnd);
-        leftX1 = mx0 - 18.0f;
+        addBenchDivider(dl, mx0 - cascade::gui::px(9.0f), iy, iyEnd);
+        leftX1 = mx0 - cascade::gui::px(18.0f);
     }
     const float leftW = leftX1 - ix0;
 
-    if (L.groupCaption && leftW > 60.0f) {
+    if (L.groupCaption && leftW > col60) {
         addBenchGroupCaption(dl, ImVec2(ix0, iy), leftW, "RECEPTION");
-        iy += fonts::kTinySize + 6.0f;
+        iy += cascade::gui::px(fonts::kTinySize) + cascade::gui::px(6.0f);
     }
 
     // The phase ladder. Exactly one lamp lights, and only for a word this
@@ -468,11 +488,12 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // divider: they report on the WINDOW and the link rather than on the
     // machine, and the groove is what says so.
     const int statusCols = L.statusLamps ? 2 : 0;
-    if (L.lampLadder && leftW > 60.0f) {
+    if (L.lampLadder && leftW > col60) {
         const int cols = fx::kPhaseCount + statusCols;
         const float pitch = leftW / static_cast<float>(cols);
-        const float lampR = std::min(7.0f, pitch * 0.16f);
-        float capPx = std::max(9.0f, std::min(fonts::kTinySize, pitch * 0.30f));
+        const float lampR = std::min(cascade::gui::px(7.0f), pitch * 0.16f);
+        const float floorPx = cascade::gui::px(9.0f);
+        float capPx = std::max(floorPx, std::min(cascade::gui::px(fonts::kTinySize), pitch * 0.30f));
         // THE WIDEST WORD MUST FIT ITS PITCH. pitch * 0.30 was a proportion
         // fitted to a condensed face; in Georgia (0.84.0) PHASING at that
         // size ran into PICTURE on either side. Measure the longest phase
@@ -486,15 +507,16 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             }
             widest = std::max(widest, ImGui::CalcTextSize("LOCK").x);
             ImGui::PopFont();
-            const float room = pitch - 6.0f;
+            const float room = pitch - cascade::gui::px(6.0f);
             if (widest > room && widest > 0.0f) {
-                capPx = std::max(9.0f, capPx * room / widest);
+                capPx = std::max(floorPx, capPx * room / widest);
             }
         }
-        const float rowH = lampR * 2.0f + capPx * 1.40f + 4.0f;
+        const float lampGap = cascade::gui::px(2.0f);
+        const float rowH = lampR * 2.0f + capPx * 1.40f + cascade::gui::px(4.0f);
         ImGui::PushFont(fonts::ui(), capPx);
         for (int i = 0; i < fx::kPhaseCount; ++i) {
-            const ImVec2 c(ix0 + pitch * (static_cast<float>(i) + 0.5f), iy + lampR + 2.0f);
+            const ImVec2 c(ix0 + pitch * (static_cast<float>(i) + 0.5f), iy + lampR + lampGap);
             // PICTURE is the phosphor one: it is the only position on the
             // ladder that means the radio is putting a picture on paper.
             const ImU32 col = (i == fx::kPhasePicture) ? theme::kPhosphor : theme::kGold;
@@ -504,68 +526,74 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             addBenchDivider(dl, ix0 + pitch * static_cast<float>(fx::kPhaseCount), iy,
                             iy + rowH);
             const ImVec2 cn(ix0 + pitch * (static_cast<float>(fx::kPhaseCount) + 0.5f),
-                            iy + lampR + 2.0f);
+                            iy + lampR + lampGap);
             drawBenchLamp(dl, cn, lampR, theme::kGold, cue.unread, "NEW");
             const ImVec2 cl(ix0 + pitch * (static_cast<float>(fx::kPhaseCount) + 1.5f),
-                            iy + lampR + 2.0f);
+                            iy + lampR + lampGap);
             drawBenchLamp(dl, cl, lampR, theme::kPhosphor, lock, "LOCK");
         }
         ImGui::PopFont();
-        iy += rowH + 4.0f;
-    } else if (leftW > 60.0f) {
+        iy += rowH + cascade::gui::px(4.0f);
+    } else if (leftW > col60) {
         // Too narrow for the ladder: the same fact in fewer pixels, the phase
         // word itself on glass, and a blank well when there is no word.
-        const float wellH = std::min(26.0f, (iyEnd - iy) * 0.42f);
-        const float wellW = statusCols > 0 ? std::min(leftW - 116.0f, 150.0f)
-                                           : std::min(leftW, 150.0f);
+        const float wellH = std::min(cascade::gui::px(26.0f), (iyEnd - iy) * 0.42f);
+        const float wellCap = cascade::gui::px(150.0f);
+        const float wellW = statusCols > 0 ? std::min(leftW - cascade::gui::px(116.0f), wellCap)
+                                           : std::min(leftW, wellCap);
         const ImVec2 wTL(ix0, iy);
         const ImVec2 wBR(ix0 + wellW, iy + wellH);
         drawFreqDrumWell(dl, wTL, wBR);
         if (phase != fx::kPhaseUnknown) {
             ImFont* f = fonts::ui();
             const char* s = fx::phaseName(phase);
-            const float px = fitPx(f, wellH * 0.62f, s, wBR.x - wTL.x - 8.0f);
-            const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, s);
-            dl->AddText(f, px,
+            const float wordPx =
+                fitPx(f, wellH * 0.62f, s, wBR.x - wTL.x - cascade::gui::px(8.0f));
+            const ImVec2 sz = f->CalcTextSizeA(wordPx, FLT_MAX, 0.0f, s);
+            dl->AddText(f, wordPx,
                         ImVec2((wTL.x + wBR.x) * 0.5f - sz.x * 0.5f,
                                (wTL.y + wBR.y) * 0.5f - sz.y * 0.5f),
                         theme::kPhosphor, s);
         }
         if (statusCols > 0) {
-            const float lampR = 6.0f;
-            const float capPx = fonts::kTinySize * 0.82f;
+            const float lampR = cascade::gui::px(6.0f);
+            const float lampGap = cascade::gui::px(2.0f);
+            const float capPx = cascade::gui::px(fonts::kTinySize) * 0.82f;
             ImGui::PushFont(fonts::ui(), capPx);
-            drawBenchLamp(dl, ImVec2(wBR.x + 32.0f, iy + lampR + 2.0f), lampR,
-                          theme::kGold, cue.unread, "NEW");
-            drawBenchLamp(dl, ImVec2(wBR.x + 88.0f, iy + lampR + 2.0f), lampR,
-                          theme::kPhosphor, lock, "LOCK");
+            drawBenchLamp(dl, ImVec2(wBR.x + cascade::gui::px(32.0f), iy + lampR + lampGap),
+                          lampR, theme::kGold, cue.unread, "NEW");
+            drawBenchLamp(dl, ImVec2(wBR.x + cascade::gui::px(88.0f), iy + lampR + lampGap),
+                          lampR, theme::kPhosphor, lock, "LOCK");
             ImGui::PopFont();
         }
-        iy += wellH + 6.0f;
+        iy += wellH + cascade::gui::px(6.0f);
     }
 
     // The selectors and the counter, along the bottom of the deck.
     const float rowH = iyEnd - iy;
-    if (rowH >= 26.0f && leftW > 60.0f) {
-        const float capPx = fonts::kTinySize * 0.82f;
-        const float cellH = std::min(24.0f, rowH - capPx - 4.0f);
-        if (cellH >= 12.0f) {
+    if (rowH >= cascade::gui::px(26.0f) && leftW > col60) {
+        const float capPx = cascade::gui::px(fonts::kTinySize) * 0.82f;
+        const float cellH = std::min(cascade::gui::px(24.0f), rowH - capPx - cascade::gui::px(4.0f));
+        if (cellH >= cascade::gui::px(12.0f)) {
             const fx::Selector iocSel = fx::iocSelector(ioc, have);
             const fx::Selector lpmSel = fx::lpmSelector(lpm, have);
             // Every cell the same width, so the two ladders and the counter
             // read as one row of apertures rather than three sizes of window.
             const int cells = iocSel.count + lpmSel.count + L.drumDigits;
             const int groups = (L.drumDigits > 0) ? 3 : 2;
-            const float spare = leftW - static_cast<float>(groups - 1) * 14.0f -
-                                static_cast<float>(cells - groups) * 3.0f;
+            const float groupGap = cascade::gui::px(14.0f);
+            const float cellGap = cascade::gui::px(3.0f);
+            const float spare = leftW - static_cast<float>(groups - 1) * groupGap -
+                                static_cast<float>(cells - groups) * cellGap;
             float cellW = spare / static_cast<float>(cells);
-            if (cellW > 32.0f) { cellW = 32.0f; }
-            if (cellW >= 11.0f) {
+            const float cellWCap = cascade::gui::px(32.0f);
+            if (cellW > cellWCap) { cellW = cellWCap; }
+            if (cellW >= cascade::gui::px(11.0f)) {
                 float x = ix0;
-                x = drawSelector(dl, ImVec2(x, iy), cellW, cellH, "IOC", iocSel) + 14.0f;
-                x = drawSelector(dl, ImVec2(x, iy), cellW, cellH, "LPM", lpmSel) + 14.0f;
+                x = drawSelector(dl, ImVec2(x, iy), cellW, cellH, "IOC", iocSel) + groupGap;
+                x = drawSelector(dl, ImVec2(x, iy), cellW, cellH, "LPM", lpmSel) + groupGap;
                 if (L.drumDigits > 0) {
-                    drawLineCounter(dl, ImVec2(x + 3.0f, iy), cellW, cellH, L.drumDigits,
+                    drawLineCounter(dl, ImVec2(x + cellGap, iy), cellW, cellH, L.drumDigits,
                                     haveLines, lines);
                 }
             }
@@ -573,12 +601,14 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     }
 
     // --- the paper slot ------------------------------------------------------
+    const float paperGap = cascade::gui::px(6.0f);
+    const float bottomGap = cascade::gui::px(8.0f);
     if (L.paperH > 0.0f) {
-        drawPaperSlot(dl, ImVec2(bx0, dBR.y + 6.0f), ImVec2(bx1, dBR.y + 6.0f + L.paperH),
+        drawPaperSlot(dl, ImVec2(bx0, dBR.y + paperGap), ImVec2(bx1, dBR.y + paperGap + L.paperH),
                       haveLines, lines);
-        return dBR.y + 6.0f + L.paperH + 8.0f - tl.y;
+        return dBR.y + paperGap + L.paperH + bottomGap - tl.y;
     }
-    return dBR.y + 8.0f - tl.y;
+    return dBR.y + bottomGap - tl.y;
 }
 
 }  // namespace cascade::gui

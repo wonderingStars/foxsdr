@@ -28,6 +28,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui::wxface {
 
 // --- the seven-segment table -------------------------------------------------
@@ -372,21 +374,52 @@ inline constexpr float kDigitGap = 3.0f;
 inline constexpr float kHumGap = 2.0f;
 inline constexpr float kPanelAir = 8.0f;
 
-inline float panelStackHeight(const PanelStyle& st) {
-    return st.headerPx + (st.headerPx > 0.0f ? kHeaderGap : 0.0f) + st.digitH +
-           (st.digitH > 0.0f ? kDigitGap : 0.0f) +
-           (st.humH > 0.0f ? st.humH + kHumGap : 0.0f) + st.modelPx;
+inline float panelStackHeight(const PanelStyle& st, float headerGap, float digitGap,
+                              float humGap) {
+    return st.headerPx + (st.headerPx > 0.0f ? headerGap : 0.0f) + st.digitH +
+           (st.digitH > 0.0f ? digitGap : 0.0f) + (st.humH > 0.0f ? st.humH + humGap : 0.0f) +
+           st.modelPx;
 }
 
-inline PanelStyle panelStyle(float panelW, float panelH, float tinySize) {
+// UNSCALED: the desktop's own rule, exactly as it always read.
+inline float panelStackHeight(const PanelStyle& st) {
+    return panelStackHeight(st, kHeaderGap, kDigitGap, kHumGap);
+}
+
+inline float panelStackHeightAtScale(const PanelStyle& st) {
+    return panelStackHeight(st, px(kHeaderGap), px(kDigitGap), px(kHumGap));
+}
+
+// Every absolute pixel threshold panelStyle judges the compartment against,
+// gathered so gui::px() can reach all of them in ONE place (panelStyleAtScale
+// below) - the same defect class as instrument_fax_math.hpp's LayoutBounds:
+// left in the desktop's own pixels, a 92 px "room for a model name" floor and
+// a 64 px digit-room ceiling stay that many PHYSICAL px on a tablet whose
+// compartment is drawn several times that size, and the console's own glass
+// stops growing while the case around it keeps growing.
+struct PanelStyleBounds {
+    float headerMinH = 46.0f;
+    float modelMinH = 92.0f;
+    float panelAir = kPanelAir;
+    float widthInset = 4.0f;   // taken off panelW before fitting the digits
+    float humMinRoom = 54.0f;
+    float humCap = 24.0f, humFloor = 14.0f;
+    float digitRoomCap = 64.0f;
+    float digitFloorHeight = 18.0f;
+};
+
+inline PanelStyle panelStyle(float panelW, float panelH, float tinySize,
+                             const PanelStyleBounds& b) {
     PanelStyle st;
     if (!(panelW > 0.0f) || !(panelH > 0.0f)) { return st; }
-    st.headerPx = (panelH >= 46.0f) ? std::min(tinySize, panelH * 0.17f) : 0.0f;
-    st.modelPx = (panelH >= 92.0f) ? (tinySize - 4.0f) : 0.0f;
-    float room = panelH - st.headerPx - st.modelPx - kPanelAir;
-    st.humH = (room >= 54.0f) ? std::min(24.0f, std::max(14.0f, room * 0.30f)) : 0.0f;
+    st.headerPx = (panelH >= b.headerMinH) ? std::min(tinySize, panelH * 0.17f) : 0.0f;
+    st.modelPx = (panelH >= b.modelMinH) ? (tinySize - b.widthInset) : 0.0f;
+    float room = panelH - st.headerPx - st.modelPx - b.panelAir;
+    st.humH =
+        (room >= b.humMinRoom) ? std::min(b.humCap, std::max(b.humFloor, room * 0.30f)) : 0.0f;
     room -= st.humH;
-    st.digitH = fitDigitHeight(panelW - 4.0f, std::min(room, 64.0f), 18.0f);
+    st.digitH = fitDigitHeight(panelW - b.widthInset, std::min(room, b.digitRoomCap),
+                               b.digitFloorHeight);
     // A compartment too narrow or too short for its temperature keeps nothing
     // but its channel number: the humidity and the name are captions on a
     // reading that is not there, and drawing them alone would say the console
@@ -396,6 +429,33 @@ inline PanelStyle panelStyle(float panelW, float panelH, float tinySize) {
         st.modelPx = 0.0f;
     }
     return st;
+}
+
+// UNSCALED: the desktop's own rule, exactly as it always read. Every
+// existing caller and every pinned test in
+// tests/test_instrument_weather_console.cpp keeps working off this
+// three-argument signature without editing a single expectation.
+inline PanelStyle panelStyle(float panelW, float panelH, float tinySize) {
+    return panelStyle(panelW, panelH, tinySize, PanelStyleBounds{});
+}
+
+// THE ONE PLACE gui::px() REACHES THE COMPARTMENT'S OWN THRESHOLDS -
+// instrument_weather_console.cpp calls this instead of panelStyle()
+// directly. `tinySize` is gui::px()'d here too, for the same reason
+// instrument_meter_math.hpp's dialGeometryAtScale scales its own type-size
+// argument rather than trusting the caller to have done it.
+inline PanelStyle panelStyleAtScale(float panelW, float panelH, float tinySize) {
+    PanelStyleBounds b;
+    b.headerMinH = px(b.headerMinH);
+    b.modelMinH = px(b.modelMinH);
+    b.panelAir = px(b.panelAir);
+    b.widthInset = px(b.widthInset);
+    b.humMinRoom = px(b.humMinRoom);
+    b.humCap = px(b.humCap);
+    b.humFloor = px(b.humFloor);
+    b.digitRoomCap = px(b.digitRoomCap);
+    b.digitFloorHeight = px(b.digitFloorHeight);
+    return panelStyle(panelW, panelH, px(tinySize), b);
 }
 
 // --- the rail's chip ---------------------------------------------------------

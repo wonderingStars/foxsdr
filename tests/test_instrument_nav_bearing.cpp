@@ -16,6 +16,7 @@
 
 #include "core/plugin_abi.h"
 #include "gui/instrument_nav_bearing_math.hpp"
+#include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 namespace nb = cascade::gui::navbearing;
@@ -385,6 +386,50 @@ int main() {
             }
         }
         CHECK(checked > 500);
+    }
+
+    // -- THE GAUGE COLUMN AND THE READOUT/IDENT STRIPS, AT BOTH SCALES ------
+    //
+    // The dial itself has no ceiling - it already takes the min of whatever
+    // width and height remain - so it fills a tablet's much larger box
+    // without any change here. What does NOT follow it unscaled: the gauge
+    // column (132 px), the readout strip (54 px) and the ident strip (40 px)
+    // stay the desktop's own physical width and height beside a dial drawn
+    // twice as large, reading as an afterthought bolted onto an oversized
+    // instrument. layoutAtScale is where gui::px() reaches those figures.
+    {
+        cascade::gui::setUiScale(1.0f);
+        // A box with room for the gauge column, the readout strip and the
+        // ident strip all at once.
+        const nb::Layout a = nb::layoutAtScale(900.0f, 700.0f);
+        CHECK(a.drawAnything && a.drawGauges && a.drawReadout && a.drawIdent);
+        // At scale 1.0, layoutAtScale is layout: gui::px(v) == v exactly.
+        const nb::Layout a2 = nb::layout(900.0f, 700.0f);
+        CHECK_NEAR(a.dialR, a2.dialR, 1e-6);
+        CHECK_NEAR(a.gaugeX1 - a.gaugeX0, a2.gaugeX1 - a2.gaugeX0, 1e-6);
+
+        cascade::gui::setUiScale(2.0f);
+        // THE SAME BOX, TWICE AS BIG - a tablet handing this face the same
+        // proportion of a docked body twice the size - and layout() is
+        // homogeneous of degree 1 in its box dimensions and its bounds taken
+        // together (every additive figure and every threshold scales by the
+        // same factor as the box), so every output field is exactly double.
+        const nb::Layout b = nb::layoutAtScale(1800.0f, 1400.0f);
+        CHECK(b.drawAnything && b.drawGauges && b.drawReadout && b.drawIdent);
+        CHECK_NEAR(b.dialR, a.dialR * 2.0f, 1e-2);
+        CHECK_NEAR(b.gaugeX1 - b.gaugeX0, (a.gaugeX1 - a.gaugeX0) * 2.0f, 1e-2);
+        CHECK_NEAR(b.readoutY1 - b.readoutY0, (a.readoutY1 - a.readoutY0) * 2.0f, 1e-2);
+
+        // BREAK-IT CHECK, run while writing this: nb::layout() called
+        // directly on the doubled box - the unscaled rule, exactly as
+        // instrument_nav_bearing.cpp called it before this change - keeps
+        // the gauge column and the readout strip at the desktop's own
+        // physical width, half what the properly scaled column measures.
+        const nb::Layout unscaled = nb::layout(1800.0f, 1400.0f);
+        CHECK_NEAR(unscaled.gaugeX1 - unscaled.gaugeX0, nb::kGaugeColumnW, 1e-2);
+        CHECK(unscaled.gaugeX1 - unscaled.gaugeX0 != b.gaugeX1 - b.gaugeX0);
+
+        cascade::gui::setUiScale(1.0f);  // as every other test finds it
     }
 
     return testSummary("test_instrument_nav_bearing");

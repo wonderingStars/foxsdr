@@ -31,6 +31,7 @@
 #include "gui/fonts.hpp"
 #include "gui/instrument_face.hpp"
 #include "gui/instrument_teleprinter_math.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -177,9 +178,49 @@ void checkFits(const char* what, const HostInstrument& in,
     }
 }
 
+// -- THE CONTROL COLUMN'S OWN WIDTH, AT BOTH UI SCALES -----------------------
+//
+// instrument_teleprinter.cpp decides the STATUS/MESSAGES column's width and
+// whether there is room for it at all from four desktop reference figures -
+// the same shape of rule as instrument_pager.cpp's column, and the same
+// defect if the bounds are left in the desktop's own pixels: a 196 px
+// ceiling reached at scale 1.0 stays 196 PHYSICAL px on a tablet whose body
+// is drawn several times that size, and the column stops growing while the
+// paper bay beside it keeps growing.
+void testColumnWidthScaling() {
+    cascade::gui::setUiScale(1.0f);
+    // A body wide enough that the column's own 196 px ceiling binds.
+    CHECK_NEAR(tp::columnWidthAtScale(700.0f, 300.0f), 196.0f, 1e-3);
+    // At scale 1.0, columnWidthAtScale is columnWidth: gui::px(v) == v.
+    CHECK_NEAR(tp::columnWidthAtScale(700.0f, 300.0f), tp::columnWidth(700.0f, 300.0f), 1e-6);
+
+    cascade::gui::setUiScale(2.0f);
+    // THE SAME BODY, TWICE AS BIG - a tablet handing this face the same
+    // proportion of a docked body twice the size - and columnWidth is
+    // homogeneous of degree 1 in its body dimensions and its bounds taken
+    // together, so the column is exactly double.
+    CHECK_NEAR(tp::columnWidthAtScale(1400.0f, 600.0f), 392.0f, 1e-2);
+
+    // BREAK-IT CHECK, run while writing this: tp::columnWidth() called
+    // directly on the doubled body - the unscaled rule, exactly as
+    // instrument_teleprinter.cpp computed it inline before this change -
+    // clamps the column to the desktop's own 196 px ceiling instead of
+    // growing it to 392.
+    CHECK_NEAR(tp::columnWidth(1400.0f, 600.0f), 196.0f, 1e-3);
+
+    // A body too narrow or too short for the column at all, at scale 2.0:
+    // the drop thresholds (420 px clearance, 208 px height) scale too.
+    CHECK_NEAR(tp::columnWidthAtScale(500.0f, 600.0f), 0.0f, 1e-3);  // not enough clearance
+    CHECK_NEAR(tp::columnWidthAtScale(1400.0f, 150.0f), 0.0f, 1e-3);  // too short
+
+    cascade::gui::setUiScale(1.0f);  // as every other test finds it
+}
+
 }  // namespace
 
 int main() {
+    testColumnWidthScaling();
+
     // ================================================================
     // 1. HOW MUCH PAPER THERE IS.
     // ================================================================

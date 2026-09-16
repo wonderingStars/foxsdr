@@ -18,11 +18,54 @@
 #ifndef CASCADE_GUI_INSTRUMENT_TELEPRINTER_MATH_HPP
 #define CASCADE_GUI_INSTRUMENT_TELEPRINTER_MATH_HPP
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui::teleprinter {
+
+// --- the control column: keep it, or hand its room to the paper -----------
+//
+// instrument_teleprinter.cpp decides the STATUS/MESSAGES column's width -
+// 32% of the body, clamped between 134 and 196 px - and whether there is
+// room for it at all - the body must have 210 px left over once the column
+// is taken off, and be at least 104 px tall - from four desktop reference
+// figures. Left unscaled, exactly as instrument_pager.cpp's column bounds
+// were: a 196 px ceiling reached at any scale stays 196 PHYSICAL px on a
+// tablet whose body is drawn several times that size, and the column stops
+// growing while the paper bay it stands beside keeps growing around it.
+struct ColumnBounds {
+    float minRef = 134.0f, maxRef = 196.0f;
+    float dropClearance = 210.0f;  // body width left over must reach this
+    float dropMinBodyH = 104.0f;
+};
+
+// Returns 0.0f when the column should be dropped.
+inline float columnWidth(float bodyW, float bodyH, const ColumnBounds& b) {
+    float colW = std::clamp(bodyW * 0.32f, b.minRef, b.maxRef);
+    if (bodyW - colW < b.dropClearance || bodyH < b.dropMinBodyH) { colW = 0.0f; }
+    return colW;
+}
+
+// UNSCALED: the desktop's own rule, exactly as it always read.
+inline float columnWidth(float bodyW, float bodyH) {
+    return columnWidth(bodyW, bodyH, ColumnBounds{});
+}
+
+// THE ONE PLACE gui::px() REACHES THE COLUMN'S OWN BOUNDS -
+// instrument_teleprinter.cpp calls this instead of writing the clamp out
+// itself.
+inline float columnWidthAtScale(float bodyW, float bodyH) {
+    ColumnBounds b;
+    b.minRef = px(b.minRef);
+    b.maxRef = px(b.maxRef);
+    b.dropClearance = px(b.dropClearance);
+    b.dropMinBodyH = px(b.dropMinBodyH);
+    return columnWidth(bodyW, bodyH, b);
+}
 
 // A printed line of thermal paper. The width is the machine's, not the
 // window's: real cockpit printers print a fixed number of columns and a

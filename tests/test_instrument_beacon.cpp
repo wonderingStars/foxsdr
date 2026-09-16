@@ -30,6 +30,7 @@
 #include "gui/fonts.hpp"
 #include "gui/instrument_beacon_math.hpp"
 #include "gui/instrument_face.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -360,6 +361,66 @@ void testLayout() {
     CHECK(tall.cellW > 3.0f);
 }
 
+// -- THE FOUR DECKS' OWN CEILINGS, AT BOTH SCALES ---------------------------
+//
+// layout()'s four deck ceilings (150/62/108/30 px) are exactly the "small in
+// the top-left with empty brass around it" defect once a tablet's docked
+// body hands this face a rectangle far larger than the desktop's: unscaled,
+// every deck stops growing at the SAME physical pixel count it always did.
+// layoutAtScale is where gui::px() reaches those four numbers (and the
+// twenty-odd others alongside them in instrument_beacon_math.hpp's
+// LayoutBounds).
+static void testBeaconLayoutScaling() {
+    cascade::gui::setUiScale(1.0f);
+    // A box generous enough that all four ceilings bind: readH -> 150,
+    // plateH -> 62, gaugeH -> 108, legH -> 30 (hand-verified against the
+    // give() order layout() itself runs).
+    const bx::Layout a = bx::layoutAtScale(0.0f, 0.0f, 2000.0f, 2000.0f);
+    CHECK(a.any);
+    CHECK_NEAR(a.readY1 - a.readY0, 150.0f, 1e-2);
+    // plateY0/gaugeY0/legY0 sit their own gap BELOW the deck above, while
+    // Y1 is the deck's full allocation measured from the SAME point Y0 is
+    // offset from - so each deck's drawn height is its allocation less its
+    // own gap (58 = 62 - the 4 px plateGap; 104 = 108 - gaugeGap; 28 = 30 -
+    // legGap), a property of layout() this test did not introduce and is not
+    // the one being pinned here - only that it holds at BOTH scales.
+    CHECK_NEAR(a.plateY1 - a.plateY0, 58.0f, 1e-2);
+    CHECK_NEAR(a.gaugeY1 - a.gaugeY0, 104.0f, 1e-2);
+    CHECK_NEAR(a.legY1 - a.legY0, 28.0f, 1e-2);
+    // At scale 1.0, layoutAtScale is layout: gui::px(v) == v exactly.
+    const bx::Layout a2 = bx::layout(0.0f, 0.0f, 2000.0f, 2000.0f);
+    CHECK_NEAR(a.readY1, a2.readY1, 1e-6);
+    CHECK_NEAR(a.used, a2.used, 1e-6);
+
+    cascade::gui::setUiScale(2.0f);
+    // THE SAME BOX, TWICE AS BIG - a tablet handing this face the same
+    // proportion of a docked body twice the size - and layout() is
+    // homogeneous of degree 1 in its box coordinates and its bounds taken
+    // together (every additive figure and every clamp bound scales by the
+    // same factor as the box), so each deck's height is exactly double.
+    const bx::Layout b = bx::layoutAtScale(0.0f, 0.0f, 4000.0f, 4000.0f);
+    CHECK(b.any);
+    CHECK_NEAR(b.readY1 - b.readY0, 300.0f, 1e-2);
+    CHECK_NEAR(b.plateY1 - b.plateY0, 116.0f, 1e-2);  // 2 x 58
+    CHECK_NEAR(b.gaugeY1 - b.gaugeY0, 208.0f, 1e-2);  // 2 x 104
+    CHECK_NEAR(b.legY1 - b.legY0, 56.0f, 1e-2);       // 2 x 28
+    CHECK_NEAR(b.digitH, a.digitH * 2.0f, 1e-2);
+    CHECK_NEAR(b.lampR, a.lampR * 2.0f, 1e-2);
+    CHECK_NEAR(b.used, a.used * 2.0f, 1e-2);
+
+    // BREAK-IT CHECK, run while writing this: bx::layout() called directly on
+    // the doubled box - the unscaled rule, exactly as instrument_beacon.cpp
+    // called it before this change - clamps every deck to the desktop's own
+    // ceiling instead of growing it, the exact defect this change fixes.
+    const bx::Layout unscaled = bx::layout(0.0f, 0.0f, 4000.0f, 4000.0f);
+    CHECK_NEAR(unscaled.readY1 - unscaled.readY0, 150.0f, 1e-2);
+    CHECK_NEAR(unscaled.gaugeY1 - unscaled.gaugeY0, 104.0f, 1e-2);
+    CHECK(unscaled.readY1 - unscaled.readY0 != b.readY1 - b.readY0);
+    CHECK(unscaled.gaugeY1 - unscaled.gaugeY0 != b.gaugeY1 - b.gaugeY0);
+
+    cascade::gui::setUiScale(1.0f);  // as every other test finds it
+}
+
 // --- geometry, through a real headless context -------------------------------
 
 struct Box {
@@ -607,6 +668,7 @@ int main() {
     testFaceFitsEverySize();
     testFaceSurvivesNonsense();
     testColdPanelDrawsLess();
+    testBeaconLayoutScaling();
 
     ImGui::DestroyContext();
     return testSummary("test_instrument_beacon");

@@ -15,6 +15,7 @@
 #include "gui/instrument_weather_console_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -39,23 +40,26 @@ float drawInstrumentFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 namespace {
 
 // A caption cut into the plate, in the legend face at the small engraving
-// size, muted ink. Returns the width used.
+// size, muted ink. Returns the width used. Through gui::px() like every
+// other face's own lettering helper - see instrument_pager.cpp's engrave()
+// for why the parameter is not spelled `px`.
 float engrave(ImDrawList* dl, const ImVec2& at, const char* s) {
+    const float sizePx = px(fonts::kTinySize);
     ImFont* f = fonts::legend();
-    dl->AddText(f, fonts::kTinySize, ImVec2(at.x, at.y + 1.0f), theme::kVoid, s);
-    dl->AddText(f, fonts::kTinySize, at, theme::kInkMuted, s);
-    return f->CalcTextSizeA(fonts::kTinySize, FLT_MAX, 0.0f, s).x;
+    dl->AddText(f, sizePx, ImVec2(at.x, at.y + 1.0f), theme::kVoid, s);
+    dl->AddText(f, sizePx, at, theme::kInkMuted, s);
+    return f->CalcTextSizeA(sizePx, FLT_MAX, 0.0f, s).x;
 }
 
 // A live word on glass, in the ui face, phosphor.
 void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float maxW) {
     ImFont* f = fonts::ui();
-    dl->AddText(f, fonts::kUiSize, at, theme::kPhosphor, s, nullptr, maxW);
+    dl->AddText(f, px(fonts::kUiSize), at, theme::kPhosphor, s, nullptr, maxW);
 }
 
 // A live figure on glass, in the reading face.
 void figure(ImDrawList* dl, const ImVec2& at, const char* s) {
-    dl->AddText(fonts::reading(), fonts::kReadingSize, at, theme::kPhosphor, s);
+    dl->AddText(fonts::reading(), px(fonts::kReadingSize), at, theme::kPhosphor, s);
 }
 
 }  // namespace
@@ -64,18 +68,22 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                       const HostInstrument& in, const InstrumentCue& cue) {
     if (dl == nullptr) { return 0.0f; }
     const float w = br.x - tl.x;
-    if (w < 80.0f || br.y - tl.y < 60.0f) { return 0.0f; }
+    if (w < px(80.0f) || br.y - tl.y < px(60.0f)) { return 0.0f; }
 
     // The plate, titled by the plugin's own window name.
     float y = addBenchPlate(dl, tl, br, in.title.c_str());
 
     // The lamps, on the plate's right shoulder: what is ringing, what is
     // locked, what has not been looked at. Each is drawn whether lit or not,
-    // so a cold panel still says which lamps it has.
-    const float lampR = 6.0f;
-    const float lampPitch = 64.0f;
-    float lx = br.x - 12.0f - lampR;
-    const float ly = y + 12.0f;
+    // so a cold panel still says which lamps it has. Both the radius and the
+    // pitch between them are the bench's own reference figures, through
+    // gui::px() like the rest of this face - unscaled, four lamps that fit a
+    // desktop plate comfortably would crowd into the LEFT SIXTH of a plate
+    // drawn twice as wide on a tablet.
+    const float lampR = px(6.0f);
+    const float lampPitch = px(64.0f);
+    float lx = br.x - px(12.0f) - lampR;
+    const float ly = y + px(12.0f);
     const bool alert = in.have && (in.state.flags & CASCADE_INSTRUMENT_FLAG_ALERT) != 0u;
     const bool lock = in.have && (in.state.flags & CASCADE_INSTRUMENT_FLAG_LOCK) != 0u;
     const bool lowBatt = in.have && (in.state.flags & CASCADE_INSTRUMENT_FLAG_LOW_BATT) != 0u;
@@ -89,21 +97,21 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kPhosphor, lock, "LOCK");
     lx -= lampPitch;
     drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, "BATT");
-    y = ly + lampR + fonts::kTinySize + 10.0f;
+    y = ly + lampR + px(fonts::kTinySize) + px(10.0f);
 
     // The glass: every filled slot, labelled by its number, texts down the
     // left and figures down the right. This is the face a kind gets before
     // it has one of its own, and the face any newer kind gets here, so it
     // must show EVERYTHING the plugin sent and invent nothing.
-    const ImVec2 gtl(tl.x + 10.0f, y);
-    const ImVec2 gbr(br.x - 10.0f, br.y - 10.0f);
-    if (gbr.y - gtl.y < 30.0f) { return y - tl.y; }
+    const ImVec2 gtl(tl.x + px(10.0f), y);
+    const ImVec2 gbr(br.x - px(10.0f), br.y - px(10.0f));
+    if (gbr.y - gtl.y < px(30.0f)) { return y - tl.y; }
     drawFreqDrumWell(dl, gtl, gbr);
     dl->PushClipRect(gtl, gbr, true);
-    const float lineH = fonts::kUiSize + 4.0f;
-    float ty = gtl.y + 8.0f;
+    const float lineH = px(fonts::kUiSize) + px(4.0f);
+    float ty = gtl.y + px(8.0f);
     if (!in.have) {
-        engrave(dl, ImVec2(gtl.x + 10.0f, ty), "NO READING YET");
+        engrave(dl, ImVec2(gtl.x + px(10.0f), ty), "NO READING YET");
     } else {
         const float split = gtl.x + (gbr.x - gtl.x) * 0.62f;
         float vy = ty;
@@ -111,26 +119,27 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             if (in.state.text[i][0] == '\0') { continue; }
             char cap[8];
             std::snprintf(cap, sizeof cap, "T%d", i);
-            engrave(dl, ImVec2(gtl.x + 8.0f, ty + 3.0f), cap);
-            onGlass(dl, ImVec2(gtl.x + 36.0f, ty), in.state.text[i], split - gtl.x - 44.0f);
+            engrave(dl, ImVec2(gtl.x + px(8.0f), ty + px(3.0f)), cap);
+            onGlass(dl, ImVec2(gtl.x + px(36.0f), ty), in.state.text[i],
+                    split - gtl.x - px(44.0f));
             ty += lineH;
         }
         for (int i = 0; i < CASCADE_INSTRUMENT_VALUES; ++i) {
             if (in.state.values[i] == 0.0) { continue; }
             char cap[8];
             std::snprintf(cap, sizeof cap, "V%d", i);
-            engrave(dl, ImVec2(split + 4.0f, vy + 3.0f), cap);
+            engrave(dl, ImVec2(split + px(4.0f), vy + px(3.0f)), cap);
             char num[32];
             std::snprintf(num, sizeof num, "%.6g", in.state.values[i]);
-            figure(dl, ImVec2(split + 32.0f, vy), num);
+            figure(dl, ImVec2(split + px(32.0f), vy), num);
             vy += lineH;
         }
         char seq[32];
         std::snprintf(seq, sizeof seq, "EVENT %u", static_cast<unsigned>(in.state.seq));
-        engrave(dl, ImVec2(gtl.x + 8.0f, gbr.y - fonts::kTinySize - 6.0f), seq);
+        engrave(dl, ImVec2(gtl.x + px(8.0f), gbr.y - px(fonts::kTinySize) - px(6.0f)), seq);
     }
     dl->PopClipRect();
-    return gbr.y + 10.0f - tl.y;
+    return gbr.y + px(10.0f) - tl.y;
 }
 
 void instrumentChip(const HostInstrument& in, bool unread, char* out, std::size_t cap) {

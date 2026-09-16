@@ -16,6 +16,7 @@
 #include <string>
 
 #include "gui/instrument_tone_alert_math.hpp"
+#include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 namespace ta = cascade::gui::tone_alert;
@@ -303,6 +304,72 @@ int main() {
         // A clock that has gone wrong leaves the lamp ON rather than off: a
         // missed alert is the expensive failure here, a stuck lamp is not.
         CHECK(ta::alertBlink(std::numeric_limits<double>::quiet_NaN()));
+    }
+
+    // -- THE THREE BAYS' OWN BOUNDS, AND THE TYPE SCALE, AT BOTH UI SCALES --
+    //
+    // instrument_tone_alert.cpp divides its deck into three bays and scales
+    // its own lettering from a set of desktop reference figures - the
+    // minimum deck size, the gaps, the bar deck's own minimum and its
+    // scale-column cap, and the 580 x 270 reference the type scale reads
+    // against. Left unscaled, exactly as instrument_pager.cpp's column
+    // bounds were: a tablet's much larger deck stops growing the bays past
+    // their desktop physical size, and the type scale pegs at its ceiling
+    // instead of reading "this is the desktop's own proportions, redrawn at
+    // this density".
+    {
+        cascade::gui::setUiScale(1.0f);
+        const ta::Columns col1x = ta::columnsForAtScale(600.0f, 300.0f);
+        CHECK(col1x.valid);
+        CHECK_NEAR(col1x.lampW, 127.6f, 1e-1);
+        CHECK_NEAR(col1x.barsW, 197.2f, 1e-1);
+        // At scale 1.0, columnsForAtScale is columnsFor: gui::px(v) == v.
+        const ta::Columns col1x2 = ta::columnsFor(600.0f, 300.0f);
+        CHECK_NEAR(col1x.lampW, col1x2.lampW, 1e-4);
+
+        const ta::BarColumns bars1x = ta::barsForAtScale(col1x.barsW);
+        CHECK(bars1x.valid);
+        CHECK_NEAR(bars1x.scaleW, 62.0f, 1e-2);  // the desktop's own cap binds
+        CHECK_NEAR(bars1x.barW, 61.6f, 1e-1);
+
+        CHECK_NEAR(ta::typeScaleAtScale(580.0f, 270.0f), 1.0f, 1e-6);
+
+        cascade::gui::setUiScale(2.0f);
+        // THE SAME DECK, TWICE AS BIG - a tablet handing this face the same
+        // proportion of a docked body twice the size - and columnsFor/barsFor
+        // are homogeneous of degree 1 in their inputs and bounds taken
+        // together, so every pixel-valued field is exactly double.
+        const ta::Columns col2x = ta::columnsForAtScale(1200.0f, 600.0f);
+        CHECK(col2x.valid);
+        CHECK_NEAR(col2x.lampW, col1x.lampW * 2.0f, 1e-1);
+        CHECK_NEAR(col2x.barsW, col1x.barsW * 2.0f, 1e-1);
+
+        const ta::BarColumns bars2x = ta::barsForAtScale(col2x.barsW);
+        CHECK(bars2x.valid);
+        CHECK_NEAR(bars2x.scaleW, bars1x.scaleW * 2.0f, 1e-1);  // the cap doubled too
+        CHECK_NEAR(bars2x.barW, bars1x.barW * 2.0f, 1e-1);
+
+        // typeScale's answer is a dimensionless RATIO, not a pixel length, so
+        // it reads the SAME 1.0 at both scales for the box that is exactly
+        // the reference redrawn at that scale - unlike the pixel-valued
+        // fields above, this one does not double.
+        CHECK_NEAR(ta::typeScaleAtScale(1160.0f, 540.0f), 1.0f, 1e-6);
+
+        // BREAK-IT CHECK, run while writing this: ta::typeScale() called
+        // directly on the doubled box - the unscaled rule, exactly as
+        // instrument_tone_alert.cpp called it before this change - reads the
+        // box against the desktop's own unscaled 580 x 270 reference and
+        // pegs the ceiling at 1.30 instead of the correct 1.0.
+        CHECK_NEAR(ta::typeScale(1160.0f, 540.0f), 1.30f, 1e-6);
+        CHECK(ta::typeScale(1160.0f, 540.0f) != ta::typeScaleAtScale(1160.0f, 540.0f));
+
+        // And the same defect in columnsFor: called directly (unscaled gap)
+        // on the doubled deck, the answer is neither the 1.0x figure nor the
+        // correctly doubled one - it is the doubled deck divided by the
+        // DESKTOP'S OWN 10 px gap instead of the scaled 20 px one.
+        CHECK(ta::columnsFor(1200.0f, 600.0f).lampW != col2x.lampW);
+
+        cascade::gui::setUiScale(1.0f);  // as every other test finds it
     }
 
     return testSummary("test_instrument_tone_alert");

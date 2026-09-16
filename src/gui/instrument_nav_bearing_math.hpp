@@ -24,6 +24,8 @@
 #include <cstddef>
 #include <cstdio>
 
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui::navbearing {
 
 // --- angles ------------------------------------------------------------------
@@ -274,43 +276,93 @@ inline constexpr float kGaugeColumnW = 132.0f; // three bays plus their gutters
 inline constexpr float kReadoutH = 54.0f;
 inline constexpr float kIdentH = 40.0f;
 
+// The margins layout() spends before the dial gets whatever is left, gathered
+// so gui::px() can reach all of them in ONE place (layoutAtScale below).
+// UNLIKE instrument_fax_math.hpp's deck, the dial itself has no CEILING - it
+// already takes the min of whatever width and height remain - so leaving
+// these unscaled does not shrink the dial on a tablet. What it does instead:
+// the gauge column and the readout/ident strips stay the desktop's own
+// physical width and height beside a dial drawn twice as large, so the
+// column and strips read as an afterthought bolted onto an oversized dial
+// rather than furniture built to the same scale as the instrument they sit
+// beside. The struct's own in-class initialisers ARE the desktop's reference
+// figures, so `LayoutBounds{}` is exactly what the original two-argument
+// layout() always computed.
+struct LayoutBounds {
+    float minDialR = kMinDialR;
+    float gaugeColumnW = kGaugeColumnW;
+    float readoutH = kReadoutH;
+    float identH = kIdentH;
+    float dialMargin = 8.0f;       // taken off w and h before the dial
+    float gaugeSideGap = 16.0f;    // gauge column vs the room the dial needs
+    float gaugeMinH = 150.0f;      // below this the gauge column never shows
+    float gaugeRightInset = 6.0f;  // gaugeX1 from the right edge
+    float gaugeDialGap = 12.0f;    // gauge column to the dial's own width
+    float dialInset = 4.0f;        // the dial's centre off the top-left corner
+};
+
 // `w` and `h` are the space BELOW the plate's rule, in pixels. A zero or
 // negative rectangle - which a window dragged to nothing produces every time -
 // comes back with drawAnything false and every field zero, so a caller that
 // honours the flag cannot divide by it.
-inline Layout layout(float w, float h) {
+inline Layout layout(float w, float h, const LayoutBounds& b) {
     Layout l;
     if (!(w > 0.0f) || !(h > 0.0f)) { return l; }
     if (!std::isfinite(w) || !std::isfinite(h)) { return l; }
 
-    float dialW = w - 8.0f;
-    float dialH = h - 8.0f;
+    float dialW = w - b.dialMargin;
+    float dialH = h - b.dialMargin;
     // The gauge column only earns its keep when the dial it stands beside is
     // still worth looking at afterwards.
-    if (w - kGaugeColumnW - 16.0f >= kMinDialR * 2.0f && h >= 150.0f) {
+    if (w - b.gaugeColumnW - b.gaugeSideGap >= b.minDialR * 2.0f && h >= b.gaugeMinH) {
         l.drawGauges = true;
-        l.gaugeX1 = w - 6.0f;
-        l.gaugeX0 = l.gaugeX1 - kGaugeColumnW;
-        dialW = l.gaugeX0 - 12.0f;
+        l.gaugeX1 = w - b.gaugeRightInset;
+        l.gaugeX0 = l.gaugeX1 - b.gaugeColumnW;
+        dialW = l.gaugeX0 - b.gaugeDialGap;
     }
-    if (dialH - kReadoutH >= kMinDialR * 2.0f) {
+    if (dialH - b.readoutH >= b.minDialR * 2.0f) {
         l.drawReadout = true;
-        dialH -= kReadoutH;
+        dialH -= b.readoutH;
     }
-    if (l.drawReadout && dialH - kIdentH >= kMinDialR * 2.0f) {
+    if (l.drawReadout && dialH - b.identH >= b.minDialR * 2.0f) {
         l.drawIdent = true;
-        dialH -= kIdentH;
+        dialH -= b.identH;
     }
 
     float r = (dialW < dialH ? dialW : dialH) * 0.5f;
-    if (r < kMinDialR) { return l; }  // no room for an instrument at all
+    if (r < b.minDialR) { return l; }  // no room for an instrument at all
     l.drawAnything = true;
     l.dialR = r;
-    l.dialCx = 4.0f + dialW * 0.5f;
-    l.dialCy = 4.0f + dialH * 0.5f;
-    l.readoutY0 = 4.0f + dialH;
-    l.readoutY1 = l.readoutY0 + kReadoutH;
+    l.dialCx = b.dialInset + dialW * 0.5f;
+    l.dialCy = b.dialInset + dialH * 0.5f;
+    l.readoutY0 = b.dialInset + dialH;
+    l.readoutY1 = l.readoutY0 + b.readoutH;
     return l;
+}
+
+// UNSCALED: the desktop's own rule, exactly as it always read. Every
+// existing caller and every pinned test in tests/test_instrument_nav_bearing
+// .cpp keeps working off this two-argument signature without editing a
+// single expectation.
+inline Layout layout(float w, float h) { return layout(w, h, LayoutBounds{}); }
+
+// THE ONE PLACE gui::px() REACHES THE GAUGE COLUMN AND THE READOUT/IDENT
+// STRIPS - instrument_nav_bearing.cpp calls this instead of layout()
+// directly, the same relationship instrument_fax_math.hpp's layoutAtScale
+// has to layout.
+inline Layout layoutAtScale(float w, float h) {
+    LayoutBounds b;
+    b.minDialR = px(b.minDialR);
+    b.gaugeColumnW = px(b.gaugeColumnW);
+    b.readoutH = px(b.readoutH);
+    b.identH = px(b.identH);
+    b.dialMargin = px(b.dialMargin);
+    b.gaugeSideGap = px(b.gaugeSideGap);
+    b.gaugeMinH = px(b.gaugeMinH);
+    b.gaugeRightInset = px(b.gaugeRightInset);
+    b.gaugeDialGap = px(b.gaugeDialGap);
+    b.dialInset = px(b.dialInset);
+    return layout(w, h, b);
 }
 
 }  // namespace cascade::gui::navbearing

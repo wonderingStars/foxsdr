@@ -49,6 +49,7 @@
 #include "core/plugin_ui.hpp"
 #include "gui/instrument_face.hpp"
 #include "gui/instrument_fax_math.hpp"
+#include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 namespace fx = cascade::gui::faxmath;
@@ -338,6 +339,61 @@ int main() {
         // Very short: the paper is the last thing to go, and it does go.
         const fx::Layout flat = fx::layout(560.0f, 60.0f);
         CHECK(flat.ok && flat.paperH == 0.0f);
+    }
+
+    // -- THE DECK'S OWN CEILINGS AND FLOORS, AT BOTH SCALES ------------------
+    //
+    // layout()'s 210 px deck cap and 420 px paper cap are exactly the
+    // "small in the top-left with empty brass around it" defect once a
+    // tablet's docked body hands this face a rectangle twice the size of the
+    // desktop's: unscaled, the deck stops growing at the SAME 210 physical
+    // px it always did, and the equipment stops filling the box it was
+    // given. layoutAtScale is where gui::px() reaches those bounds.
+    {
+        cascade::gui::setUiScale(1.0f);
+        // Big enough that every ceiling in the desktop's own table binds -
+        // the deck at 210, the paper at up to 420, the meter at 168.
+        const fx::Layout big1x = fx::layoutAtScale(1200.0f, 900.0f);
+        CHECK(big1x.ok);
+        CHECK_NEAR(big1x.deckH, 210.0f, 1e-3);
+        CHECK(big1x.meterW > 0.0f);
+        CHECK_NEAR(big1x.meterW, 168.0f, 1e-3);
+
+        cascade::gui::setUiScale(2.0f);
+        // THE SAME BOX, TWICE AS BIG - the tablet handing this face the same
+        // proportion of a docked body twice the size - and every ceiling
+        // this rule enforces has to double with it, or the equipment stalls
+        // at the desktop's own physical size while the box keeps growing.
+        const fx::Layout big2x = fx::layoutAtScale(2400.0f, 1800.0f);
+        CHECK(big2x.ok);
+        CHECK_NEAR(big2x.deckH, 420.0f, 1e-3);
+        CHECK(big2x.meterW > 0.0f);
+        CHECK_NEAR(big2x.meterW, 336.0f, 1e-3);
+
+        // BREAK-IT CHECK, run while writing this: fx::layout() called
+        // directly on the doubled box - the unscaled rule, exactly as
+        // instrument_fax.cpp called it before this change - clamps the deck
+        // to the desktop's own 210 px ceiling instead of growing it to 420,
+        // and the meter to 168 instead of 336. Caught here, not by a
+        // screenshot of a fax machine stuck in the corner of a tablet.
+        const fx::Layout unscaled = fx::layout(2400.0f, 1800.0f);
+        CHECK_NEAR(unscaled.deckH, 210.0f, 1e-3);
+        CHECK_NEAR(unscaled.meterW, 168.0f, 1e-3);
+        CHECK(unscaled.deckH != big2x.deckH);
+        CHECK(unscaled.meterW != big2x.meterW);
+
+        // The floor at the other end scales too: the desktop's own smallest
+        // usable box (80 x 56, the exact figures the "-- zero-size --" block
+        // above pins at 1.0) is BELOW the floor at 2.0, because the minimum
+        // itself doubles along with everything else - the reference 80 x 56
+        // reads as "too small" on a tablet exactly as it would if a phone
+        // were held at arm's length and shown the desktop's own pixels.
+        const fx::Layout tooSmallAt2x = fx::layoutAtScale(80.0f, 56.0f);
+        CHECK(!tooSmallAt2x.ok);
+        const fx::Layout justFitsAt2x = fx::layoutAtScale(161.0f, 113.0f);
+        CHECK(justFitsAt2x.ok);  // just past the scaled 160 x 112 floor
+
+        cascade::gui::setUiScale(1.0f);  // as every other test finds it
     }
 
     // --- the rail's chip -----------------------------------------------------

@@ -61,6 +61,7 @@
 #include "gui/instrument_tone_alert_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -115,13 +116,16 @@ float figureCentred(ImDrawList* dl, float cx, float y, float px, const char* s,
 // WITH NO TONE THE WELL IS EMPTY. Not an index at the bottom stop, which is
 // what "parked" would mean and what a reader would take for 250 Hz.
 void drawToneBar(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, double hz) {
-    if (dl == nullptr || br.x - tl.x < 6.0f || br.y - tl.y < 16.0f) { return; }
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(6.0f) ||
+        br.y - tl.y < cascade::gui::px(16.0f)) {
+        return;
+    }
     drawFreqDrumWell(dl, tl, br);
 
-    const float x0 = tl.x + 3.0f;
-    const float x1 = br.x - 3.0f;
-    const float y0 = tl.y + 4.0f;
-    const float y1 = br.y - 4.0f;
+    const float x0 = tl.x + cascade::gui::px(3.0f);
+    const float x1 = br.x - cascade::gui::px(3.0f);
+    const float y0 = tl.y + cascade::gui::px(4.0f);
+    const float y1 = br.y - cascade::gui::px(4.0f);
     if (x1 <= x0 || y1 <= y0) { return; }
 
     // The graduations INSIDE the well, one per minor tick on the engraved
@@ -181,7 +185,7 @@ void drawToneBar(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, double hz) 
 // same reason drawBenchLamp keeps the hue in its own unlit state.
 void drawStationLamp(ImDrawList* dl, const ImVec2& c, float r, ImU32 colour, bool lit,
                      const char* caption, float capPx) {
-    if (dl == nullptr || r < 4.0f) { return; }
+    if (dl == nullptr || r < cascade::gui::px(4.0f)) { return; }
 
     // The socket: a shadow under it, the brass ring, and the dark inner lip
     // the lens is seated in.
@@ -222,17 +226,20 @@ void drawStationLamp(ImDrawList* dl, const ImVec2& c, float r, ImU32 colour, boo
     if (caption != nullptr && caption[0] != '\0') {
         ImFont* f = fonts::legend();
         const ImVec2 sz = f->CalcTextSizeA(capPx, FLT_MAX, 0.0f, caption);
-        cut(dl, ImVec2(c.x - sz.x * 0.5f, c.y + r * 1.22f + 3.0f), capPx, caption,
-            lit ? theme::kIvory : theme::kCream);
+        cut(dl, ImVec2(c.x - sz.x * 0.5f, c.y + r * 1.22f + cascade::gui::px(3.0f)), capPx,
+            caption, lit ? theme::kIvory : theme::kCream);
     }
 }
 
 // The engraved frequency scale cut between the two bars. Ticks both ways, the
 // major ones numbered in the legend face - the panel's own kHz markings.
 void drawToneScale(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float px) {
-    if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 16.0f) { return; }
-    const float y0 = tl.y + 4.0f;
-    const float y1 = br.y - 4.0f;
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(12.0f) ||
+        br.y - tl.y < cascade::gui::px(16.0f)) {
+        return;
+    }
+    const float y0 = tl.y + cascade::gui::px(4.0f);
+    const float y1 = br.y - cascade::gui::px(4.0f);
     const float cx = (tl.x + br.x) * 0.5f;
     const float halfW = (br.x - tl.x) * 0.5f;
 
@@ -277,7 +284,7 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // RULE 3, at its limit: a rectangle this small cannot hold a plate, let
     // alone an instrument, so nothing is drawn and nothing is claimed. A
     // zero-size or inverted rectangle lands here too.
-    if (!(w >= 90.0f) || !(h >= 64.0f)) { return 0.0f; }
+    if (!(w >= cascade::gui::px(90.0f)) || !(h >= cascade::gui::px(64.0f))) { return 0.0f; }
 
     const CascadeInstrumentState& s = in.state;
     const bool have = in.have;
@@ -287,25 +294,33 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // The case, titled by the plugin's own window name.
     float y = addBenchPlate(dl, tl, br, in.title.c_str());
 
-    const float sc = ta::typeScale(w, h);
-    const float capPx = std::max(ta::kMinTextPx, fonts::kTinySize * sc);
-    const float readPx = std::max(ta::kMinTextPx + 2.0f, fonts::kReadingSize * sc);
-    const float uiPx = std::max(ta::kMinTextPx, fonts::kUiSize * sc);
+    // ta::typeScaleAtScale, not ta::typeScale: the 580 x 270 reference itself
+    // has to go through gui::px() for the same reason instrument_meter.cpp's
+    // `s` does - otherwise the local type scale pegs at its 1.30 ceiling on a
+    // tablet's much larger box and stops growing with the display's own
+    // density. See instrument_tone_alert_math.hpp.
+    const float sc = ta::typeScaleAtScale(w, h);
+    const float minTextPx = cascade::gui::px(ta::kMinTextPx);
+    const float capPx = std::max(minTextPx, cascade::gui::px(fonts::kTinySize) * sc);
+    const float readPx =
+        std::max(minTextPx + cascade::gui::px(2.0f), cascade::gui::px(fonts::kReadingSize) * sc);
+    const float uiPx = std::max(minTextPx, cascade::gui::px(fonts::kUiSize) * sc);
 
     // The maker's legend along the bottom of the case, and the event counter
     // beside it. Both are cut into the enamel; neither is a measurement.
-    const float legendH = capPx + 6.0f;
-    const float legendY = br.y - 5.0f - capPx;
+    const float legendH = capPx + cascade::gui::px(6.0f);
+    const float legendY = br.y - cascade::gui::px(5.0f) - capPx;
     ImFont* lf = fonts::legend();
-    float legendRoom = w - 24.0f;
+    float legendRoom = w - cascade::gui::px(24.0f);
     if (have) {
         // The event counter first, so the maker's legend beside it is fitted
         // to what is actually left rather than to the whole case.
         char ev[32];
         std::snprintf(ev, sizeof ev, "EVENT %u", static_cast<unsigned>(s.seq));
         const float ew = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, ev).x;
-        cut(dl, ImVec2(br.x - 12.0f - ew, legendY), capPx, ev, theme::kInkFaint);
-        legendRoom -= ew + 12.0f;
+        const float pad12 = cascade::gui::px(12.0f);
+        cut(dl, ImVec2(br.x - pad12 - ew, legendY), capPx, ev, theme::kInkFaint);
+        legendRoom -= ew + pad12;
     }
     // The maker's legend, cut into the case the way the equipment letters its
     // own front: what signalling it answers to, and what it is.
@@ -314,17 +329,20 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const float w0 = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, mark).x;
         if (w0 > legendRoom) { mark = "TWO-TONE SEQUENTIAL"; }
         const float w1 = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, mark).x;
-        cut(dl, ImVec2(tl.x + 12.0f, legendY), ta::fitPx(capPx, w1, legendRoom), mark);
+        cut(dl, ImVec2(tl.x + cascade::gui::px(12.0f), legendY), ta::fitPx(capPx, w1, legendRoom),
+            mark);
     }
 
     // The deck: everything between the plate's rule and the legend.
-    const ImVec2 dTL(tl.x + 10.0f, y + 2.0f);
-    const ImVec2 dBR(br.x - 10.0f, br.y - 6.0f - legendH);
+    const ImVec2 dTL(tl.x + cascade::gui::px(10.0f), y + cascade::gui::px(2.0f));
+    const ImVec2 dBR(br.x - cascade::gui::px(10.0f), br.y - cascade::gui::px(6.0f) - legendH);
     const float dw = dBR.x - dTL.x;
     const float dh = dBR.y - dTL.y;
-    if (dw < 40.0f || dh < 30.0f) { return h; }
+    if (dw < cascade::gui::px(40.0f) || dh < cascade::gui::px(30.0f)) { return h; }
 
-    const ta::Columns col = ta::columnsFor(dw, dh);
+    // ta::columnsForAtScale: the three-bay split's own minimum deck size and
+    // gap are desktop reference figures too.
+    const ta::Columns col = ta::columnsForAtScale(dw, dh);
 
     // --- the alerting lamps ---------------------------------------------------
     //
@@ -345,23 +363,28 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // that block is centred in the bay, so the lamps sit where a hand
         // would put them rather than hard against the top rail with a hole
         // underneath.
-        const float capBlock = capPx + 6.0f;
-        const float gap = 8.0f;
-        float R = std::min(bw * 0.32f, (bh - 16.0f - 2.0f * capBlock - gap) / 2.68f);
-        bool withNew = R >= 9.0f;
+        const float capBlock = capPx + cascade::gui::px(6.0f);
+        const float gap = cascade::gui::px(8.0f);
+        const float rFloor = cascade::gui::px(5.0f);
+        const float rCeil = cascade::gui::px(36.0f);
+        const float rWithNewFloor = cascade::gui::px(9.0f);
+        float R = std::min(bw * 0.32f,
+                           (bh - cascade::gui::px(16.0f) - 2.0f * capBlock - gap) / 2.68f);
+        bool withNew = R >= rWithNewFloor;
         if (!withNew) {
             // Too short for both. The ALERT lamp is the one that must survive:
             // the NEW lamp says a page arrived while you were away, and the
             // rail's own chip says that too.
-            R = std::min(bw * 0.34f, (bh - 10.0f - capBlock) * 0.5f);
+            R = std::min(bw * 0.34f, (bh - cascade::gui::px(10.0f) - capBlock) * 0.5f);
         }
-        R = std::max(5.0f, std::min(R, 36.0f));
-        const float smallR = std::max(4.0f, R * 0.34f);
+        R = std::max(rFloor, std::min(R, rCeil));
+        const float smallR = std::max(cascade::gui::px(4.0f), R * 0.34f);
         const float blockH =
             withNew ? (2.0f * R + capBlock + gap + 2.0f * smallR + capBlock)
                     : (2.0f * R + capBlock);
         float top = lTL.y + (bh - blockH) * 0.5f;
-        if (top < lTL.y + 4.0f) { top = lTL.y + 4.0f; }
+        const float topFloor = lTL.y + cascade::gui::px(4.0f);
+        if (top < topFloor) { top = topFloor; }
 
         // THE ALERT LAMP BLINKS, it is not merely on: a steady red lamp on a
         // station wall is a fault indicator, a blinking one is a call.
@@ -384,17 +407,19 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const ImVec2 bBR(bTL.x + col.barsW, dBR.y);
     addScopeBay(dl, bTL, bBR, true);
 
-    const ta::BarColumns bars = ta::barsFor(col.barsW);
+    // ta::barsForAtScale: the bar deck's own minimum width and gaps are
+    // desktop reference figures too.
+    const ta::BarColumns bars = ta::barsForAtScale(col.barsW);
     {
-        const float capY = bTL.y + 4.0f;
-        const float capH = capPx + 4.0f;
+        const float capY = bTL.y + cascade::gui::px(4.0f);
+        const float capH = capPx + cascade::gui::px(4.0f);
         // Two figure lines under each bar: the frequency and the duration,
         // each with its unit cut in beside the caption above it.
-        const float figH = readPx + 2.0f;
+        const float figH = readPx + cascade::gui::px(2.0f);
         const float wellTop = capY + capH;
-        const float wellBot = bBR.y - 6.0f - figH * 2.0f;
+        const float wellBot = bBR.y - cascade::gui::px(6.0f) - figH * 2.0f;
 
-        if (bars.valid && wellBot > wellTop + 24.0f) {
+        if (bars.valid && wellBot > wellTop + cascade::gui::px(24.0f)) {
             const float xA0 = bTL.x + bars.gap;
             const float xA1 = xA0 + bars.barW;
             const float xS0 = xA1;
@@ -423,13 +448,14 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 const double sec = ta::slotOrNone(have, s.values[2 + i]);
                 char buf[32];
                 ta::formatHz(buf, sizeof buf, hz);
-                figureCentred(dl, cx, wellBot + 3.0f, readPx, buf, bars.barW,
+                const float figGap = cascade::gui::px(3.0f);
+                figureCentred(dl, cx, wellBot + figGap, readPx, buf, bars.barW,
                               ta::haveTone(hz) ? theme::kPhosphor : theme::kCream);
                 char sb[32];
                 ta::formatSec(sb, sizeof sb, sec);
                 char line[40];
                 std::snprintf(line, sizeof line, "%s s", sb);
-                figureCentred(dl, cx, wellBot + 3.0f + figH, readPx * 0.82f, line,
+                figureCentred(dl, cx, wellBot + figGap + figH, readPx * 0.82f, line,
                               bars.barW,
                               ta::haveDuration(sec) ? theme::kAmber : theme::kCream);
             }
@@ -445,11 +471,13 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const ImVec2 gBR(gTL.x + col.glassW, dBR.y);
     drawFreqDrumWell(dl, gTL, gBR);
     {
-        const float pad = 8.0f;
+        const float pad = cascade::gui::px(8.0f);
         const float x0 = gTL.x + pad;
         const float maxW = (gBR.x - pad) - x0;
-        float gy = gTL.y + 6.0f;
+        float gy = gTL.y + cascade::gui::px(6.0f);
         const ta::Result res = have ? ta::resultOf(s.text[2]) : ta::Result::kNone;
+        const float gap2 = cascade::gui::px(2.0f);
+        const float gap4 = cascade::gui::px(4.0f);
 
         if (!have) {
             // RULE 2. No page has been received, so the glass says so - one
@@ -458,7 +486,7 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 theme::kInkMuted);
         } else {
             cut(dl, ImVec2(x0, gy), capPx, "CODE");
-            gy += capPx + 2.0f;
+            gy += capPx + gap2;
             if (s.text[0][0] != '\0') {
                 ImFont* rf = fonts::reading();
                 // THE CODE IS THE HERO FIGURE on this face - it is what a
@@ -469,15 +497,15 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 const float w0 = rf->CalcTextSizeA(codePx, FLT_MAX, 0.0f, s.text[0]).x;
                 const float px = ta::fitPx(codePx, w0, maxW);
                 dl->AddText(rf, px, ImVec2(x0, gy), theme::kPhosphor, s.text[0]);
-                gy += rf->CalcTextSizeA(px, FLT_MAX, 0.0f, s.text[0]).y + 4.0f;
+                gy += rf->CalcTextSizeA(px, FLT_MAX, 0.0f, s.text[0]).y + gap4;
             } else {
                 // A page with no code is what an unmatched pair looks like:
                 // the cell is left blank rather than filled with a guess.
-                gy += readPx + 4.0f;
+                gy += readPx + gap4;
             }
 
             cut(dl, ImVec2(x0, gy), capPx, "FORMAT");
-            gy += capPx + 2.0f;
+            gy += capPx + gap2;
             if (s.text[1][0] != '\0') {
                 // Words, so the UI face - and wrapped inside the glass rather
                 // than run out over the bevel. "Motorola Quick Call II group
@@ -487,9 +515,9 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                             nullptr, maxW);
                 const ImVec2 tsz =
                     uf->CalcTextSizeA(uiPx * 0.92f, FLT_MAX, maxW, s.text[1]);
-                gy += tsz.y + 4.0f;
+                gy += tsz.y + gap4;
             } else {
-                gy += uiPx + 4.0f;
+                gy += uiPx + gap4;
             }
 
             // The result tab: phosphor for a pair a published table names,
@@ -510,17 +538,19 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 if (res == ta::Result::kUnmatched) { ink = theme::kAmber; }
                 ImFont* tabFont = fonts::legend();
                 const float w0 = tabFont->CalcTextSizeA(capPx, FLT_MAX, 0.0f, word).x;
-                const float px = ta::fitPx(capPx, w0, maxW - 12.0f);
+                const float px = ta::fitPx(capPx, w0, maxW - cascade::gui::px(12.0f));
                 const ImVec2 tsz = tabFont->CalcTextSizeA(px, FLT_MAX, 0.0f, word);
-                float ty = gBR.y - 8.0f - tsz.y;
+                float ty = gBR.y - cascade::gui::px(8.0f) - tsz.y;
                 // ...unless the glass is so short that the foot would collide
                 // with the format line, in which case it follows on instead.
                 if (ty < gy) { ty = gy; }
-                const ImVec2 rTL(x0 - 3.0f, ty - 2.0f);
-                const ImVec2 rBR(x0 + tsz.x + 7.0f, ty + tsz.y + 3.0f);
+                const float pad2 = cascade::gui::px(2.0f);
+                const float pad3 = cascade::gui::px(3.0f);
+                const ImVec2 rTL(x0 - pad3, ty - pad2);
+                const ImVec2 rBR(x0 + tsz.x + cascade::gui::px(7.0f), ty + tsz.y + pad3);
                 if (rBR.y < gBR.y && rBR.x < gBR.x) {
-                    if (ty - capPx - 3.0f > gy) {
-                        cut(dl, ImVec2(x0, ty - capPx - 4.0f), capPx, "RESULT");
+                    if (ty - capPx - pad3 > gy) {
+                        cut(dl, ImVec2(x0, ty - capPx - cascade::gui::px(4.0f)), capPx, "RESULT");
                     }
                     dl->AddRectFilled(rTL, rBR, theme::withAlpha(ink, 0.14f), 3.0f);
                     dl->AddRect(rTL, rBR, theme::withAlpha(ink, 0.55f), 3.0f, 0, 1.0f);
@@ -533,10 +563,11 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // The two screws in the case's top corners, driven home at different
     // angles the way real ones are. Drawn last so they sit on the plate rather
     // than under it.
-    const float sr = std::max(2.5f, 4.0f * sc);
-    if (w > 120.0f) {
-        addCabinetScrew(dl, ImVec2(tl.x + sr + 5.0f, tl.y + sr + 5.0f), sr, 18.0f);
-        addCabinetScrew(dl, ImVec2(br.x - sr - 5.0f, tl.y + sr + 5.0f), sr, -34.0f);
+    const float sr = std::max(cascade::gui::px(2.5f), cascade::gui::px(4.0f) * sc);
+    if (w > cascade::gui::px(120.0f)) {
+        const float screwInset = cascade::gui::px(5.0f);
+        addCabinetScrew(dl, ImVec2(tl.x + sr + screwInset, tl.y + sr + screwInset), sr, 18.0f);
+        addCabinetScrew(dl, ImVec2(br.x - sr - screwInset, tl.y + sr + screwInset), sr, -34.0f);
     }
 
     return h;

@@ -72,6 +72,7 @@
 #include "gui/instrument_pager_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -100,19 +101,27 @@ constexpr ImU32 kLcdSegSoft = IM_COL32(0x18, 0x20, 0x14, 0x66);
 // --- small lettering helpers ------------------------------------------------
 
 // A caption cut into the metal, in the legend face. Returns its width.
+//
+// `sizePx` is ALREADY IN SCREEN PIXELS, either the default (which puts
+// kTinySize through gui::px() itself, so a caller that never thinks about
+// scale still gets it) or whatever an explicit caller computed - and a
+// caller mixing a raw fonts:: constant into that computation must run it
+// through gui::px() too, or the mix picks the unscaled figure once the
+// scaled one grows past it. The parameter is spelled `sizePx` rather than
+// `px`, which would shadow gui::px() itself for the rest of this function.
 float engrave(ImDrawList* dl, const ImVec2& at, const char* s, ImU32 ink = theme::kInkMuted,
-              float px = fonts::kTinySize) {
+              float sizePx = cascade::gui::px(fonts::kTinySize)) {
     ImFont* f = fonts::legend();
-    dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
+    dl->AddText(f, sizePx, ImVec2(at.x + 1.0f, at.y + 1.0f),
                 theme::withAlpha(theme::kVoid, 0.55f), s);
-    dl->AddText(f, px, at, ink, s);
-    return f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x;
+    dl->AddText(f, sizePx, at, ink, s);
+    return f->CalcTextSizeA(sizePx, FLT_MAX, 0.0f, s).x;
 }
 
 // A live word on glass, in the ui face, clipped to `maxW`.
 void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float maxW,
-             float px = fonts::kUiSize, ImU32 ink = theme::kPhosphor) {
-    dl->AddText(fonts::ui(), px, at, ink, s, nullptr, maxW);
+             float sizePx = cascade::gui::px(fonts::kUiSize), ImU32 ink = theme::kPhosphor) {
+    dl->AddText(fonts::ui(), sizePx, at, ink, s, nullptr, maxW);
 }
 
 // --- the pager's own parts --------------------------------------------------
@@ -121,7 +130,10 @@ void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float maxW,
 // bevel every other object on this bench wears, so it is lit from the same
 // upper left as the brass it stands in.
 void drawCaseShell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, float round) {
-    dl->AddRectFilled(ImVec2(tl.x + 3.0f, tl.y + 4.0f), ImVec2(br.x + 3.0f, br.y + 4.0f),
+    const float shadowX = cascade::gui::px(3.0f);
+    const float shadowY = cascade::gui::px(4.0f);
+    dl->AddRectFilled(ImVec2(tl.x + shadowX, tl.y + shadowY),
+                      ImVec2(br.x + shadowX, br.y + shadowY),
                       theme::withAlpha(theme::kVoid, 0.45f), round);
     dl->AddRectFilled(tl, br, kCaseHi, round);
     if (br.x - tl.x > round * 2.0f) {
@@ -165,8 +177,9 @@ void drawEnvelope(ImDrawList* dl, const ImVec2& tl, float w, float h, ImU32 ink)
 float drawDrumRow(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                   const char* cells, int count) {
     const float w = cellW * static_cast<float>(count);
-    drawFreqDrumWell(dl, ImVec2(tl.x - 3.0f, tl.y - 3.0f),
-                     ImVec2(tl.x + w + 3.0f, tl.y + cellH + 3.0f));
+    const float wellPad = cascade::gui::px(3.0f);
+    drawFreqDrumWell(dl, ImVec2(tl.x - wellPad, tl.y - wellPad),
+                     ImVec2(tl.x + w + wellPad, tl.y + cellH + wellPad));
     for (int i = 0; i < count; ++i) {
         const ImVec2 ctl(tl.x + static_cast<float>(i) * cellW, tl.y);
         const ImVec2 cbr(ctl.x + cellW - 1.0f, tl.y + cellH);
@@ -184,21 +197,32 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float w = br.x - tl.x;
     const float hAll = br.y - tl.y;
     // A rectangle too small to hold the equipment gets nothing drawn in it
-    // rather than a compressed drawing over its edges.
-    if (!(w > 0.0f) || !(hAll > 0.0f) || w < 120.0f || hAll < 90.0f) { return 0.0f; }
+    // rather than a compressed drawing over its edges. The floor is the
+    // bench's own reference figure, through gui::px() like every other layout
+    // constant here - at scale 2.0 the box has to be twice as generous before
+    // the equipment is judged to fit it.
+    if (!(w > 0.0f) || !(hAll > 0.0f) || w < cascade::gui::px(120.0f) ||
+        hAll < cascade::gui::px(90.0f)) {
+        return 0.0f;
+    }
 
     const float plateY = addBenchPlate(dl, tl, br, in.title.c_str());
 
     // THE CRADLE. The pager is a separate object standing in the bench, so the
     // bench gives it a machined bay to stand in - and the bay is what stops at
     // the bottom of the face, with the lower part of the case inside it.
-    const ImVec2 bayTL(tl.x + 10.0f, plateY + 4.0f);
+    const ImVec2 bayTL(tl.x + cascade::gui::px(10.0f), plateY + cascade::gui::px(4.0f));
     // Capped, so a window given the whole height does not stretch one pager to
     // fill it; the face returns the smaller number and the caller keeps the
-    // rest.
-    const float bayH = std::min(br.y - 10.0f - bayTL.y, 430.0f);
-    const ImVec2 bayBR(br.x - 10.0f, bayTL.y + bayH);
-    if (bayH < 60.0f || bayBR.x - bayTL.x < 100.0f) { return plateY - tl.y; }
+    // rest. THE CAP ITSELF SCALES: a bay given twice the room at scale 2.0
+    // still deserves a pager twice the size, not the desktop's own ceiling
+    // reached early and the tablet's spare height left as brass.
+    const float bayH =
+        std::min(br.y - cascade::gui::px(10.0f) - bayTL.y, cascade::gui::px(430.0f));
+    const ImVec2 bayBR(br.x - cascade::gui::px(10.0f), bayTL.y + bayH);
+    if (bayH < cascade::gui::px(60.0f) || bayBR.x - bayTL.x < cascade::gui::px(100.0f)) {
+        return plateY - tl.y;
+    }
     addScopeBay(dl, bayTL, bayBR, true);
     dl->PushClipRect(bayTL, bayBR, true);
 
@@ -218,11 +242,16 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // so at that point it is dropped and the equipment takes the whole bay -
     // which is the third rule working as intended: less is drawn, smaller,
     // rather than the same drawing pushed over the edge.
-    constexpr float kColumnMin = 150.0f;
-    const float wantW = std::clamp(bayW * 0.46f, 120.0f, 560.0f);
-    const bool haveColumn = bayW - wantW - 28.0f >= kColumnMin;
-    const float caseW = haveColumn ? wantW : std::max(120.0f, bayW - 24.0f);
-    const ImVec2 caseTL(bayTL.x + 12.0f, bayTL.y + 8.0f);
+    // THE FIVE BOUNDS - 150, 120, 560, 28, 24 reference px - AND THE DECISION
+    // THEY MAKE now live in pager::columnLayoutAtScale, in instrument_pager_
+    // math.hpp, so tests/test_instrument_pager.cpp can pin the same rule at
+    // both scales; px(v) == v at 1.0 leaves every number below reading
+    // exactly as it always did.
+    const float kColumnMin = cascade::gui::px(150.0f);
+    const pager::ColumnLayout column = pager::columnLayoutAtScale(bayW);
+    const bool haveColumn = column.haveColumn;
+    const float caseW = column.caseW;
+    const ImVec2 caseTL(bayTL.x + cascade::gui::px(12.0f), bayTL.y + cascade::gui::px(8.0f));
     // The body at its true proportions, which is TALLER than the bay: the last
     // third of the pager is down inside the cradle, exactly as it would be.
     const pager::CaseSize cs = pager::caseSize(caseW, caseW / (55.0f / 81.0f));
@@ -238,15 +267,26 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // own display below the minimum in the same move, so a small window showed
     // a pager with a dead screen. Height is the scarce dimension here; these
     // give way to it.
-    const float sideInset = std::clamp(cs.w * 0.075f, 6.0f, 16.0f);
-    const float shoulderH = std::clamp(cs.w * 0.11f, 12.0f, bayH * 0.17f);
-    const float lampR = std::max(3.0f, shoulderH * 0.22f);
+    const float sideInset =
+        std::clamp(cs.w * 0.075f, cascade::gui::px(6.0f), cascade::gui::px(16.0f));
+    const float shoulderH =
+        std::clamp(cs.w * 0.11f, cascade::gui::px(12.0f), bayH * 0.17f);
+    const float lampR = std::max(cascade::gui::px(3.0f), shoulderH * 0.22f);
     const ImVec2 lampC(caseTL.x + sideInset + lampR, caseTL.y + shoulderH * 0.55f);
     drawBenchLamp(dl, lampC, lampR, theme::kAlarmHot, ringing && blink, nullptr);
-    engrave(dl, ImVec2(lampC.x + lampR + 5.0f, lampC.y - fonts::kTinySize * 0.52f), "MSG",
-            theme::kCream, std::min(fonts::kTinySize, shoulderH * 0.72f));
+    // The caption's own size mixes a raw reference constant (kTinySize) with a
+    // proportion of the already-scaled shoulder, so the reference constant
+    // has to go through gui::px() before the two are compared - otherwise
+    // shoulderH * 0.72f wins at every scale above 1.0 and the smaller,
+    // unscaled figure is the one that would have won at 1.0, silently
+    // changing which branch of the min() is live.
+    const float msgCapPx =
+        std::min(cascade::gui::px(fonts::kTinySize), shoulderH * 0.72f);
+    engrave(dl, ImVec2(lampC.x + lampR + cascade::gui::px(5.0f),
+                       lampC.y - msgCapPx * 0.52f),
+            "MSG", theme::kCream, msgCapPx);
     {
-        const float gw = std::min(cs.w * 0.30f, 60.0f);
+        const float gw = std::min(cs.w * 0.30f, cascade::gui::px(60.0f));
         drawGrille(dl, ImVec2(caseBR.x - sideInset - gw, caseTL.y + shoulderH * 0.28f), gw,
                    shoulderH * 0.52f, 6);
     }
@@ -255,14 +295,17 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     //
     // The glass is sized from the CHARACTER CELL, so twenty columns are twenty
     // identical cells whatever the window is doing.
-    const float bezelPad = std::clamp(cs.w * 0.028f, 3.0f, 8.0f);
+    const float bezelPad =
+        std::clamp(cs.w * 0.028f, cascade::gui::px(3.0f), cascade::gui::px(8.0f));
     const float lcdMaxW = cs.w - sideInset * 2.0f - bezelPad * 2.0f;
     const float lcdTop = caseTL.y + shoulderH;
     // What is left for the display once the moulded plate under it is kept
     // clear, measured against the BAY: the case runs past the bay's bottom and
     // the display may not.
-    const float plateRoom = std::clamp(cs.w * 0.16f, 16.0f, bayH * 0.24f);
-    const float lcdMaxH = (bayBR.y - 8.0f) - lcdTop - bezelPad * 2.0f - plateRoom;
+    const float plateRoom =
+        std::clamp(cs.w * 0.16f, cascade::gui::px(16.0f), bayH * 0.24f);
+    const float lcdMaxH =
+        (bayBR.y - cascade::gui::px(8.0f)) - lcdTop - bezelPad * 2.0f - plateRoom;
     constexpr float kStripRows = 1.25f;  // the icon strip, in character rows
     const pager::LcdMetrics m =
         pager::lcdMetrics(lcdMaxW, lcdMaxH, pager::kLcdRows, pager::kLcdCols, kStripRows);
@@ -394,7 +437,8 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // about the size it was given.
         const ImVec2 gTL(caseTL.x + sideInset, lcdTop + bezelPad);
         const ImVec2 gBR(caseBR.x - sideInset,
-                         std::min(bayBR.y - 8.0f - plateRoom, lcdTop + bezelPad + 24.0f));
+                         std::min(bayBR.y - cascade::gui::px(8.0f) - plateRoom,
+                                  lcdTop + bezelPad + cascade::gui::px(24.0f)));
         if (gBR.y > gTL.y + 6.0f) {
             dl->AddRectFilled(gTL, gBR, kLcdDead, 1.0f);
             addBenchBevel(dl, gTL, gBR, 1.0f, false);
@@ -409,28 +453,35 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // two halves of the moulding, and then the cradle.
     {
         const float bandH = bayBR.y - lcdBottom;
-        const float ph = std::clamp(cs.w * 0.11f, 12.0f, 28.0f);
-        const float py = lcdBottom + std::max(5.0f, (bandH - ph) * 0.30f);
-        if (py + ph < bayBR.y - 2.0f) {
+        const float ph = std::clamp(cs.w * 0.11f, cascade::gui::px(12.0f), cascade::gui::px(28.0f));
+        const float py = lcdBottom + std::max(cascade::gui::px(5.0f), (bandH - ph) * 0.30f);
+        if (py + ph < bayBR.y - cascade::gui::px(2.0f)) {
             const ImVec2 pTL(caseTL.x + sideInset, py);
             const ImVec2 pBR(caseBR.x - sideInset, py + ph);
             dl->AddRectFilled(pTL, pBR, kCaseCut, 2.0f);
             addBenchBevel(dl, pTL, pBR, 2.0f, false);
-            const float px = std::min(fonts::kTinySize, ph * 0.68f);
-            engrave(dl, ImVec2(pTL.x + 6.0f, pTL.y + (ph - px) * 0.5f - 1.0f), "FOXSDR",
-                    kCasePlate, px);
+            // Mixes the raw kTinySize reference against a proportion of the
+            // already-scaled plate height, so kTinySize goes through
+            // gui::px() before the two are compared - see the MSG caption
+            // above for why an unscaled reference constant is the wrong half
+            // of a min() with a scaled one.
+            const float platePx = std::min(cascade::gui::px(fonts::kTinySize), ph * 0.68f);
+            engrave(dl,
+                    ImVec2(pTL.x + cascade::gui::px(6.0f), pTL.y + (ph - platePx) * 0.5f -
+                                                                cascade::gui::px(1.0f)),
+                    "FOXSDR", kCasePlate, platePx);
             ImFont* f = fonts::legend();
             const char* model = "ALPHANUMERIC PAGER";
-            const float mw = f->CalcTextSizeA(px * 0.86f, FLT_MAX, 0.0f, model).x;
+            const float mw = f->CalcTextSizeA(platePx * 0.86f, FLT_MAX, 0.0f, model).x;
             if (mw < (pBR.x - pTL.x) * 0.62f) {
-                engrave(dl, ImVec2(pBR.x - 6.0f - mw, pTL.y + (ph - px) * 0.5f), model,
-                        theme::kInkFaint, px * 0.86f);
+                engrave(dl, ImVec2(pBR.x - cascade::gui::px(6.0f) - mw, pTL.y + (ph - platePx) * 0.5f),
+                        model, theme::kInkFaint, platePx * 0.86f);
             }
             // The parting seam between the front and back shells: a cut with
             // its lit far wall, the same groove addBenchDivider draws lying
             // down. It is what stops the lower half reading as a flat panel.
-            const float sy = pBR.y + std::max(8.0f, cs.w * 0.06f);
-            if (sy < bayBR.y - 4.0f) {
+            const float sy = pBR.y + std::max(cascade::gui::px(8.0f), cs.w * 0.06f);
+            if (sy < bayBR.y - cascade::gui::px(4.0f)) {
                 dl->AddLine(ImVec2(caseTL.x + 2.0f, sy), ImVec2(caseBR.x - 2.0f, sy),
                             theme::withAlpha(theme::kVoid, 0.65f), theme::kHairline);
                 dl->AddLine(ImVec2(caseTL.x + 2.0f, sy + 1.0f),
@@ -445,19 +496,20 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // Everything here is the same reading in the bench's materials: engraved
     // captions and amber drums, so the figures can be read across the room
     // without squinting at a 1990s display.
-    const float colX = caseBR.x + 18.0f;
-    const float colW = bayBR.x - 10.0f - colX;
+    const float colX = caseBR.x + cascade::gui::px(18.0f);
+    const float colW = bayBR.x - cascade::gui::px(10.0f) - colX;
     if (haveColumn && colW >= kColumnMin) {
-        float y = bayTL.y + 12.0f;
+        float y = bayTL.y + cascade::gui::px(12.0f);
 
         // The lamps. Every one is drawn whether lit or not, so a cold panel
         // still says which lamps it has.
         {
-            ImGui::PushFont(fonts::legend(), fonts::kTinySize);
-            const float r = 6.0f;
-            const float pitch = std::min(colW / 4.0f, 78.0f);
+            const float tinyPx = cascade::gui::px(fonts::kTinySize);
+            ImGui::PushFont(fonts::legend(), tinyPx);
+            const float r = cascade::gui::px(6.0f);
+            const float pitch = std::min(colW / 4.0f, cascade::gui::px(78.0f));
             float lx = colX + pitch * 0.5f;
-            const float ly = y + r + 2.0f;
+            const float ly = y + r + cascade::gui::px(2.0f);
             drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kAlarmHot, alert && blink, "ALERT");
             lx += pitch;
             drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kGold, cue.unread, "NEW");
@@ -466,7 +518,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             lx += pitch;
             drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kAmber, lowBatt, "BATT");
             ImGui::PopFont();
-            y = ly + r + fonts::kTinySize + 7.0f;
+            y = ly + r + tinyPx + cascade::gui::px(7.0f);
         }
 
         // The drums: the capcode that was addressed, and how many pages have
@@ -477,26 +529,28 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // gap have to stand side by side, and a tall narrow column would
         // otherwise grow them until the UNREAD pair was pushed off the panel -
         // a reading the plugin supplied, gone, with nothing to say it went.
-        const float drumRoom = (colW - 34.0f) / 9.0f / 0.66f;
-        const float rowH =
-            std::clamp(std::min((bayBR.y - y - 34.0f) * 0.30f, drumRoom), 0.0f, 44.0f);
-        if (rowH >= 14.0f) {
+        const float drumRoom = (colW - cascade::gui::px(34.0f)) / 9.0f / 0.66f;
+        const float rowH = std::clamp(
+            std::min((bayBR.y - y - cascade::gui::px(34.0f)) * 0.30f, drumRoom), 0.0f,
+            cascade::gui::px(44.0f));
+        if (rowH >= cascade::gui::px(14.0f)) {
             const float cellW = rowH * 0.66f;
             const float capW = cellW * 7.0f;
             engrave(dl, ImVec2(colX, y), "CAPCODE");
-            const float uCapX = colX + capW + 22.0f;
-            const bool roomForUnread = uCapX + cellW * 2.0f + 8.0f < bayBR.x - 10.0f;
+            const float uCapX = colX + capW + cascade::gui::px(22.0f);
+            const bool roomForUnread =
+                uCapX + cellW * 2.0f + cascade::gui::px(8.0f) < bayBR.x - cascade::gui::px(10.0f);
             if (roomForUnread) { engrave(dl, ImVec2(uCapX, y), "UNREAD"); }
-            y += fonts::kTinySize + 3.0f;
+            y += cascade::gui::px(fonts::kTinySize) + cascade::gui::px(3.0f);
             char cap[8];
             pager::drumCells(have ? in.state.text[1] : "", cap, 7);
-            drawDrumRow(dl, ImVec2(colX + 3.0f, y), cellW, rowH, cap, 7);
+            drawDrumRow(dl, ImVec2(colX + cascade::gui::px(3.0f), y), cellW, rowH, cap, 7);
             if (roomForUnread) {
                 char un[2];
                 pager::counterCells(in.state.values[0], have, un, 2);
-                drawDrumRow(dl, ImVec2(uCapX + 3.0f, y), cellW, rowH, un, 2);
+                drawDrumRow(dl, ImVec2(uCapX + cascade::gui::px(3.0f), y), cellW, rowH, un, 2);
             }
-            y += rowH + 8.0f;
+            y += rowH + cascade::gui::px(8.0f);
         }
 
         // The two words: what kind of page it was and when it came in. Words,
@@ -514,10 +568,12 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // second fell off the bottom of the bay and simply was not drawn - a
         // slot the plugin filled, silently missing, which is the failure this
         // face is least able to afford.
-        const float wordRoom = bayBR.y - y - (fonts::kTinySize + 8.0f);
-        const float lineH =
-            std::clamp(wordRoom * 0.5f - 3.0f, fonts::kUiSize + 2.0f, 52.0f);
-        const float labelW = std::min(96.0f, colW * 0.40f);
+        const float tinyPx2 = cascade::gui::px(fonts::kTinySize);
+        const float wordRoom = bayBR.y - y - (tinyPx2 + cascade::gui::px(8.0f));
+        const float lineH = std::clamp(wordRoom * 0.5f - cascade::gui::px(3.0f),
+                                       cascade::gui::px(fonts::kUiSize) + cascade::gui::px(2.0f),
+                                       cascade::gui::px(52.0f));
+        const float labelW = std::min(cascade::gui::px(96.0f), colW * 0.40f);
         struct Pair {
             const char* caption;
             const char* value;
@@ -527,25 +583,26 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             {"RECEIVED", have ? in.state.text[2] : ""},
         };
         for (int i = 0; i < 2; ++i) {
-            if (y + lineH > bayBR.y - (fonts::kTinySize + 6.0f)) { break; }
-            engrave(dl, ImVec2(colX, (y + y + lineH) * 0.5f - fonts::kTinySize * 0.6f),
+            if (y + lineH > bayBR.y - (tinyPx2 + cascade::gui::px(6.0f))) { break; }
+            engrave(dl, ImVec2(colX, (y + y + lineH) * 0.5f - tinyPx2 * 0.6f),
                     pairs[i].caption);
-            const ImVec2 wTL(colX + labelW, y - 1.0f);
+            const ImVec2 wTL(colX + labelW, y - cascade::gui::px(1.0f));
             // The well is as wide as the words need and no wider: run out to
             // the edge of a large column and a five-character time sits in a
             // bar the width of the panel, which reads as a missing value
             // rather than a short one.
-            const ImVec2 wBR(std::min(bayBR.x - 10.0f, wTL.x + 300.0f), y + lineH - 3.0f);
-            if (wBR.x > wTL.x + 20.0f) {
+            const ImVec2 wBR(std::min(bayBR.x - cascade::gui::px(10.0f), wTL.x + cascade::gui::px(300.0f)),
+                             y + lineH - cascade::gui::px(3.0f));
+            if (wBR.x > wTL.x + cascade::gui::px(20.0f)) {
                 drawFreqDrumWell(dl, wTL, wBR);
                 // AN EMPTY SLOT IS AN EMPTY WELL. No dash, no "n/a", nothing
                 // that could be read as a value the plugin sent.
                 if (pairs[i].value[0] != '\0') {
-                    onGlass(dl, ImVec2(wTL.x + 7.0f, wTL.y + 1.0f), pairs[i].value,
-                            wBR.x - wTL.x - 14.0f);
+                    onGlass(dl, ImVec2(wTL.x + cascade::gui::px(7.0f), wTL.y + cascade::gui::px(1.0f)),
+                            pairs[i].value, wBR.x - wTL.x - cascade::gui::px(14.0f));
                 }
             }
-            y += lineH + 3.0f;
+            y += lineH + cascade::gui::px(3.0f);
         }
 
         // What the face is counting from: the plugin's own event number.
@@ -553,16 +610,16 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             char seq[32];
             std::snprintf(seq, sizeof seq, "EVENT %u",
                           static_cast<unsigned>(in.state.seq));
-            engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f), seq,
+            engrave(dl, ImVec2(colX, bayBR.y - tinyPx2 - cascade::gui::px(6.0f)), seq,
                     theme::kInkFaint);
         } else {
-            engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f),
+            engrave(dl, ImVec2(colX, bayBR.y - tinyPx2 - cascade::gui::px(6.0f)),
                     "NO PAGE RECEIVED", theme::kInkFaint);
         }
     }
 
     dl->PopClipRect();
-    return bayBR.y + 10.0f - tl.y;
+    return bayBR.y + cascade::gui::px(10.0f) - tl.y;
 }
 
 }  // namespace cascade::gui

@@ -76,6 +76,7 @@
 #include "gui/instrument_teleprinter_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -177,9 +178,11 @@ void engrave(ImDrawList* dl, const ImVec2& at, const char* s, float px, ImU32 in
 // switched on has not measured anything, and the two are opposite claims.
 void drawMessageCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                         int digits, double value, bool haveReading) {
-    const float groupW = static_cast<float>(digits) * cellW + static_cast<float>(digits - 1) * 2.0f;
-    drawFreqDrumWell(dl, ImVec2(tl.x - 4.0f, tl.y - 4.0f),
-                     ImVec2(tl.x + groupW + 4.0f, tl.y + cellH + 4.0f));
+    const float cellGap = cascade::gui::px(2.0f);
+    const float groupW = static_cast<float>(digits) * cellW + static_cast<float>(digits - 1) * cellGap;
+    const float wellPad = cascade::gui::px(4.0f);
+    drawFreqDrumWell(dl, ImVec2(tl.x - wellPad, tl.y - wellPad),
+                     ImVec2(tl.x + groupW + wellPad, tl.y + cellH + wellPad));
 
     // Clamped to all-nines rather than wrapped: a four-digit counter shown a
     // five-digit number must read "as high as I go", not the low four digits,
@@ -193,7 +196,7 @@ void drawMessageCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cel
 
     bool leading = true;
     for (int i = 0; i < digits; ++i) {
-        const float x = tl.x + static_cast<float>(i) * (cellW + 2.0f);
+        const float x = tl.x + static_cast<float>(i) * (cellW + cellGap);
         long place = 1;
         for (int k = 0; k < digits - 1 - i; ++k) { place *= 10; }
         const int d = static_cast<int>((shown / place) % 10);
@@ -208,7 +211,7 @@ void drawMessageCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cel
 // coming out from behind them. The serrations are what makes a brass strip a
 // tear bar rather than a trim piece.
 void drawSlotAndTearBar(ImDrawList* dl, float x0, float x1, float y, float barH) {
-    if (x1 - x0 < 8.0f) { return; }
+    if (x1 - x0 < cascade::gui::px(8.0f)) { return; }
     // The mouth: a dark aperture the paper leaves through.
     dl->AddRectFilled(ImVec2(x0, y - barH * 0.9f), ImVec2(x1, y), theme::kVoid, 1.0f);
     // The bar itself.
@@ -276,17 +279,17 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (dl == nullptr) { return 0.0f; }
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
-    if (w < 80.0f || h < 60.0f) { return 0.0f; }
+    if (w < cascade::gui::px(80.0f) || h < cascade::gui::px(60.0f)) { return 0.0f; }
 
     // The machine's own plate, titled by the plugin's window name.
     float y = addBenchPlate(dl, tl, br, in.title.c_str());
 
-    const float pad = 9.0f;
-    const ImVec2 bodyTL(tl.x + pad, y + 2.0f);
+    const float pad = cascade::gui::px(9.0f);
+    const ImVec2 bodyTL(tl.x + pad, y + cascade::gui::px(2.0f));
     const ImVec2 bodyBR(br.x - pad, br.y - pad);
     const float bodyW = bodyBR.x - bodyTL.x;
     const float bodyH = bodyBR.y - bodyTL.y;
-    if (bodyW < 60.0f || bodyH < 36.0f) { return y - tl.y; }
+    if (bodyW < cascade::gui::px(60.0f) || bodyH < cascade::gui::px(36.0f)) { return y - tl.y; }
 
     const bool alert = in.have && (in.state.flags & CASCADE_INSTRUMENT_FLAG_ALERT) != 0u;
     const bool blinkOn = std::fmod(cue.nowSec, 0.5) < 0.25;
@@ -298,22 +301,30 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // cannot see, and the memory table under the window still says how many
     // messages there have been. So in a narrow window the column goes and the
     // lamps move onto the bay's shoulder.
-    float colW = std::clamp(bodyW * 0.32f, 134.0f, 196.0f);
-    if (bodyW - colW < 210.0f || bodyH < 104.0f) { colW = 0.0f; }
+    //
+    // tp::columnWidthAtScale, not tp::columnWidth: the column's own bounds -
+    // 134..196 px, the 210 px clearance, the 104 px height floor - are the
+    // desktop's own physical pixels, and left unscaled the column stops
+    // growing while a tablet's much larger body keeps growing around it. See
+    // instrument_teleprinter_math.hpp.
+    const float colW = tp::columnWidthAtScale(bodyW, bodyH);
 
     if (colW > 0.0f) {
         // Two Dzus quarter-turn fasteners, top and bottom of the column: this
         // panel is rack-mounted in a pedestal, and the fasteners are how it
         // is held there.
-        addCabinetScrew(dl, ImVec2(bodyTL.x + 6.0f, bodyTL.y + 7.0f), 4.5f, 28.0f);
-        addCabinetScrew(dl, ImVec2(bodyTL.x + 6.0f, bodyBR.y - 7.0f), 4.5f, -14.0f);
+        const float screwR = cascade::gui::px(4.5f);
+        addCabinetScrew(dl, ImVec2(bodyTL.x + cascade::gui::px(6.0f), bodyTL.y + cascade::gui::px(7.0f)),
+                        screwR, 28.0f);
+        addCabinetScrew(dl, ImVec2(bodyTL.x + cascade::gui::px(6.0f), bodyBR.y - cascade::gui::px(7.0f)),
+                        screwR, -14.0f);
 
-        const float cx0 = bodyTL.x + 18.0f;
-        const float capW = colW - 20.0f;
-        float cy = bodyTL.y + 2.0f;
+        const float cx0 = bodyTL.x + cascade::gui::px(18.0f);
+        const float capW = colW - cascade::gui::px(20.0f);
+        float cy = bodyTL.y + cascade::gui::px(2.0f);
 
         addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, "STATUS");
-        cy += fonts::kTinySize + 8.0f;
+        cy += cascade::gui::px(fonts::kTinySize) + cascade::gui::px(8.0f);
 
         // The lamps, TWO TO A ROW and in the legend face at the engraving
         // size rather than the ambient one: drawBenchLamp letters its caption
@@ -337,42 +348,46 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                                // An alerting lamp BLINKS. One that is merely
                                // on is a lamp somebody has stopped seeing.
                                {theme::kAlarmHot, alert && blinkOn, "ALERT"}};
-        ImGui::PushFont(fonts::legend(), fonts::kTinySize - 3.0f);
-        const float lampR = 6.0f;
+        const float lampCapPx = cascade::gui::px(fonts::kTinySize) - cascade::gui::px(3.0f);
+        ImGui::PushFont(fonts::legend(), lampCapPx);
+        const float lampR = cascade::gui::px(6.0f);
         const float lampPitch = capW * 0.5f;
-        const float lampRowH = lampR * 2.0f + fonts::kTinySize - 3.0f + 5.0f;
+        const float lampRowH = lampR * 2.0f + lampCapPx + cascade::gui::px(5.0f);
         for (int i = 0; i < 4; ++i) {
             // Room is checked PER ROW, so a short window keeps the first two
             // lamps and the counter rather than losing the counter to lamps
             // drawn over the bottom of the plate.
-            if ((i % 2) == 0 && cy + lampRowH > bodyBR.y - 4.0f) { break; }
+            if ((i % 2) == 0 && cy + lampRowH > bodyBR.y - cascade::gui::px(4.0f)) { break; }
             const float lx = cx0 + lampPitch * (0.5f + static_cast<float>(i % 2));
-            const float ly = cy + lampR + 1.0f;
+            const float ly = cy + lampR + cascade::gui::px(1.0f);
             drawBenchLamp(dl, ImVec2(lx, ly), lampR, lamps[i].colour, lamps[i].lit,
                           lamps[i].caption);
             if ((i % 2) == 1) { cy += lampRowH; }
         }
         ImGui::PopFont();
-        cy += 3.0f;
+        cy += cascade::gui::px(3.0f);
 
-        if (cy + fonts::kTinySize + 34.0f < bodyBR.y) {
+        const float tinyPx = cascade::gui::px(fonts::kTinySize);
+        if (cy + tinyPx + cascade::gui::px(34.0f) < bodyBR.y) {
             addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, "MESSAGES");
-            cy += fonts::kTinySize + 9.0f;
-            const float cellW = std::min(26.0f, (capW - 14.0f) / 4.0f);
-            const float cellH = std::min(30.0f, bodyBR.y - cy - 6.0f);
-            if (cellW > 8.0f && cellH > 12.0f) {
-                drawMessageCounter(dl, ImVec2(cx0 + 4.0f, cy), cellW, cellH, 4,
+            cy += tinyPx + cascade::gui::px(9.0f);
+            const float cellW = std::min(cascade::gui::px(26.0f), (capW - cascade::gui::px(14.0f)) / 4.0f);
+            const float cellH = std::min(cascade::gui::px(30.0f), bodyBR.y - cy - cascade::gui::px(6.0f));
+            if (cellW > cascade::gui::px(8.0f) && cellH > cascade::gui::px(12.0f)) {
+                drawMessageCounter(dl, ImVec2(cx0 + cascade::gui::px(4.0f), cy), cellW, cellH, 4,
                                    in.state.values[0], in.have);
             }
         }
     }
 
     // --- the paper bay ------------------------------------------------------
-    const ImVec2 bayTL(bodyTL.x + (colW > 0.0f ? colW + 8.0f : 0.0f), bodyTL.y);
+    const ImVec2 bayTL(bodyTL.x + (colW > 0.0f ? colW + cascade::gui::px(8.0f) : 0.0f), bodyTL.y);
     const ImVec2 bayBR(bodyBR.x, bodyBR.y);
     const float bayW = bayBR.x - bayTL.x;
     const float bayH = bayBR.y - bayTL.y;
-    if (bayW < 48.0f || bayH < 30.0f) { return bodyBR.y + pad - tl.y; }
+    if (bayW < cascade::gui::px(48.0f) || bayH < cascade::gui::px(30.0f)) {
+        return bodyBR.y + pad - tl.y;
+    }
 
     // The inside of the machine, seen through the slot: a well cut into the
     // panel rather than a dark rectangle drawn on it.
@@ -382,21 +397,23 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
     // With no column, the lamps ride on the bay's shoulder so the state is
     // still readable in a small window.
-    float bayTop = bayTL.y + 4.0f;
-    if (colW <= 0.0f && bayW > 150.0f) {
-        ImGui::PushFont(fonts::legend(), fonts::kTinySize - 3.0f);
-        const float lampR = 5.0f;
-        float lx = bayBR.x - 26.0f;
-        drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kAlarmHot,
-                      alert && blinkOn, "ALERT");
-        lx -= 46.0f;
-        drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kGold, cue.unread,
-                      "NEW");
-        lx -= 46.0f;
-        drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kPhosphor, in.have,
-                      "READY");
+    float bayTop = bayTL.y + cascade::gui::px(4.0f);
+    if (colW <= 0.0f && bayW > cascade::gui::px(150.0f)) {
+        const float lampCapPx = cascade::gui::px(fonts::kTinySize) - cascade::gui::px(3.0f);
+        ImGui::PushFont(fonts::legend(), lampCapPx);
+        const float lampR = cascade::gui::px(5.0f);
+        const float lampPitch = cascade::gui::px(46.0f);
+        float lx = bayBR.x - cascade::gui::px(26.0f);
+        drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + cascade::gui::px(1.0f)), lampR,
+                      theme::kAlarmHot, alert && blinkOn, "ALERT");
+        lx -= lampPitch;
+        drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + cascade::gui::px(1.0f)), lampR,
+                      theme::kGold, cue.unread, "NEW");
+        lx -= lampPitch;
+        drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + cascade::gui::px(1.0f)), lampR,
+                      theme::kPhosphor, in.have, "READY");
         ImGui::PopFont();
-        bayTop += lampR * 2.0f + fonts::kTinySize + 2.0f;
+        bayTop += lampR * 2.0f + lampCapPx + cascade::gui::px(2.0f);
     }
 
     // --- what is on the paper ----------------------------------------------
@@ -405,31 +422,35 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // then - if the strip is long enough - the one before it, fading away
     // towards the tear bar. Nothing here is invented: a slot the plugin left
     // empty prints nothing at all.
-    const float paperInset = std::min(14.0f, bayW * 0.10f);
+    const float paperInset = std::min(cascade::gui::px(14.0f), bayW * 0.10f);
     // The mouth of the slot is drawn ABOVE the paper's top edge, so the strip
     // starts a mouth's depth into the bay rather than under the bevel.
-    const float slotBarH = std::clamp(bayH * 0.10f, 6.0f, 9.0f);
+    const float slotBarH =
+        std::clamp(bayH * 0.10f, cascade::gui::px(6.0f), cascade::gui::px(9.0f));
     const float mouthH = slotBarH * 0.9f;
     const ImVec2 pTL(bayTL.x + paperInset, bayTop + mouthH);
-    const ImVec2 pBR(bayBR.x - paperInset, bayBR.y - 3.0f);
+    const ImVec2 pBR(bayBR.x - paperInset, bayBR.y - cascade::gui::px(3.0f));
     const float paperW = pBR.x - pTL.x;
-    if (paperW < 40.0f || pBR.y - pTL.y < 24.0f) { return bodyBR.y + pad - tl.y; }
+    if (paperW < cascade::gui::px(40.0f) || pBR.y - pTL.y < cascade::gui::px(24.0f)) {
+        return bodyBR.y + pad - tl.y;
+    }
 
     ImFont* pf = fonts::reading();
-    const float textInset = 9.0f;
+    const float textInset = cascade::gui::px(9.0f);
     const float textW = paperW - textInset * 2.0f;
     // The type is chosen so a useful number of characters fits across the
     // strip, and shrunk rather than allowed to spill: a printer that could
     // only ever show fourteen characters of a message is not showing the
     // message.
-    float px = fonts::kReadingSize;
+    float px = cascade::gui::px(fonts::kReadingSize);
     float charW = pf->CalcTextSizeA(px, FLT_MAX, 0.0f, "M").x;
-    while (px > 11.0f && tp::paperColumns(textW, charW) < 26) {
+    const float pxFloor = cascade::gui::px(11.0f);
+    while (px > pxFloor && tp::paperColumns(textW, charW) < 26) {
         px -= 1.0f;
         charW = pf->CalcTextSizeA(px, FLT_MAX, 0.0f, "M").x;
     }
     const int columns = tp::paperColumns(textW, charW);
-    const float lineH = px + 3.0f;
+    const float lineH = px + cascade::gui::px(3.0f);
 
     tp::PaperLine lines[tp::kMaxPaperLines];
     ImU32 inks[tp::kMaxPaperLines];
@@ -470,7 +491,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         tp::paperFeedOffset(secondsSinceFeed(in, cue.nowSec), tp::kFeedSeconds,
                             tp::kFeedDistancePx);
 
-    const float firstLineY = pTL.y + slotBarH + 7.0f;
+    const float firstLineY = pTL.y + slotBarH + cascade::gui::px(7.0f);
 
     // WITH NOTHING PRINTED, A BLANK LEADER. The roll is loaded and the paper
     // is out; there is simply nothing on it, which is what "no reading" looks
@@ -478,7 +499,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // the leader - putting it on the paper would claim the printer printed it.
     const bool blank = (count == 0);
     const float paperBottom =
-        blank ? std::min(pBR.y, firstLineY + 26.0f) : pBR.y;
+        blank ? std::min(pBR.y, firstLineY + cascade::gui::px(26.0f)) : pBR.y;
 
     // The strip itself: lit where it leaves the slot and settling to its own
     // tone further out, which is the light falling into the bay.
@@ -512,22 +533,24 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         dl->PopClipRect();
     } else {
         const char* legend = in.have ? "NO MESSAGE PRINTED" : "PRINTER IDLE";
-        const float ly = paperBottom + 10.0f;
-        if (ly + fonts::kTinySize < bayBR.y) {
+        const float ly = paperBottom + cascade::gui::px(10.0f);
+        const float tinyPx2 = cascade::gui::px(fonts::kTinySize);
+        if (ly + tinyPx2 < bayBR.y) {
             ImFont* lf = fonts::legend();
-            const ImVec2 sz = lf->CalcTextSizeA(fonts::kTinySize, FLT_MAX, 0.0f, legend);
-            engrave(dl, ImVec2((bayTL.x + bayBR.x) * 0.5f - sz.x * 0.5f, ly), legend,
-                    fonts::kTinySize, theme::kInkFaint);
+            const ImVec2 sz = lf->CalcTextSizeA(tinyPx2, FLT_MAX, 0.0f, legend);
+            engrave(dl, ImVec2((bayTL.x + bayBR.x) * 0.5f - sz.x * 0.5f, ly), legend, tinyPx2,
+                    theme::kInkFaint);
         }
     }
 
     // The shadow the tear bar throws onto the paper, then the bar itself over
     // the strip's top edge so the paper reads as coming out from behind it.
     dl->AddRectFilledMultiColor(ImVec2(pTL.x, pTL.y + slotBarH),
-                                ImVec2(pBR.x, pTL.y + slotBarH + 7.0f),
+                                ImVec2(pBR.x, pTL.y + slotBarH + cascade::gui::px(7.0f)),
                                 IM_COL32(0, 0, 0, 90), IM_COL32(0, 0, 0, 90),
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
-    drawSlotAndTearBar(dl, bayTL.x + 5.0f, bayBR.x - 5.0f, pTL.y, slotBarH);
+    drawSlotAndTearBar(dl, bayTL.x + cascade::gui::px(5.0f), bayBR.x - cascade::gui::px(5.0f), pTL.y,
+                       slotBarH);
 
     return bodyBR.y + pad - tl.y;
 }

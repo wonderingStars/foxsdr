@@ -85,6 +85,7 @@
 #include "gui/instrument_beacon_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -104,10 +105,11 @@ float fitPx(ImFont* font, float px, const char* text, float room) {
     if (font == nullptr || text == nullptr || text[0] == '\0') { return px; }
     if (!(room > 0.0f) || !(px > 0.0f)) { return px; }
     float out = px;
+    const float floor = cascade::gui::px(9.0f);
     for (int pass = 0; pass < 4; ++pass) {
         const float w = font->CalcTextSizeA(out, FLT_MAX, 0.0f, text).x;
         if (!(w > room) || !(w > 0.0f)) { break; }
-        const float next = std::max(9.0f, out * room / w - 0.05f);
+        const float next = std::max(floor, out * room / w - 0.05f);
         if (!(next < out)) { break; }
         out = next;
     }
@@ -121,7 +123,11 @@ float fitPx(ImFont* font, float px, const char* text, float room) {
 void engrave(ImDrawList* dl, const ImVec2& at, const char* s, float room) {
     if (dl == nullptr || s == nullptr || s[0] == '\0') { return; }
     ImFont* f = fonts::legend();
-    const float px = fitPx(f, fonts::kTinySize, s, room);
+    // The STARTING size gui::px()'d, not just the floor fitPx falls back to:
+    // otherwise a caption never grows past the desktop's own kTinySize no
+    // matter how much `room` a tablet's much larger box hands it - fitPx only
+    // ever shrinks towards `room`, never enlarges past what it is given.
+    const float px = fitPx(f, cascade::gui::px(fonts::kTinySize), s, room);
     dl->PushClipRect(ImVec2(at.x - 1.0f, at.y - 2.0f),
                      ImVec2(at.x + room + 1.0f, at.y + px + 6.0f), true);
     dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f), theme::withAlpha(theme::kVoid, 0.6f),
@@ -136,7 +142,7 @@ void engrave(ImDrawList* dl, const ImVec2& at, const char* s, float room) {
 void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float room, ImU32 col) {
     if (dl == nullptr || s == nullptr || s[0] == '\0' || !(room > 4.0f)) { return; }
     ImFont* f = fonts::ui();
-    const float px = fitPx(f, fonts::kUiSize, s, room);
+    const float px = fitPx(f, cascade::gui::px(fonts::kUiSize), s, room);
     char cut[CASCADE_INSTRUMENT_TEXT_CHARS + 4];
     const char* draw = s;
     if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x > room) {
@@ -180,7 +186,7 @@ void figure(ImDrawList* dl, const ImVec2& at, const char* s, float px, ImU32 col
 // keeps its own hue at low alpha, which is how a cold red lamp reads as a red
 // lamp that is off rather than as a grey disc.
 void drawDistressLamp(ImDrawList* dl, const ImVec2& c, float r, bool lit, bool bright) {
-    if (dl == nullptr || !(r > 6.0f)) { return; }
+    if (dl == nullptr || !(r > cascade::gui::px(6.0f))) { return; }
 
     // The panel cut-out and the bezel standing proud of it.
     dl->AddCircleFilled(ImVec2(c.x, c.y + r * 0.10f), r * 1.22f,
@@ -299,14 +305,17 @@ void drawSegments(ImDrawList* dl, const ImVec2& centre, float digitH, float cell
 void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                          const char* caption, float frac01, bool haveReading,
                          const char* valueLine) {
-    if (dl == nullptr || width < 40.0f || height < 40.0f) { return; }
+    if (dl == nullptr || width < cascade::gui::px(40.0f) || height < cascade::gui::px(40.0f)) {
+        return;
+    }
     ImFont* cf = fonts::legend();
     ImFont* vf = fonts::ui();
-    const float tiny = fonts::kTinySize;
+    const float tiny = cascade::gui::px(fonts::kTinySize);
     const char* cap = (caption != nullptr) ? caption : "";
     const char* val = (valueLine != nullptr && valueLine[0] != '\0') ? valueLine : "--";
-    const float cpx = fitPx(cf, tiny, cap, width - 4.0f);
-    const float vpx = fitPx(vf, tiny, val, width - 4.0f);
+    const float textRoom = width - cascade::gui::px(4.0f);
+    const float cpx = fitPx(cf, tiny, cap, textRoom);
+    const float vpx = fitPx(vf, tiny, val, textRoom);
     const ImVec2 cs = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, cap);
     const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, val);
     const float capH = (cap[0] != '\0') ? cs.y : 0.0f;
@@ -325,9 +334,9 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
         dl->AddText(cf, cpx, at, theme::kInkMuted, cap);
     }
 
-    const float faceTop = tl.y + capH + 3.0f;
-    const float faceH = height - capH - vs.y - 8.0f;
-    if (faceH < 20.0f) { return; }
+    const float faceTop = tl.y + capH + cascade::gui::px(3.0f);
+    const float faceH = height - capH - vs.y - cascade::gui::px(8.0f);
+    if (faceH < cascade::gui::px(20.0f)) { return; }
     const ImVec2 fTL(tl.x, faceTop);
     const ImVec2 fBR(tl.x + width, faceTop + faceH);
 
@@ -337,11 +346,12 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
                                 IM_COL32(0xD8, 0xCF, 0xB4, 255));
     dl->AddRect(fTL, fBR, theme::kBrassBright, 3.0f, 0, 2.0f);
 
-    const ImVec2 pivot(tl.x + width * 0.5f, fBR.y - 4.0f);
+    const ImVec2 pivot(tl.x + width * 0.5f, fBR.y - cascade::gui::px(4.0f));
     constexpr float kHalfSweepDeg = 52.0f;
     const float armByHeight = faceH * 0.78f;
     const float reach = std::sin(kHalfSweepDeg * kPiF / 180.0f) * 0.94f;
-    const float armByWidth = (width * 0.5f - 3.0f) / std::max(0.01f, reach);
+    const float armByWidth =
+        (width * 0.5f - cascade::gui::px(3.0f)) / std::max(0.01f, reach);
     const float armR = std::min(armByHeight, armByWidth);
 
     // NINE TICKS, AND THE RED IS AT BOTH ENDS. On a centre-zero scale the far
@@ -370,23 +380,25 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
                     ImVec2(pivot.x + std::sin(a) * armR * 0.88f,
                            pivot.y - std::cos(a) * armR * 0.88f),
                     theme::kAlarm, 1.8f);
-        dl->AddCircleFilled(pivot, 3.4f, theme::kEnamel, 12);
+        dl->AddCircleFilled(pivot, cascade::gui::px(3.4f), theme::kEnamel, 12);
     } else {
         // No needle at all: a needle resting on the centre tick would read as
         // "measured, and the beacon is exactly on frequency".
-        dl->AddCircleFilled(pivot, 3.4f, theme::kInkMuted, 12);
+        dl->AddCircleFilled(pivot, cascade::gui::px(3.4f), theme::kInkMuted, 12);
     }
 
     // The unit, printed beside the pivot the way a moving-coil meter names its
     // own scale - beside, because above is where the needle sweeps.
     const float upx = std::min(tiny, faceH * 0.34f);
     const ImVec2 us = vf->CalcTextSizeA(upx, FLT_MAX, 0.0f, "kHz");
-    if (pivot.x + armR * 0.16f + us.x < fBR.x - 3.0f) {
-        dl->AddText(vf, upx, ImVec2(pivot.x + armR * 0.16f, pivot.y - us.y - 2.0f),
+    if (pivot.x + armR * 0.16f + us.x < fBR.x - cascade::gui::px(3.0f)) {
+        dl->AddText(vf, upx,
+                    ImVec2(pivot.x + armR * 0.16f, pivot.y - us.y - cascade::gui::px(2.0f)),
                     theme::kEngraved, "kHz");
     }
 
-    dl->AddText(vf, vpx, ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + 3.0f),
+    dl->AddText(vf, vpx,
+                ImVec2(tl.x + width * 0.5f - vs.x * 0.5f, fBR.y + cascade::gui::px(3.0f)),
                 haveReading ? theme::kIvory : theme::kCream, val);
 }
 
@@ -394,14 +406,18 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
 
 void drawPlateCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* caption,
                    const char* value) {
-    if (dl == nullptr || br.x - tl.x < 24.0f || br.y - tl.y < 20.0f) { return; }
-    const float capH = fonts::kTinySize + 2.0f;
+    if (dl == nullptr || br.x - tl.x < cascade::gui::px(24.0f) ||
+        br.y - tl.y < cascade::gui::px(20.0f)) {
+        return;
+    }
+    const float capH = cascade::gui::px(fonts::kTinySize) + cascade::gui::px(2.0f);
     engrave(dl, ImVec2(tl.x, tl.y), caption, br.x - tl.x);
     const ImVec2 gTL(tl.x, tl.y + capH);
-    if (br.y - gTL.y < 12.0f) { return; }
+    if (br.y - gTL.y < cascade::gui::px(12.0f)) { return; }
     drawFreqDrumWell(dl, gTL, br);
-    const float pad = 5.0f;
-    onGlass(dl, ImVec2(gTL.x + pad, gTL.y + (br.y - gTL.y - fonts::kUiSize) * 0.5f + 1.0f),
+    const float pad = cascade::gui::px(5.0f);
+    const float uiSize = cascade::gui::px(fonts::kUiSize);
+    onGlass(dl, ImVec2(gTL.x + pad, gTL.y + (br.y - gTL.y - uiSize) * 0.5f + cascade::gui::px(1.0f)),
             value, br.x - gTL.x - pad * 2.0f, theme::kPhosphor);
 }
 
@@ -412,13 +428,16 @@ void drawPlateCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const cha
 // turns on.
 void drawCounter(ImDrawList* dl, const ImVec2& tl, float width, float height, int value,
                  bool have) {
-    if (dl == nullptr || width < 24.0f || height < 14.0f) { return; }
+    if (dl == nullptr || width < cascade::gui::px(24.0f) || height < cascade::gui::px(14.0f)) {
+        return;
+    }
     constexpr int kDigits = 3;
-    const float gap = 2.0f;
+    const float gap = cascade::gui::px(2.0f);
     const float cw = (width - gap * static_cast<float>(kDigits - 1)) /
                      static_cast<float>(kDigits);
-    drawFreqDrumWell(dl, ImVec2(tl.x - 3.0f, tl.y - 3.0f),
-                     ImVec2(tl.x + width + 3.0f, tl.y + height + 3.0f));
+    const float wellPad = cascade::gui::px(3.0f);
+    drawFreqDrumWell(dl, ImVec2(tl.x - wellPad, tl.y - wellPad),
+                     ImVec2(tl.x + width + wellPad, tl.y + height + wellPad));
     int v = value;
     if (v < 0) { v = 0; }
     if (v > 999) { v = 999; }
@@ -442,10 +461,16 @@ void drawCounter(ImDrawList* dl, const ImVec2& tl, float width, float height, in
 float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                      const HostInstrument& in, const InstrumentCue& cue) {
     if (dl == nullptr) { return 0.0f; }
-    if (br.x - tl.x < 80.0f || br.y - tl.y < 60.0f) { return 0.0f; }
+    if (br.x - tl.x < cascade::gui::px(80.0f) || br.y - tl.y < cascade::gui::px(60.0f)) {
+        return 0.0f;
+    }
 
     const float headerY = addBenchPlate(dl, tl, br, in.title.c_str());
-    const beacon::Layout L = beacon::layout(tl.x, headerY, br.x, br.y);
+    // beacon::layoutAtScale, not beacon::layout: the four decks' own ceilings
+    // and floors are the desktop's own pixels, and left unscaled they stop
+    // the panel growing once the tablet's much larger body has room to
+    // spare. See instrument_beacon_math.hpp.
+    const beacon::Layout L = beacon::layoutAtScale(tl.x, headerY, br.x, br.y);
     if (!L.any) { return headerY - tl.y; }
 
     const CascadeInstrumentState& s = in.state;
@@ -461,10 +486,11 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     drawDistressLamp(dl, ImVec2(L.lampCx, L.lampCy), L.lampR, alert, blinkOn);
     {
         ImFont* f = fonts::legend();
-        const float px = fitPx(f, fonts::kTinySize, "DISTRESS", L.lampR * 2.6f);
+        const float px = fitPx(f, cascade::gui::px(fonts::kTinySize), "DISTRESS", L.lampR * 2.6f);
         const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, "DISTRESS");
-        const ImVec2 at(L.lampCx - sz.x * 0.5f, L.lampCy + L.lampR * 1.2f + 3.0f);
-        if (at.y + sz.y < L.readY1 + 2.0f) {
+        const ImVec2 at(L.lampCx - sz.x * 0.5f,
+                        L.lampCy + L.lampR * 1.2f + cascade::gui::px(3.0f));
+        if (at.y + sz.y < L.readY1 + cascade::gui::px(2.0f)) {
             // Clipped to the lamp's own column: at the smallest lamp this word
             // is wider than the lens it names even at the floor size, and what
             // it must not do is run under the identity's glass.
@@ -480,23 +506,23 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         drawBenchLamp(dl, ImVec2(L.newCx, L.newCy), L.newR, theme::kGold, cue.unread,
                       nullptr);
         ImFont* f = fonts::legend();
-        const float px = fitPx(f, fonts::kTinySize, "NEW", L.newR * 4.0f);
+        const float px = fitPx(f, cascade::gui::px(fonts::kTinySize), "NEW", L.newR * 4.0f);
         const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, "NEW");
-        const ImVec2 at(L.newCx - sz.x * 0.5f, L.newCy + L.newR + 4.0f);
+        const ImVec2 at(L.newCx - sz.x * 0.5f, L.newCy + L.newR + cascade::gui::px(4.0f));
         dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
                     theme::withAlpha(theme::kVoid, 0.6f), "NEW");
         dl->AddText(f, px, at, cue.unread ? theme::kIvory : theme::kCream, "NEW");
     }
 
-    engrave(dl, ImVec2(L.wellX0 + 2.0f, L.readY0), "BEACON 15 HEX ID",
-            L.wellX1 - L.wellX0 - 4.0f);
-    const float glassTop = L.readY0 + fonts::kTinySize + 3.0f;
-    if (L.readY1 - glassTop > 10.0f) {
+    engrave(dl, ImVec2(L.wellX0 + cascade::gui::px(2.0f), L.readY0), "BEACON 15 HEX ID",
+            L.wellX1 - L.wellX0 - cascade::gui::px(4.0f));
+    const float glassTop = L.readY0 + cascade::gui::px(fonts::kTinySize) + cascade::gui::px(3.0f);
+    if (L.readY1 - glassTop > cascade::gui::px(10.0f)) {
         drawFreqDrumWell(dl, ImVec2(L.wellX0, glassTop), ImVec2(L.wellX1, L.readY1));
         char cells[beacon::kHexIdChars + 1];
         beacon::layHexId(in.have ? s.text[0] : "", cells);
         const float cy = (glassTop + L.readY1) * 0.5f;
-        const float row = L.wellX0 + 8.0f;
+        const float row = L.wellX0 + cascade::gui::px(8.0f);
         for (int i = 0; i < beacon::kHexIdChars; ++i) {
             const float cx = row + (L.cellW + L.cellGap) * static_cast<float>(i) +
                              L.cellW * 0.5f;
@@ -508,7 +534,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // ---- deck 2: country, protocol, position -------------------------------
     if (L.plates) {
         const float w = L.x1 - L.x0;
-        const float gap = 8.0f;
+        const float gap = cascade::gui::px(8.0f);
         // The country name is the longest of the three by a wide margin (the
         // ITU MID table's own wording runs past fifty characters), so it gets
         // the widest cell rather than an equal third.
@@ -529,7 +555,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // ---- deck 3: carrier error, age, bursts --------------------------------
     if (L.gauges > 0) {
         const float w = L.x1 - L.x0;
-        const float gap = 10.0f;
+        const float gap = cascade::gui::px(10.0f);
         const float h = L.gaugeY1 - L.gaugeY0;
         const int n = L.gauges;
         const float bay = (w - gap * static_cast<float>(n - 1)) / static_cast<float>(n);
@@ -547,7 +573,8 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // box with a short needle stranded in the middle of it, which is what
         // the first photograph of this panel showed. The bay keeps its width;
         // the meter takes only what it can use.
-        const float meterW = std::min(bay, (h - 42.0f) * 3.4f + 40.0f);
+        const float meterW =
+            std::min(bay, (h - cascade::gui::px(42.0f)) * 3.4f + cascade::gui::px(40.0f));
         drawCentreZeroMeter(dl, ImVec2(L.x0, L.gaugeY0), meterW, h, "CARRIER ERROR",
                             static_cast<float>(beacon::errorFraction(s.values[0])),
                             haveErr, errLine);
@@ -555,15 +582,16 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (n >= 2) {
             const float x = L.x0 + bay + gap;
             engrave(dl, ImVec2(x, L.gaugeY0), "SINCE LAST BURST", bay);
-            const ImVec2 gTL(x, L.gaugeY0 + fonts::kTinySize + 3.0f);
-            const ImVec2 gBR(x + bay, L.gaugeY1 - 2.0f);
-            if (gBR.y - gTL.y > 14.0f) {
+            const ImVec2 gTL(x, L.gaugeY0 + cascade::gui::px(fonts::kTinySize) +
+                                    cascade::gui::px(3.0f));
+            const ImVec2 gBR(x + bay, L.gaugeY1 - cascade::gui::px(2.0f));
+            if (gBR.y - gTL.y > cascade::gui::px(14.0f)) {
                 drawFreqDrumWell(dl, gTL, gBR);
                 const bool haveAge = in.have && std::isfinite(s.values[1]);
                 char age[32];
                 beacon::formatAge(s.values[1], haveAge, age, sizeof age);
                 if (age[0] != '\0') {
-                    const float px = std::min(fonts::kReadingSize * 1.6f,
+                    const float px = std::min(cascade::gui::px(fonts::kReadingSize) * 1.6f,
                                               (gBR.y - gTL.y) * 0.62f);
                     ImFont* rf = fonts::reading();
                     const ImVec2 sz = rf->CalcTextSizeA(px, FLT_MAX, 0.0f, age);
@@ -576,11 +604,13 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (n >= 3) {
             const float x = L.x0 + (bay + gap) * 2.0f;
             engrave(dl, ImVec2(x, L.gaugeY0), "BURSTS LOGGED", bay);
-            const float dy = L.gaugeY0 + fonts::kTinySize + 6.0f;
-            const float dh = std::min(L.gaugeY1 - dy - 4.0f, 44.0f);
-            if (dh > 12.0f) {
-                const float dw = std::min(bay - 8.0f, dh * 1.9f);
-                drawCounter(dl, ImVec2(x + 4.0f, dy), dw, dh,
+            const float dy = L.gaugeY0 + cascade::gui::px(fonts::kTinySize) +
+                             cascade::gui::px(6.0f);
+            const float dh = std::min(L.gaugeY1 - dy - cascade::gui::px(4.0f),
+                                      cascade::gui::px(44.0f));
+            if (dh > cascade::gui::px(12.0f)) {
+                const float dw = std::min(bay - cascade::gui::px(8.0f), dh * 1.9f);
+                drawCounter(dl, ImVec2(x + cascade::gui::px(4.0f), dy), dw, dh,
                             static_cast<int>(in.rows.size()),
                             in.have || !in.rows.empty());
             }
@@ -594,12 +624,12 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         dl->PushClipRect(ImVec2(L.x0 - 1.0f, L.legY0 - 1.0f),
                          ImVec2(L.x1 + 1.0f, L.legY1 + 1.0f), true);
         const char* whole = beacon::warningLine(0);
-        const float px = fitPx(f, fonts::kTinySize, whole, w);
+        const float px = fitPx(f, cascade::gui::px(fonts::kTinySize), whole, w);
         // ONE LINE ONLY WHILE ONE LINE IS STILL READABLE. Below twelve pixels
         // the engraving stops being a warning and becomes a texture, so the
         // legend goes to two lines instead - it may not be dropped and it may
         // not be truncated.
-        if (px >= 12.0f) {
+        if (px >= cascade::gui::px(12.0f)) {
             const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, whole);
             const ImVec2 at(L.x0 + (w - sz.x) * 0.5f,
                             (L.legY0 + L.legY1) * 0.5f - sz.y * 0.5f);
@@ -609,7 +639,8 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         } else {
             for (int half = 1; half <= 2; ++half) {
                 const char* line = beacon::warningLine(half);
-                const float lpx = fitPx(f, fonts::kTinySize * 0.9f, line, w);
+                const float lpx =
+                    fitPx(f, cascade::gui::px(fonts::kTinySize) * 0.9f, line, w);
                 const ImVec2 sz = f->CalcTextSizeA(lpx, FLT_MAX, 0.0f, line);
                 const float rowH = (L.legY1 - L.legY0) * 0.5f;
                 const ImVec2 at(L.x0 + (w - sz.x) * 0.5f,

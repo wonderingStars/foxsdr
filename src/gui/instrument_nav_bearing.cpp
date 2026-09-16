@@ -59,6 +59,7 @@
 #include "gui/instrument_nav_bearing_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -114,7 +115,7 @@ float textW(ImFont* f, float px, const char* s) {
 void drawNavFlag(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
-    if (w < 10.0f || h < 6.0f) { return; }
+    if (w < cascade::gui::px(10.0f) || h < cascade::gui::px(6.0f)) { return; }
     dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
                       theme::withAlpha(theme::kVoid, 0.60f), 2.0f);
     dl->AddRectFilled(tl, br, theme::kCream, 2.0f);
@@ -131,8 +132,8 @@ void drawNavFlag(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
     // in with the dark cut under it - readable over both stripes, which a plain
     // white or a plain black word is not.
     ImFont* f = fonts::legend();
-    const float px = std::min(fonts::kTinySize, h * 0.72f);
-    if (px < 8.0f) { return; }
+    const float px = std::min(cascade::gui::px(fonts::kTinySize), h * 0.72f);
+    if (px < cascade::gui::px(8.0f)) { return; }
     const float tw = textW(f, px, "NAV");
     const ImVec2 at(tl.x + (w - tw) * 0.5f, tl.y + (h - px) * 0.5f - 1.0f);
     dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f), theme::withAlpha(theme::kVoid, 0.85f),
@@ -154,7 +155,7 @@ void drawNavFlag(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 //
 // Returns the course after this frame's input, in [0, 360).
 double obsKnob(ImDrawList* dl, const ImVec2& centre, float radius, double course) {
-    if (radius < 7.0f) { return course; }
+    if (radius < cascade::gui::px(7.0f)) { return course; }
     const ImVec2 saved = ImGui::GetCursorScreenPos();
     ImGui::SetCursorScreenPos(ImVec2(centre.x - radius, centre.y - radius));
     ImGui::InvisibleButton("##vor_obs", ImVec2(radius * 2.0f, radius * 2.0f),
@@ -235,7 +236,8 @@ double obsKnob(ImDrawList* dl, const ImVec2& centre, float radius, double course
 // sits beneath the fixed index at the top.
 void drawCard(ImDrawList* dl, const ImVec2& c, float r, double underIndex) {
     ImFont* nf = fonts::ui();
-    const float npx = std::max(9.0f, std::min(fonts::kUiSize, r * 0.17f));
+    const float npx =
+        std::max(cascade::gui::px(9.0f), std::min(cascade::gui::px(fonts::kUiSize), r * 0.17f));
     for (int step = 0; step < 72; ++step) {
         const int deg = step * 5;
         const double screen = nb::cardScreenDeg(deg, underIndex);
@@ -264,13 +266,18 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
     if (!(w > 0.0f) || !(h > 0.0f)) { return 0.0f; }
-    if (w < 80.0f || h < 60.0f) { return 0.0f; }
+    if (w < cascade::gui::px(80.0f) || h < cascade::gui::px(60.0f)) { return 0.0f; }
 
     // The plate the whole instrument is bolted to, titled by the plugin's own
     // window name.
     const float bodyTop = addBenchPlate(dl, tl, br, in.title.c_str());
-    const float bodyBottom = br.y - 8.0f;
-    const nb::Layout L = nb::layout(w, bodyBottom - bodyTop);
+    const float bodyBottom = br.y - cascade::gui::px(8.0f);
+    // nb::layoutAtScale, not nb::layout: the gauge column and the readout/
+    // ident strips are the desktop's own physical pixels, and left unscaled
+    // they read as an afterthought bolted onto a dial drawn twice as large
+    // on a tablet (the dial itself has no ceiling, so it already fills the
+    // box - see instrument_nav_bearing_math.hpp).
+    const nb::Layout L = nb::layoutAtScale(w, bodyBottom - bodyTop);
 
     // WHAT IS AND IS NOT A READING, decided once, here, and honoured by
     // everything below. A course indicator's whole dial is the bearing: the
@@ -291,8 +298,10 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         } else {
             std::snprintf(line, sizeof line, "NO SIGNAL");
         }
-        engrave(dl, ImVec2(tl.x + 10.0f, bodyTop + 4.0f), line, fonts::kTinySize);
-        return bodyTop + fonts::kTinySize + 10.0f - tl.y;
+        const float tinyPx = cascade::gui::px(fonts::kTinySize);
+        engrave(dl, ImVec2(tl.x + cascade::gui::px(10.0f), bodyTop + cascade::gui::px(4.0f)),
+                line, tinyPx);
+        return bodyTop + tinyPx + cascade::gui::px(10.0f) - tl.y;
     }
 
     // The OBS is the user's setting, not a measurement, so it lives with the
@@ -317,7 +326,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     addBenchBevel(dl, kTL, kBR, 4.0f, true);
     // Three screws, in the three corners the selector does not occupy - which
     // is what the real case looks like, the knob taking the fourth.
-    const float screwR = std::max(2.5f, caseR * 0.055f);
+    const float screwR = std::max(cascade::gui::px(2.5f), caseR * 0.055f);
     const float inset = caseR * 0.86f;
     addCabinetScrew(dl, ImVec2(caseC.x - inset, caseC.y - inset), screwR, 24.0f);
     addCabinetScrew(dl, ImVec2(caseC.x + inset, caseC.y - inset), screwR, -61.0f);
@@ -445,7 +454,8 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // which is the same reason drawBenchLamp letters an unlit lamp.
     {
         ImFont* f = fonts::legend();
-        const float px = std::max(8.0f, std::min(fonts::kTinySize, glassR * 0.15f));
+        const float px =
+            std::max(cascade::gui::px(8.0f), std::min(cascade::gui::px(fonts::kTinySize), glassR * 0.15f));
         const float s = std::max(4.0f, glassR * 0.080f);
         const float ty = caseC.y - glassR * 0.50f;
         const float fy = caseC.y + glassR * 0.50f;
@@ -501,9 +511,9 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // it looks like a fault in the panel rather than a legend that did not
         // have room.
         ImFont* f = fonts::legend();
-        const float px = std::min(fonts::kTinySize, kr * 0.60f);
-        const float top = kc.y + kr + 2.0f;
-        if (px >= 8.0f && top + px <= caseC.y + caseR - 2.0f) {
+        const float px = std::min(cascade::gui::px(fonts::kTinySize), kr * 0.60f);
+        const float top = kc.y + kr + cascade::gui::px(2.0f);
+        if (px >= cascade::gui::px(8.0f) && top + px <= caseC.y + caseR - cascade::gui::px(2.0f)) {
             const float tw = textW(f, px, "OBS");
             engrave(dl, ImVec2(kc.x - tw * 0.5f, top), "OBS", px);
         }
@@ -516,15 +526,16 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // from the station, the INBOUND course is its reciprocal. The plugin's own
     // text output prints both for the same reason.
     if (L.drawReadout) {
-        const ImVec2 rTL(tl.x + 6.0f, bodyTop + L.readoutY0);
-        const ImVec2 rBR(L.drawGauges ? tl.x + L.gaugeX0 - 6.0f : br.x - 6.0f,
+        const float rMargin = cascade::gui::px(6.0f);
+        const ImVec2 rTL(tl.x + rMargin, bodyTop + L.readoutY0);
+        const ImVec2 rBR(L.drawGauges ? tl.x + L.gaugeX0 - rMargin : br.x - rMargin,
                          bodyTop + L.readoutY1);
-        if (rBR.x - rTL.x > 60.0f && rBR.y - rTL.y > 24.0f) {
+        if (rBR.x - rTL.x > cascade::gui::px(60.0f) && rBR.y - rTL.y > cascade::gui::px(24.0f)) {
             drawFreqDrumWell(dl, rTL, rBR);
             const float cellW = (rBR.x - rTL.x) / 3.0f;
-            const float capPx = fonts::kTinySize;
-            const float figPx = std::min(fonts::kReadingSize + 6.0f,
-                                         (rBR.y - rTL.y) - capPx - 10.0f);
+            const float capPx = cascade::gui::px(fonts::kTinySize);
+            const float figPx = std::min(cascade::gui::px(fonts::kReadingSize) + cascade::gui::px(6.0f),
+                                         (rBR.y - rTL.y) - capPx - cascade::gui::px(10.0f));
             char rad[4] = "---";
             char inb[4] = "---";
             char crs[4];
@@ -539,13 +550,15 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             for (int i = 0; i < 3; ++i) {
                 const float cx = rTL.x + cellW * (static_cast<float>(i) + 0.5f);
                 if (i > 0) {
-                    addBenchDivider(dl, rTL.x + cellW * static_cast<float>(i), rTL.y + 4.0f,
-                                    rBR.y - 4.0f);
+                    addBenchDivider(dl, rTL.x + cellW * static_cast<float>(i),
+                                    rTL.y + cascade::gui::px(4.0f),
+                                    rBR.y - cascade::gui::px(4.0f));
                 }
                 const float cw = textW(fonts::legend(), capPx, caps[i]);
-                engrave(dl, ImVec2(cx - cw * 0.5f, rTL.y + 5.0f), caps[i], capPx);
+                const float rowY = rTL.y + cascade::gui::px(5.0f);
+                engrave(dl, ImVec2(cx - cw * 0.5f, rowY), caps[i], capPx);
                 const float vw = textW(fonts::reading(), figPx, vals[i]);
-                figure(dl, ImVec2(cx - vw * 0.5f, rTL.y + 5.0f + capPx + 2.0f), vals[i],
+                figure(dl, ImVec2(cx - vw * 0.5f, rowY + capPx + cascade::gui::px(2.0f)), vals[i],
                        figPx, litv[i]);
             }
         }
@@ -553,16 +566,19 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
     // --- the station, and its Morse ------------------------------------------
     if (L.drawIdent) {
-        const ImVec2 iTL(tl.x + 6.0f, bodyTop + L.readoutY1 + 4.0f);
-        const ImVec2 iBR(L.drawGauges ? tl.x + L.gaugeX0 - 6.0f : br.x - 6.0f,
-                         bodyTop + L.readoutY1 + nb::kIdentH - 2.0f);
-        if (iBR.x - iTL.x > 60.0f && iBR.y - iTL.y > 20.0f) {
+        const float iMargin = cascade::gui::px(6.0f);
+        const ImVec2 iTL(tl.x + iMargin, bodyTop + L.readoutY1 + cascade::gui::px(4.0f));
+        const ImVec2 iBR(L.drawGauges ? tl.x + L.gaugeX0 - iMargin : br.x - iMargin,
+                         bodyTop + L.readoutY1 + nb::kIdentH - cascade::gui::px(2.0f));
+        if (iBR.x - iTL.x > cascade::gui::px(60.0f) && iBR.y - iTL.y > cascade::gui::px(20.0f)) {
             drawFreqDrumWell(dl, iTL, iBR);
             const char* ident = in.have ? in.state.text[0] : "";
-            const float capPx = fonts::kTinySize;
-            engrave(dl, ImVec2(iTL.x + 8.0f, iTL.y + (iBR.y - iTL.y - capPx) * 0.5f),
+            const float capPx = cascade::gui::px(fonts::kTinySize);
+            const float pad8 = cascade::gui::px(8.0f);
+            engrave(dl, ImVec2(iTL.x + pad8, iTL.y + (iBR.y - iTL.y - capPx) * 0.5f),
                     "IDENT", capPx);
-            const float x0 = iTL.x + 8.0f + textW(fonts::legend(), capPx, "IDENT") + 12.0f;
+            const float x0 = iTL.x + pad8 + textW(fonts::legend(), capPx, "IDENT") +
+                             cascade::gui::px(12.0f);
             if (ident[0] == '\0') {
                 // NO STATION IS DRAWN AS NO STATION. Not "---", which on a dial
                 // full of three-figure bearings reads as one of them.
@@ -570,18 +586,19 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                         capPx);
             } else {
                 ImFont* uf = fonts::ui();
-                const float px = std::min(fonts::kUiSize + 2.0f, (iBR.y - iTL.y) * 0.52f);
-                dl->AddText(uf, px, ImVec2(x0, iTL.y + 3.0f), theme::kPhosphor, ident,
-                            nullptr, iBR.x - x0 - 8.0f);
+                const float px = std::min(cascade::gui::px(fonts::kUiSize) + cascade::gui::px(2.0f),
+                                          (iBR.y - iTL.y) * 0.52f);
+                dl->AddText(uf, px, ImVec2(x0, iTL.y + cascade::gui::px(3.0f)), theme::kPhosphor,
+                            ident, nullptr, iBR.x - x0 - pad8);
                 // The pattern under the letters, drawn as the marks it is. A
                 // dot is a disc and a dash is a bar, three dots long, which is
                 // what makes it a Morse group rather than a row of dashes.
                 char code[96];
                 nb::identMorse(ident, code, sizeof code);
-                const float unit = std::max(2.0f, (iBR.y - iTL.y) * 0.10f);
+                const float unit = std::max(cascade::gui::px(2.0f), (iBR.y - iTL.y) * 0.10f);
                 float mx = x0;
-                const float my = iTL.y + 3.0f + px + 2.0f;
-                const float maxX = iBR.x - 6.0f;
+                const float my = iTL.y + cascade::gui::px(3.0f) + px + cascade::gui::px(2.0f);
+                const float maxX = iBR.x - iMargin;
                 for (const char* p = code; *p != '\0' && mx < maxX; ++p) {
                     if (*p == ' ') {
                         mx += unit * 3.0f;
@@ -603,20 +620,22 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (L.drawGauges) {
         const float gx0 = tl.x + L.gaugeX0;
         const float gx1 = tl.x + L.gaugeX1;
-        float gy = bodyTop + 4.0f;
+        float gy = bodyTop + cascade::gui::px(4.0f);
 
-        const float lampR = 6.0f;
-        const ImVec2 lockAt(gx0 + (gx1 - gx0) * 0.28f, gy + lampR + 2.0f);
-        const ImVec2 newAt(gx0 + (gx1 - gx0) * 0.72f, gy + lampR + 2.0f);
+        const float lampR = cascade::gui::px(6.0f);
+        const float lampGap = cascade::gui::px(2.0f);
+        const ImVec2 lockAt(gx0 + (gx1 - gx0) * 0.28f, gy + lampR + lampGap);
+        const ImVec2 newAt(gx0 + (gx1 - gx0) * 0.72f, gy + lampR + lampGap);
         drawBenchLamp(dl, lockAt, lampR, theme::kPhosphor, lock, "LOCK");
         drawBenchLamp(dl, newAt, lampR, theme::kGold, cue.unread, "NEW");
-        gy += lampR * 2.0f + 4.0f + ImGui::GetTextLineHeight() + 8.0f;
+        gy += lampR * 2.0f + cascade::gui::px(4.0f) + ImGui::GetTextLineHeight() +
+              cascade::gui::px(8.0f);
 
         addBenchGroupCaption(dl, ImVec2(gx0, gy), gx1 - gx0, "SIGNAL");
-        gy += fonts::kTinySize + 8.0f;
+        gy += cascade::gui::px(fonts::kTinySize) + cascade::gui::px(8.0f);
 
         const float gh = bodyBottom - gy;
-        if (gh >= 44.0f) {
+        if (gh >= cascade::gui::px(44.0f)) {
             // THE THREE FIGURES THE SLOT MAP NAMES, and each one is drawn as
             // "no reading" when the plugin left its slot alone - a slot at zero
             // is a slot nobody filled, and the ABI says so in as many words.
@@ -627,9 +646,10 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 const char* cap;
                 double v;
             } bays[3] = {{"CONF", conf}, {"REF", ref}, {"VAR", var}};
-            const float bw = (gx1 - gx0 - 8.0f) / 3.0f;
+            const float bayGap = cascade::gui::px(4.0f);
+            const float bw = (gx1 - gx0 - cascade::gui::px(8.0f)) / 3.0f;
             for (int i = 0; i < 3; ++i) {
-                const float x = gx0 + (bw + 4.0f) * static_cast<float>(i);
+                const float x = gx0 + (bw + bayGap) * static_cast<float>(i);
                 const bool got = in.have && std::isfinite(bays[i].v) && bays[i].v > 0.0;
                 char rd[16];
                 if (got) {

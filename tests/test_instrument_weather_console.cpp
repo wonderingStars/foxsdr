@@ -24,6 +24,7 @@
 // against the real slot size, not against a number retyped in a test.
 #include "core/plugin_abi.h"
 #include "gui/instrument_weather_console_math.hpp"
+#include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 using namespace cascade::gui::wxface;
@@ -466,6 +467,58 @@ int main() {
         chipWord(7.0, nullptr, chip, sizeof chip);
         CHECK(std::string(chip) == "NO RX");
         chipWord(7.0, temps, nullptr, 0u);  // must not crash
+    }
+
+    // -- THE COMPARTMENT'S OWN THRESHOLDS, AT BOTH UI SCALES ------------------
+    //
+    // panelStyle decides the channel row, the temperature digits, the
+    // humidity digits and the model caption from six desktop reference
+    // figures - the same shape of rule as instrument_meter_math.hpp's
+    // dialGeometry, and the same defect if left unscaled: a 92 px "room for
+    // a model name" floor and a 64 px digit-room ceiling stay that many
+    // PHYSICAL pixels on a tablet whose compartment is drawn several times
+    // that size, and the console's glass stops growing while the case
+    // around it keeps growing.
+    {
+        cascade::gui::setUiScale(1.0f);
+        const PanelStyle a = panelStyleAtScale(320.0f, 380.0f, 14.0f);
+        CHECK_NEAR(a.headerPx, 14.0f, 1e-3);
+        CHECK_NEAR(a.modelPx, 10.0f, 1e-3);
+        CHECK_NEAR(a.humH, 24.0f, 1e-3);   // the humidity cap binds
+        CHECK_NEAR(a.digitH, 64.0f, 1e-2); // the digit-room cap binds
+        // At scale 1.0, panelStyleAtScale is panelStyle: gui::px(v) == v.
+        const PanelStyle a2 = panelStyle(320.0f, 380.0f, 14.0f);
+        CHECK_NEAR(a.digitH, a2.digitH, 1e-6);
+        CHECK_NEAR(panelStackHeightAtScale(a), panelStackHeight(a2), 1e-6);
+
+        cascade::gui::setUiScale(2.0f);
+        // THE SAME COMPARTMENT, TWICE AS BIG - a tablet handing this face
+        // the same proportion of a docked body twice the size - and
+        // panelStyle is homogeneous of degree 1 in its inputs and bounds
+        // taken together, so every field is exactly double.
+        const PanelStyle b = panelStyleAtScale(640.0f, 760.0f, 14.0f);
+        CHECK_NEAR(b.headerPx, 28.0f, 1e-2);
+        CHECK_NEAR(b.modelPx, 20.0f, 1e-2);
+        CHECK_NEAR(b.humH, 48.0f, 1e-2);
+        CHECK_NEAR(b.digitH, 128.0f, 1e-1);
+        // panelStackHeight(a), NOT panelStackHeightAtScale(a): the scale has
+        // already moved to 2.0 by this point, and `a` was built at 1.0 - the
+        // unscaled call is what reproduces that same 1.0x figure.
+        CHECK_NEAR(panelStackHeightAtScale(b), panelStackHeight(a) * 2.0f, 1e-1);
+
+        // BREAK-IT CHECK, run while writing this: panelStyle() called
+        // directly on the doubled compartment with the RAW type size - the
+        // unscaled rule, exactly as instrument_weather_console.cpp called it
+        // before this change - clamps the header to the desktop's own 14 px
+        // and the digits to the desktop's own 64 px ceiling instead of
+        // growing to 128.
+        const PanelStyle unscaled = panelStyle(640.0f, 760.0f, 14.0f);
+        CHECK_NEAR(unscaled.headerPx, 14.0f, 1e-3);
+        CHECK_NEAR(unscaled.digitH, 64.0f, 1e-2);
+        CHECK(unscaled.headerPx != b.headerPx);
+        CHECK(unscaled.digitH != b.digitH);
+
+        cascade::gui::setUiScale(1.0f);  // as every other test finds it
     }
 
     return testSummary("test_instrument_weather_console");

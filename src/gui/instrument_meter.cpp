@@ -96,6 +96,7 @@
 #include "gui/instrument_meter_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -210,12 +211,14 @@ float textW(ImFont* f, float px, const char* s) {
 // filled, which is a different picture from a cell holding a zero.
 void glassCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* value,
                float px) {
-    if (br.x - tl.x < 8.0f || br.y - tl.y < 6.0f) { return; }
+    if (br.x - tl.x < cascade::gui::px(8.0f) || br.y - tl.y < cascade::gui::px(6.0f)) {
+        return;
+    }
     drawFreqDrumWell(dl, tl, br);
     if (value == nullptr || value[0] == '\0') { return; }
     ImFont* f = fonts::reading();
     const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, value);
-    const ImVec2 at(tl.x + 6.0f, (tl.y + br.y) * 0.5f - sz.y * 0.5f);
+    const ImVec2 at(tl.x + cascade::gui::px(6.0f), (tl.y + br.y) * 0.5f - sz.y * 0.5f);
     dl->PushClipRect(tl, br, true);
     dl->AddText(f, px, at, theme::kAmber, value);
     dl->PopClipRect();
@@ -230,42 +233,38 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float h = br.y - tl.y;
     // Below this there is no drawing that would be an instrument rather than a
     // smear, so the generic readout - which is honest at any size - takes it.
-    if (w < 220.0f || h < 110.0f) { return drawGenericFace(dl, tl, br, in, cue); }
+    if (w < cascade::gui::px(220.0f) || h < cascade::gui::px(110.0f)) {
+        return drawGenericFace(dl, tl, br, in, cue);
+    }
 
     const float plateY = addBenchPlate(dl, tl, br, in.title.c_str());
-    const ImVec2 bTL(tl.x + 10.0f, plateY + 4.0f);
-    const ImVec2 bBR(br.x - 10.0f, br.y - 8.0f);
+    const ImVec2 bTL(tl.x + cascade::gui::px(10.0f), plateY + cascade::gui::px(4.0f));
+    const ImVec2 bBR(br.x - cascade::gui::px(10.0f), br.y - cascade::gui::px(8.0f));
     const float bodyW = bBR.x - bTL.x;
     const float bodyH = bBR.y - bTL.y;
-    if (bodyW < 160.0f || bodyH < 70.0f) { return plateY - tl.y; }
+    if (bodyW < cascade::gui::px(160.0f) || bodyH < cascade::gui::px(70.0f)) {
+        return plateY - tl.y;
+    }
 
     dl->PushClipRect(bTL, bBR, true);
 
-    // ONE SCALE FOR EVERYTHING. Every size below is this times a constant, so
-    // the drawing shrinks as one object instead of the type staying put while
-    // the metal moves - which is what makes a resized panel look broken.
-    const float s = std::clamp(std::min(bodyH / 210.0f, bodyW / 540.0f), 0.55f, 1.5f);
-    const float capPx = std::clamp(fonts::kTinySize * s, 9.0f, 18.0f);
-    const float readPx = std::clamp(fonts::kReadingSize * s, 9.0f, 20.0f);
-
-    // The right-hand column is dropped rather than squeezed: below the width
-    // its captions need, a column of clipped words is worse than no column,
-    // and the meter takes the whole body instead.
-    const float colMinW = 150.0f * s;
-    const bool haveCol = bodyW > 260.0f * s + colMinW;
-
-    const float meterBoxW = haveCol ? (bodyW - colMinW - 16.0f * s) : bodyW;
-    float radius = std::min(bodyH, meterBoxW) * 0.5f - 2.0f;
-    if (radius > bodyH * 0.5f - 2.0f) { radius = bodyH * 0.5f - 2.0f; }
-    // A METER IS A PHYSICAL SIZE, so the dial stops growing and the room goes
-    // to the column instead. Without the cap, a plugin with no roster hands
-    // this face the whole window and the dial becomes a foot across with the
-    // column squeezed against the edge - which is a picture of a meter rather
-    // than an instrument on a bench.
-    if (radius > 150.0f) { radius = 150.0f; }
-    if (radius < 34.0f) { radius = 34.0f; }
-    const ImVec2 c(bTL.x + radius + 3.0f, bTL.y + bodyH * 0.5f);
-    const float r = radius;
+    // ONE SCALE FOR EVERYTHING, computed by instrument_meter_math.hpp's
+    // dialGeometryAtScale so tests/test_instrument_meter.cpp can pin the
+    // same rule this face draws from, at both scales, without a graphics
+    // context. See that header for why the 210 x 540 reference itself has to
+    // go through gui::px(): without it, a tablet's box - already several
+    // times the reference in raw screen pixels before this face has drawn a
+    // single brass ring - pegs the local scale at its 1.5 ceiling
+    // immediately, and every figure derived from it, including the dial's
+    // own radius cap, stops growing with the display's own density.
+    const meter::DialGeometry dg = meter::dialGeometryAtScale(bodyW, bodyH, fonts::kTinySize,
+                                                              fonts::kReadingSize);
+    const float s = dg.s;
+    const float capPx = dg.capPx;
+    const float readPx = dg.readPx;
+    const bool haveCol = dg.haveCol;
+    const ImVec2 c(bTL.x + dg.radius + cascade::gui::px(3.0f), bTL.y + bodyH * 0.5f);
+    const float r = dg.radius;
 
     // --- the bezel ----------------------------------------------------------
     // Brass ring, proud of the panel, with its own shadow beneath it: the same
@@ -303,8 +302,9 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // The nameplate legend across the top of the dial. Printed, not cut:
         // it names the machine, and it changes only with the commodity slot -
         // it never states a figure.
-        float px = std::clamp(r * 0.125f, 7.5f, capPx);
-        while (px > 7.5f && textW(leg, px, nameplate) > dialR * 1.55f) { px -= 0.5f; }
+        const float floorPx = cascade::gui::px(7.5f);
+        float px = std::clamp(r * 0.125f, floorPx, capPx);
+        while (px > floorPx && textW(leg, px, nameplate) > dialR * 1.55f) { px -= 0.5f; }
         const float tw = textW(leg, px, nameplate);
         dialText(dl, leg, px, ImVec2(c.x - tw * 0.5f, c.y - r * 0.68f), nameplate,
                  kDialInk);
@@ -323,15 +323,16 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     {
         // The panel's own bezel: a thin dark surround, then the ground, then
         // the glass sheen across the top. Three rectangles and a gradient.
-        dl->AddRectFilled(ImVec2(lcdTL.x - 3.0f, lcdTL.y - 3.0f),
-                          ImVec2(lcdBR.x + 3.0f, lcdBR.y + 3.0f),
+        const float lcdShadow = cascade::gui::px(3.0f);
+        dl->AddRectFilled(ImVec2(lcdTL.x - lcdShadow, lcdTL.y - lcdShadow),
+                          ImVec2(lcdBR.x + lcdShadow, lcdBR.y + lcdShadow),
                           IM_COL32(0x4A, 0x4C, 0x42, 0xFF), 2.0f);
         dl->AddRectFilledMultiColor(lcdTL, lcdBR, kLcdTop, kLcdTop, kLcdBottom,
                                     kLcdBottom);
         dl->AddRect(lcdTL, lcdBR, theme::withAlpha(theme::kVoid, 0.55f), 0.0f, 0, 1.0f);
 
         const meter::Register reg = meter::decompose(in.have, in.state.values[0]);
-        const float pad = std::max(2.5f, r * 0.035f);
+        const float pad = std::max(cascade::gui::px(2.5f), r * 0.035f);
         const float unitW = std::min(r * 0.26f, (lcdBR.x - lcdTL.x) * 0.20f);
         const float cellsW = (lcdBR.x - lcdTL.x) - pad * 2.0f - unitW;
         const float cw = cellsW / static_cast<float>(meter::kDigits);
@@ -348,7 +349,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // The annunciators. The unit is lit whenever there is a register to
         // put it against and dark otherwise, because "kWh" beside no figure
         // is a claim about a measurement that was not made.
-        const float annPx = std::clamp(r * 0.115f, 7.5f, capPx);
+        const float annPx = std::clamp(r * 0.115f, cascade::gui::px(7.5f), capPx);
         const char* unit = meter::unitWord(comm);
         const bool unitLit = reg.status == meter::Reading::Ok;
         dialText(dl, leg, annPx,
@@ -370,9 +371,10 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const ImVec2 lBR(c.x + r * 0.60f, c.y + r * 0.47f);
         dl->AddRectFilled(lTL, lBR, kLabelPaper, 1.0f);
         dl->AddRect(lTL, lBR, theme::withAlpha(theme::kVoid, 0.35f), 1.0f, 0, 1.0f);
-        const float labPx = std::clamp((lBR.y - lTL.y) * 0.60f, 7.5f, readPx);
+        const float labPx = std::clamp((lBR.y - lTL.y) * 0.60f, cascade::gui::px(7.5f), readPx);
         const float capW = textW(leg, labPx, "METER No.");
-        dialText(dl, leg, labPx, ImVec2(lTL.x + 4.0f, (lTL.y + lBR.y) * 0.5f - labPx * 0.62f),
+        dialText(dl, leg, labPx,
+                 ImVec2(lTL.x + cascade::gui::px(4.0f), (lTL.y + lBR.y) * 0.5f - labPx * 0.62f),
                  "METER No.", theme::withAlpha(kLabelInk, 0.75f));
         // The number itself: the plugin's text[0], in the monospaced reading
         // face so a changing id does not shuffle sideways, in ink on paper -
@@ -381,10 +383,13 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (id[0] != '\0') {
             ImFont* rf = fonts::reading();
             float px = labPx;
-            const float room = (lBR.x - 5.0f) - (lTL.x + 8.0f + capW);
-            while (px > 7.0f && textW(rf, px, id) > room) { px -= 0.5f; }
+            const float labFloor = cascade::gui::px(7.0f);
+            const float pad5 = cascade::gui::px(5.0f);
+            const float pad8 = cascade::gui::px(8.0f);
+            const float room = (lBR.x - pad5) - (lTL.x + pad8 + capW);
+            while (px > labFloor && textW(rf, px, id) > room) { px -= 0.5f; }
             dl->PushClipRect(lTL, lBR, true);
-            dl->AddText(rf, px, ImVec2(lTL.x + 8.0f + capW, (lTL.y + lBR.y) * 0.5f - px * 0.62f),
+            dl->AddText(rf, px, ImVec2(lTL.x + pad8 + capW, (lTL.y + lBR.y) * 0.5f - px * 0.62f),
                         kLabelInk, id);
             dl->PopClipRect();
         }
@@ -407,8 +412,8 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     {
         const bool alert = in.have && (in.state.flags & CASCADE_INSTRUMENT_FLAG_ALERT) != 0u;
         const bool blinkOn = std::fmod(cue.nowSec, 0.5) < 0.25;
-        const float lr = std::max(2.5f, r * 0.055f);
-        const float px = std::clamp(r * 0.095f, 6.5f, capPx);
+        const float lr = std::max(cascade::gui::px(2.5f), r * 0.055f);
+        const float px = std::clamp(r * 0.095f, cascade::gui::px(6.5f), capPx);
         struct Ind {
             const char* word;
             ImU32 colour;
@@ -453,21 +458,23 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     dl->PathStroke(IM_COL32(255, 255, 255, 70), ImDrawFlags_None, 1.5f);
     dl->AddCircle(c, dialR * 1.005f, IM_COL32(255, 255, 255, 34), 0, 1.5f);
 
-    float used = std::max(c.y + r, bTL.y) + 8.0f;
+    float used = std::max(c.y + r, bTL.y) + cascade::gui::px(8.0f);
 
     // --- the column beside it -----------------------------------------------
     if (haveCol) {
-        const float x0 = c.x + r + 14.0f * s;
+        const float x0 = c.x + r + cascade::gui::px(14.0f) * s;
         const float x1 = bBR.x;
         const float colW = x1 - x0;
-        float y = bTL.y + 2.0f;
+        float y = bTL.y + cascade::gui::px(2.0f);
 
         // A caption's row is its type plus the rule addBenchGroupCaption carries
         // out under it; the slack is what stops the lamps below sitting on that
         // rule when the whole column is scaled down.
-        const float capH = capPx + 9.0f * s;
-        const float lampR = std::clamp(6.0f * s, 4.0f, 8.0f);
-        const float cellH = std::clamp(readPx + 8.0f * s, 16.0f, 30.0f);
+        const float capH = capPx + cascade::gui::px(9.0f) * s;
+        const float lampR =
+            std::clamp(cascade::gui::px(6.0f) * s, cascade::gui::px(4.0f), cascade::gui::px(8.0f));
+        const float cellH = std::clamp(readPx + cascade::gui::px(8.0f) * s, cascade::gui::px(16.0f),
+                                       cascade::gui::px(30.0f));
 
         // COMMODITY - three engraved lamps, the matching one lit. All three
         // are drawn whatever the state, so a cold panel still says which
@@ -496,11 +503,11 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             for (int i = 0; i < 3; ++i) {
                 const bool lit = in.have && comm == lamps[i].kind;
                 drawBenchLamp(dl, ImVec2(x0 + pitch * (static_cast<float>(i) + 0.5f),
-                                         y + lampR + 3.0f * s),
+                                         y + lampR + cascade::gui::px(3.0f) * s),
                               lampR, lamps[i].colour, lit, lamps[i].word);
             }
             ImGui::PopFont();
-            y += lampR * 2.0f + capPx + 10.0f * s;
+            y += lampR * 2.0f + capPx + cascade::gui::px(10.0f) * s;
         }
 
         // TAMPER - the counters the SCM carries [1]: "tamper status". The flag
@@ -510,11 +517,12 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         addBenchGroupCaption(dl, ImVec2(x0, y), colW, "TAMPER");
         y += capH;
         {
-            const float halfW = (colW - 8.0f * s) * 0.5f;
+            const float gap8 = cascade::gui::px(8.0f) * s;
+            const float halfW = (colW - gap8) * 0.5f;
             const char* words[2] = {"PHYSICAL", "ENCODER"};
             const int counts[2] = {tp.physical, tp.encoder};
             for (int i = 0; i < 2; ++i) {
-                const float cx0 = x0 + (halfW + 8.0f * s) * static_cast<float>(i);
+                const float cx0 = x0 + (halfW + gap8) * static_cast<float>(i);
                 dl->AddText(leg, capPx, ImVec2(cx0 + 1.0f, y + 1.0f),
                             theme::withAlpha(theme::kVoid, 0.55f), words[i]);
                 dl->AddText(leg, capPx, ImVec2(cx0, y), theme::kInkMuted, words[i]);
@@ -525,8 +533,8 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 // beside it is what separates those two, by being absent.
                 const bool flag = tp.have && counts[i] != 0;
                 const bool blink = std::fmod(cue.nowSec, 0.6) < 0.35;
-                const float fr = std::max(3.0f, 4.5f * s);
-                const ImVec2 fc(cx0 + wordW + fr + 5.0f, y + capPx * 0.45f);
+                const float fr = std::max(cascade::gui::px(3.0f), cascade::gui::px(4.5f) * s);
+                const ImVec2 fc(cx0 + wordW + fr + cascade::gui::px(5.0f), y + capPx * 0.45f);
                 dl->AddCircleFilled(fc, fr,
                                     flag ? (blink ? theme::kAlarmHot
                                                   : theme::withAlpha(theme::kAlarm, 0.55f))
@@ -536,25 +544,26 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
                 char num[8] = {0};
                 if (tp.have) { std::snprintf(num, sizeof num, "%d", counts[i]); }
-                glassCell(dl, ImVec2(cx0, y + capPx + 3.0f * s),
-                          ImVec2(cx0 + halfW, y + capPx + 3.0f * s + cellH), num, readPx);
+                const float cellGap = cascade::gui::px(3.0f) * s;
+                glassCell(dl, ImVec2(cx0, y + capPx + cellGap),
+                          ImVec2(cx0 + halfW, y + capPx + cellGap + cellH), num, readPx);
             }
-            y += capPx + cellH + 9.0f * s;
+            y += capPx + cellH + cascade::gui::px(9.0f) * s;
         }
 
         // LAST HEARD - read out of the roster the host is about to draw
         // underneath, so the two can never disagree; blank when the roster
         // does not carry it.
-        if (y + capH + cellH < bBR.y + 4.0f) {
+        if (y + capH + cellH < bBR.y + cascade::gui::px(4.0f)) {
             addBenchGroupCaption(dl, ImVec2(x0, y), colW, "LAST HEARD");
             y += capH;
             const std::string heard =
                 meter::heardText(in.headings, in.rows, in.have ? in.state.text[0] : "");
             glassCell(dl, ImVec2(x0, y), ImVec2(x1, y + cellH), heard.c_str(), readPx);
-            y += cellH + 4.0f;
+            y += cellH + cascade::gui::px(4.0f);
         }
 
-        used = std::max(used, y + 4.0f);
+        used = std::max(used, y + cascade::gui::px(4.0f));
     } else {
         // With no column the meter is the whole instrument, so the commodity
         // has to be readable off the dial itself. One word, under the glass,
@@ -563,7 +572,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const char* word = (comm == meter::Commodity::Electric)  ? "ELECTRIC"
                                : (comm == meter::Commodity::Gas)     ? "GAS"
                                                                      : "WATER";
-            const float px = std::clamp(r * 0.11f, 7.5f, capPx);
+            const float px = std::clamp(r * 0.11f, cascade::gui::px(7.5f), capPx);
             const float tw = textW(uiF, px, word);
             dialText(dl, uiF, px, ImVec2(c.x - tw * 0.5f, c.y + r * 0.86f - px), word,
                      kDialInk);
@@ -571,7 +580,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     }
 
     dl->PopClipRect();
-    return std::min(used, bBR.y + 8.0f) - tl.y;
+    return std::min(used, bBR.y + cascade::gui::px(8.0f)) - tl.y;
 }
 
 }  // namespace cascade::gui

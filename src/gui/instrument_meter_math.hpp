@@ -25,6 +25,7 @@
 #ifndef CASCADE_GUI_INSTRUMENT_METER_MATH_HPP
 #define CASCADE_GUI_INSTRUMENT_METER_MATH_HPP
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -33,6 +34,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui::meter {
 
@@ -247,6 +249,90 @@ inline std::string heardText(const std::vector<std::string>& headings,
         return std::string(cell, n);
     }
     return std::string();
+}
+
+// --- the dial's own scale ----------------------------------------------------
+//
+// instrument_meter.cpp draws the whole face off ONE local scale `s`, so the
+// picture shrinks or grows as one object rather than the type staying put
+// while the metal moves - and every one of its floors, ceilings and the
+// dial's own radius cap is a desktop reference figure. Pulled out here for
+// the same reason instrument_fax_math.hpp's LayoutBounds is: so
+// gui::px() can reach all of them in ONE place (dialGeometryAtScale below)
+// and tests/test_instrument_meter.cpp can pin the result at both scales
+// without a graphics context.
+struct DialBounds {
+    float refW = 540.0f;    // the body size `s` reads as "1.0"
+    float refH = 210.0f;
+    float sMin = 0.55f;     // dimensionless: how far a resize may shrink the
+    float sMax = 1.5f;      // face, independent of the display's own density
+    float capFloor = 9.0f, capCeil = 18.0f;    // capPx bounds
+    float readFloor = 9.0f, readCeil = 20.0f;  // readPx bounds
+    float colMinRef = 150.0f;    // the column's own minimum width, times `s`
+    float colGapRef = 260.0f;    // clearance the meter needs before a column
+    float meterGapRef = 16.0f;   // column to meter, when there is a column
+    float edgeInset = 2.0f;      // the dial's own edge clearance
+    float radiusCap = 150.0f;    // A METER IS A PHYSICAL SIZE: see the .cpp
+    float radiusFloor = 34.0f;
+};
+
+struct DialGeometry {
+    float s = 1.0f;
+    float capPx = 0.0f;
+    float readPx = 0.0f;
+    bool haveCol = false;
+    float colMinW = 0.0f;
+    float radius = 0.0f;
+};
+
+inline DialGeometry dialGeometry(float bodyW, float bodyH, float tinySize, float readingSize,
+                                 const DialBounds& b) {
+    DialGeometry g;
+    if (!(bodyW > 0.0f) || !(bodyH > 0.0f)) { return g; }
+    g.s = std::clamp(std::min(bodyH / b.refH, bodyW / b.refW), b.sMin, b.sMax);
+    g.capPx = std::clamp(tinySize * g.s, b.capFloor, b.capCeil);
+    g.readPx = std::clamp(readingSize * g.s, b.readFloor, b.readCeil);
+    g.colMinW = b.colMinRef * g.s;
+    g.haveCol = bodyW > b.colGapRef * g.s + g.colMinW;
+    const float meterBoxW = g.haveCol ? (bodyW - g.colMinW - b.meterGapRef * g.s) : bodyW;
+    float radius = std::min(bodyH, meterBoxW) * 0.5f - b.edgeInset;
+    if (radius > bodyH * 0.5f - b.edgeInset) { radius = bodyH * 0.5f - b.edgeInset; }
+    if (radius > b.radiusCap) { radius = b.radiusCap; }
+    if (radius < b.radiusFloor) { radius = b.radiusFloor; }
+    g.radius = radius;
+    return g;
+}
+
+// UNSCALED: the desktop's own rule. No existing caller depends on this
+// signature (the geometry used to be written out inline in
+// instrument_meter.cpp), but it is kept for the same reason
+// instrument_fax_math.hpp keeps layout(): a bounds-free desktop reading to
+// compare the scaled one against.
+inline DialGeometry dialGeometry(float bodyW, float bodyH) {
+    return dialGeometry(bodyW, bodyH, 14.0f, 16.0f, DialBounds{});
+}
+
+// THE ONE PLACE gui::px() REACHES THE REFERENCE FOOTPRINT AND EVERY FLOOR AND
+// CEILING - instrument_meter.cpp calls this instead of writing the
+// arithmetic out itself. `tinySize`/`readingSize` are fonts::kTinySize and
+// fonts::kReadingSize, gui::px()'d here rather than by the caller so the one
+// function is where every figure in the picture is scaled.
+inline DialGeometry dialGeometryAtScale(float bodyW, float bodyH, float tinySize,
+                                        float readingSize) {
+    DialBounds b;
+    b.refW = px(b.refW);
+    b.refH = px(b.refH);
+    b.capFloor = px(b.capFloor);
+    b.capCeil = px(b.capCeil);
+    b.readFloor = px(b.readFloor);
+    b.readCeil = px(b.readCeil);
+    b.colMinRef = px(b.colMinRef);
+    b.colGapRef = px(b.colGapRef);
+    b.meterGapRef = px(b.meterGapRef);
+    b.edgeInset = px(b.edgeInset);
+    b.radiusCap = px(b.radiusCap);
+    b.radiusFloor = px(b.radiusFloor);
+    return dialGeometry(bodyW, bodyH, px(tinySize), px(readingSize), b);
 }
 
 // --- the rail chip ----------------------------------------------------------

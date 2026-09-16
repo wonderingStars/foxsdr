@@ -104,6 +104,7 @@
 #include "gui/instrument_weather_console_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui {
 
@@ -260,7 +261,7 @@ void drawChannelGlyph(ImDrawList* dl, float x, float y, float h, int channel, bo
 // permanently-present outline with nothing in it would be one more thing to
 // interpret, and this is a warning, not a gauge.
 void drawBatteryLow(ImDrawList* dl, float x, float y, float w, float h) {
-    if (w < 8.0f || h < 5.0f) { return; }
+    if (w < cascade::gui::px(8.0f) || h < cascade::gui::px(5.0f)) { return; }
     const float bodyW = w - w * 0.16f;
     dl->AddRect(ImVec2(x, y), ImVec2(x + bodyW, y + h), kGlassInk, 1.0f, 0, 1.4f);
     dl->AddRectFilled(ImVec2(x + bodyW, y + h * 0.28f), ImVec2(x + w, y + h * 0.72f),
@@ -339,7 +340,7 @@ void drawChannelPanel(ImDrawList* dl, float x0, float x1, float y0, float y1, in
     // empty polariser below them. The height is the sum of what is actually
     // going to be drawn, so a compartment that has given up its humidity row
     // recentres on what is left rather than keeping a hole where it was.
-    const float stackH = panelStackHeight(st);
+    const float stackH = panelStackHeightAtScale(st);
     float y = y0 + std::max(0.0f, (y1 - y0 - stackH) * 0.5f);
 
     // The compartment's own header: the channel number, always, so an empty
@@ -349,15 +350,16 @@ void drawChannelPanel(ImDrawList* dl, float x0, float x1, float y0, float y1, in
         char ch[8];
         std::snprintf(ch, sizeof ch, "%d", channel);
         const float glyphW = st.headerPx * 0.95f;
-        drawChannelGlyph(dl, x0 + 2.0f, y, st.headerPx, channel, reporting);
-        glassText(dl, x0 + 2.0f + glyphW + 3.0f, y, ch, st.headerPx,
+        const float pad2 = cascade::gui::px(2.0f);
+        drawChannelGlyph(dl, x0 + pad2, y, st.headerPx, channel, reporting);
+        glassText(dl, x0 + pad2 + glyphW + cascade::gui::px(3.0f), y, ch, st.headerPx,
                   reporting ? 0.95f : 0.55f, x1);
         if (lowBatt) {
             const float bh = st.headerPx * 0.62f;
             const float bw = bh * 1.9f;
-            drawBatteryLow(dl, x1 - bw - 2.0f, y + (st.headerPx - bh) * 0.5f, bw, bh);
+            drawBatteryLow(dl, x1 - bw - pad2, y + (st.headerPx - bh) * 0.5f, bw, bh);
         }
-        y += st.headerPx + kHeaderGap;
+        y += st.headerPx + cascade::gui::px(kHeaderGap);
     }
 
     // The temperature, in the compartment's large digits.
@@ -397,7 +399,7 @@ void drawChannelPanel(ImDrawList* dl, float x0, float x1, float y0, float y1, in
         drawCell(dl, x, y, cell, st.digitH, segmentsFor(t.tenths), true);
         x += cell + pitch;
         drawDegreeC(dl, x, y, st.digitH);
-        y += st.digitH + kDigitGap;
+        y += st.digitH + cascade::gui::px(kDigitGap);
     }
 
     // The humidity, in the compartment's small digits, with its own legend.
@@ -407,7 +409,7 @@ void drawChannelPanel(ImDrawList* dl, float x0, float x1, float y0, float y1, in
         const float cw = digitCellWidth(dh);
         const float pitch = dh * 0.16f;
         ImFont* f = fonts::ui();
-        const float legendPx = std::max(11.0f, dh * 0.62f);
+        const float legendPx = std::max(cascade::gui::px(11.0f), dh * 0.62f);
         const float legendW = f->CalcTextSizeA(legendPx, FLT_MAX, 0.0f, "%").x;
         const float total = cw * 3.0f + pitch * 3.0f + legendW;
         float x = x0 + std::max(0.0f, (x1 - x0 - total) * 0.5f);
@@ -418,7 +420,7 @@ void drawChannelPanel(ImDrawList* dl, float x0, float x1, float y0, float y1, in
         drawCell(dl, x, y, cw, dh, segmentsFor(h.units), true);
         x += cw + pitch;
         glassText(dl, x, y + dh - legendPx, "%", legendPx, h.blank ? 0.4f : 0.85f, x1);
-        y += dh + kHumGap;
+        y += dh + cascade::gui::px(kHumGap);
     }
 
     // The sensor's own name, printed under its compartment. Only where there
@@ -428,9 +430,10 @@ void drawChannelPanel(ImDrawList* dl, float x0, float x1, float y0, float y1, in
         const char* model = in.state.text[channel - 1];
         if (model[0] != '\0') {
             ImFont* f = fonts::ui();
-            const float per = std::max(3.0f, f->CalcTextSizeA(st.modelPx, FLT_MAX, 0.0f, "n").x);
+            const float per =
+                std::max(cascade::gui::px(3.0f), f->CalcTextSizeA(st.modelPx, FLT_MAX, 0.0f, "n").x);
             const std::size_t fits =
-                static_cast<std::size_t>(std::max(0.0f, (x1 - x0 - 4.0f) / per));
+                static_cast<std::size_t>(std::max(0.0f, (x1 - x0 - cascade::gui::px(4.0f)) / per));
             char label[CASCADE_INSTRUMENT_TEXT_CHARS];
             fitLabel(model, label, sizeof label, fits);
             if (label[0] != '\0') {
@@ -453,17 +456,19 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // Below this there is no drawing that would be honest at the size - so
     // nothing is drawn and nothing is claimed, rather than a smear over the
     // edge of a window somebody has dragged shut.
-    if (w < 120.0f || h < 70.0f) { return 0.0f; }
+    if (w < cascade::gui::px(120.0f) || h < cascade::gui::px(70.0f)) { return 0.0f; }
 
     // The window's own plate, titled by the plugin.
     const float plateBottom = addBenchPlate(dl, tl, br, in.title.c_str());
 
     // --- the console's case ---------------------------------------------------
-    const float hx0 = tl.x + 8.0f;
-    const float hx1 = br.x - 8.0f;
-    const float hy0 = plateBottom + 4.0f;
-    const float hy1 = br.y - 8.0f;
-    if (hx1 - hx0 < 90.0f || hy1 - hy0 < 50.0f) { return br.y - tl.y; }
+    const float hx0 = tl.x + cascade::gui::px(8.0f);
+    const float hx1 = br.x - cascade::gui::px(8.0f);
+    const float hy0 = plateBottom + cascade::gui::px(4.0f);
+    const float hy1 = br.y - cascade::gui::px(8.0f);
+    if (hx1 - hx0 < cascade::gui::px(90.0f) || hy1 - hy0 < cascade::gui::px(50.0f)) {
+        return br.y - tl.y;
+    }
 
     const float round = theme::kPanelRounding + 2.0f;
     dl->AddRectFilled(ImVec2(hx0, hy0), ImVec2(hx1, hy1), theme::kBrassMid, round);
@@ -476,10 +481,11 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 theme::kHairline);
     addBenchBevel(dl, ImVec2(hx0, hy0), ImVec2(hx1, hy1), round, true);
 
-    const bool roomForScrews = (hx1 - hx0) > 200.0f && (hy1 - hy0) > 110.0f;
+    const bool roomForScrews =
+        (hx1 - hx0) > cascade::gui::px(200.0f) && (hy1 - hy0) > cascade::gui::px(110.0f);
     if (roomForScrews) {
-        const float sr = 3.6f;
-        const float si = 9.0f;
+        const float sr = cascade::gui::px(3.6f);
+        const float si = cascade::gui::px(9.0f);
         addCabinetScrew(dl, ImVec2(hx0 + si, hy0 + si), sr, 24.0f);
         addCabinetScrew(dl, ImVec2(hx1 - si, hy0 + si), sr, -61.0f);
         addCabinetScrew(dl, ImVec2(hx0 + si, hy1 - si), sr, 78.0f);
@@ -493,26 +499,29 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // sunk well. It is the readings COUNTER - the plugin's own event sequence,
     // which for this kind advances once per reading received - so it counts
     // something real.
-    const float caseInset = roomForScrews ? 14.0f : 8.0f;
+    const float caseInset = roomForScrews ? cascade::gui::px(14.0f) : cascade::gui::px(8.0f);
     float stripTop = hy1;
-    const float stripH = 34.0f;
-    const bool haveStrip = (hy1 - hy0) >= 150.0f;
+    const float stripH = cascade::gui::px(34.0f);
+    const bool haveStrip = (hy1 - hy0) >= cascade::gui::px(150.0f);
+    const float tinyPx = cascade::gui::px(fonts::kTinySize);
+    const float readingPx = cascade::gui::px(fonts::kReadingSize);
     if (haveStrip) {
-        stripTop = hy1 - stripH - 4.0f;
+        stripTop = hy1 - stripH - cascade::gui::px(4.0f);
         // The caption is cut into the metal BESIDE the well, not above it:
         // above it there is only the glass bezel, and that is where it was
         // being drawn and clipped.
         ImFont* lf = fonts::legend();
         const char* cap = "READINGS";
-        const float capW = lf->CalcTextSizeA(fonts::kTinySize, FLT_MAX, 0.0f, cap).x;
-        const float wy0 = stripTop + 5.0f;
-        const float wy1 = wy0 + 24.0f;
+        const float capW = lf->CalcTextSizeA(tinyPx, FLT_MAX, 0.0f, cap).x;
+        const float wy0 = stripTop + cascade::gui::px(5.0f);
+        const float wy1 = wy0 + cascade::gui::px(24.0f);
         const float capX = hx0 + caseInset;
-        dl->AddText(lf, fonts::kTinySize, ImVec2(capX + 1.0f, wy0 + 5.0f),
+        dl->AddText(lf, tinyPx, ImVec2(capX + 1.0f, wy0 + cascade::gui::px(5.0f)),
                     theme::withAlpha(theme::kVoid, 0.55f), cap);
-        dl->AddText(lf, fonts::kTinySize, ImVec2(capX, wy0 + 4.0f), theme::kInkMuted, cap);
-        const float wx0 = capX + capW + 8.0f;
-        const float wx1 = wx0 + std::min(72.0f, (hx1 - hx0) * 0.22f);
+        dl->AddText(lf, tinyPx, ImVec2(capX, wy0 + cascade::gui::px(4.0f)), theme::kInkMuted,
+                    cap);
+        const float wx0 = capX + capW + cascade::gui::px(8.0f);
+        const float wx1 = wx0 + std::min(cascade::gui::px(72.0f), (hx1 - hx0) * 0.22f);
         drawFreqDrumWell(dl, ImVec2(wx0, wy0), ImVec2(wx1, wy1));
         char count[16];
         if (in.have) {
@@ -523,9 +532,9 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             std::snprintf(count, sizeof count, "---");
         }
         ImFont* rf = fonts::reading();
-        const ImVec2 csz = rf->CalcTextSizeA(fonts::kReadingSize, FLT_MAX, 0.0f, count);
-        dl->AddText(rf, fonts::kReadingSize,
-                    ImVec2(wx1 - csz.x - 8.0f, (wy0 + wy1) * 0.5f - csz.y * 0.5f),
+        const ImVec2 csz = rf->CalcTextSizeA(readingPx, FLT_MAX, 0.0f, count);
+        dl->AddText(rf, readingPx,
+                    ImVec2(wx1 - csz.x - cascade::gui::px(8.0f), (wy0 + wy1) * 0.5f - csz.y * 0.5f),
                     in.have ? theme::kAmber : theme::kAmberDim, count);
 
         // The lamps. NEW is the host's cue - an event has arrived that this
@@ -534,14 +543,14 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // compartment carrying the symbol is scrolled out of a narrow window.
         const bool lowBatt =
             in.have && (in.state.flags & CASCADE_INSTRUMENT_FLAG_LOW_BATT) != 0u;
-        const float lampR = 6.0f;
+        const float lampR = cascade::gui::px(6.0f);
         // Clear of the corner screw: the lamps' captions are lettered under
         // them and the bottom right screw sits where BATT's T would be.
-        float lx = hx1 - caseInset - lampR - 12.0f;
-        const float ly = stripTop + 8.0f;
-        ImGui::PushFont(fonts::legend(), fonts::kTinySize);
+        float lx = hx1 - caseInset - lampR - cascade::gui::px(12.0f);
+        const float ly = stripTop + cascade::gui::px(8.0f);
+        ImGui::PushFont(fonts::legend(), tinyPx);
         drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, "BATT");
-        lx -= 64.0f;
+        lx -= cascade::gui::px(64.0f);
         drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kGold, cue.unread, "NEW");
         ImGui::PopFont();
     }
@@ -549,14 +558,17 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // --- the glass ------------------------------------------------------------
     const float gx0 = hx0 + caseInset;
     const float gx1 = hx1 - caseInset;
-    const float gy0 = hy0 + (roomForScrews ? 14.0f : 8.0f);
-    const float gy1 = (haveStrip ? stripTop : hy1) - 8.0f;
-    if (gx1 - gx0 < 60.0f || gy1 - gy0 < 34.0f) { return br.y - tl.y; }
+    const float gy0 = hy0 + (roomForScrews ? cascade::gui::px(14.0f) : cascade::gui::px(8.0f));
+    const float gy1 = (haveStrip ? stripTop : hy1) - cascade::gui::px(8.0f);
+    if (gx1 - gx0 < cascade::gui::px(60.0f) || gy1 - gy0 < cascade::gui::px(34.0f)) {
+        return br.y - tl.y;
+    }
 
     // The bezel it is sunk into, then the polariser itself.
-    dl->AddRectFilled(ImVec2(gx0 - 4.0f, gy0 - 4.0f), ImVec2(gx1 + 4.0f, gy1 + 4.0f),
+    const float bezel = cascade::gui::px(4.0f);
+    dl->AddRectFilled(ImVec2(gx0 - bezel, gy0 - bezel), ImVec2(gx1 + bezel, gy1 + bezel),
                       theme::kEnamelDark, 4.0f);
-    addBenchBevel(dl, ImVec2(gx0 - 4.0f, gy0 - 4.0f), ImVec2(gx1 + 4.0f, gy1 + 4.0f), 4.0f,
+    addBenchBevel(dl, ImVec2(gx0 - bezel, gy0 - bezel), ImVec2(gx1 + bezel, gy1 + bezel), 4.0f,
                   false);
     dl->AddRectFilled(ImVec2(gx0, gy0), ImVec2(gx1, gy1), kGlassTop, 2.0f);
     dl->AddRectFilledMultiColor(ImVec2(gx0 + 2.0f, gy0), ImVec2(gx1 - 2.0f, gy1), kGlassTop,
@@ -570,19 +582,19 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
     dl->PushClipRect(ImVec2(gx0, gy0), ImVec2(gx1, gy1), true);
 
-    const float insetX = 6.0f;
+    const float insetX = cascade::gui::px(6.0f);
     const float ix0 = gx0 + insetX;
     const float ix1 = gx1 - insetX;
-    float iy0 = gy0 + 4.0f;
-    const float iy1 = gy1 - 4.0f;
+    float iy0 = gy0 + cascade::gui::px(4.0f);
+    const float iy1 = gy1 - cascade::gui::px(4.0f);
 
     // The clock strip along the top, exactly where the console keeps it: the
     // time on the left, and on the right how many of the three channels are
     // being heard - which is the console's own "how many sensors have I got"
     // and is the honest form of a signal indicator.
     const float insideH = iy1 - iy0;
-    if (insideH >= 96.0f) {
-        const float px = fonts::kTinySize;
+    if (insideH >= cascade::gui::px(96.0f)) {
+        const float px = tinyPx;
         bool colonOn = true;
         const char* clock = consoleClock(cue.nowSec, &colonOn);
         char shown[8];
@@ -603,23 +615,27 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         ImFont* f = fonts::ui();
         const float cw = f->CalcTextSizeA(px, FLT_MAX, 0.0f, chans).x;
         glassText(dl, ix1 - cw, iy0, chans, px, in.have ? 0.85f : 0.5f, ix1);
-        iy0 += px + 3.0f;
+        iy0 += px + cascade::gui::px(3.0f);
         // The rule printed across the glass between the clock strip and the
         // channel area.
         dl->AddLine(ImVec2(ix0, iy0), ImVec2(ix1, iy0), kGlassGhost, 1.0f);
         dl->AddLine(ImVec2(ix0, iy0), ImVec2(ix1, iy0),
                     (kGlassInk & 0x00FFFFFFu) | (0x40u << IM_COL32_A_SHIFT), 1.0f);
-        iy0 += 4.0f;
+        iy0 += cascade::gui::px(4.0f);
     }
 
     // --- the three compartments ----------------------------------------------
     const float panelH = iy1 - iy0;
-    const float panelGap = 8.0f;
+    const float panelGap = cascade::gui::px(8.0f);
     // The compartment's vertical budget, which is pure arithmetic and lives in
     // the math header where a test sweeps it over every size a window can be.
+    // panelStyleAtScale, not panelStyle: the compartment's own thresholds -
+    // the 92 px room a model name needs, the 64 px digit-room ceiling - are
+    // desktop reference figures, and left unscaled the console's glass stops
+    // growing while a tablet's much larger case keeps growing around it.
     const PanelBox first = panelBox(ix0, ix1, 0, 3, panelGap);
     const float panelW = first.valid ? (first.x1 - first.x0) : 0.0f;
-    const PanelStyle st = panelStyle(panelW, panelH, fonts::kTinySize);
+    const PanelStyle st = panelStyleAtScale(panelW, panelH, fonts::kTinySize);
 
     for (int i = 0; i < 3; ++i) {
         const PanelBox b = panelBox(ix0, ix1, i, 3, panelGap);
@@ -640,7 +656,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (!in.have && st.headerPx > 0.0f) {
         ImFont* f = fonts::ui();
         const char* msg = "NO SENSOR HEARD YET";
-        const float px = fonts::kTinySize;
+        const float px = tinyPx;
         const float mw = f->CalcTextSizeA(px, FLT_MAX, 0.0f, msg).x;
         if (mw < ix1 - ix0) {
             glassText(dl, (ix0 + ix1) * 0.5f - mw * 0.5f, iy1 - px - 1.0f, msg, px, 0.8f, ix1);

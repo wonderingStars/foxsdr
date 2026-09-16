@@ -13,12 +13,16 @@
 #include <string>
 
 #include "gui/instrument_pager_math.hpp"
+#include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
 namespace {
 
 using cascade::gui::pager::caseSize;
 using cascade::gui::pager::CaseSize;
+using cascade::gui::pager::columnLayout;
+using cascade::gui::pager::columnLayoutAtScale;
+using cascade::gui::pager::ColumnLayout;
 using cascade::gui::pager::composeStatusLine;
 using cascade::gui::pager::counterCells;
 using cascade::gui::pager::drumCells;
@@ -320,6 +324,60 @@ int main() {
         CHECK(none.w == 0.0f && none.h == 0.0f);
         const CaseSize bad = caseSize(-5.0f, 40.0f);
         CHECK(bad.w == 0.0f && bad.h == 0.0f);
+    }
+
+    // -- THE BENCH'S COLUMN, AT BOTH SCALES ---------------------------------
+    //
+    // instrument_pager.cpp decides how wide the equipment stands, and whether
+    // the engraved column beside it is drawn at all, from five bounds that
+    // are the desktop's own pixels - a bay drawn twice as large on a tablet
+    // must grow the case by the same factor, or it stops at the desktop's own
+    // ceiling with the tablet's spare height left as empty brass. See the
+    // header on pager::columnLayoutAtScale for why the bounds live there.
+    {
+        cascade::gui::setUiScale(1.0f);
+        // A wide bay: the case takes 46% of it (120..560 does not bind) and
+        // there is more than 150 px left over for the column.
+        const ColumnLayout wide1x = columnLayoutAtScale(1000.0f);
+        CHECK(wide1x.haveColumn);
+        CHECK_NEAR(wide1x.caseW, 460.0f, 1e-3);
+
+        // A narrower bay: 46% is still inside the case's own 120..560 span,
+        // but 150 px will not fit beside it, so the column is dropped and the
+        // case takes the whole bay less its 24 px edge margin.
+        const ColumnLayout narrow1x = columnLayoutAtScale(300.0f);
+        CHECK(!narrow1x.haveColumn);
+        CHECK_NEAR(narrow1x.caseW, 276.0f, 1e-3);
+
+        cascade::gui::setUiScale(2.0f);
+        // THE SAME TWO BAYS, TWICE AS WIDE - a tablet drawing the same
+        // proportion of screen the desktop bay above did - and the answer is
+        // exactly double, in both the case width and the has-a-column call.
+        const ColumnLayout wide2x = columnLayoutAtScale(2000.0f);
+        CHECK(wide2x.haveColumn);
+        CHECK_NEAR(wide2x.caseW, 920.0f, 1e-3);
+        const ColumnLayout narrow2x = columnLayoutAtScale(600.0f);
+        CHECK(!narrow2x.haveColumn);
+        CHECK_NEAR(narrow2x.caseW, 552.0f, 1e-3);
+
+        // BREAK-IT CHECK, run while writing this: columnLayout() with the
+        // bounds left UNSCALED (as instrument_pager.cpp had them before this
+        // change) against the scale-2.0 wide bay clamps the case to the
+        // desktop's own 560 px ceiling instead of growing it to 920 - the
+        // exact "small in the top-left with empty brass around it" defect
+        // this change exists to fix, caught here rather than by a
+        // screenshot.
+        const ColumnLayout unscaled = columnLayout(2000.0f, 120.0f, 560.0f, 150.0f, 28.0f, 24.0f);
+        CHECK_NEAR(unscaled.caseW, 560.0f, 1e-3);
+        CHECK(unscaled.caseW != wide2x.caseW);
+
+        // A bay too small or negative to lay anything out at all.
+        const ColumnLayout none = columnLayout(0.0f, 120.0f, 560.0f, 150.0f, 28.0f, 24.0f);
+        CHECK(!none.haveColumn && none.caseW == 0.0f);
+        const ColumnLayout neg = columnLayout(-10.0f, 120.0f, 560.0f, 150.0f, 28.0f, 24.0f);
+        CHECK(!neg.haveColumn && neg.caseW == 0.0f);
+
+        cascade::gui::setUiScale(1.0f);  // as every other test finds it
     }
 
     return testSummary("test_instrument_pager");

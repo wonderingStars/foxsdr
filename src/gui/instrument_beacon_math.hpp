@@ -26,6 +26,8 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui::beacon {
 
 // --- the readout -------------------------------------------------------------
@@ -273,18 +275,63 @@ inline float clampf(float v, float lo, float hi) {
     return v;
 }
 
+// Every absolute pixel figure layout() decides the four decks against,
+// gathered here so gui::px() can reach all of them in ONE place
+// (layoutAtScale below) instead of at each of the roughly thirty call sites
+// inside the function - the same defect class as instrument_fax_math.hpp's
+// LayoutBounds: left in the desktop's own pixels, a 150 px identity-deck
+// ceiling and a 108 px gauge-deck ceiling stay that many PHYSICAL px on a
+// tablet drawn twice as large, and the panel stops growing while the box it
+// was given still has brass to spare. The struct's own in-class initialisers
+// ARE the desktop's reference figures, so `LayoutBounds{}` is exactly what
+// the original four-argument layout() always computed.
+struct LayoutBounds {
+    float marginW = 20.0f;   // 10 pt each side, taken off x1 - x0
+    float marginH = 8.0f;
+    float minW = 80.0f;
+    float minH = 44.0f;
+    float readMin = 46.0f, readMax = 150.0f;
+    float plateMin = 44.0f, plateMax = 62.0f;
+    float gaugeMin = 66.0f, gaugeMax = 108.0f;
+    float legMin = 22.0f, legMax = 30.0f;
+    float topGap = 4.0f;     // top -> deck 1
+    float plateGap = 4.0f;   // deck 1 -> deck 2
+    float gaugeGap = 4.0f;   // the deck above -> deck 3
+    float legGap = 2.0f;     // the deck above -> deck 4
+    float usedTail = 4.0f;
+    float gauges3W = 320.0f;  // bay width at which all three gauges fit
+    float gauges2W = 200.0f;
+    // The lamp and the identity glass beside it.
+    float lampRFloor = 9.0f, lampRCeil = 34.0f;
+    float lampHeightInset = 22.0f;
+    float lampWidthInset = 14.0f;
+    float lampCxInset = 2.0f;
+    float lampCyInset = 6.0f;
+    float lampGapAfter = 12.0f;
+    float newRFloor = 5.0f, newRCeil = 9.0f;
+    float newColGap = 20.0f;
+    float newLampMinRoom = 150.0f;
+    float newCxInset = 4.0f;
+    float newCyInset = 8.0f;
+    float cellInnerMargin = 16.0f;
+    float cellGapFloor = 1.0f, cellGapCeil = 4.0f;
+    float cellWFloor = 0.5f;
+    float glassHMargin = 26.0f;
+    float digitHFloor = 6.0f;
+};
+
 // `top` is the y the plate's own title rule left free, `br` the bottom right of
 // the whole face. A rectangle too small for even the identity returns
 // `any = false` and a used height of zero, which is a face that draws nothing
 // rather than a face that draws over its neighbour.
-inline Layout layout(float x0, float top, float x1, float bottom) {
+inline Layout layout(float x0, float top, float x1, float bottom, const LayoutBounds& b) {
     Layout L;
-    const float w = x1 - x0 - 20.0f;  // 10 pt of margin each side
-    const float h = bottom - top - 8.0f;
-    if (!(w > 80.0f) || !(h > 44.0f)) { return L; }
+    const float w = x1 - x0 - b.marginW;
+    const float h = bottom - top - b.marginH;
+    if (!(w > b.minW) || !(h > b.minH)) { return L; }
     L.any = true;
-    L.x0 = x0 + 10.0f;
-    L.x1 = x1 - 10.0f;
+    L.x0 = x0 + b.marginW * 0.5f;
+    L.x1 = x1 - b.marginW * 0.5f;
 
     // EVERY DECK GETS ITS MINIMUM BEFORE ANY DECK GETS MORE THAN ONE, and the
     // first attempt at this did the opposite - deck 1 took a third of the
@@ -297,32 +344,27 @@ inline Layout layout(float x0, float top, float x1, float bottom) {
     //
     // So: minimums first, in order of what a beacon receiver cannot do
     // without, and only then is the surplus handed out.
-    constexpr float kReadMin = 46.0f, kReadMax = 150.0f;
-    constexpr float kPlateMin = 44.0f, kPlateMax = 62.0f;
-    constexpr float kGaugeMin = 66.0f, kGaugeMax = 108.0f;
-    constexpr float kLegMin = 22.0f, kLegMax = 30.0f;
-
-    float readH = (kReadMin < h) ? kReadMin : h;
+    float readH = (b.readMin < h) ? b.readMin : h;
     float rem = h - readH;
     float plateH = 0.0f;
     float gaugeH = 0.0f;
     float legH = 0.0f;
-    if (rem >= kPlateMin) {
+    if (rem >= b.plateMin) {
         L.plates = true;
-        plateH = kPlateMin;
+        plateH = b.plateMin;
         rem -= plateH;
     }
     // The gauge deck is a moving-coil meter with an engraved caption over it
     // and a figure under it - the tallest thing on the face. Below its minimum
     // there is no face left to draw a needle on, so the deck goes whole rather
     // than becoming three empty boxes.
-    if (L.plates && rem >= kGaugeMin) {
-        gaugeH = kGaugeMin;
+    if (L.plates && rem >= b.gaugeMin) {
+        gaugeH = b.gaugeMin;
         rem -= gaugeH;
     }
-    if (rem >= kLegMin) {
+    if (rem >= b.legMin) {
         L.legend = true;
-        legH = kLegMin;
+        legH = b.legMin;
         rem -= legH;
     }
 
@@ -337,36 +379,36 @@ inline Layout layout(float x0, float top, float x1, float bottom) {
         deck += take;
         rem -= take;
     };
-    give(readH, kReadMax);
-    if (gaugeH > 0.0f) { give(gaugeH, kGaugeMax); }
-    if (plateH > 0.0f) { give(plateH, kPlateMax); }
-    if (legH > 0.0f) { give(legH, kLegMax); }
+    give(readH, b.readMax);
+    if (gaugeH > 0.0f) { give(gaugeH, b.gaugeMax); }
+    if (plateH > 0.0f) { give(plateH, b.plateMax); }
+    if (legH > 0.0f) { give(legH, b.legMax); }
 
-    float y = top + 4.0f;
+    float y = top + b.topGap;
     L.readY0 = y;
     L.readY1 = y + readH;
     y = L.readY1;
     if (L.plates) {
-        L.plateY0 = y + 4.0f;
+        L.plateY0 = y + b.plateGap;
         L.plateY1 = y + plateH;
         y = L.plateY1;
     }
     if (gaugeH > 0.0f) {
-        L.gaugeY0 = y + 4.0f;
+        L.gaugeY0 = y + b.gaugeGap;
         L.gaugeY1 = y + gaugeH;
         y = L.gaugeY1;
         // The three bays: the meter, the age and the burst counter. A narrow
         // window keeps them in that order of usefulness rather than squeezing
         // three unreadable ones side by side.
         const float bays = L.x1 - L.x0;
-        L.gauges = (bays >= 320.0f) ? 3 : ((bays >= 200.0f) ? 2 : 1);
+        L.gauges = (bays >= b.gauges3W) ? 3 : ((bays >= b.gauges2W) ? 2 : 1);
     }
     if (L.legend) {
-        L.legY0 = y + 2.0f;
+        L.legY0 = y + b.legGap;
         L.legY1 = y + legH;
         y = L.legY1;
     }
-    L.used = y - top + 4.0f;
+    L.used = y - top + b.usedTail;
 
     // Deck 1's own furniture. The lamp is as large as the deck allows once its
     // engraved word is taken off, and the identity gets everything else.
@@ -380,29 +422,31 @@ inline Layout layout(float x0, float top, float x1, float bottom) {
     // fail, it just quietly makes the identity too small to read, on the one
     // window where reading it is the entire point. A third of the width, less
     // the gap, is the lamp's share.
-    const float rByHeight = clampf((readH - 22.0f) * 0.40f, 9.0f, 34.0f);
-    const float rByWidth = clampf((w * 0.34f - 14.0f) / 2.6f, 9.0f, 34.0f);
+    const float rByHeight =
+        clampf((readH - b.lampHeightInset) * 0.40f, b.lampRFloor, b.lampRCeil);
+    const float rByWidth =
+        clampf((w * 0.34f - b.lampWidthInset) / 2.6f, b.lampRFloor, b.lampRCeil);
     L.lampR = (rByWidth < rByHeight) ? rByWidth : rByHeight;
-    L.lampCx = L.x0 + L.lampR * 1.30f + 2.0f;
-    L.lampCy = L.readY0 + 6.0f + L.lampR;
+    L.lampCx = L.x0 + L.lampR * 1.30f + b.lampCxInset;
+    L.lampCy = L.readY0 + b.lampCyInset + L.lampR;
 
-    const float afterLamp = L.lampCx + L.lampR * 1.30f + 12.0f;
-    L.newR = clampf(L.lampR * 0.26f, 5.0f, 9.0f);
+    const float afterLamp = L.lampCx + L.lampR * 1.30f + b.lampGapAfter;
+    L.newR = clampf(L.lampR * 0.26f, b.newRFloor, b.newRCeil);
     // The NEW lamp only exists if taking its column off the glass still leaves
     // the identity room to be read; on a narrow window the identity wins.
-    const float newCol = L.newR * 2.0f + 20.0f;
+    const float newCol = L.newR * 2.0f + b.newColGap;
     L.wellX0 = afterLamp;
     L.wellX1 = L.x1;
-    if (L.x1 - newCol - afterLamp > 150.0f) {
+    if (L.x1 - newCol - afterLamp > b.newLampMinRoom) {
         L.newLamp = true;
         L.wellX1 = L.x1 - newCol;
-        L.newCx = L.x1 - L.newR - 4.0f;
-        L.newCy = L.readY0 + 8.0f + L.newR;
+        L.newCx = L.x1 - L.newR - b.newCxInset;
+        L.newCy = L.readY0 + b.newCyInset + L.newR;
     }
 
     // Fifteen cells, a gap between each, inside the glass.
-    const float inner = (L.wellX1 - L.wellX0) - 16.0f;
-    const float gap = clampf(inner * 0.012f, 1.0f, 4.0f);
+    const float inner = (L.wellX1 - L.wellX0) - b.cellInnerMargin;
+    const float gap = clampf(inner * 0.012f, b.cellGapFloor, b.cellGapCeil);
     const float cell = (inner - gap * static_cast<float>(kHexIdChars - 1)) /
                        static_cast<float>(kHexIdChars);
     L.cellGap = gap;
@@ -411,14 +455,68 @@ inline Layout layout(float x0, float top, float x1, float bottom) {
     // moment the window is narrow enough to reach it - the row then runs off
     // the end of its own well rather than becoming small. Small is the honest
     // answer; the lamp above gives up its width first.
-    L.cellW = (cell > 0.5f) ? cell : 0.5f;
+    L.cellW = (cell > b.cellWFloor) ? cell : b.cellWFloor;
     // A segment digit is about seven parts tall to four wide; whichever of the
     // cell width and the glass height binds first is the one that decides.
-    const float glassH = (L.readY1 - L.readY0) - 26.0f;
+    const float glassH = (L.readY1 - L.readY0) - b.glassHMargin;
     const float byWidth = L.cellW * 1.75f;
     L.digitH = (byWidth < glassH) ? byWidth : glassH;
-    if (!(L.digitH > 6.0f)) { L.digitH = 6.0f; }
+    if (!(L.digitH > b.digitHFloor)) { L.digitH = b.digitHFloor; }
     return L;
+}
+
+// UNSCALED: the desktop's own rule, exactly as it always read. Every existing
+// caller and every pinned test in tests/test_instrument_beacon.cpp keeps
+// working off this four-argument signature without editing a single
+// expectation.
+inline Layout layout(float x0, float top, float x1, float bottom) {
+    return layout(x0, top, x1, bottom, LayoutBounds{});
+}
+
+// THE ONE PLACE gui::px() REACHES THE DECKS' OWN CEILINGS AND FLOORS -
+// instrument_beacon.cpp calls this instead of layout() directly, the same
+// relationship instrument_fax_math.hpp's layoutAtScale has to layout.
+inline Layout layoutAtScale(float x0, float top, float x1, float bottom) {
+    LayoutBounds b;
+    b.marginW = px(b.marginW);
+    b.marginH = px(b.marginH);
+    b.minW = px(b.minW);
+    b.minH = px(b.minH);
+    b.readMin = px(b.readMin);
+    b.readMax = px(b.readMax);
+    b.plateMin = px(b.plateMin);
+    b.plateMax = px(b.plateMax);
+    b.gaugeMin = px(b.gaugeMin);
+    b.gaugeMax = px(b.gaugeMax);
+    b.legMin = px(b.legMin);
+    b.legMax = px(b.legMax);
+    b.topGap = px(b.topGap);
+    b.plateGap = px(b.plateGap);
+    b.gaugeGap = px(b.gaugeGap);
+    b.legGap = px(b.legGap);
+    b.usedTail = px(b.usedTail);
+    b.gauges3W = px(b.gauges3W);
+    b.gauges2W = px(b.gauges2W);
+    b.lampRFloor = px(b.lampRFloor);
+    b.lampRCeil = px(b.lampRCeil);
+    b.lampHeightInset = px(b.lampHeightInset);
+    b.lampWidthInset = px(b.lampWidthInset);
+    b.lampCxInset = px(b.lampCxInset);
+    b.lampCyInset = px(b.lampCyInset);
+    b.lampGapAfter = px(b.lampGapAfter);
+    b.newRFloor = px(b.newRFloor);
+    b.newRCeil = px(b.newRCeil);
+    b.newColGap = px(b.newColGap);
+    b.newLampMinRoom = px(b.newLampMinRoom);
+    b.newCxInset = px(b.newCxInset);
+    b.newCyInset = px(b.newCyInset);
+    b.cellInnerMargin = px(b.cellInnerMargin);
+    b.cellGapFloor = px(b.cellGapFloor);
+    b.cellGapCeil = px(b.cellGapCeil);
+    b.cellWFloor = px(b.cellWFloor);
+    b.glassHMargin = px(b.glassHMargin);
+    b.digitHFloor = px(b.digitHFloor);
+    return layout(x0, top, x1, bottom, b);
 }
 
 }  // namespace cascade::gui::beacon
