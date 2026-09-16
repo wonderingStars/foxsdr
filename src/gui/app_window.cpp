@@ -47,6 +47,7 @@
 // The MSIX question, asked in exactly two places in this file: whether the
 // startup update check runs at all, and what the Settings > Updates row says.
 #include "core/package_identity.hpp"
+#include "gui/band_plan_style.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
@@ -341,6 +342,29 @@ constexpr const char* kDeemphLabels[3] = {"50 us (EU/world)", "75 us (Americas)"
 constexpr double kDeemphUs[3] = {50.0, 75.0, 0.0};
 constexpr int kDeemphCount = 3;
 
+// Band plan Size/Colour pickers (issue #1). AppConfig::bandPlanSize and
+// ::bandPlanPalette carry these exact spellings — index i here is index i
+// there, in both directions, so the two tables and the int mirrors beside
+// them (AppWindow::bandPlanSizeIndex_/bandPlanPaletteIndex_) can never drift.
+constexpr const char* kBandPlanSizeKeys[3] = {"small", "medium", "large"};
+constexpr const char* kBandPlanSizeLabels[3] = {"Small", "Medium", "Large"};
+constexpr const char* kBandPlanPaletteKeys[3] = {"classic", "vivid", "mono"};
+constexpr const char* kBandPlanPaletteLabels[3] = {"Classic", "Vivid", "Mono"};
+
+int bandPlanSizeIndexFromKey(const std::string& key) {
+    for (int i = 0; i < 3; ++i) {
+        if (key == kBandPlanSizeKeys[i]) { return i; }
+    }
+    return 0;
+}
+
+int bandPlanPaletteIndexFromKey(const std::string& key) {
+    for (int i = 0; i < 3; ++i) {
+        if (key == kBandPlanPaletteKeys[i]) { return i; }
+    }
+    return 0;
+}
+
 // Tick capacity. FreqScale spaces ticks >= 80 px apart, so 128 slots cover a
 // panel over 10K pixels wide before the HIGH end of the axis would truncate.
 constexpr int kMaxTicks = 128;
@@ -583,6 +607,7 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.bandPlanSelection == b.bandPlanSelection &&
+           a.bandPlanSize == b.bandPlanSize && a.bandPlanPalette == b.bandPlanPalette &&
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
@@ -731,11 +756,15 @@ bool readLocalCatalogue(const std::string& path,
 // and waterfall amber. The band is now a RIBBON along the top edge at full
 // palette alpha, plus faint full-height edge lines — same information (extent,
 // boundaries, name), none of the damage to the trace underneath.
-constexpr float kBandRibbonPx = 6.0f;
+//
+// The ribbon's HEIGHT, its label size and its label-min-width rule now come
+// from gui::bandRibbonGeometry (issue #1: "a bit bigger on the top, a few
+// options for size"), keyed by AppConfig::bandPlanSize /
+// bandPlanSizeIndex_ — see kBandPlanSizeKeys above. Only kBandEdgeAlphaScale
+// stays a fixed constant here: it darkens whatever colour the palette
+// resolved to (gui::bandPlanPaletteColor), so it applies the same way
+// whatever size or palette is chosen.
 constexpr float kBandEdgeAlphaScale = 0.55f;
-// A band narrower than this many pixels gets no label — there is nowhere to
-// put one that would not spill over its neighbours.
-constexpr float kBandLabelMinPx = 46.0f;
 
 // Index of the value in arr[0..n) closest to x (ties resolve low). Used to
 // point preset combos at whatever a config file or device readback holds.
@@ -5304,6 +5333,19 @@ void AppWindow::drawDisplaySection() {
         // feature look broken rather than simply idle.
         ImGui::Checkbox("Band plan", &bandPlanOverlay_);
         if (bandPlanOverlay_) {
+            // Ribbon size and segment-colour palette (issue #1: "a bit bigger
+            // on the top, a few options for size and maybe colour"). Plain
+            // Combo boxes, the same control the De-emph and Trail style rows
+            // elsewhere in this panel use for a small fixed set of choices —
+            // there is no separate "bench segment key" widget for a settings
+            // row like this one; that custom-drawn control is reserved for
+            // the physical rail's bank buttons. Both apply live (the next
+            // frame's drawBandPlanOverlay call reads the index straight back)
+            // and are picked up by currentConfig() like every other setting
+            // here, so they save on the same debounce.
+            ImGui::Combo("Size", &bandPlanSizeIndex_, kBandPlanSizeLabels, 3);
+            ImGui::Combo("Colour", &bandPlanPaletteIndex_, kBandPlanPaletteLabels, 3);
+
             // The REGION PICKER. Allocations genuinely contradict each other
             // between ITU regions, so this is a choice the user has to make
             // and not something the application can merge its way out of —
@@ -7665,6 +7707,18 @@ void AppWindow::drawCenterPanels() {
     chrome.freqTicks = (tickCount > 0) ? axisTicks : nullptr;
     chrome.freqTickCount = tickCount;
     chrome.spanHz = scale_.viewHighHz() - scale_.viewLowHz();
+    // Room for a taller band-plan ribbon (issue #1), rather than a thicker
+    // wash over the trace: only the GROWTH beyond the ribbon's original 6px
+    // is reserved. That keeps "small" (still 6px) drawing into exactly the
+    // same pixels it always has — the overlap the comment above
+    // drawBandPlanOverlay explains — while "medium"/"large" push the trace
+    // down by the extra height instead of painting further into it.
+    if (bandPlanOverlay_) {
+        const cascade::gui::BandRibbonGeometry ribbonGeom = cascade::gui::bandRibbonGeometry(
+            static_cast<cascade::gui::BandPlanSizeTier>(bandPlanSizeIndex_));
+        constexpr float kBandRibbonPxSmall = 6.0f;
+        chrome.reservedTopPx = std::max(0.0f, ribbonGeom.ribbonPx - kBandRibbonPxSmall);
+    }
 
     // Before the first frame lastFrame_.dbBins is empty; SpectrumView renders
     // the background + grid for null bins, which is the wanted idle look.
@@ -15113,6 +15167,19 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         bandPlan_.visible(scale_.viewLowHz(), scale_.viewHighHz());
     if (vis.empty()) { return; }
 
+    // Size and palette (issue #1). The two enums are declared in the same
+    // Small/Medium/Large and Classic/Vivid/Mono order as the Combo boxes
+    // that set these indexes (kBandPlanSizeKeys/kBandPlanPaletteKeys), so the
+    // int mirrors cast straight across without another lookup.
+    const auto sizeTier = static_cast<cascade::gui::BandPlanSizeTier>(bandPlanSizeIndex_);
+    const auto paletteKind = static_cast<cascade::gui::BandPlanPaletteKind>(bandPlanPaletteIndex_);
+    const cascade::gui::BandRibbonGeometry geom = cascade::gui::bandRibbonGeometry(sizeTier);
+    // The label font, EXPLICITLY, at the tier's own size: "small" uses
+    // ui()/kUiSize, the exact face and size AddText's no-font overload drew
+    // at before this change (ui() is the default bound font — see fonts.hpp)
+    // — so a small-tier screenshot is byte-identical to one before issue #1.
+    ImFont* labelFont = cascade::gui::fonts::ui();
+
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
     // The rectangles the names drawn so far occupy (x0, y0, x1, y1), so a
@@ -15129,7 +15196,10 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         bx1 = std::min(bx1, x0 + width);
         if (!(bx1 > bx0)) { continue; }
 
-        const std::uint32_t rgba = b->colorRgba;  // 0xRRGGBBAA
+        // The palette resolves per SERVICE class, not per plan, so switching
+        // Colour repaints every installed plan identically (see
+        // bandPlanPaletteColor). "classic" reproduces b->colorRgba exactly.
+        const std::uint32_t rgba = cascade::gui::bandPlanPaletteColor(paletteKind, b->service);
         const int r = static_cast<int>((rgba >> 24) & 0xFFu);
         const int g = static_cast<int>((rgba >> 16) & 0xFFu);
         const int bl = static_cast<int>((rgba >> 8) & 0xFFu);
@@ -15140,7 +15210,7 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         // and destroys the trace's readability. A ribbon says exactly the same
         // thing (where the band starts, ends and what it is called) while
         // leaving the signal untouched.
-        const float ribbonH = std::min(kBandRibbonPx, height * 0.25f);
+        const float ribbonH = std::min(geom.ribbonPx, height * 0.25f);
         drawList->AddRectFilled(ImVec2(bx0, y0), ImVec2(bx1, y0 + ribbonH),
                                 IM_COL32(r, g, bl, a));
         // Faint full-height edges still mark the boundaries down the panel, so
@@ -15152,8 +15222,10 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
         drawList->AddLine(ImVec2(bx1, y0), ImVec2(bx1, y0 + height),
                           IM_COL32(r, g, bl, edgeA));
 
-        if (bx1 - bx0 >= kBandLabelMinPx) {
-            const ImVec2 sz = ImGui::CalcTextSize(b->name.c_str());
+        if (bx1 - bx0 >= geom.labelMinPx) {
+            const ImVec2 sz = (labelFont != nullptr)
+                ? labelFont->CalcTextSizeA(geom.labelPx, FLT_MAX, 0.0f, b->name.c_str())
+                : ImGui::CalcTextSize(b->name.c_str());
             if (sz.x <= bx1 - bx0 - 4.0f) {
                 // Label sits just under its ribbon, in near-white: coloured
                 // text on the coloured ribbon was the least legible part of
@@ -15195,8 +15267,13 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
                     }
                 }
                 placedLabels.push_back(ImVec4(labelX, labelY, labelX + sz.x, labelY + sz.y));
-                drawList->AddText(ImVec2(labelX, labelY), IM_COL32(235, 235, 235, 200),
-                                  b->name.c_str());
+                if (labelFont != nullptr) {
+                    drawList->AddText(labelFont, geom.labelPx, ImVec2(labelX, labelY),
+                                      IM_COL32(235, 235, 235, 200), b->name.c_str());
+                } else {
+                    drawList->AddText(ImVec2(labelX, labelY), IM_COL32(235, 235, 235, 200),
+                                      b->name.c_str());
+                }
             }
         }
     }
@@ -17905,6 +17982,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     autoNotch_ = cfg.autoNotch;
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
+    bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
+    bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
     // applyConfig runs AFTER the startup loadBandPlan(), so a restored
     // selection that differs from the default has to re-load or the user's
     // chosen region silently reverts to "world" on every launch. Guarded on
@@ -18502,6 +18581,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.autoNotch = autoNotch_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
     cfg.bandPlanSelection = bandPlanSelection_;
+    cfg.bandPlanSize = kBandPlanSizeKeys[std::clamp(bandPlanSizeIndex_, 0, 2)];
+    cfg.bandPlanPalette = kBandPlanPaletteKeys[std::clamp(bandPlanPaletteIndex_, 0, 2)];
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
