@@ -75,7 +75,11 @@ int main() {
     // A density the configuration failed to report (0, or NaN from a bad
     // divide) must not collapse the scale to nothing.
     CHECK_NEAR(fittedUiScale(2264, 1080, 0.0f, nullptr), kUiScaleMin, 1e-6);
-    CHECK_NEAR(fittedUiScale(2264, 1080, 0.0f / 0.0f, nullptr), kUiScaleMin, 1e-6);
+    // The NaN is produced at run time from a volatile zero: MSVC refuses a
+    // constant 0.0f / 0.0f outright (C2124), and a compile-time NaN would
+    // let the optimiser fold the check away in any case.
+    volatile float nanSource = 0.0f;
+    CHECK_NEAR(fittedUiScale(2264, 1080, nanSource / nanSource, nullptr), kUiScaleMin, 1e-6);
     // ...and a density past any shipping screen is clamped, not obeyed.
     CHECK_NEAR(fittedUiScale(99999, 99999, 100.0f, nullptr), 4.0f, 1e-6);
 
