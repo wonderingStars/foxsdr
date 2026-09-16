@@ -294,6 +294,18 @@ file(GLOB CASCADE_DSP    CONFIGURE_DEPENDS src/dsp/*.cpp)
 file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
+# audio_out_aaudio.cpp is the AAudio (Android) backend for
+# cascade::sink::AudioOut, sharing audio_out.hpp's interface with the
+# PortAudio backend in audio_out.cpp — see that file's own header comment
+# for the two-backends-one-class decision. Excluded here because this
+# CMakeLists has no Android target of any kind yet: it is built separately,
+# by a direct NDK clang++ invocation for the arm64-v8a compile, and by a
+# bespoke tests/CMakeLists.txt entry (test_audio_out_aaudio) for its
+# host-testable ring/priming/underrun core. Branch and-core's CASCADE_ANDROID
+# cross-build will need to reverse this filter (and exclude audio_out.cpp
+# instead) once it can actually target Android from this CMakeLists; that
+# wiring belongs to that change, not this one.
+list(FILTER CASCADE_SINK EXCLUDE REGEX "audio_out_aaudio\\.cpp$")
 file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
 # Native radio drivers talk to the hardware through our own USB transport
 # (src/usb) - WinUSB on Windows, usbfs directly on Linux - not through

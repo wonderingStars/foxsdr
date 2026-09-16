@@ -817,6 +817,31 @@ const KnownWait kKnownWaits[] = {
      "request), and the Linux transport's exact counterpart to winusb_device.cpp's constant "
      "of the same name. Zero for the same reason: spent instead of the Soapy pair, never as "
      "well as it"},
+
+    // THE AAUDIO (ANDROID) SINK BACKEND (and-aaudio). Zero not because the
+    // wait is covered by some other charged column, as every other zero row
+    // above is, but because there is no shutdown budget for it to be spent
+    // against in the first place: this repository's HangWatchdog and
+    // AppWindow - the beginShutdown()/stop() bracket this whole file
+    // measures - are desktop GUI classes with no Android build target on
+    // this branch. audio_out_aaudio.cpp compiles ONLY under __ANDROID__ (its
+    // own file header explains the split) and is excluded from every
+    // desktop binary by the CASCADE_SINK filter in the top-level
+    // CMakeLists.txt, so it can never be linked into the cascade.exe this
+    // test launches. It is still listed, because this scan reads the
+    // constant out of the SOURCE FILE ON DISK regardless of what today's
+    // build links - which is the entire point of scanning "the source that
+    // ships" rather than a hand-maintained list (see the file header): the
+    // day an Android teardown path exists and calls closeLocked(), this row
+    // is the one that has to move from 0 to a real column, not be
+    // discovered fresh.
+    {"src/sink/audio_out_aaudio.cpp", "kCloseWaitForStop", 0,
+     "AudioOut::closeLocked() (Android/AAudio backend) waiting for AAudioStream_requestStop()'s "
+     "asynchronous stop to be reflected in the stream's state before AAudioStream_close() is "
+     "called - AAudio documents close() with no timeout of its own, so this bounds the WAIT, "
+     "not the close() call itself, the same shape as SdrPlaySource's kCallbackDrainWait. Zero "
+     "because no desktop shutdown path can ever reach this Android-only file, not because "
+     "another column already covers it"},
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {

@@ -5,8 +5,24 @@
 file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
 foreach(src ${CASCADE_TESTS})
     get_filename_component(name "${src}" NAME_WE)
-    add_executable(${name} "${src}")
-    target_link_libraries(${name} PRIVATE cascade_lib)
+    if(name STREQUAL "test_audio_out_aaudio")
+        # This test drives src/sink/audio_out_aaudio.cpp's ring/priming/
+        # underrun core and its two AAudio callback cores directly, NOT
+        # through cascade_lib: cascade_lib already carries audio_out.cpp's
+        # PortAudio-backed cascade::sink::AudioOut, and linking both
+        # backends' definitions of the same class into one binary is a
+        # straight ODR violation (see audio_out_aaudio.cpp's file header).
+        # Compiling it here with NO __ANDROID__ defined — this is a host
+        # build — means the AAudio-touching methods (open/close's real body/
+        # streamAlive/listOutputDevices, which need <aaudio/AAudio.h> and
+        # libaaudio) are never emitted; only the platform-independent half
+        # this test exercises is.
+        add_executable(${name} "${src}" "${CMAKE_SOURCE_DIR}/src/sink/audio_out_aaudio.cpp")
+        target_include_directories(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    else()
+        add_executable(${name} "${src}")
+        target_link_libraries(${name} PRIVATE cascade_lib)
+    endif()
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     # Put SoapySDR.dll beside the test binary EXPLICITLY.
     #

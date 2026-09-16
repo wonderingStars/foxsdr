@@ -50,6 +50,22 @@ struct AudioDevice {
     bool isDefault;  // true for the host API's default output device
 };
 
+// TWO BACKENDS, ONE CLASS (Android, 0.98.0). AudioOut's public surface below
+// is implemented twice: audio_out.cpp (PortAudio, Windows/Linux — unchanged,
+// not one line touched by the Android work) and audio_out_aaudio.cpp
+// (AAudio, Android — see that file's own header comment for why a second
+// CLASS implementing a shared IAudioOut interface was rejected in favour of
+// this). Exactly one of the two is ever compiled into a given binary (the
+// CMakeLists.txt filter beside CASCADE_SINK, and audio_out_aaudio.cpp's own
+// build for arm64-v8a), so the two are never linked together and never need
+// to agree on anything beyond this header's contract.
+//
+// The two members below exist ONLY for the Android backend. The PortAudio
+// backend never writes androidStreamError_ (it stays false for the object's
+// whole life) and never calls androidErrorCallback(), so this changes
+// nothing about Windows or Linux behaviour — they are declared here, on the
+// shared class, rather than on a second type, because that is the whole
+// point of choosing one class over two.
 class AudioOut {
 public:
     // Calls Pa_Initialize(). PortAudio itself refcounts paired
@@ -108,6 +124,22 @@ public:
     // tell "the stream died" from "there was never a device" — on a headless
     // box the second is normal and must not provoke endless reopen attempts.
     bool everOpened() const { return everOpened_.load(std::memory_order_relaxed); }
+
+    // ANDROID ONLY (see the class-level note above). True once
+    // androidErrorCallback() has fired for the currently-open stream — AAudio
+    // calls it "if any error occurs or the stream is disconnected" (a
+    // headset or USB device unplugged, a timeout, an internal fault), and
+    // its own documented contract forbids stopping, closing or reopening the
+    // stream FROM that callback. So it can only set this flag; the Android
+    // streamAlive() reads it as one more reason to say "dead" alongside
+    // AAudioStream_getState(), and a fresh open() clears it. Reset here (not
+    // in the header) because a getter has no reason to know when it is
+    // called; every open() clears it before starting the new stream so a
+    // stale error from a PREVIOUS one can never mark a healthy new one dead.
+    // Always false on the PortAudio backend, which never touches it.
+    bool androidStreamErrorFlagged() const {
+        return androidStreamError_.load(std::memory_order_relaxed);
+    }
 
     // The deviceIndex argument of the last successful open, verbatim: -1 when
     // the caller asked for the system default. Kept UNRESOLVED on purpose —
@@ -213,6 +245,18 @@ public:
     // can prime a ring to the exact threshold instead of guessing at it.
     static constexpr std::size_t kPrimeFrames = 5760;
 
+    // ANDROID ONLY. AAudioStreamBuilder_setErrorCallback's trampoline in
+    // audio_out_aaudio.cpp calls exactly this with `self` = the AudioOut the
+    // stream belongs to (the same userData pattern paOutCallback uses for
+    // pullBlock above). Static, public and taking void* for the same reason
+    // pullBlock is: so tests/test_audio_out_aaudio.cpp can fire it directly
+    // with no real AAudioStream, exactly as test_audio_out.cpp drives
+    // pullBlock with no real PaStream. It does the ONE thing AAudio's error
+    // callback is allowed to do — mark the stream dead — and nothing else:
+    // requestStop()/requestPause()/close()/waitForStateChange() are all on
+    // AAudio's own documented list of calls this callback must NOT make.
+    static void androidErrorCallback(void* self);
+
 private:
     // The body of close(), for the paths that already hold apiMutex_ (open()
     // closes the previous stream before it opens the next one).
@@ -254,6 +298,11 @@ private:
     std::atomic<bool> everOpened_{false};
     std::atomic<int> openedRequested_{-1};
     std::string openedName_;  // guarded by apiMutex_
+    // ANDROID ONLY: set by androidErrorCallback(), read by androidStreamErrorFlagged().
+    // See the class-level note at the top of this class for why it lives here
+    // rather than on a second type, and why the PortAudio backend is
+    // unaffected by its mere existence.
+    std::atomic<bool> androidStreamError_{false};
 };
 
 // Which device a recovery reopen should target, given what the last
