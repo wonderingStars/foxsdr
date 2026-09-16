@@ -189,8 +189,18 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
 // paddle's POSITION says which way it is thrown - up for on, down for off - so
 // the control is readable in a greyscale photograph and by the roughly one man
 // in twelve for whom colour alone is not a signal.
-bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
-                   const char* label, const char* trailing, bool on, const char* id) {
+//
+// AT AN EXPLICIT SIZE, for the same reason drawNoteAt() takes one: THE
+// CONTROL DECK's compact mode (see the note above `compact` in
+// PluginStoreView::draw()) needs the SHOW well's rockers a size down on the
+// narrowest real bodies this window has been measured on, where even a
+// single column of six rows costs more height than the whole deck is allowed
+// - see the note above `rockerPx` in draw() for the actual figures. Still
+// never smaller than fonts::kTinySize, the app's own floor for "still has to
+// be readable".
+bool drawRockerRowAt(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
+                     const char* label, const char* trailing, bool on, const char* id,
+                     float px) {
     if (dl == nullptr || width < cascade::gui::px(50.0f) || rowH < cascade::gui::px(10.0f)) {
         return false;
     }
@@ -215,7 +225,6 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
     addBenchBevel(dl, pTL, pBR, 1.0f, true);
 
     ImFont* f = fonts::ui();
-    const float px = prose();
     const float lw = textW(f, px, label);
     const float lh = faceH(f, px);
     const ImVec2 lTL(tl.x + rw + cascade::gui::px(7.0f),
@@ -1383,6 +1392,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // before the deck is measured at all, and 0 says so honestly where the
     // previous frame's figure would claim a deck that was never laid out.
     upperDeckHeight_ = 0.0f;
+    addAllWellDrawn_ = false;
 
     ImGui::PushID("pluginstore");
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1431,10 +1441,6 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     //
     //   A KEY carries one centred word.
     //
-    //   A ROCKER carries a label PLATE, which is the face's height plus five,
-    //   and the rows are stacked with no gap between them - so a row only as
-    //   tall as its own plate makes two neighbouring plates touch.
-    //
     //   A SEGMENT carries one centred word in the shallowest of the three.
     //
     // And the PLATE KEY at the foot of the data plate carries TWO lines -
@@ -1444,8 +1450,15 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     //
     // The old figures stay as floors: they are the design's proportions and
     // nothing here should shrink if a future face happens to be short.
+    //
+    // THE THIRD OF THE THREE - A ROCKER, which carries a label PLATE the
+    // face's height plus five, rows stacked with no gap so a row only as tall
+    // as its own plate makes two neighbouring plates touch - is computed in
+    // THE CONTROL DECK below instead of here, because on the narrowest real
+    // bodies this window has been measured on its label reads a size down
+    // (see `rockerH` and the note on `compact`), which this file's OTHER two
+    // heights never need to.
     const float kKeyH = std::max(cascade::gui::px(28.0f), tinyH + cascade::gui::px(12.0f));
-    const float kRockerH = std::max(cascade::gui::px(22.0f), tinyH + cascade::gui::px(10.0f));
     const float kSegH = std::max(cascade::gui::px(24.0f), tinyH + cascade::gui::px(10.0f));
     const float kPlateKeyH =
         std::max(cascade::gui::px(34.0f), tinyH * 2.0f + cascade::gui::px(8.0f));
@@ -1524,6 +1537,12 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         if (!sm.updateToVersion.empty()) { ++updateCount; }
     }
 
+    // MOVED AHEAD OF THE ADD ALL WELL, which now needs to know this before it
+    // decides whether to exist at all - see the note on CatalogueState::Bundled
+    // just below. THE UPDATES BANNER (further down) uses the same value it
+    // always did; this is not a second computation of it, just an earlier one.
+    const CatalogueState catState = catalogueState(model);
+
     // ======================= ADD ALL PLUGINS ================================
     //
     // THE ONE KEY AT THE TOP OF THE PAGE, and it is the largest thing on it
@@ -1539,119 +1558,143 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // action there is. They are named, they are counted, and one tick beside
     // the key adds them - or does not, and the key says ADD 17 PLUGINS
     // instead of ADD ALL PLUGINS, which is the truth about what it will do.
-    const AddAllPlan plan = planAddAll(model, deck.addAllAck);
-    int noticeModules = 0;
-    std::string noticeNames;
-    for (const StoreModule& sm : model.modules) {
-        if (sm.plate.fitted || sm.plate.legalNotice.empty()) { continue; }
-        if (!sm.blockedReasonIfAcknowledged.empty()) { continue; }
-        ++noticeModules;
-        if (!noticeNames.empty()) { noticeNames += ", "; }
-        noticeNames += sm.plate.name.empty() ? "(unnamed module)" : sm.plate.name;
-    }
-
-    // The key is measured from the longest engraving it can ever carry, not
-    // from the one it happens to have: drawDeckKey CENTRES its label and does
-    // not clip, so a key too narrow does not shorten the word - it hangs it
-    // out over both machined edges.
-    const float addKeyW =
-        std::max({cascade::gui::px(320.0f), textW(uf, tiny, plan.label.c_str()) + cascade::gui::px(40.0f),
-                  textW(uf, tiny, "ADD ALL PLUGINS") + cascade::gui::px(40.0f)});
-    const float addKeyH = std::max(cascade::gui::px(54.0f), tinyH * 2.0f + cascade::gui::px(18.0f));
-    const float addNoteW = width - kPad * 3.0f - addKeyW - cascade::gui::px(12.0f);
-
-    std::string addLead;
-    ImU32 addAccent = theme::kInkMuted;
-    if (model.addAllRunning) {
-        addLead = model.addAllProgress.empty()
-                      ? std::string("Working through the catalogue, one module at a time.")
-                      : model.addAllProgress;
-        addAccent = theme::kGold;
-    } else if (!plan.blockedReason.empty()) {
-        // A DEAD KEY ALWAYS SAYS WHY - the rule this whole window is built on.
-        addLead = "Cannot add all: " + plan.blockedReason;
-        addAccent = theme::kGold;
-    } else {
-        char lead[512];
-        std::snprintf(lead, sizeof lead,
-                      "%d to fetch and %d to update, one after another. Each is fetched "
-                      "over https and refused unless its bytes hash to the sha256 the "
-                      "catalogue published - the same gate a single FIT goes through. A "
-                      "module that fails does not stop the rest.",
-                      static_cast<int>(plan.install.size()),
-                      static_cast<int>(plan.update.size()));
-        addLead = lead;
-    }
-
-    std::string addSkipLine;
-    if (!model.addAllRunning && noticeModules > 0) {
-        // BUILT AS A STRING, NOT INTO A BUFFER. Seven module names run past
-        // three hundred characters and a 320-byte snprintf cut the sentence at
-        // "...is on that module's DAT" - a truncated sentence about consent,
-        // on the one note whose job is to say exactly what is being consented
-        // to. There is no length that is safely enough here, so there is no
-        // length.
-        addSkipLine = std::to_string(noticeModules) +
-                      " of these carry a legal notice from their maker: " + noticeNames +
-                      ". Each notice is on that module's DATA PLATE below.";
-    }
-
-    const bool addAckRow = noticeModules > 0 && !model.addAllRunning;
-    const float addAckH = addAckRow ? (tinyH + cascade::gui::px(12.0f)) : 0.0f;
-    float addTextH = noteHeight(addNoteW, addLead.c_str());
-    if (!addSkipLine.empty()) { addTextH += 4.0f + noteHeight(addNoteW, addSkipLine.c_str()); }
-    if (!model.addAllSummary.empty()) {
-        addTextH += 4.0f + noteHeight(addNoteW, model.addAllSummary.c_str());
-    }
-    const float addAllH = kPad + std::max(addKeyH + addAckH, addTextH) + kPad;
-    const float addAllTotal = addAllH + kGap;
-
-    ImGui::Dummy(ImVec2(width, addAllTotal));
-    {
-        const ImVec2 tl(origin.x, origin.y);
-        const ImVec2 br(tl.x + width, tl.y + addAllH);
-        addDeckWell(dl, tl, br);
-        dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
-                         true);
-        const ImVec2 kTL(tl.x + kPad, tl.y + kPad);
-        if (drawDeckKey(dl, kTL, ImVec2(kTL.x + addKeyW, kTL.y + addKeyH),
-                        plan.label.c_str(), nullptr,
-                        plan.blockedReason.empty() && !model.addAllRunning, "addall")) {
-            addAll_ = true;
+    //
+    // NOT DRAWN AT ALL IN A BUNDLED BUILD, and this is a harder rule than
+    // "disabled". Every OTHER dead state here still draws the key, greyed,
+    // with its reason beside it - a live control that cannot be pressed today
+    // is still the truthful shape of the window. Bundled is different: there
+    // is no catalogue on this platform AT ALL (see PluginStoreModel::bundled),
+    // so this key can never do anything on any day the application looks like
+    // this, on any device. A permanently dead key that claims a THIRD of the
+    // page's own width and a fifth of a docked tablet's whole body is not
+    // "the largest thing on the page because it acts on the whole catalogue"
+    // any more - it is furniture with a caption taped to it. Its one sentence
+    // (why it cannot run) folds into THE UPDATES BANNER below instead, which
+    // already carries the Bundled state's own explanation and loses nothing
+    // by carrying this one too. Every other catalogue state keeps the well
+    // exactly as it always drew - this is the one branch, and it is decided
+    // by the same `catState` the banner already computes.
+    float addAllH = 0.0f;
+    float addAllTotal = 0.0f;
+    if (catState != CatalogueState::Bundled) {
+        const AddAllPlan plan = planAddAll(model, deck.addAllAck);
+        int noticeModules = 0;
+        std::string noticeNames;
+        for (const StoreModule& sm : model.modules) {
+            if (sm.plate.fitted || sm.plate.legalNotice.empty()) { continue; }
+            if (!sm.blockedReasonIfAcknowledged.empty()) { continue; }
+            ++noticeModules;
+            if (!noticeNames.empty()) { noticeNames += ", "; }
+            noticeNames += sm.plate.name.empty() ? "(unnamed module)" : sm.plate.name;
         }
-        if (addAckRow) {
-            // A REAL TICK, not a rocker: this is a consent and it reads as one
-            // everywhere else in this application.
-            ImGui::SetCursorScreenPos(ImVec2(kTL.x + 2.0f, kTL.y + addKeyH + 6.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
-            ImGui::PushFont(uf, tiny);
-            char ack[96];
-            std::snprintf(ack, sizeof ack, "I accept the %d legal notice%s above",
-                          noticeModules, noticeModules == 1 ? "" : "s");
-            ImGui::Checkbox(ack, &deck.addAllAck);
-            ImGui::PopFont();
-            ImGui::PopStyleColor();
+
+        // The key is measured from the longest engraving it can ever carry, not
+        // from the one it happens to have: drawDeckKey CENTRES its label and does
+        // not clip, so a key too narrow does not shorten the word - it hangs it
+        // out over both machined edges.
+        const float addKeyW = std::max(
+            {cascade::gui::px(320.0f), textW(uf, tiny, plan.label.c_str()) + cascade::gui::px(40.0f),
+             textW(uf, tiny, "ADD ALL PLUGINS") + cascade::gui::px(40.0f)});
+        const float addKeyH =
+            std::max(cascade::gui::px(54.0f), tinyH * 2.0f + cascade::gui::px(18.0f));
+        const float addNoteW = width - kPad * 3.0f - addKeyW - cascade::gui::px(12.0f);
+
+        std::string addLead;
+        ImU32 addAccent = theme::kInkMuted;
+        if (model.addAllRunning) {
+            addLead = model.addAllProgress.empty()
+                          ? std::string("Working through the catalogue, one module at a time.")
+                          : model.addAllProgress;
+            addAccent = theme::kGold;
+        } else if (!plan.blockedReason.empty()) {
+            // A DEAD KEY ALWAYS SAYS WHY - the rule this whole window is built on.
+            addLead = "Cannot add all: " + plan.blockedReason;
+            addAccent = theme::kGold;
+        } else {
+            char lead[512];
+            std::snprintf(lead, sizeof lead,
+                          "%d to fetch and %d to update, one after another. Each is fetched "
+                          "over https and refused unless its bytes hash to the sha256 the "
+                          "catalogue published - the same gate a single FIT goes through. A "
+                          "module that fails does not stop the rest.",
+                          static_cast<int>(plan.install.size()),
+                          static_cast<int>(plan.update.size()));
+            addLead = lead;
         }
-        float ny = tl.y + kPad;
-        drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW, addAccent,
-                 addLead.c_str());
-        ny += noteHeight(addNoteW, addLead.c_str());
+
+        std::string addSkipLine;
+        if (!model.addAllRunning && noticeModules > 0) {
+            // BUILT AS A STRING, NOT INTO A BUFFER. Seven module names run past
+            // three hundred characters and a 320-byte snprintf cut the sentence at
+            // "...is on that module's DAT" - a truncated sentence about consent,
+            // on the one note whose job is to say exactly what is being consented
+            // to. There is no length that is safely enough here, so there is no
+            // length.
+            addSkipLine = std::to_string(noticeModules) +
+                          " of these carry a legal notice from their maker: " + noticeNames +
+                          ". Each notice is on that module's DATA PLATE below.";
+        }
+
+        const bool addAckRow = noticeModules > 0 && !model.addAllRunning;
+        const float addAckH = addAckRow ? (tinyH + cascade::gui::px(12.0f)) : 0.0f;
+        float addTextH = noteHeight(addNoteW, addLead.c_str());
         if (!addSkipLine.empty()) {
-            ny += 4.0f;
-            drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW, theme::kGold,
-                     addSkipLine.c_str());
-            ny += noteHeight(addNoteW, addSkipLine.c_str());
+            addTextH += 4.0f + noteHeight(addNoteW, addSkipLine.c_str());
         }
         if (!model.addAllSummary.empty()) {
-            // WHAT THE RUN ACTUALLY DID, left on the panel after it ends -
-            // "23 installed, 0 failed", or the names that failed with the
-            // reason each of them gave, verbatim.
-            ny += 4.0f;
-            drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW,
-                     model.addAllFailed ? theme::kAlarm : theme::kPhosphor,
-                     model.addAllSummary.c_str());
+            addTextH += 4.0f + noteHeight(addNoteW, model.addAllSummary.c_str());
         }
-        dl->PopClipRect();
+        addAllH = kPad + std::max(addKeyH + addAckH, addTextH) + kPad;
+        addAllTotal = addAllH + kGap;
+        addAllWellDrawn_ = true;
+
+        ImGui::Dummy(ImVec2(width, addAllTotal));
+        {
+            const ImVec2 tl(origin.x, origin.y);
+            const ImVec2 br(tl.x + width, tl.y + addAllH);
+            addDeckWell(dl, tl, br);
+            dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
+                             true);
+            const ImVec2 kTL(tl.x + kPad, tl.y + kPad);
+            if (drawDeckKey(dl, kTL, ImVec2(kTL.x + addKeyW, kTL.y + addKeyH),
+                            plan.label.c_str(), nullptr,
+                            plan.blockedReason.empty() && !model.addAllRunning, "addall")) {
+                addAll_ = true;
+            }
+            if (addAckRow) {
+                // A REAL TICK, not a rocker: this is a consent and it reads as one
+                // everywhere else in this application.
+                ImGui::SetCursorScreenPos(ImVec2(kTL.x + 2.0f, kTL.y + addKeyH + 6.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
+                ImGui::PushFont(uf, tiny);
+                char ack[96];
+                std::snprintf(ack, sizeof ack, "I accept the %d legal notice%s above",
+                              noticeModules, noticeModules == 1 ? "" : "s");
+                ImGui::Checkbox(ack, &deck.addAllAck);
+                ImGui::PopFont();
+                ImGui::PopStyleColor();
+            }
+            float ny = tl.y + kPad;
+            drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW, addAccent,
+                     addLead.c_str());
+            ny += noteHeight(addNoteW, addLead.c_str());
+            if (!addSkipLine.empty()) {
+                ny += 4.0f;
+                drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW, theme::kGold,
+                         addSkipLine.c_str());
+                ny += noteHeight(addNoteW, addSkipLine.c_str());
+            }
+            if (!model.addAllSummary.empty()) {
+                // WHAT THE RUN ACTUALLY DID, left on the panel after it ends -
+                // "23 installed, 0 failed", or the names that failed with the
+                // reason each of them gave, verbatim.
+                ny += 4.0f;
+                drawNote(dl, ImVec2(tl.x + kPad * 2.0f + addKeyW, ny), addNoteW,
+                         model.addAllFailed ? theme::kAlarm : theme::kPhosphor,
+                         model.addAllSummary.c_str());
+            }
+            dl->PopClipRect();
+        }
     }
 
     // ======================= THE UPDATES BANNER =============================
@@ -1668,7 +1711,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // anything has been read at all, and what pressing UPDATE does - and the
     // key is per module, because one transfer at a time is the rule the
     // repository actually enforces.
-    const CatalogueState catState = catalogueState(model);
+    //
+    // `catState` is computed above the ADD ALL well now, not here - the same
+    // value, read once.
     const char* bannerCaption;
     const char* bannerNote;
     ImU32 bannerLamp;
@@ -1677,14 +1722,21 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // NOT A LAMP AND NOT AN ALARM. Nothing is wrong, nothing is pending
         // and nothing is missing: this is what the product IS on this
         // platform, so the banner states it and asks for nothing.
+        //
+        // ONE LINE, AND IT NOW CARRIES THE ADD ALL WELL'S OWN REASON TOO -
+        // the well itself is not drawn in this state (see the note above it),
+        // so "nothing is fetched or added" is doing the same job its dead
+        // key's sentence used to: saying why there is no fetch to offer. Kept
+        // to one line at the store's own prose size on the narrowest real
+        // body this window has been measured on (1174 px, docked) - the
+        // caption above ("MODULES BUNDLED WITH THIS BUILD") and the list
+        // heading below already say what is bundled and where it is, so this
+        // sentence only has to say the one new thing: nothing here fetches or
+        // installs, on any day, on any device.
         bannerCaption = "MODULES BUNDLED WITH THIS BUILD";
         bannerLamp = theme::kGold;
         bannerLit = false;
-        bannerNote =
-            "This build fetches no catalogue and installs nothing. The modules listed "
-            "below are compiled into the application and were loaded from inside it, so "
-            "what is shown is what is fitted - and it changes only when the application "
-            "itself is updated.";
+        bannerNote = "Bundled with this build - nothing is fetched or added.";
     } else if (catState == CatalogueState::NeverAsked) {
         bannerCaption = "CATALOGUE NOT READ";
         bannerLamp = theme::kGold;
@@ -1880,15 +1932,23 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // desktop's live index, post-Android) against 14 bundled on Android. Two
     // digits covers up to 99 - more than triple the biggest catalogue this
     // product has shipped.
-    const float showRockerMinW = cascade::gui::px(16.0f) + cascade::gui::px(7.0f) +
-                                 std::max({textW(uf, tiny, "NOT DECLARED"),
-                                           textW(uf, tiny, "OTHER KINDS"),
-                                           textW(uf, tiny, "NOT FITTED"),
-                                           textW(uf, tiny, "CANNOT FIT"),
-                                           textW(uf, tiny, "DECODERS"),
-                                           textW(uf, tiny, "FITTED")}) +
-                                 cascade::gui::px(12.0f) + cascade::gui::px(6.0f) +
-                                 textW(rf, tiny, "00");
+    //
+    // A FUNCTION OF THE LABEL SIZE, NOT A CONSTANT, because compact mode
+    // (below) letters these labels a size down on the narrowest real bodies
+    // this window has been measured on. Measured on the docked tablet
+    // emulator's ACTUAL body (1174x906 - see the note on `compact`, not the
+    // 1860x1400 this window was first briefed against): even after every
+    // other figure in this well went compact, a single column of six rows at
+    // the full-size label was 544 px tall on its own, more than the entire
+    // deck's half-body allowance - so the label itself has to give up size
+    // before two columns can exist at all in a well this narrow.
+    auto showRockerMinWAt = [&](float labelPx) {
+        return cascade::gui::px(16.0f) + cascade::gui::px(7.0f) +
+              std::max({textW(uf, labelPx, "NOT DECLARED"), textW(uf, labelPx, "OTHER KINDS"),
+                        textW(uf, labelPx, "NOT FITTED"), textW(uf, labelPx, "CANNOT FIT"),
+                        textW(uf, labelPx, "DECODERS"), textW(uf, labelPx, "FITTED")}) +
+              cascade::gui::px(12.0f) + cascade::gui::px(6.0f) + textW(rf, labelPx, "00");
+    };
 
     // WHERE THE MODULES CAME FROM, in one line. "no catalogue source set" is a
     // configuration fault on the desktop and would be a lie here: a bundled
@@ -1900,15 +1960,18 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                                   : model.sourceUrl;
 
     // THE SEARCH WELL'S OWN FLOOR, measured rather than felt: the CLEAR key at
-    // its own measured width, a gap, and roughly a dozen characters of typed
-    // query - enough to type a plugin's name or its maker and still read it
-    // back, which is what this field is actually for (see searchLegend just
-    // above: "Searches name, maker and description."). Only spent when
-    // `compact` below says the deck needs it; the search well is exactly a
-    // third of the page otherwise, unchanged from before this existed.
+    // its own measured width, a gap, and room to read back a short module
+    // name while typing it - "ADS-B" is a real one, not a round number, and
+    // this field's job is exactly to narrow the list by a name or a maker
+    // (see searchLegend just above: "Searches name, maker and description.").
+    // Only spent when `compact` below says the deck needs it; the search
+    // well is exactly a third of the page otherwise, unchanged from before
+    // this existed. Measured tight rather than generous on purpose: on the
+    // narrowest real body this window has been measured on (1174x906,
+    // docked), the SHOW well needs everything the search well can spare
+    // before its own two columns fit at all - see `showRockerMinWAt`.
     const float searchFloorInner =
-        kClearW + cascade::gui::px(8.0f) + textW(uf, uiPx, "a plugin name") +
-        cascade::gui::px(16.0f);
+        kClearW + cascade::gui::px(8.0f) + textW(uf, uiPx, "ADS-B") + cascade::gui::px(16.0f);
 
     // ONE FORMULA FOR THE THREE WELLS' HEIGHT, CALLED TWICE - once to find
     // out whether their usual, full-size explanatory prose at an equal-thirds
@@ -1920,14 +1983,18 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // storeCheckKeyWidth() and moduleKindTagWidth() for the same reasoning
     // applied to a single figure rather than a whole well.
     //
-    // `notePx` touches ONLY the wrapped explanatory sentences (this well's own
+    // `notePx` covers the wrapped explanatory sentences (this well's own
     // caption paragraph, the catalogue source line, its status and its
-    // error) - never the rocker LABELS, the field, the keys or the captions,
-    // which are short, functional, and stay at the size every other control
-    // in this window reads at. Shrinking a paragraph nobody has to act on
-    // this second is a legibility trade a fully hidden module list does not
-    // let this window avoid making; shrinking a switch's own label is not
-    // the same trade and is not made here.
+    // error) AND, as of the real-body measurement above, the SHOW well's own
+    // rocker labels and row height - never the field, the keys or the
+    // captions, which are short, functional, and stay at the size every
+    // other control in this window reads at. A rocker's label is the one
+    // exception to "interactive controls keep their size": kTinySize is
+    // already the size every OTHER control label in this application reads
+    // at (rail keys, bank keys - see fonts.hpp) and it is the store itself
+    // that deliberately upsizes to read as paragraphs; when the page cannot
+    // afford that upsize, the rocker reads at the size the rest of the
+    // application already considers legible, not below it.
     struct DeckWellHeights {
         float deckAH = 0.0f;
         float deckBH = 0.0f;
@@ -1935,12 +2002,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         bool showTwoCols = false;
         float showRows = 6.0f;
         float showColW = 0.0f;
+        float rockerH = 0.0f;
         float searchLegendH = 0.0f;
         float srcLineH = 0.0f;
         float srcTextW = 0.0f;
     };
     auto computeWellHeights = [&](float notePx, float searchInnerW, float showInnerW,
-                                  float sortInnerW, const char* showNoteText) {
+                                  float sortInnerW, const char* showNoteText,
+                                  bool compactCall) {
         DeckWellHeights r;
         // WRAPPED, NOT ASSUMED SINGLE-LINE - this sentence is drawn wrapped to
         // its own well's width, narrow enough at a large enough face to take
@@ -1950,10 +2019,21 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         r.deckAH = kPad + legH + 8.0f + fieldH + 9.0f + r.searchLegendH + 4.0f +
                   countLineHeight() + kPad;
 
+        // THE ROCKER'S OWN PADDING SHRINKS TOO, ONLY ON THE compactCall PASS:
+        // px(10.0f) is generous breathing room around a full-size label, and
+        // it is what every OTHER page's rocker still gets. On the real docked
+        // body (1174x906) six rows' worth of it was 6 px more than the
+        // difference between fitting under gui::pageDeckHeightCap() and not -
+        // a smaller label already reads with room to spare at px(4.0f), so
+        // the extra was spent on nothing.
+        r.rockerH = std::max(cascade::gui::px(22.0f),
+                             faceH(uf, notePx) +
+                                 (compactCall ? cascade::gui::px(4.0f)
+                                              : cascade::gui::px(10.0f)));
         r.showColW = (showInnerW - cascade::gui::px(12.0f)) * 0.5f;
-        r.showTwoCols = r.showColW >= showRockerMinW;
+        r.showTwoCols = r.showColW >= showRockerMinWAt(notePx);
         r.showRows = r.showTwoCols ? 3.0f : 6.0f;
-        r.deckBH = kPad + legH + 8.0f + kRockerH * r.showRows + 8.0f +
+        r.deckBH = kPad + legH + 8.0f + r.rockerH * r.showRows + 8.0f +
                   noteHeightAt(showInnerW, showNoteText, notePx) + kPad;
 
         // px() ON THE GAP, from the scaling slice: every figure in this
@@ -1974,7 +2054,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     };
 
     const DeckWellHeights atFullProse =
-        computeWellHeights(tiny, wellInner, wellInner, wellInner, showNote);
+        computeWellHeights(tiny, wellInner, wellInner, wellInner, showNote, false);
     const float deckH_atFullProse =
         std::max(atFullProse.deckAH, std::max(atFullProse.deckBH, atFullProse.deckCH));
     // COMPACT: the deck's usual equal-thirds split, at this window's usual
@@ -2001,7 +2081,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float showInnerFinal = wellInner + searchBorrow;
     const DeckWellHeights wh =
         compact ? computeWellHeights(notePx, searchInnerFinal, showInnerFinal, wellInner,
-                                     showNoteCompact)
+                                     showNoteCompact, true)
                 : atFullProse;
 
     const float deckAH = wh.deckAH;
@@ -2010,6 +2090,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const bool showTwoCols = wh.showTwoCols;
     const float showRows = wh.showRows;
     const float showColW = wh.showColW;
+    const float rockerH = wh.rockerH;
     const float searchLegendH = wh.searchLegendH;
     const float srcLineH = wh.srcLineH;
     const float srcTextW = wh.srcTextW;
@@ -2143,15 +2224,15 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                                                 ? (colW + cascade::gui::px(12.0f))
                                                 : 0.0f);
             const float ry =
-                y + kRockerH * static_cast<float>(showTwoCols ? (i / 2) : i);
+                y + rockerH * static_cast<float>(showTwoCols ? (i / 2) : i);
             char cnt[16];
             std::snprintf(cnt, sizeof cnt, "%d", rows[i].count);
-            if (drawRockerRow(dl, ImVec2(rx, ry), colW, kRockerH, rows[i].label, cnt,
-                              *rows[i].flag, rows[i].id)) {
+            if (drawRockerRowAt(dl, ImVec2(rx, ry), colW, rockerH, rows[i].label, cnt,
+                               *rows[i].flag, rows[i].id, notePx)) {
                 *rows[i].flag = !*rows[i].flag;
             }
         }
-        y += kRockerH * showRows + 8.0f;
+        y += rockerH * showRows + 8.0f;
         drawNoteAt(dl, ImVec2(tl.x + kPad, y), showInnerFinal, theme::kInkMuted,
                   compact ? showNoteCompact : showNote, notePx);
         dl->PopClipRect();

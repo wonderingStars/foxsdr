@@ -165,6 +165,10 @@ void testUpperDeckFitsUnderHalfTheBody() {
         const float h = drawnUpperDeckHeight(view, model, deck, 1860.0f, bodyH);
         CHECK(h > 0.0f);
         CHECK(h <= pageDeckHeightCap(bodyH));
+        // BUNDLED: the ADD ALL well does not draw - see the note above it in
+        // draw(). This body was already comfortably under the cap before that
+        // change; this pins that the well's absence is real, not incidental.
+        CHECK(!view.addAllWellDrawn());
         std::printf("  tablet body 1860x%.0f @2.0x: upper deck %.2f px, cap %.2f px\n", bodyH,
                     h, pageDeckHeightCap(bodyH));
     }
@@ -182,8 +186,35 @@ void testUpperDeckFitsUnderHalfTheBody() {
         const float h = drawnUpperDeckHeight(view, model, deck, 1860.0f, bodyH);
         CHECK(h > 0.0f);
         CHECK(h <= pageDeckHeightCap(bodyH));
+        CHECK(!view.addAllWellDrawn());
         std::printf("  tablet body 1860x%.0f @1.0x: upper deck %.2f px, cap %.2f px\n", bodyH,
                     h, pageDeckHeightCap(bodyH));
+    }
+
+    // THE REAL DOCKED BODY, MEASURED BACK FROM THE RUNNING APP - not the
+    // briefed 1860x1400. A temporary diagLogf at THE CONTROL DECK read the
+    // actual size the foxsdr_dock emulator's CentreDock tab hands
+    // PluginStoreView::draw() (it shares the screen with the left DECODE
+    // list and the right STATUS column, which the briefed figure did not
+    // account for): 1174 x 906, roughly 40% of the assumed area. At that
+    // size, with the ADD ALL well still drawn, the deck measured 1014 px
+    // against a 453 px cap - 561 px over, and the ADD ALL well plus the
+    // banner alone (450 px) very nearly consumed the whole cap before the
+    // three control wells drew a single pixel. Removing the well in this
+    // state is what closes it - this is the case that motivated the change.
+    {
+        cascade::gui::setUiScale(2.0f);
+        PluginStoreModel model = bundledAndroidModel();
+        PluginStoreDeck deck;
+        PluginStoreView view;
+        const float bodyH = 906.0f;
+        const float h = drawnUpperDeckHeight(view, model, deck, 1174.0f, bodyH);
+        CHECK(h > 0.0f);
+        CHECK(h <= pageDeckHeightCap(bodyH));
+        CHECK(!view.addAllWellDrawn());
+        std::printf("  REAL docked body 1174x%.0f @2.0x (bundled): upper deck %.2f px, "
+                    "cap %.2f px, ADD ALL drawn=%d\n",
+                    bodyH, h, pageDeckHeightCap(bodyH), view.addAllWellDrawn() ? 1 : 0);
     }
 
     // A REPRESENTATIVE DESKTOP WINDOW BODY, at its own scale (1.0) - well
@@ -199,6 +230,9 @@ void testUpperDeckFitsUnderHalfTheBody() {
         const float h = drawnUpperDeckHeight(view, model, deck, 1280.0f, bodyH);
         CHECK(h > 0.0f);
         CHECK(h <= pageDeckHeightCap(bodyH));
+        // NOT BUNDLED: every other catalogue state keeps the ADD ALL well
+        // exactly as it always drew it.
+        CHECK(view.addAllWellDrawn());
         std::printf("  desktop body 1280x%.0f @1.0x: upper deck %.2f px, cap %.2f px\n", bodyH,
                     h, pageDeckHeightCap(bodyH));
     }
@@ -217,6 +251,7 @@ void testUpperDeckFitsUnderHalfTheBody() {
         const float h = drawnUpperDeckHeight(view, model, deck, 2560.0f, bodyH);
         CHECK(h > 0.0f);
         CHECK(h <= pageDeckHeightCap(bodyH));
+        CHECK(view.addAllWellDrawn());
         std::printf("  desktop body 2560x%.0f @2.0x: upper deck %.2f px, cap %.2f px\n", bodyH,
                     h, pageDeckHeightCap(bodyH));
     }
@@ -260,6 +295,49 @@ void testUpperDeckHeightScalesWithUi() {
     cascade::gui::setUiScale(1.0f);
 }
 
+// ---------------------------------------------------------------------------
+// THE ADD ALL WELL DRAWS IN EVERY CATALOGUE STATE BUT BUNDLED. catalogueState()
+// itself has internal linkage (plugin_store_view.cpp's anonymous namespace)
+// and cannot be named from here, so each state below is built by hand from
+// PluginStoreModel's own fields, matched against its precedence exactly as
+// catalogueState() states it: bundled first, then haveCatalogue, then
+// sourceStatus, then sourceError, then NeverAsked.
+// ---------------------------------------------------------------------------
+void testAddAllWellPresenceMatchesCatalogueState() {
+    struct Case {
+        const char* name;
+        PluginStoreModel model;
+        bool expectAddAll;
+    };
+    std::vector<Case> cases;
+
+    {
+        PluginStoreModel m;  // every field at its default: nothing asked yet
+        cases.push_back({"NeverAsked", m, true});
+    }
+    {
+        PluginStoreModel m;
+        m.sourceError = "connection refused";
+        cases.push_back({"Failed", m, true});
+    }
+    {
+        PluginStoreModel m;
+        m.sourceStatus = "0 plugins in the catalogue";
+        cases.push_back({"ReadEmpty", m, true});
+    }
+    { cases.push_back({"Read", desktopCatalogueModel(), true}); }
+    { cases.push_back({"Bundled", bundledAndroidModel(), false}); }
+
+    for (const Case& c : cases) {
+        PluginStoreDeck deck;
+        PluginStoreView view;
+        drawnUpperDeckHeight(view, c.model, deck, 1280.0f, 900.0f);
+        CHECK(view.addAllWellDrawn() == c.expectAddAll);
+        std::printf("  catalogue state %-10s addAllWellDrawn=%d (want %d)\n", c.name,
+                    view.addAllWellDrawn() ? 1 : 0, c.expectAddAll ? 1 : 0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -280,6 +358,7 @@ int main() {
     if (loaded) {
         testUpperDeckFitsUnderHalfTheBody();
         testUpperDeckHeightScalesWithUi();
+        testAddAllWellPresenceMatchesCatalogueState();
     } else {
         std::printf("fonts::load() failed - the measurements below were not run\n");
     }

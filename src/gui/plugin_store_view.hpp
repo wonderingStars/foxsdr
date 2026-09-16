@@ -628,6 +628,15 @@ public:
     // applied over a run of transfers is exactly the thing that goes stale.
     bool addAllRequested() const { return addAll_; }
 
+    // WHETHER THE LAST draw() DREW THE ADD ALL WELL AT ALL. True in every
+    // catalogue state but CatalogueState::Bundled, where the well is not
+    // drawn and its one sentence folds into THE UPDATES BANNER instead (see
+    // the note above the well in draw()). Recorded rather than inferred from
+    // the model, for the same reason upperDeckHeight() is: the only thing
+    // that could otherwise prove the well's presence or absence was a
+    // screenshot.
+    bool addAllWellDrawn() const { return addAllWellDrawn_; }
+
     // --- what the last draw() measured, not asked for -----------------------
     //
     // THE WHOLE UPPER DECK'S HEIGHT: the ADD ALL well, the state banner and
@@ -655,6 +664,7 @@ private:
     int fitIndex_ = -1;
     int updateIndex_ = -1;
     float upperDeckHeight_ = 0.0f;
+    bool addAllWellDrawn_ = false;
 };
 
 }  // namespace cascade::gui
