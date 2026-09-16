@@ -158,13 +158,14 @@ else()  # CASCADE_ANDROID
 #     test_web_control and test_web_audio below cover the rest of src/net
 #     that doesn't touch auth.
 #   - test_crash_upload, test_telemetry, test_plugin_repo, test_httplib_vendor,
-#     test_diag_hang, test_diagnostics, test_thread_fault, test_updater,
-#     test_report_reader, test_gps_reader, test_scanner: need the excluded
-#     HTTPS transports, hang_watchdog.cpp's still-Android-TODO libunwind
-#     internals (crash_handler_posix.cpp's are NOT excluded any more - see
-#     test_crash_capture/test_crash_absorbed_child below - but hang capture is
-#     a separate slice and still stubbed), or gps_reader.cpp (excluded because
-#     it pulls gui/scope_view.hpp for one constant).
+#     test_diagnostics, test_thread_fault, test_updater, test_report_reader,
+#     test_gps_reader, test_scanner: need the excluded HTTPS transports, or
+#     gps_reader.cpp (excluded because it pulls gui/scope_view.hpp for one
+#     constant). test_diag_hang USED to be excluded here too, for
+#     hang_watchdog.cpp's own Android-TODO libunwind internals - it is in the
+#     list below now that captureAllThreads() has a real Android body (see
+#     hang_watchdog.cpp's file header), the same move test_crash_capture and
+#     test_crash_absorbed_child made earlier for crash_handler_posix.cpp.
 #   - test_rtlsdr_live: NOT excluded for a unit reason — it explicitly
 #     supports "no hardware attached" as a passing outcome — but it is left
 #     out of ANDROID_TEST_NAMES anyway because opening a USB device node from
@@ -213,6 +214,17 @@ set(CASCADE_ANDROID_TEST_NAMES
     # a different implementation of the same GNU unwind ABI this file's
     # header explains crash_handler_posix.cpp relies on.
     test_crash_capture test_crash_absorbed_child
+    # The hang watchdog: other-thread stack capture over tgkill + a realtime
+    # signal, same as desktop Linux, differing only in which unwinder the
+    # signalled thread calls on itself (see hang_watchdog.cpp's file header).
+    # The whole file builds and runs here (this test has no GUI, ImGui, GLFW
+    # or NDK dependency of its own - see test_diag_hang.cpp's includes); its
+    # real-application blocks stay inert outside _WIN32, exactly as they do on
+    # desktop Linux ctest runs, so what actually executes on-device is the
+    # HangWatchdog class's own behaviour: a stall is captured with more than
+    # one thread's stack, a paused/suppressed stall produces none, and the
+    # switch governs a running watchdog in both directions.
+    test_diag_hang
     # The Android port's own pure halves. They are in BOTH lists - the desktop
     # glob above picks them up too - because they are header-only logic with
     # no ImGui, no GLFW and no NDK in them, and what they pin (how big the

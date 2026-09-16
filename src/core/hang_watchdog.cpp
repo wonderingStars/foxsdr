@@ -9,6 +9,32 @@
 // process it is trying to describe. There are two, not one: allocation, and
 // the loader lock the stack walk itself takes.
 //
+// ANDROID: other-thread stack capture used to be inert here (an
+// ANDROID-TODO(crash-capture) stub in captureAllThreads' final branch,
+// removed below) because the NDK ships no libunwind local-unwind API. It
+// now shares the entire Linux implementation - the guard on the block below
+// changed from "__linux__ && !CASCADE_ANDROID" to plain "__linux__", exactly
+// as crash_handler_posix.cpp's guard did - and differs from the desktop
+// build in exactly one place: captureCurrentThreadFrames() calls clang's
+// _Unwind_Backtrace (<unwind.h>) instead of libunwind's
+// unw_init_local/unw_step. See that function, and crash_handler_posix.cpp's
+// file header, for why _Unwind_Backtrace is available with no separate
+// library and why it is safe to call from a signal handler in the same
+// qualified sense libunwind's local unwinder is.
+//
+// THE PART THAT DOES NOT COME FOR FREE: a hang report walks ANOTHER
+// thread's stack (the frozen GUI thread, from the watchdog thread), and
+// _Unwind_Backtrace - like unw_init_local - only ever unwinds the stack of
+// whatever thread calls it. The Linux block below already solves this for
+// libunwind by never trying to unwind a thread from outside it: it sends the
+// target thread a realtime signal via tgkill, and hangCaptureSignalHandler
+// runs ON the target thread's own stack and unwinds ITSELF, handing the
+// result back through g_hangCapture and a semaphore. That mechanism is
+// unchanged for Android - tgkill and sigaction both exist on bionic - so the
+// only thing that changes under CASCADE_ANDROID is the one function the
+// signal handler (and the two other capturing-the-current-thread call
+// sites) call to do the actual unwind.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/hang_watchdog.hpp"
 
@@ -25,9 +51,13 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
-#elif defined(__linux__) && !defined(CASCADE_ANDROID)
+#elif defined(__linux__)
+#if defined(CASCADE_ANDROID)
+#include <unwind.h>
+#else
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
+#endif
 
 #include <csignal>
 #include <cstdlib>
@@ -36,12 +66,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #else
-// ANDROID-TODO(crash-capture): the NDK ships no libunwind local-unwind API
-// (see the "#elif defined(__linux__) && !defined(CASCADE_ANDROID)" blocks
-// below, all of which this branch skips), so other-thread stack capture is
-// inert on Android. <cstdlib> alone is kept: the /proc/self/status tracer
-// check further down has no libunwind dependency and keeps working
-// unchanged here (Android is Linux; __linux__ stays defined).
+// Neither Windows nor Linux: other-thread stack capture is not implemented
+// for this platform. Nothing this codebase ships targets one (see the file
+// header's platform list), so this is a safety net, not a real branch.
 #include <cstdlib>
 #endif
 
@@ -104,7 +131,7 @@ std::string frameLine(std::uintptr_t addr) {
     return std::string(buf);
 }
 
-#if defined(__linux__) && !defined(CASCADE_ANDROID)
+#if defined(__linux__)
 // ---------------------------------------------------------------------------
 // LINUX: capturing a stack that is not the caller's own.
 //
@@ -150,14 +177,39 @@ LinuxHangCapture g_hangCapture;
 sem_t g_hangCaptureSem;
 std::atomic<bool> g_hangSignalReady{false};
 
-// Runs ON THE SIGNALLED THREAD. unw_getcontext captures exactly this thread's
-// live registers (there is no ucontext to borrow the way a fault handler
-// would use the one the kernel hands a SIGSEGV handler - a realtime signal
-// delivered by tgkill carries no such context), then a normal local unwind
-// walks it. sem_post is on the POSIX async-signal-safe list; storing into
-// g_hangCapture first is safe because the watchdog thread only ever has ONE
-// capture in flight; see the mutual-exclusion note at the call site.
-void hangCaptureSignalHandler(int) {
+#if defined(CASCADE_ANDROID)
+// THE ONE THING THAT DIFFERS FROM DESKTOP LINUX. See crash_handler_posix.cpp's
+// file header for the full case for _Unwind_Backtrace on Android (no separate
+// library, verified to continue past bionic's sigreturn trampoline into the
+// interrupted frame on both shipped ABIs) and the one honest caveat it shares
+// with libunwind's local unwinder (neither is on the POSIX async-signal-safe
+// list). What is specific to THIS call site: _Unwind_Backtrace always
+// unwinds the stack of whatever thread calls it, starting from the call
+// site - never an arbitrary supplied context - so calling it from inside
+// hangCaptureSignalHandler, which the SIGNALLED thread runs on its own stack
+// (see the header comment above and the Linux block's own note on tgkill),
+// is what makes "the caller's own stack" the frozen thread's real one rather
+// than the watchdog's.
+struct AndroidHangUnwindState {
+    std::uintptr_t* frames;
+    int n;
+    int max;
+};
+
+_Unwind_Reason_Code androidHangUnwindCallback(struct _Unwind_Context* uctx, void* argVoid) {
+    auto* st = static_cast<AndroidHangUnwindState*>(argVoid);
+    if (st->n >= st->max) { return _URC_END_OF_STACK; }
+    st->frames[st->n++] = static_cast<std::uintptr_t>(::_Unwind_GetIP(uctx));
+    return _URC_NO_REASON;
+}
+
+int captureCurrentThreadFrames(std::uintptr_t* frames, int maxFrames) {
+    AndroidHangUnwindState st{frames, 0, maxFrames};
+    ::_Unwind_Backtrace(&androidHangUnwindCallback, &st);
+    return st.n;
+}
+#else  // desktop Linux: libunwind
+int captureCurrentThreadFrames(std::uintptr_t* frames, int maxFrames) {
     unw_context_t ctx;
     unw_getcontext(&ctx);
     unw_cursor_t cursor;
@@ -166,9 +218,22 @@ void hangCaptureSignalHandler(int) {
     do {
         unw_word_t ip = 0;
         if (unw_get_reg(&cursor, UNW_REG_IP, &ip) != 0) { break; }
-        g_hangCapture.frames[n++] = static_cast<std::uintptr_t>(ip);
-    } while (n < kMaxHangFrames && unw_step(&cursor) > 0);
-    g_hangCapture.count = n;
+        frames[n++] = static_cast<std::uintptr_t>(ip);
+    } while (n < maxFrames && unw_step(&cursor) > 0);
+    return n;
+}
+#endif  // CASCADE_ANDROID
+
+// Runs ON THE SIGNALLED THREAD. There is no ucontext to hand the unwinder the
+// way a fault handler would use the one the kernel hands a SIGSEGV handler -
+// a realtime signal delivered by tgkill carries no such context - so this
+// captures the calling thread's OWN live stack, which is exactly this
+// thread's stack because this handler is running on it. sem_post is on the
+// POSIX async-signal-safe list; storing into g_hangCapture first is safe
+// because the watchdog thread only ever has ONE capture in flight; see the
+// mutual-exclusion note at the call site.
+void hangCaptureSignalHandler(int) {
+    g_hangCapture.count = captureCurrentThreadFrames(g_hangCapture.frames, kMaxHangFrames);
     sem_post(&g_hangCaptureSem);
 }
 
@@ -182,13 +247,10 @@ void ensureHangCaptureSignalInstalled() {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     ::sigaction(hangCaptureSignal(), &sa, nullptr);
-    // Pays for libunwind's one-time setup (see the header comment above)
+    // Pays for the unwinder's one-time setup (see the header comment above)
     // before any thread is ever signalled for a real stall.
-    unw_context_t ctx;
-    unw_getcontext(&ctx);
-    unw_cursor_t cursor;
-    unw_init_local(&cursor, &ctx);
-    unw_step(&cursor);
+    std::uintptr_t warm[4];
+    captureCurrentThreadFrames(warm, 4);
     g_hangSignalReady.store(true, std::memory_order_release);
 }
 
@@ -220,17 +282,7 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
     ThreadStack ts;
     ts.tid = static_cast<unsigned long>(tid);
     if (tid == self) {
-        unw_context_t ctx;
-        unw_getcontext(&ctx);
-        unw_cursor_t cursor;
-        unw_init_local(&cursor, &ctx);
-        int n = 0;
-        do {
-            unw_word_t ip = 0;
-            if (unw_get_reg(&cursor, UNW_REG_IP, &ip) != 0) { break; }
-            ts.frames[n++] = static_cast<std::uintptr_t>(ip);
-        } while (n < kMaxHangFrames && unw_step(&cursor) > 0);
-        ts.count = n;
+        ts.count = captureCurrentThreadFrames(ts.frames, kMaxHangFrames);
         return ts;
     }
 
@@ -257,9 +309,10 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
     // frame list invented to fill the gap.
     return ts;
 }
-#endif  // __linux__ && !CASCADE_ANDROID - the block above was unguarded once
-        // and MSVC compiled it; the NDK equally cannot, see the ANDROID-TODO
-        // near the top of this file
+#endif  // __linux__ - covers both desktop Linux and Android; MSVC cannot
+        // compile this block at all (it was unguarded once and did), and
+        // the only line inside it that differs by platform is
+        // captureCurrentThreadFrames() above
 
 }  // namespace
 
@@ -275,7 +328,7 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
                        std::memory_order_relaxed);
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
-#elif defined(__linux__) && !defined(CASCADE_ANDROID)
+#elif defined(__linux__)
     guiThreadId_.store(static_cast<unsigned long>(linuxGetTid()), std::memory_order_relaxed);
 #endif
     // The module snapshot the capture resolves addresses against, taken HERE -
@@ -349,7 +402,7 @@ void HangWatchdog::heartbeat(bool recordGap) {
     const double prev = lastBeatMs_.exchange(now, std::memory_order_relaxed);
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
-#elif defined(__linux__) && !defined(CASCADE_ANDROID)
+#elif defined(__linux__)
     guiThreadId_.store(static_cast<unsigned long>(linuxGetTid()), std::memory_order_relaxed);
 #endif
     // A gap that spans a deliberate pause is not a frame gap: it is the device
@@ -983,8 +1036,8 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     for (const std::string& line : ring) { out << line << "\n"; }
     out.flush();
     out.close();
-#elif defined(__linux__) && !defined(CASCADE_ANDROID)
-    // LINUX. No suspend/resume window to get wrong (see the header comment
+#elif defined(__linux__)
+    // LINUX (desktop and Android). No suspend/resume window to get wrong (see the header comment
     // above captureOneLinuxThread): each thread is asked, via a realtime
     // signal, to unwind itself and hand the result back, and it keeps running
     // the whole time it is not actually inside that handler. So there is no
@@ -1098,12 +1151,12 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out.flush();
     out.close();
 #else
-    // ANDROID-TODO(crash-capture): no libunwind local-unwind API on the NDK,
-    // so a stalled thread's other-thread stacks cannot be captured here. The
-    // watchdog still detects and reports the stall's timing (threadMain()
-    // above) - only the per-thread frame dump is unavailable.
-    diagWarnf("watchdog: other-thread stack capture is not available on this "
-              "platform (ANDROID-TODO(crash-capture)); no hang report written");
+    // Neither Windows nor Linux (see the file header): no other-thread stack
+    // capture is implemented for this platform. The watchdog still detects
+    // and reports the stall's timing (threadMain() above) - only the
+    // per-thread frame dump is unavailable.
+    diagWarnf("watchdog: other-thread stack capture is not available on this platform; "
+              "no hang report written");
     (void)path;
     (void)stalledMs;
 #endif

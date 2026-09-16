@@ -756,8 +756,23 @@ int main() {
     // would touch, and it goes red the moment the marker moves back above the
     // join. (Reading a source file to hold a promise is the same device
     // tests/test_crash_upload.cpp uses against PRIVACY.md.)
+    //
+    // CASCADE_SOURCE_DIR is a path on the machine that BUILT this binary, not
+    // necessarily the one running it - true on desktop ctest (same machine)
+    // but not once this test is pushed to an Android device, which has no
+    // copy of the source tree at all. Rather than fail there for an absent
+    // tree it never claimed to check, this SKIPS loudly, the same shape
+    // test_shell_open_android and test_json_dump_policy's device exclusion
+    // (tools/run-android-tests.sh) already use for a host-only assumption.
     {
         const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
+        if (!fs::exists(src)) {
+            std::printf(
+                "SKIP: source tree not present on this machine (CASCADE_SOURCE_DIR=%s); "
+                "this check only means something on the machine that built the binary\n",
+                CASCADE_SOURCE_DIR);
+            return testSummary("test_diag_hang");
+        }
         const std::string text = readFile(src);
         CHECK(!text.empty());
 
