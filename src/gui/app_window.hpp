@@ -1823,6 +1823,13 @@ private:
     // inside a combo box.
     std::string bandPlanSelection_ = "world";
     std::vector<cascade::core::PlanInfo> bandPlanChoices_;
+    // Ribbon size / segment-colour picker (issue #1). Int mirrors for the
+    // two Combo boxes, the same pattern deemphIndex_ uses beside kDeemphUs —
+    // see kBandPlanSizeKeys/kBandPlanPaletteKeys in app_window.cpp for what
+    // each index means and currentConfig()/applyConfig() for the string
+    // AppConfig fields these round-trip through.
+    int bandPlanSizeIndex_ = 0;
+    int bandPlanPaletteIndex_ = 0;
 
     // Plugin host: scanned once at construction and on Rescan. Owns the
     // loaded modules, so it must outlive nothing in particular here — but it
