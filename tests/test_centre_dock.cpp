@@ -170,6 +170,18 @@ int main() {
         // ...and the spectrum is never "full height": it has no strip to hide.
         d.showSpectrum();
         CHECK(!d.fullHeight());
+
+        // THE MAXIMISE KEY IN THE TAB ROW IS THE SAME STATE BY ANOTHER ROUTE,
+        // because a gesture nobody has been told about cannot be the only way
+        // to reach one. It does nothing at all while the spectrum is showing.
+        d.toggleFullHeight();
+        CHECK(!d.fullHeight());
+        CHECK(d.fullHeight(kMap));  // and it did not reach into another tab
+        d.tap(kPager, 500.0);
+        d.toggleFullHeight();
+        CHECK(d.fullHeight(kPager));
+        d.toggleFullHeight();
+        CHECK(!d.fullHeight(kPager));
     }
 
     // -- THE CLOSE KEY IN THE TAB BAR ---------------------------------------

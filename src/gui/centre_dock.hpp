@@ -187,6 +187,17 @@ public:
         lastTapSec_ = nowSec;
     }
 
+    // The maximise/restore key in the tab bar, which is the visible route to
+    // what the double tap does by gesture - a gesture nobody has been told
+    // about cannot be the only way to reach a state. Nothing to toggle while
+    // the spectrum is showing: it has no strip to hide.
+    void toggleFullHeight() {
+        if (active_.empty()) { return; }
+        const auto it = full_.find(active_);
+        const bool was = (it != full_.end()) && it->second;
+        full_[active_] = !was;
+    }
+
     // The close key in the tab bar. It does NOT hide the window itself: the
     // page path owns that, and it already has one way of doing it (beginPage
     // clears the caller's `open` flag and the call site hides the window on

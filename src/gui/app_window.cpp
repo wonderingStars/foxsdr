@@ -2656,6 +2656,12 @@ void AppWindow::drawUi() {
     // browser's tune has already landed, so the mute follows a web tune in the
     // same frame rather than one behind it.
     updateAudioMute();
+    // THE TABLET'S TAB PASS OPENS HERE, around everything that draws a page -
+    // which is the pages below AND anything drawn later inside the root window
+    // - so the row of tabs is the whole frame's account of what is open rather
+    // than one function's. Nothing on the desktop: kCentreDockPresentation is
+    // a compile-time false there and this folds away (gui/centre_dock.hpp).
+    if (kCentreDockPresentation) { centreDock_.beginFrame(); }
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -2916,6 +2922,12 @@ void AppWindow::drawUi() {
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
     telemetryHeartbeat_.poll(ImGui::GetTime());
+
+    // ...AND THE TAB PASS CLOSES, after every page in the frame has had its
+    // say: what was offered becomes the row of tabs the NEXT frame draws, a
+    // window that has just opened becomes the selected one, and a selection
+    // whose window has gone falls back to the spectrum.
+    if (kCentreDockPresentation) { centreDock_.endFrame(); }
 }
 
 void AppWindow::pollAudioHealth() {
@@ -7626,6 +7638,48 @@ void AppWindow::followInputRate() {
     refreshPluginRunner();
 }
 
+// --- THE CENTRE DOCK'S TWO MEASUREMENTS ---------------------------------------
+//
+// Both are wanted in two places - the panel that lays the strip out, and the
+// tab row above it - so they are computed once, in this file's usual style for
+// a number two call sites must agree about.
+
+// HOW MUCH BIGGER THE HAND-DRAWN FURNITURE IS DRAWN ON A TABLET.
+//
+// Everything in this interface that is DRAWN rather than laid out - a bank
+// key, a rail plate, an engraved caption - is written in raw pixels measured
+// against a ~96 dpi desktop, and nothing scales it: ImGuiStyle::FontScaleDpi
+// (set once from gui/ui_scale.hpp on Android, 1.0 everywhere else) scales the
+// widgets and the sizes ImGui itself resolves, but an explicit
+// ImDrawList::AddText(font, px, ...) is drawn at px. The tab row is a TOUCH
+// TARGET before it is furniture - a 22 px key on a 2560 x 1600 tablet is about
+// 2 mm, a quarter of Android's own 9 mm guidance - so it takes the same factor
+// the widgets took. On the desktop this is 1.0 and the arithmetic below is
+// exactly the arithmetic the rail's own bank keys use.
+//
+// (When the sweep that puts every hard-coded constant in this file through one
+// px() helper lands, this becomes that helper.)
+static float centreDockScale() {
+    const float s = ImGui::GetStyle().FontScaleDpi;
+    return (s >= 1.0f) ? s : 1.0f;  // NaN-safe
+}
+
+// WHAT IS LEFT OF THE SPECTRUM WITH A WINDOW DOCKED UNDER IT: a quarter of the
+// height it would otherwise have, which is the owner's own figure - "the
+// spectrum collapses to a strip about a quarter of its height above it". It
+// stays a REAL spectrum - the trace, the passband, the frequency scale and
+// every gesture that tunes them - because the whole reason for keeping it is
+// that the radio is still tunable while a decoder is being watched.
+//
+// The floor is what stops the quarter becoming nothing on a short window: a
+// strip under about a finger's width is a decoration, not a control.
+static float centreDockStripHeight(float fullSpectrumHeight) {
+    const float quarter = fullSpectrumHeight * 0.25f;
+    const float floorPx = 48.0f * centreDockScale();
+    if (!(quarter >= floorPx)) { return floorPx; }  // NaN-safe
+    return quarter;
+}
+
 void AppWindow::drawCenterPanels() {
     // Poll for a new spectrum frame every GUI frame. getLatestFrame compares
     // against lastFrame_.seq, so this is one mutex lock returning false when
@@ -7686,6 +7740,18 @@ void AppWindow::drawCenterPanels() {
     cascade::source::IqSource& src = pipeline_.activeSource();
     scale_.setSpan(src.centerFrequencyHz(), pipeline_.inputRateHz());
 
+    // THE TABLET'S TAB ROW, ABOVE EVERYTHING THIS PANEL DRAWS (see
+    // gui/centre_dock.hpp). It takes its own height off the region before the
+    // spectrum measures what is left, so the panels below are laid out in the
+    // space that is actually theirs rather than overlapping it. Compiled on
+    // every platform and drawn on none but Android: kCentreDockPresentation is
+    // a compile-time false on the desktop and the whole branch folds away.
+    bool dockedBody = false;
+    if (kCentreDockPresentation) {
+        drawCentreDockTabs();
+        dockedBody = !centreDock_.spectrumActive();
+    }
+
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     // The grab strip between the two panels: a finger's worth at the scale the
     // interface is drawn at, not six pixels of a tablet's 2560.
@@ -7698,8 +7764,26 @@ void AppWindow::drawCenterPanels() {
     // sizes asserts inside ImGui, so just skip the panels that frame.
     if (usable < cascade::gui::px(40.0f) || avail.x < cascade::gui::px(40.0f)) { return; }
 
+    // FULL HEIGHT: the docked window has been given the whole panel by a
+    // double tap on its tab, and there is no strip at all. A map wants this
+    // and a pager does not, which is why the flag belongs to the tab rather
+    // than to the dock (gui/centre_dock.hpp).
+    if (dockedBody && centreDock_.fullHeight()) {
+        const ImVec2 bodyAt = ImGui::GetCursorScreenPos();
+        dockBodyX_ = bodyAt.x;
+        dockBodyY_ = bodyAt.y;
+        dockBodyW_ = avail.x;
+        dockBodyH_ = avail.y;
+        return;
+    }
+
     const float width = avail.x;
-    const float spectrumHeight = splitRatio_ * usable;
+    // NOT const, and only because of the strip: with a window docked the
+    // spectrum keeps a quarter of its height and the waterfall's area becomes
+    // the window's. The split ratio itself is untouched, so tapping SPECTRUM
+    // puts the panels back exactly where the user last dragged the splitter.
+    float spectrumHeight = splitRatio_ * usable;
+    if (dockedBody) { spectrumHeight = centreDockStripHeight(spectrumHeight); }
     const float waterfallHeight = usable - spectrumHeight;
 
     // Visible slice of the fftshifted spectrum, shared by BOTH panels so
@@ -7901,6 +7985,28 @@ void AppWindow::drawCenterPanels() {
         }
     }
     spectrum_->drawVfoOverlay(band, width, spectrumHeight);
+
+    // WITH A WINDOW DOCKED, THE PANEL ENDS HERE: what is left below the strip
+    // is the docked body's, and the splitter and the waterfall are not drawn
+    // at all. The waterfall's HISTORY keeps being fed at the top of this
+    // function whether or not it is on screen, so tapping SPECTRUM shows the
+    // picture that was accumulating underneath rather than a gap.
+    //
+    // The wheel is carried over on its own because the two panels share it and
+    // only one of them is here; every other gesture in this function belongs
+    // to the spectrum and has already run.
+    if (dockedBody) {
+        if (specHovered && io.MouseWheel != 0.0f) {
+            scale_.zoomAt(mouseFrac,
+                          std::pow(kZoomPerNotch, static_cast<double>(io.MouseWheel)));
+        }
+        const ImVec2 bodyAt = ImGui::GetCursorScreenPos();
+        dockBodyX_ = bodyAt.x;
+        dockBodyY_ = bodyAt.y;
+        dockBodyW_ = avail.x;
+        dockBodyH_ = (specPos.y + avail.y) - bodyAt.y;
+        return;
+    }
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
@@ -9550,6 +9656,214 @@ bool AppWindow::pageGeometryTransient(const char* id) const {
     return it != pageChrome_.end() && (it->second.collapsed || it->second.maximised);
 }
 
+// --- THE CENTRE DOCK, DRAWN ---------------------------------------------------
+//
+// The state is in gui/centre_dock.hpp and the three functions below are all
+// there is to the presentation: a row of keys across the top of the centre
+// panel, a page begun over the panel's lower part instead of as a window of
+// its own, and the end of that page. Everything else about a docked window -
+// its face, its memory rows, its map, its gestures - is the SAME CODE that
+// draws it as a floating page, because the only thing that changes is the
+// frame around it.
+
+// The word on a tab, cut to the key it has to fit in. A plugin names its own
+// windows and nothing bounds that text, so an uncut label would run off the
+// brass and over its neighbour - the same argument railPlateLabel makes about
+// the rail's rows, and the same answer.
+static std::string centreDockTabLabel(const std::string& title, float maxW, float px) {
+    ImFont* f = cascade::gui::fonts::legend();
+    if (f == nullptr || title.empty()) { return title; }
+    if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, title.c_str()).x <= maxW) { return title; }
+    std::string cut = title;
+    while (!cut.empty()) {
+        // Back off a whole character, never half of a multi-byte one: a title
+        // is third-party text and may be anything.
+        cut.pop_back();
+        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0u) == 0x80u) {
+            cut.pop_back();
+        }
+        const std::string probe = cut + ".";
+        if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, probe.c_str()).x <= maxW) { return probe; }
+    }
+    return std::string();
+}
+
+float AppWindow::drawCentreDockTabs() {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (dl == nullptr) { return 0.0f; }
+    const float scale = centreDockScale();
+    const float w = ImGui::GetContentRegionAvail().x;
+    // THE RAIL'S BANK KEYS ARE THE REFERENCE LOOK, and this is their
+    // arithmetic (drawRailBankKeys): a lettered brass key that stays PRESSED
+    // while its panel is showing, with a phosphor strip lit under it. The tab
+    // row IS a function selector - it selects what the centre panel shows -
+    // so it is the same part, not a new one.
+    const float labelPx = cascade::gui::fonts::kTinySize * scale;
+    const float keyH = std::max(22.0f * scale, labelPx + 9.0f * scale);
+    const float gap = 4.0f * scale;
+    const float lampStrip = 7.0f * scale;  // the lit strip under a key, and its gap
+    const float barH = keyH + lampStrip + 6.0f * scale;
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    if (w < 120.0f || keyH < 12.0f) { return 0.0f; }
+
+    // THE DOCKED WINDOW'S OWN CABINET KEYS, at the right-hand end of the row
+    // and drawn by the same function that draws them on a page's rail, so they
+    // are the same three keys in the same order with the same glyphs. What
+    // each MEANS is the docked reading of what it means on a page:
+    //   minimise - the window goes away and the spectrum comes back, with its
+    //              tab kept, which is what "out of the way but not shut" is
+    //              here (there is no taskbar to minimise to);
+    //   maximise - the window takes the whole centre panel and the spectrum
+    //              strip goes, and restores when it is already full: the same
+    //              key the double tap on a tab is a shortcut for;
+    //   close    - the window shuts, exactly as its own close key would.
+    float keysLeft = at.x + w;
+    if (!centreDock_.spectrumActive()) {
+        cascade::gui::frame::Rect keys;
+        const RailPress press =
+            drawRailChrome(dl, at, ImVec2(at.x + w, at.y + keyH), keyH, nullptr,
+                           centreDock_.fullHeight(), true, "##dockkeys", &keys);
+        if (!keys.empty()) { keysLeft = keys.x0 - gap; }
+        if (press.minimise) { centreDock_.showSpectrum(); }
+        if (press.maximise) { centreDock_.toggleFullHeight(); }
+        if (press.close) { centreDock_.requestClose(centreDock_.activeId()); }
+    }
+
+    const std::vector<cascade::gui::DockTab>& tabs = centreDock_.tabs();
+    const int count = 1 + static_cast<int>(tabs.size());  // SPECTRUM is always there
+    const float room = keysLeft - at.x;
+    if (room < 40.0f || count <= 0) {
+        ImGui::SetCursorScreenPos(at);
+        ImGui::Dummy(ImVec2(w, barH));
+        return barH;
+    }
+    // Even widths, never wider than a key needs to be: with one window open a
+    // row of two half-screen keys would read as a split panel rather than as a
+    // selector.
+    float keyW = (room - gap * static_cast<float>(count - 1)) / static_cast<float>(count);
+    const float keyWMax = 190.0f * scale;
+    if (keyW > keyWMax) { keyW = keyWMax; }
+
+    float x = at.x;
+    int id = 700;  // clear of the rail's own bank keys, which are 0..4
+    if (keyW >= 12.0f) {
+        if (benchBankKey(dl, ImVec2(x, at.y), ImVec2(x + keyW, at.y + keyH), "SPECTRUM",
+                         centreDock_.spectrumActive(), nullptr, id++)) {
+            centreDock_.showSpectrum();
+        }
+        x += keyW + gap;
+        for (const cascade::gui::DockTab& t : tabs) {
+            if (x + keyW > keysLeft + 0.5f) { break; }  // no room left for this one
+            const std::string label = centreDockTabLabel(t.title, keyW - 10.0f * scale, labelPx);
+            if (benchBankKey(dl, ImVec2(x, at.y), ImVec2(x + keyW, at.y + keyH), label.c_str(),
+                             centreDock_.isActive(t.id), nullptr, id++)) {
+                // THE TAP, WITH THE FRAME'S OWN CLOCK: one selects, two inside
+                // 300 ms give this tab's window the whole panel.
+                centreDock_.tap(t.id, ImGui::GetTime());
+            }
+            x += keyW + gap;
+        }
+    }
+
+    // The keys left the cursor wherever the last InvisibleButton ended; the row
+    // owns the whole strip, including the lamps under it, so it re-declares its
+    // own rectangle before the panels below measure what is left.
+    ImGui::SetCursorScreenPos(at);
+    ImGui::Dummy(ImVec2(w, barH));
+    return barH;
+}
+
+// A DOCKED PAGE: the same body, drawn into the centre panel instead of into a
+// window of its own. Returns what beginPage returns - whether the body should
+// be drawn - and is unwound by endDockedPage exactly as Begin is by End.
+//
+// THIS IS ALSO WHERE THE TAB LIST COMES FROM. Every page that asks to be drawn
+// offers itself here, which is what makes the row of tabs the set of open
+// windows with nothing to maintain and nothing to drift (gui/centre_dock.hpp).
+bool AppWindow::beginDockedPage(const char* id, const char* title, bool* open) {
+    dockedPageBegun_ = false;
+    pageBodyOpen_ = false;
+    pageInset_ = 0.0f;
+    if (id == nullptr) { return false; }
+    const std::string key(id);
+    centreDock_.offer(key, title != nullptr ? std::string(title) : std::string());
+
+    // THE CLOSE KEY IN THE TAB ROW SHUTS THE WINDOW THE PAGE'S OWN WAY: the
+    // caller's open flag is cleared here and the call site hides the window on
+    // its way out of this frame, which is the same sequence a floating page's
+    // close key runs. One close route rather than two is what keeps a docked
+    // window and a torn-off one shutting identically - including the things
+    // that hang off it, like PluginWindows::hide and the transmit page's key
+    // release.
+    if (centreDock_.takeCloseRequest(key)) {
+        if (open != nullptr) { *open = false; }
+        return false;
+    }
+    // A window that is open but not selected draws nothing at all. It keeps
+    // its tab, and its plugin keeps running: a decoder does not stop because
+    // its picture is not the one on screen.
+    if (!centreDock_.isActive(key)) { return false; }
+    // Before the centre panel has measured itself once there is no rectangle
+    // to draw into, and a guessed one would put a body over the tuner. One
+    // frame, at startup only.
+    if (!(dockBodyW_ >= 16.0f) || !(dockBodyH_ >= 16.0f)) { return false; }
+
+    ImGui::SetNextWindowPos(ImVec2(dockBodyX_, dockBodyY_), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(dockBodyW_, dockBodyH_), ImGuiCond_Always);
+    const ImGuiWindowFlags f = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                               ImGuiWindowFlags_NoSavedSettings;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, cascade::gui::theme::kBrassShade);
+    const bool visible = ImGui::Begin(id, nullptr, f);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+    dockedPageBegun_ = true;
+    if (!visible) { return false; }
+
+    // NO CABINET AND NO RAIL: the name is on the tab, the keys are in the tab
+    // row, and a second frame drawn inside the first would spend a tablet's
+    // scarcest dimension on decoration. What is left is the WELL - the brass
+    // ground and the bevel that every page's body sits in - so the body
+    // itself, which is what this is all for, is drawn on exactly what it is
+    // drawn on when it floats.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 tl = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    const ImVec2 br(tl.x + size.x, tl.y + size.y);
+    dl->AddRectFilled(tl, br, cascade::gui::theme::kBrassShade,
+                      cascade::gui::theme::kPanelRounding);
+    cascade::gui::addBenchBevel(dl, tl, br, cascade::gui::theme::kPanelRounding, true);
+
+    const float inset = std::max(3.0f, 4.0f * centreDockScale());
+    const ImVec2 wellSize(size.x - inset * 2.0f, size.y - inset * 2.0f);
+    if (wellSize.x < 8.0f || wellSize.y < 8.0f) { return false; }
+    ImGui::SetCursorScreenPos(ImVec2(tl.x + inset, tl.y + inset));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    ImGui::BeginChild("##pagewell", wellSize, ImGuiChildFlags_None, ImGuiWindowFlags_None);
+    ImGui::PopStyleColor();
+    pageBodyOpen_ = true;
+    pageInset_ = inset;
+    return true;
+}
+
+void AppWindow::endDockedPage() {
+    if (pageBodyOpen_) {
+        ImGui::EndChild();
+        pageBodyOpen_ = false;
+    }
+    // ONLY IF THE WINDOW WAS BEGUN. A tab that is not the selected one never
+    // reached ImGui::Begin, and an End for it would close the window this page
+    // was drawn inside - which is the root window, and a spectacular way to
+    // discover an unpaired call.
+    if (dockedPageBegun_) {
+        ImGui::End();
+        dockedPageBegun_ = false;
+    }
+}
+
 // A PAGE IS A CABINET. The window is begun without ImGui's title bar; the
 // brass, the screws and the well are drawn over its whole rectangle, the rail
 // carries its name and keys, and the body is laid in a child inset by the
@@ -9559,6 +9873,15 @@ bool AppWindow::pageGeometryTransient(const char* id) const {
 // object, drawn by the same drawCabinet.
 bool AppWindow::beginPage(const char* id, const char* title, bool* open, int flags,
                           float defaultW, float defaultH) {
+    // THE TABLET TAKES THE OTHER ROUTE, and takes it FIRST: on Android a page
+    // is not a window that floats and tears off, it is a tab in the centre
+    // panel (gui/centre_dock.hpp). Everything below this line - the cabinet,
+    // the rail, the drag, the maximise, the restore rectangle - describes a
+    // desktop window manager that is not there. kCentreDockPresentation is a
+    // compile-time false on Windows and Linux, so this line folds away and the
+    // desktop's behaviour is unchanged to the byte.
+    if (kCentreDockPresentation) { return beginDockedPage(id, title, open); }
+
     PageChrome& pc = pageChrome_[id];
     const float kStripH = cascade::gui::px(30.0f);
     // THE SIZE A PAGE CANNOT BE DRAGGED UNDER, from gui/page_geometry.hpp.
@@ -9794,6 +10117,11 @@ void AppWindow::resetPageWindows() {
 }
 
 void AppWindow::endPage() {
+    // Paired with the branch at the top of beginPage, and for the same reason.
+    if (kCentreDockPresentation) {
+        endDockedPage();
+        return;
+    }
     if (pageBodyOpen_) {
         ImGui::EndChild();
         // The bottom and right margins count towards the window's content,

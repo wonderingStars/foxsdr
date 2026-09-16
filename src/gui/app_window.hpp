@@ -46,6 +46,10 @@
 // that puts an already-wrong one back. ImGui-free for the same reason as the
 // headers below it - the tests include it without a graphics context.
 #include "gui/page_geometry.hpp"
+// WHICH WINDOW THE CENTRE OF A TABLET'S SCREEN IS SHOWING. ImGui-free for the
+// same reason as its neighbours; the desktop compiles it and never asks it
+// anything (see kCentreDockPresentation below).
+#include "gui/centre_dock.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/audio_open.hpp"
 #include "gui/shell_open.hpp"
@@ -2137,6 +2141,59 @@ private:
     // Whether beginPage opened the well child this frame, so endPage closes it.
     bool pageBodyOpen_ = false;
     float pageInset_ = 0.0f;
+
+    // --- THE CENTRE DOCK: the tablet's one-screen presentation (0.97.0) -------
+    //
+    // WHAT IT CHANGES. On Android a page does not float over the spectrum and
+    // cannot be torn off - there is one screen and no window manager to tear
+    // it off to - so the centre panel grows a row of keys (SPECTRUM, then one
+    // per open window) and the selected window's body is drawn into the
+    // waterfall's area with the spectrum collapsed to a tunable strip above
+    // it. The page path is the SAME path: beginPage and endPage take a docked
+    // route instead of an operating-system window, so an instrument or a map
+    // renders identically and only its frame differs.
+    //
+    // WHY A COMPILE-TIME CONSTANT AND NOT A RUNTIME TEST. The obvious runtime
+    // question - "does this platform support a second viewport?" - is ALREADY
+    // false on two desktop machines: FOXSDR_SINGLE_VIEWPORT is set for every
+    // self-capture run, and a driver that refuses a second shared GL context
+    // turns it off for the whole session (gui/viewport_policy.hpp, and the
+    // 0.95.0 crash that made it necessary). Deciding the presentation on that
+    // answer would hand those two desktops a tablet's interface, which is
+    // precisely the behaviour change this work is not allowed to make. A
+    // constant known at compile time cannot: on Windows and Linux it is false,
+    // every branch below folds away, and the pages keep floating and tearing
+    // off exactly as they did. It is a CONSTANT rather than an #ifdef around
+    // the code so that the desktop and MSVC still COMPILE the docked path and
+    // catch a mistake in it.
+    static constexpr bool kCentreDockPresentation =
+#if defined(__ANDROID__)
+        true;
+#else
+        false;
+#endif
+    cascade::gui::CentreDock centreDock_;
+    // WHERE THE DOCKED BODY IS DRAWN, in screen coordinates, as the centre
+    // panel measured it. Taken LAST frame, because the pages are drawn before
+    // the root window that contains the centre panel (drawUi's own comment
+    // says why) - so a docked body follows a resize one frame later, which at
+    // sixty frames a second is invisible and on a tablet, whose window never
+    // resizes, never happens at all. Zero width means "not measured yet": the
+    // first frame after a window opens draws no body rather than one at a
+    // guessed rectangle.
+    float dockBodyX_ = 0.0f;
+    float dockBodyY_ = 0.0f;
+    float dockBodyW_ = 0.0f;
+    float dockBodyH_ = 0.0f;
+    // Set by beginPage when it took the docked route, so endPage unwinds
+    // exactly what was pushed - the two are as strictly paired as Begin/End.
+    bool dockedPageBegun_ = false;
+    bool beginDockedPage(const char* id, const char* title, bool* open);
+    void endDockedPage();
+    // The tab row across the top of the centre panel, in the rail's own
+    // pushbutton style. Returns the height it used, which the panel below
+    // takes off its own.
+    float drawCentreDockTabs();
     // Begin a page: the window, its cabinet, its rail and keys. Returns whether
     // the body should be drawn; ALWAYS pair with endPage(), as Begin with End.
     //
