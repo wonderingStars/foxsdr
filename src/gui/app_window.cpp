@@ -12466,7 +12466,15 @@ void AppWindow::drawPluginWindows() {
                 // one that cannot be put into a state the renderer has no meaning
                 // for. It also makes a third style a one-line change here.
                 ImGui::BeginDisabled(!mapTrails_);
-                ImGui::SetNextItemWidth(110.0f);
+                // A LITERAL PIXEL WIDTH, not a measured one, so it does not
+                // follow ImGui's own font/style scaling the way the checkboxes
+                // beside it do - SetNextItemWidth takes a raw pixel count, and
+                // 110 stayed the desktop's own count on the tablet, drawing a
+                // box barely wider than its own dropdown arrow beside type
+                // twice its desktop size ("Ribbon" is the word it has to
+                // hold). gui::px() is the same fix drawTransmitPage's own
+                // widget widths already use for this reason.
+                ImGui::SetNextItemWidth(cascade::gui::px(110.0f));
                 const char* kTrailStyles[] = {"Line", "Ribbon"};
                 if (mapTrailStyle_ < 0 || mapTrailStyle_ > 1) { mapTrailStyle_ = 0; }
                 ImGui::Combo("##trailstyle", &mapTrailStyle_, kTrailStyles, 2);

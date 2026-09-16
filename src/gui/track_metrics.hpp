@@ -31,6 +31,15 @@
 #include <string>
 #include <vector>
 
+// gui::px() and nothing else from ImGui - see that header's own file comment
+// for why it is safe here: pure arithmetic on one float, no ImGui, no
+// platform. What it buys the legend below is the same thing moduleKindTagWidth
+// and coordCellWidth already have in gui/plugin_store_view.cpp and
+// gui/map_view.cpp - a fixed-pixel control that comes out the tablet's size
+// along with the rest of the interface instead of staying pinned at its
+// desktop pixel count.
+#include "gui/ui_scale.hpp"
+
 namespace cascade::gui {
 
 // --- geodesy -----------------------------------------------------------------
@@ -203,8 +212,17 @@ const AltBandStyle& orbitBandStyle(int index);
 // of it and after the label. Named rather than repeated as literals because the
 // width below and the drawing code have to agree about them, and when they were
 // written separately they did not.
-inline constexpr float kAltLegendSwatch = 10.0f;
-inline constexpr float kAltLegendPad = 5.0f;
+//
+// FUNCTIONS, NOT CONSTANTS - so they go through gui::px() and the swatch and
+// its padding come out the tablet's size along with the rest of the legend.
+// Before this they were the one pair of figures in the legend's own
+// arithmetic that stayed pinned at their desktop pixel count while
+// ImGui::GetTextLineHeight() (everything else the legend measures itself
+// against) doubled under it: a swatch drawn at 10 px beside type drawn at
+// twice its desktop size. At scale 1.0 px(v) == v exactly, so every figure
+// this header and tests/test_track_metrics.cpp already pin is unchanged.
+inline float kAltLegendSwatch() { return px(10.0f); }
+inline float kAltLegendPad() { return px(5.0f); }
 
 // Panel width for the altitude legend, MEASURED rather than guessed.
 //
@@ -749,7 +767,7 @@ inline float legendWidth(int count, BandStyleAt&& bandStyleAt,
         const float w = measureTextWidth(bandStyleAt(i).label);
         if (w > longest) { longest = w; }
     }
-    return kAltLegendPad + kAltLegendSwatch + kAltLegendPad + longest + kAltLegendPad;
+    return kAltLegendPad() + kAltLegendSwatch() + kAltLegendPad() + longest + kAltLegendPad();
 }
 }  // namespace detail
 

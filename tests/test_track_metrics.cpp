@@ -1419,9 +1419,9 @@ int main() {
                     return advance * static_cast<float>(std::strlen(s));
                 };
                 const float w = cascade::gui::orbitLegendWidth(measure);
-                const float fixed = cascade::gui::kAltLegendPad +
-                                    cascade::gui::kAltLegendSwatch +
-                                    cascade::gui::kAltLegendPad + cascade::gui::kAltLegendPad;
+                const float fixed = cascade::gui::kAltLegendPad() +
+                                    cascade::gui::kAltLegendSwatch() +
+                                    cascade::gui::kAltLegendPad() + cascade::gui::kAltLegendPad();
                 float longest = 0.0f;
                 for (int i = 0; i < kOrbitBandCount; ++i) {
                     const float lw = measure(orbitBandStyle(i).label);
@@ -1704,8 +1704,8 @@ int main() {
             const float w = cascade::gui::altLegendWidth(measure);
             // The fixed parts, in the order the legend draws them: pad, swatch,
             // pad, label, pad.
-            const float fixed = cascade::gui::kAltLegendPad + cascade::gui::kAltLegendSwatch +
-                                cascade::gui::kAltLegendPad + cascade::gui::kAltLegendPad;
+            const float fixed = cascade::gui::kAltLegendPad() + cascade::gui::kAltLegendSwatch() +
+                                cascade::gui::kAltLegendPad() + cascade::gui::kAltLegendPad();
             for (int i = 0; i < kAltBandCount; ++i) {
                 CHECK(w >= fixed + measure(altBandStyle(i).label));
             }
@@ -1718,6 +1718,53 @@ int main() {
             }
             CHECK_NEAR(w, fixed + longest, 0.001);
         }
+
+        // --- THE SAME PLATE ON THE TABLET, AT UI SCALE 2.0 ---------------------
+        // Everything above this ran at the implicit scale of 1.0 every test
+        // binary starts at, where gui::px(v) == v exactly and the legend's
+        // fixed parts are the same 10 px swatch and 5 px pad they have always
+        // been. This is the check that they are NOT that pair of literals any
+        // more: before this fix, kAltLegendSwatch and kAltLegendPad were
+        // `inline constexpr float` and could not call gui::px() at all, so the
+        // swatch stayed pinned at its desktop pixel count beside type that had
+        // doubled under it - the "desktop-sized brass carrying double-sized
+        // lettering" defect commit 14bf77f fixed everywhere else in this
+        // file's shared bench vocabulary but not here, because this legend is
+        // not part of that vocabulary; it is the map's own control.
+        //
+        // Measured at scale 1.0 first, then 2.0, with the SAME measuring
+        // lambda both times - so a change in the result can only be the fixed
+        // swatch/pad part growing, not the label measurement.
+        //
+        // Verified this test actually exercises gui::px() and not some other
+        // doubling by temporarily reverting kAltLegendSwatch/kAltLegendPad to
+        // `inline constexpr float` (dropping the px() call) and confirming
+        // this block alone failed - swatch2/pad2/w2/wOrbit2 all came back
+        // equal to their scale-1.0 figures - while every other check in this
+        // file stayed green; then restored the fix.
+        const auto measure2 = [](const char* s) {
+            return 7.0f * static_cast<float>(std::strlen(s));
+        };
+        const float swatch1 = cascade::gui::kAltLegendSwatch();
+        const float pad1 = cascade::gui::kAltLegendPad();
+        const float w1 = cascade::gui::altLegendWidth(measure2);
+        const float wOrbit1 = cascade::gui::orbitLegendWidth(measure2);
+
+        cascade::gui::setUiScale(2.0f);
+        const float swatch2 = cascade::gui::kAltLegendSwatch();
+        const float pad2 = cascade::gui::kAltLegendPad();
+        const float w2 = cascade::gui::altLegendWidth(measure2);
+        const float wOrbit2 = cascade::gui::orbitLegendWidth(measure2);
+        // Scale back to 1.0 immediately - before the CHECKs below and before
+        // any test that runs after this one in the same binary. A scale left
+        // at 2.0 would silently double every other px()-based figure this
+        // file or a later test function measures.
+        cascade::gui::setUiScale(1.0f);
+
+        CHECK(swatch2 > swatch1 * 1.8f);
+        CHECK(pad2 > pad1 * 1.8f);
+        CHECK(w2 > w1 * 1.2f);
+        CHECK(wOrbit2 > wOrbit1 * 1.2f);
     }
 
     // --- the table leaves room for the line drawn under it -------------------

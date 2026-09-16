@@ -1199,11 +1199,17 @@ void MapView::draw(float width, float height,
     const float mapLineH = ImGui::GetTextLineHeight();
     // The gap between a caption and the mark it belongs to. Small, because the
     // pairing is what makes the number mean something.
-    constexpr float kLabelGap = 3.0f;
+    //
+    // THROUGH px() LIKE EVERY OTHER PADDING IN THIS FILE, not constexpr any
+    // more: mapLineH above already comes out the tablet's size (it is
+    // ImGui's own line height, and ImGui's font is scaled), so a caption
+    // gap that stayed pinned at its desktop pixel count was the one part of
+    // this spacing that did not grow with the type sitting next to it.
+    const float kLabelGap = px(3.0f);
     // How far off the floor of the chart the scale bar's rule is drawn. Named
     // because the graticule below has to stand out of its way and was doing so
     // against a number that had nothing to do with it.
-    constexpr float kScaleBarUp = 26.0f;
+    const float kScaleBarUp = px(26.0f);
     const double step = graticuleStep(spanDeg_);
     // A graticule is engraved into the plate and its numbers are a caption on
     // it - never a reading, which is why neither of them is amber.
@@ -1729,24 +1735,32 @@ void MapView::draw(float width, float height,
     // the only thing that says which of them a given block of colour belongs
     // to.
     {
-        const float sw = kAltLegendSwatch;
-        const float pad = kAltLegendPad;
+        // sw/pad already come out the tablet's size - see kAltLegendSwatch's
+        // own comment in track_metrics.hpp - and every other figure in this
+        // plate is scaled here too, the same convention the deck wells and
+        // rocker rows elsewhere in this file already follow: positions,
+        // padding and gaps go through px(); corner rounding and stroke
+        // thickness (the literal 2.0f/3.0f arguments to AddRect/AddRectFilled)
+        // stay unscaled, matching theme::kPanelRounding/kHairline's own
+        // convention.
+        const float sw = kAltLegendSwatch();
+        const float pad = kAltLegendPad();
         const float lh = ImGui::GetTextLineHeight();
-        const float rowStep = lh + 2.0f;
-        float legendY = origin.y + 8.0f;
+        const float rowStep = lh + px(2.0f);
+        float legendY = origin.y + px(8.0f);
 
         // One ladder's key. Returns the height it used so a second can be
         // stacked under it without either guessing at the other's size.
         const auto drawLadder = [&](const char* heading, int bandCount,
                                     const AltBandStyle& (*styleAt)(int), float widthPx) {
-            const float headH = lh + 3.0f;
+            const float headH = lh + px(3.0f);
             const float boxH =
-                headH + rowStep * static_cast<float>(bandCount) + 8.0f;
+                headH + rowStep * static_cast<float>(bandCount) + px(8.0f);
             // The heading may be wider than any band label; the plate has to
             // hold whichever is longer or it clips its own title.
             const float headW = ImGui::CalcTextSize(heading).x + pad * 2.0f;
             const float boxW = (widthPx > headW) ? widthPx : headW;
-            const ImVec2 tl(origin.x + width - boxW - 8.0f, legendY);
+            const ImVec2 tl(origin.x + width - boxW - px(8.0f), legendY);
             const ImVec2 br(tl.x + boxW, tl.y + boxH);
             // The legend is a plate laid on the map: the map's own ground as a
             // scrim so it darkens busy tiles without hiding them, edged in the
@@ -1757,12 +1771,12 @@ void MapView::draw(float width, float height,
                         3.0f);
             // A caption on glass, so cream rather than the engraved tone - the
             // same rule every other over-map word here follows.
-            dl->AddText(ImVec2(tl.x + pad, tl.y + 4.0f), theme::kCream, heading);
+            dl->AddText(ImVec2(tl.x + pad, tl.y + px(4.0f)), theme::kCream, heading);
             for (int i = 0; i < bandCount; ++i) {
                 // Highest band at the TOP, which is the way an altitude scale
                 // is read everywhere else.
                 const AltBandStyle& s = styleAt(bandCount - 1 - i);
-                const float y = tl.y + 4.0f + headH + rowStep * static_cast<float>(i);
+                const float y = tl.y + px(4.0f) + headH + rowStep * static_cast<float>(i);
                 // Laid out from the same padding the width was computed from,
                 // so the two cannot disagree about where the label starts.
                 dl->AddRectFilled(ImVec2(tl.x + pad, y + (lh - sw) * 0.5f),
@@ -1772,7 +1786,7 @@ void MapView::draw(float width, float height,
                 // the label beside it is a caption on glass, so it is cream.
                 dl->AddText(ImVec2(tl.x + pad + sw + pad, y), theme::kCream, s.label);
             }
-            legendY = br.y + 6.0f;
+            legendY = br.y + px(6.0f);
         };
 
         // MEASURED WITH THE FONT IN USE, not assumed. A constant here was 74 px
@@ -1823,7 +1837,12 @@ void MapView::draw(float width, float height,
             double barKm = 1.0;
             while (barKm / kmPerPx < 60.0) { barKm *= 2.0; }
             const float barPx = static_cast<float>(barKm / kmPerPx);
-            const ImVec2 a(origin.x + 12.0f, origin.y + height - kScaleBarUp);
+            // origin.x's own offset and the tick half-length go through px()
+            // like kScaleBarUp above; the bar's own length is a measurement
+            // (kmPerPx derived) and is left alone, and the 2.0f line
+            // thickness stays literal, matching theme::kHairline's convention
+            // of leaving stroke weight unscaled.
+            const ImVec2 a(origin.x + px(12.0f), origin.y + height - kScaleBarUp);
             const ImVec2 b(a.x + barPx, a.y);
             // Printed on the chart in cream, one tone below the ivory the
             // receiver's own mark takes: the bar states the map's scale, it is
@@ -1833,8 +1852,9 @@ void MapView::draw(float width, float height,
             // End ticks, so the bar's extent is unambiguous: a bare line has
             // no stated end and a scale read half a pixel long is a scale read
             // wrong.
-            dl->AddLine(ImVec2(a.x, a.y - 4.0f), ImVec2(a.x, a.y + 4.0f), barCol, 2.0f);
-            dl->AddLine(ImVec2(b.x, b.y - 4.0f), ImVec2(b.x, b.y + 4.0f), barCol, 2.0f);
+            const float tickHalf = px(4.0f);
+            dl->AddLine(ImVec2(a.x, a.y - tickHalf), ImVec2(a.x, a.y + tickHalf), barCol, 2.0f);
+            dl->AddLine(ImVec2(b.x, b.y - tickHalf), ImVec2(b.x, b.y + tickHalf), barCol, 2.0f);
             char buf[64];
             if (std::fabs(refLat) < 0.5) {
                 std::snprintf(buf, sizeof buf, "%.0f km at the equator", barKm);
