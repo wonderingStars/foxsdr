@@ -592,12 +592,18 @@ file(GLOB CASCADE_USB    CONFIGURE_DEPENDS src/usb/*.cpp)
 # JNI layer calls into the adopted-device registry declared alongside
 # usbfs_device.cpp's own header (src/usb/usbfs_device.hpp) - it has no
 # purpose without that registry and #errors on any non-Linux build the same
-# way, so it is excluded right beside it. CASCADE_ANDROID is named as well
-# as UNIX because the NDK toolchain sets CMAKE_SYSTEM_NAME to Android, for
+# way, so it is excluded right beside it. usb_android_jni.cpp - the JNI seam
+# that binds com.foxsdr.app.Usb's native methods and calls that bridge - goes
+# with them: its whole body is behind "#if defined(__ANDROID__)" (a desktop
+# Linux build compiles the no-op branch, which is what keeps the header
+# includable without a platform guard), so on Windows and macOS it would add
+# a translation unit that contains nothing at all. CASCADE_ANDROID is named as
+# well as UNIX because the NDK toolchain sets CMAKE_SYSTEM_NAME to Android, for
 # which CMake's UNIX is true but is not something this file wants to rely on.
 if(NOT ((UNIX AND NOT APPLE) OR CASCADE_ANDROID))
     list(FILTER CASCADE_USB EXCLUDE REGEX "usbfs_device\\.cpp$")
     list(FILTER CASCADE_USB EXCLUDE REGEX "usb_android_bridge\\.cpp$")
+    list(FILTER CASCADE_USB EXCLUDE REGEX "usb_android_jni\\.cpp$")
 endif()
 
 add_library(cascade_lib STATIC

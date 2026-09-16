@@ -81,12 +81,27 @@
             </intent-filter>
 
             <!--
-              PLACEHOLDER for the USB slice: this is what makes Android offer
-              to launch FoxSDR when a receiver is plugged in, and what grants
-              permission to that device without a dialog. The filter it points
-              at is deliberately EMPTY - it matches no device today - so the
-              wiring is in place and provably harmless until the slice that
-              adds the real vendor/product identifiers lands.
+              THE RECEIVERS, and the filter is no longer empty. This is what
+              makes Android offer to launch FoxSDR when one is plugged in, and
+              what grants permission to that device without a dialog - which
+              is the difference between "plug it in and it works" and "plug it
+              in, find the app, tap through a dialog".
+
+              THE LIST IS GENERATED, never hand-written: res/xml/usb_device_filter.xml
+              comes from installer/linux/99-foxsdr-sdr.rules through
+              tools/gen-android-usb-ids.py, and tests/test_usb_android_ids.cpp
+              pins it to that file, to the Java table in
+              java/com/foxsdr/app/UsbIds.java and to the drivers' own
+              compiled-in id tables. A radio a driver here can open and this
+              filter does not list would be invisible on a phone with nothing
+              anywhere to say why.
+
+              IT DOES NOT, ON ITS OWN, OPEN ANYTHING. The descriptor still has
+              to be obtained in Java (Usb.java) and handed to the native
+              transport; this filter only decides what Android launches us for
+              and what it hands us permission for. Everything else about the
+              sequence - asking, opening, registering, closing - is in
+              Usb.java's own comment.
             -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />

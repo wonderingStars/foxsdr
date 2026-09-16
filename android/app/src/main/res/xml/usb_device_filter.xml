@@ -2,22 +2,84 @@
 <!--
   SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-  THE USB DEVICE FILTER, AND IT IS DELIBERATELY EMPTY.
+  GENERATED FILE - DO NOT EDIT BY HAND.
+  Written by tools/gen-android-usb-ids.py from
+  installer/linux/99-foxsdr-sdr.rules, which is the text form of the native
+  drivers' own id tables. tests/test_usb_android_ids.cpp pins this file, that
+  one, UsbIds.java and the compiled-in driver tables to the same set.
 
-  Android matches an attached device against the <usb-device> entries here. An
-  entry grants this application permission to open that device without the
-  system dialog, and offers to launch it when the device is plugged in - which
-  is exactly the behaviour a receiver wants, and exactly the behaviour that must
-  not be granted to hardware nobody has tested against.
-
-  So the wiring is in place and matches nothing. The USB slice fills this in
-  with the identifiers it has actually opened a device with. For reference, the
-  form each entry takes, in DECIMAL (Android rejects 0x notation here, which is
-  the single most common mistake in this file):
-
-      <usb-device vendor-id="3034" product-id="10296" />   RTL2832U, 0x0BDA/0x2838
-
-  Nothing is listed until the slice that can test it says so.
+  WHAT AN ENTRY DOES. Android matches an attached device against these
+  <usb-device> entries: a match offers to launch FoxSDR when the device is
+  plugged in AND grants this application permission to open it without the
+  system dialog. The ids are DECIMAL - Android rejects 0x notation here,
+  which is the single most common mistake in this file - so each line
+  carries the hex form in a comment beside it.
 -->
 <resources>
+
+    <!-- RTL2832U-based RTL-SDR dongles -->
+    <usb-device vendor-id="3034" product-id="10290" />  <!-- 0bda:2832 -->
+    <usb-device vendor-id="3034" product-id="10296" />  <!-- 0bda:2838 -->
+    <usb-device vendor-id="1043" product-id="26240" />  <!-- 0413:6680 -->
+    <usb-device vendor-id="1043" product-id="28431" />  <!-- 0413:6f0f -->
+    <usb-device vendor-id="1112" product-id="28799" />  <!-- 0458:707f -->
+    <usb-device vendor-id="3277" product-id="169" />  <!-- 0ccd:00a9 -->
+    <usb-device vendor-id="3277" product-id="179" />  <!-- 0ccd:00b3 -->
+    <usb-device vendor-id="3277" product-id="180" />  <!-- 0ccd:00b4 -->
+    <usb-device vendor-id="3277" product-id="181" />  <!-- 0ccd:00b5 -->
+    <usb-device vendor-id="3277" product-id="183" />  <!-- 0ccd:00b7 -->
+    <usb-device vendor-id="3277" product-id="184" />  <!-- 0ccd:00b8 -->
+    <usb-device vendor-id="3277" product-id="185" />  <!-- 0ccd:00b9 -->
+    <usb-device vendor-id="3277" product-id="192" />  <!-- 0ccd:00c0 -->
+    <usb-device vendor-id="3277" product-id="198" />  <!-- 0ccd:00c6 -->
+    <usb-device vendor-id="3277" product-id="211" />  <!-- 0ccd:00d3 -->
+    <usb-device vendor-id="3277" product-id="215" />  <!-- 0ccd:00d7 -->
+    <usb-device vendor-id="3277" product-id="224" />  <!-- 0ccd:00e0 -->
+    <usb-device vendor-id="5460" product-id="20512" />  <!-- 1554:5020 -->
+    <usb-device vendor-id="5620" product-id="305" />  <!-- 15f4:0131 -->
+    <usb-device vendor-id="5620" product-id="307" />  <!-- 15f4:0133 -->
+    <usb-device vendor-id="6235" product-id="1568" />  <!-- 185b:0620 -->
+    <usb-device vendor-id="6235" product-id="1616" />  <!-- 185b:0650 -->
+    <usb-device vendor-id="6235" product-id="1664" />  <!-- 185b:0680 -->
+    <usb-device vendor-id="7040" product-id="54163" />  <!-- 1b80:d393 -->
+    <usb-device vendor-id="7040" product-id="54164" />  <!-- 1b80:d394 -->
+    <usb-device vendor-id="7040" product-id="54165" />  <!-- 1b80:d395 -->
+    <usb-device vendor-id="7040" product-id="54167" />  <!-- 1b80:d397 -->
+    <usb-device vendor-id="7040" product-id="54168" />  <!-- 1b80:d398 -->
+    <usb-device vendor-id="7040" product-id="54173" />  <!-- 1b80:d39d -->
+    <usb-device vendor-id="7040" product-id="54180" />  <!-- 1b80:d3a4 -->
+    <usb-device vendor-id="7040" product-id="54184" />  <!-- 1b80:d3a8 -->
+    <usb-device vendor-id="7040" product-id="54191" />  <!-- 1b80:d3af -->
+    <usb-device vendor-id="7040" product-id="54192" />  <!-- 1b80:d3b0 -->
+    <usb-device vendor-id="7449" product-id="4353" />  <!-- 1d19:1101 -->
+    <usb-device vendor-id="7449" product-id="4354" />  <!-- 1d19:1102 -->
+    <usb-device vendor-id="7449" product-id="4355" />  <!-- 1d19:1103 -->
+    <usb-device vendor-id="7449" product-id="4356" />  <!-- 1d19:1104 -->
+    <usb-device vendor-id="8013" product-id="43011" />  <!-- 1f4d:a803 -->
+    <usb-device vendor-id="8013" product-id="47107" />  <!-- 1f4d:b803 -->
+    <usb-device vendor-id="8013" product-id="51203" />  <!-- 1f4d:c803 -->
+    <usb-device vendor-id="8013" product-id="53894" />  <!-- 1f4d:d286 -->
+    <usb-device vendor-id="8013" product-id="55299" />  <!-- 1f4d:d803 -->
+
+    <!-- HackRF (One, Jawbreaker, rad1o) -->
+    <usb-device vendor-id="7504" product-id="24713" />  <!-- 1d50:6089 -->
+    <usb-device vendor-id="7504" product-id="24651" />  <!-- 1d50:604b -->
+    <usb-device vendor-id="7504" product-id="52245" />  <!-- 1d50:cc15 -->
+
+    <!-- RX888 mk2 (SDDC/FX3 firmware) - the bootloader id AND the streamer id -->
+    <usb-device vendor-id="1204" product-id="241" />  <!-- 04b4:00f1 -->
+    <usb-device vendor-id="1204" product-id="243" />  <!-- 04b4:00f3 -->
+
+    <!-- Mirics MSi2500 + MSi001 (and the television sticks built on it) -->
+    <usb-device vendor-id="7671" product-id="9472" />  <!-- 1df7:2500 -->
+    <usb-device vendor-id="7671" product-id="12288" />  <!-- 1df7:3000 -->
+    <usb-device vendor-id="7671" product-id="12304" />  <!-- 1df7:3010 -->
+    <usb-device vendor-id="8256" product-id="54016" />  <!-- 2040:d300 -->
+    <usb-device vendor-id="1994" product-id="34193" />  <!-- 07ca:8591 -->
+    <usb-device vendor-id="1211" product-id="1335" />  <!-- 04bb:0537 -->
+    <usb-device vendor-id="1297" product-id="55" />  <!-- 0511:0037 -->
+
+    <!-- RTL-SDR and the in-tree DVB driver -->
+    <usb-device vendor-id="7504" product-id="24737" />  <!-- 1d50:60a1 -->
+    <usb-device vendor-id="1003" product-id="32780" />  <!-- 03eb:800c -->
 </resources>

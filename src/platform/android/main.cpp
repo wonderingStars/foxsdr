@@ -39,6 +39,7 @@
 #include "core/version.hpp"
 #include "gui/app_window.hpp"
 #include "gui/platform_window_android.hpp"
+#include "usb/usb_android_jni.hpp"
 
 namespace {
 
@@ -141,6 +142,29 @@ extern "C" void android_main(struct android_app* app) {
         } else {
             cascade::core::diagLogf("plugins: bundled in this package, at %s", libDir.c_str());
         }
+    }
+
+    // THE RADIOS, and this is the one call that makes a plugged-in dongle
+    // reachable at all on this platform.
+    //
+    // An Android application may not open a USB device from native code -
+    // UsbManager, its permission dialog and the descriptor it hands out are
+    // Java-only, and /dev/bus/usb is not readable by an app whatever its
+    // manifest says. So the sequence lives in Java
+    // (android/app/src/main/java/com/foxsdr/app/Usb.java) and this binds its
+    // native methods and tells it to start; from then on every driver's
+    // ordinary enumerateWinUsb()/openWinUsb() pair sees the device exactly as
+    // the sysfs walk presents one on desktop Linux.
+    //
+    // AFTER the diagnostics ring, like the two calls above and for the same
+    // reason: the attach, the permission answer and the registration are all
+    // reported through diagLogf, and on a tablet that log is the only account
+    // of why a radio did or did not appear. BEFORE the AppWindow, so a device
+    // already attached at launch is registered by the time the Source section
+    // first scans - and if it is not, the scan is ungated and picks it up on
+    // the next one anyway.
+    if (app != nullptr && app->activity != nullptr) {
+        cascade::usb::androidUsbInit(app->activity->vm, app->activity->clazz);
     }
 
     // THE USER'S STORED PREFERENCE, read before anything is armed - the same

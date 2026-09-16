@@ -28,12 +28,17 @@ import android.view.WindowInsetsController
  * thing that gives the picture back, and it has to be re-applied on every
  * focus gain because any system gesture brings them back transiently.
  *
- * WHAT IS STILL NOT IMPLEMENTED, and is not pretended to be:
+ * USB IS THE OTHER THING THIS CLASS EXISTS FOR, and almost none of it is in
+ * this file. `UsbManager`, its permission dialog and the file descriptor it
+ * hands out are Java-only APIs with no NDK equivalent, so the whole sequence
+ * lives in `Usb.java` beside this file and reaches native code through the C
+ * ABI in `src/usb/usb_android_bridge.h`. What this activity owes it is two
+ * lifecycle calls and nothing more - the scan is NOT started from `onCreate`,
+ * but from native code (`androidUsbInit`) once the native methods are bound,
+ * because until that binding has happened every call Java makes into native
+ * would throw `UnsatisfiedLinkError`. See `Usb.onNativeReady`.
  *
- *  - USB. `UsbManager.requestPermission` puts a dialog in front of the user
- *    before an application may open a device. There is no NDK equivalent; the
- *    file descriptor has to be obtained on the Java side and handed down (the
- *    C ABI for that already exists - src/usb/usb_android_bridge.h).
+ * WHAT IS STILL NOT IMPLEMENTED, and is not pretended to be:
  *
  *  - The soft keyboard. `AInputEvent` carries no Unicode character and there
  *    is no native way to raise the on-screen keyboard, so any text entry in
@@ -58,6 +63,30 @@ class MainActivity : NativeActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) { goImmersive() }
+    }
+
+    // THE CASE ANDROID'S OWN BROADCASTS DO NOT COVER. A dongle plugged in
+    // while FoxSDR was in the background, or permission granted from the
+    // system's own dialog as part of a launch, both leave a radio attached
+    // that no attach broadcast will ever arrive for. Usb.onResume rescans;
+    // it is idempotent (a device already open is skipped, one already asked
+    // about is not asked twice) and does nothing at all before native code
+    // has armed it.
+    override fun onResume() {
+        super.onResume()
+        Usb.onResume(this)
+    }
+
+    // BEFORE super.onDestroy(), deliberately. NativeActivity's own onDestroy
+    // is what tears the native side down and waits for its thread, so this is
+    // the last moment at which the library is certainly still loaded and the
+    // native methods Usb.stop calls are certainly still bound. Closing a
+    // UsbDeviceConnection here does not cut a native driver off mid-transfer:
+    // the transport dup()s the descriptor when it opens a radio, and a usbfs
+    // interface claim lives as long as the last descriptor sharing it.
+    override fun onDestroy() {
+        Usb.stop(this)
+        super.onDestroy()
     }
 
     @Suppress("DEPRECATION")

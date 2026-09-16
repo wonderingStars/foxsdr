@@ -196,6 +196,96 @@ before deciding to use the right one does on the desktop.
 
 ---
 
+## Radios over USB
+
+An Android app cannot open a USB device from native code: `UsbManager`, its
+permission dialog and the file descriptor it hands out are Java-only APIs, and
+`/dev/bus/usb/*` is not readable by an application whatever its manifest says.
+What native code *can* do — and what this program already does on desktop
+Linux — is talk usbfs on an **already-open** descriptor. So the sequence is
+split, and the split is the whole design:
+
+| where | what it does |
+|---|---|
+| `res/xml/usb_device_filter.xml` (via the manifest's `USB_DEVICE_ATTACHED` filter) | makes Android offer to launch FoxSDR when a listed radio is plugged in, and grants permission for it with no dialog |
+| `java/com/foxsdr/app/Usb.java` | enumerates `getDeviceList()`, filters by `UsbIds`, asks permission, `openDevice()`, hands the descriptor down, closes on detach |
+| `src/usb/usb_android_jni.cpp` | binds `Usb`'s five native methods with `RegisterNatives` from `android_main`, and calls them into the C ABI |
+| `src/usb/usb_android_bridge.h` | the plain-C registration the JNI layer calls |
+| `src/usb/usbfs_device.cpp` | `dup()`s the descriptor when a driver opens the radio; from there every driver's ordinary `enumerateWinUsb()`/`openWinUsb()` pair works unchanged |
+
+Two things about that are worth knowing before changing any of it.
+
+**Native code calls Java first, not the other way round.** `libfoxsdr.so` is
+loaded by the framework (`android.app.lib_name`), not by `System.loadLibrary`,
+so its native methods cannot be resolved by name and `JNI_OnLoad` is never
+called on it either. `androidUsbInit` binds them explicitly and only then calls
+`Usb.onNativeReady(activity)`. Anything Java does before that would be an
+`UnsatisfiedLinkError` with no radio and nothing in the log to say why.
+
+**The USB id list is generated, in four places at once.** One list has to
+appear in the drivers' own id tables, the desktop udev rules, the Android
+filter XML and the Java table, or a radio works on the desktop and is silently
+unopenable on a phone. `tools/gen-android-usb-ids.py` writes the last two from
+`installer/linux/99-foxsdr-sdr.rules`, and `tests/test_usb_android_ids.cpp`
+pins all four sets equal — including the compiled-in driver tables, which
+nothing else connects to the Android files at all.
+
+```sh
+tools/gen-android-usb-ids.py            # rewrite the two generated files
+tools/gen-android-usb-ids.py --check    # exit 1 if either is out of date
+```
+
+### Proving the path without a radio
+
+There is no USB device on an emulator, so the JNI round trip has a **self-test
+built into the debug build**: it opens `/dev/null`, registers it as the
+commonest RTL-SDR in the world, asks the native side what the Source section
+would now list, and unregisters it again.
+
+```sh
+adb shell am start -S -n com.foxsdr/com.foxsdr.app.MainActivity \
+    --ez foxsdr_usb_selftest true
+adb logcat -d -s FoxSDR | grep 'usb:'
+```
+
+`-S` matters: the activity is `singleTop`, so without it a running instance
+keeps its original intent and the extra is never seen. It is gated twice — the
+extra **and** `ApplicationInfo.FLAG_DEBUGGABLE` — so a release APK ignores it.
+A good run says:
+
+```
+usb: 5 native method(s) bound to com.foxsdr.app.Usb
+usb: java: listening for USB attach/detach
+usb: selftest: /dev/null is fd 95; 0 device(s) adopted
+usb: registered selftest:/dev/null (0bda:2838, serial "FOXSDR-SELFTEST", …) as fd:95
+usb: selftest: registered as fd:95; 1 device(s) adopted; Source lists: rtlsdr: …
+usb: selftest: unregistered; 0 device(s) adopted; Source lists: (no radio)
+usb: selftest: PASS
+```
+
+The host suite covers the same seam from the other side without any device:
+`tests/test_usb_android_bridge.cpp` drives the C ABI exactly as the JNI layer
+does (`ctest -R test_usb_android`), and it is in the on-device list too, so
+`tools/run-android-tests.sh` runs it on the emulator's own ABI.
+
+### What a real dongle is still needed for
+
+Everything above is provable without hardware. These are not, and none of them
+is claimed:
+
+- the system permission dialog itself — the emulator never shows one, because
+  it has no device to ask about;
+- `USB_DEVICE_ATTACHED` / `DETACHED` actually arriving (both are protected
+  broadcasts; `adb shell am broadcast` cannot send them, and the
+  `EXTRA_DEVICE` parcelable cannot be faked from the shell);
+- whether an OTG adapter's power budget carries an RTL-SDR at all on a given
+  tablet;
+- samples. A real descriptor's control and bulk transfers are the one thing
+  neither the host tests nor the emulator can exercise: `/dev/null` answers the
+  claim ioctl with `ENOTTY`, which is exactly as far as a fake can go.
+
+---
+
 ## Decisions in this slice
 
 **EGL config.** `EGL_OPENGL_ES3_BIT` renderable type (without it

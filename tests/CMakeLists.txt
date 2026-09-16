@@ -184,8 +184,22 @@ set(CASCADE_ANDROID_TEST_NAMES
     test_band_plan
     # plugin host
     test_plugin_host
-    # usb fake/usbfs
-    test_usb_usbfs test_usb_winusb
+    # usb fake/usbfs, and the plain-C bridge the Android Java layer calls
+    # (src/usb/usb_android_bridge.h). The bridge test is in BOTH lists for the
+    # same reason test_net_post is: what it pins is that a registration made
+    # the way Java makes it is what the drivers then see, and an assertion
+    # like that is worth much less if it only ever runs on the build host. It
+    # reaches no Java and no JNI - the registry it drives is the same code
+    # either configuration compiles - and it asserts BY PATH rather than by
+    # list size, because the emulator exposes a real /sys/bus/usb/devices
+    # (see the note at the top of tools/run-android-tests.sh).
+    test_usb_usbfs test_usb_winusb test_usb_android_bridge
+    # The Android USB id table, in four places at once: the drivers' own
+    # compiled-in tables, the udev rules, res/xml/usb_device_filter.xml and
+    # UsbIds.java. NOT in this list - it reads three files out of the
+    # repository by CASCADE_SOURCE_DIR, which does not exist on a device, and
+    # what it proves is a property of the SOURCE TREE rather than of any
+    # platform. The desktop glob above builds and runs it.
     # native driver tests (over the usb fake, or a real bus if present)
     test_rtlsdr_source test_hackrf_source test_airspy_source
     test_airspyhf_source test_rx888_source test_mirisdr_source
