@@ -5610,7 +5610,7 @@ static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     }
     // The word, cut into the brass: ink on metal, never amber.
     ImFont* f = cascade::gui::fonts::legend();
-    const float px = cascade::gui::px(cascade::gui::fonts::kTinySize);
+    const float px = cascade::gui::px(cascade::gui::fonts::kRailBankSize);
     const ImVec2 ts = f->CalcTextSizeA(px, FLT_MAX, 0.0f, label);
     dl->AddText(f, px,
                 ImVec2((tl.x + br.x) * 0.5f - ts.x * 0.5f,
@@ -5629,7 +5629,7 @@ float AppWindow::drawRailBankKeys(float colX, float colY, float colW, float body
     const float kGap = cascade::gui::px(4.0f);
     const float kStrip = cascade::gui::px(7.0f);  // lamp strip and gap, below the key
     const float keyH =
-        cascade::gui::px(std::max(22.0f, cascade::gui::fonts::kTinySize + 9.0f));
+        cascade::gui::px(std::max(22.0f, cascade::gui::fonts::kRailBankSize + 9.0f));
     const float x0 = colX + kPad;
     const float x1 = colX + colW - kPad;
     const float keyW = (x1 - x0 - kGap * static_cast<float>(cascade::gui::kRailBankCount - 1)) /

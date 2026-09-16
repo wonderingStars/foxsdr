@@ -89,6 +89,20 @@ inline constexpr float kReadingSize = 16.0f;  // a number on glass
 inline constexpr float kTinySize = 14.0f;     // the smallest engraving that
                                               // still has to be readable
 
+// THE FUNCTION SELECT BANK KEYS (SIGNAL, DECODE, VIEW, EXTEND, SYSTEM). On a
+// desk their words are cut at kTinySize, like every other chip on the rail.
+// On a tablet held at arm's length the same word at the same size was the
+// owner's first complaint on seeing the layout ("they need to be bigger so
+// we can read them", 2026-09-16), so on Android the keys letter at kUiSize
+// and grow with it (drawRailBankKeys derives the key height from this). The
+// desktop figure is unchanged, which is why test_app_rail's pinned numbers
+// still hold there.
+#if defined(__ANDROID__)
+inline constexpr float kRailBankSize = kUiSize;
+#else
+inline constexpr float kRailBankSize = kTinySize;
+#endif
+
 // THE LARGEST ENGRAVING IN THE APPLICATION, and it is deliberately used by ONE
 // surface: a PAGE whose entire content is prose a user reads before deciding
 // to put somebody else's native code into this process. The plugin store is
