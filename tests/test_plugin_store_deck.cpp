@@ -209,12 +209,27 @@ void testUpperDeckFitsUnderHalfTheBody() {
         PluginStoreView view;
         const float bodyH = 906.0f;
         const float h = drawnUpperDeckHeight(view, model, deck, 1174.0f, bodyH);
+        const float cap = pageDeckHeightCap(bodyH);
         CHECK(h > 0.0f);
-        CHECK(h <= pageDeckHeightCap(bodyH));
+        CHECK(h <= cap);
         CHECK(!view.addAllWellDrawn());
-        std::printf("  REAL docked body 1174x%.0f @2.0x (bundled): upper deck %.2f px, "
-                    "cap %.2f px, ADD ALL drawn=%d\n",
-                    bodyH, h, pageDeckHeightCap(bodyH), view.addAllWellDrawn() ? 1 : 0);
+        // THE MARGIN, PRINTED RATHER THAN JUST PASSED, and which typeface
+        // this run measured it against: Georgia (Windows' system serif,
+        // fonts.hpp's usingSystemSerif()) runs wider and taller than the
+        // embedded Saira fallback this binary uses everywhere else, so a
+        // margin measured here is a margin on ONE face and the number this
+        // print states is what tells a Windows run whether it still holds on
+        // the other. No new CHECK is pinned on the percentage itself - the
+        // one true property is `h <= cap` above, checked on whichever face
+        // actually loaded - but the layout above this test was deliberately
+        // built for at least 10% of headroom here (Saira) precisely so
+        // Georgia's extra height has somewhere to go without crossing it.
+        const float marginPct = (cap - h) / cap * 100.0f;
+        std::printf(
+            "  REAL docked body 1174x%.0f @2.0x (bundled): upper deck %.2f px, cap %.2f "
+            "px, margin %.1f%%, ADD ALL drawn=%d, system serif=%d\n",
+            bodyH, h, cap, marginPct, view.addAllWellDrawn() ? 1 : 0,
+            cascade::gui::fonts::usingSystemSerif() ? 1 : 0);
     }
 
     // A REPRESENTATIVE DESKTOP WINDOW BODY, at its own scale (1.0) - well
@@ -354,6 +369,19 @@ int main() {
     // nothing about what the product draws.
     const bool loaded = cascade::gui::fonts::load();
     CHECK(loaded);
+
+    // WHICH TYPEFACE THIS RUN MEASURES AGAINST, printed once so the run's own
+    // output states it rather than leaving it to be inferred: on Windows the
+    // ui/legend roles load the system's Georgia (fonts.hpp's
+    // usingSystemSerif()), which measures wider and taller than the embedded
+    // Saira fallback every other platform - and this binary on Linux - falls
+    // back to. The REAL docked body check below is pinned with margin to
+    // spare on Saira specifically so Georgia's extra height has somewhere to
+    // go; a Windows run of this same binary is the one that proves it holds
+    // under the serif this file has no way to load itself.
+    std::printf("  fonts::usingSystemSerif() = %d (%s)\n",
+                cascade::gui::fonts::usingSystemSerif() ? 1 : 0,
+                cascade::gui::fonts::usingSystemSerif() ? "Georgia" : "embedded Saira");
 
     if (loaded) {
         testUpperDeckFitsUnderHalfTheBody();

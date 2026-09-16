@@ -253,6 +253,37 @@ const char* moduleKindTag(const ModulePlate& m);
 // Call inside a frame: it asks the atlas to measure.
 float moduleKindTagWidth();
 
+// THE MODULE CARD'S OWN ACTION-COLUMN WIDTH - the key (FIT / UPDATE /
+// FITTED), the install word and the running state word all have to fit in
+// it, wrapped where they must. Exported for the same reason
+// moduleKindTagWidth() is: moduleRowColumns() below and the row's own drawing
+// need the identical figure. Call inside a frame.
+float moduleActionColumnWidth();
+
+// A MODULE CARD'S THREE COLUMNS: the kind tag, the text column (name,
+// version, summary, maker/licence), and the action column, as widths and
+// offsets from the card's own left edge (`cw`).
+struct ModuleRowColumns {
+    float mx = 0.0f;    // the text column's own left edge
+    float midW = 0.0f;  // the text column's width - EXACTLY the room there
+                       // is; never a floor that can claim more than `cw`
+                       // actually leaves once the tag and action columns
+                       // have taken their own share
+    float ax = 0.0f;    // the action column's own left edge - always
+                       // mx + midW, so a caller that clips or wraps to
+                       // midW cannot draw past it
+};
+
+// HOW THE MODULE LIST'S ROW (plugin_store_view.cpp) DIVIDES ITS OWN WIDTH,
+// pulled out of draw() for the reason storeCheckKeyWidth() was: the only
+// thing that could observe this arithmetic going wrong was a screenshot at
+// one window size, which is exactly how "INSTALLED" came to sit on top of
+// "1.0.0 INSTALLED" on the docked tablet's real body (1174 px) before this
+// was pinned. `mx + midW == ax` always, by construction - see the note on
+// `moduleRowColumns` in the .cpp for what the old formula got wrong and why.
+// Call inside a frame.
+ModuleRowColumns moduleRowColumns(float cw);
+
 // HOW WIDE THE CATALOGUE-SOURCE KEY HAS TO BE, measured across all three words
 // it can carry: CHECK NOW, CHECK AGAIN, and - in a build whose modules are
 // bundled (PluginStoreModel::bundled) - NO CATALOGUE, which is the longest of

@@ -845,7 +845,12 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
 
         for (std::size_t i = 0; i < facts.size(); ++i) {
             const PlateFact& f = facts[i];
-            const float cx = x + (i % 2u == 0u ? 0.0f : (colW + 14.0f));
+            // px() ON THE COLUMN GAP: colW's own reservation above already
+            // subtracts px(14.0f) for it, and a raw 14.0f here quietly
+            // stopped scaling with everything beside it once `width` (and so
+            // `inner` and `colW`) started arriving in real device pixels -
+            // the same fault fabc498 fixed on the SHOW well's second column.
+            const float cx = x + (i % 2u == 0u ? 0.0f : (colW + cascade::gui::px(14.0f)));
             const float cy = y + factRowH * static_cast<float>(i / 2u);
             // THE KEY IS WHAT MAKES THE VALUE MEAN ANYTHING, so it is lettered
             // to be read: muted ink on the plate's dark ground is about 6:1
@@ -1118,6 +1123,58 @@ float moduleKindTagWidth() {
     // The floor is the width the store's card used before this was measured,
     // so a narrow face cannot shrink the chip out of the design.
     return std::max(cascade::gui::px(84.0f), w + cascade::gui::px(14.0f));
+}
+
+// THE MODULE CARD'S OWN ACTION-COLUMN WIDTH, exported for the same reason as
+// the two functions above it: the module list's row and moduleRowColumns()
+// below both need the identical figure, and a second copy of this max() list
+// is exactly the kind of drift this file measures rather than guesses at.
+float moduleActionColumnWidth() {
+    ImFont* uf = fonts::ui();
+    const float tiny = prose();
+    return std::max({cascade::gui::px(150.0f), textW(uf, tiny, "FIT") + cascade::gui::px(28.0f),
+                     textW(uf, tiny, "UPDATE") + cascade::gui::px(28.0f),
+                     textW(uf, tiny, "FITTED") + cascade::gui::px(28.0f),
+                     textW(uf, tiny, "NOT INSTALLED") + cascade::gui::px(18.0f),
+                     textW(uf, tiny, "CANNOT FIT") + cascade::gui::px(18.0f),
+                     textW(uf, tiny, "INSTALLED") + cascade::gui::px(18.0f),
+                     textW(uf, tiny, "REFUSED") + cascade::gui::px(18.0f)});
+}
+
+// HOW ONE MODULE CARD'S THREE COLUMNS DIVIDE `cw` - the card's own width,
+// which is the module list's content width and is NOT the desktop's 1280 px
+// store this row was first drawn for. A pure function of `cw` (font metrics
+// come from the loaded typefaces, not from an open ImGui frame or a window
+// size), so tests/test_plugin_store_deck.cpp can pin `mx + midW == ax` - the
+// text column ends EXACTLY where the action column begins, never later, at
+// any width - rather than trusting a screenshot to notice when it does not.
+//
+// midW IS NEVER A COMFORT FLOOR THAT CAN EXCEED THE ROOM ACTUALLY LEFT. It
+// used to be std::max(px(120.0f), cw - kTagW - kActW - kCardPad * 3.0f): a
+// floor meant for a card so narrow the text column would otherwise collapse
+// to nothing. At UI scale 2.0 that floor is itself scaled (px(120.0f) is
+// 240 device px, not 120), so on a card even a little narrower than the
+// desktop's own the CLAIMED 240 px could exceed the true remainder by a
+// wide margin - and on the real docked tablet body (1174 px, module list
+// content width ~712-727 px) it did: the floor claimed more than was left,
+// and nothing clipped the difference, which is exactly what drew
+// "INSTALLED" and "STARTED" on top of the row's own text. A card this
+// narrow gets an honestly narrow text column now instead - see the
+// per-glyph clip on the row's version/install and maker/licence lines, the
+// same technique railPlateLabel and centreDockTabLabel already use for the
+// same reason: arbitrary third-party text with nothing else bounding it.
+// (The data plate's own width - `plateW`, further down this file - has an
+// unrelated px() shortfall of its own that this change does not touch; see
+// the note there for why.)
+ModuleRowColumns moduleRowColumns(float cw) {
+    ModuleRowColumns r;
+    const float kTagW = moduleKindTagWidth();
+    const float kActW = moduleActionColumnWidth();
+    const float kCardPad = cascade::gui::px(14.0f);
+    r.mx = kCardPad + kTagW + kCardPad;
+    r.ax = cw - kCardPad - kActW;
+    r.midW = std::max(0.0f, r.ax - r.mx);
+    return r;
 }
 
 std::string moduleReachSummary(const ModulePlate& m) {
@@ -1910,9 +1967,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // and exhaustive and both name the reason NOT DECLARED exists; this one
     // says it in fewer words because it is the last thing standing between
     // the deck and gui::pageDeckHeightCap() on the docked tablet.
-    const char* showNoteCompact =
-        "Three states, three kinds - each module is one of each. NOT DECLARED: no "
-        "capability field until fitted.";
+    const char* showNoteCompact = "Three states, three kinds. NOT DECLARED: no capability yet.";
     // TWO COLUMNS WHEN THEY FIT, ONE WHEN THEY DO NOT. A rocker whose label
     // plate has been squeezed off the row is a switch nobody can read, so the
     // well grows taller rather than letting that happen.
@@ -1958,6 +2013,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             ? std::string("this build - the modules are inside it, nothing is fetched")
         : model.sourceUrl.empty() ? std::string("no catalogue source set")
                                   : model.sourceUrl;
+    // THE SAME FACT, SHORTER - used ONLY in `compact` below, never in the
+    // ordinary case, for the same reason showNoteCompact exists: this is the
+    // one line CATALOGUE SOURCE's own well has room for at the docked
+    // tablet's real width even after the well's own compaction, and a URL
+    // (the non-bundled case) is not this window's to shorten, so only the
+    // bundled wording gets a second, terser version.
+    const std::string sourceLineCompact =
+        model.bundled ? std::string("this build - nothing is fetched") : sourceLine;
 
     // THE SEARCH WELL'S OWN FLOOR, measured rather than felt: the CLEAR key at
     // its own measured width, a gap, and room to read back a short module
@@ -2009,15 +2072,24 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     };
     auto computeWellHeights = [&](float notePx, float searchInnerW, float showInnerW,
                                   float sortInnerW, const char* showNoteText,
-                                  bool compactCall) {
+                                  const std::string& sourceLineText, bool compactCall) {
         DeckWellHeights r;
         // WRAPPED, NOT ASSUMED SINGLE-LINE - this sentence is drawn wrapped to
         // its own well's width, narrow enough at a large enough face to take
         // more than one line, and the line count it takes is not fixed
         // across scales or across the search well's own width.
+        // THE WELL'S OWN TOP/BOTTOM PADDING SHRINKS TOO, ONLY ON THE
+        // compactCall PASS - the same trade rockerH's own padding makes just
+        // below, and for the same real-body reason: px(10.0f) is comfortable
+        // breathing room around a well's content, and every well on every
+        // OTHER page still gets it, but on the docked tablet's real body it
+        // was six pixels of margin the deck did not have (two wells, top and
+        // bottom, at the difference between px(10.0f) and px(4.0f) each).
+        const float wellPad =
+            compactCall ? cascade::gui::px(4.0f) : kPad;
         r.searchLegendH = wrapH(uf, notePx, searchInnerW, searchLegend);
-        r.deckAH = kPad + legH + 8.0f + fieldH + 9.0f + r.searchLegendH + 4.0f +
-                  countLineHeight() + kPad;
+        r.deckAH = wellPad + legH + 8.0f + fieldH + 9.0f + r.searchLegendH + 4.0f +
+                  countLineHeight() + wellPad;
 
         // THE ROCKER'S OWN PADDING SHRINKS TOO, ONLY ON THE compactCall PASS:
         // px(10.0f) is generous breathing room around a full-size label, and
@@ -2033,16 +2105,23 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         r.showColW = (showInnerW - cascade::gui::px(12.0f)) * 0.5f;
         r.showTwoCols = r.showColW >= showRockerMinWAt(notePx);
         r.showRows = r.showTwoCols ? 3.0f : 6.0f;
-        r.deckBH = kPad + legH + 8.0f + r.rockerH * r.showRows + 8.0f +
-                  noteHeightAt(showInnerW, showNoteText, notePx) + kPad;
+        r.deckBH = wellPad + legH + 8.0f + r.rockerH * r.showRows + 8.0f +
+                  noteHeightAt(showInnerW, showNoteText, notePx) + wellPad;
 
         // px() ON THE GAP, from the scaling slice: every figure in this
         // window is in scaled pixels, and the bundled line is drawn in the
         // same well as the url it replaces.
         r.srcTextW = sortInnerW - kCheckW - cascade::gui::px(8.0f);
-        r.srcLineH = std::max(kKeyH, wrapH(uf, notePx, r.srcTextW, sourceLine.c_str()));
-        r.deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
-                  r.srcLineH + kPad;
+        r.srcLineH = std::max(kKeyH, wrapH(uf, notePx, r.srcTextW, sourceLineText.c_str()));
+        // THE RAIL'S OWN CLEARANCE TIGHTENS TOO, ONLY ON THE compactCall PASS
+        // - the gap either side of the hairline between the sort segments and
+        // CATALOGUE SOURCE, which is breathing room rather than anything
+        // measured from a face. `sortGap` is read back by the drawing code
+        // below (the same name, same value) so the two cannot disagree.
+        const float sortGap = compactCall ? 6.0f : 12.0f;
+        const float railGap = compactCall ? 5.0f : 10.0f;
+        r.deckCH = wellPad + legH + 8.0f + kSegH + sortGap + 1.0f + railGap + legH + 8.0f +
+                  r.srcLineH + wellPad;
         if (!model.sourceStatus.empty()) {
             r.deckCH += 6.0f + wrapH(uf, notePx, sortInnerW, model.sourceStatus.c_str());
         }
@@ -2054,7 +2133,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     };
 
     const DeckWellHeights atFullProse =
-        computeWellHeights(tiny, wellInner, wellInner, wellInner, showNote, false);
+        computeWellHeights(tiny, wellInner, wellInner, wellInner, showNote, sourceLine, false);
     const float deckH_atFullProse =
         std::max(atFullProse.deckAH, std::max(atFullProse.deckBH, atFullProse.deckCH));
     // COMPACT: the deck's usual equal-thirds split, at this window's usual
@@ -2081,7 +2160,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float showInnerFinal = wellInner + searchBorrow;
     const DeckWellHeights wh =
         compact ? computeWellHeights(notePx, searchInnerFinal, showInnerFinal, wellInner,
-                                     showNoteCompact, true)
+                                     showNoteCompact, sourceLineCompact, true)
                 : atFullProse;
 
     const float deckAH = wh.deckAH;
@@ -2093,6 +2172,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float rockerH = wh.rockerH;
     const float searchLegendH = wh.searchLegendH;
     const float srcLineH = wh.srcLineH;
+    // THE SAME wellPad computeWellHeights used, so the space the three wells'
+    // drawing blocks start their content at (just below) agrees with the
+    // space their own height was measured against above.
+    const float wellPad = compact ? cascade::gui::px(4.0f) : kPad;
     const float srcTextW = wh.srcTextW;
     // THE THREE WELLS' OWN WIDTHS - equal thirds unless `compact` moved
     // width from SEARCH to SHOW, per the note above.
@@ -2118,7 +2201,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         addDeckWell(dl, tl, br);
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
-        float y = tl.y + kPad;
+        float y = tl.y + wellPad;
         addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), searchInnerFinal, "CATALOGUE SEARCH");
         y += legH + 8.0f;
 
@@ -2171,7 +2254,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         addDeckWell(dl, tl, br);
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
-        float y = tl.y + kPad;
+        float y = tl.y + wellPad;
         addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), showInnerFinal, "SHOW");
         y += legH + 8.0f;
 
@@ -2245,7 +2328,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         addDeckWell(dl, tl, br);
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
-        float y = tl.y + kPad;
+        float y = tl.y + wellPad;
         addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "SORT");
         y += legH + 8.0f;
         // THREE SEGMENTS, NOT A MENU: the whole option set visible at once, so
@@ -2260,9 +2343,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 deck.sortKey = i;
             }
         }
-        y += kSegH + 12.0f;
+        // THE SAME sortGap/railGap computeWellHeights used, so the drawn
+        // clearance around the rail agrees with what its height was
+        // measured against above.
+        const float sortGap = compact ? 6.0f : 12.0f;
+        const float railGap = compact ? 5.0f : 10.0f;
+        y += kSegH + sortGap;
         addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
-        y += 10.0f;
+        y += railGap;
         addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "CATALOGUE SOURCE");
         y += legH + 8.0f;
 
@@ -2270,7 +2358,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // and gets them. A store that will not say what it is about to contact
         // is asking for a decision it has withheld the facts for.
         dl->AddText(uf, notePx, ImVec2(tl.x + kPad, y), theme::kInkMuted,
-                    sourceLine.c_str(), nullptr, srcTextW);
+                    (compact ? sourceLineCompact : sourceLine).c_str(), nullptr, srcTextW);
         if (drawDeckKey(dl, ImVec2(br.x - kPad - kCheckW, y),
                         ImVec2(br.x - kPad, y + kKeyH),
                         // AGAIN once anything has been asked, whatever came
@@ -2383,6 +2471,20 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // PLB)" at fifty-one characters, and it now WRAPS rather than being cut at
     // the column edge, so the column has to be wide enough for that to be two
     // lines and not six.
+    // NOT PUT THROUGH px() HERE, AND DELIBERATELY LEFT THAT WAY FOR NOW. It
+    // reads like the same fault fabc498 and the note above moduleRowColumns()
+    // both fixed - `width` arrives in scaled device pixels and these four
+    // literals do not - but scaling all four moves BOTH the plate's own floor
+    // and the list's floor at once, and on the real docked body (1174 px)
+    // the two floors already cannot both be honoured (280 + 400 + the gap
+    // exceeds 1174 at scale 2): whichever is scaled "correctly" changes WHICH
+    // window loses width it was promised, not whether one of them does. That
+    // is a real decision about this window's priorities under a body neither
+    // floor was written for, not a units bug with one honest fix - and it is
+    // the reason this line is named here rather than changed. See
+    // moduleRowColumns() below: it is written to answer honestly (an empty
+    // text column, never an overlapping one) for whatever `cw` this formula
+    // hands it, which is what makes leaving this one alone safe for now.
     const float plateW =
         std::min(std::clamp(width * 0.33f, 340.0f, 560.0f),
                  std::max(280.0f, width - kGap - 400.0f));
@@ -2473,36 +2575,21 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 drawNote(cdl, at, cw - 8.0f, theme::kGold, why);
                 ImGui::Dummy(ImVec2(cw, noteHeight(cw - 8.0f, why)));
             }
-            // BOTH FIXED COLUMNS MEASURED FROM THEIR OWN WORDS. The tag chip
-            // is the shared measurement, so this card and the fitted-modules
-            // row draw one chip and not two; the action column has to hold
-            // whichever of FIT, UPDATE and FITTED this row gets, plus the
-            // state word wrapped beneath it, and 92 px was fitted around a
-            // 12 px face.
-            //
-            // THE ACTION COLUMN ALSO HOLDS THE INSTALL WORD NOW, and that is
-            // the longest thing in it: "NOT INSTALLED" at the page's own size
-            // is wider than any of the three key labels. It is measured from
-            // every word storeInstallWord can return rather than from the one
-            // this row happens to get, because a column that changed width
-            // with its word would move the module's name beside it from row
-            // to row.
+            // BOTH FIXED COLUMNS MEASURED FROM THEIR OWN WORDS, and the split
+            // between them and the text column is moduleRowColumns() now, not
+            // a second copy of the same arithmetic - see its own comment for
+            // why: a floor that could claim more width than the card actually
+            // had left was what let this row's own text run under the action
+            // column on the docked tablet's real body.
             const float kTagW = moduleKindTagWidth();
-            const float kActW = std::max(
-                {cascade::gui::px(150.0f), textW(uf, tiny, "FIT") + cascade::gui::px(28.0f),
-                 textW(uf, tiny, "UPDATE") + cascade::gui::px(28.0f),
-                 textW(uf, tiny, "FITTED") + cascade::gui::px(28.0f),
-                 textW(uf, tiny, "NOT INSTALLED") + cascade::gui::px(18.0f),
-                 textW(uf, tiny, "CANNOT FIT") + cascade::gui::px(18.0f),
-                 textW(uf, tiny, "INSTALLED") + cascade::gui::px(18.0f),
-                 textW(uf, tiny, "REFUSED") + cascade::gui::px(18.0f)});
+            const float kActW = moduleActionColumnWidth();
             const float kCardPad = cascade::gui::px(14.0f);
             for (int idx : visible) {
                 const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
                 const ModulePlate& p = sm.plate;
                 const bool isSel = idx == deck.selected;
-                const float midW =
-                    std::max(cascade::gui::px(120.0f), cw - kTagW - kActW - kCardPad * 3.0f);
+                const ModuleRowColumns cols = moduleRowColumns(cw);
+                const float midW = cols.midW;
                 const std::string reach = moduleReachSummary(p);
                 // THE SUMMARY ON THE ROW, THE DESCRIPTION ON THE PLATE. See
                 // ModulePlate::summary: the live catalogue's descriptions run
@@ -2617,7 +2704,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                                  theme::kEnamel, tag);
                 }
 
-                const float mx = cTL.x + kCardPad + kTagW + kCardPad;
+                const float mx = cTL.x + cols.mx;
+                const float ax = cTL.x + cols.ax;
                 float my = cTL.y + kCardPad;
                 // WRAPPED, NOT CLIPPED. midW is the same width the card's
                 // height was measured from, so what is drawn and what was
@@ -2632,14 +2720,23 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // end of the name line in the smallest engraving the
                     // application has, and both are what a user is actually
                     // scanning the list for.
+                    // CLIPPED TO THE TEXT COLUMN, per-glyph, the same
+                    // technique railPlateLabel and centreDockTabLabel use for
+                    // arbitrary third-party text with nothing else bounding
+                    // it: on a card narrow enough that midW is genuinely
+                    // small, "1.0.0" plus "INSTALLED" drawn end to end with
+                    // no limit at all is exactly what used to run under the
+                    // action column's own key.
+                    const ImVec4 idClip(mx, my, ax, my + idLineH);
                     float vx = mx;
                     if (!p.version.empty()) {
                         cdl->AddText(rf, tiny, ImVec2(vx, my + idLineH - faceH(rf, tiny)),
-                                     theme::kAmber, p.version.c_str());
+                                     theme::kAmber, p.version.c_str(), nullptr, 0.0f, &idClip);
                         vx += textW(rf, tiny, p.version.c_str()) + 16.0f;
                     }
                     cdl->AddText(uf, tiny, ImVec2(vx, my + idLineH - tinyH),
-                                 storeInstallColour(instState), instWord);
+                                 storeInstallColour(instState), instWord, nullptr, 0.0f,
+                                 &idClip);
                 }
                 my += idLineH + 6.0f;
                 if (!rowText.empty()) {
@@ -2655,16 +2752,31 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // - the terms the module arrives under - and the comment
                     // above says why they are on the row at all. A line worth
                     // putting there is a line worth being able to read.
+                    //
+                    // CLIPPED, per-glyph, to the text column - `foot` is a
+                    // maker's own name and licence string, third-party text
+                    // with nothing else bounding it, and `reachBeside`'s own
+                    // check only ever asked whether foot-plus-reach fit
+                    // TOGETHER; a foot long enough on its own (a real maker
+                    // name plus a real licence identifier easily clears 160 px
+                    // at the docked tablet's own width) still ran under the
+                    // action column with nothing to stop it.
+                    const ImVec4 footClip(mx, my, ax, my + tinyH);
                     cdl->AddText(uf, tiny, ImVec2(mx, my),
-                                 p.licence.empty() ? theme::kGold : theme::kInkMuted, foot);
+                                 p.licence.empty() ? theme::kGold : theme::kInkMuted, foot,
+                                 nullptr, 0.0f, &footClip);
                     if (reachBeside) {
                         cdl->AddText(uf, tiny,
                                      ImVec2(mx + textW(uf, tiny, foot) + 14.0f, my),
-                                     moduleReachColour(p), reach.c_str());
+                                     moduleReachColour(p), reach.c_str(), nullptr, 0.0f,
+                                     &footClip);
                         my += tinyH;
                     } else {
+                        const ImVec4 reachClip(mx, my + tinyH + 2.0f, ax,
+                                              my + tinyH + 2.0f + tinyH);
                         cdl->AddText(uf, tiny, ImVec2(mx, my + tinyH + 2.0f),
-                                     moduleReachColour(p), reach.c_str());
+                                     moduleReachColour(p), reach.c_str(), nullptr, 0.0f,
+                                     &reachClip);
                         my += tinyH + tinyH + 2.0f;
                     }
                 }
@@ -2679,7 +2791,6 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
                 // --- the action key and the running lamp --------------------
                 {
-                    const float ax = cBR.x - kCardPad - kActW;
                     const float ay = cTL.y + kCardPad;
                     const bool hasUpdate = !sm.updateToVersion.empty();
                     if (!p.fitted) {
