@@ -63,6 +63,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/crash_handler_posix.hpp"
 
+#include "core/crash_stack_start.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 
@@ -475,12 +476,12 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         }
     }
     // THIS HANDLER'S OWN FRAMES ARE NOT PART OF THE FAULT. On Android the walk
-    // starts inside this file (see captureFramesFromContext's comment and
-    // stackStartIndex in the header for why, and what it cost: every Android
-    // report grouped under captureFramesFromContext on the dashboard), so the
-    // written stack starts at the faulting instruction the `address:` field
-    // above already names. On desktop this is frame 0 and nothing moves.
-    const int firstFrame = stackStartIndex(g_frames, nFrames, faultAddr);
+    // starts inside this file (see captureFramesFromContext's comment, and
+    // core/crash_stack_start.hpp for why that matters and what it cost: every
+    // Android report grouped under captureFramesFromContext on the dashboard),
+    // so the written stack starts at the faulting instruction the `address:`
+    // field above already names. On desktop this is frame 0 and nothing moves.
+    const int firstFrame = crashStackStartIndex(g_frames, nFrames, faultAddr);
     for (int i = firstFrame; i < nFrames; ++i) {
         e.str("  ");
         e.addr(static_cast<std::uintptr_t>(g_frames[i]));
@@ -618,31 +619,6 @@ void onTerminatePosix() {
 }
 
 }  // namespace
-
-// ---------------------------------------------------------------------------
-// Where a written stack begins
-// ---------------------------------------------------------------------------
-//
-// Declared in crash_handler_posix.hpp, which carries the whole argument for
-// why this exists (the short version: the Android unwinder starts inside this
-// handler, so a raw walk names the handler as the faulting frame and the crash
-// dashboard groups every Android report together). Defined out here rather than
-// in the anonymous namespace above so tests/test_crash_stack_start.cpp can hold
-// the rule to the frame shape that was measured on a device.
-//
-// Fault-path code: no allocation, no locks, no globals, no library calls.
-int stackStartIndex(const unsigned long* frames, int frameCount,
-                    std::uintptr_t faultAddress) {
-    if (frames == nullptr || frameCount <= 0 || faultAddress == 0) { return 0; }
-    const int limit =
-        (frameCount < kStackStartSearchFrames) ? frameCount : kStackStartSearchFrames;
-    for (int i = 0; i < limit; ++i) {
-        if (static_cast<std::uintptr_t>(frames[i]) == faultAddress) { return i; }
-    }
-    // Not recognised: write the whole walk. A stack nobody has measured is
-    // worth more intact than trimmed on a guess.
-    return 0;
-}
 
 // ---------------------------------------------------------------------------
 // __cxa_pure_virtual - the ABI hook for a pure virtual call
