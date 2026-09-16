@@ -138,7 +138,84 @@ std::string errnoText(const char* what, int err) {
 #endif
 }
 
+std::string fdPath(int fd) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "fd:%d", fd);
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
+// THE ADOPTED-DEVICE REGISTRY. See usbfs_device.hpp for the API contract;
+// this is just the storage behind it. A plain mutex-guarded vector: the
+// number of entries is the number of SDRs one phone has plugged in, never
+// more than a handful, so there is no case here where linear search costs
+// anything worth a map.
+// ---------------------------------------------------------------------------
+
+struct AdoptedEntry {
+    UsbDeviceInfo info;  // info.path is always "fd:<fd>" - see registerAdoptedDevice()
+    int fd = -1;
+};
+
+std::mutex& adoptedMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::vector<AdoptedEntry>& adoptedRegistry() {
+    static std::vector<AdoptedEntry> registry;
+    return registry;
+}
+
+// Numeric compare on the trailing digits of an "fd:<n>" path so a listing
+// with fd 9 and fd 10 in it sorts as a person would read it, not as the
+// strings "fd:10" < "fd:9" would; falls back to plain string compare for a
+// sysfs path (or anything else), which is exactly the comparison
+// sysfsUsbNodesToDevices() already sorts by, unchanged.
+bool devicePathLess(const UsbDeviceInfo& a, const UsbDeviceInfo& b) {
+    constexpr const char* kPrefix = "fd:";
+    constexpr std::size_t kPrefixLen = 3;
+    const bool aFd = a.path.rfind(kPrefix, 0) == 0;
+    const bool bFd = b.path.rfind(kPrefix, 0) == 0;
+    if (aFd && bFd) {
+        const long an = std::strtol(a.path.c_str() + kPrefixLen, nullptr, 10);
+        const long bn = std::strtol(b.path.c_str() + kPrefixLen, nullptr, 10);
+        if (an != bn) { return an < bn; }
+        return a.path < b.path;
+    }
+    return a.path < b.path;
+}
+
 }  // namespace
+
+void registerAdoptedDevice(UsbDeviceInfo info, int fd) {
+    info.path = fdPath(fd);
+    std::lock_guard<std::mutex> lk(adoptedMutex());
+    std::vector<AdoptedEntry>& registry = adoptedRegistry();
+    for (AdoptedEntry& e : registry) {
+        if (e.fd == fd) {
+            // A stale registration for a reused fd number: replace it rather
+            // than accumulate a duplicate entry two enumerations would both
+            // report.
+            e.info = std::move(info);
+            return;
+        }
+    }
+    registry.push_back(AdoptedEntry{std::move(info), fd});
+}
+
+void unregisterAdoptedDevice(const std::string& path) {
+    std::lock_guard<std::mutex> lk(adoptedMutex());
+    std::vector<AdoptedEntry>& registry = adoptedRegistry();
+    registry.erase(std::remove_if(registry.begin(), registry.end(),
+                                   [&](const AdoptedEntry& e) { return e.info.path == path; }),
+                   registry.end());
+}
+
+std::size_t adoptedDeviceCount() {
+    std::lock_guard<std::mutex> lk(adoptedMutex());
+    return adoptedRegistry().size();
+}
 
 // ---------------------------------------------------------------------------
 // THE WALK: reading /sys/bus/usb/devices (or a fixture standing in for it)
@@ -264,7 +341,31 @@ std::vector<UsbDeviceInfo> sysfsUsbNodesToDevices(const std::vector<SysfsUsbNode
 
 std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
     if (ids.empty()) { return std::vector<UsbDeviceInfo>(); }
-    return sysfsUsbNodesToDevices(readSysfsUsbNodes("/sys/bus/usb/devices"), ids);
+    std::vector<UsbDeviceInfo> out =
+        sysfsUsbNodesToDevices(readSysfsUsbNodes("/sys/bus/usb/devices"), ids);
+    // THE ANDROID HALF: on desktop Linux this registry is always empty (see
+    // usbfs_device.hpp), so this loop appends nothing and `out` is exactly
+    // what the line above produced - the sysfs-only behaviour this file has
+    // always had. On Android it is the ONLY source of devices, since
+    // /sys/bus/usb/devices does not exist for an app to walk there either.
+    {
+        std::lock_guard<std::mutex> lk(adoptedMutex());
+        for (const AdoptedEntry& e : adoptedRegistry()) {
+            for (const UsbId& id : ids) {
+                if (id.vid == e.info.vid && id.pid == e.info.pid) {
+                    out.push_back(e.info);
+                    break;
+                }
+            }
+        }
+    }
+    // Re-sort with the fd-aware comparator (see devicePathLess()) rather
+    // than the plain string sort sysfsUsbNodesToDevices() already applied to
+    // its own half: a mixed sysfs+adopted list (never expected in practice -
+    // a phone has no sysfs half - but not forbidden either) still needs one
+    // consistent order.
+    std::sort(out.begin(), out.end(), devicePathLess);
+    return out;
 }
 
 std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>&) {
@@ -592,11 +693,113 @@ private:
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// ADOPTING AN ANDROID-OPENED FD. See usbfs_device.hpp for the full contract
+// (fd ownership, why USBDEVFS_CLAIMINTERFACE and never DISCONNECT_CLAIM here,
+// what an EBUSY claim means). This is the one place that reasoning is acted
+// on.
+// ---------------------------------------------------------------------------
+std::unique_ptr<UsbDevice> adoptUsbFd(int fd, std::uint16_t vid, std::uint16_t pid,
+                                      const std::string& serial, std::string& error) {
+    error.clear();
+    if (fd < 0) {
+        error = "adoptUsbFd() needs an already-open file descriptor";
+        return nullptr;
+    }
+
+    // THE OWNERSHIP DECISION: dup, never take the caller's fd value itself -
+    // see usbfs_device.hpp's comment on this function for why the Java side
+    // needs its own fd to outlive whatever this native UsbfsDevice does.
+    const int newFd = ::dup(fd);
+    if (newFd < 0) {
+        error = errnoText("duplicating the adopted USB file descriptor", errno);
+        return nullptr;
+    }
+    // Match the O_CLOEXEC the sysfs open() path already asks for; a dup()
+    // does not inherit the FD_CLOEXEC flag from the fd it was duplicated
+    // from; it is our own duplicate to close, not the original, so its exec
+    // behaviour is our call to make, and every other fd this file opens is
+    // O_CLOEXEC.
+    ::fcntl(newFd, F_SETFD, FD_CLOEXEC);
+
+    char idText[32];
+    std::snprintf(idText, sizeof(idText), "%04x:%04x", vid, pid);
+    const std::string label =
+        std::string(idText) + (serial.empty() ? std::string() : (" (serial " + serial + ")"));
+
+    unsigned int iface = kSdrInterface;
+    if (::ioctl(newFd, USBDEVFS_CLAIMINTERFACE, &iface) != 0) {
+        const int err = errno;
+        if (err == EBUSY) {
+            // Java's own UsbDeviceConnection.claimInterface() almost
+            // certainly already holds it - see usbfs_device.hpp: nothing
+            // else on Android binds a kernel driver to an SDR's interface
+            // for this ioctl to be contending with. Not a failure; usbfs
+            // control/bulk transfers on this fd work regardless of which
+            // side of the JNI boundary issued the claim.
+            std::fprintf(stderr,
+                         "usbfs: interface %u already claimed for %s (fd %d) - assuming "
+                         "Android's UsbDeviceConnection did it; proceeding\n",
+                         kSdrInterface, label.c_str(), fd);
+        } else if (err == ENOTTY) {
+            // The one failure this function's own test can produce without
+            // real hardware: a pipe or /dev/null answers USBDEVFS_CLAIMINTERFACE
+            // with "no such ioctl on this file", which is exactly what "this
+            // is not a usbfs fd at all" looks like from here.
+            error = "fd " + std::to_string(fd) + " (" + label + ") is not a usbfs device";
+            ::close(newFd);
+            return nullptr;
+        } else {
+            error = errnoText(("claiming the USB interface for " + label).c_str(), err);
+            ::close(newFd);
+            return nullptr;
+        }
+    }
+
+    return std::make_unique<UsbfsDevice>(newFd, fdPath(fd));
+}
+
 std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& error) {
     error.clear();
     if (path.empty()) {
         error = "openWinUsb() needs a device interface path";
         return nullptr;
+    }
+    if (path.rfind("fd:", 0) == 0) {
+        // AN ADOPTED-DEVICE PATH, not a filesystem path at all: look up what
+        // registerAdoptedDevice() recorded for it and hand off to
+        // adoptUsbFd() with the vid/pid/serial that came with the
+        // registration, rather than opening `path` as a file (which it is
+        // not - open() on a string like "fd:37" would just fail ENOENT and
+        // report a confusing message for what is really "not registered").
+        // The lookup copies the entry and releases the registry lock before
+        // calling adoptUsbFd(), so a slow dup()/ioctl() below never holds up
+        // a concurrent register/unregister call.
+        bool found = false;
+        int lookupFd = -1;
+        std::uint16_t lookupVid = 0;
+        std::uint16_t lookupPid = 0;
+        std::string lookupSerial;
+        {
+            std::lock_guard<std::mutex> lk(adoptedMutex());
+            for (const AdoptedEntry& e : adoptedRegistry()) {
+                if (e.info.path == path) {
+                    found = true;
+                    lookupFd = e.fd;
+                    lookupVid = e.info.vid;
+                    lookupPid = e.info.pid;
+                    lookupSerial = e.info.serial;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            error = "no adopted USB device is registered at " + path +
+                    " (it may have been unregistered, or the app restarted without Android "
+                    "re-granting permission)";
+            return nullptr;
+        }
+        return adoptUsbFd(lookupFd, lookupVid, lookupPid, lookupSerial, error);
     }
     const int fd = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
     if (fd < 0) {

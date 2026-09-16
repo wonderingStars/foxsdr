@@ -28,9 +28,11 @@
 
 #if defined(__linux__)
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -409,6 +411,161 @@ int main() {
             CHECK(out[0].description.empty());
             CHECK(out[0].path == "/dev/bus/usb/003/012");
         }
+    }
+
+    // --- 7. adoptUsbFd() ON A NON-USBFS FD, AND THE OWNERSHIP DECISION -----
+    //
+    // No usbfs device exists to adopt on this WSL2 build box (no
+    // /sys/bus/usb/devices, no /dev/bus/usb - see the file header), so the
+    // one failure this function's own test CAN produce is exactly the one
+    // named in usbfs_device.hpp's own comment: USBDEVFS_CLAIMINTERFACE
+    // answers ENOTTY ("no such ioctl") on any fd that is not a usbfs device
+    // node at all, which a pipe and /dev/null both are. That failure is also
+    // what proves the ownership decision (dup, never touch the caller's own
+    // fd): whether or not the claim succeeds, the ORIGINAL fd passed in must
+    // still be exactly as valid afterwards as it was before, because
+    // adoptUsbFd() is only ever supposed to act on its own dup of it.
+    {
+        int pipeFds[2] = {-1, -1};
+        CHECK(::pipe(pipeFds) == 0);
+        if (pipeFds[0] >= 0) {
+            std::string err = "untouched";
+            auto dev = cascade::usb::adoptUsbFd(pipeFds[1], 0x0bda, 0x2838, "test-serial", err);
+            CHECK(dev == nullptr);
+            CHECK(!err.empty());
+            CHECK(err != "untouched");
+            std::printf("adoptUsbFd() on a pipe fd: %s\n", err.c_str());
+            CHECK(err.find("usbfs") != std::string::npos);
+
+            // THE OWNERSHIP DECISION, proven: still a live, writable fd.
+            CHECK(::fcntl(pipeFds[1], F_GETFD) != -1);
+            const char b = 'x';
+            CHECK(::write(pipeFds[1], &b, 1) == 1);
+
+            ::close(pipeFds[0]);
+            ::close(pipeFds[1]);
+        }
+
+        // /dev/null: a real device node, and still not a usbfs one.
+        const int nullFd = ::open("/dev/null", O_RDWR);
+        CHECK(nullFd >= 0);
+        if (nullFd >= 0) {
+            std::string err;
+            auto dev = cascade::usb::adoptUsbFd(nullFd, 0x1d50, 0x6089, "", err);
+            CHECK(dev == nullptr);
+            CHECK(!err.empty());
+            CHECK(err.find("usbfs") != std::string::npos);
+            CHECK(::fcntl(nullFd, F_GETFD) != -1);  // still open, untouched
+            ::close(nullFd);
+        }
+
+        // A negative fd is refused before any syscall touches it.
+        std::string err;
+        CHECK(cascade::usb::adoptUsbFd(-1, 0, 0, "", err) == nullptr);
+        CHECK(!err.empty());
+    }
+
+    // --- 8. THE ADOPTED-DEVICE REGISTRY -------------------------------------
+    //
+    // Stands in for the Android JNI layer registering two UsbDevices it has
+    // permission for: enumerateWinUsb() must include both (the sysfs half
+    // stays empty on this box, so this proves the registry is the ENTIRE
+    // answer, not a supplement nothing exercises), sorted, and
+    // openWinUsb("fd:<n>") must reach adoptUsbFd() for the right one - which
+    // fails at the claim step for the same ENOTTY reason as section 7, since
+    // a pipe fd is standing in for a real usbfs fd here too. That failure
+    // message is exactly what proves the wiring: a wrong lookup would fail
+    // with the DIFFERENT "no adopted USB device is registered" message
+    // instead.
+    {
+        int fdsA[2] = {-1, -1};
+        int fdsB[2] = {-1, -1};
+        CHECK(::pipe(fdsA) == 0);
+        CHECK(::pipe(fdsB) == 0);
+        CHECK(cascade::usb::adoptedDeviceCount() == 0);
+
+        UsbDeviceInfo infoA;
+        infoA.vid = 0x0bda;
+        infoA.pid = 0x2838;
+        infoA.serial = "AAA";
+        infoA.description = "adopted A";
+        cascade::usb::registerAdoptedDevice(infoA, fdsA[1]);
+
+        UsbDeviceInfo infoB;
+        infoB.vid = 0x0bda;
+        infoB.pid = 0x2838;
+        infoB.serial = "BBB";
+        infoB.description = "adopted B";
+        cascade::usb::registerAdoptedDevice(infoB, fdsB[1]);
+
+        CHECK(cascade::usb::adoptedDeviceCount() == 2);
+
+        // Re-registering the SAME fd replaces, not duplicates, the entry -
+        // the "Java re-opened the same device" case usbfs_device.hpp's
+        // registerAdoptedDevice() comment names.
+        UsbDeviceInfo infoAAgain = infoA;
+        infoAAgain.serial = "AAA-REPLACED";
+        cascade::usb::registerAdoptedDevice(infoAAgain, fdsA[1]);
+        CHECK(cascade::usb::adoptedDeviceCount() == 2);
+
+        const std::vector<UsbId> ids = {{0x0bda, 0x2838}};
+        const std::vector<UsbDeviceInfo> found = cascade::usb::enumerateWinUsb(ids);
+        std::printf("enumerateWinUsb with two adopted devices: %zu found\n", found.size());
+        CHECK(found.size() == 2);
+        if (found.size() == 2) {
+            // Sorted NUMERICALLY by the fd in "fd:<n>", not lexicographically
+            // - see enumerateWinUsb()'s devicePathLess() - so this holds
+            // whichever way the kernel happened to number these two pipes'
+            // write ends.
+            const int loFd = std::min(fdsA[1], fdsB[1]);
+            const int hiFd = std::max(fdsA[1], fdsB[1]);
+            char loPath[32];
+            std::snprintf(loPath, sizeof(loPath), "fd:%d", loFd);
+            char hiPath[32];
+            std::snprintf(hiPath, sizeof(hiPath), "fd:%d", hiFd);
+            CHECK(found[0].path == loPath);
+            CHECK(found[1].path == hiPath);
+            // The replacement took effect, not the original registration.
+            const UsbDeviceInfo& forFdA = (fdsA[1] == loFd) ? found[0] : found[1];
+            CHECK(forFdA.serial == "AAA-REPLACED");
+        }
+
+        // openWinUsb() must reach adoptUsbFd() for a registered "fd:" path.
+        {
+            char path[32];
+            std::snprintf(path, sizeof(path), "fd:%d", fdsA[1]);
+            std::string err;
+            auto dev = cascade::usb::openWinUsb(path, err);
+            CHECK(dev == nullptr);
+            std::printf("openWinUsb(%s) on an adopted-but-fake fd: %s\n", path, err.c_str());
+            CHECK(err.find("usbfs") != std::string::npos);
+        }
+
+        // A path naming nothing registered gets ITS OWN, DIFFERENT message -
+        // the thing that proves the lookup ran rather than always falling
+        // into the adopt path regardless of what was asked for.
+        {
+            std::string err;
+            auto dev = cascade::usb::openWinUsb("fd:999999", err);
+            CHECK(dev == nullptr);
+            CHECK(!err.empty());
+            CHECK(err.find("registered") != std::string::npos);
+        }
+
+        cascade::usb::unregisterAdoptedDevice(std::string("fd:") + std::to_string(fdsA[1]));
+        CHECK(cascade::usb::adoptedDeviceCount() == 1);
+        // Unregistering something already gone is a no-op, not an error.
+        cascade::usb::unregisterAdoptedDevice(std::string("fd:") + std::to_string(fdsA[1]));
+        CHECK(cascade::usb::adoptedDeviceCount() == 1);
+
+        cascade::usb::unregisterAdoptedDevice(std::string("fd:") + std::to_string(fdsB[1]));
+        CHECK(cascade::usb::adoptedDeviceCount() == 0);
+        CHECK(cascade::usb::enumerateWinUsb(ids).empty());
+
+        ::close(fdsA[0]);
+        ::close(fdsA[1]);
+        ::close(fdsB[0]);
+        ::close(fdsB[1]);
     }
 
     return testSummary("test_usb_usbfs");

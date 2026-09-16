@@ -280,9 +280,14 @@ file(GLOB CASCADE_USB    CONFIGURE_DEPENDS src/usb/*.cpp)
 # nowhere else; it is compiled ONLY on Linux; every other platform (Windows,
 # macOS, *BSD) keeps building against winusb_device.cpp's portable stub for
 # enumerateWinUsb()/enumerateUnbound()/openWinUsb() exactly as before this
-# file existed.
+# file existed. usb_android_bridge.cpp is the extern "C" wrapper the Android
+# JNI layer calls into the adopted-device registry declared alongside
+# usbfs_device.cpp's own header (src/usb/usbfs_device.hpp) - it has no
+# purpose without that registry and #errors on any non-Linux build the same
+# way, so it is excluded right beside it.
 if(NOT (UNIX AND NOT APPLE))
     list(FILTER CASCADE_USB EXCLUDE REGEX "usbfs_device\\.cpp$")
+    list(FILTER CASCADE_USB EXCLUDE REGEX "usb_android_bridge\\.cpp$")
 endif()
 
 add_library(cascade_lib STATIC
