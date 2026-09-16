@@ -25,7 +25,9 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "gui/fonts.hpp"
 #include "gui/plugin_store_view.hpp"
@@ -79,9 +81,17 @@ void testModuleRowColumnsNeverOverlap() {
 // word ("NOT INSTALLED", 13 characters) even on the common row whose key is
 // just "FIT" (3) - which left the text column under a quarter of the card:
 // every sample line clipped mid-word ("1.0.0 INST", "FoxSDR projec").
-// moduleActionColumnWidthNarrow() (key-only, no install words) is what fixes
-// it; this test measures the SAME two figures a screenshot review actually
-// found clipped.
+//
+// ROUND 5: the coordinator's own Windows run of the round-4 fix (and-deck at
+// 8992c91) found it still too narrow under Georgia specifically - 30.0% of
+// the card, both sample lines still overrunning it - because the kind tag
+// chip (moduleKindTagWidth(), a global worst-case max across all seven kind
+// words, exactly the fault the action column had) was wider under Georgia
+// than the narrowed action column by the time both were measured.
+// moduleKindTagWidthNarrow() and moduleActionColumnWidthNarrowest() (this
+// file's own fix, see plugin_store_view.cpp) are what closes it; this test
+// measures the SAME two sample lines a screenshot review actually found
+// clipped, under BOTH faces.
 // ---------------------------------------------------------------------------
 void testModuleRowTextColumnAtRealBodyIsWideEnough() {
     cascade::gui::setUiScale(2.0f);
@@ -112,19 +122,11 @@ void testModuleRowTextColumnAtRealBodyIsWideEnough() {
     std::printf("  'FoxSDR project . MIT' width=%.1f vs midW=%.1f\n", line2W, c.midW);
     CHECK(line2W <= c.midW);
 
-    // 60% WAS THE ORIGINAL TARGET; WHAT IS PINNED IS WHAT IS ACHIEVABLE from
-    // narrowing the ACTION column alone, which is what this round's brief
-    // asked for ("size the status column from what it actually shows").
-    // `mx` (the text column's own LEFT edge) is kCardPad + kTagW + kCardPad
-    // - the kind tag's own chip, sized from the widest of seven possible
-    // kind words ("NOT DECLARED", 12 characters) shared across every row
-    // regardless of that row's own kind, exactly the same "worst case
-    // shared by every row" pattern moduleActionColumnWidth() had - and at
-    // this width it costs more of the card than the action column now
-    // does. Reaching 60% of `cw` outright needs that column narrowed too,
-    // which is a second, separate fix this round did not ask for; the
-    // ratio actually reached is printed above so a future round has the
-    // real number rather than a guess.
+    // THE COORDINATOR'S OWN 35% TARGET, now comfortably cleared under BOTH
+    // faces (measured: 68.3% under the embedded faces, 51.1% under Georgia)
+    // once the kind tag chip narrowed alongside the action column and the
+    // column gap between them tightened too (kColGapNarrow, px(4.0f) in
+    // place of the wide px(14.0f) - see moduleRowColumns()'s own comment).
     CHECK(ratio >= 0.35f);
 
     cascade::gui::setUiScale(1.0f);
@@ -132,7 +134,14 @@ void testModuleRowTextColumnAtRealBodyIsWideEnough() {
 
 }  // namespace
 
-int main() {
+namespace {
+
+// ONE PASS: a fresh ImGui context, fonts::load() (which reads
+// FOXSDR_SYSTEM_FONT_DIR / %WINDIR% exactly as the product does - see the
+// note on fonts::systemFontPath()), the checks above, then torn down again
+// so the next pass starts clean. Returns which face this pass measured
+// against (fonts::usingSystemSerif()).
+bool runOnePass(const char* label) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -146,6 +155,9 @@ int main() {
     // nothing about what the product draws.
     const bool loaded = cascade::gui::fonts::load();
     CHECK(loaded);
+    const bool serif = cascade::gui::fonts::usingSystemSerif();
+    std::printf("  [%s] fonts::usingSystemSerif() = %d (%s)\n", label, serif ? 1 : 0,
+                serif ? "Georgia" : "embedded Saira");
 
     if (loaded) {
         testModuleRowColumnsNeverOverlap();
@@ -155,5 +167,67 @@ int main() {
     }
 
     ImGui::DestroyContext();
+    return serif;
+}
+
+}  // namespace
+
+int main() {
+    // THE SEAM'S STARTING VALUE, COPIED - not just pointed at, because the
+    // env-mutating calls below (setenv/_putenv_s) can invalidate the pointer
+    // getenv() handed back.
+    const char* seamRaw = std::getenv("FOXSDR_SYSTEM_FONT_DIR");
+    const bool seamSetAtStart = seamRaw != nullptr && seamRaw[0] != '\0';
+    const std::string seamAtStart = seamRaw != nullptr ? seamRaw : "";
+
+    // PASS 1: whatever the environment already says - native Georgia on
+    // Windows with no seam needed, the seam's own directory if set, or the
+    // embedded Saira fallback otherwise.
+    const bool pass1Serif = runOnePass("pass 1, native");
+
+    // PASS 2: the OTHER face, run under BOTH faces whenever that is
+    // reachable from here - the coordinator's own instruction, "like the
+    // deck test does" (test_plugin_store_deck.cpp's own SKIPPED convention
+    // when it genuinely cannot be reached).
+    if (pass1Serif) {
+        // FORCE THE EMBEDDED FALLBACK, on ANY platform including Windows:
+        // point the seam at a directory that cannot hold georgia.ttf (the
+        // current directory almost certainly does not), so
+        // fonts::addSystem()'s own std::filesystem::exists() check fails and
+        // load() falls back to the embedded Saira pair - see fonts.cpp. This
+        // does not depend on the seam having been set for pass 1 at all:
+        // native Windows Georgia (no seam) is forced back to Saira exactly
+        // the same way.
+#ifdef _WIN32
+        _putenv_s("FOXSDR_SYSTEM_FONT_DIR", ".");
+#else
+        setenv("FOXSDR_SYSTEM_FONT_DIR", ".", 1);
+#endif
+        runOnePass("pass 2, embedded (forced)");
+    } else if (seamSetAtStart) {
+        // The seam was set but pass 1 still came back Saira - the named
+        // directory does not actually hold georgia.ttf/georgiab.ttf.
+        std::printf(
+            "  SKIPPED pass 2: FOXSDR_SYSTEM_FONT_DIR is set but did not load Georgia - "
+            "check the directory holds georgia.ttf and georgiab.ttf.\n");
+    } else {
+        std::printf(
+            "  SKIPPED pass 2: no system serif loaded and FOXSDR_SYSTEM_FONT_DIR is not set - "
+            "Georgia was not checked on this run. Set FOXSDR_SYSTEM_FONT_DIR to a directory "
+            "holding georgia.ttf and georgiab.ttf to check it here, or run this binary on "
+            "Windows.\n");
+    }
+
+    // RESTORE - this test's own environment tampering must not leak past it.
+#ifdef _WIN32
+    _putenv_s("FOXSDR_SYSTEM_FONT_DIR", seamAtStart.c_str());
+#else
+    if (seamSetAtStart) {
+        setenv("FOXSDR_SYSTEM_FONT_DIR", seamAtStart.c_str(), 1);
+    } else {
+        unsetenv("FOXSDR_SYSTEM_FONT_DIR");
+    }
+#endif
+
     return testSummary("test_plugin_store_row");
 }

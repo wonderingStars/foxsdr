@@ -139,7 +139,7 @@ void addPlateBox(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 // refuses the click - and the sentence saying WHY lives beside it, because a
 // greyed key with no explanation is the fault this redesign exists to remove.
 bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* line1,
-                 const char* line2, bool enabled, const char* id) {
+                 const char* line2, bool enabled, const char* id, float labelPx = -1.0f) {
     if (dl == nullptr || br.x - tl.x < cascade::gui::px(8.0f) ||
         br.y - tl.y < cascade::gui::px(8.0f)) {
         return false;
@@ -193,7 +193,11 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     // most often has to read. kInkMuted is about 6:1 there and is still a
     // clear step below the cream of a live key.
     ImFont* f = fonts::ui();
-    const float px = prose();
+    // THE LABEL'S OWN SIZE - prose() unless a caller measured against
+    // something smaller (moduleActionColumnWidthNarrowest(), the module
+    // row's own last-resort tier) and passed it explicitly, so what is
+    // measured and what is drawn cannot disagree.
+    const float px = labelPx > 0.0f ? labelPx : prose();
     const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     const float lh = faceH(f, px);
     const int lines = (line2 != nullptr && line2[0] != '\0') ? 2 : 1;
@@ -1177,6 +1181,25 @@ float moduleActionColumnWidthNarrow() {
                      textW(uf, tiny, "FITTED") + cascade::gui::px(22.0f)});
 }
 
+float moduleKindTagWidthNarrow() {
+    static const char* const kTags[] = {"NOT KNOWN", "NOT DECLARED", "DECODER",
+                                        "MAP",       "PANEL",        "CONTROL",
+                                        "MODULE"};
+    ImFont* f = fonts::ui();
+    const float px = cascade::gui::px(fonts::kTinySize);
+    float w = 0.0f;
+    for (const char* t : kTags) { w = std::max(w, textW(f, px, t)); }
+    return std::max(cascade::gui::px(40.0f), w + cascade::gui::px(6.0f));
+}
+
+float moduleActionColumnWidthNarrowest() {
+    ImFont* uf = fonts::ui();
+    const float tinyPx = cascade::gui::px(fonts::kTinySize);
+    return std::max({cascade::gui::px(48.0f), textW(uf, tinyPx, "FIT") + cascade::gui::px(10.0f),
+                     textW(uf, tinyPx, "UPDATE") + cascade::gui::px(10.0f),
+                     textW(uf, tinyPx, "FITTED") + cascade::gui::px(10.0f)});
+}
+
 // HOW ONE MODULE CARD'S THREE COLUMNS DIVIDE `cw` - the card's own width,
 // which is the module list's content width and is NOT the desktop's 1280 px
 // store this row was first drawn for. A pure function of `cw` (font metrics
@@ -1203,20 +1226,28 @@ float moduleActionColumnWidthNarrow() {
 // unrelated px() shortfall of its own that this change does not touch; see
 // the note there for why.)
 ModuleRowColumns moduleRowColumns(float cw) {
-    const float kTagW = moduleKindTagWidth();
-    const float kCardPad = cascade::gui::px(14.0f);
-    const float mx = kCardPad + kTagW + kCardPad;
+    // THE GAP BETWEEN COLUMNS - kCardPad (px(14.0f)) everywhere but here at
+    // the two narrow tiers, which use a tighter kColGapNarrow instead. This
+    // is DELIBERATELY A DIFFERENT SYMBOL from the card's own outer/vertical
+    // padding (also kCardPad, in the row's drawing loop below - the card's
+    // top/bottom margin and the kind tag chip's own Y offset), which this
+    // fix does not touch: shrinking the SPACE BETWEEN columns buys real
+    // width without also cramming the card's vertical breathing room.
+    const float kColGapWide = cascade::gui::px(14.0f);
+    const float kColGapNarrow = cascade::gui::px(4.0f);
 
-    auto withActionWidth = [&](float actW, bool narrow) {
+    auto withWidths = [&](float tagW, float actW, float colGap, bool narrow, bool narrowest) {
         ModuleRowColumns r;
-        r.mx = mx;
-        r.ax = cw - kCardPad - actW;
+        r.mx = colGap + tagW + colGap;
+        r.ax = cw - colGap - actW;
         r.midW = std::max(0.0f, r.ax - r.mx);
         r.narrow = narrow;
+        r.narrowest = narrowest;
         return r;
     };
 
-    const ModuleRowColumns wide = withActionWidth(moduleActionColumnWidth(), false);
+    const ModuleRowColumns wide = withWidths(moduleKindTagWidth(), moduleActionColumnWidth(),
+                                             kColGapWide, false, false);
     // NARROW WHEN THE WIDE FIGURE WOULD LEAVE THE TEXT COLUMN UNDER 60% OF
     // THE CARD - gated on the width actually available, never on platform or
     // catalogue state (Round 4's own instruction): a desktop window dragged
@@ -1224,8 +1255,30 @@ ModuleRowColumns moduleRowColumns(float cw) {
     // does, and every width this file has pinned a desktop figure at (827,
     // 1256 px cards) is comfortably clear of the threshold, so this is a
     // no-op there - see tests/test_plugin_store_row.cpp's own desktop cases.
+    // THE KIND TAG CHIP NARROWS WITH IT, at the same gate - the coordinator's
+    // own report on and-deck at 8992c91: under Georgia at the real docked
+    // body the chip (moduleKindTagWidth(), a global worst-case max across
+    // all seven kind words, exactly the same "shared by every row" fault
+    // moduleActionColumnWidth() had) was wider than the narrowed action
+    // column by the time both were measured, so the text column recovered
+    // only to 30% instead of the round-4 fix's own 38.8% under Saira.
     if (cw <= 0.0f || wide.midW >= cw * 0.6f) { return wide; }
-    return withActionWidth(moduleActionColumnWidthNarrow(), true);
+
+    // STRAIGHT TO THE SMALLEST ACTION-KEY FACE, not a further-conditional
+    // middle tier - moduleActionColumnWidthNarrow() (the key's own word at
+    // prose()) was tried first here and MEASURED insufficient even where its
+    // own ratio cleared 35%: under Georgia at the real docked body it read
+    // 40.7%, comfortably over the threshold, while "1.0.0 INSTALLED" (308.2
+    // px) and "FoxSDR project . MIT" (358.1 px) both still ran past a 289.9
+    // px column - the ratio a wide desktop card is sized against is not a
+    // reliable proxy for whether THIS row's actual text fits once the card
+    // is this narrow. Since kTinySize is never LARGER than prose() and this
+    // row is already in the width-is-short branch, there is no case where
+    // holding the key at prose() here would have helped and dropping to
+    // kTinySize would not - so the "if still short, drop the key's face"
+    // instruction folds into "always drop it, once narrow is needed at all".
+    return withWidths(moduleKindTagWidthNarrow(), moduleActionColumnWidthNarrowest(),
+                      kColGapNarrow, true, true);
 }
 
 std::string moduleReachSummary(const ModulePlate& m) {
@@ -2813,7 +2866,11 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             // why: a floor that could claim more width than the card actually
             // had left was what let this row's own text run under the action
             // column on the docked tablet's real body.
-            const float kTagW = moduleKindTagWidth();
+            // THE CARD'S OWN OUTER/VERTICAL PADDING - top/bottom margin, the
+            // kind tag chip's Y offset, cardH's own top-and-bottom spend.
+            // UNCHANGED by cols.narrow: see the note on moduleRowColumns()'s
+            // own kColGapNarrow, a deliberately different symbol for the
+            // horizontal gap BETWEEN columns, which this is not.
             const float kCardPad = cascade::gui::px(14.0f);
             for (int idx : visible) {
                 const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
@@ -2821,11 +2878,20 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const bool isSel = idx == deck.selected;
                 const ModuleRowColumns cols = moduleRowColumns(cw);
                 const float midW = cols.midW;
+                // THE SAME TAG WIDTH AND COLUMN GAP moduleRowColumns() JUST
+                // CHOSE - matching cols.narrow exactly, so the chip this row
+                // actually draws is never wider than the room cols.mx left
+                // for it, and never starts anywhere but where cols.mx says
+                // the text column begins right after.
+                const float kTagW =
+                    cols.narrow ? moduleKindTagWidthNarrow() : moduleKindTagWidth();
+                const float kColGap =
+                    cols.narrow ? cascade::gui::px(4.0f) : cascade::gui::px(14.0f);
                 // THE SAME WIDTH moduleRowColumns() JUST CHOSE - recovered
                 // from `cols.ax` rather than called a second time, so this
                 // row's key, install word and state lamp are always sized
                 // against the SAME figure the column split itself used.
-                const float kActW = cw - kCardPad - cols.ax;
+                const float kActW = cw - kColGap - cols.ax;
                 const std::string reach = moduleReachSummary(p);
                 // THE SUMMARY ON THE ROW, THE DESCRIPTION ON THE PLATE. See
                 // ModulePlate::summary: the live catalogue's descriptions run
@@ -2912,6 +2978,20 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const float stateWordW = std::max(40.0f, kActW - 18.0f);
                 const bool instRedundant =
                     cols.narrow && instState == StoreInstallState::Installed;
+                // THE INSTALL WORD AND STATE WORD'S OWN SIZE - kTinySize at
+                // cols.narrowest, prose() otherwise. Round 5's own finding:
+                // sizing the action column from the KEY alone (kTinySize)
+                // while its install/state words stayed at prose() left the
+                // column too narrow for its OWN content - "STARTED" (a
+                // common, short state word) measured 169 px at prose() under
+                // Georgia against a ~120 px column, wrapping it mid-word
+                // ("STARTE" / "D") with no space to break at. The same "every
+                // OTHER control label already reads at this floor" argument
+                // that justified shrinking the key applies here too - these
+                // are state labels, not paragraphs.
+                const float actionTextPx =
+                    cols.narrowest ? cascade::gui::px(fonts::kTinySize) : tiny;
+                const float actionTextH = faceH(uf, actionTextPx);
                 // NOT PUT THROUGH px() - matching the lamp's own drawing
                 // below (the "6.0f" / "4.5f" / "9.0f" this row's lamp has
                 // always used, unscaled, on every card this window has ever
@@ -2923,16 +3003,17 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const float lampSpan = 13.5f;
                 const bool inlineFits =
                     cols.narrow && !instRedundant &&
-                    (textW(uf, tiny, instWord) + inlineGap + lampSpan + textW(uf, tiny, stateWord) <=
+                    (textW(uf, actionTextPx, instWord) + inlineGap + lampSpan +
+                         textW(uf, actionTextPx, stateWord) <=
                      kActW);
                 float actH;
                 if (instRedundant) {
-                    actH = kKeyH + 8.0f + wrapH(uf, tiny, stateWordW, stateWord);
+                    actH = kKeyH + 8.0f + wrapH(uf, actionTextPx, stateWordW, stateWord);
                 } else if (inlineFits) {
-                    actH = kKeyH + 8.0f + std::max(faceH(uf, tiny), tinyH);
+                    actH = kKeyH + 8.0f + std::max(actionTextH, tinyH);
                 } else {
-                    actH = kKeyH + 8.0f + wrapH(uf, tiny, stateWordW, instWord) + 6.0f +
-                          wrapH(uf, tiny, stateWordW, stateWord);
+                    actH = kKeyH + 8.0f + wrapH(uf, actionTextPx, stateWordW, instWord) + 6.0f +
+                          wrapH(uf, actionTextPx, stateWordW, stateWord);
                 }
                 const float cardH = std::max(rowsH, actH) + kCardPad * 2.0f;
 
@@ -2969,7 +3050,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // --- the kind tag ------------------------------------------
                 {
                     const float tagPx = cascade::gui::px(fonts::kTinySize);
-                    const ImVec2 tTL(cTL.x + kCardPad, cTL.y + kCardPad);
+                    const ImVec2 tTL(cTL.x + kColGap, cTL.y + kCardPad);
                     const ImVec2 tBR(tTL.x + kTagW,
                                      tTL.y + faceH(uf, tagPx) + cascade::gui::px(6.0f));
                     cdl->AddRectFilled(tTL, tBR, theme::kBrassBright, 1.0f);
@@ -3079,14 +3160,24 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 {
                     const float ay = cTL.y + kCardPad;
                     const bool hasUpdate = !sm.updateToVersion.empty();
+                    // THE KEY'S OWN LABEL SIZE - kTinySize only at
+                    // cols.narrowest, matching whichever figure
+                    // moduleRowColumns() measured this row's kActW against
+                    // (moduleActionColumnWidthNarrowest() when narrowest,
+                    // moduleActionColumnWidth[Narrow]() otherwise, both at
+                    // prose() - see the note on drawDeckKey's own labelPx
+                    // parameter).
+                    const float keyLabelPx =
+                        cols.narrowest ? cascade::gui::px(fonts::kTinySize) : -1.0f;
                     if (!p.fitted) {
                         if (drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                        "FIT", nullptr, sm.blockedReason.empty(), "fit")) {
+                                        "FIT", nullptr, sm.blockedReason.empty(), "fit",
+                                        keyLabelPx)) {
                             fitIndex_ = idx;
                         }
                     } else if (hasUpdate) {
                         if (drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                        "UPDATE", nullptr, !model.busy, "upd")) {
+                                        "UPDATE", nullptr, !model.busy, "upd", keyLabelPx)) {
                             updateIndex_ = idx;
                         }
                     } else {
@@ -3096,7 +3187,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                         // two windows offering the same control is how they come
                         // to disagree about what it did.
                         drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                    "FITTED", nullptr, false, "fitted");
+                                    "FITTED", nullptr, false, "fitted", keyLabelPx);
                     }
                     // THE STATE WORD AND ITS LAMP, from the shared component,
                     // so this row and the plate beside it cannot describe one
@@ -3119,36 +3210,40 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     const float ly0 = ay + kKeyH + 8.0f;
                     if (instRedundant) {
                         // NO INSTALL WORD LINE AT ALL: FITTED already said it.
-                        const ImVec2 lampC(ax + 6.0f, ly0 + tinyH * 0.5f);
+                        const ImVec2 lampC(ax + 6.0f, ly0 + actionTextH * 0.5f);
                         drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
                                       moduleStateLampLit(p), nullptr);
-                        cdl->AddText(uf, tiny, ImVec2(lampC.x + 9.0f, ly0),
+                        cdl->AddText(uf, actionTextPx, ImVec2(lampC.x + 9.0f, ly0),
                                      moduleStateColour(p), stateWord, nullptr, stateWordW);
                     } else if (inlineFits) {
                         // INSTALL WORD, THEN THE LAMP, THEN THE STATE - one
                         // line, where the width this row actually has allows
                         // it, rather than a line each.
-                        cdl->AddText(uf, tiny, ImVec2(ax, ly0), storeInstallColour(instState),
-                                     instWord);
-                        const float afterInst = ax + textW(uf, tiny, instWord) + inlineGap;
-                        const ImVec2 lampC(afterInst + 4.5f, ly0 + tinyH * 0.5f);
+                        cdl->AddText(uf, actionTextPx, ImVec2(ax, ly0),
+                                     storeInstallColour(instState), instWord);
+                        const float afterInst =
+                            ax + textW(uf, actionTextPx, instWord) + inlineGap;
+                        const ImVec2 lampC(afterInst + 4.5f, ly0 + actionTextH * 0.5f);
                         drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
                                       moduleStateLampLit(p), nullptr);
-                        cdl->AddText(uf, tiny, ImVec2(lampC.x + 9.0f, ly0),
+                        cdl->AddText(uf, actionTextPx, ImVec2(lampC.x + 9.0f, ly0),
                                      moduleStateColour(p), stateWord);
                     } else {
                         // THE ORIGINAL THREE-LINE STACK - byte-identical to
                         // every row this window has ever drawn on a card wide
-                        // enough for `cols.narrow` to be false.
+                        // enough for `cols.narrow` to be false (actionTextPx
+                        // == tiny there, so this is the same draw it always
+                        // was).
                         float ly = ly0;
-                        cdl->AddText(uf, tiny, ImVec2(ax, ly), storeInstallColour(instState),
-                                     instWord, nullptr, stateWordW);
-                        ly += wrapH(uf, tiny, stateWordW, instWord) + 6.0f;
-                        const ImVec2 lampC(ax + 6.0f, ly + tinyH * 0.5f);
+                        cdl->AddText(uf, actionTextPx, ImVec2(ax, ly),
+                                     storeInstallColour(instState), instWord, nullptr,
+                                     stateWordW);
+                        ly += wrapH(uf, actionTextPx, stateWordW, instWord) + 6.0f;
+                        const ImVec2 lampC(ax + 6.0f, ly + actionTextH * 0.5f);
                         drawBenchLamp(cdl, lampC, 4.5f, moduleStateColour(p),
                                       moduleStateLampLit(p), nullptr);
-                        cdl->AddText(uf, tiny, ImVec2(lampC.x + 9.0f, ly), moduleStateColour(p),
-                                     stateWord, nullptr, stateWordW);
+                        cdl->AddText(uf, actionTextPx, ImVec2(lampC.x + 9.0f, ly),
+                                     moduleStateColour(p), stateWord, nullptr, stateWordW);
                     }
                 }
                 ImGui::PopID();
