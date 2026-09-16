@@ -308,6 +308,10 @@ int main() {
         CHECK_NEAR(cascade::gui::dockTabRowHeight(14.0f), 23.0f + 7.0f + 6.0f, 1e-6);
         // Smaller type than the floor allows for: the floor wins.
         CHECK_NEAR(cascade::gui::dockTabKeyHeight(8.0f), 22.0f, 1e-6);
+        // fonts::kRailBankSize is kUiSize (17) on Android, which is what the
+        // tab row and the FUNCTION SELECT rail both letter at there: the key
+        // has to grow with the type or the words do not fit in it.
+        CHECK_NEAR(cascade::gui::dockTabKeyHeight(17.0f), 26.0f, 1e-6);
         // A quarter of the spectrum's height, and the 48 px floor under it.
         CHECK_NEAR(cascade::gui::dockStripHeight(600.0f), 150.0f, 1e-6);
         CHECK_NEAR(cascade::gui::dockStripHeight(100.0f), 48.0f, 1e-6);
@@ -316,6 +320,9 @@ int main() {
         CHECK_NEAR(cascade::gui::dockTabKeyHeight(14.0f), 46.0f, 1e-6);
         CHECK_NEAR(cascade::gui::dockTabRowHeight(14.0f), 72.0f, 1e-6);
         CHECK_NEAR(cascade::gui::dockTabKeyHeight(8.0f), 44.0f, 1e-6);
+        // The tablet's own pair: 17 px of type in a 52 px key, the figure the
+        // FUNCTION SELECT rail arrives at from the same constant.
+        CHECK_NEAR(cascade::gui::dockTabKeyHeight(17.0f), 52.0f, 1e-6);
         // THE STRIP'S QUARTER IS ALREADY IN SCREEN PIXELS - it is a quarter of
         // a height the panel measured - so only its FLOOR is scaled. Scaling
         // the quarter as well would take a quarter of a quarter.

@@ -9661,10 +9661,18 @@ float AppWindow::drawCentreDockTabs() {
     // in src/gui: the row is a TOUCH TARGET before it is furniture, and an
     // unscaled 22 px key on a 2560 x 1600 tablet is about 2 mm against
     // Android's own 9 mm guidance.
-    const float labelPx = cascade::gui::px(cascade::gui::fonts::kTinySize);
-    const float keyH = cascade::gui::dockTabKeyHeight(cascade::gui::fonts::kTinySize);
+    //
+    // THE TYPE SIZE IS fonts::kRailBankSize, the same constant benchBankKey
+    // letters these keys' words at and drawRailBankKeys takes its height from
+    // (kUiSize on Android - the owner's first word on seeing the tablet was
+    // that the bank keys had to be readable at arm's length - and kTinySize on
+    // the desktop). Taken from the constant rather than repeated as a literal:
+    // a row that sized itself from a different figure would letter 34 px of
+    // type into a 46 px key.
+    const float labelPx = cascade::gui::px(cascade::gui::fonts::kRailBankSize);
+    const float keyH = cascade::gui::dockTabKeyHeight(cascade::gui::fonts::kRailBankSize);
     const float gap = cascade::gui::px(4.0f);
-    const float barH = cascade::gui::dockTabRowHeight(cascade::gui::fonts::kTinySize);
+    const float barH = cascade::gui::dockTabRowHeight(cascade::gui::fonts::kRailBankSize);
     const ImVec2 at = ImGui::GetCursorScreenPos();
     if (w < cascade::gui::px(120.0f) || keyH < 12.0f) { return 0.0f; }
 
