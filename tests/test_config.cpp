@@ -135,6 +135,12 @@ AppConfig junkConfig() {
     c.notchQ = 1e9;
     c.autoNotch = true;
     c.bandPlanOverlay = false;
+    // Both a closed three-way choice, away from their "small"/"classic"
+    // defaults and NOT the value the round-trip fixture below picks either,
+    // so a load path that forgot either field is caught here rather than by
+    // the two of them happening to already agree.
+    c.bandPlanSize = "large";
+    c.bandPlanPalette = "vivid";
     // Both trail switches default ON, so false is the away-from-default value
     // a load path that forgets to assign them would have to overwrite.
     c.mapTrails = false;
@@ -271,6 +277,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.notchQ == b.notchQ);
     CHECK(a.autoNotch == b.autoNotch);
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
+    CHECK(a.bandPlanSize == b.bandPlanSize);
+    CHECK(a.bandPlanPalette == b.bandPlanPalette);
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
@@ -472,6 +480,12 @@ int main() {
         in.notchQ = 42.25;
         in.autoNotch = true;
         in.bandPlanOverlay = false;
+        // A legal value for each, distinct from BOTH the default
+        // ("small"/"classic") and junkConfig()'s ("large"/"vivid"), so the
+        // roundtrip proves the FILE is what came back rather than either
+        // end's fallback.
+        in.bandPlanSize = "medium";
+        in.bandPlanPalette = "mono";
         // The two trail switches. A bool has only one value that is not its
         // default, so these necessarily match junkConfig()'s - the same
         // position bandPlanOverlay is in above. What proves the SAVE half is
@@ -1127,6 +1141,59 @@ int main() {
         CHECK(d.deemphasisIndex == 0);
         CHECK(d.stereoEnabled);
         CHECK(d.bandPlanOverlay);
+        CHECK(d.bandPlanSize == "small");
+        CHECK(d.bandPlanPalette == "classic");
+    }
+
+    // --- bandPlanSize / bandPlanPalette: a closed three-way choice each,
+    // unlike bandPlanSelection (validated elsewhere, against whatever band
+    // plans are actually installed) -------------------------------------------
+    {
+        const std::string path = p("band_plan_style.json");
+        AppConfig out;
+        std::string err;
+
+        // Every legal value survives, both fields independently.
+        for (const char* v : {"small", "medium", "large"}) {
+            CHECK(writeText(path, std::string("{\"bandPlanSize\":\"") + v + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.bandPlanSize == v);
+            CHECK(out.bandPlanPalette == "classic");  // untouched key: default
+        }
+        for (const char* v : {"classic", "vivid", "mono"}) {
+            CHECK(writeText(path, std::string("{\"bandPlanPalette\":\"") + v + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.bandPlanPalette == v);
+            CHECK(out.bandPlanSize == "small");  // untouched key: default
+        }
+
+        // Hand-edited / future-build garbage falls back to the default
+        // rather than reaching the GUI as an unrecognised string.
+        CHECK(writeText(path, "{\"bandPlanSize\":\"huge\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+        CHECK(writeText(path, "{\"bandPlanPalette\":\"rainbow\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanPalette == "classic");
+
+        // Case is significant: "Small" is not "small" and must not sneak
+        // through as though it were the legal spelling.
+        CHECK(writeText(path, "{\"bandPlanSize\":\"Small\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+
+        // Wrong JSON type: absent, per the header's own rule for every
+        // string field, so it is the default that survives here too.
+        CHECK(writeText(path, "{\"bandPlanSize\":5,\"bandPlanPalette\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+        CHECK(out.bandPlanPalette == "classic");
+
+        // Empty string is exactly as unrecognised as any other garbage.
+        CHECK(writeText(path, "{\"bandPlanSize\":\"\",\"bandPlanPalette\":\"\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bandPlanSize == "small");
+        CHECK(out.bandPlanPalette == "classic");
     }
 
     // --- the two map trail switches (documented in config.hpp) ---------------

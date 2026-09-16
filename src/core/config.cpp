@@ -245,6 +245,23 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
     getString(j, "bandPlanSelection", out.bandPlanSelection);
+    // Both are a closed set of three spellings, unlike bandPlanSelection
+    // (which is validated against whatever is actually installed, elsewhere,
+    // by BandPlan::loadSelection). A hand-edited or future-build value this
+    // build does not recognise resets to the default rather than reaching
+    // gui::bandPlanSizeTierFromKey / bandPlanPaletteKindFromKey, which would
+    // silently apply the identical fallback one layer further in — resetting
+    // here keeps the config file itself an honest record of what loaded.
+    getString(j, "bandPlanSize", out.bandPlanSize);
+    if (out.bandPlanSize != "small" && out.bandPlanSize != "medium" &&
+        out.bandPlanSize != "large") {
+        out.bandPlanSize = "small";
+    }
+    getString(j, "bandPlanPalette", out.bandPlanPalette);
+    if (out.bandPlanPalette != "classic" && out.bandPlanPalette != "vivid" &&
+        out.bandPlanPalette != "mono") {
+        out.bandPlanPalette = "classic";
+    }
     // Both default true, so an older config that has never heard of them
     // arrives with trails drawn and coloured - see AppConfig for why the two
     // are separate switches. Neither has a range to clamp: a bool read by
@@ -646,6 +663,8 @@ bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::strin
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
+    j["bandPlanSize"] = cfg.bandPlanSize;
+    j["bandPlanPalette"] = cfg.bandPlanPalette;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;

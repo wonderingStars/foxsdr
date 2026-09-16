@@ -218,6 +218,18 @@ struct AppConfig {
     // and the picker is one click from the right regional plan.
     std::string bandPlanSelection = "world";
 
+    // Ribbon size and segment-colour palette for the overlay above (issue #1:
+    // "Band plan I think needs to be a bit bigger on the top, would be nice
+    // to see a few options for size and maybe colour"). Both default to
+    // today's only behaviour, so an existing install looks exactly as it did
+    // until the user opens the picker in the Display section.
+    //
+    // "small" | "medium" | "large" — see gui::bandRibbonGeometry for the
+    // actual figures each one draws.
+    std::string bandPlanSize = "small";
+    // "classic" | "vivid" | "mono" — see gui::bandPlanPaletteColor.
+    std::string bandPlanPalette = "classic";
+
     // --- Map trails -----------------------------------------------------------
     // TWO SWITCHES, because the request behind them was ambiguous and both
     // readings deserve an answer. A beta tester asked for the flight trail to
