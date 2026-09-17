@@ -10,11 +10,13 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "core/plugin_ui.hpp"
 // normalisedSerial lives with the driver that needs it, and the prefer-native
 // rule has to use the SAME normalisation the driver's own open() matches on -
 // a rule stricter than the driver's would point at a device the driver then
@@ -122,19 +124,35 @@ inline std::string tuneMismatchMessage(double requestHz, double answeredHz, bool
 // match nothing would ever land on by chance.
 namespace detail {
 
-inline bool presetAlreadyTunedTo(const CascadePreset& ps, double deviceCentreHz,
-                                  double vfoOffsetHz, double deviceRateHz) {
-    if ((ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u) {
+// THE CORE OF "IS THE RECEIVER ALREADY HERE", pulled out to the three plain
+// numbers a preset actually contributes - frequency, bandwidth, and whether
+// it is a device-centre preset - rather than a full CascadePreset, so the
+// same arithmetic can be run from a cascade::core::MutePreset (the mute
+// snapshot's own reduced copy of a preset, built without ever calling back
+// into the plugin - see AppWindow::rebuildMuteStates) as well as from the
+// ABI struct itself. presetAlreadyTunedTo below is now a thin adapter over
+// this for its existing callers; nothing about its behaviour changes.
+inline bool presetAlreadyTunedToFields(double presetFrequencyHz, double presetBandwidthHz,
+                                        bool deviceCentre, double deviceCentreHz,
+                                        double vfoOffsetHz, double deviceRateHz) {
+    if (deviceCentre) {
         // Zero rate (no source open, or a source that has not answered yet)
         // collapses the tolerance to zero rather than dividing by anything -
         // "inside" then means exactly on the mark, which is the safe answer
         // when there is no band to speak of at all.
         const double toleranceHz = 0.5 * deviceRateHz;
-        return std::fabs(deviceCentreHz - ps.frequencyHz) <= toleranceHz;
+        return std::fabs(deviceCentreHz - presetFrequencyHz) <= toleranceHz;
     }
-    const double toleranceHz = std::max(0.5 * ps.bandwidthHz, 5000.0);
+    const double toleranceHz = std::max(0.5 * presetBandwidthHz, 5000.0);
     const double tunedHz = deviceCentreHz + vfoOffsetHz;
-    return std::fabs(tunedHz - ps.frequencyHz) <= toleranceHz;
+    return std::fabs(tunedHz - presetFrequencyHz) <= toleranceHz;
+}
+
+inline bool presetAlreadyTunedTo(const CascadePreset& ps, double deviceCentreHz,
+                                  double vfoOffsetHz, double deviceRateHz) {
+    return presetAlreadyTunedToFields(ps.frequencyHz, ps.bandwidthHz,
+                                       (ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u,
+                                       deviceCentreHz, vfoOffsetHz, deviceRateHz);
 }
 
 }  // namespace detail
@@ -192,6 +210,209 @@ inline int autoPresetIndexOnStart(const std::vector<CascadePreset>& presets,
 //                                                nobody touched the row)
 inline bool autoPresetTriggersOnWindowClick(bool clicked, bool wasShownBeforeClick) {
     return clicked && !wasShownBeforeClick;
+}
+
+// --- Preset bars: one key per valid preset, on the plugin's OWN window -----
+//
+// 0.99.0, from the owner's own words: "if I have multiple plugins open at
+// the same time I want to select on the individual plugin to use its preset
+// - so if I'm watching ADS-B I can click a button on POCSAG." Until this, the
+// only place to press a preset was the DECODERS rail section
+// (AppWindow::drawPluginPresets), so a user with ADS-B's map and POCSAG's
+// decoder output both open had to go back to a rail row to send the radio to
+// either one. What follows is the pure half of the fix: what a bar's keys
+// look like, and the deferred-apply state machine that keeps a key press
+// from reaching applyPluginPreset while AppWindow::drawPluginWindows is still
+// iterating the very lists a preset's own apply rebuilds.
+
+// THE SHARED VALIDITY FILTER. Every consumer of a plugin's preset table - the
+// rail's buttons (drawPluginPresets), the auto-preset-on-start/on-show
+// decision, the mute snapshot, the new bars, and the web status/apply paths
+// - refuses the same third-party garbage the same way: a frequency that is
+// not a frequency, NaN included, which is why this is a positive test rather
+// than a negation. Kept here so several call sites cannot drift into several
+// different opinions about what "a preset" means.
+inline bool presetIsValid(const CascadePreset& ps) {
+    return ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12;
+}
+
+// THE SHARED CAP. A plugin is third-party code, and a list of buttons or bar
+// keys thousands long is not a menu - it is a way for a buggy plugin to put a
+// wall of controls on the panel, or to turn a per-frame frequency comparison
+// into an unbounded loop. `cap` is AppWindow::kMaxPresetsPerPlugin, passed in
+// rather than duplicated here: the constant belongs to the class that
+// enforces it everywhere else, and this header must not fork a second copy
+// of it.
+inline std::uint32_t cappedPresetCount(std::uint32_t rawCount, std::uint32_t cap) {
+    return rawCount > cap ? cap : rawCount;
+}
+
+// THE SHARED LABEL. The ABI promises `label` is NUL-terminated, but a plugin
+// that fills every one of CASCADE_PRESET_LABEL_CHARS bytes with no
+// terminator must not walk the host past the end of its own buffer -
+// strnlen, not strlen, is what makes reading it safe. Falls back to
+// `pluginName` when the plugin left the label empty, which is the common
+// case: most presets letter nothing of their own and are meant to read as
+// the plugin's name ("ADS-B" on the one preset an ADS-B decoder publishes).
+inline std::string presetLabel(const char label[CASCADE_PRESET_LABEL_CHARS],
+                                const std::string& pluginName) {
+    const std::size_t len = strnlen(label, CASCADE_PRESET_LABEL_CHARS);
+    return len == 0 ? pluginName : std::string(label, len);
+}
+
+// ONE PRESET AS THE PLUGIN'S OWN TABLE RETURNED IT, together with the RAW
+// index get() was called with. The position of a preset within a FILTERED
+// list (the ones presetIsValid let through) is NOT that index the moment any
+// earlier one failed validation - and the raw index is exactly what a
+// deferred apply must record, because it re-reads the preset through the
+// plugin's own get() rather than trusting anything carried from the frame
+// the key was pressed on. See AppWindow::validatedPresets, the one place
+// that walks a plugin's count()/get() and builds this list.
+struct IndexedPreset {
+    std::uint32_t index = 0;
+    CascadePreset preset{};
+};
+
+// ONE KEY OF A PRESET BAR, computed with no ImGui and no plugin ABI call:
+// from a snapshot already taken (a plugin's cascade::core::MutePreset list -
+// see AppWindow::rebuildMuteStates, which is the one place that snapshot is
+// built, and the reason a bar never calls count()/get() itself) and the
+// receiver's current position. `label` is already the bounded, name-
+// falling-back text (the snapshot carries the RESULT of presetLabel, not the
+// raw bytes) and `lit` is whether the receiver is already sitting on this
+// preset - the same rule maybeAutoPreset uses to decide whether pressing it
+// again would do anything.
+struct PresetBarKey {
+    std::uint32_t index = 0;
+    std::string label;
+    bool lit = false;
+};
+
+// A BAR HAS NOTHING TO DRAW when `presets` is empty: the return is an empty
+// vector, and every caller's contract is "draw nothing and cost no vertical
+// space" in that case, never a placeholder row.
+inline std::vector<PresetBarKey> presetBarKeys(
+    const std::vector<cascade::core::MutePreset>& presets, double deviceCentreHz,
+    double vfoOffsetHz, double deviceRateHz) {
+    std::vector<PresetBarKey> out;
+    out.reserve(presets.size());
+    for (const cascade::core::MutePreset& ps : presets) {
+        PresetBarKey k;
+        k.index = ps.index;
+        k.label = ps.label;
+        k.lit = detail::presetAlreadyTunedToFields(ps.frequencyHz, ps.bandwidthHz, ps.deviceCentre,
+                                                    deviceCentreHz, vfoOffsetHz, deviceRateHz);
+        out.push_back(std::move(k));
+    }
+    return out;
+}
+
+// --- The mid-iteration-rebuild hazard: record now, apply after the loop ----
+//
+// applyPluginPreset ends by calling refreshPluginRunner(), which rebuilds
+// pluginUi_'s panels, instruments and images and, through ensureMapPage's own
+// bookkeeping, the map page list too - the very containers
+// AppWindow::drawPluginWindows is iterating when one of ITS windows draws a
+// preset bar. 0.96.1 fixed a crash of exactly this shape in a different list
+// (see gui/list_pick.hpp: "pick by index, apply after the loop" - a combo
+// handler that rebuilt a list while still inside the loop that was drawing
+// it). A bar's key press must do what that fix does: RECORD which plugin and
+// which raw preset index were pressed, and let the actual apply happen once
+// every window this frame has had its say.
+//
+// This is deliberately not a bare std::optional<PresetBarRequest> exposed to
+// callers: record() and take() are the only operations, so a caller cannot
+// read the pending request twice or forget to clear it. ONE request survives
+// at most - a second press in the same frame (two different bars, or the
+// same bar clicked twice by a very fast double-click) REPLACES whatever was
+// pending rather than queuing it, because "the last thing you pressed" is
+// the only sane answer to "what happens" when two presses landed in one
+// frame nobody could have told apart anyway.
+struct PresetBarRequest {
+    std::string pluginKey;          // cascade::core::pluginKey() - the module file name
+    std::uint32_t presetIndex = 0;  // the RAW index into the plugin's own table
+};
+
+class PendingPresetRequest {
+public:
+    void record(std::string pluginKey, std::uint32_t presetIndex) {
+        pending_ = PresetBarRequest{std::move(pluginKey), presetIndex};
+    }
+    bool hasPending() const { return pending_.has_value(); }
+    // Consumed ONCE: a second call in the same frame (there should never be
+    // one, since only one safe point calls this) finds nothing, exactly as
+    // if nothing had been pressed.
+    std::optional<PresetBarRequest> take() {
+        std::optional<PresetBarRequest> out = std::move(pending_);
+        pending_.reset();
+        return out;
+    }
+
+private:
+    std::optional<PresetBarRequest> pending_;
+};
+
+// WHETHER A RESOLVED REQUEST IS SAFE TO HAND TO applyPluginPreset, asked at
+// the safe point after the frame's window loops, never at the press itself.
+// `pluginFound` is whether `pluginKey` still names a LOADED plugin with a
+// preset table - false when the plugin was removed or unloaded between the
+// press and this point, which a rescan mid-frame cannot do today but a
+// module removed through the store while its window was open is exactly this
+// case in miniature. `count` is that plugin's own answer to count(), read
+// FRESH: the ABI promises a preset table cannot change without a rescan, but
+// the index recorded when the key was pressed is only ever trusted against a
+// bound read again right here, never against what count() answered back when
+// the bar was drawn. `fetchedOk` is whether get(presetIndex, &ps) returned 1.
+inline bool presetRequestStillValid(bool pluginFound, std::uint32_t count,
+                                     std::uint32_t maxPresets, std::uint32_t presetIndex,
+                                     bool fetchedOk, const CascadePreset& ps) {
+    if (!pluginFound) { return false; }
+    if (presetIndex >= count || presetIndex >= maxPresets) { return false; }
+    if (!fetchedOk) { return false; }
+    return presetIsValid(ps);
+}
+
+// --- The bar's own wrap: which row each key is drawn on --------------------
+//
+// THE WHOLE LAYOUT, DECIDED BEFORE ANYTHING IS DRAWN. The first version of the
+// bar asked ImGui, key by key, "what is left on the current row"
+// (GetContentRegionAvail().x) and called SameLine() when the next key fitted
+// in the answer. That question cannot be asked where it was being asked:
+// once a button has been submitted WITHOUT a SameLine() after it, ImGui has
+// already moved the cursor to the start of the next line, so "what is left"
+// is always the full width and every key always "fits". The rendered check
+// showed exactly that (2026-09-17): FLEX's four keys on one row in a 570 px
+// window, the third cut off by the frame and the fourth not on screen at
+// all - while the arithmetic test was green, because the arithmetic was
+// never what was wrong.
+//
+// So the draw code no longer asks as it goes. It measures every key, hands
+// the widths here with the width of the row and the gap ImGui puts between
+// two items on a line, and draws key i on the same line as key i-1 exactly
+// when their rows are equal. What is tested is then what is drawn.
+//
+// A KEY WIDER THAN THE ROW still gets a row - its own - rather than being
+// dropped: it belongs wherever the cursor is, however wide it turns out to
+// be, so a bar can never wrap before it has drawn anything and leave a row
+// with nothing on it. Exactly filling the row fits (<=, not <).
+inline std::vector<std::size_t> presetBarRows(float rowWidthPx, float spacingPx,
+                                              const std::vector<float>& keyWidthsPx) {
+    std::vector<std::size_t> rows;
+    rows.reserve(keyWidthsPx.size());
+    std::size_t row = 0;
+    float used = 0.0f;  // width taken on the current row, 0 = nothing on it yet
+    for (const float w : keyWidthsPx) {
+        if (used > 0.0f && used + spacingPx + w > rowWidthPx) {
+            ++row;
+            used = 0.0f;
+        }
+        used = (used > 0.0f) ? used + spacingPx + w : w;
+        // A zero-width key must still count as "something on this row", or
+        // the next key would be treated as a row's first and never wrap.
+        if (used <= 0.0f) { used = 0.0001f; }
+        rows.push_back(row);
+    }
+    return rows;
 }
 
 // --- Per-digit tuning: the tubes' own arithmetic, shared with the switches --

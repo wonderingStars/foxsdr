@@ -2708,6 +2708,13 @@ void AppWindow::drawUi() {
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
     drawPluginWindows();
+    // THE SAFE POINT for a preset bar's key press: every loop inside
+    // drawPluginWindows that a bar could have been drawn inside of - the map
+    // pages, the image/panel/instrument windows and the Decoder output
+    // window's grouped bars - has now finished iterating, so it is safe to
+    // let applyPluginPreset rebuild the very lists those loops were walking.
+    // See pendingPresetRequest_'s own comment for the crash this avoids.
+    consumePendingPresetRequest();
     // ONCE A FRAME, AFTER THE PAGE HAS HAD ITS SAY. drawTransmitPage above is
     // what sets transmitPttHeld_, so this has to follow it or the key would
     // always be acting on the previous frame's request. It is also the stamp
@@ -12150,6 +12157,12 @@ void AppWindow::drawPluginWindows() {
                 page.w = static_cast<int>(wsize.x);
                 page.h = static_cast<int>(wsize.y);
             }
+            // THE PRESET BAR, at the top of the body, for BOTH kinds of map
+            // page - a satellite tracker publishes presets exactly as any
+            // other track source can, and "click a button on ADS-B while
+            // watching satellites" is the same gesture this whole feature
+            // exists for. Draws nothing when the plugin has none.
+            drawPluginPresetBar(page.plugin);
             // TWO KINDS OF MAP PAGE, AND THE SATELLITE ONE IS A WHOLE
             // INSTRUMENT. Every control below - fit, the receiver position,
             // the coverage and trail switches, the target list - exists on the
@@ -12434,6 +12447,7 @@ void AppWindow::drawPluginWindows() {
         }
         if (beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, kSeparatePageW,
                       kSeparatePageH)) {
+            drawPluginPresetBar(im.plugin);
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("Waiting for the first image...");
             } else {
@@ -12554,6 +12568,7 @@ void AppWindow::drawPluginWindows() {
             rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
         if (beginPage(id.c_str(), railName.c_str(), &panelOpen, 0, kPanelW, kPanelH)) {
+            drawPluginPresetBar(p.plugin);
             drawRowTable(p.headings, p.rows);
         }
         endPage();
@@ -12585,6 +12600,7 @@ void AppWindow::drawPluginWindows() {
             rc = static_cast<char>(std::toupper(static_cast<unsigned char>(rc)));
         }
         if (beginPage(id.c_str(), railName.c_str(), &open, 0, kInstrumentW, kInstrumentH)) {
+            drawPluginPresetBar(in.plugin);
             const double now = ImGui::GetTime();
             InstrumentSeen& seen = instrumentSeen_[id];
             if (in.have && in.state.seq != seen.seq) {
@@ -13565,34 +13581,41 @@ void AppWindow::drawTargetDetailsWindow() {
     if (!detailsOpen_) { detailsTrackId_.clear(); }
 }
 
+std::vector<cascade::gui::IndexedPreset> AppWindow::validatedPresets(
+    const cascade::core::LoadedPlugin& p) const {
+    std::vector<cascade::gui::IndexedPreset> out;
+    if (p.preset == nullptr) { return out; }
+    const std::uint32_t n =
+        cascade::gui::cappedPresetCount(p.preset->count(), kMaxPresetsPerPlugin);
+    out.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        cascade::gui::IndexedPreset ip;
+        ip.index = i;
+        ip.preset.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+        if (p.preset->get(i, &ip.preset) != 1) { continue; }
+        // Third-party numbers about to command a radio. A frequency that is
+        // not a frequency is refused here rather than handed to a driver;
+        // cascade::gui::presetIsValid is written as a positive test because
+        // the negation would accept NaN.
+        if (!cascade::gui::presetIsValid(ip.preset)) { continue; }
+        out.push_back(ip);
+    }
+    return out;
+}
+
 void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
     // ONE CLICK: go where this decoder listens, in the mode it needs, and show
     // its windows. A decoder knows its own frequency and the user usually does
     // not; making them find out that ADS-B is at 1090 MHz and wants 2 MS/s of
     // raw band is the difference between a plugin that works when you click it
     // and one that appears to do nothing.
-    if (p.preset == nullptr) { return; }
-    uint32_t n = p.preset->count();
-    if (n == 0u) { return; }
-    // A plugin is third-party code. A list this long is not a menu, and
-    // without a cap a buggy plugin could put thousands of buttons on the
-    // panel.
-    if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
-
-    for (uint32_t i = 0; i < n; ++i) {
-        CascadePreset ps{};
-        ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-        if (p.preset->get(i, &ps) != 1) { continue; }
-        // Third-party numbers about to command a radio. A frequency that is
-        // not a frequency is refused here rather than handed to a driver;
-        // written as a positive test because the negation would accept NaN.
-        if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
-
+    for (const cascade::gui::IndexedPreset& ip : validatedPresets(p)) {
+        const CascadePreset& ps = ip.preset;
         // Bounded print: the ABI says the label is NUL-terminated, but a
         // plugin that fills every byte must not walk the host off the end.
         char label[CASCADE_PRESET_LABEL_CHARS + 32];
-        std::snprintf(label, sizeof(label), "%.*s##preset%u", CASCADE_PRESET_LABEL_CHARS,
-                      ps.label[0] != '\0' ? ps.label : p.name.c_str(), i);
+        std::snprintf(label, sizeof(label), "%s##preset%u",
+                      cascade::gui::presetLabel(ps.label, p.name).c_str(), ip.index);
         if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) { applyPluginPreset(p, ps); }
         if (ImGui::IsItemHovered()) {
             // WHAT THIS BUTTON WILL DO FOR THIS PLUGIN, which is not the same
@@ -13874,20 +13897,13 @@ void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) 
     }
     if (found == nullptr || found->preset == nullptr) { return; }
 
-    // THE SAME VALIDITY FILTER drawPluginPresets applies before ever putting
-    // a preset in front of a user: bounded, and each frequency positively
-    // tested so third-party garbage (NaN included) never reaches the
-    // decision below.
-    std::uint32_t n = found->preset->count();
-    if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
+    // THE SAME ENUMERATION drawPluginPresets uses, so this can never see a
+    // different set of presets than the row the user could have pressed
+    // instead: bounded, and each frequency positively tested so third-party
+    // garbage (NaN included) never reaches the decision below.
     std::vector<CascadePreset> presets;
-    presets.reserve(n);
-    for (std::uint32_t i = 0; i < n; ++i) {
-        CascadePreset ps{};
-        ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-        if (found->preset->get(i, &ps) != 1) { continue; }
-        if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
-        presets.push_back(ps);
+    for (const cascade::gui::IndexedPreset& ip : validatedPresets(*found)) {
+        presets.push_back(ip.preset);
     }
     if (presets.empty()) { return; }
 
@@ -13922,6 +13938,151 @@ std::string AppWindow::pluginKeyForDisplayName(const std::string& displayName) c
         if (p.name == displayName) { return cascade::core::pluginKey(p); }
     }
     return {};
+}
+
+// --- Preset bars: a plugin's own window offers its own presets (0.99.0) -----
+//
+// "If I have multiple plugins open at the same time I want to select on the
+// individual plugin to use its preset - so if I'm watching ADS-B I can click
+// a button on POCSAG" (the owner, verbatim). Before this, the only place to
+// press a preset was the DECODERS rail section (drawPluginPresets, above),
+// so with ADS-B's map and POCSAG's decoder output both open there was no way
+// from either window to send the radio to the other's plugin.
+
+const cascade::core::MutePlugin* AppWindow::muteStateForDisplayName(
+    const std::string& displayName) const {
+    for (const cascade::core::MutePlugin& m : muteStates_) {
+        if (m.name == displayName) { return &m; }
+    }
+    return nullptr;
+}
+
+void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& pluginName,
+                               const std::vector<cascade::core::MutePreset>& presets) {
+    const std::vector<cascade::gui::PresetBarKey> keys = cascade::gui::presetBarKeys(
+        presets, pipeline_.activeSource().centerFrequencyHz(), pipeline_.vfoOffsetHz(),
+        pipeline_.activeSource().sampleRateHz());
+    // THE WRAP IS DECIDED BEFORE THE FIRST KEY IS DRAWN, from the widths of
+    // all of them and the width of the row as it stands right now - which is
+    // the one moment GetContentRegionAvail() answers the question being asked
+    // (cascade::gui::presetBarRows has the measurement of what happened when
+    // it was asked key by key instead). A key shares its line with the one
+    // before it exactly when the layout put them on the same row; not calling
+    // SameLine() is what lets a key fall to a new one.
+    const float rowWidth = ImGui::GetContentRegionAvail().x;
+    std::vector<float> keyWidths;
+    keyWidths.reserve(keys.size());
+    for (const cascade::gui::PresetBarKey& k : keys) {
+        keyWidths.push_back(ImGui::CalcTextSize(k.label.c_str(), nullptr, true).x +
+                            ImGui::GetStyle().FramePadding.x * 2.0f);
+    }
+    const std::vector<std::size_t> rows = cascade::gui::presetBarRows(
+        rowWidth, ImGui::GetStyle().ItemSpacing.x, keyWidths);
+    ImGui::PushID(pluginKey.c_str());
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const cascade::gui::PresetBarKey& k = keys[i];
+        char label[CASCADE_PRESET_LABEL_CHARS + 32];
+        std::snprintf(label, sizeof(label), "%s##pbar%u", k.label.c_str(), k.index);
+        if (i > 0 && rows[i] == rows[i - 1]) { ImGui::SameLine(); }
+        // LIT: the receiver is already sitting on this preset. Same look as
+        // the transmit page's own "currently selected" keys (kBrassDark
+        // button, kPhosphor text) so a lit preset key reads as the same kind
+        // of fact everywhere this bench draws one.
+        if (k.lit) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+        }
+        // A PRESS ONLY RECORDS. See pendingPresetRequest_'s own comment for
+        // why applying here, mid-iteration of drawPluginWindows' lists, is
+        // exactly the crash 0.96.1 fixed in a different list.
+        if (ImGui::SmallButton(label)) { pendingPresetRequest_.record(pluginKey, k.index); }
+        if (k.lit) { ImGui::PopStyleColor(2); }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(k.lit ? "Already tuned to this preset of %s."
+                                    : "Tune to this preset of %s.",
+                              pluginName.c_str());
+        }
+    }
+    ImGui::PopID();
+}
+
+void AppWindow::drawPluginPresetBar(const std::string& displayName) {
+    const cascade::core::MutePlugin* m = muteStateForDisplayName(displayName);
+    // NOTHING TO DRAW, NOTHING DRAWN. A plugin with no presets costs no
+    // vertical space on its own window - there is no empty bar, no
+    // separator, no placeholder text, because a window that never has a
+    // preset bar must not read as one that is temporarily missing its own.
+    if (m == nullptr || m->presets.empty()) { return; }
+    drawPresetKeys(m->key, m->name, m->presets);
+    ImGui::Separator();
+}
+
+void AppWindow::drawDecoderPresetBars() {
+    // THE "CLICK A BUTTON ON POCSAG" CASE ITSELF: every text decoder - one
+    // that writes into the shared Decoder output window rather than owning a
+    // window of its own - gets its own dimmed name and its own row of keys,
+    // so a plugin's presets are reachable from every place its output can be
+    // read, not only from the DECODERS rail section it shares with every
+    // other module.
+    //
+    // p.decoder != nullptr IS THE FILTER, not p.preset != nullptr: an I/Q or
+    // image decoder also publishes presets, but it already has a map page or
+    // an image window carrying its own bar (drawPluginPresetBar) - repeating
+    // its keys here as well would be the same control twice, in two idioms,
+    // and would eventually disagree about which one is real (the exact
+    // reason drawSatelliteMapBody's own comment gives for not drawing the
+    // ordinary map bar over it).
+    bool any = false;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || p.decoder == nullptr) { continue; }
+        // A STOPPED DECODER IS SKIPPED. A preset key for a plugin the user
+        // just switched off would retune the radio and start it again from
+        // the one window that is supposed to just be reading its output -
+        // the rail's own Start/preset buttons are already the way back in.
+        if (pluginIsStopped(cascade::core::pluginKey(p))) { continue; }
+        const cascade::core::MutePlugin* m = muteStateForDisplayName(p.name);
+        if (m == nullptr || m->presets.empty()) { continue; }
+        any = true;
+        ImGui::TextDisabled("%s", p.name.c_str());
+        ImGui::SameLine();
+        drawPresetKeys(m->key, m->name, m->presets);
+    }
+    if (any) { ImGui::Separator(); }
+}
+
+void AppWindow::consumePendingPresetRequest() {
+    // THE SAFE POINT. Called once a frame from drawUi, after drawPluginWindows
+    // has returned - so every loop over pluginImages_, pluginUi_.panels(),
+    // pluginUi_.instruments() and mapPages_ that a bar's key was drawn inside
+    // has already finished this frame, and applyPluginPreset's
+    // refreshPluginRunner() is free to rebuild every one of them.
+    const std::optional<cascade::gui::PresetBarRequest> req = pendingPresetRequest_.take();
+    if (!req.has_value()) { return; }
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (cascade::core::pluginKey(p) != req->pluginKey) { continue; }
+        // RE-READ, NEVER TRUSTED FROM THE PRESS. count() and get() are asked
+        // again, fresh, exactly as the web remote's own deferred apply does
+        // (applyWebControls' r.pluginPresetIndex handling) - the plugin the
+        // key named a moment ago may have been removed since, and the index
+        // that was valid then is only ever safe to use against a bound read
+        // now.
+        const std::uint32_t n = (p.preset != nullptr) ? p.preset->count() : 0u;
+        CascadePreset ps{};
+        ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+        const bool fetchedOk = p.preset != nullptr && req->presetIndex < n &&
+                               p.preset->get(req->presetIndex, &ps) == 1;
+        if (!cascade::gui::presetRequestStillValid(/*pluginFound=*/true, n, kMaxPresetsPerPlugin,
+                                                    req->presetIndex, fetchedOk, ps)) {
+            return;
+        }
+        applyPluginPreset(p, ps);
+        return;
+    }
+    // No loaded plugin answers to this key any more (unloaded, or removed
+    // through the store, between the press and this safe point) - a silent
+    // no-op is the whole of the contract for a stale request.
 }
 
 // --- Audio mute while a data decoder is running -------------------------------
@@ -13978,29 +14139,25 @@ void AppWindow::rebuildMuteStates() {
         // reason.
         m.running = !pluginIsStopped(m.key) && pluginRunner_.isFeeding(m.key);
         m.mutes = pluginMutes(p);
-        if (p.preset != nullptr) {
-            uint32_t n = p.preset->count();
-            // The same cap the preset BUTTONS get, for the same reason: this
-            // walks third-party code and a plugin claiming thousands of
-            // presets must not turn a frequency comparison into an unbounded
-            // loop.
-            if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
-            for (uint32_t i = 0; i < n; ++i) {
-                CascadePreset ps{};
-                ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-                if (p.preset->get(i, &ps) != 1) { continue; }
-                // The same sanity test applyPluginPreset applies before
-                // commanding a radio, and written the same way (positive, so
-                // NaN is refused rather than accepted by a negation).
-                if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
-                cascade::core::MutePreset mp;
-                mp.frequencyHz = ps.frequencyHz;
-                mp.bandwidthHz = (ps.bandwidthHz > 0.0 && ps.bandwidthHz < 1e12)
-                                     ? ps.bandwidthHz
-                                     : 0.0;
-                mp.deviceCentre = (ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u;
-                m.presets.push_back(mp);
-            }
+        // THE SAME ENUMERATION drawPluginPresets and the preset bars use - one
+        // walk of this plugin's table, capped and filtered once, rather than
+        // this function repeating a second copy of the cap and the frequency
+        // sanity test. This is also THE reason a bar never calls count()/get()
+        // itself: this cache is rebuilt on every plugin-set change (see the
+        // callers of rebuildMuteStates), and m.presets - with the RAW index
+        // and the bounded label a bar needs to draw and to record a press by
+        // - is everything cascade::gui::presetBarKeys needs afterwards.
+        for (const cascade::gui::IndexedPreset& ip : validatedPresets(p)) {
+            const CascadePreset& ps = ip.preset;
+            cascade::core::MutePreset mp;
+            mp.frequencyHz = ps.frequencyHz;
+            mp.bandwidthHz = (ps.bandwidthHz > 0.0 && ps.bandwidthHz < 1e12)
+                                 ? ps.bandwidthHz
+                                 : 0.0;
+            mp.deviceCentre = (ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u;
+            mp.index = ip.index;
+            mp.label = cascade::gui::presetLabel(ps.label, p.name);
+            m.presets.push_back(mp);
         }
         muteStates_.push_back(std::move(m));
     }
@@ -14450,10 +14607,30 @@ void AppWindow::drawDecoderWindow() {
     // window appeared at every launch with that plugin fitted. The user asked
     // for the application to start on the main screen alone; this window is
     // the DECODERS row's own key away ("Show decoder output").
+    //
+    // VERIFICATION ONLY, same house rule as FOXSDR_OPEN_SERIAL_PORTS: the
+    // open flag is not in AppConfig and no remote control sets it, so nothing
+    // a headless self-capture can supply would put this window - and the
+    // grouped preset bar it carries - on screen. Once, at the first frame, so
+    // a session that closes the window again is not fought.
+    static const bool openForCapture = std::getenv("FOXSDR_OPEN_DECODER_OUTPUT") != nullptr;
+    static bool openedForCapture = false;
+    if (openForCapture && !openedForCapture) {
+        openedForCapture = true;
+        decoderWindowOpen_ = true;
+    }
     if (!decoderWindowOpen_) { return; }
     telemetryNotePanel("decoded");
 
     placeAsSeparateWindow(9);
+    if (openForCapture) {
+        // A separate page opens BESIDE the main window, which is outside the
+        // only framebuffer a self-capture reads. Under the capture seam alone
+        // it opens inside instead; the later SetNextWindowPos wins.
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + 420.0f, mv->Pos.y + 200.0f),
+                                ImGuiCond_FirstUseEver);
+    }
     if (beginPage("Decoder output###decoderout", "DECODER OUTPUT", &decoderWindowOpen_, 0,
                   kSeparatePageW, kSeparatePageH)) {
         ImGui::Checkbox("Follow", &decoderAutoScroll_);
@@ -14462,6 +14639,12 @@ void AppWindow::drawDecoderWindow() {
         ImGui::SameLine();
         ImGui::TextDisabled("%d line%s", static_cast<int>(decoderLog_.size()),
                             decoderLog_.size() == 1 ? "" : "s");
+
+        // "IF I'M WATCHING ADS-B I CAN CLICK A BUTTON ON POCSAG" - the one
+        // case a per-window preset bar cannot reach, because a text decoder
+        // publishes no window of its own at all. Drawn above the log, once
+        // per loaded, running, preset-carrying text decoder.
+        drawDecoderPresetBars();
 
         ImGui::BeginChild("##decoderlog", ImVec2(0.0f, 0.0f), true,
                           ImGuiWindowFlags_HorizontalScrollbar);
@@ -16900,31 +17083,19 @@ void AppWindow::publishWebSnapshot() {
         w.tuneAllowed = std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(),
                                   cascade::core::PluginUi::tuneKey(p)) !=
                         pluginTuneAllowed_.end();
-        // Declared presets, filtered by the SAME rules drawPluginPresets uses:
-        // capped, because a plugin is third-party code and a list this long is
-        // not a menu, and each frequency positively tested so a value that is
-        // not a frequency (NaN included — which is why this is written as a
-        // positive test rather than a negation) never reaches the browser or,
-        // through it, a driver.
-        if (p.preset != nullptr) {
-            std::uint32_t n = p.preset->count();
-            if (n > kMaxPresetsPerPlugin) { n = kMaxPresetsPerPlugin; }
-            for (std::uint32_t i = 0; i < n; ++i) {
-                CascadePreset ps{};
-                ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-                if (p.preset->get(i, &ps) != 1) { continue; }
-                if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { continue; }
-                cascade::net::RadioStatus::Plugin::Preset wp;
-                // The ABI says the label is NUL-terminated, but a plugin that
-                // fills every byte must not walk us off the end.
-                wp.label.assign(ps.label,
-                                strnlen(ps.label, CASCADE_PRESET_LABEL_CHARS));
-                if (wp.label.empty()) { wp.label = p.name; }
-                wp.frequencyHz = ps.frequencyHz;
-                wp.bandwidthHz = ps.bandwidthHz;
-                wp.sampleRateHz = ps.sampleRateHz;
-                w.presets.push_back(std::move(wp));
-            }
+        // Declared presets, from the SAME enumeration drawPluginPresets and
+        // the preset bars use: capped, because a plugin is third-party code
+        // and a list this long is not a menu, and each frequency positively
+        // tested so a value that is not a frequency (NaN included) never
+        // reaches the browser or, through it, a driver.
+        for (const cascade::gui::IndexedPreset& ip : validatedPresets(p)) {
+            const CascadePreset& ps = ip.preset;
+            cascade::net::RadioStatus::Plugin::Preset wp;
+            wp.label = cascade::gui::presetLabel(ps.label, p.name);
+            wp.frequencyHz = ps.frequencyHz;
+            wp.bandwidthHz = ps.bandwidthHz;
+            wp.sampleRateHz = ps.sampleRateHz;
+            w.presets.push_back(std::move(wp));
         }
         s.plugins.push_back(std::move(w));
     }
@@ -17396,7 +17567,7 @@ void AppWindow::applyWebControls() {
                 CascadePreset ps{};
                 ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
                 if (lp.preset->get(idx, &ps) != 1) { break; }
-                if (!(ps.frequencyHz > 0.0 && ps.frequencyHz < 1e12)) { break; }
+                if (!cascade::gui::presetIsValid(ps)) { break; }
                 applyPluginPreset(lp, ps);
                 break;
             }
