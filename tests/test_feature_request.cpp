@@ -718,5 +718,89 @@ int main() {
         srv.stop();
     }
 
+    // --- when the page empties its text box, and how big its buffers are -----
+    {
+        using cascade::core::featureRequestClearsTextNow;
+        using S = cascade::core::FeatureRequestState;
+        // The one frame a success is first seen.
+        CHECK(featureRequestClearsTextNow(S::Sending, S::Sent));
+        // NOT WHILE THE THANK-YOU IS STILL SHOWING. Sent is held for the whole
+        // cooldown, and a rule of "clear whenever it is Sent" wiped every
+        // keystroke of a second request for thirty seconds.
+        // RED WHEN the rule looks only at the current state.
+        CHECK(!featureRequestClearsTextNow(S::Sent, S::Sent));
+        CHECK(!featureRequestClearsTextNow(S::Idle, S::Sent));
+        // A failure, a rate limit and a send still in flight keep the words.
+        CHECK(!featureRequestClearsTextNow(S::Sending, S::Failed));
+        CHECK(!featureRequestClearsTextNow(S::Sending, S::CoolingDown));
+        CHECK(!featureRequestClearsTextNow(S::Sending, S::Sending));
+        CHECK(!featureRequestClearsTextNow(S::Idle, S::Idle));
+
+        // THE BUFFERS HOLD WHAT THE LIMITS ALLOW: 2000 four-byte characters
+        // and a terminator, with room for the one character too many that
+        // validation then refuses in words.
+        // RED WHEN a buffer is sized from the character count alone.
+        const std::string longest(cascade::core::kFeatureRequestMaxChars * 4u, 'x');
+        CHECK(longest.size() + 4u + 1u <= cascade::core::kFeatureRequestTextBufferBytes);
+        CHECK(cascade::core::kFeatureRequestMaxContactChars * 4u + 4u + 1u <=
+              cascade::core::kFeatureRequestContactBufferBytes);
+    }
+
+    // --- THE TWO HALVES AGAINST EACH OTHER, only when asked ------------------
+    //
+    // Everything above proves this client against a fake it wrote itself, and
+    // the server's tests prove it against requests they wrote themselves; two
+    // halves each green against their own idea of the contract is how a
+    // byte-counting server and a character-counting client both passed on the
+    // same day (2026-09-17). With FOXSDR_FEATURE_E2E_URL pointing at a REAL
+    // foxsdr-site binary on loopback, this sends what the application sends
+    // and reads what the server really answers. It refuses any host but
+    // 127.0.0.1, so it cannot be aimed at the production site by mistake.
+    {
+        const char* e2e = std::getenv("FOXSDR_FEATURE_E2E_URL");
+        if (e2e == nullptr || e2e[0] == '\0') {
+            std::printf("SKIPPED: end-to-end against a real site binary "
+                        "(set FOXSDR_FEATURE_E2E_URL=http://127.0.0.1:<port>/api/feature-request)\n");
+        } else {
+            const std::string url = e2e;
+            CHECK(url.rfind("http://127.0.0.1:", 0) == 0);
+            if (url.rfind("http://127.0.0.1:", 0) == 0) {
+                // 1500 two-byte letters and a contact in the same script: the
+                // message a byte-counting server refused.
+                std::string cyr;
+                for (int i = 0; i < 1500; ++i) { cyr += "\xD0\xB6"; }
+                int accepted = 0;
+                int limited = 0;
+                std::string lastSentence;
+                // Six sends from one address: the contract's five an hour,
+                // then the sixth refused with the server's own sentence. A
+                // fresh sender each time, because one sender's 30 s cooldown
+                // is tested above and is not what is being measured here.
+                for (int i = 0; i < 6; ++i) {
+                    FeatureRequestSender sender;
+                    const std::uint64_t t0 = 5000;
+                    CHECK(sender.send(url, samplePayload(cyr, "\xD0\xB6\xD0\xB6"), t0));
+                    const FeatureRequestState st = waitForTerminal(sender, t0);
+                    if (st == FeatureRequestState::Sent && sender.lastStatus() == 200) {
+                        ++accepted;
+                    } else if (sender.lastStatus() == 429) {
+                        ++limited;
+                        lastSentence = sender.failureMessage();
+                        CHECK(sender.blockedUntil() > t0 + kFeatureRequestCooldownSeconds);
+                    } else {
+                        std::printf("e2e send %d: state %d, HTTP %d, %s\n", i,
+                                    static_cast<int>(st), sender.lastStatus(),
+                                    sender.failureMessage().c_str());
+                    }
+                }
+                std::printf("e2e: accepted %d, rate-limited %d, sentence: %s\n", accepted,
+                            limited, lastSentence.c_str());
+                CHECK(accepted == 5);
+                CHECK(limited == 1);
+                CHECK(!lastSentence.empty());
+            }
+        }
+    }
+
     return testSummary("test_feature_request");
 }
