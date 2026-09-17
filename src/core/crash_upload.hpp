@@ -308,6 +308,35 @@ private:
 UploadResult postCrashReport(const std::string& url, const std::string& json,
                              const std::shared_ptr<UploadCancel>& cancel);
 
+// ---------------------------------------------------------------------------
+// The shared low-level transport (2026-09-17)
+// ---------------------------------------------------------------------------
+//
+// postCrashReport() above is postBounded() with captureBody=false, kept as its
+// own function because every existing caller and every existing test names
+// it. core/feature_request.hpp's sender is the second caller, and its wire
+// contract needs something the crash path's four rules explicitly forbid:
+// reading the response BODY, so a 400's {"error":"..."} sentence can reach the
+// person who pressed Send. Rather than write a second WinHTTP/httplib client
+// for one more field, this is that same client with body-reading made
+// conditional - `captureBody` false reproduces postCrashReport()'s exact
+// behaviour (the body is never asked for, so nothing about the crash path's
+// timing or the bytes it sends changes), and true additionally reads the
+// response into `body`, bounded by the same connect/send/receive timeouts as
+// everything else here - a server that answers slowly is a server this
+// bound already refuses, body or no body.
+struct RawPostResult {
+    bool attempted = false;
+    int status = 0;          // 0 when the request never got an answer
+    bool rateLimited = false;
+    std::uint64_t retryAfterSeconds = 0;
+    bool cancelled = false;
+    std::string body;        // populated only when captureBody was true
+};
+
+RawPostResult postBounded(const std::string& url, const std::string& json,
+                          const std::shared_ptr<UploadCancel>& cancel, bool captureBody);
+
 // WHERE REPORTS GO. https://foxsdr.com/api/crash, overridable by
 // FOXSDR_CRASH_URL, which is how the tests point at a local stub with no
 // network. Plain http is refused EXCEPT for a loopback host, so a test can use

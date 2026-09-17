@@ -828,9 +828,18 @@ std::uint64_t parseRetryAfterSeconds(const std::string& v) {
 }  // namespace
 #endif
 
-UploadResult postCrashReport(const std::string& url, const std::string& json,
-                             const std::shared_ptr<UploadCancel>& cancel) {
-    UploadResult res;
+// The cap on a captured response body. Nothing this application asks a
+// server for is supposed to be large - a JSON {"ok":false,"error":"..."}
+// sentence - so this exists to bound the WORK, not the content: a server
+// that answered with megabytes of something else is refused past this point
+// rather than read in full, and the connect/send/receive timeouts below still
+// apply throughout, so a slow feed of even this much is still bounded by
+// them, never by this number.
+constexpr std::size_t kMaxCapturedBodyBytes = 16 * 1024;
+
+RawPostResult postBounded(const std::string& url, const std::string& json,
+                          const std::shared_ptr<UploadCancel>& cancel, bool captureBody) {
+    RawPostResult res;
 #if defined(_WIN32)
     if (url.empty() || json.empty() || !cancel) { return res; }
 
@@ -887,16 +896,45 @@ UploadResult postCrashReport(const std::string& url, const std::string& json,
                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &len,
                             WINHTTP_NO_HEADER_INDEX) != 0) {
                         res.status = static_cast<int>(status);
-                        res.accepted = (status >= 200 && status < 300);
                         if (status == 429) {
                             res.rateLimited = true;
                             res.retryAfterSeconds = queryRetryAfter(req);
                         }
                     }
-                    // The body is never read. There is nothing the server could
-                    // say that this client should obey - no config, no
-                    // commands, no identifiers - and not reading it is the
-                    // simplest way to guarantee that stays true.
+                    // THE BODY IS READ ONLY WHEN THE CALLER ASKED. The crash
+                    // path never sets captureBody, so this loop never runs for
+                    // it and postCrashReport()'s "the body is never read"
+                    // promise stays exactly as true as it always was - there
+                    // is nothing the server could say that the crash path
+                    // should obey, no config, no commands, no identifiers.
+                    // feature_request.cpp DOES need it, to surface a 400's
+                    // {"error":"..."} sentence, so this reads up to
+                    // kMaxCapturedBodyBytes, bounded by the same receive
+                    // timeout as everything else above - a slow feed of even
+                    // that much is refused by the timeout, not by looping
+                    // forever waiting for it.
+                    if (captureBody) {
+                        std::string body;
+                        for (;;) {
+                            DWORD avail = 0;
+                            if (::WinHttpQueryDataAvailable(req, &avail) == 0 || avail == 0) {
+                                break;
+                            }
+                            if (body.size() + avail > kMaxCapturedBodyBytes) {
+                                avail = static_cast<DWORD>(kMaxCapturedBodyBytes - body.size());
+                                if (avail == 0) { break; }
+                            }
+                            std::vector<char> buf(avail);
+                            DWORD got = 0;
+                            if (::WinHttpReadData(req, buf.data(), avail, &got) == 0 ||
+                                got == 0) {
+                                break;
+                            }
+                            body.append(buf.data(), got);
+                            if (body.size() >= kMaxCapturedBodyBytes) { break; }
+                        }
+                        res.body = std::move(body);
+                    }
                 } else if (::GetLastError() == ERROR_WINHTTP_OPERATION_CANCELLED) {
                     res.cancelled = true;
                 }
@@ -963,20 +1001,38 @@ UploadResult postCrashReport(const std::string& url, const std::string& json,
 
         if (r) {
             res.status = r->status;
-            res.accepted = (res.status >= 200 && res.status < 300);
             if (res.status == 429) {
                 res.rateLimited = true;
                 res.retryAfterSeconds = parseRetryAfterSeconds(r->get_header_value("Retry-After"));
             }
-            // The body is never read. There is nothing the server could say
-            // that this client should obey - no config, no commands, no
-            // identifiers - and not reading it is the simplest way to
-            // guarantee that stays true.
+            // THE BODY IS COPIED OUT ONLY WHEN THE CALLER ASKED. httplib's
+            // Post() has already read it into `r->body` by the time it
+            // returns - that part of the cost is paid on the crash path too,
+            // exactly as it always was - but it is only ever LOOKED AT here
+            // when captureBody is true, which keeps postCrashReport()'s "the
+            // body is never read" promise a promise about what this client
+            // OBEYS rather than about which bytes crossed the socket.
+            if (captureBody) {
+                res.body = r->body.substr(0, kMaxCapturedBodyBytes);
+            }
         } else if (cancel->cancelled()) {
             res.cancelled = true;
         }
     }
 #endif
+    return res;
+}
+
+UploadResult postCrashReport(const std::string& url, const std::string& json,
+                             const std::shared_ptr<UploadCancel>& cancel) {
+    const RawPostResult raw = postBounded(url, json, cancel, /*captureBody=*/false);
+    UploadResult res;
+    res.attempted = raw.attempted;
+    res.status = raw.status;
+    res.accepted = (raw.status >= 200 && raw.status < 300);
+    res.rateLimited = raw.rateLimited;
+    res.retryAfterSeconds = raw.retryAfterSeconds;
+    res.cancelled = raw.cancelled;
     return res;
 }
 

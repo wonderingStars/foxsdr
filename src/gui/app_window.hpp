@@ -84,6 +84,7 @@ struct GLFWwindow;
 #include "gui/map_view.hpp"
 #include "core/telemetry.hpp"
 #include "core/crash_upload.hpp"
+#include "core/feature_request.hpp"
 #include "core/hang_watchdog.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
@@ -2072,6 +2073,37 @@ private:
     bool crashUploadSwept_ = false;
     void crashUploadStart();
     void crashUploadFinish();
+
+    // --- REQUEST A FEATURE (see core/feature_request.hpp) -------------------
+    //
+    // A KEY ON THE MAIN SCREEN, not a rail row: this is not a mode of the
+    // receiver and has no lamp to keep lit, so it lives on the STATUS column,
+    // above the maker's plate - see drawStatusColumn(). Never persisted and
+    // never reopened at start-up (the same rule as demodScopeOpen_ above:
+    // nothing here rides in AppConfig, so there is nothing FOR startupState()
+    // to have to clear).
+    bool featureRequestOpen_ = false;
+    // FOXSDR_OPEN_FEATURE_REQUEST's one-shot latch - see the call site in
+    // run() beside FOXSDR_OPEN_SERIAL_PORTS's sibling seams.
+    bool featureRequestOpenedByEnv_ = false;
+    // The typed text and the typed contact line - IN MEMORY ONLY, per
+    // PRIVACY.md and the file header of feature_request.hpp: neither field
+    // is ever read from or written to AppConfig, and neither reaches the
+    // diagnostics log. `featureRequestContact_` survives a successful send
+    // (the contract calls for keeping it so a person filing several requests
+    // does not have to retype it); `featureRequestText_` is cleared.
+    std::string featureRequestText_;
+    std::string featureRequestContact_;
+    cascade::core::FeatureRequestSender featureRequestSender_;
+    // The state drawFeatureRequestPage() last logged against, and the
+    // character count it logged with - so a send's outcome is logged exactly
+    // once, on the frame the worker's Sending -> terminal transition is first
+    // seen, and the log line can say how many characters without saying what
+    // any of them were.
+    cascade::core::FeatureRequestState featureRequestLastLoggedState_ =
+        cascade::core::FeatureRequestState::Idle;
+    std::size_t featureRequestSentChars_ = 0;
+    void drawFeatureRequestPage();
     // "Serial ports" settings section: the machine's ports as a table, and
     // the GPS row (drawGpsPositionControl) that used to be findable only
     // under the rail's Radar section. Drawn before Diagnostics, on the SYSTEM

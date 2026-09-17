@@ -66,6 +66,11 @@ exactly as many.
   element sets from CelesTrak about every twelve hours, falling back to a
   copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request
   carries no identifier.
+- **A feature request is sent only when you press SEND on the REQUEST A
+  FEATURE page.** It carries the text you typed, an optional contact line, and
+  which build you are running - never an identifier, never a frequency, never
+  the log, never anything from your config. Exactly what it contains is listed
+  field by field below.
 
 ## What is sent when usage reporting is enabled
 
@@ -276,6 +281,60 @@ The reports are stored as the module names and offsets above. Turning an offset
 into a function and a line needs the debug database from that exact build, which
 is kept on our own machines and **is never uploaded anywhere** — the resolution
 happens locally, in `tools/report-reader`, not on the server.
+
+## Feature requests
+
+The main screen has a **REQUEST A FEATURE** key, above the maker's plate in
+the STATUS column. Pressing it opens a page with a text box, an optional
+"Email or callsign" line, and a SEND key. Nothing is sent until you press
+SEND - not while you type, not when you open the page, and never in the
+background - and there is no queue: a request that fails to send is still
+sitting in the text box exactly as you typed it, so you can try again rather
+than being told it will be retried for you.
+
+The typed text and the typed contact line live in memory only, for as long as
+the page is open. Neither is ever written to `config.json`, and neither
+reaches the diagnostics log - the log records only that a send happened, how
+many characters it carried and what the server answered
+(`feature request: sent, 42 characters, HTTP 200`, or the failure in the same
+shape), never the words themselves.
+
+### What is sent when you request a feature
+
+One request, to `https://foxsdr.com/api/feature-request`, only when you press
+SEND:
+
+| Field | Example | Why |
+|---|---|---|
+| `schema` | `1` | Which version of this list the request follows. |
+| `text` | `Please add a squelch tail hang timer` | What you typed, trimmed of leading and trailing blank space. Between 10 and 2000 characters. |
+| `contact` | `g4xyz@example.com`, or empty | An email address or callsign, ENTIRELY OPTIONAL, so we can follow up. Up to 120 characters. Kept on screen after a successful send, in case you file a second request. |
+| `version` | `0.99.0` | Which release, so a request against an old build is not chased in the current one. |
+| `platform` | `windows`, `linux` or `android` | Which build filed it. |
+| `arch` | `x64` or `arm64` | As above. |
+
+That is the complete list. No install identifier, no hardware, no log, no
+config, no frequency, no location, no plugin list - a feature request carries
+nothing this application knows about your machine or your session, only what
+you just typed and which build you are running. It is asserted **in both
+directions** by `tests/test_feature_request.cpp`: a field added to the
+request fails the test just as loudly as a field this table claims and the
+request stopped sending, and the same test reads this document and requires
+the two lists to match.
+
+**How the server answers.** Success or a readable sentence explaining why
+not - the same sentence is shown on the page. If the server asks us to wait
+(too many requests from this connection), FoxSDR waits and disables SEND for
+that long; otherwise SEND is disabled again for 30 seconds after every
+attempt, successful or not, so filing five requests in five seconds is not
+something the button lets you do by accident.
+
+**What we keep on our end.** The text, the contact line if you gave one, the
+version, the platform, the architecture, when it arrived, and your country if
+our server's existing geolocation resolves one from the connection - **never
+your IP address itself**. Third-party text is HTML-escaped before it is shown
+on our admin page, because it is exactly that: something you wrote, not
+something we generated.
 
 ## What is never sent
 
