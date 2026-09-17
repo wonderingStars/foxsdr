@@ -3301,12 +3301,19 @@ void AppWindow::drawStatusColumn() {
     // THE FEATURE REQUEST KEY IS MEASURED SECOND, for the same reason: it is
     // the other fixed thing in this column, directly above the plate it sits
     // on, and the cards above it have to know where THEIR room ends too.
-    // valueH-scaled rather than tinyH-scaled - a key a person presses reads
-    // better a size up from a card's caption.
-    const float featureKeyH = valueH + 12.0f;
-    const ImVec2 featureKeyBR(colBR.x - kPad, plateTL.y - 8.0f);
+    //
+    // AS SHORT AS A LETTERED KEY CAN BE, AND THAT IS A MEASUREMENT. Its first
+    // version was valueH + 12 with 8 px either side, and at the default window
+    // size that was 8 px more than the column had: with the web remote switched
+    // on, the WEB ACCESS card - the sixth, and the last - no longer fitted above
+    // it and was skipped whole, so adding a key took a reading away from
+    // everybody who serves the receiver to a browser (rendered check,
+    // 2026-09-17). A caption-height key with 5 px either side fits in the room
+    // the six cards leave at that size.
+    const float featureKeyH = tinyH + 8.0f;
+    const ImVec2 featureKeyBR(colBR.x - kPad, plateTL.y - 5.0f);
     const ImVec2 featureKeyTL(colTL.x + kPad, featureKeyBR.y - featureKeyH);
-    const float cardsBottom = featureKeyTL.y - 8.0f;
+    const float cardsBottom = featureKeyTL.y - 5.0f;
 
     const float cardL = colTL.x + kPad;
     const float cardR = colBR.x - kPad;
@@ -14989,7 +14996,7 @@ void AppWindow::drawFeatureRequestPage() {
         // contract's own 2000-character ceiling so a full-length message is
         // never silently truncated by the widget before validation gets a
         // chance to say so in words.
-        char buf[cascade::core::kFeatureRequestMaxChars + 64];
+        char buf[cascade::core::kFeatureRequestTextBufferBytes];
         std::snprintf(buf, sizeof(buf), "%s", featureRequestText_.c_str());
         ImGui::BeginDisabled(sending);
         if (ImGui::InputTextMultiline("##featurerequesttext", buf, sizeof(buf),
@@ -15010,7 +15017,7 @@ void AppWindow::drawFeatureRequestPage() {
     // --- the optional contact line ----------------------------------------
     ImGui::TextUnformatted("Email or callsign (optional)");
     {
-        char buf[cascade::core::kFeatureRequestMaxContactChars + 32];
+        char buf[cascade::core::kFeatureRequestContactBufferBytes];
         std::snprintf(buf, sizeof(buf), "%s", featureRequestContact_.c_str());
         ImGui::BeginDisabled(sending);
         ImGui::SetNextItemWidth(-1.0f);
@@ -15137,16 +15144,17 @@ void AppWindow::drawFeatureRequestPage() {
                                     featureRequestSender_.failureMessage().c_str());
         }
     }
-    featureRequestLastLoggedState_ = state;
-
-    // Cleared on the same frame the SEND that just succeeded is first seen,
-    // never before - a send still in flight, or one that failed, leaves the
+    // Cleared on the ONE frame the SEND that just succeeded is first seen -
+    // never before, and never again while the thank-you is still showing (see
+    // featureRequestClearsTextNow for what "whenever it is Sent" did to a
+    // second request). A send still in flight, or one that failed, leaves the
     // words on screen so the person is not asked to retype them. The contact
     // line is deliberately NOT cleared: the contract calls for keeping it, so
     // filing a second request does not mean typing an email address twice.
-    if (state == cascade::core::FeatureRequestState::Sent) {
+    if (cascade::core::featureRequestClearsTextNow(featureRequestLastLoggedState_, state)) {
         featureRequestText_.clear();
     }
+    featureRequestLastLoggedState_ = state;
 }
 
 // --- THE DEMOD SCOPE (0.94.0) -----------------------------------------------

@@ -106,6 +106,18 @@ constexpr std::size_t kFeatureRequestMinChars = 10;
 constexpr std::size_t kFeatureRequestMaxChars = 2000;
 constexpr std::size_t kFeatureRequestMaxContactChars = 120;
 
+// THE TEXT FIELDS' BUFFERS, IN BYTES. The limits above are characters and a
+// character is up to four bytes of UTF-8, so a buffer sized from the character
+// count alone (the page's first version: 2000 + 64) stopped taking input at
+// about a thousand Cyrillic letters or five hundred emoji while the counter
+// under it still read "1032 / 2000" - a limit nobody set and nothing
+// explained. Four bytes a character, plus the terminator, plus enough slack
+// that one character PAST the limit can be typed and refused in words rather
+// than silently not appearing.
+constexpr std::size_t kFeatureRequestTextBufferBytes = (kFeatureRequestMaxChars + 16) * 4 + 1;
+constexpr std::size_t kFeatureRequestContactBufferBytes =
+    (kFeatureRequestMaxContactChars + 16) * 4 + 1;
+
 // UTF-8 CODE POINTS, NOT BYTES. A multi-byte letter must count once -
 // counting bytes would let a message the server accepts be refused here, or
 // refuse one here that the server would have accepted. Malformed UTF-8 never
@@ -181,6 +193,17 @@ std::string featureRequestEndpoint();
 // send, and the server's own Retry-After after a 429, are the same field with
 // two different sources for its value.
 enum class FeatureRequestState { Idle, Sending, Sent, Failed, CoolingDown };
+
+// WHEN THE PAGE EMPTIES ITS TEXT BOX: on the one frame a send is first seen to
+// have SUCCEEDED, and on no other. The page's first version cleared it
+// whenever the state WAS Sent - and Sent is held for the whole 30 second
+// cooldown, so for half a minute after a thank-you every keystroke of a second
+// request was wiped the frame after it was typed. A failed send never clears:
+// the words stay for another press of Send.
+inline bool featureRequestClearsTextNow(FeatureRequestState previous,
+                                        FeatureRequestState current) {
+    return previous == FeatureRequestState::Sending && current == FeatureRequestState::Sent;
+}
 
 constexpr std::uint64_t kFeatureRequestCooldownSeconds = 30;
 // A ceiling on a hostile or broken Retry-After, the same defensive clamp
