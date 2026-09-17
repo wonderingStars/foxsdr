@@ -1511,6 +1511,10 @@ int AppWindow::run(int frames) {
         // the GUI thread, through the one door. Before the UI is drawn so the
         // frame that shows "position set" is the frame the scope has it.
         pollGpsReader();
+        // Collects a feature-request worker that has finished and, once its
+        // post-send cooldown has passed, returns the SEND key to Idle on its
+        // own - see core/feature_request.hpp for why this never blocks.
+        featureRequestSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
         // flight. Everything else about the browser is unchanged — this is
@@ -1522,6 +1526,17 @@ int AppWindow::run(int frames) {
                           pluginCatalogueUrl_.c_str());
             pluginBrowseOpen_ = true;
             startCatalogFetch();
+        }
+        // VERIFICATION ONLY, same house rule as FOXSDR_OPEN_SERIAL_PORTS and
+        // FOXSDR_OPEN_KEY_BINDINGS above: this page's open/closed state is
+        // ImGui's own in-memory storage, not AppConfig, so nothing in a
+        // config file can open it for a headless self-capture - and nothing
+        // does at start-up in a real session either, which is the point.
+        // Opened ONCE, on the first frame that sees the variable, so a real
+        // session that closes the page again is not fought every frame.
+        if (!featureRequestOpenedByEnv_ && std::getenv("FOXSDR_OPEN_FEATURE_REQUEST") != nullptr) {
+            featureRequestOpenedByEnv_ = true;
+            featureRequestOpen_ = true;
         }
 
         drawUi();
@@ -1834,6 +1849,12 @@ int AppWindow::run(int frames) {
     // endpoint does not delay shutdown" true; it is measured against the real
     // binary in tests/test_crash_upload.cpp.
     crashUploadFinish();
+    // Same reason, same shape: a feature request typed and sent moments
+    // before the window closed must not delay it either. Nothing is
+    // persisted from the outcome - unlike crashUploadFinish() there is no
+    // policy state to journal back to the config, because there is no sweep
+    // and nothing to retry (see core/feature_request.hpp).
+    featureRequestSender_.cancel();
     if (!configPath_.empty()) { saveConfigNow(); }
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
@@ -3276,7 +3297,16 @@ void AppWindow::drawStatusColumn() {
     const float plateH = tinyH * 2.0f + 13.0f;
     const ImVec2 plateTL(colTL.x + kPad, colBR.y - kPad - plateH);
     const ImVec2 plateBR(colBR.x - kPad, colBR.y - kPad);
-    const float cardsBottom = plateTL.y - 8.0f;
+
+    // THE FEATURE REQUEST KEY IS MEASURED SECOND, for the same reason: it is
+    // the other fixed thing in this column, directly above the plate it sits
+    // on, and the cards above it have to know where THEIR room ends too.
+    // valueH-scaled rather than tinyH-scaled - a key a person presses reads
+    // better a size up from a card's caption.
+    const float featureKeyH = valueH + 12.0f;
+    const ImVec2 featureKeyBR(colBR.x - kPad, plateTL.y - 8.0f);
+    const ImVec2 featureKeyTL(colTL.x + kPad, featureKeyBR.y - featureKeyH);
+    const float cardsBottom = featureKeyTL.y - 8.0f;
 
     const float cardL = colTL.x + kPad;
     const float cardR = colBR.x - kPad;
@@ -3726,6 +3756,27 @@ void AppWindow::drawStatusColumn() {
              faulted ? cascade::gui::theme::kAlarm
                      : (rxRunning ? cascade::gui::theme::kPhosphor : kMuted),
              faulted ? "FAULT" : (rxRunning ? "RUNNING" : "STOPPED"), lines, n);
+    }
+
+    // --- REQUEST A FEATURE -----------------------------------------------------
+    //
+    // THE ONE KEY IN THIS COLUMN, because everything else here is a reading
+    // and this is the one thing a person DOES from it. It sits directly above
+    // the maker's plate rather than among the cards, so it reads as hardware
+    // bolted to the case rather than as one more instrument telling you
+    // something. benchWordKey is the same lettered-brass primitive every
+    // hand-drawn panel in this application already uses for a labelled key
+    // (map_view.cpp's follow key, the satellites window's view controls) -
+    // never a stock ImGui button, which this bench never draws one of.
+    //
+    // SKIPPED WHOLE ON A COLUMN TOO SHORT TO HOLD IT, the same rule every
+    // card above already follows: half a key is worse than no key, and a
+    // window this narrow has bigger problems than this one being absent.
+    if (featureKeyBR.y > bodyTop && featureKeyBR.x > featureKeyTL.x + 16.0f) {
+        if (cascade::gui::benchWordKey(dl, featureKeyTL, featureKeyBR, "REQUEST A FEATURE",
+                                       true, "status-feature-request")) {
+            featureRequestOpen_ = true;
+        }
     }
 
     // --- the maker's plate ---------------------------------------------------
@@ -12474,6 +12525,7 @@ void AppWindow::drawPluginWindows() {
     // is a real window like every one of them: movable, resizable, and able to
     // sit on a second monitor beside the spectrum it is explaining.
     drawDemodScopePage();
+    drawFeatureRequestPage();
 
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
@@ -14892,6 +14944,209 @@ void AppWindow::drawTransmitPage() {
     // Applied AFTER the page is drawn, so the frequency the operator just
     // typed is the one that goes to the radio this frame rather than next.
     followTransmitFrequency();
+}
+
+// --- REQUEST A FEATURE (see core/feature_request.hpp) -----------------------
+//
+// A SMALL PAGE, on purpose: a text box, an optional contact line, the one
+// sentence naming exactly what is sent, a SEND key, and a status line. Opened
+// by the STATUS column's own key (drawStatusColumn) and by nothing else -
+// never restored at start-up, matching every other torn-off page's rule.
+void AppWindow::drawFeatureRequestPage() {
+    if (!featureRequestOpen_) { return; }
+    constexpr float kW = 480.0f;
+    constexpr float kH = 420.0f;
+    float px = 0.0f;
+    float py = 0.0f;
+    float pw = kW;
+    float ph = kH;
+    {
+        // OPENS INSIDE THE MAIN WINDOW, centred - the same arithmetic the
+        // plugin store and the demod scope use, and for the same reason: a
+        // key that opens nothing visible on a maximised single monitor has
+        // told the person who pressed it nothing at all.
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        cascade::gui::pageOpenInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, kW, kH, px,
+                                     py, pw, ph);
+    }
+    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(pw, ph), ImGuiCond_FirstUseEver);
+    if (!beginPage("Feature request###featurerequestwindow", "FEATURE REQUEST",
+                   &featureRequestOpen_, 0, pw, ph)) {
+        endPage();
+        return;
+    }
+
+    const std::uint64_t nowEpoch = static_cast<std::uint64_t>(std::time(nullptr));
+    const cascade::core::FeatureRequestState state = featureRequestSender_.state();
+    const bool sending = (state == cascade::core::FeatureRequestState::Sending);
+
+    // --- the text --------------------------------------------------------
+    ImGui::TextUnformatted("What would you like FoxSDR to do?");
+    {
+        // A FIXED BUFFER, like every other text field on this bench
+        // (transmitArgs_ above, bookmark names elsewhere) - sized past the
+        // contract's own 2000-character ceiling so a full-length message is
+        // never silently truncated by the widget before validation gets a
+        // chance to say so in words.
+        char buf[cascade::core::kFeatureRequestMaxChars + 64];
+        std::snprintf(buf, sizeof(buf), "%s", featureRequestText_.c_str());
+        ImGui::BeginDisabled(sending);
+        if (ImGui::InputTextMultiline("##featurerequesttext", buf, sizeof(buf),
+                                      ImVec2(-1.0f, 160.0f))) {
+            featureRequestText_ = buf;
+        }
+        ImGui::EndDisabled();
+    }
+    // THE SAME COUNT validateFeatureRequestText() JUDGES THE BOUNDARY
+    // AGAINST - after trimming and after dropping control characters the way
+    // the server does before IT counts them - so the number on screen never
+    // disagrees with the number that decides whether SEND is enabled.
+    const std::size_t chars = cascade::core::featureRequestTextCharCount(featureRequestText_);
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+    ImGui::Text("%zu / %zu characters", chars, cascade::core::kFeatureRequestMaxChars);
+    ImGui::PopStyleColor();
+
+    // --- the optional contact line ----------------------------------------
+    ImGui::TextUnformatted("Email or callsign (optional)");
+    {
+        char buf[cascade::core::kFeatureRequestMaxContactChars + 32];
+        std::snprintf(buf, sizeof(buf), "%s", featureRequestContact_.c_str());
+        ImGui::BeginDisabled(sending);
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##featurerequestcontact", buf, sizeof(buf))) {
+            featureRequestContact_ = buf;
+        }
+        ImGui::EndDisabled();
+    }
+
+    ImGui::Separator();
+
+    // --- THE SENTENCE, exactly what leaves the machine -----------------------
+    //
+    // Built from what is actually about to be sent, never a static string
+    // that could drift from the payload beside it: the contact line only
+    // appears here when there is one to send, exactly as it only appears in
+    // the JSON when featureRequestJson() trims it to something non-empty.
+    {
+        std::string sentence = "Sends your message above";
+        const bool haveContact =
+            !cascade::core::validateFeatureRequestContact(featureRequestContact_).empty()
+                ? false  // an over-length contact is not going to be sent at all
+                : cascade::core::featureRequestContactCharCount(featureRequestContact_) > 0;
+        if (haveContact) { sentence += ", the contact line below it"; }
+        sentence += ", the FoxSDR version, and whether this is running on Windows, Linux "
+                    "or Android, x64 or arm64. Nothing else - no identifier, no log, no "
+                    "settings, no frequency.";
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        ImGui::TextWrapped("%s", sentence.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    // --- whether SEND is allowed, and why not when it is not ------------------
+    const std::string textError = cascade::core::validateFeatureRequestText(featureRequestText_);
+    const std::string contactError =
+        cascade::core::validateFeatureRequestContact(featureRequestContact_);
+    const std::uint64_t blockedUntil = featureRequestSender_.blockedUntil();
+    const bool cooling = !sending && blockedUntil > nowEpoch;
+
+    std::string disabledReason;
+    if (sending) {
+        disabledReason = "sending";
+    } else if (!textError.empty()) {
+        disabledReason = textError;
+    } else if (!contactError.empty()) {
+        disabledReason = contactError;
+    } else if (cooling) {
+        const std::uint64_t left = blockedUntil - nowEpoch;
+        disabledReason = "wait " + std::to_string(left) + "s before sending another";
+    }
+    const bool canSend = disabledReason.empty();
+
+    ImGui::BeginDisabled(!canSend);
+    const bool pressed = ImGui::Button("SEND", ImVec2(120.0f, 0.0f));
+    ImGui::EndDisabled();
+    if (!disabledReason.empty()) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+        ImGui::Text("(%s)", disabledReason.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    if (pressed && canSend) {
+        cascade::core::FeatureRequestPayload payload;
+        payload.text = featureRequestText_;
+        payload.contact = featureRequestContact_;
+        payload.version = cascade::versionString();
+        payload.platform = cascade::core::featureRequestPlatform();
+        payload.arch = cascade::core::featureRequestArch();
+        // The count LOGGED is the same one the SEND key's boundary and the
+        // on-page counter already use - the server's own count, after
+        // trimming and after dropping control characters - never a raw
+        // std::string::size() that could differ from it by a stray blank
+        // line or an embedded control character.
+        featureRequestSentChars_ =
+            cascade::core::featureRequestTextCharCount(featureRequestText_);
+        featureRequestSender_.send(cascade::core::featureRequestEndpoint(), payload, nowEpoch);
+    }
+
+    // --- the status line -------------------------------------------------
+    switch (state) {
+        case cascade::core::FeatureRequestState::Idle:
+            break;
+        case cascade::core::FeatureRequestState::Sending:
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+            ImGui::TextUnformatted("Sending...");
+            ImGui::PopStyleColor();
+            break;
+        case cascade::core::FeatureRequestState::Sent:
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+            ImGui::TextUnformatted("Thank you - your request was sent.");
+            ImGui::PopStyleColor();
+            break;
+        case cascade::core::FeatureRequestState::Failed:
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
+            ImGui::TextWrapped("%s", featureRequestSender_.failureMessage().c_str());
+            ImGui::PopStyleColor();
+            break;
+        case cascade::core::FeatureRequestState::CoolingDown: {
+            std::string msg = featureRequestSender_.failureMessage();
+            if (msg.empty()) {
+                msg = "The server asked us to wait before sending another request.";
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+            ImGui::TextWrapped("%s", msg.c_str());
+            ImGui::PopStyleColor();
+            break;
+        }
+    }
+
+    endPage();
+
+    // THE LOG LINE, exactly once per send, on the frame the transition out of
+    // Sending is first observed - never the text, never the contact, exactly
+    // as PRIVACY.md and feature_request.hpp both promise.
+    if (featureRequestLastLoggedState_ == cascade::core::FeatureRequestState::Sending &&
+        state != cascade::core::FeatureRequestState::Sending) {
+        if (state == cascade::core::FeatureRequestState::Sent) {
+            cascade::core::diagLogf("feature request: sent, %zu characters, HTTP %d",
+                                    featureRequestSentChars_, featureRequestSender_.lastStatus());
+        } else {
+            cascade::core::diagLogf("feature request: failed, %zu characters, HTTP %d - %s",
+                                    featureRequestSentChars_, featureRequestSender_.lastStatus(),
+                                    featureRequestSender_.failureMessage().c_str());
+        }
+    }
+    featureRequestLastLoggedState_ = state;
+
+    // Cleared on the same frame the SEND that just succeeded is first seen,
+    // never before - a send still in flight, or one that failed, leaves the
+    // words on screen so the person is not asked to retype them. The contact
+    // line is deliberately NOT cleared: the contract calls for keeping it, so
+    // filing a second request does not mean typing an email address twice.
+    if (state == cascade::core::FeatureRequestState::Sent) {
+        featureRequestText_.clear();
+    }
 }
 
 // --- THE DEMOD SCOPE (0.94.0) -----------------------------------------------

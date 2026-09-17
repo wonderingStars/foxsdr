@@ -195,6 +195,10 @@ are still moving. What is in the current build:
 - **Browser access.** The full interface over HTTP on your LAN, at feature
   parity with the desktop, with password authentication and live audio. Off by
   default; see [Browser access](#browser-access) for the security posture.
+- **A REQUEST A FEATURE key**, above the maker's plate in the STATUS column on
+  the main screen. Opens a page with a text box and an optional contact line;
+  nothing is sent until you press SEND, and there is no queue. See
+  [Privacy](#privacy) for exactly what leaves the machine.
 
 **Verification, honestly stated.** The DSP core and every decoder carry unit
 tests (`ctest` runs 82 entries: 75 test binaries and seven checks on the
@@ -1528,6 +1532,10 @@ each says what starts it:
 - **A crash or freeze report**, and only with Diagnostics on: the report's text
   goes out the *next* time you open the application, never from inside the
   fault. See [When it crashes or freezes](#when-it-crashes-or-freezes).
+- **A feature request**, only when you press SEND on the REQUEST A FEATURE
+  page: your text, an optional contact line, and the version/platform/
+  architecture you are running - never automatically, never retried, never
+  queued. See [PRIVACY.md](PRIVACY.md) for the complete field list.
 
 A plugin is native code loaded into this application's own process, so an
 installed plugin may make requests of its own — a basemap plugin fetching map
