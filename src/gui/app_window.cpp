@@ -13903,23 +13903,28 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
     const std::vector<cascade::gui::PresetBarKey> keys = cascade::gui::presetBarKeys(
         presets, pipeline_.activeSource().centerFrequencyHz(), pipeline_.vfoOffsetHz(),
         pipeline_.activeSource().sampleRateHz());
+    // THE WRAP IS DECIDED BEFORE THE FIRST KEY IS DRAWN, from the widths of
+    // all of them and the width of the row as it stands right now - which is
+    // the one moment GetContentRegionAvail() answers the question being asked
+    // (cascade::gui::presetBarRows has the measurement of what happened when
+    // it was asked key by key instead). A key shares its line with the one
+    // before it exactly when the layout put them on the same row; not calling
+    // SameLine() is what lets a key fall to a new one.
+    const float rowWidth = ImGui::GetContentRegionAvail().x;
+    std::vector<float> keyWidths;
+    keyWidths.reserve(keys.size());
+    for (const cascade::gui::PresetBarKey& k : keys) {
+        keyWidths.push_back(ImGui::CalcTextSize(k.label.c_str(), nullptr, true).x +
+                            ImGui::GetStyle().FramePadding.x * 2.0f);
+    }
+    const std::vector<std::size_t> rows = cascade::gui::presetBarRows(
+        rowWidth, ImGui::GetStyle().ItemSpacing.x, keyWidths);
     ImGui::PushID(pluginKey.c_str());
     for (std::size_t i = 0; i < keys.size(); ++i) {
         const cascade::gui::PresetBarKey& k = keys[i];
         char label[CASCADE_PRESET_LABEL_CHARS + 32];
         std::snprintf(label, sizeof(label), "%s##pbar%u", k.label.c_str(), k.index);
-        const float keyWidth =
-            ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-        // THE WRAP: never asked about the first key of a row (see the long
-        // comment on cascade::gui::presetKeyFitsOnRow), and for every other
-        // key, ImGui's own idiom of asking what is left on the current row.
-        // Not calling SameLine() at all is what lets the key fall to a new
-        // row - there is no explicit NewLine, because that is what ImGui
-        // does by default when the previous item did not chain one on.
-        if (i > 0 && cascade::gui::presetKeyFitsOnRow(ImGui::GetContentRegionAvail().x,
-                                                       keyWidth)) {
-            ImGui::SameLine();
-        }
+        if (i > 0 && rows[i] == rows[i - 1]) { ImGui::SameLine(); }
         // LIT: the receiver is already sitting on this preset. Same look as
         // the transmit page's own "currently selected" keys (kBrassDark
         // button, kPhosphor text) so a lit preset key reads as the same kind
@@ -14543,10 +14548,30 @@ void AppWindow::drawDecoderWindow() {
     // window appeared at every launch with that plugin fitted. The user asked
     // for the application to start on the main screen alone; this window is
     // the DECODERS row's own key away ("Show decoder output").
+    //
+    // VERIFICATION ONLY, same house rule as FOXSDR_OPEN_SERIAL_PORTS: the
+    // open flag is not in AppConfig and no remote control sets it, so nothing
+    // a headless self-capture can supply would put this window - and the
+    // grouped preset bar it carries - on screen. Once, at the first frame, so
+    // a session that closes the window again is not fought.
+    static const bool openForCapture = std::getenv("FOXSDR_OPEN_DECODER_OUTPUT") != nullptr;
+    static bool openedForCapture = false;
+    if (openForCapture && !openedForCapture) {
+        openedForCapture = true;
+        decoderWindowOpen_ = true;
+    }
     if (!decoderWindowOpen_) { return; }
     telemetryNotePanel("decoded");
 
     placeAsSeparateWindow(9);
+    if (openForCapture) {
+        // A separate page opens BESIDE the main window, which is outside the
+        // only framebuffer a self-capture reads. Under the capture seam alone
+        // it opens inside instead; the later SetNextWindowPos wins.
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + 420.0f, mv->Pos.y + 200.0f),
+                                ImGuiCond_FirstUseEver);
+    }
     if (beginPage("Decoder output###decoderout", "DECODER OUTPUT", &decoderWindowOpen_, 0,
                   kSeparatePageW, kSeparatePageH)) {
         ImGui::Checkbox("Follow", &decoderAutoScroll_);

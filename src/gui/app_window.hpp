@@ -972,7 +972,7 @@ private:
     // drawPluginPresetBar (one plugin, its own bar) and drawDecoderPresetBars
     // (several text decoders, one bar each, grouped under the shared Decoder
     // output window). Wraps within the available width via
-    // cascade::gui::presetKeyFitsOnRow; every press records into
+    // cascade::gui::presetBarRows; every press records into
     // pendingPresetRequest_ under `pluginKey`, never applies inline.
     void drawPresetKeys(const std::string& pluginKey, const std::string& pluginName,
                         const std::vector<cascade::core::MutePreset>& presets);
