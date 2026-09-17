@@ -372,18 +372,47 @@ inline bool presetRequestStillValid(bool pluginFound, std::uint32_t count,
     return presetIsValid(ps);
 }
 
-// --- The bar's own wrap: does the next key fit on the current row ----------
+// --- The bar's own wrap: which row each key is drawn on --------------------
 //
-// ImGui idiom: ask GetContentRegionAvail().x for what is left on the current
-// row and decide whether to call SameLine() before the next item or let it
-// fall to a new one. `availWidthPx` is that answer; `keyWidth` is the key
-// about to be drawn. This is never asked about the FIRST key of a row - that
-// key belongs wherever the cursor already is, however wide it turns out to
+// THE WHOLE LAYOUT, DECIDED BEFORE ANYTHING IS DRAWN. The first version of the
+// bar asked ImGui, key by key, "what is left on the current row"
+// (GetContentRegionAvail().x) and called SameLine() when the next key fitted
+// in the answer. That question cannot be asked where it was being asked:
+// once a button has been submitted WITHOUT a SameLine() after it, ImGui has
+// already moved the cursor to the start of the next line, so "what is left"
+// is always the full width and every key always "fits". The rendered check
+// showed exactly that (2026-09-17): FLEX's four keys on one row in a 570 px
+// window, the third cut off by the frame and the fourth not on screen at
+// all - while the arithmetic test was green, because the arithmetic was
+// never what was wrong.
+//
+// So the draw code no longer asks as it goes. It measures every key, hands
+// the widths here with the width of the row and the gap ImGui puts between
+// two items on a line, and draws key i on the same line as key i-1 exactly
+// when their rows are equal. What is tested is then what is drawn.
+//
+// A KEY WIDER THAN THE ROW still gets a row - its own - rather than being
+// dropped: it belongs wherever the cursor is, however wide it turns out to
 // be, so a bar can never wrap before it has drawn anything and leave a row
-// with nothing on it; enforcing that is the caller's contract, not this
-// function's job.
-inline bool presetKeyFitsOnRow(float availWidthPx, float keyWidth) {
-    return keyWidth <= availWidthPx;
+// with nothing on it. Exactly filling the row fits (<=, not <).
+inline std::vector<std::size_t> presetBarRows(float rowWidthPx, float spacingPx,
+                                              const std::vector<float>& keyWidthsPx) {
+    std::vector<std::size_t> rows;
+    rows.reserve(keyWidthsPx.size());
+    std::size_t row = 0;
+    float used = 0.0f;  // width taken on the current row, 0 = nothing on it yet
+    for (const float w : keyWidthsPx) {
+        if (used > 0.0f && used + spacingPx + w > rowWidthPx) {
+            ++row;
+            used = 0.0f;
+        }
+        used = (used > 0.0f) ? used + spacingPx + w : w;
+        // A zero-width key must still count as "something on this row", or
+        // the next key would be treated as a row's first and never wrap.
+        if (used <= 0.0f) { used = 0.0001f; }
+        rows.push_back(row);
+    }
+    return rows;
 }
 
 // --- Per-digit tuning: the tubes' own arithmetic, shared with the switches --

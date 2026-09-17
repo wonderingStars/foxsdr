@@ -31,7 +31,7 @@ using cascade::gui::presetBarKeys;
 using cascade::gui::PresetBarKey;
 using cascade::gui::PresetBarRequest;
 using cascade::gui::presetIsValid;
-using cascade::gui::presetKeyFitsOnRow;
+using cascade::gui::presetBarRows;
 using cascade::gui::presetLabel;
 using cascade::gui::presetRequestStillValid;
 
@@ -175,19 +175,34 @@ int main() {
         CHECK(!at(dark, 0).lit);
     }
 
-    // --- presetKeyFitsOnRow: the wrap, at the exact boundary ----------------
+    // --- presetBarRows: the wrap, as the whole bar ---------------------------
     {
-        // EXACTLY ON THE BOUNDARY FITS (<=, not <) - the same "coerced, not
-        // refused" convention this header's kTuneMismatchToleranceHz uses.
-        // RED WHEN the comparison becomes strict (<).
-        CHECK(presetKeyFitsOnRow(100.0f, 100.0f));
+        using Rows = std::vector<std::size_t>;
+        // THE CASE THE RENDERED CHECK CAUGHT (2026-09-17): FLEX publishes four
+        // keys of about 190 px into a 540 px row. Asked key by key they were
+        // all drawn on one line and the last two ran off the window; laid out
+        // as a bar, two fit (190 + 8 + 190 = 388; a third would need 586) and
+        // the other two take the next row.
+        // RED WHEN the layout never starts a new row.
+        CHECK(presetBarRows(540.0f, 8.0f, {190.0f, 190.0f, 190.0f, 190.0f}) ==
+              Rows({0u, 0u, 1u, 1u}));
+        // EXACTLY FILLING THE ROW FITS (<=, not <): 100 + 8 + 92 = 200.
+        // RED WHEN the comparison becomes >=.
+        CHECK(presetBarRows(200.0f, 8.0f, {100.0f, 92.0f}) == Rows({0u, 0u}));
         // One hundredth of a pixel over: wraps.
-        CHECK(!presetKeyFitsOnRow(100.0f, 100.01f));
-        CHECK(presetKeyFitsOnRow(200.0f, 100.0f));
-        // NOTHING LEFT ON THE ROW: only a zero-width key still fits, and
-        // that is the boundary case above, not a special one.
-        CHECK(!presetKeyFitsOnRow(0.0f, 1.0f));
-        CHECK(presetKeyFitsOnRow(0.0f, 0.0f));
+        CHECK(presetBarRows(200.0f, 8.0f, {100.0f, 92.01f}) == Rows({0u, 1u}));
+        // THE SPACING COUNTS: two 100 px keys do not fit in 200 px with a gap
+        // between them. RED WHEN the gap is left out of the sum.
+        CHECK(presetBarRows(200.0f, 8.0f, {100.0f, 100.0f}) == Rows({0u, 1u}));
+        // A KEY WIDER THAN THE ROW still gets a row, its own - never dropped,
+        // and never an empty row in front of it.
+        CHECK(presetBarRows(100.0f, 8.0f, {300.0f, 50.0f, 40.0f}) == Rows({0u, 1u, 1u}));
+        CHECK(presetBarRows(100.0f, 8.0f, {50.0f, 300.0f, 40.0f}) == Rows({0u, 1u, 2u}));
+        // No keys, no rows; one key, row 0 whatever the width (a collapsed
+        // window reports a width of zero or less).
+        CHECK(presetBarRows(540.0f, 8.0f, {}).empty());
+        CHECK(presetBarRows(0.0f, 8.0f, {50.0f}) == Rows({0u}));
+        CHECK(presetBarRows(-10.0f, 8.0f, {50.0f, 50.0f}) == Rows({0u, 1u}));
     }
 
     // --- PendingPresetRequest: record now, apply after the loop -------------
