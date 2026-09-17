@@ -392,7 +392,11 @@ std::size_t attachedHostBridgeCount();
 // Nothing here calls into a plugin: the preset API is the plugin's own code
 // and must not be run once per frame per plugin from inside a mute decision.
 
-// One preset, reduced to what the mute decision needs.
+// One preset, reduced to what the mute decision needs - PLUS what the 0.99.0
+// preset bars need to draw and re-apply the same preset, added rather than
+// kept as a second cache: this snapshot is already rebuilt on every plugin-
+// set change (AppWindow::rebuildMuteStates), which is exactly the cadence the
+// bars are not allowed to call count()/get() at any faster than.
 struct MutePreset {
     double frequencyHz = 0.0;
     // The preset's channel bandwidth, or 0 when it declares none (most do).
@@ -403,6 +407,17 @@ struct MutePreset {
     // the last station would press "ADS-B 1090 MHz", land the device exactly
     // on the preset, and be told they are not on it.
     bool deviceCentre = false;
+    // The RAW index this preset was read from (get(index, ...)), not its
+    // position in this filtered vector - the two disagree the moment any
+    // earlier index failed validation. A bar's key press records this index
+    // so the deferred apply can re-fetch the same preset from the plugin
+    // itself rather than trusting anything carried across frames.
+    std::uint32_t index = 0;
+    // Bounded already (see cascade::gui::presetLabel): the plugin's own label,
+    // or this plugin's display name when it left the label empty. Never the
+    // raw ABI bytes, so nothing downstream of this cache has to bound them
+    // again.
+    std::string label;
 };
 
 // One plugin's contribution to the decision.

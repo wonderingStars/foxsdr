@@ -838,10 +838,24 @@ private:
     void drawPluginPresets(const cascade::core::LoadedPlugin& p);
     // Tunes to a preset, sets the mode/bandwidth/device rate it asks for,
     // rebuilds the decoders against the new receiver state, and opens what
-    // that plugin contributes. The ONLY caller is a button: a preset is a
-    // plugin publishing where it listens, never a plugin retuning the radio —
-    // that still needs the separate per-plugin permission.
+    // that plugin contributes. The ONLY callers are a button and the deferred
+    // preset-bar/web-remote apply paths, each of which has already re-read
+    // and re-validated `ps` from the plugin itself: a preset is a plugin
+    // publishing where it listens, never a plugin retuning the radio — that
+    // still needs the separate per-plugin permission.
     void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps);
+    // THE ONE ENUMERATION, used by drawPluginPresets, maybeAutoPreset,
+    // rebuildMuteStates and the web status snapshot: walks `p`'s preset table
+    // (capped at kMaxPresetsPerPlugin, exactly as every consumer has always
+    // capped it) and keeps only what cascade::gui::presetIsValid accepts,
+    // paired with the RAW index get() was called with — the index a deferred
+    // apply must record, because it is not the same number as this preset's
+    // position in the returned (filtered) vector. Empty when p.preset is
+    // null. This is a real call into third-party code and must only be
+    // called on a plugin-set change, never once per frame per window — see
+    // muteStates_ and the long comment on rebuildMuteStates for why.
+    std::vector<cascade::gui::IndexedPreset> validatedPresets(
+        const cascade::core::LoadedPlugin& p) const;
     // The REMNANT of the receiver-control rows, and it is the half the fitted
     // window cannot draw: the refusal notice PluginUi records, and the grants
     // held by modules that are NOT installed any more. The fitted window
@@ -933,6 +947,53 @@ private:
     // plugin answers to `displayName` (an unloaded or since-removed module),
     // which the two callers below treat as "nothing to auto-preset".
     std::string pluginKeyForDisplayName(const std::string& displayName) const;
+
+    // --- Preset bars: a plugin's own window offers its own presets (0.99.0) --
+    //
+    // Looks up `displayName` (a HostTrack/HostImage/HostPanel/HostInstrument
+    // /MapPage plugin tag — the same identity pluginKeyForDisplayName
+    // resolves) in muteStates_, which is the ONE cache of a plugin's
+    // validated presets that already exists and is already rebuilt on every
+    // plugin-set change (see rebuildMuteStates) — never a fresh count()/get()
+    // walk, which is what the header comment above rebuildMuteStates refuses
+    // to let the frame path do. Null when no cached entry answers to that
+    // name (an unloaded plugin, or one with no presets at all — see the
+    // caller, which treats null the same as "nothing to draw").
+    const cascade::core::MutePlugin* muteStateForDisplayName(const std::string& displayName) const;
+    // THE BAR FOR ONE WINDOW: a map page, an image window, a panel or an
+    // instrument window, each of which owns exactly one plugin and knows its
+    // own display name. Draws nothing and costs no vertical space when that
+    // plugin publishes no valid preset. A key's own press only RECORDS a
+    // request into pendingPresetRequest_ — see the long comment beside that
+    // member for why the apply cannot happen here, mid-iteration of the very
+    // lists a preset's own apply rebuilds.
+    void drawPluginPresetBar(const std::string& displayName);
+    // THE SHARED DRAWING OF ONE PLUGIN'S ROW OF KEYS, used by
+    // drawPluginPresetBar (one plugin, its own bar) and drawDecoderPresetBars
+    // (several text decoders, one bar each, grouped under the shared Decoder
+    // output window). Wraps within the available width via
+    // cascade::gui::presetKeyFitsOnRow; every press records into
+    // pendingPresetRequest_ under `pluginKey`, never applies inline.
+    void drawPresetKeys(const std::string& pluginKey, const std::string& pluginName,
+                        const std::vector<cascade::core::MutePreset>& presets);
+    // THE GROUPED BAR IN THE SHARED DECODER OUTPUT WINDOW — "if I'm watching
+    // ADS-B I can click a button on POCSAG" for exactly the plugins that have
+    // no window of their own (POCSAG, FLEX, CW, RTTY, APRS, ...): every
+    // loaded, NOT-stopped text decoder (p.decoder != nullptr) that publishes
+    // at least one valid preset gets its own dimmed name followed by its own
+    // keys, one plugin per line. A stopped decoder is skipped — a preset key
+    // for a plugin the user just switched off would be confusing, and the
+    // rail's own "Start"/preset buttons are already the way back in.
+    void drawDecoderPresetBars();
+    // THE SAFE POINT: called once a frame, from drawUi, AFTER drawPluginWindows
+    // has finished every one of its loops — never from inside one. Consumes
+    // pendingPresetRequest_ (at most one; see its own comment) and, if there
+    // is one, re-resolves it against the CURRENT plugin list and preset
+    // table (cascade::gui::presetRequestStillValid) rather than trusting
+    // anything carried from the frame the key was pressed on. A plugin
+    // unloaded in between, or an index that no longer names a valid preset,
+    // is a silent no-op — exactly the contract a stale request must have.
+    void consumePendingPresetRequest();
 
     // --- Audio mute while a data decoder is running (see plugin_ui.hpp) -------
     // The EFFECTIVE "mute audio while running" setting for one plugin: the
@@ -2589,6 +2650,17 @@ private:
     // What the last preset click did, shown under the list — a receiver that
     // moved with no acknowledgement reads as a button that did nothing.
     std::string presetNote_;
+    // A PRESET-BAR KEY PRESS, recorded and not yet applied. Every bar drawn
+    // inside drawPluginWindows (the map/image/panel/instrument pages, and the
+    // grouped bar in the Decoder output window) records into this rather than
+    // calling applyPluginPreset directly — applyPluginPreset ends with
+    // refreshPluginRunner(), which rebuilds the very panel/instrument/image
+    // lists and map pages drawPluginWindows is iterating at that moment, and
+    // rebuilding a list a for-loop is still walking is exactly the shape of
+    // the crash 0.96.1 fixed in gui/list_pick.hpp. consumePendingPresetRequest
+    // is the only reader, called once a frame from drawUi AFTER
+    // drawPluginWindows returns — never from inside it.
+    cascade::gui::PendingPresetRequest pendingPresetRequest_;
 
     // --- Plugin browser (P9) --------------------------------------------------
     //
