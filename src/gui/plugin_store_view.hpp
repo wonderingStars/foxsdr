@@ -449,6 +449,32 @@ ImU32 storeInstallColour(StoreInstallState s);
 // keep theirs.
 float storeProsePx();
 
+// THE LIST IS WHAT THIS WINDOW IS FOR, AND IT HAD NO FLOOR (the owner,
+// 2026-09-18, on 0.99.2: "it's not letting me scroll on the plugin store to see
+// the plugins"). Three bands sit above it - the ADD ALL well, the updates
+// banner and the three-well control deck - and together they come to about
+// 590 px at the page's engraving sizes. The store opens clamped inside the
+// main window, which on a fresh install is 1282 x 745, so the store is about
+// 1234 x 697 and the list was left 65 px: less than one module card, with the
+// other twenty-three "a scroll away" in a pane nobody could see into. Shorter
+// still, the list was pushed below the window's bottom edge entirely.
+//
+// This is the least height the BODY - the module list column and the data
+// plate beside it - is ever given. The list column spends about 55 px of it on
+// its own heading and rule, so the list itself keeps about 345 px: two whole
+// module cards (about 130 px each with a one-line summary at these sizes) and
+// part of a third. 340 was tried first and left the list 285 px.
+inline constexpr float kStoreListMinH = 400.0f;
+
+// THE FLAGS OF THE PANE THE WHOLE STORE IS DRAWN INTO, owned here so the
+// window that draws it and the test that measures it cannot disagree. It was
+// NoScrollbar | NoScrollWithMouse, on the grounds that the view always fits
+// the pane it is given - which it did not, and a pane that cannot scroll turns
+// "does not fit" into "is not there". It now scrolls, with a scrollbar that
+// appears only when there is something below the edge: when the window is
+// tall enough nothing changes, and when it is not, the list is still reachable.
+ImGuiWindowFlags storeFaceWindowFlags();
+
 // The control deck's settings. Owned by the CALLER because they outlive one
 // frame and the caller may persist them; the view edits them in place and
 // keeps no second copy.
