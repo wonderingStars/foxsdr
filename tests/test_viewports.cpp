@@ -195,6 +195,58 @@ void testARefusedViewportWindowSurvivesEveryPlatformCallback(GLFWwindow* main) {
     (void)main;
 }
 
+// THE 0.99.0 CRASH REPORT (2026-09-18, a HackRF on Windows 10.0.22631): the log
+// says "GLFW error 65543: WGL: Failed to create OpenGL context", then the
+// 0.96.1 fallback's own line "every page stays inside the main window for this
+// session" - and nine seconds later an access violation in
+// _glfwWindowFocusedWin32 <- ImGui_ImplGlfw_NewFrame <- AppWindow::run.
+//
+// 0.96.1 made every platform CALLBACK survive a viewport with no window. It
+// missed the two loops the backend runs by itself at the top of every frame,
+// ImGui_ImplGlfw_UpdateMouseData and ImGui_ImplGlfw_UpdateMouseCursor: both
+// walk platform_io.Viewports and hand each PlatformHandle to GLFW without
+// asking whether there is one, and a viewport whose window was refused stays
+// in that list until ImGui gets round to dropping it.
+//
+// Driven exactly as the field had it: a refused viewport sitting in the list
+// when NewFrame runs. As with the callbacks above, reaching the next line IS
+// the check - the unguarded loops die at 0xC0000005 inside GLFW, which is the
+// report's own signature.
+void testANewFrameSurvivesARefusedViewportStillInTheList() {
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    CHECK(pio.Platform_CreateWindow != nullptr);
+    if (pio.Platform_CreateWindow == nullptr) { return; }
+
+    ImGuiViewport vp;
+    vp.ID = 0x0F0C5D12u;
+    vp.Pos = ImVec2(100.0f, 200.0f);
+    vp.Size = ImVec2(320.0f, 240.0f);
+    ImGui_ImplGlfw_FailNextViewportWindowForTest();
+    pio.Platform_CreateWindow(&vp);
+    CHECK(vp.PlatformHandle == nullptr);
+
+    const int listed = pio.Viewports.Size;
+    pio.Viewports.push_back(&vp);
+
+    // Both cursor branches: the ordinary arrow, and "ImGui draws the cursor",
+    // which takes the other arm of UpdateMouseCursor's loop.
+    ImGuiIO& io = ImGui::GetIO();
+    const bool drawCursorWas = io.MouseDrawCursor;
+    io.MouseDrawCursor = false;
+    ImGui_ImplGlfw_NewFrame();
+    io.MouseDrawCursor = true;
+    ImGui_ImplGlfw_NewFrame();
+    io.MouseDrawCursor = drawCursorWas;
+    CHECK(true);  // reaching here is the result
+
+    // Taken back out before anything else looks at the list: it is a stack
+    // object and ImGui did not put it there.
+    pio.Viewports.pop_back();
+    CHECK(pio.Viewports.Size == listed);
+    pio.Platform_DestroyWindow(&vp);
+    CHECK(vp.PlatformUserData == nullptr);
+}
+
 void testAViewportWithNoBackendRecordAtAllIsAlsoSafe() {
     // The other null: PlatformUserData never set. ImGui does not normally
     // produce this, but every callback reads that pointer first and a crash
@@ -246,6 +298,7 @@ int main() {
         CHECK(ImGui_ImplGlfw_InitForOpenGL(window, false));
 
         testARefusedViewportWindowSurvivesEveryPlatformCallback(window);
+        testANewFrameSurvivesARefusedViewportStillInTheList();
         testAViewportWithNoBackendRecordAtAllIsAlsoSafe();
 
         ImGui_ImplGlfw_Shutdown();
