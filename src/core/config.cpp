@@ -406,6 +406,28 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getStringArray(j, "closedWindows", out.closedWindows);
     getStringArray(j, "pluginsStopped", out.pluginsStopped);
     getStringArray(j, "pluginMuteOverride", out.pluginMuteOverride);
+    // The user's own presets. Element-wise tolerant like mapPages: an entry
+    // that is not an object is a hand-edit and is skipped; every other rule
+    // (key, frequency, label, caps, duplicates) is sanitiseUserPresets', below.
+    {
+        const auto it = j.find("userPresets");
+        if (it != j.end() && it->is_array()) {
+            std::vector<UserPreset> presets;
+            for (const auto& e : *it) {
+                if (!e.is_object()) { continue; }
+                UserPreset p;
+                getString(e, "plugin", p.plugin);
+                getString(e, "label", p.label);
+                getDouble(e, "frequencyHz", p.frequencyHz);
+                int mode = 0;
+                getInt(e, "demodMode", mode);
+                p.demodMode = mode < 0 ? 0u : static_cast<std::uint32_t>(mode);
+                getDouble(e, "bandwidthHz", p.bandwidthHz);
+                presets.push_back(std::move(p));
+            }
+            out.userPresets = std::move(presets);
+        }
+    }
     getBool(j, "webEnabled", out.webEnabled);
     getString(j, "webBindAddress", out.webBindAddress);
     getInt(j, "webPort", out.webPort);
@@ -628,6 +650,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // duplicate here would be a preference that flipped twice - which is the
     // same as not being there at all, but only if something removes it.
     out.pluginMuteOverride = sanitisePluginNames(out.pluginMuteOverride);
+    out.userPresets = sanitiseUserPresets(out.userPresets);
     // And the rebound keys, from the same function for the fourth time. An
     // empty line could name no action, and a line repeated verbatim is one
     // rebind stated twice - both are noise a hand-edit leaves behind, and the
@@ -743,6 +766,19 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["closedWindows"] = cfg.closedWindows;
     j["pluginsStopped"] = cfg.pluginsStopped;
     j["pluginMuteOverride"] = cfg.pluginMuteOverride;
+    {
+        json presets = json::array();
+        for (const UserPreset& p : cfg.userPresets) {
+            json e;
+            e["plugin"] = p.plugin;
+            e["label"] = p.label;
+            e["frequencyHz"] = p.frequencyHz;
+            e["demodMode"] = p.demodMode;
+            e["bandwidthHz"] = p.bandwidthHz;
+            presets.push_back(std::move(e));
+        }
+        j["userPresets"] = std::move(presets);
+    }
     j["webEnabled"] = cfg.webEnabled;
     j["webBindAddress"] = cfg.webBindAddress;
     j["webPort"] = cfg.webPort;

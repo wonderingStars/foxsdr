@@ -68,6 +68,7 @@ struct GLFWwindow;
 #include "gui/track_info_cache.hpp"
 // RememberedSource, held by value below: the pure source decisions, ImGui-free
 // like every other gui header included here.
+#include "gui/readout_hold.hpp"
 #include "gui/tune_control.hpp"
 #include "gui/viewport_policy.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
@@ -995,6 +996,16 @@ private:
     // unloaded in between, or an index that no longer names a valid preset,
     // is a silent no-op — exactly the contract a stale request must have.
     void consumePendingPresetRequest();
+    // The user's own presets for one loaded plugin, in saved order (see
+    // core/user_presets.hpp). Keyed by the version-stripped module id, so a
+    // plugin update keeps them.
+    std::vector<cascade::core::UserPreset> userPresetsForPlugin(
+        const cascade::core::LoadedPlugin& p) const;
+    // Applies pendingUserPresetEdit_ if there is one: a Save stores the
+    // receiver's CURRENT tuning (absolute frequency, mode, channel bandwidth)
+    // against that plugin, a Forget removes one. Reports what happened in
+    // presetNote_. Called only from the safe point.
+    void consumePendingUserPresetEdit();
 
     // --- Audio mute while a data decoder is running (see plugin_ui.hpp) -------
     // The EFFECTIVE "mute audio while running" setting for one plugin: the
@@ -2699,6 +2710,41 @@ private:
     // is the only reader, called once a frame from drawUi AFTER
     // drawPluginWindows returns — never from inside it.
     cascade::gui::PendingPresetRequest pendingPresetRequest_;
+
+    // --- The user's own presets (0.99.4) ---------------------------------------
+    // AppConfig::userPresets, for every plugin (see core/user_presets.hpp for
+    // what they are and why). Held here, like the plugin lists above, because
+    // everything that acts on them is rebuilt underneath them.
+    std::vector<cascade::core::UserPreset> userPresets_;
+    // A SAVE OR A FORGET, recorded and not yet applied. Both end in
+    // rebuildMuteStates(), which replaces the muteStates_ entry a preset bar
+    // is reading its keys from while it draws them - so, exactly like
+    // pendingPresetRequest_, a press only records and the edit happens at the
+    // same safe point (consumePendingPresetRequest). `pluginFileKey` is the
+    // module file name (core::pluginKey); the version-stripped key the list
+    // is stored under is derived from it when the edit is applied.
+    struct PendingUserPresetEdit {
+        enum class Op { None, Save, Forget };
+        Op op = Op::None;
+        std::string pluginFileKey;
+        std::size_t ordinal = 0;  // Forget only: which of that plugin's presets
+    };
+    PendingUserPresetEdit pendingUserPresetEdit_;
+
+    // --- Readouts held long enough to read (0.99.4) ---------------------------
+    // See gui/readout_hold.hpp. FRAME TIME's text is the mean of the last half
+    // second rather than this frame's delta; the AUDIO - UNDERRUNS card's
+    // figures are re-read twice a second rather than every frame. The meter
+    // needle stays live.
+    cascade::gui::HeldMean frameTimeHold_;
+    struct AudioReadout {
+        unsigned long long underruns = 0;
+        double ringMs = 0.0;
+        double capMs = 0.0;
+        unsigned long long gaps = 0;
+        unsigned long long gapFrames = 0;
+    };
+    cascade::gui::HeldSample<AudioReadout> audioHold_;
 
     // --- Plugin browser (P9) --------------------------------------------------
     //

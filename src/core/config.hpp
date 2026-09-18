@@ -106,6 +106,7 @@
 // -relevant constant, and two copies of it that can drift is exactly how a
 // build ends up quietly pointing at the wrong host.
 #include "core/plugin_repo.hpp"
+#include "core/user_presets.hpp"
 
 namespace cascade::core {
 
@@ -680,6 +681,15 @@ struct AppConfig {
     //
     // Sanitized on load exactly like the two lists above.
     std::vector<std::string> pluginMuteOverride;
+
+    // --- The user's own presets, per decoder (0.99.4) --------------------------
+    // Frequencies the user saved against one plugin with the "Save" key beside
+    // that plugin's presets - see core/user_presets.hpp for why they exist and
+    // why they are keyed by the version-stripped module id rather than the
+    // file name the three lists above use. Sanitized on load by
+    // sanitiseUserPresets: element-wise, so one bad entry is dropped and the
+    // rest survive, and capped per plugin and overall.
+    std::vector<UserPreset> userPresets;
 
     // --- Web server mode (P11) ------------------------------------------------
     // Browser access to the receiver. OFF by default, and the default binding
