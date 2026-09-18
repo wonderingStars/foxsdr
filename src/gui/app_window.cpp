@@ -11478,6 +11478,17 @@ void AppWindow::drawPluginStoreWindow() {
     // every frame, before the open test, exactly as it used to happen before
     // the section's own header test.
     pluginBrowserDrawnThisFrame_ = false;
+    // VERIFICATION ONLY, same house rule as FOXSDR_OPEN_KEY_BINDINGS and
+    // FOXSDR_OPEN_FEATURE_REQUEST: the store's open flag is in no config and no
+    // remote control, so nothing a bounded self-capture can supply would put
+    // it on screen. Once, at the first frame, so a session that closes it
+    // again is not fought.
+    static const bool openForCapture = std::getenv("FOXSDR_OPEN_PLUGIN_STORE") != nullptr;
+    static bool openedForCapture = false;
+    if (openForCapture && !openedForCapture) {
+        openedForCapture = true;
+        pluginBrowseOpen_ = true;
+    }
     if (!pluginBrowseOpen_) { return; }
     telemetryNotePanel("plugin store");
 
@@ -11567,9 +11578,10 @@ void AppWindow::drawPluginStoreWindow() {
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
                 ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop));
+                // SCROLLS WHEN IT HAS TO - see cascade::gui::storeFaceWindowFlags
+                // for the report that made this a pane that can.
                 ImGui::BeginChild("##storeface", ImVec2(faceW, faceH), ImGuiChildFlags_None,
-                                  ImGuiWindowFlags_NoScrollbar |
-                                      ImGuiWindowFlags_NoScrollWithMouse);
+                                  cascade::gui::storeFaceWindowFlags());
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor();
                 pluginStoreView_->draw(faceW, faceH, model, *pluginStoreDeck_);

@@ -1127,6 +1127,11 @@ const char* storeSortLabel(int index) {
 // here invents a figure.
 float storeProsePx() { return fonts::kPanelSize; }
 
+// No NoScrollbar and no NoScrollWithMouse: see the header. The scrollbar only
+// appears when the view is taller than the pane, which at the design size it
+// is not.
+ImGuiWindowFlags storeFaceWindowFlags() { return ImGuiWindowFlags_None; }
+
 // ===========================================================================
 // THE INSTALL STATE - the catalogue's question, not the runner's
 // ===========================================================================
@@ -1991,7 +1996,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // ======================= THE BODY =======================================
     ImGui::SetCursorScreenPos(ImVec2(origin.x, deckTL.y + deckH + kGap));
     const ImVec2 bodyTL = ImGui::GetCursorScreenPos();
-    const float bodyH = std::max(120.0f, origin.y + height - bodyTL.y);
+    // THE FLOOR IS kStoreListMinH, NOT 120. At 120 the list could be squeezed
+    // to less than one module card by the three bands above it, and past that
+    // the body ran off the bottom of a pane that could not scroll. With the
+    // floor the body keeps room for two cards and more, and when the window is
+    // too short for that as well the pane it is drawn in scrolls
+    // (storeFaceWindowFlags) rather than hiding what does not fit.
+    const float bodyH = std::max(kStoreListMinH, origin.y + height - bodyTL.y);
     // The plate takes a third, but never at the cost of a list too narrow to
     // read a module name in - the list is what this window is FOR, and a plate
     // beside three characters of name would be the tail wagging the dog.
