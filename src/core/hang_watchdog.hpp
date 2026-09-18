@@ -417,8 +417,9 @@ public:
 
     // THE PURE DECISION, over module names alone, top frame first.
     //
-    // True when the stalled thread is parked in a kernel wait AND a display
-    // driver, OpenGL or Direct3D/DXGI module appears within the first
+    // True when the stalled thread is parked in a kernel wait (ntdll and
+    // friends on Windows, the C library on Linux) AND a display driver,
+    // OpenGL, Direct3D/DXGI, EGL or Wayland/X11 client module appears within the first
     // kDisplayStallScanFrames - i.e. the application is waiting for the
     // graphics stack to present, not for anything of its own. False for a stall
     // whose frames are this program's code, however close to SwapBuffers the

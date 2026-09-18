@@ -77,6 +77,39 @@ void checkTheDecision() {
     deep.push_back("opengl32.dll");
     CHECK(!stall(deep));
 
+    // LINUX. Field report "hang cascade @ hangCaptureSignalHandler" (0.97.0,
+    // Linux 7.2, RTL-SDR): the GUI thread waiting in poll() inside
+    // libwayland-client, under Mesa's eglSwapBuffers - a Wayland compositor
+    // withholds frame callbacks from a surface it is not showing, so the swap
+    // waits for as long as the window is out of sight. These are its frames as
+    // the capture now hands them over (the capture's own handler and the
+    // kernel's signal trampoline removed): three libc frames of the poll
+    // syscall, then the Wayland client, then Mesa.
+    CHECK(stall({"libc.so.6", "libc.so.6", "libc.so.6", "libwayland-client.so.0",
+                 "libwayland-client.so.0", "libwayland-client.so.0", "libEGL_mesa.so.0",
+                 "libEGL_mesa.so.0", "libEGL_mesa.so.0", "cascade"}));
+    // The same wait under X11/GLX and under NVIDIA's own driver.
+    CHECK(stall({"libc.so.6", "libxcb.so.1", "libX11.so.6", "libGLX_mesa.so.0", "cascade"}));
+    CHECK(stall({"libc.so.6", "libnvidia-glcore.so.580.95", "libEGL_nvidia.so.0", "cascade"}));
+    CHECK(stall({"libc.so.6", "radeonsi_dri.so", "libGLX_mesa.so.0", "cascade"}));
+    // And on Linux, too, a wait under a RADIO library or this application
+    // stays a hang: that is the SDRplay service or a deadlock, not a display.
+    CHECK(!stall({"libc.so.6", "libsdrplay_api.so.3", "cascade", "cascade"}));
+    CHECK(!stall({"libc.so.6", "libusb-1.0.so.0", "cascade"}));
+    CHECK(!stall({"libc.so.6", "cascade", "cascade"}));
+    // GLib shares its first letters with libGL and is not a display: a wait
+    // in its main loop is a portal dialog or this application.
+    CHECK(!stall({"libc.so.6", "libglib-2.0.so.0", "cascade"}));
+    CHECK(stall({"libc.so.6", "libGL.so.1", "cascade"}));
+    CHECK(stall({"libc.so.6", "libGLdispatch.so.0", "cascade"}));
+    // Busy in Mesa is not waiting on a display.
+    CHECK(!stall({"libEGL_mesa.so.0", "libc.so.6", "cascade"}));
+    // THE REPORT AS 0.97.0 ACTUALLY SENT IT, capture frames and all: the top
+    // frame is this application's own signal handler, which is not a wait -
+    // so that shape must never be what the classification is handed.
+    CHECK(!stall({"cascade", "libc.so.6", "libc.so.6", "libwayland-client.so.0",
+                  "libEGL_mesa.so.0"}));
+
     // Degenerate input answers no rather than crashing: a walk that yielded
     // nothing, and a frame the module table could not resolve.
     CHECK(!HangWatchdog::isDisplayPresentationStall(nullptr, 4));

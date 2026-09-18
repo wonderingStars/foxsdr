@@ -149,18 +149,35 @@ std::atomic<bool> g_hangSignalReady{false};
 // walks it. sem_post is on the POSIX async-signal-safe list; storing into
 // g_hangCapture first is safe because the watchdog thread only ever has ONE
 // capture in flight; see the mutual-exclusion note at the call site.
+//
+// THE CAPTURE'S OWN FRAMES ARE DROPPED. The walk starts HERE, so its first two
+// frames are this handler and the kernel's signal trampoline (__restore_rt),
+// and only the third is where the thread actually was. Until 0.99.6 they were
+// kept, so every Linux hang ever reported had this handler as its top frame -
+// field report "hang cascade @ hangCaptureSignalHandler" (0.97.0) - which put
+// every Linux hang under ONE signature whatever had stopped, and left the
+// display-stall rule (which needs a wait at the top) nothing to match. The
+// trampoline is found by libunwind's own signal-frame test rather than by
+// counting, and if it is never found the whole walk is kept: a report with
+// two extra frames beats one with none.
 void hangCaptureSignalHandler(int) {
     unw_context_t ctx;
     unw_getcontext(&ctx);
     unw_cursor_t cursor;
     unw_init_local(&cursor, &ctx);
+    std::uintptr_t walk[kMaxHangFrames];
     int n = 0;
+    int firstReal = 0;
     do {
         unw_word_t ip = 0;
         if (unw_get_reg(&cursor, UNW_REG_IP, &ip) != 0) { break; }
-        g_hangCapture.frames[n++] = static_cast<std::uintptr_t>(ip);
+        walk[n++] = static_cast<std::uintptr_t>(ip);
+        if (firstReal == 0 && unw_is_signal_frame(&cursor) > 0) { firstReal = n; }
     } while (n < kMaxHangFrames && unw_step(&cursor) > 0);
-    g_hangCapture.count = n;
+    if (firstReal >= n) { firstReal = 0; }
+    int out = 0;
+    for (int i = firstReal; i < n; ++i) { g_hangCapture.frames[out++] = walk[i]; }
+    g_hangCapture.count = out;
     sem_post(&g_hangCaptureSem);
 }
 
@@ -451,9 +468,13 @@ bool containsNoCase(const char* name, const char* needle) {
 // WHERE A THREAD SITS WHEN IT IS WAITING FOR SOMETHING. Every blocking wait on
 // Windows bottoms out in one of these, so this alone says nothing about the
 // CAUSE - it is the precondition, not the decision.
+// On Linux every system call - poll, futex, nanosleep - is made from the C
+// library (libpthread is folded into it since glibc 2.34, but older systems
+// still load it separately).
 bool isKernelWaitModule(const char* name) {
     return equalsNoCase(name, "ntdll.dll") || equalsNoCase(name, "win32u.dll") ||
-           equalsNoCase(name, "kernelbase.dll") || equalsNoCase(name, "kernel32.dll");
+           equalsNoCase(name, "kernelbase.dll") || equalsNoCase(name, "kernel32.dll") ||
+           startsWithNoCase(name, "libc.so") || startsWithNoCase(name, "libpthread.so");
 }
 
 // THE GRAPHICS STACK, and the list is deliberately in three parts because the
@@ -484,10 +505,22 @@ bool isDisplayModule(const char* name) {
         "nvoglv", "nvd3dum", "nvwgf2um", "nvldumd", "nvapi",
         // Intel.
         "igd", "igvk", "igc", "ig9", "ig11", "ig12",
+        // LINUX (0.97.0 report: poll() in libwayland-client under Mesa's
+        // eglSwapBuffers). The window-system clients - a Wayland swap waits on
+        // the compositor's frame callback, an X11 one on the server - and the
+        // GL/EGL/Vulkan dispatch and driver libraries, Mesa and NVIDIA alike.
+        // "libgl" is spelt out per library, because as a bare prefix it would
+        // also take libglib - a GLib main-loop wait (a portal dialog) is not a
+        // display.
+        "libwayland-", "libxcb", "libx11", "libdecor", "libegl", "libgl.", "libglx",
+        "libgldispatch", "libgles", "libvulkan", "libgallium", "libdrm", "libgbm",
+        "libnvidia-",
     };
     for (const char* p : kPrefixes) {
         if (startsWithNoCase(name, p)) { return true; }
     }
+    // Mesa's classic per-driver modules: radeonsi_dri.so, iris_dri.so.
+    if (containsNoCase(name, "_dri.so")) { return true; }
     return containsNoCase(name, "icd");
 }
 
@@ -1002,9 +1035,11 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
 
     // THE STALLED THREAD FIRST, same reason as Windows' phase 1b: the `kind`
     // line has to be decided before anything is written, and it needs frame 0
-    // of the thread that actually stalled. No display-stall classification is
-    // implemented on Linux (there is no equivalent graphics-driver module list
-    // to check against), so every report here is `kind: hang`.
+    // of the thread that actually stalled - and, as on Windows, the frames
+    // under it, which is what tells a presentation stall (a Wayland swap
+    // waiting on a compositor that is not showing the window, 0.97.0's report)
+    // from a hang in this application. The same rule decides both platforms;
+    // isDisplayModule knows the Linux graphics libraries.
     ThreadStack first = tids.empty() ? ThreadStack{} : captureOneLinuxThread(tids[0], self);
     const char* topModule = "?";
     std::uintptr_t topOffset = 0;
@@ -1016,13 +1051,35 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
             topOffset = off;
         }
     }
-    const std::string sig = crashSignature(0x48414E47ul, topModule, topOffset);  // 'HANG'
+    bool displayStall = false;
+    if (!tids.empty() && tids[0] == gui && gui != self && first.count > 0) {
+        DiagModule mods[HangWatchdog::kDisplayStallScanFrames];
+        const char* names[HangWatchdog::kDisplayStallScanFrames] = {};
+        const int scan = (first.count < HangWatchdog::kDisplayStallScanFrames)
+                             ? first.count
+                             : HangWatchdog::kDisplayStallScanFrames;
+        for (int i = 0; i < scan; ++i) {
+            std::uintptr_t off = 0;
+            names[i] = resolveAddress(first.frames[i], mods[i], off) ? mods[i].name : nullptr;
+        }
+        displayStall = HangWatchdog::isDisplayPresentationStall(names, scan);
+    }
+    // 'STAL' / 'HANG', for the reason given at the Windows signature above.
+    const std::string sig =
+        crashSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, topModule, topOffset);
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) { return; }
 
-    out << "kind: hang\n";
-    out << "note: the gui thread did not complete a frame within the threshold\n";
+    out << "kind: " << (displayStall ? "stall" : "hang") << "\n";
+    out << "note: "
+        << (displayStall
+                ? "presentation stalled in the display stack - the frames under the wait "
+                  "are the window system and graphics libraries, not this application. A "
+                  "window the compositor is not showing, a monitor switched off or a GPU "
+                  "reset will do this."
+                : "the gui thread did not complete a frame within the threshold")
+        << "\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
     out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
     out << "signature: " << sig << "\n";
