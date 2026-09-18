@@ -17,6 +17,7 @@
 
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
+#include "core/user_presets.hpp"
 // normalisedSerial lives with the driver that needs it, and the prefer-native
 // rule has to use the SAME normalisation the driver's own open() matches on -
 // a rule stricter than the driver's would point at a device the driver then
@@ -1240,6 +1241,80 @@ inline SavedSource sourceToSave(const std::string& liveKind, const std::string& 
         if (remembered.sampleRateHz > 0.0) { out.sampleRateHz = remembered.sampleRateHz; }
     }
     return out;
+}
+
+// --- The user's own presets (0.99.4) ----------------------------------------
+//
+// core/user_presets.hpp has what they are and why. This is the half that
+// meets the plugin preset machinery: an index space a preset-bar key can
+// record, the conversion to the CascadePreset applyPluginPreset takes, and
+// the order the auto-preset decision sees.
+//
+// ONE INDEX SPACE, TWO SOURCES. A preset-bar key records (plugin key, index)
+// and the safe point re-reads the preset from that pair (PendingPresetRequest
+// above). A plugin's own presets use their RAW get() index, which the host
+// caps at 16; a user preset is recorded as kUserPresetIndexBase + its ordinal
+// among that plugin's user presets, so the two ranges can never meet and the
+// safe point can tell from the number alone which table to re-read.
+inline constexpr std::uint32_t kUserPresetIndexBase = 1000u;
+
+inline bool isUserPresetIndex(std::uint32_t index) { return index >= kUserPresetIndexBase; }
+
+// The ABI's CASCADE_DEMOD_* for the receiver's mode button index, in
+// kModeNames order (NFM WFM AM DSB USB CW LSB RAW) - the exact inverse of the
+// table applyPluginPreset uses, so a saved preset replays into the mode it
+// was saved from. Anything outside 0..7 answers UNCHANGED.
+inline std::uint32_t abiDemodForModeIndex(int modeIndex) {
+    if (modeIndex < 0 || modeIndex > 7) { return CASCADE_DEMOD_UNCHANGED; }
+    return static_cast<std::uint32_t>(modeIndex) + 1u;
+}
+
+// A user preset as the preset the apply path takes. flags 0: a user preset
+// is an ABSOLUTE tuned frequency (tuneAbsoluteHz keeps the VFO offset and
+// moves the device), which is also how it was measured when it was saved.
+// sampleRateHz 0: the user saved a channel, not a device rate - a POCSAG
+// channel saved at 2.4 MS/s must not drag the device back there on replay.
+inline CascadePreset userPresetToCascade(const cascade::core::UserPreset& u) {
+    CascadePreset ps{};
+    ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
+    std::snprintf(ps.label, sizeof(ps.label), "%s", u.label.c_str());
+    ps.frequencyHz = u.frequencyHz;
+    ps.demodMode = u.demodMode <= CASCADE_DEMOD_RAW ? u.demodMode : CASCADE_DEMOD_UNCHANGED;
+    ps.bandwidthHz = u.bandwidthHz;
+    ps.sampleRateHz = 0.0;
+    ps.flags = 0u;
+    return ps;
+}
+
+// WHAT THE AUTO-PRESET DECISION SEES, IN ORDER: the user's presets first,
+// then the plugin's own. autoPresetIndexOnStart applies element 0 unless the
+// receiver already sits on ANY element, so this order is the whole feature:
+// once a UK listener has saved 153.0500 against POCSAG, opening POCSAG tunes
+// there instead of to DAPNET (the plugin's PRESET[0]), and opening it while
+// already on 153.0500 - or on any of the plugin's own channels - tunes
+// nowhere at all.
+inline std::vector<CascadePreset> autoPresetCandidates(
+    const std::vector<cascade::core::UserPreset>& user,
+    const std::vector<CascadePreset>& plugin) {
+    std::vector<CascadePreset> out;
+    out.reserve(user.size() + plugin.size());
+    for (const cascade::core::UserPreset& u : user) { out.push_back(userPresetToCascade(u)); }
+    for (const CascadePreset& p : plugin) { out.push_back(p); }
+    return out;
+}
+
+// A user preset as a preset-bar key's snapshot entry (the MutePreset list
+// rebuildMuteStates builds): same lit rule as a plugin preset, recorded at
+// kUserPresetIndexBase + ordinal.
+inline cascade::core::MutePreset userPresetToMutePreset(const cascade::core::UserPreset& u,
+                                                        std::size_t ordinal) {
+    cascade::core::MutePreset mp;
+    mp.frequencyHz = u.frequencyHz;
+    mp.bandwidthHz = u.bandwidthHz;
+    mp.deviceCentre = false;
+    mp.index = kUserPresetIndexBase + static_cast<std::uint32_t>(ordinal);
+    mp.label = u.label;
+    return mp;
 }
 
 }  // namespace cascade::gui

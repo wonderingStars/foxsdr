@@ -655,6 +655,7 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.pluginTuneAllowed == b.pluginTuneAllowed &&
            a.pluginsStopped == b.pluginsStopped &&
            a.pluginMuteOverride == b.pluginMuteOverride &&
+           a.userPresets == b.userPresets &&
            // Without this a close is remembered in memory and never written:
            // the comparison is what decides whether the file is saved at all,
            // so a field missing from it persists only when something else
@@ -3406,15 +3407,27 @@ void AppWindow::drawStatusColumn() {
     // real number the artboard always wanted, instead of leaving it invented
     // or absent.
     cascade::sink::AudioOut& audioSink = pipeline_.audio();
-    const unsigned long long under =
-        static_cast<unsigned long long>(audioSink.underruns());
-    std::snprintf(v, sizeof(v), "%llu", under);
+    // HELD, NOT LIVE (0.99.4): every figure on this card is read into one
+    // snapshot that is refreshed twice a second (gui/readout_hold.hpp) - the
+    // ring level moves every callback and a starving sink's count climbs by
+    // the frame, and both were unreadable printed at the frame rate. The
+    // colour and the wording follow the SAME held figures, so the card never
+    // says "no callback has starved yet" beside a non-zero count.
+    AudioReadout liveAudio;
+    liveAudio.underruns = static_cast<unsigned long long>(audioSink.underruns());
     {
         const double rateHz = cascade::core::Pipeline::kAudioRateHz;
-        const double ringMs =
-            1000.0 * static_cast<double>(audioSink.ringFrames()) / rateHz;
-        const double capMs =
-            1000.0 * static_cast<double>(audioSink.ringCapacityFrames()) / rateHz;
+        liveAudio.ringMs = 1000.0 * static_cast<double>(audioSink.ringFrames()) / rateHz;
+        liveAudio.capMs = 1000.0 * static_cast<double>(audioSink.ringCapacityFrames()) / rateHz;
+    }
+    liveAudio.gaps = static_cast<unsigned long long>(pluginRunner_.audioGaps());
+    liveAudio.gapFrames = static_cast<unsigned long long>(pluginRunner_.audioGapFrames());
+    const AudioReadout& shownAudio = audioHold_.value(ImGui::GetTime(), liveAudio);
+    const unsigned long long under = shownAudio.underruns;
+    std::snprintf(v, sizeof(v), "%llu", under);
+    {
+        const double ringMs = shownAudio.ringMs;
+        const double capMs = shownAudio.capMs;
         std::snprintf(l1, sizeof(l1), "ring %.0f of %.0f ms", ringMs, capMs);
         StatusLine lines[3] = {
             {under == 0 ? "no callback has starved yet" : "starved callbacks, since start",
@@ -3429,10 +3442,8 @@ void AppWindow::drawStatusColumn() {
             // are repaired in completely different places - so while a plugin
             // is playing, this card carries both counts and the user can tell
             // which of them is happening.
-            const unsigned long long gaps =
-                static_cast<unsigned long long>(pluginRunner_.audioGaps());
-            const unsigned long long gapFrames =
-                static_cast<unsigned long long>(pluginRunner_.audioGapFrames());
+            const unsigned long long gaps = shownAudio.gaps;
+            const unsigned long long gapFrames = shownAudio.gapFrames;
             std::snprintf(l2, sizeof(l2), "plugin gaps %llu, %llu frames", gaps, gapFrames);
             lines[n++] = {l2, gaps == 0 ? kFaint : cascade::gui::theme::kAlarm};
         }
@@ -4275,10 +4286,17 @@ void AppWindow::drawToolbar() {
         // because it is not the DSP load and must not be read as one.
         const float dt = ImGui::GetIO().DeltaTime;
         const bool haveDt = dt > 0.0f && dt < 1.0f;
+        // THE NEEDLE IS LIVE, THE TEXT IS THE MEAN OF THE LAST HALF SECOND
+        // (0.99.4, gui/readout_hold.hpp). Printed per frame it changed sixty
+        // times a second and could not be read; the mean is also the more
+        // honest figure, since any one frame's delta is mostly scheduling
+        // noise.
+        if (haveDt) { frameTimeHold_.add(ImGui::GetTime(), static_cast<double>(dt)); }
+        const bool haveShown = haveDt && frameTimeHold_.have();
+        const double shownDt = frameTimeHold_.value();
         char dtTxt[32];
-        std::snprintf(dtTxt, sizeof(dtTxt), haveDt ? "%.0f %% - %.1f ms" : "--",
-                      static_cast<double>(dt) * 1000.0 / 16.7 * 100.0,
-                      static_cast<double>(dt) * 1000.0);
+        std::snprintf(dtTxt, sizeof(dtTxt), haveShown ? "%.0f %% - %.1f ms" : "--",
+                      shownDt * 1000.0 / 16.7 * 100.0, shownDt * 1000.0);
         cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), kMeterW, meterH,
                                      "FRAME TIME", dt * 1000.0f / 16.7f, haveDt, dtTxt,
                                      "ms");
@@ -13649,6 +13667,127 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
             }
         }
     }
+
+    // THE USER'S OWN PRESETS (0.99.4), under the plugin's, each with a small
+    // key to forget it. A plugin can only publish a fixed table, and some
+    // deliberately publish nothing for a region (POCSAG has no UK commercial
+    // channel - core/user_presets.hpp has the field report). These are the
+    // frequencies the user kept instead, and they replay through the same
+    // applyPluginPreset the plugin's own keys use.
+    const std::string fileKey = cascade::core::pluginKey(p);
+    const std::vector<cascade::core::UserPreset> mine = userPresetsForPlugin(p);
+    const float forgetW = ImGui::CalcTextSize("x").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    for (std::size_t i = 0; i < mine.size(); ++i) {
+        char label[CASCADE_PRESET_LABEL_CHARS + 32];
+        std::snprintf(label, sizeof(label), "%s##upreset%u", mine[i].label.c_str(),
+                      static_cast<unsigned>(i));
+        const float w = ImGui::GetContentRegionAvail().x - forgetW - ImGui::GetStyle().ItemSpacing.x;
+        if (ImGui::Button(label, ImVec2(w > 0.0f ? w : -1.0f, 0.0f))) {
+            applyPluginPreset(p, cascade::gui::userPresetToCascade(mine[i]));
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Your preset: tune to %.4f MHz and start this plugin",
+                              mine[i].frequencyHz / 1.0e6);
+        }
+        ImGui::SameLine();
+        char forget[32];
+        std::snprintf(forget, sizeof(forget), "x##upforget%u", static_cast<unsigned>(i));
+        if (ImGui::Button(forget)) {
+            pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Forget, fileKey, i};
+        }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Forget this preset"); }
+    }
+
+    // SAVE WHERE YOU ARE. Offered on every DECODER, whether or not it
+    // publishes presets of its own - a decoder with none is exactly the one
+    // whose user has nowhere else to keep a channel. Records only; the save
+    // happens at the safe point (see pendingUserPresetEdit_).
+    const bool isDecoder =
+        p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
+    if (isDecoder) {
+        const double hereHz =
+            pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
+        char save[64];
+        std::snprintf(save, sizeof(save), "+ Save %.4f MHz as a preset##upsave",
+                      hereHz / 1.0e6);
+        if (ImGui::Button(save, ImVec2(-1.0f, 0.0f))) {
+            pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Save, fileKey, 0};
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Keep the frequency, mode and bandwidth you are tuned to now as "
+                              "a preset for %s.\nOpening %s will tune there from then on.",
+                              p.name.c_str(), p.name.c_str());
+        }
+    }
+}
+
+std::vector<cascade::core::UserPreset> AppWindow::userPresetsForPlugin(
+    const cascade::core::LoadedPlugin& p) const {
+    return cascade::core::userPresetsFor(
+        userPresets_, cascade::core::userPresetKey(cascade::core::pluginKey(p)));
+}
+
+void AppWindow::consumePendingUserPresetEdit() {
+    const PendingUserPresetEdit edit = pendingUserPresetEdit_;
+    pendingUserPresetEdit_ = PendingUserPresetEdit{};
+    if (edit.op == PendingUserPresetEdit::Op::None) { return; }
+    // Re-found by key, never carried from the press: the plugin may have been
+    // removed between the press and this safe point, and a save against a
+    // plugin that is no longer there is a silent no-op.
+    const cascade::core::LoadedPlugin* found = nullptr;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (cascade::core::pluginKey(p) == edit.pluginFileKey) {
+            found = &p;
+            break;
+        }
+    }
+    if (found == nullptr) { return; }
+    const std::string key = cascade::core::userPresetKey(edit.pluginFileKey);
+
+    if (edit.op == PendingUserPresetEdit::Op::Forget) {
+        if (cascade::core::removeUserPreset(userPresets_, key, edit.ordinal)) {
+            rebuildMuteStates();
+            presetNote_ = "Forgot a preset for " + found->name;
+        }
+        return;
+    }
+
+    // WHAT "WHERE YOU ARE" MEANS: the absolute tuned frequency (device centre
+    // plus VFO offset - what the tuner readout shows), the mode button that
+    // is lit, and the channel bandwidth. Not the device sample rate: that is
+    // a property of the radio, not of the channel.
+    cascade::core::UserPreset u;
+    u.plugin = key;
+    u.frequencyHz = pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
+    u.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
+    u.bandwidthHz = vfoBandwidthHz_;
+    u.label = cascade::core::defaultUserPresetLabel(u.frequencyHz);
+    char note[192];
+    switch (cascade::core::addUserPreset(userPresets_, u)) {
+        case cascade::core::UserPresetAdd::Added:
+            rebuildMuteStates();
+            std::snprintf(note, sizeof(note), "Saved %.4f MHz as a preset for %s",
+                          u.frequencyHz / 1.0e6, found->name.c_str());
+            break;
+        case cascade::core::UserPresetAdd::AlreadySaved:
+            std::snprintf(note, sizeof(note), "%.4f MHz is already a preset for %s",
+                          u.frequencyHz / 1.0e6, found->name.c_str());
+            break;
+        case cascade::core::UserPresetAdd::PluginFull:
+            std::snprintf(note, sizeof(note),
+                          "%s already has %u presets of yours - forget one to save another",
+                          found->name.c_str(),
+                          static_cast<unsigned>(cascade::core::kMaxUserPresetsPerPlugin));
+            break;
+        case cascade::core::UserPresetAdd::ListFull:
+            std::snprintf(note, sizeof(note), "No room for another preset");
+            break;
+        case cascade::core::UserPresetAdd::Invalid:
+        default:
+            std::snprintf(note, sizeof(note), "Not saved: no usable frequency to save");
+            break;
+    }
+    presetNote_ = note;
 }
 
 void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
@@ -13907,16 +14046,24 @@ void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb) 
             break;
         }
     }
-    if (found == nullptr || found->preset == nullptr) { return; }
+    if (found == nullptr) { return; }
 
     // THE SAME ENUMERATION drawPluginPresets uses, so this can never see a
     // different set of presets than the row the user could have pressed
     // instead: bounded, and each frequency positively tested so third-party
     // garbage (NaN included) never reaches the decision below.
-    std::vector<CascadePreset> presets;
+    std::vector<CascadePreset> own;
     for (const cascade::gui::IndexedPreset& ip : validatedPresets(*found)) {
-        presets.push_back(ip.preset);
+        own.push_back(ip.preset);
     }
+    // THE USER'S OWN PRESETS COME FIRST (0.99.4). autoPresetIndexOnStart
+    // applies element 0 unless the receiver already sits on any element, so a
+    // channel the user saved against this plugin is what opening it tunes to
+    // - and being on it, or on any of the plugin's own, tunes nowhere. Before
+    // this, a UK listener on 153.050 MHz was moved to POCSAG's DAPNET preset
+    // every time they opened POCSAG. See gui/tune_control.hpp.
+    const std::vector<CascadePreset> presets =
+        cascade::gui::autoPresetCandidates(userPresetsForPlugin(*found), own);
     if (presets.empty()) { return; }
 
     // WHAT THE RECEIVER IS DOING RIGHT NOW — the same three numbers
@@ -13988,6 +14135,12 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
         keyWidths.push_back(ImGui::CalcTextSize(k.label.c_str(), nullptr, true).x +
                             ImGui::GetStyle().FramePadding.x * 2.0f);
     }
+    // THE SAVE KEY (0.99.4) is laid out with the rest, last, so it wraps by
+    // the same rule rather than hanging off the end of a full row. It is what
+    // makes a channel "settable on the fly": from the window the user is
+    // reading the decoder in, not only from the rail.
+    static constexpr const char* kSaveKey = "+ Save";
+    keyWidths.push_back(ImGui::CalcTextSize(kSaveKey).x + ImGui::GetStyle().FramePadding.x * 2.0f);
     const std::vector<std::size_t> rows = cascade::gui::presetBarRows(
         rowWidth, ImGui::GetStyle().ItemSpacing.x, keyWidths);
     ImGui::PushID(pluginKey.c_str());
@@ -14011,11 +14164,38 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
         // exactly the crash 0.96.1 fixed in a different list.
         if (ImGui::SmallButton(label)) { pendingPresetRequest_.record(pluginKey, k.index); }
         if (k.lit) { ImGui::PopStyleColor(2); }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(k.lit ? "Already tuned to this preset of %s."
-                                    : "Tune to this preset of %s.",
-                              pluginName.c_str());
+        const bool mine = cascade::gui::isUserPresetIndex(k.index);
+        // A RIGHT-CLICK FORGETS one of the user's own - recorded, like every
+        // other press here. A plugin's own keys ignore it: those are not the
+        // user's to remove.
+        if (mine && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Forget, pluginKey,
+                                      k.index - cascade::gui::kUserPresetIndexBase};
         }
+        if (ImGui::IsItemHovered()) {
+            if (mine) {
+                ImGui::SetTooltip(k.lit ? "Already tuned to your preset for %s.\n"
+                                          "Right-click to forget it."
+                                        : "Tune to your preset for %s.\n"
+                                          "Right-click to forget it.",
+                                  pluginName.c_str());
+            } else {
+                ImGui::SetTooltip(k.lit ? "Already tuned to this preset of %s."
+                                        : "Tune to this preset of %s.",
+                                  pluginName.c_str());
+            }
+        }
+    }
+    if (!keys.empty() && rows.back() == rows[keys.size() - 1]) { ImGui::SameLine(); }
+    if (ImGui::SmallButton("+ Save##pbarsave")) {
+        pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Save, pluginKey, 0};
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Save the frequency you are tuned to now (%.4f MHz) as a preset "
+                          "for %s.",
+                          (pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz()) /
+                              1.0e6,
+                          pluginName.c_str());
     }
     ImGui::PopID();
 }
@@ -14070,10 +14250,25 @@ void AppWindow::consumePendingPresetRequest() {
     // pluginUi_.instruments() and mapPages_ that a bar's key was drawn inside
     // has already finished this frame, and applyPluginPreset's
     // refreshPluginRunner() is free to rebuild every one of them.
+    // A save or a forget of the user's own presets waits for the same point,
+    // for the same reason (see pendingUserPresetEdit_).
+    consumePendingUserPresetEdit();
     const std::optional<cascade::gui::PresetBarRequest> req = pendingPresetRequest_.take();
     if (!req.has_value()) { return; }
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (cascade::core::pluginKey(p) != req->pluginKey) { continue; }
+        // ONE OF THE USER'S OWN (0.99.4): re-read from userPresets_ by
+        // ordinal, exactly as a plugin preset is re-read from the plugin - a
+        // preset forgotten since the press is a silent no-op.
+        if (cascade::gui::isUserPresetIndex(req->presetIndex)) {
+            const std::vector<cascade::core::UserPreset> mine = userPresetsForPlugin(p);
+            const std::size_t ord = req->presetIndex - cascade::gui::kUserPresetIndexBase;
+            if (ord >= mine.size()) { return; }
+            const CascadePreset ps = cascade::gui::userPresetToCascade(mine[ord]);
+            if (!cascade::gui::presetIsValid(ps)) { return; }
+            applyPluginPreset(p, ps);
+            return;
+        }
         // RE-READ, NEVER TRUSTED FROM THE PRESS. count() and get() are asked
         // again, fresh, exactly as the web remote's own deferred apply does
         // (applyWebControls' r.pluginPresetIndex handling) - the plugin the
@@ -14170,6 +14365,14 @@ void AppWindow::rebuildMuteStates() {
             mp.index = ip.index;
             mp.label = cascade::gui::presetLabel(ps.label, p.name);
             m.presets.push_back(mp);
+        }
+        // AND THE USER'S OWN (0.99.4), after the plugin's, recorded in their
+        // own index range so a bar's key press says which table to re-read.
+        // Being in this list is also what lets the audio mute treat a saved
+        // channel exactly as it treats one of the plugin's.
+        const std::vector<cascade::core::UserPreset> mine = userPresetsForPlugin(p);
+        for (std::size_t i = 0; i < mine.size(); ++i) {
+            m.presets.push_back(cascade::gui::userPresetToMutePreset(mine[i], i));
         }
         muteStates_.push_back(std::move(m));
     }
@@ -18851,6 +19054,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // last session must not come back audible for the seconds it takes them to
     // find the checkbox again.
     pluginMuteOverride_ = cfg.pluginMuteOverride;
+    // The user's own presets, before the same rebuild: they are baked into
+    // the preset snapshot (rebuildMuteStates) the bars and the mute read.
+    userPresets_ = cfg.userPresets;
     refreshPluginRunner();
 
     for (int i = 0; i < 8; ++i) {
@@ -19359,6 +19565,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // about a session in which windows only ever open by hand.
     cfg.closedWindows.clear();
     cfg.pluginMuteOverride = pluginMuteOverride_;
+    cfg.userPresets = userPresets_;
     cfg.catEnabled = catEnabled_;
     cfg.catBindAll = catBindAll_;
     cfg.catPort = catPortMirror_;
