@@ -1422,6 +1422,36 @@ void SdrPlaySource::stopStreamingLocked() {
         // calls, then "closing SDRplay RSPdx before opening another device" -
         // and the GUI thread never came back from that ReleaseDevice.
         noteIfServiceDead(err, "stop");
+
+        // A REFUSED UNINIT HAS STOPPED NOTHING (the 0.97.1 crash report,
+        // 2026-09-17). The drain below asks "is a callback inside us right
+        // now", which is the right question only when Uninit SUCCEEDED and the
+        // library has promised no more are coming. When it refused, the stream
+        // is still running on the service's side - the same report's next line
+        // is the library saying so itself, "Init failed:
+        // sdrplay_api_AlreadyInitialised" - and it still holds our callback
+        // and the address of this Link. With no callback inside at that
+        // instant the Link was not stranded, so it died with this source when
+        // the device was closed, and the next block the service delivered was
+        // copied into a freed ring: an access violation in memcpy, on the
+        // vendor's own thread, where nothing of ours can catch it.
+        //
+        // So a refusal is treated exactly as the unreachable branch above
+        // treats it: accepting is cleared so a late block is dropped, the Link
+        // is stranded for the life of the process, and it KEEPS its device
+        // handle for whatever is still inside. A leaked ring is survivable; a
+        // use-after-free on somebody else's thread is not.
+        link_->accepting.store(false, std::memory_order_relaxed);
+        strandLink(link_);
+        initialised_ = false;
+        running_.store(false, std::memory_order_relaxed);
+        std::string refusedLine;
+        {
+            std::lock_guard<std::mutex> hl(link_->healthMutex);
+            refusedLine = healthLineLocked(*link_);
+        }
+        if (!refusedLine.empty()) { core::diagLogf("%s", refusedLine.c_str()); }
+        return;
     }
     initialised_ = false;
     running_.store(false, std::memory_order_relaxed);

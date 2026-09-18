@@ -1557,6 +1557,68 @@ void testStopsOwnUninitGoingServiceNotRespondingKeepsCloseDeviceOffTheVendorDll(
     if (caller.joinable()) { caller.join(); }
 }
 
+// THE 0.97.1 CRASH REPORT (2026-09-17, an RSP1 whose API service kept going
+// quiet): "access violation" inside VCRUNTIME140 (memcpy), called from
+// SdrPlaySource::streamCallbackA, called from sdrplay_api.dll, on the vendor's
+// own thread. Its log is the whole story in four lines:
+//
+//   SDRplay Uninit failed - sdrplay_api_ServiceNotResponding (14)
+//   SDRplay start failed - SDRplay Init failed: sdrplay_api_AlreadyInitialised (9)
+//   closing Mirics MSi2500 before opening another device
+//   SDRplay closed without ReleaseDevice ...
+//
+// A REFUSED Uninit has not stopped the stream - the second line is the vendor
+// library saying so in its own words - so the library still holds our callback
+// and the address of our Link. stop() used to strand the Link only when a
+// callback happened to be INSIDE it at that instant; otherwise the Link died
+// with the source when the device was closed, and the next block the service
+// delivered was copied into a ring that had been freed.
+//
+// What is asserted is the accounting (the Link was stranded), because the
+// defect itself is a use-after-free and a test that provokes one proves
+// nothing reliably: it may crash, or may quietly write into memory the
+// allocator has not reused yet. Only once the Link is known to be stranded are
+// blocks delivered through the callback the fake still holds, which is then a
+// defined thing to do.
+void testARefusedUninitStrandsTheLinkBecauseTheServiceStillHoldsTheCallback() {
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("1810012345", abi::kRsp1);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    CHECK(src->start());
+    CHECK(!src->faulted());
+
+    const unsigned long long strandedBefore = SdrPlaySource::linksStranded();
+
+    // The service refuses the stop. It answered, quickly, and no callback is
+    // inside us at this moment - the case the old accounting called safe.
+    fake->uninitResult = abi::ServiceNotResponding;
+    src->stop();
+    CHECK(!src->running());
+
+    // THE DEFECT, IN ONE LINE: the stream was never stopped, so the Link must
+    // outlive the source. Before the fix this count does not move.
+    const bool stranded = SdrPlaySource::linksStranded() == strandedBefore + 1;
+    CHECK(stranded);
+
+    // The field order: the device is closed and the source goes away.
+    src->closeDevice();
+    delete src;
+
+    // ...AND THE SERVICE, WHICH WAS NEVER STOPPED, DELIVERS ANOTHER BLOCK.
+    if (stranded) {
+        const short xi[4] = {100, 200, 300, 400};
+        const short xq[4] = {-100, -200, -300, -400};
+        for (int i = 0; i < 64; ++i) { fake->pushSamples(xi, xq, 4); }
+        // Still here: the blocks landed in a Link that is alive, and were
+        // dropped, because a stopped source accepts nothing.
+        CHECK(true);
+    } else {
+        std::printf("     SKIPPED: delivering a block after the source was freed - the Link was "
+                    "not stranded, so that delivery would be the use-after-free itself\n");
+    }
+}
+
 void testAHealthyControlIsStillSynchronousAndAcknowledged() {
     // The bound must not have changed the ordinary path. A service that
     // answers is updated on the spot, the acknowledgement flag is still
@@ -1721,6 +1783,7 @@ int main() {
     testFailuresOnTheOpeningPathUnwind();
     testSkipReasonReachesTheSourcePanel();
     testServiceNotRespondingMakesTheDeviceDead();
+    testARefusedUninitStrandsTheLinkBecauseTheServiceStillHoldsTheCallback();
     testAHealthyControlIsStillSynchronousAndAcknowledged();
     testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence();
     // The three that abandon or hang a worker inside their own fake go last,
