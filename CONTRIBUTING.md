@@ -17,7 +17,7 @@ somebody else owns the copyright in even one file, no commercial licence can
 lawfully be granted over it — and the free-for-hobbyists arrangement stops
 being fundable.
 
-**So: by submitting a contribution, you grant Steven Fairclough a perpetual,
+**So: by submitting a contribution, you grant Steven Fox a perpetual,
 irrevocable, worldwide, royalty-free, non-exclusive licence to use, reproduce,
 modify, distribute, license and sub-license your contribution, in source and
 object form, under any licence terms whatsoever — including the commercial
@@ -84,9 +84,9 @@ plugin catalogue documentation for how to publish one.
 
 ## Reporting security issues
 
-Do not open a public issue. Email <steven.fairclough@icloud.com> with the
+Do not open a public issue. Email <support@foxsdr.com> with the
 details and allow a reasonable period for a fix before disclosing.
 
 ## Contact
 
-Steven Fairclough — <steven.fairclough@icloud.com>
+Steven Fox — <support@foxsdr.com>

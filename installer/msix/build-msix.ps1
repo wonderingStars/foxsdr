@@ -59,7 +59,7 @@ param(
     [string] $IdentityName = "",
     # Partner Center's Package/Identity/Publisher (an X.500 string).
     [string] $IdentityPublisher = "",
-    [string] $PublisherDisplayName = "Steven Fairclough",
+    [string] $PublisherDisplayName = "Steven Fox",
     # The MaxVersionTested to declare. Defaults to the SDK this machine has.
     [string] $MaxVersionTested = "10.0.26100.0",
     # Make a self-signed certificate and sign the package with it. LOCAL
