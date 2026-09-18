@@ -46,6 +46,7 @@ using cascade::gui::kTuneMismatchToleranceHz;
 using cascade::gui::presetVfoOffsetHz;
 using cascade::gui::stepDigit;
 using cascade::gui::tuneMismatchMessage;
+using cascade::gui::tuneRefusedMessage;
 using cascade::gui::kDeckCoreW;
 using cascade::gui::kDeckMinWindowW;
 using cascade::gui::kFirstLaunchBarW;
@@ -117,6 +118,36 @@ int main() {
         // A flag set ALONGSIDE others still zeroes the offset - this is an OR
         // of bits, not an exact-match test.
         CHECK(presetVfoOffsetHz(CASCADE_PRESET_DEVICE_CENTRE | 0x00000002u, 5000.0) == 0.0);
+    }
+
+    // --- tuneRefusedMessage: a tune the radio would not make at all -------------
+    {
+        // THE MEASURED CASE (2026-09-18): an R820T2 dongle, 24 MHz to 1766 MHz,
+        // asked for 7.1 MHz. It refused, the counter did not move, and nothing
+        // anywhere said why. RED WHEN a refusal outside the range says nothing.
+        const std::string below = tuneRefusedMessage(7.1e6, true, 24.0e6, 1766.0e6, false);
+        CHECK(below == "This radio cannot tune to 7.100 MHz - it stayed where it was. "
+                       "Its range is 24.000 MHz to 1.766 GHz.");
+        // Above the range is the same sentence.
+        CHECK(!tuneRefusedMessage(1800.0e6, true, 24.0e6, 1766.0e6, false).empty());
+        // INSIDE THE RANGE A REFUSAL IS A BUSY DRIVER, NOT A FACT ABOUT THE
+        // RADIO, and saying "cannot tune" for it is the false report 0.88.0 had
+        // to remove. RED WHEN every refusal is reported.
+        CHECK(tuneRefusedMessage(100.3e6, true, 24.0e6, 1766.0e6, false).empty());
+        // The edges belong to the radio.
+        CHECK(tuneRefusedMessage(24.0e6, true, 24.0e6, 1766.0e6, false).empty());
+        CHECK(tuneRefusedMessage(1766.0e6, true, 24.0e6, 1766.0e6, false).empty());
+        CHECK(!tuneRefusedMessage(24.0e6 - 1.0, true, 24.0e6, 1766.0e6, false).empty());
+        CHECK(!tuneRefusedMessage(1766.0e6 + 1.0, true, 24.0e6, 1766.0e6, false).empty());
+        // NO PUBLISHED RANGE, NOTHING SAID - and a range that is not a range
+        // (zero width, or upside down) is no range.
+        CHECK(tuneRefusedMessage(7.1e6, false, 0.0, 0.0, false).empty());
+        CHECK(tuneRefusedMessage(7.1e6, true, 0.0, 0.0, false).empty());
+        CHECK(tuneRefusedMessage(7.1e6, true, 1766.0e6, 24.0e6, false).empty());
+        // A preset's refusal says what the preset needs.
+        const std::string preset = tuneRefusedMessage(3.853e6, true, 24.0e6, 1766.0e6, true);
+        CHECK(preset.find("This preset needs a receiver that covers that band.") !=
+              std::string::npos);
     }
 
     // --- tuneMismatchMessage: within tolerance ---------------------------------

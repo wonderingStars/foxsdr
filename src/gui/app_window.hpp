@@ -1201,6 +1201,12 @@ private:
     // in gui/tune_control.hpp's tuneMismatchMessage — stays testable without
     // a device.
     void noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset);
+    // The refusal's counterpart: a tune the source would not make at all,
+    // reported only when the request lies outside the range the radio itself
+    // publishes (gui/tune_control.hpp, tuneRefusedMessage). Same note line,
+    // logged once per distinct request.
+    void noteTuneRefused(double requestHz, bool isPluginPreset);
+    double lastRefusedRequestHz_ = -1.0;
 
     // Uninstalls the matching pipeline tap, THEN stops the recorder — the
     // order the Recorder contract requires (see Pipeline::set*Recorder).

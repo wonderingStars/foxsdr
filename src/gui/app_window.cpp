@@ -16597,7 +16597,34 @@ void AppWindow::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // with the request logged "asked for 124.19 MHz, the B200 answered
     // 124.69 MHz", a coercion that never happened (seen on the desk the day
     // this check was added).
-    if (applied) { noteTuneMismatch(centerHz, landedHz, isPluginPreset); }
+    if (applied) {
+        noteTuneMismatch(centerHz, landedHz, isPluginPreset);
+    } else {
+        noteTuneRefused(centerHz, isPluginPreset);
+    }
+}
+
+void AppWindow::noteTuneRefused(double requestHz, bool isPluginPreset) {
+    // THE OTHER HALF OF "SAY WHEN THE RADIO CANNOT TUNE THERE": a radio that
+    // refuses outright leaves the counter exactly where it was, and until this
+    // existed nothing anywhere said why. Shown where the coerced-tune sentence
+    // is shown and logged once per distinct request, for the same reason
+    // noteTuneMismatch logs once. cascade::gui::tuneRefusedMessage answers
+    // nothing for a refusal INSIDE the radio's range, which is a busy driver
+    // and not a fact about the radio.
+    double rangeLoHz = 0.0;
+    double rangeHiHz = 0.0;
+    const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
+    const std::string note = cascade::gui::tuneRefusedMessage(requestHz, hasRange, rangeLoHz,
+                                                              rangeHiHz, isPluginPreset);
+    if (note.empty()) { return; }
+    tuneMismatchNote_ = note;
+    if (requestHz == lastRefusedRequestHz_) { return; }
+    lastRefusedRequestHz_ = requestHz;
+    cascade::core::diagLogf("source: asked for %.6f MHz, the %s refused it - its range is "
+                            "%.6f to %.6f MHz",
+                            requestHz / 1.0e6, pipeline_.activeSource().name(), rangeLoHz / 1.0e6,
+                            rangeHiHz / 1.0e6);
 }
 
 void AppWindow::noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset) {
