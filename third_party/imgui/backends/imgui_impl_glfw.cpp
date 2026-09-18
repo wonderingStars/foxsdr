@@ -931,6 +931,13 @@ static void ImGui_ImplGlfw_UpdateMouseData()
     {
         ImGuiViewport* viewport = platform_io.Viewports[n];
         GLFWwindow* window = (GLFWwindow*)viewport->PlatformHandle;
+        // FoxSDR: a viewport whose window the display refused (GLFW 65543) stays in
+        // this list until ImGui drops it, and every call below dereferences the
+        // window. The 0.96.1 guards covered the platform callbacks and missed this
+        // loop, which the backend runs by itself at the top of every frame - the
+        // 0.99.0 crash report is _glfwWindowFocusedWin32 <- ImGui_ImplGlfw_NewFrame.
+        if (window == nullptr)
+            continue;
 
 #ifdef EMSCRIPTEN_USE_EMBEDDED_GLFW3
         const bool is_window_focused = true;
@@ -1005,6 +1012,8 @@ static void ImGui_ImplGlfw_UpdateMouseCursor()
     for (int n = 0; n < platform_io.Viewports.Size; n++)
     {
         GLFWwindow* window = (GLFWwindow*)platform_io.Viewports[n]->PlatformHandle;
+        if (window == nullptr) // FoxSDR: no window was created - see UpdateMouseData above
+            continue;
         if (imgui_cursor == ImGuiMouseCursor_None || io.MouseDrawCursor)
         {
             if (bd->LastMouseCursor != nullptr)
