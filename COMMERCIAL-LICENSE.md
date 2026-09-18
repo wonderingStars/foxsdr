@@ -84,7 +84,7 @@ copy to.
 
 ## How to buy
 
-Email <steven.fairclough@icloud.com> with:
+Email <sales@foxsdr.com> with:
 
 - who you are, and the legal entity that will hold the licence;
 - what you want to build or do with it;
@@ -114,4 +114,4 @@ invoice. Nothing is hidden behind a sales process.
 
 ## Contact
 
-Steven Fairclough — <steven.fairclough@icloud.com>
+Steven Fox — <sales@foxsdr.com>

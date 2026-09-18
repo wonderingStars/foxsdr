@@ -45,7 +45,7 @@
   ; website published for a file it was not serving.
   #include "generated-version.iss"
 #endif
-#define AppPublisher "Steven Fairclough"
+#define AppPublisher "Steven Fox"
 #define AppExe "cascade.exe"
 ; Install-dir leaf avoids '+' (some tools mishandle it in paths); display name keeps it.
 #define InstallLeaf "FoxSDR"

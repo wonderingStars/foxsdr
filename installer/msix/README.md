@@ -673,7 +673,7 @@ commitment.
            -IdentityPublisher "<Package/Identity/Publisher>"
 
    `Package/Properties/PublisherDisplayName` from the same page goes in
-   `-PublisherDisplayName` if it differs from "Steven Fairclough".
+   `-PublisherDisplayName` if it differs from "Steven Fox".
 4. **Settle the version question** (section 5.2) — `0.96.2.0` is not a
    submittable version because the first section cannot be 0.
 5. **Create the submission and upload the `.msix`** on the *Packages* page.

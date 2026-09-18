@@ -13,7 +13,7 @@
 
 | | |
 | --- | --- |
-| **Licensor** | Steven Fairclough, ______________________ (address) |
+| **Licensor** | ______________________ (the publisher of FoxSDR, known publicly as Steven Fox; legal name and address completed on the signed copy) |
 | **Licensee** | ______________________ (full legal entity name and registered number) |
 | **Licensee address** | ______________________ |
 | **Software** | FoxSDR (internal project name `cascade`) |
@@ -22,7 +22,7 @@
 | **Annual Fee** | £__________ plus VAT |
 | **Start Date** | ______________________ |
 | **Initial Term** | 12 months from the Start Date |
-| **Support contact** | steven.fairclough@icloud.com |
+| **Support contact** | support@foxsdr.com |
 
 ---
 
