@@ -235,6 +235,26 @@ int main() {
         // The stalled thread is named as such, so nobody has to guess which
         // of five stacks is the one that stopped.
         CHECK(text.find("(gui, stalled)") != std::string::npos);
+#if defined(__linux__)
+        // THE STALLED THREAD'S TOP FRAME IS WHERE IT WAS, not where it was
+        // asked to unwind itself. Field report "hang cascade @
+        // hangCaptureSignalHandler" (0.97.0): every Linux hang ever captured
+        // named the capture's own signal handler as its top frame, so every
+        // one grouped under ONE signature whatever had actually stopped, and
+        // the display-stall rule, which needs a wait at the top, could never
+        // match. This thread is asleep in sleep_for, so its first frame must
+        // be the C library, not this binary.
+        {
+            const std::size_t sec = text.find("(gui, stalled) ---\n");
+            CHECK(sec != std::string::npos);
+            if (sec != std::string::npos) {
+                const std::size_t at = sec + std::strlen("(gui, stalled) ---\n");
+                const std::string first = text.substr(at, text.find('\n', at) - at);
+                std::printf("stalled thread top frame: %s\n", first.c_str());
+                CHECK(first.find("  libc") == 0);
+            }
+        }
+#endif
 
         // ...AND THE MODULE TABLE, which is what makes those stacks readable
         // by anyone who was not there. A stack of module+offset with nothing

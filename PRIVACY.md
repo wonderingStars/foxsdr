@@ -184,7 +184,7 @@ none of them adds a field, and all are governed by the same switch in
 
 | Field | Example | Why |
 |---|---|---|
-| `kind` | `hang` or `stall` | As above. `stall` means the wait was inside the display driver rather than inside FoxSDR - a monitor switched off, a resolution change, a remote session. Those are kept on your machine and never sent. |
+| `kind` | `hang` or `stall` | As above. `stall` means the wait was inside the display driver or the window system rather than inside FoxSDR - a monitor switched off, a resolution change, a remote session, or on Linux a window the compositor is not showing. Those are kept on your machine and never sent. |
 | `note` | `the gui thread did not complete a frame within the threshold` | The same distinction in one sentence, so a report says what it is without anyone having to know the codes. |
 | `stalled-ms` | `7213` | How long the interface had been unresponsive. |
 | `threshold-ms` | `5000` | What it was measured against, so the number above can be judged. |
