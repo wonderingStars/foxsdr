@@ -102,6 +102,38 @@ inline std::string tuneMismatchMessage(double requestHz, double answeredHz, bool
     return msg;
 }
 
+// --- A tune the radio REFUSED, because it is outside what the radio covers --
+//
+// tuneMismatchMessage above speaks for a radio that ANSWERED somewhere else.
+// A radio that answers nothing at all - setCenterFrequencyHz returns false and
+// the readback stays where it was - had no sentence: on an RTL-SDR with an
+// R820T2 (24 MHz to 1766 MHz) a request for 7.1 MHz moved nothing, and the
+// Source section, the log and the browser's sourceError were all silent
+// (measured on the desk dongle, 2026-09-18, while looking into GitHub issue 2,
+// "I cannot change frequency with the mouse, with the toggle switches and
+// directly inputting the desired frequency"). From the chair that is a counter
+// that ignores the wheel, the switches and a typed figure alike.
+//
+// ONLY WHEN THE REQUEST IS OUTSIDE A RANGE THE RADIO ITSELF PUBLISHED. A
+// refusal has innocent causes too - the driver busy behind its control lock
+// during a fast drag is the one 0.88.0 had to stop reporting as a jump - and
+// those are transient, in range, and would make this sentence a lie. With no
+// published range nothing is said: "outside its range" is not something this
+// can know about a radio that never told it one.
+inline std::string tuneRefusedMessage(double requestHz, bool hasRange, double rangeLoHz,
+                                      double rangeHiHz, bool isPluginPreset) {
+    if (!hasRange || !(rangeHiHz > rangeLoHz)) { return {}; }
+    if (requestHz >= rangeLoHz && requestHz <= rangeHiHz) { return {}; }
+    std::string msg = "This radio cannot tune to " + detail::formatTuneFreq(requestHz) +
+                      " - it stayed where it was. Its range is " +
+                      detail::formatTuneFreq(rangeLoHz) + " to " +
+                      detail::formatTuneFreq(rangeHiHz) + ".";
+    if (isPluginPreset) {
+        msg += " This preset needs a receiver that covers that band.";
+    }
+    return msg;
+}
+
 // --- Auto-preset on start: "we want the user to have to do nothing" --------
 //
 // The owner's own words for this one. A decoder that publishes presets knows
