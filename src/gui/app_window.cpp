@@ -13661,6 +13661,12 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
                 ImGui::SetTooltip("Tune to %.4f MHz, start this plugin and open its "
                                   "windows",
                                   ps.frequencyHz / 1.0e6);
+            } else if (p.decoder != nullptr) {
+                // Its lines go to the shared window, and the press opens it
+                // (presetOpensDecoderOutput) - so say so.
+                ImGui::SetTooltip("Tune to %.4f MHz, start this plugin and open the "
+                                  "Decoder output window",
+                                  ps.frequencyHz / 1.0e6);
             } else {
                 ImGui::SetTooltip("Tune to %.4f MHz and start this plugin",
                                   ps.frequencyHz / 1.0e6);
@@ -13914,10 +13920,32 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
         if (hp.plugin == p.name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
     }
+    bool ownWindow = p.imageDecoder != nullptr;
+    {
+        const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
+        if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
+            ownWindow = true;
+        }
+    }
+    for (const cascade::core::HostPanel& hp : pluginUi_.panels()) {
+        if (hp.plugin == p.name) { ownWindow = true; }
+    }
     for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
         if (in.plugin == p.name) {
             pluginWindows_.show(instrumentWindowId(in));
+            ownWindow = true;
         }
+    }
+    // A TEXT DECODER WITH NO WINDOW OF ITS OWN is read in the shared Decoder
+    // output window, so that is the window this press opens - otherwise
+    // pressing POCSAG tuned the radio and showed nothing at all (GitHub issue
+    // 2). See cascade::gui::presetOpensDecoderOutput. Logged, because "a
+    // window opened" is otherwise invisible to anyone reading a report.
+    if (cascade::gui::presetOpensDecoderOutput(p.decoder != nullptr, ownWindow) &&
+        !decoderWindowOpen_) {
+        decoderWindowOpen_ = true;
+        cascade::core::diagLogf("preset: opened the Decoder output window for %s",
+                                p.name.c_str());
     }
 
     char note[192];

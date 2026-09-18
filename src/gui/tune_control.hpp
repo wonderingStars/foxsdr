@@ -245,6 +245,26 @@ inline bool autoPresetTriggersOnWindowClick(bool clicked, bool wasShownBeforeCli
     return clicked && !wasShownBeforeClick;
 }
 
+// --- Where a text decoder's preset shows its output --------------------------
+//
+// A preset press is the one "show me this plugin" gesture, and it opens the
+// windows the plugin declares - a map page, a picture, a panel, an instrument.
+// A TEXT decoder (CASCADE_CAP_DECODER: POCSAG, CW, RTTY, APRS) declares none of
+// those; everything it decodes is written as lines into the shared DECODER
+// OUTPUT window. So pressing POCSAG's preset retuned the radio, started the
+// decoder and put nothing new on screen - reported from the field on 0.98.1 /
+// 0.99.x as "when I click Pocsag nothing happens" (GitHub issue 2, 2026-09-18),
+// while FLEX, which also has an instrument face, visibly opened.
+//
+// The answer is the window its lines actually go to: a text decoder with no
+// window of its own opens the Decoder output window. A text decoder WITH a
+// window of its own (FLEX's pager, the teleprinter) keeps opening just that -
+// its face is where its output is read - and a module that decodes nothing to
+// text never opens it.
+inline bool presetOpensDecoderOutput(bool isTextDecoder, bool hasOwnWindow) {
+    return isTextDecoder && !hasOwnWindow;
+}
+
 // --- Preset bars: one key per valid preset, on the plugin's OWN window -----
 //
 // 0.99.0, from the owner's own words: "if I have multiple plugins open at

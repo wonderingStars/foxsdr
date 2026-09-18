@@ -265,5 +265,23 @@ int main() {
         CHECK(!presetRequestStillValid(true, 4u, 16u, 2u, true, presetAt(0.0)));
     }
 
+    // --- presetOpensDecoderOutput: where a text decoder's preset shows it ----
+    {
+        using cascade::gui::presetOpensDecoderOutput;
+        // THE REPORT (GitHub issue 2, 2026-09-18): pressing POCSAG's preset
+        // retuned the radio and put nothing on screen, because POCSAG is a
+        // text decoder with no window of its own and only a module's OWN
+        // windows were opened. RED WHEN a windowless text decoder opens
+        // nothing.
+        CHECK(presetOpensDecoderOutput(/*isTextDecoder=*/true, /*hasOwnWindow=*/false));
+        // FLEX has its pager face: that face is where its output is read, and
+        // opening the shared log as well would be two windows for one press.
+        CHECK(!presetOpensDecoderOutput(true, true));
+        // A module that decodes nothing to text (ADS-B's map, APT's picture,
+        // Satellites) never opens it, windowless or not.
+        CHECK(!presetOpensDecoderOutput(false, true));
+        CHECK(!presetOpensDecoderOutput(false, false));
+    }
+
     return testSummary("test_preset_bar");
 }
