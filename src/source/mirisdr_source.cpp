@@ -56,7 +56,9 @@ std::vector<NativeDeviceInfo> miriSdrDevicesFrom(
         if (model == nullptr) { continue; }
         NativeDeviceInfo info;
         info.driver = "mirisdr";
-        info.label = model->label;
+        // The bus description decides between an RSP1 and a television stick
+        // on the id they share; see msi2500.hpp's resolveModel.
+        info.label = msi2500::resolveModel(*model, d.description).label;
         if (!d.serial.empty()) {
             info.label += " (serial " + d.serial + ")";
             info.args = "serial=" + d.serial;
@@ -342,8 +344,12 @@ bool MiriSdrSource::open(const std::string& args) {
     clearError();
 
     const msi2500::DeviceModel* model = msi2500::modelFor(info.vid, info.pid);
-    plan_ = (model != nullptr && model->sdrPlayFlavour) ? msi001::Plan::SdrPlay
-                                                        : msi001::Plan::Default;
+    // ...and it decides the BAND PLAN too, which is the half that matters: an
+    // RSP1 given the television plan tunes with the wrong filter in circuit
+    // and says nothing about it.
+    const bool sdrPlay =
+        model != nullptr && msi2500::resolveModel(*model, info.description).sdrPlayFlavour;
+    plan_ = sdrPlay ? msi001::Plan::SdrPlay : msi001::Plan::Default;
 
     // --- QUIETEN IT FIRST ------------------------------------------------
     // This chip has NO IDENTITY REGISTERS to read back - there is no board id,

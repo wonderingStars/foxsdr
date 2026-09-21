@@ -71,6 +71,25 @@ const std::vector<DeviceModel>& deviceModels();
 // Null when the pair is not one of ours.
 const DeviceModel* modelFor(std::uint16_t vid, std::uint16_t pid);
 
+// WHAT TO CALL A DEVICE, AND WHICH BAND PLAN TO GIVE IT, when the USB id
+// alone cannot say. 1df7:2500 is BOTH the original SDRplay RSP1 and the Mirics
+// reference design the television sticks are built on, so the id is not an
+// answer: the RSP1 wants the SDRplay band plan and a TV stick wants the
+// default, and the wrong one does not fail loudly - it tunes with the wrong
+// filter in circuit. The bus description is the only thing left that separates
+// them without opening the device (rule 1), and an RSP says so in it.
+//
+// NOT VERIFIED AGAINST HARDWARE: there is no Mirics device on this bench, and
+// the owner has decided not to buy one (2026-09-21). A device whose
+// description says nothing keeps today's behaviour exactly.
+struct ResolvedModel {
+    std::string label;
+    bool sdrPlayFlavour;
+};
+
+bool descriptionNamesSdrPlay(const std::string& description);
+ResolvedModel resolveModel(const DeviceModel& model, const std::string& description);
+
 // The VID/PID list enumeration asks the transport for, built from the above.
 std::vector<cascade::usb::UsbId> usbIds();
 

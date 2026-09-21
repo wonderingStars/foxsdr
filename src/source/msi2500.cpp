@@ -25,15 +25,41 @@ inline int signExtend(std::uint32_t raw, int bits) {
 // --- identity -------------------------------------------------------------
 
 const std::vector<DeviceModel>& deviceModels() {
-    // Mirics' own id, the two early SDRplay units built on the same pair, and
-    // the television sticks that shipped it. The SDRplay pair takes the other
-    // band plan (tuner_msi001.hpp): the same silicon behind a different input
+    // Mirics' own id, the SDRplay units built on the same pair, and the
+    // television sticks that shipped it. The SDRplay units take the other band
+    // plan (tuner_msi001.hpp): the same silicon behind a different input
     // network wants different switch words and different band edges, and using
     // the wrong plan does not fail - it quietly tunes with the wrong filter in
     // circuit, which is exactly the kind of fault nobody attributes.
+    //
+    // THE PRODUCT IDS WERE WRONG UNTIL 0.99.9, and the mistake was the kind
+    // that reads as support. SDRplay's own udev rules (their Linux API
+    // package, and the copy in srcejon/sdrplayapi's install_lib.sh) map them:
+    //
+    //   1df7:2500  RSP1            1df7:3020  RSPduo
+    //   1df7:3000  RSP1A           1df7:3030  RSPdx
+    //   1df7:3010  RSP2 / RSP2pro  1df7:3050  RSP1B
+    //                              1df7:3060  RSPdx-R2
+    //
+    // So 3000 was lettered "RSP1" while it is an RSP1A, and - the half that
+    // actually mistuned - the real RSP1 fell through to 2500, which was
+    // flagged as a television dongle and therefore took the WRONG BAND PLAN.
+    // 2500 is shared: it is both the RSP1 and the Mirics reference design, so
+    // the id alone cannot separate them and resolveModel() below reads the
+    // device description instead.
+    //
+    // THE FOUR THAT ARE NOT HERE - RSPduo, RSPdx, RSP1B, RSPdx-R2 - are left
+    // out ON PURPOSE. Each adds front-end hardware (switched filters, LNA
+    // steps, antenna ports, notches; the RSPdx a different front end
+    // altogether) that this driver has no way to drive and no device here to
+    // learn from, and a native row that opens a radio and then hears very
+    // little is worse than no row at all: it looks like FoxSDR failing, not
+    // like a driver that was never written. Those models are served by the
+    // SDRplay API path (source/sdrplay_source.cpp), which is the supported
+    // route for every RSP.
     static const std::vector<DeviceModel> models = {
         {0x1DF7, 0x2500, "Mirics MSi2500", false},
-        {0x1DF7, 0x3000, "SDRplay RSP1", true},
+        {0x1DF7, 0x3000, "SDRplay RSP1A", true},
         {0x1DF7, 0x3010, "SDRplay RSP2", true},
         {0x2040, 0xD300, "Hauppauge WinTV 133559 LF", false},
         {0x07CA, 0x8591, "AverMedia A859 Pure DVB-T", false},
@@ -41,6 +67,31 @@ const std::vector<DeviceModel>& deviceModels() {
         {0x0511, 0x0037, "Logitec LDT-1S310U/J", false},
     };
     return models;
+}
+
+bool descriptionNamesSdrPlay(const std::string& description) {
+    // Case-insensitive, and only on the two words that can only come from
+    // SDRplay: a television stick's description says Hauppauge, AverMedia or
+    // nothing at all. A device that says neither keeps the default.
+    std::string lower;
+    lower.reserve(description.size());
+    for (const char c : description) {
+        lower.push_back(static_cast<char>(
+            (c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c));
+    }
+    return lower.find("sdrplay") != std::string::npos || lower.find("rsp") != std::string::npos;
+}
+
+ResolvedModel resolveModel(const DeviceModel& model, const std::string& description) {
+    ResolvedModel out{model.label, model.sdrPlayFlavour};
+    // ONLY THE SHARED ID IS IN DOUBT. Every other pair in the table names one
+    // product, and a description that disagrees with a unique id is a bus
+    // string somebody renamed, not a different radio.
+    if (model.vid != 0x1DF7 || model.pid != 0x2500) { return out; }
+    if (!descriptionNamesSdrPlay(description)) { return out; }
+    out.label = "SDRplay RSP1";
+    out.sdrPlayFlavour = true;
+    return out;
 }
 
 const DeviceModel* modelFor(std::uint16_t vid, std::uint16_t pid) {

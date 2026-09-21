@@ -769,6 +769,60 @@ int main() {
         CHECK(msi2500::modelFor(0x1DF7, 0x3000) != nullptr);
         CHECK(msi2500::modelFor(0x1DF7, 0x3000)->sdrPlayFlavour);
         CHECK(!msi2500::modelFor(0x1DF7, 0x2500)->sdrPlayFlavour);
+
+        // --- WHICH RSP IS WHICH (0.99.9) ------------------------------
+        //
+        // The table lettered 3000 as an RSP1 for four releases. It is an
+        // RSP1A: SDRplay's own udev rules map 2500 to the RSP1, 3000 to
+        // the RSP1A, 3010 to the RSP2/RSP2pro, 3020 to the RSPduo, 3030
+        // to the RSPdx, 3050 to the RSP1B and 3060 to the RSPdx-R2.
+        CHECK(std::string(msi2500::modelFor(0x1DF7, 0x3000)->label) ==
+              "SDRplay RSP1A");
+        CHECK(std::string(msi2500::modelFor(0x1DF7, 0x3010)->label) ==
+              "SDRplay RSP2");
+        // The four with front ends this driver cannot drive stay OUT: a
+        // native row that opens a radio and then hears very little reads
+        // as FoxSDR failing rather than as a driver never written. They
+        // are served by the SDRplay API path.
+        CHECK(msi2500::modelFor(0x1DF7, 0x3020) == nullptr);  // RSPduo
+        CHECK(msi2500::modelFor(0x1DF7, 0x3030) == nullptr);  // RSPdx
+        CHECK(msi2500::modelFor(0x1DF7, 0x3050) == nullptr);  // RSP1B
+        CHECK(msi2500::modelFor(0x1DF7, 0x3060) == nullptr);  // RSPdx-R2
+
+        // --- THE ID THE RSP1 SHARES WITH A TELEVISION STICK -----------
+        //
+        // 1df7:2500 is BOTH the original RSP1 and the Mirics reference
+        // design. The id cannot separate them, and the band plan is not
+        // cosmetic: the wrong one tunes with the wrong filter in circuit
+        // and says nothing. The bus description is the only thing left
+        // that can tell them apart without opening the device.
+        {
+            const msi2500::DeviceModel& shared = *msi2500::modelFor(0x1DF7, 0x2500);
+            const msi2500::ResolvedModel rsp = msi2500::resolveModel(shared, "SDRplay RSP1");
+            CHECK(rsp.label == "SDRplay RSP1");
+            CHECK(rsp.sdrPlayFlavour);
+            // Case and surrounding words do not matter; the name does.
+            CHECK(msi2500::resolveModel(shared, "sdrplay rsp1 (usb)").sdrPlayFlavour);
+            CHECK(msi2500::resolveModel(shared, "RSP1").sdrPlayFlavour);
+
+            // A TELEVISION STICK KEEPS TODAY'S BEHAVIOUR EXACTLY, and so
+            // does a device whose description is empty - which is the
+            // ordinary case on this bus and must never be read as an RSP.
+            const msi2500::ResolvedModel tv = msi2500::resolveModel(shared, "MSi2500 DVB-T");
+            CHECK(tv.label == "Mirics MSi2500");
+            CHECK(!tv.sdrPlayFlavour);
+            CHECK(!msi2500::resolveModel(shared, "").sdrPlayFlavour);
+            CHECK(msi2500::resolveModel(shared, "").label == "Mirics MSi2500");
+
+            // AND A UNIQUE ID IS NEVER SECOND-GUESSED: a description that
+            // disagrees with an id naming one product is a bus string
+            // somebody renamed, not a different radio.
+            const msi2500::DeviceModel& tvOnly = *msi2500::modelFor(0x2040, 0xD300);
+            CHECK(!msi2500::resolveModel(tvOnly, "SDRplay RSP1").sdrPlayFlavour);
+            const msi2500::DeviceModel& rsp1a = *msi2500::modelFor(0x1DF7, 0x3000);
+            CHECK(msi2500::resolveModel(rsp1a, "").sdrPlayFlavour);
+            CHECK(msi2500::resolveModel(rsp1a, "").label == "SDRplay RSP1A");
+        }
         CHECK(msi2500::modelFor(0x2040, 0xD300) != nullptr);
         CHECK(msi2500::modelFor(0x0BDA, 0x2838) == nullptr);  // an RTL-SDR is not ours
         CHECK(msi2500::usbIds().size() == msi2500::deviceModels().size());
@@ -905,11 +959,17 @@ int main() {
     // difference at 100 MHz is the switch word - which is exactly the kind of
     // difference that would never show up as a failure, only as a filter in
     // the wrong place.
+    //
+    // THE NAME CHANGED IN 0.99.9 AND THE EXPECTATION WAS THE WRONG ONE, not
+    // the code: 1df7:3000 is an RSP1A, per SDRplay own udev rules. This check
+    // asserted the mislabel for four releases. The band plan it exists to
+    // prove is unchanged - an RSP1A wants the SDRplay plan exactly as the
+    // device this row was thought to be did.
     {
         MiriSdrSource src;
         FakeMiriSdrUsb* fake = attachFake(src, oneFakeDevice("", 0x1DF7, 0x3000));
         CHECK(src.open(""));
-        CHECK(std::string(src.name()) == "Mirics: SDRplay RSP1");
+        CHECK(std::string(src.name()) == "Mirics: SDRplay RSP1A");
         const std::vector<MiriControlRecord> ctl = fake->controls();
         // Index 10 is the band switch: one command, the ADC asleep, five
         // initialisation writes, three rate writes, then the tune.
