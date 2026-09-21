@@ -34,6 +34,8 @@
 #include <imgui_impl_opengl3.h>
 
 #include "core/version.hpp"
+#include "core/background_exit.hpp"
+#include "core/first_run_decoders.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
@@ -963,6 +965,11 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     if (!configPath_.empty()) {
         cascade::core::AppConfig cfg;
         std::string err;
+        // ASKED BEFORE THE LOAD, because load() answers true for a missing
+        // file (defaults) and cannot tell a first run from a later one. Only
+        // core/first_run_decoders.hpp uses it, and only on a phone.
+        std::error_code firstRunEc;
+        const bool firstRun = !std::filesystem::exists(configPath_, firstRunEc);
         const bool loaded = cascade::core::ConfigStore::load(configPath_, cfg, err);
         if (loaded) {
             applyConfig(cfg);
@@ -989,6 +996,36 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
                 std::printf("config applied: defaults (%s)\n", err.c_str());
             }
         }
+        // A PHONE'S FIRST RUN STARTS WITH ITS BUNDLED DECODERS STOPPED.
+        // See core/first_run_decoders.hpp: fourteen decoders fed at once is
+        // the Android audio budget, and it is what a new user met before they
+        // had asked for any of them. Done here - after the scan in the
+        // constructor above and after the config has been applied - so the
+        // keys are real and the user's own list, on every later run, is what
+        // wins. recordPluginStopped rather than setPluginStopped: one rebuild
+        // at the end, not one per module.
+        {
+            std::vector<std::string> decoderKeys;
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                if (!lp.loaded) { continue; }
+                if (lp.decoder == nullptr && lp.iqDecoder == nullptr &&
+                    lp.imageDecoder == nullptr) {
+                    continue;
+                }
+                decoderKeys.push_back(cascade::core::pluginKey(lp));
+            }
+            const std::vector<std::string> stopThese = cascade::core::decodersStoppedOnFirstRun(
+                decoderKeys, cascade::core::platformEndsWithoutShutdown(), firstRun);
+            if (!stopThese.empty()) {
+                for (const std::string& key : stopThese) { recordPluginStopped(key, true); }
+                refreshPluginRunner();
+                cascade::core::diagLogf(
+                    "first run: %d bundled decoder(s) start stopped - press a decoder's "
+                    "preset, or its START key, to run one",
+                    static_cast<int>(stopThese.size()));
+            }
+        }
+
         // Baseline for the debounce: what the file holds (or would hold).
         savedCfg_ = currentConfig();
         pendingCfg_ = savedCfg_;
@@ -1541,6 +1578,25 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
             // iconified() is the minimise.
             const bool hidden = platform.iconified() || !platform.visible();
             presentGrace.update(platform.time(), displayChanged, hidden);
+            // THE ANDROID LIFECYCLE'S OWN CLEAN EXIT. A phone has no quit -
+            // the task is swiped away or the system reclaims the process -
+            // so going to the background is the last moment this run is
+            // certainly alive, and that is where "it ended properly" is
+            // written. core/background_exit.hpp has the whole reasoning and
+            // tests/test_background_exit.cpp the truth table; on the desktop
+            // every case answers None and nothing below runs.
+            switch (cascade::core::markForVisibility(
+                lastHiddenForExit_, hidden, cascade::core::platformEndsWithoutShutdown())) {
+                case cascade::core::ExitMark::Clean:
+                    markLifecycleExit(true);
+                    break;
+                case cascade::core::ExitMark::Running:
+                    markLifecycleExit(false);
+                    break;
+                case cascade::core::ExitMark::None:
+                    break;
+            }
+            lastHiddenForExit_ = hidden;
         }
 
         ImGui_ImplOpenGL3_NewFrame();
@@ -19541,6 +19597,35 @@ void AppWindow::maybeSaveConfig(double nowS) {
 
 void AppWindow::saveConfigNow() {
     requestConfigSave(currentConfig());
+}
+
+void AppWindow::markLifecycleExit(bool clean) {
+    // THE SHUTDOWN PATH'S SHAPE, not currentConfig(): the same rewrite the
+    // quit path makes (see THE CLEAN-EXIT MARKER above), for the same reason -
+    // re-deriving every value here would rebuild the pending usage report and
+    // re-read a pipeline that may be mid-stop. One field, on the snapshot the
+    // last save already asked for.
+    if (configPath_.empty()) { return; }
+    telemetryCleanExit_ = clean;
+    cascade::core::AppConfig marked = lastRequestedConfig_;
+    marked.telemetryCleanExit = clean;
+    requestConfigSave(marked);
+    if (!clean) {
+        // Coming back to the foreground: there is no hurry, the next save
+        // will carry it and the process is not about to be killed.
+        return;
+    }
+    // GOING TO THE BACKGROUND, WHERE THERE IS A HURRY. Android can kill the
+    // process at any moment once it is not visible, and a queued write that
+    // never lands is exactly the bug being fixed. Bounded, and abandoned
+    // rather than joined past the bound, like every other wait in this file.
+    if (configWriter_.finishOrAbandon(cascade::gui::ConfigWriter::kSaveBound)) {
+        cascade::core::diagLogf("lifecycle: marked a clean exit on going to the background");
+    } else {
+        cascade::core::diagLogf(
+            "lifecycle: the clean-exit mark did not reach disk within %d ms",
+            static_cast<int>(cascade::gui::ConfigWriter::kSaveBound.count()));
+    }
 }
 
 void AppWindow::requestConfigSave(const cascade::core::AppConfig& cfg) {

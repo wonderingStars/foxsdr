@@ -1245,6 +1245,9 @@ private:
     cascade::core::AppConfig currentConfig();  // snapshot of the live state
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
+    // Writes telemetryCleanExit from the ANDROID lifecycle rather than from a
+    // shutdown that a phone never runs - see core/background_exit.hpp.
+    void markLifecycleExit(bool clean);
 
     // THE ASYNC SAVE (0.97.2). Field report "hang ntdll.dll @
     // cascade::core::ConfigStore::save" (0.96.3): both functions above used
@@ -2020,6 +2023,10 @@ private:
     std::uint64_t telemetryLaunches_ = 0;
     std::uint64_t telemetryCrashes_ = 0;
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
+    // The visibility the lifecycle marker last acted on. Starts hidden: the
+    // window is created hidden on purpose, so the first frame's transition to
+    // visible is the one that arms the marker.
+    bool lastHiddenForExit_ = true;
     double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
     // Time in the current mode. A plain "since" mark cannot be used here: the
     // accrual runs once per frame, and a per-frame delta truncated to whole
