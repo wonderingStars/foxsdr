@@ -1428,7 +1428,14 @@ int main() {
                         "\"demodScopeGain\":99}\n"));
         out = junkConfig();
         CHECK(ConfigStore::load(path, out, err));
-        CHECK(out.demodScopeSignal == cascade::gui::kScopeSignalCount - 1);
+        // OUT OF RANGE CLAMPS TO VECTOR, and this used to be written as
+        // "kScopeSignalCount - 1" - which passed only because Vector happened
+        // to be the last position. It is not any more: MPX is, and MPX is the
+        // one position that does not always exist (it needs WFM), so clamping
+        // a hand-edited config onto it would open the scope on a signal that
+        // may not be there. The rule the code actually follows is the right
+        // one and this expectation is now written to say so.
+        CHECK(out.demodScopeSignal == static_cast<int>(cascade::gui::ScopeSignal::Vector));
         CHECK(out.demodScopeTimebase == cascade::gui::kScopeTimebaseCount - 1);
         CHECK(out.demodScopeGain == cascade::gui::kScopeGainCount - 1);
         CHECK(writeText(path,

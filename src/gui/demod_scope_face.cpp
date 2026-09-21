@@ -23,6 +23,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/demod_scope_face.hpp"
 
+#include "gui/fm_mpx_plan.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -169,12 +171,19 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
     glassText(dl, legend, px, ImVec2(a.x + 7.0f, y), theme::kIvory,
               scopeSignalCaption(signal));
 
+    const bool spectral = (signal == ScopeSignal::Spectrum || signal == ScopeSignal::Mpx);
+
     char buf[32];
-    if (signal == ScopeSignal::Spectrum) {
+    if (spectral) {
         // A SPECTRUM HAS NO TIME BASE, and printing one would be a number that
         // describes nothing on the screen. What the axis is ruled in is the
-        // span, so that is what the row says instead.
-        const double span = scopeSpectrumSpanHz(feed.audioRateHz);
+        // span, so that is what the row says instead. The span comes from the
+        // feed rather than being recomputed here, so the label and the bins
+        // the page actually cut cannot disagree - which matters more for the
+        // multiplex, where the labels are placed against that same number.
+        const double span = (feed.spectrumSpanHz > 0.0)
+                                ? feed.spectrumSpanHz
+                                : scopeSpectrumSpanHz(feed.audioRateHz);
         std::snprintf(buf, sizeof(buf), "0 - %.1f kHz", span / 1000.0);
     } else {
         const double rate = scopeSignalIsBaseband(signal) ? feed.iqRateHz : feed.audioRateHz;
@@ -189,7 +198,7 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
               buf);
 
     char gain[32];
-    if (signal == ScopeSignal::Spectrum) {
+    if (spectral) {
         std::snprintf(gain, sizeof(gain), "10 dB/DIV");
     } else {
         formatScopeGain(gain, sizeof(gain), scopeGainPerDiv(state.gainIndex));
@@ -233,6 +242,90 @@ float demodScopePeak(const DemodScopeFeed& feed, ScopeSignal signal) {
         return (pi > pq) ? pi : pq;
     }
     return scopePeak(feed.audio, feed.audioCount);
+}
+
+// WHAT EACH PART OF THE MULTIPLEX IS, written on the glass.
+//
+// The request this exists for (owner, 2026-09-21): a view of the broadcast FM
+// spectrum "where it shows what each frequency group is used for". The table
+// and the arithmetic are in gui/fm_mpx_plan.hpp and are tested without a draw
+// list; this is the ink.
+//
+// HOW IT READS. Each region gets a bracket along the top of the glass - a rule
+// with a tick turned down at each end, which says "this extent" without
+// filling the area the trace lives in - and its name under the bracket. A tone
+// (the pilot, an SCA) gets one vertical rule the full height instead, because
+// a bracket a pixel wide is not a bracket. Anything a station may simply not
+// transmit is drawn fainter than the sum channel and the pilot: an empty
+// 57 kHz slot is a fact about the station, and a label in the same ink as the
+// pilot's would read as a fault in the receiver.
+//
+// CROWDING IS DECIDED BY MEASUREMENT, not by a width threshold picked by eye:
+// a label is drawn if the text fits in the room its own band owns, and skipped
+// if it does not. On a narrow tube that leaves "Mono L+R" and the pilot rule,
+// which is the right answer rather than a compromise.
+void drawMpxLabels(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
+                   const DemodScopeFeed& feed) {
+    const double span = (feed.spectrumSpanHz > 0.0)
+                            ? feed.spectrumSpanHz
+                            : static_cast<double>(feed.spectrumBins) * feed.spectrumBinHz;
+    if (!(span > 0.0)) { return; }
+    const float w = b.x - a.x;
+    if (!(w > 0.0f)) { return; }
+
+    ImFont* reading = fonts::reading();
+    const float px = fonts::kTinySize;
+    // The bracket sits under the top rule; band names hang under the bracket
+    // and tone names one line lower, so "Pilot" cannot land on top of the sum
+    // channel's name where the two nearly touch.
+    const float bracketY = a.y + 10.0f;
+    const float bandTextY = bracketY + 3.0f;
+    const float toneTextY = bandTextY + px + 2.0f;
+
+    // THE TUBE'S OWN INK, not a new palette: the rules are drawn in the same
+    // phosphor as the graticule (kRuleAxis for what every station sends,
+    // kRule for what it may not) so they read as part of the glass rather
+    // than as an overlay pasted on top of it.
+    const ImU32 inkStrong = kRuleAxis;
+    const ImU32 inkFaint = kRule;
+    const ImU32 textStrong = theme::withAlpha(theme::kIvory, 0.80f);
+    const ImU32 textFaint = theme::withAlpha(theme::kIvory, 0.46f);
+
+    for (std::size_t i = 0; i < kMpxBandCount; ++i) {
+        const MpxBand& band = kMpxBands[i];
+        if (!mpxBandInSpan(band, span)) { continue; }
+        const ImU32 ink = band.optional ? inkFaint : inkStrong;
+        const ImU32 text = band.optional ? textFaint : textStrong;
+
+        if (band.loHz == band.hiHz) {
+            // A TONE: one rule, floor to ceiling, and its name beside the
+            // rule's foot rather than centred on it - centred, the text would
+            // sit astride the very line it is naming.
+            const float x = a.x + w * static_cast<float>(mpxFraction(band.loHz, span));
+            dl->AddLine(ImVec2(x, a.y + 2.0f), ImVec2(x, b.y - 2.0f), ink, 1.0f);
+            const float tw = textWidth(reading, px, band.label);
+            if (tw + 6.0f <= mpxLabelRoomPx(band, span, w)) {
+                float tx = x + 3.0f;
+                if (tx + tw > b.x - 2.0f) { tx = x - 3.0f - tw; }
+                glassText(dl, reading, px, ImVec2(tx, toneTextY), text, band.label);
+            }
+            continue;
+        }
+
+        // AN EXTENT: the bracket, then the name centred under it.
+        const double hi = (band.hiHz < span) ? band.hiHz : span;
+        const float x0 = a.x + w * static_cast<float>(mpxFraction(band.loHz, span));
+        const float x1 = a.x + w * static_cast<float>(mpxFraction(hi, span));
+        dl->AddLine(ImVec2(x0, bracketY), ImVec2(x1, bracketY), ink, 1.0f);
+        dl->AddLine(ImVec2(x0, bracketY), ImVec2(x0, bracketY + 4.0f), ink, 1.0f);
+        dl->AddLine(ImVec2(x1, bracketY), ImVec2(x1, bracketY + 4.0f), ink, 1.0f);
+
+        const float tw = textWidth(reading, px, band.label);
+        if (tw + 4.0f <= (x1 - x0)) {
+            glassText(dl, reading, px, ImVec2((x0 + x1) * 0.5f - tw * 0.5f, bandTextY), text,
+                      band.label);
+        }
+    }
 }
 
 void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
@@ -288,17 +381,21 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 }
                 break;
             }
-            case ScopeSignal::Spectrum: {
-                if (feed.spectrumDb == nullptr || feed.spectrumBins == 0 ||
+            case ScopeSignal::Spectrum:
+            case ScopeSignal::Mpx: {
+                const char* empty = (signal == ScopeSignal::Mpx)
+                                        ? "NO MULTIPLEX IN THE TAP"
+                                        : "NO AUDIO IN THE TAP";
+                if (feed.spectrumDb == nullptr || feed.spectrumBins < 2 ||
                     !(feed.spectrumBinHz > 0.0)) {
-                    addNoSignal(dl, a, b, "NO AUDIO IN THE TAP");
+                    addNoSignal(dl, a, b, empty);
                     break;
                 }
+                // THE LABELS GO UNDER THE BEAM, always: they are a ruler laid
+                // on the glass, and a ruler that hid the measurement would be
+                // the wrong way round.
+                if (signal == ScopeSignal::Mpx) { drawMpxLabels(dl, a, b, feed); }
                 const std::size_t n = feed.spectrumBins;
-                if (n < 2) {
-                    addNoSignal(dl, a, b, "NO AUDIO IN THE TAP");
-                    break;
-                }
                 // A LINE PER BIN, not a bar chart: the spectrum shares its
                 // tube with the traces above, and a filled histogram would
                 // read as a different instrument on the same glass.

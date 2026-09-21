@@ -1449,6 +1449,20 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     const cascade::dsp::DemodMode mode = demod_.mode();
     const bool wfm = (mode == cascade::dsp::DemodMode::WFM);
 
+    // THE MULTIPLEX, AND ONLY WHEN THERE IS ONE. In WFM audioBuf_ currently
+    // holds the composite: the discriminator's output, flat, before the stereo
+    // decoder below has taken the pilot and the difference sidebands out of
+    // it and before any de-emphasis. That is the one instant in the chain
+    // where the multiplex exists as a thing to look at, which is why the tap
+    // is here and not two lines further down.
+    //
+    // NOT PUSHED IN ANY OTHER MODE, deliberately. An AM or SSB chain has the
+    // demodulated audio in this buffer and pushing that would give the scope a
+    // "multiplex" to draw over a signal that has none - the labels would be
+    // furniture, and this application does not draw furniture. The scope's own
+    // liveness rule watches written(), so a mode change simply stops the tube.
+    if (wfm) { scopeMpx_.push(audioBuf_.data(), m); }
+
     // RDS gets the RAW discriminator output: no de-emphasis, no scaling, no
     // AGC, no squelch — bit-for-bit the signal the --rds-check bench path
     // feeds the same decoder, which is the only configuration proven off air.

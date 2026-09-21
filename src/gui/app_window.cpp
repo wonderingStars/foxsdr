@@ -52,6 +52,7 @@
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
 // this is the drawing half, which includes imgui.h and therefore may not.
+#include "gui/fm_mpx_plan.hpp"
 #include "gui/demod_scope_face.hpp"
 #include "dsp/window.hpp"
 #include "gui/fonts.hpp"
@@ -1541,6 +1542,17 @@ int AppWindow::run(int frames) {
         if (!featureRequestOpenedByEnv_ && std::getenv("FOXSDR_OPEN_FEATURE_REQUEST") != nullptr) {
             featureRequestOpenedByEnv_ = true;
             featureRequestOpen_ = true;
+        }
+        // AND THE SCOPE, for the same reason and under the same rule. The
+        // multiplex position can only be judged by looking at it - a table of
+        // frequencies proves the arithmetic and says nothing about whether
+        // the labels land on the signal - and nothing in a config file opens
+        // this page, because startupState() clears it so that no window
+        // opens itself at launch. Once, on the first frame that sees the
+        // variable.
+        if (!demodScopeOpenedByEnv_ && std::getenv("FOXSDR_OPEN_DEMOD_SCOPE") != nullptr) {
+            demodScopeOpenedByEnv_ = true;
+            demodScopeOpen_ = true;
         }
 
         drawUi();
@@ -15748,11 +15760,30 @@ void AppWindow::drawFeatureRequestPage() {
 // bin over the 43 ms it consumes - fine enough to separate the harmonics of a
 // voice, short enough that the picture still moves with the sound.
 static constexpr std::size_t kScopeFftSize = 2048;
+// See the note beside its use: the multiplex is a wider span asked for finer
+// detail, so it gets four times the transform.
+static constexpr std::size_t kScopeMpxFftSize = 8192;
+
+// Is there a multiplex to look at? Exactly one mode produces one, and this
+// is the only place that fact is written down in the interface.
+bool AppWindow::pipelineIsWfm() const {
+    return pipeline_.demodMode() == cascade::dsp::DemodMode::WFM;
+}
+
+// The saved position against today's mode. The SETTING is not rewritten - a
+// user who left the scope on the multiplex and tuned to an AM station is shown
+// the audio spectrum meanwhile and finds the multiplex again when they go
+// back, which is what "the scope stayed where I left it" means to anybody who
+// is not reading the config file.
+cascade::gui::ScopeSignal AppWindow::scopeSignalNow() const {
+    return cascade::gui::scopeSignalForMode(
+        cascade::gui::scopeSignalFromIndex(demodScope_.signal), pipelineIsWfm());
+}
 
 void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
-    const cascade::gui::ScopeSignal sig =
-        cascade::gui::scopeSignalFromIndex(demodScope_.signal);
+    const cascade::gui::ScopeSignal sig = scopeSignalNow();
     const bool baseband = cascade::gui::scopeSignalIsBaseband(sig);
+    const bool mpx = (sig == cascade::gui::ScopeSignal::Mpx);
 
     feed.audioRateHz = cascade::core::Pipeline::kAudioRateHz;
     feed.iqRateHz = pipeline_.channelRateHz();
@@ -15773,47 +15804,76 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
         cascade::gui::scopeTapLive(scopeAudioLive_, pipeline_.scopeAudio().written(), nowS);
     const bool iqLive =
         cascade::gui::scopeTapLive(scopeIqLive_, pipeline_.scopeIq().written(), nowS);
-    scopeLive_ = baseband ? iqLive : audioLive;
+    const bool mpxLive =
+        cascade::gui::scopeTapLive(scopeMpxLive_, pipeline_.scopeMpx().written(), nowS);
+    scopeLive_ = baseband ? iqLive : (mpx ? mpxLive : audioLive);
     feed.live = scopeLive_;
     if (!scopeLive_) { return; }
 
-    if (sig == cascade::gui::ScopeSignal::Spectrum) {
-        // The newest transform's worth of audio, windowed and transformed. The
-        // plan and the window are built once and kept: a pffft setup is not
-        // free and this position can be left up for hours.
-        if (!scopeFft_ || scopeFft_->size() != kScopeFftSize) {
-            scopeFft_ = std::make_unique<cascade::dsp::ComplexFFT>(kScopeFftSize);
-            scopeFftWindow_ = cascade::dsp::makeWindow(cascade::dsp::WindowType::Hann,
-                                                       kScopeFftSize);
+    if (sig == cascade::gui::ScopeSignal::Spectrum || mpx) {
+        // ONE TRANSFORM, TWO SIGNALS. The audio position looks at the finished
+        // sound over the twenty kilohertz hearing stops at; the multiplex
+        // position looks at the composite over the hundred the standard uses.
+        // Everything that differs between them is decided here - the tap, the
+        // rate, the span and the transform length - and nothing below this
+        // block knows which it is drawing.
+        //
+        // THE MULTIPLEX GETS THE LONGER TRANSFORM because it is asked a harder
+        // question: 8192 bins at a 200 kHz channel rate resolve 24 Hz, which
+        // puts the pilot in a bin of its own and shows RDS's sidebands either
+        // side of 57 kHz. The audio position's 2048 over 48 kHz is 23 Hz and
+        // is not changing.
+        const std::size_t fftSize = mpx ? kScopeMpxFftSize : kScopeFftSize;
+        const double rateHz = mpx ? feed.iqRateHz : feed.audioRateHz;
+        const double spanHz = mpx ? cascade::gui::mpxSpanHz(rateHz)
+                                  : cascade::gui::scopeSpectrumSpanHz(rateHz);
+        if (!(rateHz > 0.0) || !(spanHz > 0.0)) { return; }
+
+        // The newest transform's worth, windowed and transformed. The plan and
+        // the window are built once and kept: a pffft setup is not free and
+        // this position can be left up for hours. They are rebuilt when the
+        // LENGTH changes, which is what switching between the two positions
+        // does.
+        if (!scopeFft_ || scopeFft_->size() != fftSize) {
+            scopeFft_ = std::make_unique<cascade::dsp::ComplexFFT>(fftSize);
+            scopeFftWindow_ = cascade::dsp::makeWindow(cascade::dsp::WindowType::Hann, fftSize);
         }
-        scopeAudioBuf_.resize(kScopeFftSize);
+        scopeAudioBuf_.resize(fftSize);
         const std::size_t got =
-            pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), kScopeFftSize);
-        if (got < kScopeFftSize) { return; }
-        scopeFftIn_.resize(kScopeFftSize);
-        scopeFftOut_.resize(kScopeFftSize);
-        for (std::size_t i = 0; i < kScopeFftSize; ++i) {
-            scopeFftIn_[i] = std::complex<float>(scopeAudioBuf_[i] * scopeFftWindow_[i],
-                                                 0.0f);
+            mpx ? pipeline_.scopeMpx().snapshot(scopeAudioBuf_.data(), fftSize)
+                : pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), fftSize);
+        if (got < fftSize) { return; }
+        scopeFftIn_.resize(fftSize);
+        scopeFftOut_.resize(fftSize);
+        for (std::size_t i = 0; i < fftSize; ++i) {
+            scopeFftIn_[i] = std::complex<float>(scopeAudioBuf_[i] * scopeFftWindow_[i], 0.0f);
         }
         scopeFft_->forward(scopeFftIn_.data(), scopeFftOut_.data());
-        const double binHz = feed.audioRateHz / static_cast<double>(kScopeFftSize);
-        const std::size_t bins = cascade::gui::scopeSpectrumBins(
-            kScopeFftSize, feed.audioRateHz, cascade::gui::scopeSpectrumSpanHz(feed.audioRateHz));
+        const double binHz = rateHz / static_cast<double>(fftSize);
+        const std::size_t bins = cascade::gui::scopeSpectrumBins(fftSize, rateHz, spanHz);
         scopeSpecDb_.resize(bins);
         // NORMALISED BY THE TRANSFORM LENGTH AND THE WINDOW'S OWN GAIN, so a
         // full-scale tone reads 0 dB on the top rule rather than at whatever
         // number this particular FFT size happens to produce. A dB axis whose
         // zero moves with an internal buffer size is not a scale.
-        const float norm = 2.0f / (static_cast<float>(kScopeFftSize) *
-                                   cascade::dsp::coherentGain(scopeFftWindow_.data(),
-                                                              kScopeFftSize));
+        const float norm = 2.0f / (static_cast<float>(fftSize) *
+                                   cascade::dsp::coherentGain(scopeFftWindow_.data(), fftSize));
         for (std::size_t k = 0; k < bins; ++k) {
             scopeSpecDb_[k] = cascade::gui::scopeSpectrumDb(std::abs(scopeFftOut_[k]) * norm);
         }
         feed.spectrumDb = scopeSpecDb_.data();
         feed.spectrumBins = bins;
         feed.spectrumBinHz = binHz;
+        // THE AXIS THE BINS ACTUALLY COVER, not the span that was asked for.
+        // The face draws bin k at k/(bins-1) of the width, so the right-hand
+        // edge of the glass IS the last bin - and the last bin is at most one
+        // bin short of the nominal span, because scopeSpectrumBins caps at the
+        // transform's positive half. Publishing the nominal number instead
+        // would place every multiplex label against an axis a bin wider than
+        // the one under it: a fifth of a pixel here, and wrong by
+        // construction, which is the kind of disagreement that grows when
+        // somebody later changes a transform length.
+        feed.spectrumSpanHz = (bins > 1) ? static_cast<double>(bins - 1) * binHz : spanHz;
         return;
     }
 
@@ -15910,8 +15970,7 @@ void AppWindow::drawDemodScopePage() {
                   kScopeW, kScopeH)) {
         cascade::gui::DemodScopeFeed feed;
         gatherDemodScope(feed);
-        const cascade::gui::ScopeSignal sig =
-            cascade::gui::scopeSignalFromIndex(demodScope_.signal);
+        const cascade::gui::ScopeSignal sig = scopeSignalNow();
 
         // THE ATTENUATOR RANGES BEFORE THE TUBE IS DRAWN, so the picture and
         // the "mV/DIV" printed under it are the same frame's answer. Ranging
@@ -15926,10 +15985,18 @@ void AppWindow::drawDemodScopePage() {
         // into the panel. Buttons rather than a combo because a bench
         // instrument's input selector is a row of keys you can see the state
         // of without opening anything.
+        // THE FIFTH KEY IS NOT ALWAYS THERE. The multiplex exists in WFM and
+        // nowhere else, so outside it the key is absent rather than present
+        // and disabled: a dead key invites the question "why can I not press
+        // this", and the honest answer - there is no multiplex on an AM
+        // station - is better told by there being nothing to press.
+        bool firstKey = true;
         for (int i = 0; i < cascade::gui::kScopeSignalCount; ++i) {
-            if (i > 0) { ImGui::SameLine(); }
-            const bool on = (demodScope_.signal == i);
             const cascade::gui::ScopeSignal s = cascade::gui::scopeSignalFromIndex(i);
+            if (!cascade::gui::scopeSignalAvailable(s, pipelineIsWfm())) { continue; }
+            if (!firstKey) { ImGui::SameLine(); }
+            firstKey = false;
+            const bool on = (sig == s);
             if (on) {
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));

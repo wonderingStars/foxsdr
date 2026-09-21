@@ -556,8 +556,19 @@ public:
     // pipeline to be running - a stopped chain simply stops advancing
     // written(), and a reader that watches that counter can tell the
     // difference between silence and a stall.
+    //   scopeMpx()    the FM MULTIPLEX at channelRateHz(): the discriminator's
+    //                 output in WFM, before de-emphasis and before the stereo
+    //                 decoder, which is the only place the pilot, the
+    //                 difference sidebands, RDS and any SCA still exist as
+    //                 separate things. Pushed ONLY in WFM - in every other
+    //                 mode the same buffer is ordinary audio and there is no
+    //                 multiplex to show - so a reader watching written() sees
+    //                 it stop advancing the moment the mode changes, which is
+    //                 what the scope's own liveness rule already knows how to
+    //                 read.
     const ScopeTap<float>& scopeAudio() const { return scopeAudio_; }
     const ScopeTap<std::complex<float>>& scopeIq() const { return scopeIq_; }
+    const ScopeTap<float>& scopeMpx() const { return scopeMpx_; }
 
     // --- Recorder taps (P6) ---------------------------------------------------
     // Non-owning recorder hooks fed by the DSP thread; nullptr (the default)
@@ -789,8 +800,16 @@ private:
     // allocates.
     static constexpr std::size_t kScopeAudioTapSamples = 65536;   // 1.37 s @ 48 kHz
     static constexpr std::size_t kScopeIqTapSamples = 262144;     // 1.31 s @ 200 kHz
+    // The multiplex needs resolution rather than duration: one transform of
+    // 8192 bins at a 200 kHz channel rate resolves 24 Hz, which separates the
+    // pilot from everything near it and puts RDS's sidebands either side of
+    // 57 kHz where they belong. 65536 is eight of those transforms' worth -
+    // enough for the page to average without ever waiting for the ring to
+    // fill - and it is a power of two because the tap indexes by mask.
+    static constexpr std::size_t kScopeMpxTapSamples = 65536;     // 0.33 s @ 200 kHz
     ScopeTap<float> scopeAudio_{kScopeAudioTapSamples};
     ScopeTap<std::complex<float>> scopeIq_{kScopeIqTapSamples};
+    ScopeTap<float> scopeMpx_{kScopeMpxTapSamples};
     std::atomic<float> signalDb_{-200.0f};
     std::atomic<std::uint64_t> audioSamples_{0};
     // UI snapshots, published once per block like signalDb_.

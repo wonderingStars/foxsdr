@@ -1088,6 +1088,14 @@ private:
     // because it is the half of the page that has nothing to do with drawing
     // and everything to do with what is being drawn.
     void gatherDemodScope(cascade::gui::DemodScopeFeed& feed);
+    // Is the receiver demodulating wideband FM right now? The one question
+    // the multiplex position turns on, asked in one place so the key row, the
+    // feed and the saved-position fallback cannot disagree.
+    bool pipelineIsWfm() const;
+    // The saved scope position, against today's mode: MPX falls back to the
+    // audio spectrum outside WFM WITHOUT rewriting the setting, so returning
+    // to FM finds the scope where it was left.
+    cascade::gui::ScopeSignal scopeSignalNow() const;
     // Moves decoded lines out of the runner into decoderLog_. Called from
     // drawUi unconditionally, because the runner's buffer is bounded and
     // draining only when the panel is visible would drop output silently.
@@ -2169,6 +2177,8 @@ private:
     // FOXSDR_OPEN_FEATURE_REQUEST's one-shot latch - see the call site in
     // run() beside FOXSDR_OPEN_SERIAL_PORTS's sibling seams.
     bool featureRequestOpenedByEnv_ = false;
+    // The same one-shot latch for FOXSDR_OPEN_DEMOD_SCOPE - see its use.
+    bool demodScopeOpenedByEnv_ = false;
     // The typed text and the typed contact line - IN MEMORY ONLY, per
     // PRIVACY.md and the file header of feature_request.hpp: neither field
     // is ever read from or written to AppConfig, and neither reaches the
@@ -2426,6 +2436,11 @@ private:
     // one would answer for a tap nobody is looking at.
     cascade::gui::ScopeLiveness scopeAudioLive_;
     cascade::gui::ScopeLiveness scopeIqLive_;
+    // The multiplex tap's own counter. A SEPARATE one because it stops the
+    // instant the mode leaves WFM while the audio tap carries on - reading
+    // the audio tap's liveness for the multiplex position would draw a
+    // confident trace of a signal that is no longer being produced.
+    cascade::gui::ScopeLiveness scopeMpxLive_;
     bool scopeLive_ = false;
     // The plugin currently playing through the host, if any. A member rather
     // than a local because the face is handed a const char* into it and the

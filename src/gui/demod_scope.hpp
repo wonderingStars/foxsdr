@@ -75,9 +75,16 @@ enum class ScopeSignal : int {
     Audio = 0,       // the demodulated audio, triggered, as a trace
     Spectrum = 1,    // the same audio, as a log-magnitude spectrum
     Baseband = 2,    // the channel I/Q at the demodulator's input, I and Q
-    Vector = 3       // the same I/Q, plotted I against Q
+    Vector = 3,      // the same I/Q, plotted I against Q
+    // THE FIFTH POSITION EXISTS ONLY IN WFM - see scopeSignalAvailable below.
+    // The broadcast multiplex is the discriminator's output before de-emphasis
+    // and before the stereo decoder: the mono sum, the pilot, the difference
+    // sidebands, RDS and any SCA, stacked in frequency. Nothing else this
+    // receiver demodulates has one, which is why this is not a setting anybody
+    // has to find - in every other mode the key is simply not there.
+    Mpx = 4
 };
-inline constexpr int kScopeSignalCount = 4;
+inline constexpr int kScopeSignalCount = 5;
 
 // The word engraved on the key. Short, because four keys share one row.
 inline const char* scopeSignalKey(ScopeSignal s) {
@@ -86,6 +93,7 @@ inline const char* scopeSignalKey(ScopeSignal s) {
         case ScopeSignal::Spectrum: return "SPEC";
         case ScopeSignal::Baseband: return "I/Q";
         case ScopeSignal::Vector: return "VECTOR";
+        case ScopeSignal::Mpx: return "MPX";
     }
     return "";
 }
@@ -98,6 +106,7 @@ inline const char* scopeSignalCaption(ScopeSignal s) {
         case ScopeSignal::Spectrum: return "AUDIO SPECTRUM";
         case ScopeSignal::Baseband: return "BASEBAND I/Q";
         case ScopeSignal::Vector: return "VECTOR I-Q";
+        case ScopeSignal::Mpx: return "FM MULTIPLEX";
     }
     return "";
 }
@@ -109,6 +118,26 @@ inline ScopeSignal scopeSignalFromIndex(int index) {
     if (index < 0) { return ScopeSignal::Audio; }
     if (index >= kScopeSignalCount) { return ScopeSignal::Vector; }
     return static_cast<ScopeSignal>(index);
+}
+
+// WHICH POSITIONS EXIST RIGHT NOW. Four always; the multiplex only while the
+// receiver is demodulating wideband FM, because only then is there one.
+//
+// Asked as a question rather than written out at the call sites so the key
+// row, the caption, the saved-position fallback and the page's feed all agree
+// by construction - and so the day a second mode grows a multiplex-like
+// signal, this is the one line that changes.
+inline bool scopeSignalAvailable(ScopeSignal s, bool wfm) {
+    return (s != ScopeSignal::Mpx) || wfm;
+}
+
+// THE SAVED POSITION, AGAINST TODAY'S MODE. A user who left the scope on MPX
+// and came back on AM must not be shown an empty tube with a caption naming a
+// signal that does not exist; they get the audio spectrum, which is the
+// nearest thing that does. The saved setting is NOT rewritten by this - go
+// back to WFM and the multiplex is there again, exactly as it was left.
+inline ScopeSignal scopeSignalForMode(ScopeSignal saved, bool wfm) {
+    return scopeSignalAvailable(saved, wfm) ? saved : ScopeSignal::Spectrum;
 }
 
 // The two I/Q signals are the two that need the baseband tap rather than the

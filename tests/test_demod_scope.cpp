@@ -478,7 +478,11 @@ void testVector() {
 
 // --- the selector and the readouts -------------------------------------------
 void testSignalSelector() {
-    CHECK(kScopeSignalCount == 4);
+    // FIVE POSITIONS SINCE THE MULTIPLEX ARRIVED. Pinned so that adding one
+    // is a deliberate act: the count drives the key row, the config clamp and
+    // the saved-position fallback, and a position added without thinking
+    // about those three would be half-wired.
+    CHECK(kScopeSignalCount == 5);
     // A hand-edited config cannot open the scope on a signal that does not
     // exist, and every position has both a key word and a caption - a blank
     // key is a control nobody can find.

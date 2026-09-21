@@ -56,6 +56,11 @@ struct DemodScopeFeed {
     const float* spectrumDb = nullptr;
     std::size_t spectrumBins = 0;
     double spectrumBinHz = 0.0;
+    // The axis the bins were cut to, in hertz. Derivable from the two above
+    // to within one bin, and passed anyway because the MULTIPLEX labels are
+    // placed against it: a pilot rule that lands a bin's width away from the
+    // pilot is a drawing that disagrees with its own axis.
+    double spectrumSpanHz = 0.0;
 
     // WHOSE SOUND THIS IS. Empty for the demodulated audio; the plugin's name
     // when one has taken the speakers through CASCADE_CAP_AUDIO_OUT. The tap
