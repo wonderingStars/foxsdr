@@ -796,7 +796,8 @@ private:
     // map-page latch again in a larger form: there, every reopen affordance
     // lived inside the window the user had just closed.
     void drawScopeMode();
-    // The switch that turns it on, in the Decoders section of the left rail.
+    // The switch that turns it on, in the rail's "Turn on and off plugins"
+    // section (its widget id is still ###decoders).
     void drawRadarSection();
     void drawScopeModeControl();
     // The receiver position entry - two coordinate fields and "Set RX here" -

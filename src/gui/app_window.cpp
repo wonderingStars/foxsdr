@@ -8799,7 +8799,7 @@ void AppWindow::drawDecodersSection() {
     // the STOP keys inside it. DefaultOpen applies the first time the node is
     // seen, so a session that closes it again is not fought.
     static const bool openForCapture = std::getenv("FOXSDR_OPEN_DECODERS") != nullptr;
-    if (!benchSection("Decoders###decoders", openForCapture, decChip,
+    if (!benchSection("Turn on and off plugins###decoders", openForCapture, decChip,
                       cascade::gui::theme::kPhosphor, fed > 0)) {
         return;
     }
