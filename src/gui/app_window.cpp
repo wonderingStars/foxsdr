@@ -70,6 +70,7 @@
 // imgui.h and that header is compiled into the tests; the members are held by
 // unique_ptr behind forward declarations for exactly that reason.
 #include "gui/plugin_store_view.hpp"
+#include "gui/running_view.hpp"
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
@@ -5304,6 +5305,7 @@ void AppWindow::drawMenuColumn() {
     // selected bank and nothing else. Every section keeps its own
     // open/closed state across a bank change - the state is ImGui's, keyed
     // on the row's id, and the id does not change with the bank.
+    selectDecodeBankForCapture();
     switch (cascade::gui::railBankFromIndex(railBank_)) {
         case cascade::gui::RailBank::SignalPath:
             // --- SIGNAL PATH: what the samples pass through, in the order
@@ -5722,6 +5724,17 @@ void AppWindow::drawDisplaySection() {
 // to VIEW and SIGNAL PATH when the rail became five banks, because a bank
 // is chosen by what a control IS, and a scope is a view while a recorder
 // is part of the signal path.
+void AppWindow::selectDecodeBankForCapture() {
+    // The other half of FOXSDR_OPEN_DECODERS above: the section lives on the
+    // DECODE bank, and a capture of a rail showing SIGNAL PATH would prove
+    // nothing about it. Once, at the first frame.
+    static const bool wanted = std::getenv("FOXSDR_OPEN_DECODERS") != nullptr;
+    static bool done = false;
+    if (!wanted || done) { return; }
+    done = true;
+    railBank_ = static_cast<int>(cascade::gui::RailBank::Decode);
+}
+
 void AppWindow::drawDecodeBank() {
     // --- DECODE: what is made of the samples, and what is kept of it --------
     //
@@ -8709,19 +8722,73 @@ void AppWindow::drawDecodersSection() {
     //     key for either.
     //
     // The receiver-control remnant is here too: the refusal notice and any
-    // grant held by a module that is no longer installed. Everything else
-    // about a fitted module - start, stop, remove, its grant, why it is silent
-    // - is in the fitted window and is deliberately not repeated.
+    // grant held by a module that is no longer installed. Remove, the grant
+    // and the why-it-is-silent sentences stay in the fitted window and are
+    // deliberately not repeated.
+    //
+    // STOP AND START ARE THE EXCEPTION, AND THEY ARE HERE ON PURPOSE (0.99.8).
+    // They lived only in the fitted window until a beta tester explained what
+    // that costs, through the owner (2026-09-21): several decoders left
+    // running "and then it can start to hiccup and stutter on other decodes.
+    // So I currently go into the plugins tab and manually stop the other
+    // decoders." Stopping a decoder is not housekeeping in that story, it is
+    // how you get your audio back - so it belongs on the screen the user is
+    // already looking at, beside the presets that started the decoder in the
+    // first place. gui/running_view.hpp holds every decision and
+    // tests/test_running_view.cpp drives it.
     const std::size_t fed = pipeline_.running() ? fedDecoderCount() : 0u;
     char decChip[16];
     std::snprintf(decChip, sizeof(decChip), "%zu FED", fed);
-    if (!benchSection("Decoders###decoders", false, decChip,
+    // VERIFICATION ONLY, the same house rule as FOXSDR_OPEN_PLUGIN_STORE: this
+    // section's open state is ImGui's, kept in no config and reachable by no
+    // remote control, so a bounded self-capture could not otherwise photograph
+    // the STOP keys inside it. DefaultOpen applies the first time the node is
+    // seen, so a session that closes it again is not fought.
+    static const bool openForCapture = std::getenv("FOXSDR_OPEN_DECODERS") != nullptr;
+    if (!benchSection("Decoders###decoders", openForCapture, decChip,
                       cascade::gui::theme::kPhosphor, fed > 0)) {
         return;
     }
     telemetryNotePanel("decoders");
 
     drawDecoderStatusRows();
+
+    // --- what is running, and the one key that stops all of it ---------------
+    //
+    // Built from the runner rather than from the loaded list: "running" here
+    // means BEING FED, which is the only sense in which a decoder is costing
+    // this machine anything (running_view.hpp says why).
+    std::vector<cascade::gui::RunnableDecoder> runnable;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (!lp.loaded) { continue; }
+        const bool isDec = lp.decoder != nullptr || lp.iqDecoder != nullptr ||
+                           lp.imageDecoder != nullptr;
+        if (!isDec) { continue; }
+        cascade::gui::RunnableDecoder rd;
+        rd.name = lp.name;
+        rd.key = cascade::core::pluginKey(lp);
+        rd.stopped = pluginIsStopped(rd.key);
+        rd.feeding = pluginRunner_.isFeeding(rd.key);
+        runnable.push_back(std::move(rd));
+    }
+    const int runningNow = cascade::gui::runningCount(runnable, pipeline_.running());
+    std::string stopAllPressed;  // non-empty marks "stop every running key"
+    if (cascade::gui::showStopAll(runningNow)) {
+        const std::string note = cascade::gui::runningCostNote(runningNow);
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", note.c_str());
+        ImGui::PopStyleColor();
+        if (ImGui::Button(cascade::gui::stopAllLabel(runningNow).c_str(),
+                          ImVec2(-1.0f, 0.0f))) {
+            stopAllPressed = "yes";
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Stop every decoder that is being fed right now. "
+                              "Nothing is removed and nothing you already stopped "
+                              "is started; press a decoder's preset to start it "
+                              "again.");
+        }
+    }
 
     // --- presets and mute, per loaded module ---------------------------------
     // Deferred past the loop, exactly as the old installed list deferred it:
@@ -8730,6 +8797,8 @@ void AppWindow::drawDecodersSection() {
     const std::vector<cascade::core::LoadedPlugin>& list = pluginHost_.plugins();
     int toggleMuteIdx = -1;
     bool toggleMuteTo = false;
+    std::string stopKey;   // a row's STOP/START key, applied after the loop
+    bool stopTo = false;
     bool anyRow = false;
     for (std::size_t i = 0; i < list.size(); ++i) {
         const cascade::core::LoadedPlugin& p = list[i];
@@ -8747,6 +8816,29 @@ void AppWindow::drawDecodersSection() {
         ImGui::SeparatorText(p.name.c_str());
         drawPluginPresets(p);
         if (isDecoder) {
+            // ONE KEY, THE ONE THAT CHANGES WHAT YOU ARE LOOKING AT (0.99.8).
+            // Deferred like the mute below it: setPluginStopped rebuilds every
+            // instance, and this loop is walking the vector it replaces.
+            cascade::gui::RunnableDecoder row;
+            row.name = p.name;
+            row.key = cascade::core::pluginKey(p);
+            row.stopped = pluginIsStopped(row.key);
+            row.feeding = pluginRunner_.isFeeding(row.key);
+            if (ImGui::Button(cascade::gui::rowKeyLabel(row), ImVec2(-1.0f, 0.0f))) {
+                stopKey = row.key;
+                stopTo = cascade::gui::rowOffersStop(row);
+            }
+            if (ImGui::IsItemHovered()) {
+                if (cascade::gui::rowOffersStop(row)) {
+                    ImGui::SetTooltip("Stop this decoder. It stays fitted and keeps its "
+                                      "presets; nothing else is touched. Start it again "
+                                      "with this key or with one of its presets.");
+                } else {
+                    ImGui::SetTooltip("Start this decoder again. It begins decoding as "
+                                      "soon as the receiver is on a frequency it can "
+                                      "use.");
+                }
+            }
             // MUTE AUDIO WHILE RUNNING, per plugin, defaulted from what the
             // plugin consumes rather than from a global preference. An I/Q
             // decoder leaves behind a demodulated channel that is not the
@@ -8771,6 +8863,18 @@ void AppWindow::drawDecodersSection() {
     }
     if (toggleMuteIdx >= 0 && static_cast<std::size_t>(toggleMuteIdx) < list.size()) {
         setPluginMutes(list[static_cast<std::size_t>(toggleMuteIdx)], toggleMuteTo);
+    }
+    // APPLIED AFTER THE LOOP, for the reason the mute above is: each of these
+    // rebuilds every decoder instance, and the list being walked is the one
+    // they replace. STOP ALL is applied from the keys the frame was DRAWN
+    // from, so a decoder that started between the draw and here is not caught
+    // by a key the user never saw offered.
+    if (!stopAllPressed.empty()) {
+        for (const std::string& key : cascade::gui::stopAllKeys(runnable, pipeline_.running())) {
+            setPluginStopped(key, true);
+        }
+    } else if (!stopKey.empty()) {
+        setPluginStopped(stopKey, stopTo);
     }
     if (!anyRow) {
         ImGui::TextDisabled("No fitted module publishes a preset or is fed a signal.");

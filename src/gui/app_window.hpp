@@ -641,6 +641,8 @@ private:
     void drawSinksSection();
     void drawDisplaySection();
     void drawDecodeBank();
+    // FOXSDR_OPEN_DECODERS: puts the rail on DECODE for a self-capture.
+    void selectDecodeBankForCapture();
     // The five bank keys under the rail's title, at the column's top-left
     // (colX, colY) and width colW, laid from bodyTop. Returns the y the
     // sections start at. Reads the keyboard too: F1..F5, one per key.
