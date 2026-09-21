@@ -283,5 +283,46 @@ int main() {
     cascade::gui::setUiScale(1.0f);
     CHECK(uiScale() == 1.0f);
 
+    // --- THE USER'S OWN MAGNIFICATION ------------------------------------
+    //
+    // THE REPORT (Android tester, through the owner, 2026-09-21): "Much of
+    // the text is very small -even on a 14-inch display- and cannot be
+    // enlarged (I wear glasses...)". The fitted scale is capped at the
+    // screen's density, and a 14-inch tablet at about 160 dpi reports a
+    // density of about 1.0 - so the cap held the interface at desktop sizes
+    // on a screen held at arm's length.
+    using cascade::gui::clampUiZoomPercent;
+    using cascade::gui::zoomedUiScale;
+
+    // 100% IS EXACTLY TODAY, which is what makes the setting safe to ship:
+    // every config written before it carries no such field at all.
+    CHECK(clampUiZoomPercent(100) == 100);
+    CHECK(zoomedUiScale(1.0f, 100) == 1.0f);
+    CHECK(zoomedUiScale(2.0f, 100) == 2.0f);
+
+    // The magnification multiplies the fitted scale.
+    CHECK(zoomedUiScale(1.0f, 150) == 1.5f);
+    CHECK(zoomedUiScale(2.0f, 150) == 3.0f);
+
+    // NEVER PAST THE CEILING EVERY OTHER SCALE OBEYS: beyond 4x the layout
+    // stops being a layout, whoever asked for it.
+    CHECK(zoomedUiScale(2.0f, 250) == cascade::gui::kUiScaleMax);
+    CHECK(zoomedUiScale(4.0f, 200) == cascade::gui::kUiScaleMax);
+
+    // ...and never below 1:1, whatever it is handed: a fitted scale of zero
+    // is a window that has not been measured yet.
+    CHECK(zoomedUiScale(0.0f, 100) == 1.0f);
+    CHECK(zoomedUiScale(-3.0f, 100) == 1.0f);
+
+    // OUT OF RANGE IS CLAMPED, NOT REFUSED: this value comes from a slider
+    // and from a config file a user may have edited by hand, and an
+    // unusable interface must not be reachable from either.
+    CHECK(clampUiZoomPercent(10) == cascade::gui::kUiZoomMinPercent);
+    CHECK(clampUiZoomPercent(9999) == cascade::gui::kUiZoomMaxPercent);
+    // ...and snapped to the step, so every size is one a key can return from.
+    CHECK(clampUiZoomPercent(137) == 125);
+    CHECK(clampUiZoomPercent(138) == 150);
+    CHECK(clampUiZoomPercent(175) == 175);
+
     return testSummary("test_ui_scale");
 }

@@ -281,6 +281,14 @@ struct AppConfig {
     // them without being asked. It is one control away.
     int mapTrailStyle = 0;
 
+    // THE USER'S OWN INTERFACE MAGNIFICATION, as a percentage of the scale
+    // FoxSDR fits to the screen. 100 is exactly what every build before
+    // 0.98.1-android.3 did, so a config that has never carried this field
+    // changes nothing. Clamped and snapped on load by
+    // gui::clampUiZoomPercent; an Android tester with glasses and a 14-inch
+    // tablet is why it exists (see gui/ui_scale.hpp).
+    int uiZoomPercent = 100;
+
     // --- The ADS-B radar scope ------------------------------------------------
     // A plan-position indicator - the receiver at the centre, range rings and
     // bearing ticks around it, aircraft plotted at their true range and

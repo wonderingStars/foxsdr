@@ -52,6 +52,48 @@ inline constexpr float kLayoutRefH = 720.0f;
 inline constexpr float kUiScaleMin = 1.0f;
 inline constexpr float kUiScaleMax = 4.0f;
 
+// -- THE USER'S OWN MAGNIFICATION -------------------------------------------
+//
+// THE REPORT (Android tester, through the owner, 2026-09-21): "Much of the
+// text is very small -even on a 14-inch display- and cannot be enlarged (I
+// wear glasses...)", beside "Adjusting settings via the touchscreen is very
+// difficult (even on a 14-inch screen)".
+//
+// Both follow from fittedUiScale's CAP. The fitted scale is the largest factor
+// at which the 1280x720 layout still fits, capped at the screen's own density
+// - and a 14-inch tablet at around 160 dpi reports a density of about 1.0, so
+// the cap holds the interface at desktop sizes on a screen held at arm's
+// length. The cap is right as a DEFAULT (it is what keeps the layout whole)
+// and wrong as a limit, because it answers a question about pixels when the
+// user's question is about eyes.
+//
+// So the user gets a multiplier on top of it. 100% is exactly today's
+// behaviour, which is what makes this safe to ship: a user who never touches
+// it sees no change at all.
+inline constexpr int kUiZoomMinPercent = 100;
+inline constexpr int kUiZoomMaxPercent = 250;
+inline constexpr int kUiZoomStepPercent = 25;
+
+inline int clampUiZoomPercent(int percent) {
+    if (percent < kUiZoomMinPercent) { return kUiZoomMinPercent; }
+    if (percent > kUiZoomMaxPercent) { return kUiZoomMaxPercent; }
+    // Snapped to the step, so a hand-edited config cannot produce a size no
+    // key in the interface can return from.
+    const int steps = (percent - kUiZoomMinPercent + kUiZoomStepPercent / 2) / kUiZoomStepPercent;
+    return kUiZoomMinPercent + steps * kUiZoomStepPercent;
+}
+
+// The fitted scale magnified by the user's choice, held inside the same
+// absolute ceiling every other scale obeys: past 4x the layout stops being a
+// layout, whoever asked for it.
+inline float zoomedUiScale(float fitted, int percent) {
+    if (!(fitted >= kUiScaleMin)) { fitted = kUiScaleMin; }  // NaN-safe
+    const float scaled = fitted * (static_cast<float>(clampUiZoomPercent(percent)) / 100.0f);
+    if (!(scaled <= kUiScaleMax)) { return kUiScaleMax; }
+    if (!(scaled >= kUiScaleMin)) { return kUiScaleMin; }
+    return scaled;
+}
+
 // FOXSDR_UI_SCALE, as getenv returns it: null when unset. Out-of-range and
 // unparseable values are REFUSED rather than clamped, and refused silently
 // enough that a typo cannot make the interface unusable - the caller falls

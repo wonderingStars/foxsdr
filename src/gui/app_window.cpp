@@ -1277,6 +1277,19 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
         style.FontSizeBase = cascade::gui::px(cascade::gui::fonts::kUiSize);
         cascade::core::diagLogf("ui scale x%.3f [FOXSDR_UI_SCALE]",
                                 static_cast<double>(forced));
+    } else if (const float zoomed = cascade::gui::zoomedUiScale(1.0f, uiZoomPercent_);
+               zoomed > 1.0f) {
+        // THE SAME SETTING, ON A DESKTOP. The fitted scale is 1:1 here (the
+        // layout was measured for this screen), so the user's percentage is
+        // the whole of it - and a 4K monitor with a reader's eyes behind it
+        // is not an Android-only pairing. Untouched at 100%, which is the
+        // default and what every existing config holds.
+        cascade::gui::setUiScale(zoomed);
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.ScaleAllSizes(zoomed);
+        style.FontSizeBase = cascade::gui::px(cascade::gui::fonts::kUiSize);
+        cascade::core::diagLogf("ui scale x%.3f [interface size %d%%]",
+                                static_cast<double>(zoomed), uiZoomPercent_);
     }
 #endif
 
@@ -1327,7 +1340,16 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
         float densityY = 1.0f;
         platform.contentScale(densityX, densityY);
         const char* scaleEnv = std::getenv("FOXSDR_UI_SCALE");
-        const float uiScale = cascade::gui::fittedUiScale(fbW, fbH, densityX, scaleEnv);
+        const float fitted = cascade::gui::fittedUiScale(fbW, fbH, densityX, scaleEnv);
+        // THE USER'S OWN MAGNIFICATION ON TOP OF THE FITTED SCALE. 100% is
+        // the fitted scale exactly, so a config without the field - every
+        // config written before this build - behaves as it always did. An
+        // explicit FOXSDR_UI_SCALE still wins outright: it is the developer
+        // override and must mean what it says.
+        const float uiScale =
+            (cascade::gui::uiScaleOverride(scaleEnv) > 0.0f)
+                ? fitted
+                : cascade::gui::zoomedUiScale(fitted, uiZoomPercent_);
         cascade::gui::setUiScale(uiScale);
         ImGuiStyle& style = ImGui::GetStyle();
         style.ScaleAllSizes(uiScale);
@@ -5740,6 +5762,30 @@ void AppWindow::drawDisplaySection() {
                              !bandPlan_.entries().empty();
     if (benchSection("Display", true, bandPlanOverlay_ ? "PLAN" : "PLAIN",
                      cascade::gui::theme::kPhosphor, planDrawing)) {
+        // INTERFACE SIZE, first in the section because it is the one control
+        // here that decides whether the others can be read at all. An Android
+        // tester, through the owner (2026-09-21): "Much of the text is very
+        // small -even on a 14-inch display- and cannot be enlarged (I wear
+        // glasses...)". gui/ui_scale.hpp says why the fitted scale alone could
+        // not answer that. 100% is the size every build before this one drew.
+        {
+            int pct = uiZoomPercent_;
+            if (ImGui::SliderInt("Interface size", &pct, cascade::gui::kUiZoomMinPercent,
+                                 cascade::gui::kUiZoomMaxPercent, "%d%%")) {
+                pct = cascade::gui::clampUiZoomPercent(pct);
+                if (pct != uiZoomPercent_) {
+                    uiZoomPercent_ = pct;
+                    applyUiZoom();
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Makes every word and key in FoxSDR larger, in steps of "
+                                  "%d%%. The layout is rebuilt as you let go, and the size "
+                                  "is remembered.",
+                                  cascade::gui::kUiZoomStepPercent);
+            }
+        }
+
         // One shared dB range drives both the spectrum axis and the waterfall
         // colormap so the two panels always agree on what "hot" means.
         const bool minChanged =
@@ -18904,6 +18950,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     mapTrails_ = cfg.mapTrails;
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
     mapTrailStyle_ = cfg.mapTrailStyle;
+    // Clamped and snapped on the way in, so a hand-edited config cannot ask
+    // for a size no key in the interface can return from.
+    uiZoomPercent_ = cascade::gui::clampUiZoomPercent(cfg.uiZoomPercent);
 
     // The radar scope. The MODE arrives off - startupState cleared it, because
     // the application starts on the bench whatever was showing at the last
@@ -19495,6 +19544,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
+    cfg.uiZoomPercent = uiZoomPercent_;
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
     cfg.demodScopeOpen = demodScopeOpen_;
@@ -19593,6 +19643,59 @@ void AppWindow::maybeSaveConfig(double nowS) {
         requestConfigSave(cur);
         lastChangeTimeS_ = -1.0;
     }
+}
+
+void AppWindow::applyUiZoom() {
+    // REBUILT FROM A DEFAULT STYLE, NOT MULTIPLIED AGAIN. ScaleAllSizes
+    // multiplies the CURRENT metrics in place, so applying a new factor to an
+    // already-scaled style compounds the two and no sequence of presses ever
+    // returns to the size it started at. A default-constructed style, the
+    // theme applied over it, then one multiplication is the only shape that
+    // makes this reversible - which is the whole point of a size control.
+    int fbW = 0;
+    int fbH = 0;
+    float densityX = 1.0f;
+    float densityY = 1.0f;
+    if (platform_ != nullptr) {
+        platform_->framebufferSize(fbW, fbH);
+        platform_->contentScale(densityX, densityY);
+    }
+    const char* scaleEnv = std::getenv("FOXSDR_UI_SCALE");
+    float fitted = 1.0f;
+#if defined(__ANDROID__)
+    fitted = cascade::gui::fittedUiScale(fbW, fbH, densityX, scaleEnv);
+#else
+    (void)fbW;
+    (void)fbH;
+    (void)densityX;
+    (void)densityY;
+#endif
+    if (cascade::gui::uiScaleOverride(scaleEnv) > 0.0f) {
+        // The developer override owns the scale outright; the setting is
+        // remembered but not applied, and the log says so rather than leaving
+        // a key that appears to do nothing.
+        cascade::core::diagLogf(
+            "interface size %d%% recorded but FOXSDR_UI_SCALE is set and wins",
+            uiZoomPercent_);
+        return;
+    }
+    const float scale = cascade::gui::zoomedUiScale(fitted, uiZoomPercent_);
+    cascade::gui::setUiScale(scale);
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = ImGuiStyle();
+    cascade::gui::theme::applyTheme();
+    style.ScaleAllSizes(scale);
+    style.FontSizeBase = cascade::gui::px(cascade::gui::fonts::kUiSize);
+#if defined(__ANDROID__)
+    // The touch metrics the phone build sets at startup, re-applied with the
+    // rest: a finger does not get smaller when the type gets bigger.
+    style.TouchExtraPadding = ImVec2(4.0f * scale, 6.0f * scale);
+    style.FramePadding = ImVec2(style.FramePadding.x, style.FramePadding.y + 4.0f * scale);
+    style.ScrollbarSize = 18.0f * scale;
+    style.GrabMinSize = 24.0f * scale;
+#endif
+    cascade::core::diagLogf("interface size %d%% - ui scale x%.3f", uiZoomPercent_,
+                            static_cast<double>(scale));
 }
 
 void AppWindow::saveConfigNow() {

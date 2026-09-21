@@ -288,6 +288,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "mapTrails", out.mapTrails);
     getBool(j, "mapTrailAltitudeColours", out.mapTrailAltitudeColours);
     getInt(j, "mapTrailStyle", out.mapTrailStyle);
+    getInt(j, "uiZoomPercent", out.uiZoomPercent);
     // CLAMPED ON LOAD, not trusted. The file is user-editable and an unknown
     // style would otherwise reach the draw loop and select nothing at all.
     if (out.mapTrailStyle < 0 || out.mapTrailStyle > 1) { out.mapTrailStyle = 0; }
@@ -672,6 +673,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
+    j["uiZoomPercent"] = cfg.uiZoomPercent;
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
     j["demodScopeOpen"] = cfg.demodScopeOpen;

@@ -1244,6 +1244,9 @@ private:
     void applyConfig(const cascade::core::AppConfig& cfg);
     cascade::core::AppConfig currentConfig();  // snapshot of the live state
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
+    // Rebuilds the style at the user's chosen interface size. See
+    // gui/ui_scale.hpp; called from the Display section and at startup.
+    void applyUiZoom();
     void saveConfigNow();               // clean-exit save (unconditional)
     // Writes telemetryCleanExit from the ANDROID lifecycle rather than from a
     // shutdown that a phone never runs - see core/background_exit.hpp.
@@ -2022,6 +2025,9 @@ private:
     std::string telemetryInstallId_;
     std::uint64_t telemetryLaunches_ = 0;
     std::uint64_t telemetryCrashes_ = 0;
+    // The user's interface magnification, as a percentage of the fitted
+    // scale. 100 is what every build before this one drew.
+    int uiZoomPercent_ = 100;
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
     // The visibility the lifecycle marker last acted on. Starts hidden: the
     // window is created hidden on purpose, so the first frame's transition to
