@@ -79,6 +79,7 @@
 #include "gui/present_grace.hpp"
 #include "gui/win_frame.hpp"
 #include "source/iq_file_source.hpp"
+#include "source/rsp_rows.hpp"
 
 #ifdef _WIN32
 // ShellExecuteW, for handing the verified installer to the shell so its
@@ -7571,6 +7572,28 @@ void AppWindow::scanNative() {
         nativeDevices_.push_back(std::move(d));
     }
     sdrPlayRowsFound_ = nativeDevices_.size() > beforeSdrPlay;
+
+    // ONE RADIO, ONE ROW (0.99.9, at the owner's word). An RSP reachable both
+    // natively and through the SDRplay API was offered TWICE, under two names,
+    // with nothing saying which to pick - and picking the native one gets the
+    // less capable of the two, because the API drives front-end hardware this
+    // application cannot. source/rsp_rows.hpp holds the rule and says why the
+    // hiding is as narrow as it is: a row hidden in error is a radio the user
+    // cannot select at all.
+    {
+        const std::size_t before = nativeDevices_.size();
+        nativeDevices_ = cascade::source::withoutDuplicateRsps(nativeDevices_);
+        const std::size_t hidden = before - nativeDevices_.size();
+        if (hidden > 0) {
+            // LOGGED, because a row that vanishes without explanation is the
+            // fault report this is trying to prevent, arriving from the other
+            // direction.
+            cascade::core::diagLogf(
+                "source: %zu native SDRplay row(s) hidden - the SDRplay API already lists "
+                "that radio, and it is the fuller driver of the two",
+                hidden);
+        }
+    }
     // ...AND WHAT TO SAY WHEN THERE IS NO RSP ROW BECAUSE THERE IS NO API.
     // Composed here rather than in the draw, because the draw runs sixty
     // times a second and this reads the process's load result. The sentence
