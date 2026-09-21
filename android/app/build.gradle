@@ -17,7 +17,12 @@ plugins {
 // the native CASCADE_VERSION_SUFFIX passed to CMake, so the app's own
 // versionName and the compiled-in versionString() the crash/usage reports
 // carry can never say two different alpha numbers.
-def foxsdrAndroidBuildNumber = 1
+// BUMPED TO 2 for the build that carries the first fixes from the tester
+// list of 2026-09-21 (the phantom "improperly shut down", and a first run
+// that no longer feeds all fourteen bundled decoders). The name and the
+// versionCode both have to move, or the tester cannot tell this build from
+// the one they already have and Android may refuse to install it over it.
+def foxsdrAndroidBuildNumber = 2
 // READ FROM THE ROOT CMakeLists.txt's `project(cascade VERSION ...)` line, so
 // the Android versionName can never drift from the version the native
 // library reports: the first alpha build was cut with a hand-copied '0.98.0'
@@ -94,8 +99,10 @@ android {
         targetSdk 34
         // Bumped from the stale 1 alongside the alpha versionName below - a
         // versionCode that never moved would let Android refuse this as an
-        // "older" build than nothing at all.
-        versionCode 2
+        // "older" build than nothing at all. 3 is the tester-fix build
+        // (-android.2); it moves with foxsdrAndroidBuildNumber above, and an
+        // in-place update over an installed alpha depends on it moving.
+        versionCode 3
         // NOT the plain product version any more. This is a SIDELOADABLE
         // ALPHA: every report it sends must be distinguishable from a
         // desktop 0.98.0 release, so the name carries the same
