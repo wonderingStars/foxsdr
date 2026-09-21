@@ -75,6 +75,7 @@
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
 #include "gui/tune_control.hpp"
+#include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/win_frame.hpp"
@@ -4282,26 +4283,44 @@ void AppWindow::drawToolbar() {
                                      "SAMPLE RATE", static_cast<float>(rate / 10.0e6),
                                      haveRate, rateTxt, "MS/s");
 
-        // FRAME TIME: the GUI's own, from ImGui's delta, against a 16.7 ms
-        // budget - so full scale is "one frame's worth of 60 Hz". It is a
-        // real measurement of a real thing, and it is NOT called PROCESSOR
-        // because it is not the DSP load and must not be read as one.
-        const float dt = ImGui::GetIO().DeltaTime;
-        const bool haveDt = dt > 0.0f && dt < 1.0f;
-        // THE NEEDLE IS LIVE, THE TEXT IS THE MEAN OF THE LAST HALF SECOND
-        // (0.99.4, gui/readout_hold.hpp). Printed per frame it changed sixty
-        // times a second and could not be read; the mean is also the more
-        // honest figure, since any one frame's delta is mostly scheduling
-        // noise.
-        if (haveDt) { frameTimeHold_.add(ImGui::GetTime(), static_cast<double>(dt)); }
-        const bool haveShown = haveDt && frameTimeHold_.have();
-        const double shownDt = frameTimeHold_.value();
-        char dtTxt[32];
-        std::snprintf(dtTxt, sizeof(dtTxt), haveShown ? "%.0f %% - %.1f ms" : "--",
-                      shownDt * 1000.0 / 16.7 * 100.0, shownDt * 1000.0);
+        // VOLUME: what is actually coming out of the speakers (0.99.11, at
+        // the owner's request - this meter used to read FRAME TIME, which is
+        // an honest measurement of the wrong thing to give a permanent meter
+        // on a receiver; frame time is still measured and still reported in
+        // the status column, it just does not own a meter any more).
+        //
+        // THE LEVEL IS TAKEN FROM THE FINISHED AUDIO - pipeline::scopeAudio,
+        // which sits below the plugin audio replacement and below the hard
+        // mute, so a decoder playing through the host's audio capability
+        // moves this needle and the hiss it replaced does not - and then the
+        // volume control is applied, because a meter that ignored the knob
+        // would sit half way up a silent set. gui/volume_meter.hpp carries
+        // every decision and tests/test_volume_meter.cpp drives them.
+        float tapPeak = 0.0f;
+        bool haveAudio = false;
+        {
+            // A SHORT WINDOW, READ ONCE A FRAME. 2048 samples at 48 kHz is
+            // 43 ms - long enough that a syllable cannot fall between two
+            // frames, short enough that the needle is not averaging over
+            // something the user has already stopped hearing.
+            constexpr std::size_t kWindow = 2048;
+            static float window[kWindow];
+            const std::size_t got = pipeline_.scopeAudio().snapshot(window, kWindow);
+            if (got > 0) {
+                haveAudio = true;
+                tapPeak = cascade::gui::audioPeak(window, got);
+            }
+        }
+        const float audible = cascade::gui::audibleAmplitude(
+            tapPeak, volume_, pipeline_.audioMuted());
+        const float target = cascade::gui::meterFraction(audible);
+        volumeNeedle_ = cascade::gui::meterBallistics(volumeNeedle_, target,
+                                                      ImGui::GetIO().DeltaTime);
+        char volTxt[32];
+        cascade::gui::formatVolumeText(volTxt, sizeof(volTxt), audible, haveAudio);
         cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), kMeterW, meterH,
-                                     "FRAME TIME", dt * 1000.0f / 16.7f, haveDt, dtTxt,
-                                     "ms");
+                                     "VOLUME", volumeNeedle_, haveAudio, volTxt,
+                                     "dB");
     }
 
     // Beside the frequency, because the banner is ABOUT the frequency: it

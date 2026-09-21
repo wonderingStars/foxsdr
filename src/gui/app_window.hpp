@@ -2076,6 +2076,9 @@ private:
     std::string telemetryInstallId_;
     std::uint64_t telemetryLaunches_ = 0;
     std::uint64_t telemetryCrashes_ = 0;
+    // The VOLUME meter's needle, carried between frames so it can fall
+    // gently rather than follow every syllable - see gui/volume_meter.hpp.
+    float volumeNeedle_ = 0.0f;
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
     double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
     // Time in the current mode. A plain "since" mark cannot be used here: the
