@@ -22,7 +22,7 @@ plugins {
 // that no longer feeds all fourteen bundled decoders). The name and the
 // versionCode both have to move, or the tester cannot tell this build from
 // the one they already have and Android may refuse to install it over it.
-def foxsdrAndroidBuildNumber = 3
+def foxsdrAndroidBuildNumber = 4
 // READ FROM THE ROOT CMakeLists.txt's `project(cascade VERSION ...)` line, so
 // the Android versionName can never drift from the version the native
 // library reports: the first alpha build was cut with a hand-copied '0.98.0'
@@ -102,7 +102,7 @@ android {
         // "older" build than nothing at all. 3 is the tester-fix build
         // (-android.2); it moves with foxsdrAndroidBuildNumber above, and an
         // in-place update over an installed alpha depends on it moving.
-        versionCode 4
+        versionCode 5
         // NOT the plain product version any more. This is a SIDELOADABLE
         // ALPHA: every report it sends must be distinguishable from a
         // desktop 0.98.0 release, so the name carries the same

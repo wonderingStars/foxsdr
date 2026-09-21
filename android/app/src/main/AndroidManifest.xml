@@ -31,6 +31,45 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+      THE DEVICE'S OWN POSITION, for the receiver position and nothing else.
+
+      WHY IT IS HERE AT ALL. FoxSDR needs to know where the antenna is: a
+      satellite pass, an aircraft's bearing, the coverage map and the radar
+      scope are all computed from it. On the desktop that is typed in, or read
+      from a GPS receiver on a serial port. A tablet has neither a keyboard
+      anybody enjoys nor a serial port, and it has a GNSS chip - so the tester
+      who asked for this is right that the device should be able to answer.
+
+      WHEN IT IS ASKED FOR: when the user presses "Use this device's position",
+      and never before. Nothing requests it at startup, nothing requests it in
+      the background, and a refusal is reported in the interface rather than
+      retried. See android/app/src/main/java/com/foxsdr/app/Loc.java.
+
+      WHAT HAPPENS TO THE POSITION: it is applied as the receiver position and
+      persisted in the application's own config, exactly as a typed one is. It
+      is NEVER logged (core/device_location.hpp states that rule and
+      tests/test_device_location.cpp searches the log ring for the digits) and
+      it is NEVER transmitted - PRIVACY.md's field-by-field inventory of both
+      payloads does not contain it, and tests/test_telemetry.cpp holds them to
+      that inventory.
+
+      COARSE IS DECLARED BESIDE FINE because Android 12 and later let the user
+      grant approximate location instead; a receiver position from wi-fi is
+      rough but usable, and refusing to accept it would turn "approximate" into
+      "nothing at all".
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!--
+      Declared required="false" for the same reason the USB host feature is:
+      a device with no GNSS receiver must still be able to install this. The
+      position can always be typed in, and every other part of the application
+      works without one.
+    -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <!--
       USB host, for the radios. Declared required="false" ON PURPOSE: a phone
       without USB host support must still be able to install this, because the
       signal generator, recorded I/Q files and (later) a network receiver all

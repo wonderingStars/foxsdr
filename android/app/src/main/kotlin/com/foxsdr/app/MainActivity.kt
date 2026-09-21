@@ -77,6 +77,20 @@ class MainActivity : NativeActivity() {
         Usb.onResume(this)
     }
 
+    // THE ONE PERMISSION PROMPT THIS APPLICATION RAISES, and the only place
+    // its answer can arrive. Android delivers the result to the activity, so
+    // Loc cannot hear it on its own; without this forwarding a user who
+    // tapped "Allow" would watch the control do nothing at all, because the
+    // request that was waiting for the grant would never be resumed.
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        Loc.onPermissionResult(requestCode, permissions as Array<String>, grantResults)
+    }
+
     // BEFORE super.onDestroy(), deliberately. NativeActivity's own onDestroy
     // is what tears the native side down and waits for its thread, so this is
     // the last moment at which the library is certainly still loaded and the
@@ -86,6 +100,11 @@ class MainActivity : NativeActivity() {
     // interface claim lives as long as the last descriptor sharing it.
     override fun onDestroy() {
         Usb.stop(this)
+        // A location request outstanding at the moment the activity goes is a
+        // GNSS chip left powered on. Native code cancels its own request on
+        // the way down too; this is the belt for the case where the process
+        // is torn down without that path running.
+        Loc.stop()
         super.onDestroy()
     }
 

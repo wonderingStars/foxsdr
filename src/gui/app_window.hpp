@@ -30,6 +30,7 @@
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
+#include "core/device_location.hpp"
 #include "core/gps_reader.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
@@ -840,12 +841,23 @@ private:
     // read from the machine only when its drop-down is opened, never per
     // frame. See the definition for what the row promises.
     void drawGpsPositionControl();
+    // The same row on a platform that knows its own position: one key, no
+    // port and no baud, because a tablet has neither. Drawn INSTEAD of the
+    // serial row (not beside it) wherever core::platformHasDeviceLocation()
+    // is true - a box asking for "COM3" on a tablet is a control that cannot
+    // work, which is what the Android tester was given.
+    void drawDeviceLocationControl();
     // ONCE A FRAME, and once more after the last frame: takes the fix the
     // reader accepted, if there is one, and hands it to applyReceiverPosition
     // - the only door a position enters by. The single-shot takeFix() is
     // what keeps a 60 Hz poll from re-applying it (and resetting the
     // coverage map) sixty times a second.
     void pollGpsReader();
+    // The device-location half of the same job, and it also drives that
+    // provider's clock: the timeout is measured against the frame clock
+    // rather than a thread of its own, so nothing sleeps and nothing has to
+    // be woken to give up. A no-op where there is no such provider.
+    void pollDeviceLocation(double nowS);
     // WHAT "SET RX HERE" ACTUALLY DOES, as a function, because there are now
     // THREE ways to say where the antenna is: the toolbar's fields, the
     // satellites window's coordinate cells, and a click on that window's map
@@ -2325,6 +2337,13 @@ private:
     // predicate, and is shown rather than swallowed precisely so a day it
     // does happen is visible.
     cascade::core::GpsReader gpsReader_;
+    // --- and the position the DEVICE itself knows (Android) -----------------
+    // A tablet has a GNSS chip and an operating system that already talks to
+    // it, and no serial port to offer the reader above. On a platform where
+    // core::platformHasDeviceLocation() is true this is what the control
+    // drives instead; on every other platform it is constructed, never
+    // started, and answers Unavailable. See core/device_location.hpp.
+    cascade::core::DeviceLocation deviceLocation_;
     std::string gpsPort_;
     int gpsBaud_ = cascade::core::kDefaultGpsBaud;
     char gpsPortInput_[cascade::core::kMaxSerialPortNameChars + 1] = "";

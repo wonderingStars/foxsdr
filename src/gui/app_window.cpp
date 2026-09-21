@@ -1098,6 +1098,10 @@ AppWindow::~AppWindow() {
     // on its own, not joined, so a Bluetooth port whose puck is off cannot
     // hold this destructor for the length of an RFCOMM connect attempt.
     gpsReader_.stop();
+    // And the device's own location provider, which owns no thread of its
+    // own but does own a live request on the platform - a GNSS chip left
+    // powered on is the thing this cancels.
+    deviceLocation_.stop();
 
     // And the same again for the lazy device SCAN, which blocks in
     // SoapySDR::Device::enumerate() and is the likelier of the two to be in
@@ -1630,6 +1634,10 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
         // the GUI thread, through the one door. Before the UI is drawn so the
         // frame that shows "position set" is the frame the scope has it.
         pollGpsReader();
+        // And the device's own position, on the same frame and through the
+        // same door. It is handed the frame clock because that is what its
+        // timeout is measured against - see core/device_location.hpp.
+        pollDeviceLocation(platform.time());
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
         // flight. Everything else about the browser is unchanged — this is
@@ -1931,6 +1939,14 @@ int AppWindow::run(int frames, PlatformWindow& platform) {
     // on disk if the reader had it, whichever frame it arrived on.
     gpsReader_.stop();
     pollGpsReader();
+    // The same two steps for the device's own position: stop the request,
+    // then poll once, because a fix that landed during the last frame (or
+    // that the stop just let through - one already taken is kept) has not
+    // been applied yet, and the save below is what persists it. The clock
+    // only drives the timeout, and a stopped provider has none, so the
+    // last frame time is exact here rather than approximate.
+    deviceLocation_.stop();
+    pollDeviceLocation(platform.time());
 
     // Closing the window mid-take finalizes both recordings cleanly (same
     // contract as the toolbar Stop): taps out, then headers patched — before
@@ -10882,7 +10898,12 @@ void AppWindow::drawReceiverPositionOffers() {
     // table of the machine's ports - a rail row already the least roomy
     // surface this appears on (drawGpsPositionControl's own comment) is not
     // getting wider for a feature most of its readings never need.
-    benchHint("All serial-port settings are also under SYSTEM > Serial ports.");
+    // ...AND NOT ON A PLATFORM THAT HAS NO SERIAL PORTS. Pointing an
+    // Android tablet at a section about ports it does not have is the same
+    // mistake as the "COM3" field this row now replaces there.
+    if constexpr (!cascade::core::platformHasDeviceLocation()) {
+        benchHint("All serial-port settings are also under SYSTEM > Serial ports.");
+    }
 }
 
 // THE POSITION FROM A GPS RECEIVER, the fourth way to say where the antenna
@@ -10923,6 +10944,18 @@ void AppWindow::drawReceiverPositionOffers() {
 // searches the log ring for the digits).
 void AppWindow::drawGpsPositionControl() {
     using cascade::core::GpsReader;
+
+    // A PLATFORM THAT KNOWS WHERE IT IS DOES NOT GET ASKED FOR A PORT.
+    // Everything below this line - the port field with its "COM3" hint, the
+    // baud combo, the port drop-down - is furniture for a receiver plugged
+    // into a serial port, and an Android tablet has none of those things. It
+    // has a GNSS chip instead, and drawing both would offer a user two ways
+    // to do one thing, one of which cannot work on their device.
+    if constexpr (cascade::core::platformHasDeviceLocation()) {
+        drawDeviceLocationControl();
+        return;
+    }
+
     const bool listening = gpsReader_.listening();
 
     benchHint("or read it from a GPS receiver on a serial port:");
@@ -11055,6 +11088,92 @@ void AppWindow::drawGpsPositionControl() {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", gpsRefusal_.c_str());
         ImGui::PopStyleColor();
+    }
+}
+
+// THE SAME ROW ON A DEVICE THAT KNOWS WHERE IT IS: one key.
+//
+// The request this exists for (owner, 2026-09-21): "can you look at using the
+// android tablets GPS in the software". What that tablet was offered instead
+// was the serial row above, whose first control asks for a port name and
+// suggests COM3.
+//
+// The whole policy is in core/device_location.hpp - what counts as a
+// position, which provider answered, when to give up - so this draws two
+// things and decides nothing: the key (or its Stop), and the one status line
+// that provider's own formatter produced. The position itself never reaches
+// the screen from here; it goes through applyReceiverPosition like a typed
+// one and appears in the fields above.
+void AppWindow::drawDeviceLocationControl() {
+    using cascade::core::DeviceLocation;
+    const bool listening = deviceLocation_.listening();
+
+    benchHint("or take it from this device's own position:");
+
+    if (listening) {
+        if (ImGui::Button("Stop", ImVec2(-1.0f, 0.0f))) { deviceLocation_.stop(); }
+    } else {
+        if (ImGui::Button("Use this device's position", ImVec2(-1.0f, 0.0f))) {
+            gpsRefusal_.clear();
+            deviceLocation_.start();
+        }
+        if (ImGui::IsItemHovered()) {
+            // Says what it will ask for BEFORE it asks. An application that
+            // wants your location should be able to explain why in one
+            // sentence, and this one's reason is the whole of it.
+            ImGui::SetTooltip(
+                "Asks Android for this device's position and sets the receiver's position\n"
+                "from it, exactly as if it had been typed. Android will ask your permission\n"
+                "the first time. Waits up to %.0f s, takes ONE position and then stops - the\n"
+                "location is not followed, and it is never written to the diagnostic log or\n"
+                "sent anywhere.",
+                DeviceLocation::kDefaultTimeoutS);
+        }
+    }
+
+    const DeviceLocation::Status status = deviceLocation_.status();
+    const std::string line = cascade::core::deviceLocationStatusLine(status);
+    if (!line.empty()) {
+        const bool trouble = status.state == DeviceLocation::State::Failed ||
+                             status.state == DeviceLocation::State::Denied ||
+                             status.state == DeviceLocation::State::Unavailable ||
+                             status.state == DeviceLocation::State::TimedOut;
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              trouble ? cascade::gui::theme::warning()
+                                      : cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        ImGui::TextWrapped("%s", line.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (!gpsRefusal_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", gpsRefusal_.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+// The device-location half of pollGpsReader, and the clock the provider's
+// timeout is measured against. Both halves end at the SAME door
+// (applyReceiverPosition) for the same reason the serial one does.
+void AppWindow::pollDeviceLocation(double nowS) {
+    if constexpr (!cascade::core::platformHasDeviceLocation()) {
+        return;
+    } else {
+        deviceLocation_.tick(nowS);
+        cascade::core::DeviceLocation::Fix fix;
+        if (!deviceLocation_.takeFix(fix)) { return; }
+        if (applyReceiverPosition(fix.latDeg, fix.lonDeg)) {
+            gpsRefusal_.clear();
+            gpsRowReveal_ = true;
+            // A FACT, NOT A COORDINATE - the same rule the provider itself
+            // follows (core/device_location.hpp), because this line rides
+            // inside an uploaded crash report too.
+            cascade::core::diagLogf("location: applied as the receiver position");
+        } else {
+            gpsRefusal_ =
+                "The position was refused by the position rule (off the globe, or 0,0).";
+            cascade::core::diagLogf(
+                "location: applyReceiverPosition refused the device's position");
+        }
     }
 }
 

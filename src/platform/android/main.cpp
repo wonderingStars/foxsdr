@@ -39,6 +39,7 @@
 #include "core/version.hpp"
 #include "gui/app_window.hpp"
 #include "gui/platform_window_android.hpp"
+#include "core/device_location.hpp"
 #include "usb/usb_android_jni.hpp"
 
 namespace {
@@ -165,6 +166,12 @@ extern "C" void android_main(struct android_app* app) {
     // the next one anyway.
     if (app != nullptr && app->activity != nullptr) {
         cascade::usb::androidUsbInit(app->activity->vm, app->activity->clazz);
+        // AND THE DEVICE'S OWN POSITION, bound the same way and for the same
+        // reason: com.foxsdr.app.Loc's native methods must exist before Java
+        // is ever asked to call one. Binding is all this does - nothing is
+        // asked of the location service, and no permission is requested,
+        // until the user presses the key. See core/device_location.hpp.
+        cascade::core::androidLocationInit(app->activity->vm, app->activity->clazz);
     }
 
     // THE USER'S STORED PREFERENCE, read before anything is armed - the same
