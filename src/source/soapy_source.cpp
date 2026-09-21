@@ -10,6 +10,7 @@
 #include <SoapySDR/Constants.h>
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Modules.hpp>
+#include <SoapySDR/Registry.hpp>
 #include <SoapySDR/Version.hpp>
 #include <SoapySDR/Errors.hpp>
 #include <SoapySDR/Formats.h>
@@ -477,6 +478,36 @@ bool SoapySource::anyDeviceOpen() {
 }
 
 std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
+    return enumerateInProcess(std::string());
+}
+
+std::vector<std::string> SoapySource::driverNames() {
+    if (!runtimeAvailable()) { return {}; }
+    // LOADED, THEN LISTED, and no further. loadModules() brings each module's
+    // registration into this process and listFindFunctions() reads the names
+    // off the registry; neither calls a find function, which is where the
+    // enumeration faults live. A module that faults as it LOADS still takes
+    // this process down - it is a child, which is the point.
+    std::vector<std::string> out;
+    const bool completed = guardedVendorCall([&out]() noexcept {
+        try {
+            SoapySDR::loadModules();
+            for (const auto& entry : SoapySDR::Registry::listFindFunctions()) {
+                if (!entry.first.empty()) { out.push_back(entry.first); }
+            }
+        } catch (...) {
+            out.clear();
+        }
+    });
+    if (!completed) {
+        out.clear();
+        core::diagWarnf("soapy: driver list faulted (code 0x%08X)",
+                        static_cast<unsigned>(vendorGuardLastFaultCode()));
+    }
+    return out;
+}
+
+std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess(const std::string& driver) {
     std::vector<SoapyDeviceInfo> out;
     if (!runtimeAvailable()) { return out; }  // no runtime: no devices, no crash
 
@@ -510,13 +541,19 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
     // function is the CHILD's job and not the application's.
     struct Walk {
         std::vector<SoapyDeviceInfo>* out;
-    } walk{&out};
+        const std::string* driver;
+    } walk{&out, &driver};
 
     const bool completed = callGuardingVendorFaults(
         [](void* p) noexcept {
             auto* w = static_cast<Walk*>(p);
             try {
-                for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate()) {
+                // WITH the driver key, only that module's find function runs;
+                // without it, every one of them does. Same call either way, so
+                // the guard, the catch and the row building below are shared.
+                SoapySDR::Kwargs ask;
+                if (!w->driver->empty()) { ask["driver"] = *w->driver; }
+                for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate(ask)) {
                     SoapyDeviceInfo info;
                     // Modules put a display string under "label"; fall back to
                     // the driver key so the menu never shows a blank row.
@@ -550,9 +587,10 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
         // cannot be opened. Empty plus a logged reason is the honest answer.
         out.clear();
         core::diagWarnf(
-            "soapy: enumerate faulted inside a vendor module (code 0x%08X) - "
+            "soapy: enumerate faulted inside a vendor module (code 0x%08X)%s%s - "
             "no devices listed; a driver install on this machine is faulty",
-            static_cast<unsigned>(vendorGuardLastFaultCode()));
+            static_cast<unsigned>(vendorGuardLastFaultCode()),
+            driver.empty() ? "" : " while probing ", driver.c_str());
     }
     return out;
 }

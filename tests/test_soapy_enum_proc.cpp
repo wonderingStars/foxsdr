@@ -170,6 +170,24 @@ bool wasGivenCrashDir(int argc, char** argv) {
     return false;
 }
 
+// The driver this child was restricted to, or empty for the whole bus.
+std::string driverArg(int argc, char** argv) {
+    const char* flag = "--driver=";
+    const std::size_t n = std::strlen(flag);
+    for (int i = 1; i < argc; ++i) {
+        if (std::strncmp(argv[i], flag, n) == 0) { return std::string(argv[i] + n); }
+    }
+    return std::string();
+}
+
+// True when this child was asked for driver NAMES rather than devices.
+bool askedToListDrivers(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--list-drivers") == 0) { return true; }
+    }
+    return false;
+}
+
 #ifdef _WIN32
 std::wstring selfExePathW() {
     std::wstring buf(1024, L'\0');
@@ -232,6 +250,26 @@ int fakeHelper(int argc, char** argv) {
 #else
         return 20;
 #endif
+    }
+    if (mode == "onebaddriver") {
+        // THE MACHINE IN FIELD REPORT 650B88A1, faked: asked for the whole
+        // bus it dies EVERY time (so the retry cannot help), it can still
+        // list its drivers, and of the two, one faults and one answers.
+        const std::string driver = driverArg(argc, argv);
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"good\",\"bad\"],\"devices\":[]}\n",
+                        gotCrashDir ? "true" : "false");
+            return 0;
+        }
+        if (driver == "good") {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"devices\":[{\"label\":\"good radio\",\"args\":\"driver=good,serial=9\"}]}\n",
+                        gotCrashDir ? "true" : "false");
+            return 0;
+        }
+        // "bad", and the whole-bus probe, die the same way the field does.
+        return 7;
     }
     if (mode == "garbage") {
         std::printf("this is not json at all\n");
@@ -802,6 +840,62 @@ int main(int argc, char** argv) {
         const EnumResult r = enumerateIsolated(o);
         CHECK(r.outcome == EnumOutcome::Malformed);
         CHECK(r.devices.empty());
+    }
+
+    // --- ONE BAD DRIVER MUST NOT HIDE THE OTHERS --------------------------
+    //
+    // Field report 650B88A1 (0.99.6, Windows 10.0.26200, and 0.96.3 before
+    // it): a libusb-based module faulted on EVERY probe of one machine, so
+    // both children died and the Source menu told a user with a radio
+    // plugged in that there were no radios at all. A retry cannot help a
+    // fault that happens every time; asking each driver separately can.
+    {
+        setMode("onebaddriver");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        // The working driver's radio is listed, which is the whole point.
+        const Rows wantRows{{"good radio", "driver=good,serial=9"}};
+        const std::vector<std::string> wantAsked{"good", "bad"};
+        const std::vector<std::string> wantFaulted{"bad"};
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(rowsOf(r) == wantRows);
+        CHECK(r.sweptPerDriver);
+        CHECK(r.sweptDrivers == wantAsked);
+        // The faulting one is NAMED - the whole-bus death never could be.
+        CHECK(r.faultedDrivers == wantFaulted);
+        // The whole-bus probe still ran exactly twice; the sweep counts its
+        // own children (the listing, then one per driver).
+        CHECK(r.attempts == 2);
+        CHECK(r.sweepChildren == 3);
+        // Every death is still counted: two whole-bus, one driver.
+        CHECK(r.childDeaths == 3);
+    }
+    {
+        // A MACHINE WHERE EVEN THE DRIVER LIST DIES is left exactly where it
+        // was: no devices, ChildDied, and no pretence that a sweep happened.
+        setMode("die");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        CHECK(r.outcome == EnumOutcome::ChildDied);
+        CHECK(r.devices.empty());
+        CHECK(!r.sweptPerDriver);
+        CHECK(r.faultedDrivers.empty());
+    }
+    {
+        // A HEALTHY MACHINE NEVER PAYS FOR ANY OF THIS: one child, no sweep.
+        setMode("ok");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(r.attempts == 1);
+        CHECK(r.sweepChildren == 0);
+        CHECK(!r.sweptPerDriver);
     }
 
     // --- ChildDied: the fault this file exists for, contained ---------------

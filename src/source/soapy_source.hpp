@@ -164,6 +164,23 @@ public:
     // named so that a call site reads as the deliberate choice it has to be.
     static std::vector<SoapyDeviceInfo> enumerateInProcess();
 
+    // THE SAME WALK, RESTRICTED TO ONE DRIVER, which is how a machine with one
+    // faulting driver still gets a device list. Field report 650B88A1 (0.99.6,
+    // and 0.96.3 before it): a libusb-based module faulted on every probe, so
+    // every whole-bus child died and the user was told they had no radio at
+    // all. Asking each driver in its own child costs one process per driver on
+    // that machine and nothing on every other one, because it only runs after
+    // the whole-bus probe has died - see source/soapy_enum_proc.hpp.
+    //
+    // `driver` is a name from driverNames(). Empty means the unrestricted walk.
+    static std::vector<SoapyDeviceInfo> enumerateInProcess(const std::string& driver);
+
+    // The driver names this machine has modules for, loaded but not probed:
+    // listing them touches each module's registration, never its find
+    // function, which is where the faults in the field reports live. Empty
+    // when the runtime is missing or the load itself faulted.
+    static std::vector<std::string> driverNames();
+
     // False when SoapySDR.dll cannot be loaded (missing or broken install).
     // The DLL is delay-loaded, so the app runs fine without it — only
     // hardware sources are unavailable. Every Soapy entry point checks this

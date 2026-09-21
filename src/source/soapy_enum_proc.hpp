@@ -186,6 +186,29 @@ struct EnumResult {
     // separate parent processes, every parent surviving.
     int childDeaths = 0;
     unsigned long deathExitCode = 0;  // the most recent death's code
+
+    // THE PER-DRIVER SWEEP: set when the whole-bus probe died on every attempt
+    // and each driver was then asked in a child of its own. Field report
+    // 650B88A1 (0.99.6): a libusb module faulted on every probe of a machine,
+    // deterministically, so the retry could not help and the user was told
+    // there were no radios. The sweep is the answer to "one bad driver must
+    // not hide the others"; it runs on no other path, so a healthy machine
+    // never pays for it.
+    bool sweptPerDriver = false;
+
+    // Children started BY the sweep - the driver listing plus one per driver.
+    // Kept apart from `attempts`, which stays the count of whole-bus probes so
+    // that "the retry ran twice" keeps meaning exactly that.
+    int sweepChildren = 0;
+
+    // The drivers asked, and the ones whose own child died. `faultedDrivers`
+    // is what a support conversation needs: it names the module to uninstall
+    // or update, which no exit code ever could.
+    std::vector<std::string> sweptDrivers;
+    std::vector<std::string> faultedDrivers;
+
+    // Only ever filled by a --list-drivers child; see kKeyDrivers.
+    std::vector<std::string> drivers;
 };
 
 struct EnumOptions {
@@ -225,6 +248,12 @@ struct EnumOptions {
     // Path to the helper executable. Empty means resolve it (see
     // enumerateHelperPath).
     std::string helperPath;
+
+    // ASK EACH DRIVER SEPARATELY once the whole-bus probe has died on every
+    // attempt. Off in the tests that measure the plain retry behaviour, and on
+    // everywhere else: the alternative on a machine whose driver faults every
+    // time is an empty Source menu, which is what the field reported.
+    bool perDriverSweep = true;
 
     // Run the walk in THIS process when no helper can be started.
     //
@@ -292,7 +321,11 @@ void armEnumerateHelperProcess(const char* crashDir);
 // actually absorb, and absorbing it yields a clean empty list and exit 0 -
 // which the parent can tell apart from a death. Free, and strictly more
 // information than a corpse.
-int runEnumerateHelper(const char* crashDir = nullptr);
+// `driver` restricts the walk to one driver name (null or empty: the whole
+// bus). `listDrivers` makes the child answer with the machine's driver NAMES
+// and no devices, which is how the parent knows what to sweep.
+int runEnumerateHelper(const char* crashDir = nullptr, const char* driver = nullptr,
+                       bool listDrivers = false);
 
 // The child's ONE serialisation step, as a named function: everything between
 // "the walk produced these devices" and "this is the line on stdout". It
@@ -308,7 +341,8 @@ int runEnumerateHelper(const char* crashDir = nullptr);
 std::string enumerationReportJson(bool runtimeAvailable,
                                   unsigned long long guardedCalls,
                                   bool captureArmed,
-                                  const std::vector<SoapyDeviceInfo>& devices);
+                                  const std::vector<SoapyDeviceInfo>& devices,
+                                  const std::vector<std::string>& drivers = {});
 
 }  // namespace cascade::source
 

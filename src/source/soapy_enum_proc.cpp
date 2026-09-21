@@ -50,6 +50,7 @@ constexpr const char* kKeyCapture = "capture";
 constexpr const char* kKeyDevices = "devices";
 constexpr const char* kKeyLabel = "label";
 constexpr const char* kKeyArgs = "args";
+constexpr const char* kKeyDrivers = "drivers";
 
 #ifdef _WIN32
 
@@ -118,6 +119,14 @@ bool parseOneLine(const std::string& text, EnumResult& out) {
     out.childCaptureArmed =
         j.contains(kKeyCapture) && j[kKeyCapture].is_boolean() && j[kKeyCapture].get<bool>();
 
+    if (j.contains(kKeyDrivers) && j[kKeyDrivers].is_array()) {
+        for (const auto& d : j[kKeyDrivers]) {
+            if (d.is_string() && !d.get<std::string>().empty()) {
+                out.drivers.push_back(d.get<std::string>());
+            }
+        }
+    }
+
     for (const auto& e : j[kKeyDevices]) {
         if (!e.is_object()) { return false; }
         SoapyDeviceInfo info;
@@ -154,6 +163,7 @@ bool parseChildOutput(const std::string& text, EnumResult& out) {
             EnumResult candidate;
             if (parseOneLine(line, candidate)) {
                 out.devices = std::move(candidate.devices);
+                out.drivers = std::move(candidate.drivers);
                 out.guardedCalls = candidate.guardedCalls;
                 out.childRuntimeAvailable = candidate.childRuntimeAvailable;
                 out.childCaptureArmed = candidate.childCaptureArmed;
@@ -172,7 +182,8 @@ bool parseChildOutput(const std::string& text, EnumResult& out) {
 // and is the parent's already-armed capture directory - see CRASH CAPTURE IN
 // THE CHILD in the header.
 void runOneChild(const std::string& helper, unsigned long timeoutMs,
-                 const std::string& crashDir, EnumResult& out) {
+                 const std::string& crashDir, EnumResult& out,
+                 const std::string& extraArg = std::string()) {
 #ifdef _WIN32
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
@@ -272,6 +283,9 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
         while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/')) { dir.pop_back(); }
         if (!dir.empty()) { cmd += L" \"--crash-dir=" + widen(dir) + L"\""; }
     }
+    // One more flag, quoted the same way: --list-drivers, or --driver=<name>
+    // where the name comes from a child of ours and never from a user.
+    if (!extraArg.empty()) { cmd += L" \"" + widen(extraArg) + L"\""; }
     cmd.push_back(L'\0');
 
     // A JOB THE CHILD CANNOT OUTLIVE, and this is not belt-and-braces.
@@ -407,6 +421,7 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     argStorage.push_back(helper);
     argStorage.push_back("--enumerate-json");
     if (!crashDir.empty()) { argStorage.push_back("--crash-dir=" + crashDir); }
+    if (!extraArg.empty()) { argStorage.push_back(extraArg); }
     std::vector<char*> argv;
     argv.reserve(argStorage.size() + 1);
     for (std::string& s : argStorage) { argv.push_back(s.data()); }
@@ -563,6 +578,80 @@ std::string enumerateHelperPath() {
 #endif
 }
 
+// ONE CHILD PER DRIVER, and only once the whole-bus probe has died every time.
+//
+// Field report 650B88A1 (0.99.6 on Windows 10.0.26200, and 0.96.3 before it):
+// a libusb-based module faulted during discovery on EVERY probe of one
+// machine, so both children died, the scan listed nothing, and the Source
+// menu told a user with a radio plugged in that there were no radios. The
+// retry cannot help a fault that is deterministic - only asking the other
+// drivers separately can.
+//
+// The list of drivers comes from a child too (loading a module can fault as
+// surely as probing with it), so a machine where even that dies is left
+// exactly where it was before: no devices, and a logged reason.
+//
+// Each driver gets ONE child: a driver that faults faults every time here by
+// construction, and this path is already the slow one.
+void sweepEachDriver(const std::string& helper, const EnumOptions& options,
+                     const std::string& crashDir, EnumResult& result) {
+    EnumResult listing;
+    runOneChild(helper, options.timeoutMs, crashDir, listing, "--list-drivers");
+    result.sweepChildren += listing.attempts;
+    if (listing.outcome != EnumOutcome::Ok || listing.drivers.empty()) {
+        core::diagWarnf(
+            "soapy: every whole-bus probe died and the driver list could not be read "
+            "either - no devices listed this scan");
+        return;
+    }
+
+    result.sweptPerDriver = true;
+    result.sweptDrivers = listing.drivers;
+    std::vector<SoapyDeviceInfo> found;
+    for (const std::string& driver : listing.drivers) {
+        EnumResult one;
+        runOneChild(helper, options.timeoutMs, crashDir, one, "--driver=" + driver);
+        result.sweepChildren += one.attempts;
+        if (one.outcome == EnumOutcome::Ok) {
+            for (SoapyDeviceInfo& d : one.devices) { found.push_back(std::move(d)); }
+            continue;
+        }
+        if (one.outcome == EnumOutcome::ChildDied) {
+            result.childDeaths += 1;
+            result.deathExitCode = one.exitCode;
+            // FILED PER DRIVER, because the driver NAME is the one thing the
+            // whole-bus death could never say and the only thing that tells a
+            // user which install to fix.
+            core::reportAbsorbedChildFault(
+                "SDR device enumeration child process died probing one driver "
+                "(contained: every other driver was still probed)",
+                one.exitCode, 1);
+        }
+        result.faultedDrivers.push_back(driver);
+        core::diagWarnf(
+            "soapy: the '%s' driver faulted during discovery (exit 0x%08lX) - it is "
+            "skipped for this scan; every other driver was still asked",
+            driver.c_str(), one.exitCode);
+    }
+
+    result.devices = std::move(found);
+    // Ok even when some drivers faulted: the list is the honest answer for the
+    // drivers that worked, and the ones that did not are named in the log and
+    // in faultedDrivers. Only a sweep that produced nothing at all stays a
+    // death, so the caller's "no devices" message is still reached.
+    if (!result.devices.empty() ||
+        result.faultedDrivers.size() < listing.drivers.size()) {
+        result.outcome = EnumOutcome::Ok;
+        result.exitCode = 0;
+        core::diagWarnf(
+            "soapy: the whole-bus scan died, so each driver was asked separately - "
+            "%d driver(s) asked, %d faulted, %d device(s) listed",
+            static_cast<int>(listing.drivers.size()),
+            static_cast<int>(result.faultedDrivers.size()),
+            static_cast<int>(result.devices.size()));
+    }
+}
+
 EnumResult enumerateIsolated(const EnumOptions& options) {
     const auto t0 = std::chrono::steady_clock::now();
     EnumResult result;
@@ -622,6 +711,10 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                     "this is the known libusb fault, contained; retrying",
                     result.exitCode, i + 1, maxAttempts);
             }
+        }
+        // EVERY ATTEMPT DIED. One bad driver must not hide the rest.
+        if (result.outcome == EnumOutcome::ChildDied && options.perDriverSweep) {
+            sweepEachDriver(helper, options, childCrashDir, result);
         }
     } else {
         result.outcome = EnumOutcome::SpawnFailed;
@@ -745,7 +838,8 @@ void armEnumerateHelperProcess(const char* crashDir) {
 std::string enumerationReportJson(bool runtimeAvailable,
                                   unsigned long long guardedCalls,
                                   bool captureArmed,
-                                  const std::vector<SoapyDeviceInfo>& devices) {
+                                  const std::vector<SoapyDeviceInfo>& devices,
+                                  const std::vector<std::string>& drivers) {
     nlohmann::json j;
     j[kKeySchema] = kSchema;
     j[kKeyRuntime] = runtimeAvailable;
@@ -755,6 +849,10 @@ std::string enumerationReportJson(bool runtimeAvailable,
     // second one is what a test has to be able to check, and a directory that
     // could not be created turns the first into a lie.
     j[kKeyCapture] = captureArmed;
+    if (!drivers.empty()) {
+        j[kKeyDrivers] = nlohmann::json::array();
+        for (const std::string& d : drivers) { j[kKeyDrivers].push_back(d); }
+    }
     j[kKeyDevices] = nlohmann::json::array();
     for (const SoapyDeviceInfo& d : devices) {
         nlohmann::json e;
@@ -783,7 +881,7 @@ std::string enumerationReportJson(bool runtimeAvailable,
     return line;
 }
 
-int runEnumerateHelper(const char* crashDir) {
+int runEnumerateHelper(const char* crashDir, const char* driver, bool listDrivers) {
     armEnumerateHelperProcess(crashDir);
     const bool captureArmed = !core::activeCrashDir().empty();
 #ifdef _WIN32
@@ -795,11 +893,19 @@ int runEnumerateHelper(const char* crashDir) {
 
     const std::uint64_t before = vendorGuardCallCount();
     const bool runtime = SoapySource::runtimeAvailable();
-    const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerateInProcess();
+    // THREE JOBS, ONE CHILD. The names-only answer exists so the parent can
+    // sweep drivers separately after a whole-bus death; the restricted walk is
+    // that sweep. Both are otherwise the ordinary walk, guard and all.
+    const std::vector<std::string> names =
+        listDrivers ? SoapySource::driverNames() : std::vector<std::string>();
+    const std::vector<SoapyDeviceInfo> devices =
+        listDrivers ? std::vector<SoapyDeviceInfo>()
+                    : SoapySource::enumerateInProcess(
+                          (driver != nullptr) ? std::string(driver) : std::string());
 
     const std::string line = enumerationReportJson(
         runtime, static_cast<unsigned long long>(vendorGuardCallCount() - before),
-        captureArmed, devices);
+        captureArmed, devices, names);
     std::fwrite(line.data(), 1, line.size(), stdout);
     std::fputc('\n', stdout);
     std::fflush(stdout);

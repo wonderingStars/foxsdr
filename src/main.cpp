@@ -907,16 +907,27 @@ int main(int argc, char** argv) {
     // flag itself, so no combination of arguments to a real session can turn
     // it into a helper.
     constexpr const char* kCrashDirFlag = "--crash-dir=";
+    constexpr const char* kDriverFlag = "--driver=";
+    constexpr const char* kListDriversFlag = "--list-drivers";
     if (argc >= 2 && std::strcmp(argv[1], "--enumerate-json") == 0) {
         const char* crashDir = nullptr;
-        if (argc == 3 && std::strncmp(argv[2], kCrashDirFlag, std::strlen(kCrashDirFlag)) == 0) {
-            crashDir = argv[2] + std::strlen(kCrashDirFlag);
-        } else if (argc != 2) {
-            std::fprintf(stderr, "cascade: --enumerate-json takes at most one %s argument\n",
-                         kCrashDirFlag);
-            return 2;
+        const char* driver = nullptr;
+        bool listDrivers = false;
+        for (int i = 2; i < argc; ++i) {
+            if (std::strncmp(argv[i], kCrashDirFlag, std::strlen(kCrashDirFlag)) == 0) {
+                crashDir = argv[i] + std::strlen(kCrashDirFlag);
+            } else if (std::strncmp(argv[i], kDriverFlag, std::strlen(kDriverFlag)) == 0) {
+                driver = argv[i] + std::strlen(kDriverFlag);
+            } else if (std::strcmp(argv[i], kListDriversFlag) == 0) {
+                listDrivers = true;
+            } else {
+                std::fprintf(stderr,
+                             "cascade: --enumerate-json takes only %s, %s and %s\n",
+                             kCrashDirFlag, kDriverFlag, kListDriversFlag);
+                return 2;
+            }
         }
-        return cascade::source::runEnumerateHelper(crashDir);
+        return cascade::source::runEnumerateHelper(crashDir, driver, listDrivers);
     }
 
     // FIRST, before anything that could fault has had the chance. The four
