@@ -1,0 +1,323 @@
+// patch_graph.hpp - what a patch IS, with no opinion about how it is drawn.
+//
+// The Patch page lets a radio, some channels, the decoders we already ship and
+// a few displays be wired together on a canvas. This header is the half that
+// decides; gui/patch_view.cpp is the half that draws. The split is the same one
+// instrument_meter_math.hpp keeps from instrument_meter.cpp, and for the same
+// reason: everything below is a pure function of the graph, so
+// tests/test_patch_graph.cpp can pin the connection rules, the cycle check and
+// the evaluation order without a graphics context.
+//
+// WHY THE RULES LIVE HERE AND NOT IN THE CANVAS. A patcher has exactly one
+// interesting failure mode: a connection that LOOKS made and does nothing. Text
+// dropped into an I/Q port, two sources feeding one input, a loop that starves
+// the audio thread - each of those draws a perfectly convincing wire. So
+// connect() refuses with a REASON rather than returning a bool, the canvas
+// shows that reason while the drag is still in the air, and the refusal is
+// tested here where it cannot depend on where the pointer happened to be.
+//
+// WHAT A PORT TYPE MEANS. The four types are not decoration; they are the four
+// things that actually move between stages in this product:
+//
+//   Iq       complex baseband, what a radio produces and a channel narrows
+//   Audio    real demodulated samples, what a speaker or a text decoder eats
+//   Text     decoded lines, what a decoder emits
+//   Control  a tuning request or a squelch gate, which carries no samples
+//
+// The Iq/Audio distinction is not ours to invent - it is already in the plugin
+// ABI, which has CASCADE_CAP_IQ_DECODER for decoders that want baseband and
+// CASCADE_CAP_DECODER for those that want demodulated audio. ADS-B is the
+// first, ACARS the second. A Decoder node therefore declares which it is, and
+// wiring the wrong one is refused here rather than discovered as silence.
+//
+// POSITIONS LIVE IN THE MODEL, and that is deliberate. A patch is a document
+// the user saves and reopens; where they put a node is part of what they
+// arranged, not a detail of this frame's rendering.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#ifndef CASCADE_CORE_PATCH_GRAPH_HPP
+#define CASCADE_CORE_PATCH_GRAPH_HPP
+
+#include <algorithm>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace cascade::core::patch {
+
+// --- identity ----------------------------------------------------------------
+//
+// Ids are handed out and never reused within a graph, so a wire cannot end up
+// pointing at a different node than the one it was drawn to after a delete and
+// an add. Zero is "no node" so a default-constructed reference is invalid
+// rather than pointing at whatever was created first.
+using NodeId = std::uint32_t;
+inline constexpr NodeId kNoNode = 0u;
+
+using PortIndex = std::uint32_t;
+
+enum class PortType : std::uint8_t { Iq, Audio, Text, Control };
+
+enum class NodeKind : std::uint8_t {
+    Radio,    // one device; the only node with no input
+    Channel,  // mix to DC, low-pass, decimate: Iq in, Iq out
+    Demod,    // Iq in, Audio out
+    Decoder,  // a plugin: Iq OR Audio in, Text out
+    Display,  // a view: consumes, produces nothing
+    Sink,     // speaker, recorder, network: consumes, produces nothing
+};
+
+// Why a connection was refused. The canvas shows these while the wire is still
+// being dragged, so each one has to name a cause a person can act on.
+enum class Connect : std::uint8_t {
+    Ok,
+    UnknownNode,     // an id that is not in this graph
+    NoSuchPort,      // port index past the end of that node's list
+    TypeMismatch,    // Text into an Iq port, and so on
+    InputOccupied,   // an input takes exactly one wire
+    AlreadyWired,    // this exact pair is already connected
+    SelfLoop,        // a node wired to itself
+    WouldCycle,      // the wire would close a loop
+};
+
+struct Wire {
+    NodeId from = kNoNode;
+    PortIndex fromPort = 0;
+    NodeId to = kNoNode;
+    PortIndex toPort = 0;
+};
+
+inline bool operator==(const Wire& a, const Wire& b) {
+    return a.from == b.from && a.fromPort == b.fromPort && a.to == b.to && a.toPort == b.toPort;
+}
+
+struct Node {
+    NodeId id = kNoNode;
+    NodeKind kind = NodeKind::Radio;
+    std::string name;
+    std::vector<PortType> inputs;
+    std::vector<PortType> outputs;
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+// --- the port tables ---------------------------------------------------------
+//
+// Stated once, here, rather than at each construction site. A node kind whose
+// ports are decided in two places is a node kind that will eventually disagree
+// with itself.
+//
+// `feed` says what a Decoder wants and is ignored for every other kind. It
+// exists because that is a real distinction in the plugin ABI rather than a
+// convenience: an I/Q decoder handed demodulated audio does not degrade, it
+// decodes nothing at all.
+inline void portsFor(NodeKind kind, PortType feed, std::vector<PortType>& in,
+                     std::vector<PortType>& out) {
+    in.clear();
+    out.clear();
+    switch (kind) {
+        case NodeKind::Radio:
+            out.push_back(PortType::Iq);
+            break;
+        case NodeKind::Channel:
+            in.push_back(PortType::Iq);
+            out.push_back(PortType::Iq);
+            break;
+        case NodeKind::Demod:
+            in.push_back(PortType::Iq);
+            out.push_back(PortType::Audio);
+            break;
+        case NodeKind::Decoder:
+            in.push_back(feed == PortType::Iq ? PortType::Iq : PortType::Audio);
+            out.push_back(PortType::Text);
+            break;
+        case NodeKind::Display:
+            in.push_back(feed);
+            break;
+        case NodeKind::Sink:
+            in.push_back(feed);
+            break;
+    }
+}
+
+class Graph {
+public:
+    // --- building ------------------------------------------------------------
+
+    NodeId addNode(NodeKind kind, const std::string& name, PortType feed = PortType::Iq,
+                   float x = 0.0f, float y = 0.0f) {
+        Node n;
+        n.id = nextId_++;
+        n.kind = kind;
+        n.name = name;
+        n.x = x;
+        n.y = y;
+        portsFor(kind, feed, n.inputs, n.outputs);
+        nodes_.push_back(std::move(n));
+        return nodes_.back().id;
+    }
+
+    // Removing a node takes its wires with it. A wire whose endpoint no longer
+    // exists is the one piece of state that would let the canvas draw a line to
+    // nowhere and the rebuild dereference a hole, so it is not allowed to
+    // survive for even one frame.
+    bool removeNode(NodeId id) {
+        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
+                                     [id](const Node& n) { return n.id == id; });
+        if (it == nodes_.end()) { return false; }
+        nodes_.erase(it);
+        wires_.erase(std::remove_if(wires_.begin(), wires_.end(),
+                                    [id](const Wire& w) { return w.from == id || w.to == id; }),
+                     wires_.end());
+        return true;
+    }
+
+    Connect connect(NodeId from, PortIndex fromPort, NodeId to, PortIndex toPort) {
+        const Node* src = find(from);
+        const Node* dst = find(to);
+        if (src == nullptr || dst == nullptr) { return Connect::UnknownNode; }
+        if (from == to) { return Connect::SelfLoop; }
+        if (fromPort >= src->outputs.size() || toPort >= dst->inputs.size()) {
+            return Connect::NoSuchPort;
+        }
+        if (src->outputs[fromPort] != dst->inputs[toPort]) { return Connect::TypeMismatch; }
+
+        // FAN-IN IS A PROPERTY OF THE TYPE, not of the port.
+        //
+        // Two sample streams into one input is not a mix, it is an argument
+        // about which one wins, and nothing downstream could tell you which
+        // did - so Iq, Audio and Control take exactly one wire each. TEXT is
+        // genuinely different: merging decoded lines is defined (interleave
+        // them, tag each with where it came from) and it is the thing the
+        // workbench already does when six ACARS channels land in one window.
+        // Refusing it here would have made the canvas unable to express the
+        // one arrangement the page exists for.
+        const bool mergeable = dst->inputs[toPort] == PortType::Text;
+
+        const Wire want{from, fromPort, to, toPort};
+        for (const Wire& w : wires_) {
+            if (w == want) { return Connect::AlreadyWired; }
+            if (!mergeable && w.to == to && w.toPort == toPort) {
+                return Connect::InputOccupied;
+            }
+        }
+        if (reaches(to, from)) { return Connect::WouldCycle; }
+
+        wires_.push_back(want);
+        return Connect::Ok;
+    }
+
+    bool disconnect(const Wire& w) {
+        const auto it = std::find(wires_.begin(), wires_.end(), w);
+        if (it == wires_.end()) { return false; }
+        wires_.erase(it);
+        return true;
+    }
+
+    // --- reading -------------------------------------------------------------
+
+    const std::vector<Node>& nodes() const { return nodes_; }
+    const std::vector<Wire>& wires() const { return wires_; }
+
+    const Node* find(NodeId id) const {
+        for (const Node& n : nodes_) {
+            if (n.id == id) { return &n; }
+        }
+        return nullptr;
+    }
+
+    // The writable one, DELIBERATELY under a different name rather than as a
+    // non-const overload of find(). An overload pair would resolve to the
+    // mutable one for every call on a non-const Graph - including the ones
+    // inside connect() that only read - and a private overload of it silently
+    // makes find() uncallable from outside on a non-const object, which is
+    // exactly the error this replaced. Dragging a node on the canvas moves its
+    // x/y, so this is the call that does it.
+    Node* mutableNode(NodeId id) {
+        for (Node& n : nodes_) {
+            if (n.id == id) { return &n; }
+        }
+        return nullptr;
+    }
+
+    std::size_t count(NodeKind kind) const {
+        std::size_t n = 0;
+        for (const Node& node : nodes_) {
+            if (node.kind == kind) { ++n; }
+        }
+        return n;
+    }
+
+    // The order the DSP must be built and run in: every node appears after
+    // everything that feeds it.
+    //
+    // DETERMINISTIC BY ID, not by whatever order the ready set happened to fill.
+    // The rebuild that follows a rewire runs off the audio thread and is swapped
+    // in atomically, so two rebuilds of the same patch producing two different
+    // orders would make a fault reproducible only by luck.
+    //
+    // A graph with a cycle cannot happen through connect(), which refuses one.
+    // If one is ever present anyway the unreachable remainder is dropped rather
+    // than looping forever - the caller compares size() against nodes().size()
+    // to notice.
+    std::vector<NodeId> evaluationOrder() const {
+        std::vector<NodeId> order;
+        order.reserve(nodes_.size());
+
+        std::vector<NodeId> pending;
+        pending.reserve(nodes_.size());
+        for (const Node& n : nodes_) { pending.push_back(n.id); }
+        std::sort(pending.begin(), pending.end());
+
+        std::vector<NodeId> done;
+        while (!pending.empty()) {
+            NodeId chosen = kNoNode;
+            for (NodeId id : pending) {
+                bool ready = true;
+                for (const Wire& w : wires_) {
+                    if (w.to != id) { continue; }
+                    if (std::find(done.begin(), done.end(), w.from) == done.end()) {
+                        ready = false;
+                        break;
+                    }
+                }
+                if (ready) {
+                    chosen = id;  // pending is sorted, so this is the lowest ready id
+                    break;
+                }
+            }
+            if (chosen == kNoNode) { break; }  // a cycle; stop rather than spin
+            done.push_back(chosen);
+            order.push_back(chosen);
+            pending.erase(std::find(pending.begin(), pending.end(), chosen));
+        }
+        return order;
+    }
+
+private:
+    // Is `target` reachable from `start` by following wires forwards? Used to
+    // refuse a wire that would close a loop, asked BEFORE the wire is added.
+    bool reaches(NodeId start, NodeId target) const {
+        std::vector<NodeId> stack{start};
+        std::vector<NodeId> seen;
+        while (!stack.empty()) {
+            const NodeId id = stack.back();
+            stack.pop_back();
+            if (id == target) { return true; }
+            if (std::find(seen.begin(), seen.end(), id) != seen.end()) { continue; }
+            seen.push_back(id);
+            for (const Wire& w : wires_) {
+                if (w.from == id) { stack.push_back(w.to); }
+            }
+        }
+        return false;
+    }
+
+    std::vector<Node> nodes_;
+    std::vector<Wire> wires_;
+    NodeId nextId_ = 1u;  // 0 is kNoNode
+};
+
+}  // namespace cascade::core::patch
+
+#endif  // CASCADE_CORE_PATCH_GRAPH_HPP
