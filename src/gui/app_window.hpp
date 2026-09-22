@@ -2445,6 +2445,13 @@ private:
     // rather than kept, because a stale level is worse than none: it reads
     // as a live measurement of a channel that may no longer exist.
     std::vector<cascade::gui::patch::NodeReading> patchReadings_;
+    // What the running set was built for. A new one is published only
+    // when one of these changes - otherwise a set of strips and filters
+    // would be allocated sixty times a second to hand the DSP thread
+    // something identical to what it already has.
+    double patchBuiltRate_ = 0.0;
+    double patchBuiltCentre_ = 0.0;
+    bool patchWasOpen_ = false;
     // How many parts have been dropped from the bin, used only to
     // stagger the next one so a run of clicks does not stack every
     // node on the same spot.

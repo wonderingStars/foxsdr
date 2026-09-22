@@ -104,6 +104,7 @@
 #include "dsp/noise_reduction.hpp"
 #include "dsp/notch.hpp"
 #include "dsp/rds.hpp"
+#include "core/patch_runner.hpp"
 #include "dsp/resampler.hpp"
 #include "dsp/spectrum.hpp"
 #include "dsp/spsc_ring.hpp"
@@ -379,6 +380,13 @@ public:
     // The audio sink, exposed for GUI wiring: volume, device enumeration, and
     // re-open on device change. The device the constructor opens (when
     // cfg.audioEnabled) is the system default at kAudioRateHz.
+    // THE PATCH. The GUI thread builds a set of strips and publishes it;
+    // this thread adopts it at a block boundary. See core/patch_runner.hpp
+    // for why the hand-off is shaped the way it is - in short, the audio
+    // thread must never be able to queue behind a GUI thread that is
+    // allocating.
+    cascade::core::patch::Runner& patchRunner() { return patch_; }
+
     cascade::sink::AudioOut& audio();
 
     // Opens an output device (-1 = system default) at kAudioRateHz, trying
@@ -751,6 +759,15 @@ private:
     // worker a copy of this pointer, so the sink outlives the abandonment and
     // whichever thread drops the last reference is the one that closes the
     // stream. Never null.
+    // The patch, its takeover fade, and the last sample it played - the
+    // same three things the plugin path keeps, for the same reasons.
+    cascade::core::patch::Runner patch_;
+    std::vector<float> patchL_;
+    std::vector<float> patchR_;
+    float patchFade_ = 0.0f;
+    float patchLastL_ = 0.0f;
+    float patchLastR_ = 0.0f;
+
     std::shared_ptr<cascade::sink::AudioOut> audio_;  // device opened only
                                                       // when cfg_.audioEnabled
     // Channel layout the sink was last opened with (1 or 2), mirrored under

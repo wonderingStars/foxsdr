@@ -50,6 +50,7 @@
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_strip.hpp"
+#include "dsp/resampler.hpp"
 
 namespace cascade::core::patch {
 
@@ -67,6 +68,14 @@ struct RunningChannel {
 // thread; touched by exactly one thread at a time thereafter.
 struct StripSet {
     std::vector<RunningChannel> channels;
+
+    // THE LISTENING CHANNEL'S CONVERSION TO THE SINK'S RATE. A strip runs
+    // at whatever whole division of the device rate lands nearest 48 kHz -
+    // 62500 on a 2 MS/s generator, 47628 on an RTL-SDR at 2.048 - and the
+    // sink wants exactly 48000, so this is not optional and it is not a
+    // rounding. Built here, on the GUI thread, with everything else.
+    std::unique_ptr<cascade::dsp::RationalResampler> toAudio;
+    std::vector<float> resampled;   // preallocated scratch for one block
     // Which channel's audio reaches the speaker. Exactly one, because mixing
     // two demodulated channels is not defined here - the graph refuses
     // fan-in on samples for the same reason.
@@ -81,7 +90,8 @@ inline constexpr std::size_t kMaxBlockAudio = 65536;
 
 // Builds the set a plan describes. GUI THREAD ONLY - it allocates.
 inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
-                                               double deviceRateHz, NodeId listening) {
+                                               double deviceRateHz, NodeId listening,
+                                               double audioRateHz = 48000.0) {
     auto set = std::make_shared<StripSet>();
     set->listening = listening;
     set->channels.reserve(plan.channels.size());
@@ -111,6 +121,21 @@ inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
 
         rc.audio.assign(kMaxBlockAudio, 0.0f);
         set->channels.push_back(std::move(rc));
+    }
+
+    // Only the channel being listened to needs converting - the others are
+    // measured and decoded, not played, and a resampler each would be work
+    // nobody hears.
+    for (const RunningChannel& rc : set->channels) {
+        if (rc.node != listening) { continue; }
+        const double inRate = rc.strip.outRateHz();
+        if (inRate > 0.0 && audioRateHz > 0.0) {
+            set->toAudio = std::make_unique<cascade::dsp::RationalResampler>(
+                static_cast<unsigned>(audioRateHz + 0.5),
+                static_cast<unsigned>(inRate + 0.5));
+            set->resampled.assign(set->toAudio->maxOut(kMaxBlockAudio) + 8, 0.0f);
+        }
+        break;
     }
     return set;
 }
@@ -151,6 +176,12 @@ public:
         }
         if (!taken) { return false; }
         active_ = std::move(taken);
+        // THE RING GOES WITH THE OLD SET. Its contents are at the previous
+        // channel's rate and from the previous channel's frequency; playing
+        // them after a rewire is playing the patch the user just replaced.
+        ringRead_ = 0;
+        ringWrite_ = 0;
+        ringCount_ = 0;
         generation_.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -169,8 +200,55 @@ public:
                                                                          : rc.audio.size();
             for (std::size_t i = 0; i < take; ++i) { rc.audio[i] = scratch_[i]; }
             rc.produced = take;
+
+            // The listening channel also goes to the sink's rate and into
+            // the ring the audio stage draws from.
+            if (rc.node == active_->listening && active_->toAudio && take > 0) {
+                const std::size_t got = active_->toAudio->process(
+                    rc.audio.data(), take, active_->resampled.data(),
+                    active_->resampled.size());
+                pushRing(active_->resampled.data(), got);
+            }
         }
     }
+
+    // DSP THREAD. Fills `left` and `right` with `frames` of the patch's
+    // audio and returns TRUE; returns FALSE when no patch is listening,
+    // leaving both buffers untouched so the caller keeps its demodulated
+    // audio.
+    //
+    // DELIBERATELY THE SAME SHAPE AS PluginRunner::pullPluginAudio, down to
+    // the short-block rule: a patch that has not produced enough this block
+    // is still the thing being listened to, so the shortfall is silence
+    // rather than a handback to the demodulator. Handing back would make a
+    // momentarily starved patch chatter between two sources, which is worse
+    // than a gap and much harder to diagnose.
+    bool pullAudio(float* left, float* right, std::size_t frames) {
+        if (!active_ || active_->listening == kNoNode || !active_->toAudio) {
+            return false;
+        }
+        if (left == nullptr || right == nullptr) { return false; }
+        for (std::size_t i = 0; i < frames; ++i) {
+            float v = 0.0f;
+            if (ringCount_ > 0) {
+                v = ring_[ringRead_];
+                ringRead_ = (ringRead_ + 1 == ring_.size()) ? 0 : ringRead_ + 1;
+                --ringCount_;
+            } else {
+                ++starved_;
+            }
+            left[i] = v;
+            right[i] = v;   // mono, on both
+        }
+        return true;
+    }
+
+    // Frames of silence handed out because the patch had nothing ready.
+    // The honest health number for this path, and the one a dropout shows
+    // up in - a patch that is never ready is a patch producing nothing.
+    std::uint64_t starvedFrames() const { return starved_; }
+
+    std::size_t bufferedFrames() const { return ringCount_; }
 
     // DSP THREAD. The audio of the channel the patch is listening to, or
     // nothing when it is not running one.
@@ -209,6 +287,9 @@ public:
     // patch holding buffers that will be stale when it starts again.
     void clear() {
         active_.reset();
+        ringRead_ = 0;
+        ringWrite_ = 0;
+        ringCount_ = 0;
         std::lock_guard<std::mutex> lock(pendingMutex_);
         pending_.reset();
         hasPending_.store(false, std::memory_order_release);
@@ -223,6 +304,33 @@ private:
     // DSP THREAD ONLY after adoption. No other thread may touch this.
     std::shared_ptr<StripSet> active_;
     std::vector<float> scratch_;
+
+    // A second of audio at 48 kHz, allocated once. DSP thread only: it is
+    // written by process() and read by pullAudio(), which the pipeline
+    // calls from the same thread.
+    //
+    // OLDEST DROPPED WHEN IT OVERFLOWS, not newest. A full ring means the
+    // sink is behind, and the samples worth keeping are the ones about to
+    // be played, not the ones that went stale a second ago.
+    std::vector<float> ring_ = std::vector<float>(48000, 0.0f);
+    std::size_t ringRead_ = 0;
+    std::size_t ringWrite_ = 0;
+    std::size_t ringCount_ = 0;
+    std::uint64_t starved_ = 0;
+
+    void pushRing(const float* p, std::size_t n) {
+        for (std::size_t i = 0; i < n; ++i) {
+            ring_[ringWrite_] = p[i];
+            ringWrite_ = (ringWrite_ + 1 == ring_.size()) ? 0 : ringWrite_ + 1;
+            if (ringCount_ < ring_.size()) {
+                ++ringCount_;
+            } else {
+                // Full: the write just overwrote the oldest unread sample,
+                // so the read cursor has to move with it.
+                ringRead_ = ringWrite_;
+            }
+        }
+    }
 
     std::atomic<std::uint64_t> generation_{0};
     std::atomic<std::uint64_t> locks_{0};

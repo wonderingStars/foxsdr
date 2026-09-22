@@ -1415,6 +1415,14 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         runner->processIq(reinterpret_cast<const float*>(in), n);
     }
 
+    // THE PATCH TAPS THE SAME RAW BAND, at the same point and for exactly
+    // the reason given above: a patch splits its own channels out of the
+    // full capture, so handing it the VFO's one narrow channel would be
+    // handing it the user's tuning instead of its own. This also adopts any
+    // set the GUI thread has published, so a rewire takes effect on a block
+    // boundary and never halfway through one.
+    patch_.process(in, n);
+
     // VFO: mix the tuned offset to DC, band-limit, decimate to channel rate.
     chanBuf_.resize(n / vfoDecim_ + 1);
     const std::size_t m = vfo_.process(in, n, chanBuf_.data(), chanBuf_.size());
@@ -1625,6 +1633,43 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // finished PCM from an error-corrected stream. The volume dial and the mute
     // are the user's controls that still apply, which is what the ABI promises
     // a plugin author.
+    // --- THE PATCH'S AUDIO, if one is listening -----------------------------
+    //
+    // Just ABOVE the plugin's takeover, with a fade of the same length, and
+    // that ordering IS the precedence: a plugin holding the speakers still
+    // wins, so nothing about the existing behaviour changes, and a patch plays
+    // whenever no plugin is claiming them. Below the plugin block it could
+    // silence a DAB decoder mid-programme.
+    //
+    // Above the hard mute for the same reason everything else here is: the
+    // mute lamp, the recorder, the web stream and the test tap must all
+    // describe the signal that actually reaches the speakers, whoever made it.
+    {
+        patchL_.resize(k);
+        patchR_.resize(k);
+        const bool patching = patch_.pullAudio(patchL_.data(), patchR_.data(), k);
+        if (patching || patchFade_ > 0.0f) {
+            const float target = patching ? 1.0f : 0.0f;
+            const float step = 1.0f / static_cast<float>(kPluginFadeFrames);
+            for (std::size_t i = 0; i < k; ++i) {
+                if (patchFade_ < target) {
+                    patchFade_ = std::min(target, patchFade_ + step);
+                } else if (patchFade_ > target) {
+                    patchFade_ = std::max(target, patchFade_ - step);
+                }
+                const float f = patchFade_;
+                const float pl = patching ? patchL_[i] : patchLastL_;
+                const float pr = patching ? patchR_[i] : patchLastR_;
+                outL_[i] = (1.0f - f) * outL_[i] + f * pl;
+                outR_[i] = (1.0f - f) * outR_[i] + f * pr;
+            }
+            if (patching && k != 0) {
+                patchLastL_ = patchL_[k - 1];
+                patchLastR_ = patchR_[k - 1];
+            }
+        }
+    }
+
     if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
         plugL_.resize(k);
         plugR_.resize(k);

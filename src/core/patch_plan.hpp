@@ -147,6 +147,45 @@ inline RateChoice chooseChannelRate(double deviceRateHz) {
     return best;
 }
 
+// The Channel whose audio reaches a speaker, or kNoNode when none does.
+//
+// Walks BACKWARDS from an audio Sink: a speaker has exactly one wire into it
+// (samples do not fan in), so there is one chain to follow and no choice to
+// make along the way. The walk stops at the first Channel it meets, which is
+// the strip that has to be resampled and played.
+//
+// THE FIRST AUDIO SINK WINS when a patch has several. That is a real
+// ambiguity - two speakers is not a thing the sound device can honour - and
+// picking the first in node order at least makes it stable between frames,
+// where picking by position or by whichever was drawn last would make the
+// audio change when the user moved a box.
+inline NodeId listeningChannel(const Graph& g) {
+    for (const Node& sink : g.nodes()) {
+        if (sink.kind != NodeKind::Sink) { continue; }
+        if (sink.inputs.empty() || sink.inputs[0] != PortType::Audio) { continue; }
+
+        NodeId at = sink.id;
+        // Bounded by the node count: the graph refuses cycles, so this cannot
+        // loop, but a bound costs nothing and turns a future mistake into a
+        // wrong answer rather than a hung audio thread.
+        for (std::size_t step = 0; step < g.nodes().size() + 1; ++step) {
+            NodeId feeder = kNoNode;
+            for (const Wire& w : g.wires()) {
+                if (w.to == at) {
+                    feeder = w.from;
+                    break;
+                }
+            }
+            if (feeder == kNoNode) { break; }
+            const Node* n = g.find(feeder);
+            if (n == nullptr) { break; }
+            if (n->kind == NodeKind::Channel) { return n->id; }
+            at = feeder;
+        }
+    }
+    return kNoNode;
+}
+
 inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz) {
     Plan plan;
     plan.order = g.evaluationOrder();

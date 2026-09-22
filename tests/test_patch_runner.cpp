@@ -83,6 +83,21 @@ struct Patch {
     }
 };
 
+double followsTone(const std::vector<float>& v, double toneHz, double rate) {
+    if (v.size() < 8) { return 0.0; }
+    double sc = 0.0;
+    double ss = 0.0;
+    double sv = 0.0;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        const double t = static_cast<double>(i) / rate;
+        const double ref = std::sin(2.0 * kPi * toneHz * t);
+        sc += static_cast<double>(v[i]) * ref;
+        ss += ref * ref;
+        sv += static_cast<double>(v[i]) * static_cast<double>(v[i]);
+    }
+    return (ss > 0.0 && sv > 0.0) ? std::fabs(sc) / std::sqrt(ss * sv) : 0.0;
+}
+
 double rms(const float* p, std::size_t n) {
     if (p == nullptr || n == 0) { return 0.0; }
     double s = 0.0;
@@ -358,6 +373,141 @@ int main() {
         const auto none = buildStripSet(compile(bare, kRate, kCentre), bare, kRate, kNoNode);
         CHECK(none->channels.size() == 1u);
         CHECK(none->channels[0].mode == Demod::Am);
+    }
+
+    // [13] pullAudio answers FALSE when no patch is listening, and leaves the
+    // buffers alone. That is the contract the pipeline depends on: false means
+    // "keep your demodulated audio", so writing anything here would silence a
+    // receiver that is working perfectly.
+    {
+        Patch p(1);
+        Runner r;
+        r.publish(p.build(kNoNode));           // running, but listening to nothing
+        const auto sig = tone(100000.0, 4800);
+        r.process(sig.data(), sig.size());
+
+        float l[64];
+        float rr[64];
+        for (int i = 0; i < 64; ++i) { l[i] = 1234.0f; rr[i] = 5678.0f; }
+        CHECK(!r.pullAudio(l, rr, 64));
+        CHECK(l[0] == 1234.0f);                // untouched
+        CHECK(rr[63] == 5678.0f);
+
+        // ...and likewise with nothing published at all.
+        Runner empty;
+        CHECK(!empty.pullAudio(l, rr, 64));
+        CHECK(l[0] == 1234.0f);
+    }
+
+    // [14] Listening to a channel gives audio at the SINK's rate, carrying the
+    // tone that was transmitted.
+    //
+    // The rates really do differ: at 2.4 MS/s a channel runs at 48000 exactly,
+    // so this test uses a device rate that does NOT divide to it, and the
+    // resampler is what makes the difference invisible.
+    {
+        Patch p(1);
+        Runner r;
+        r.publish(p.build(p.channels[0]));
+        CHECK(r.adopt());
+        // The strip is not at the sink's rate, which is the point.
+        CHECK(r.bufferedFrames() == 0u);
+
+        const auto sig = tone(100000.0, 240000);   // 0.1 s at 2.4 MS/s
+        r.process(sig.data(), sig.size());
+        CHECK(r.bufferedFrames() > 0u);
+
+        std::vector<float> l(2048, 0.0f);
+        std::vector<float> rr(2048, 0.0f);
+        CHECK(r.pullAudio(l.data(), rr.data(), l.size()));
+        CHECK(rms(l.data(), l.size()) > 0.05);
+        // Mono on both channels, identically.
+        bool sameBoth = true;
+        for (std::size_t i = 0; i < l.size(); ++i) {
+            if (l[i] != rr[i]) { sameBoth = false; }
+        }
+        CHECK(sameBoth);
+
+        // It is the 1 kHz tone the signal was modulated with, judged at the
+        // SINK's rate - which is the one thing that proves the resampler is
+        // doing its job rather than merely producing samples.
+        CHECK(followsTone(l, 1000.0, 48000.0) > 0.7);
+    }
+
+    // [15] A patch with nothing ready hands out SILENCE and still says true.
+    // Handing back to the demodulator instead would make a momentarily starved
+    // patch chatter between two sources, which is worse than a gap and much
+    // harder to diagnose.
+    {
+        Patch p(1);
+        Runner r;
+        r.publish(p.build(p.channels[0]));
+        CHECK(r.adopt());
+        CHECK(r.starvedFrames() == 0u);
+
+        std::vector<float> l(512, 9.0f);
+        std::vector<float> rr(512, 9.0f);
+        CHECK(r.pullAudio(l.data(), rr.data(), l.size()));   // nothing produced yet
+        CHECK(rms(l.data(), l.size()) == 0.0);               // silence, not 9
+        CHECK(r.starvedFrames() == 512u);
+    }
+
+    // [16] A rewire throws the buffered audio away. What is in the ring is at
+    // the old channel's rate and from the old channel's frequency; playing it
+    // after the patch changed is playing the patch the user just replaced.
+    {
+        Patch a(1);
+        Patch b(2);
+        Runner r;
+        r.publish(a.build(a.channels[0]));
+        const auto sig = tone(100000.0, 240000);
+        r.process(sig.data(), sig.size());
+        CHECK(r.bufferedFrames() > 0u);
+
+        r.publish(b.build(b.channels[1]));
+        CHECK(r.adopt());
+        CHECK(r.bufferedFrames() == 0u);
+    }
+
+    // [17] The ring drops the OLDEST when it overflows. A full ring means the
+    // sink is behind, and the samples worth keeping are the ones about to be
+    // played rather than the ones that went stale a second ago.
+    {
+        Patch p(1);
+        Runner r;
+        r.publish(p.build(p.channels[0]));
+        CHECK(r.adopt());
+
+        // Well over a second of audio without ever pulling any.
+        const auto sig = tone(100000.0, 2400000);   // 1 s at 2.4 MS/s
+        for (int i = 0; i < 3; ++i) { r.process(sig.data(), sig.size()); }
+
+        // Bounded, not grown: the ring is a second at the sink's rate.
+        CHECK(r.bufferedFrames() <= 48000u);
+        CHECK(r.bufferedFrames() > 1000u);
+
+        // And what comes out is still audio rather than a torn join.
+        std::vector<float> l(4096, 0.0f);
+        std::vector<float> rr(4096, 0.0f);
+        CHECK(r.pullAudio(l.data(), rr.data(), l.size()));
+        CHECK(rms(l.data(), l.size()) > 0.01);
+    }
+
+    // [18] clear() empties the ring too, so a stopped receiver does not resume
+    // by playing a second of what it heard before it stopped.
+    {
+        Patch p(1);
+        Runner r;
+        r.publish(p.build(p.channels[0]));
+        const auto sig = tone(100000.0, 240000);
+        r.process(sig.data(), sig.size());
+        CHECK(r.bufferedFrames() > 0u);
+        r.clear();
+        CHECK(r.bufferedFrames() == 0u);
+
+        float l[16];
+        float rr[16];
+        CHECK(!r.pullAudio(l, rr, 16));   // nothing running any more
     }
 
     return testSummary("test_patch_runner");

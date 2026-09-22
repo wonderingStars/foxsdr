@@ -24,6 +24,8 @@ using cascade::core::patch::Graph;
 using cascade::core::patch::hasBlockingProblem;
 using cascade::core::patch::isAdvisory;
 using cascade::core::patch::kChannelRateHz;
+using cascade::core::patch::kNoNode;
+using cascade::core::patch::listeningChannel;
 using cascade::core::patch::NodeId;
 using cascade::core::patch::NodeKind;
 using cascade::core::patch::Plan;
@@ -353,6 +355,70 @@ int main() {
             CHECK(c.decimation == 50u);
             CHECK(std::fabs(c.offsetHz) <= 0.5 * kRate);
         }
+    }
+
+    // [13] Which channel reaches the speaker.
+    {
+        Working w;   // radio -> channel -> demod -> speaker
+        CHECK(listeningChannel(w.g) == w.chan);
+
+        // No speaker at all: nothing is being listened to, which is a normal
+        // state for a patch of displays and decoders.
+        Graph quiet;
+        const NodeId r = quiet.addNode(NodeKind::Radio, "R", PortType::Iq);
+        const NodeId c = quiet.addNode(NodeKind::Channel, "c", PortType::Iq);
+        const NodeId d = quiet.addNode(NodeKind::Display, "Spectrum", PortType::Iq);
+        quiet.mutableNode(c)->freqHz = kCentre;
+        CHECK(quiet.connect(r, 0, c, 0) == Connect::Ok);
+        CHECK(quiet.connect(c, 0, d, 0) == Connect::Ok);
+        CHECK(listeningChannel(quiet) == kNoNode);
+
+        // A TEXT sink is not a speaker, however many of them there are.
+        Graph text;
+        const NodeId tr = text.addNode(NodeKind::Radio, "R", PortType::Iq);
+        const NodeId tc = text.addNode(NodeKind::Channel, "c", PortType::Iq);
+        const NodeId td = text.addNode(NodeKind::Decoder, "d", PortType::Iq);
+        const NodeId ts = text.addNode(NodeKind::Sink, "Text", PortType::Text);
+        text.mutableNode(tc)->freqHz = kCentre;
+        CHECK(text.connect(tr, 0, tc, 0) == Connect::Ok);
+        CHECK(text.connect(tc, 0, td, 0) == Connect::Ok);
+        CHECK(text.connect(td, 0, ts, 0) == Connect::Ok);
+        CHECK(listeningChannel(text) == kNoNode);
+
+        // A speaker wired to nothing leads nowhere rather than to the first
+        // channel it can find.
+        Graph dangling;
+        const NodeId dr = dangling.addNode(NodeKind::Radio, "R", PortType::Iq);
+        const NodeId dc = dangling.addNode(NodeKind::Channel, "c", PortType::Iq);
+        dangling.addNode(NodeKind::Sink, "Speaker", PortType::Audio);
+        dangling.mutableNode(dc)->freqHz = kCentre;
+        CHECK(dangling.connect(dr, 0, dc, 0) == Connect::Ok);
+        CHECK(listeningChannel(dangling) == kNoNode);
+    }
+
+    // [14] With two chains, the speaker's OWN chain is the one played - not
+    // whichever channel happens to come first.
+    {
+        Graph g;
+        const NodeId radio = g.addNode(NodeKind::Radio, "Radio", PortType::Iq);
+        const NodeId quietCh = g.addNode(NodeKind::Channel, "quiet", PortType::Iq);
+        const NodeId quietDec = g.addNode(NodeKind::Decoder, "dec", PortType::Iq);
+        const NodeId text = g.addNode(NodeKind::Sink, "Text", PortType::Text);
+        const NodeId heardCh = g.addNode(NodeKind::Channel, "heard", PortType::Iq);
+        const NodeId dm = g.addNode(NodeKind::Demod, "AM", PortType::Iq);
+        const NodeId spk = g.addNode(NodeKind::Sink, "Speaker", PortType::Audio);
+        g.mutableNode(quietCh)->freqHz = kCentre + 100000.0;
+        g.mutableNode(heardCh)->freqHz = kCentre + 200000.0;
+        CHECK(g.connect(radio, 0, quietCh, 0) == Connect::Ok);
+        CHECK(g.connect(quietCh, 0, quietDec, 0) == Connect::Ok);
+        CHECK(g.connect(quietDec, 0, text, 0) == Connect::Ok);
+        CHECK(g.connect(radio, 0, heardCh, 0) == Connect::Ok);
+        CHECK(g.connect(heardCh, 0, dm, 0) == Connect::Ok);
+        CHECK(g.connect(dm, 0, spk, 0) == Connect::Ok);
+
+        // quietCh was created FIRST, so a walk that picked the first channel
+        // rather than following the speaker's own wires would answer wrongly.
+        CHECK(listeningChannel(g) == heardCh);
     }
 
     return testSummary("test_patch_plan");

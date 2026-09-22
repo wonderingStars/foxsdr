@@ -10825,7 +10825,17 @@ void AppWindow::drawPatchSection() {
 }
 
 void AppWindow::drawPatchPage() {
-    if (!patchOpen_) { return; }
+    if (!patchOpen_) {
+        // CLOSING THE PAGE STOPS THE PATCH. The page took the radios over
+        // when it opened, so handing them back when it closes is the only
+        // symmetric answer - and a patch still playing from a window you
+        // have closed is a receiver whose controls you cannot find.
+        if (patchWasOpen_) {
+            patchWasOpen_ = false;
+            pipeline_.patchRunner().clear();
+        }
+        return;
+    }
 
     // The patch a page opens with when the user has none: one radio, nothing
     // wired. An empty canvas gives no clue what a node even is; one node does,
@@ -11066,6 +11076,26 @@ void AppWindow::drawPatchPage() {
             }
         }
         ImGui::EndChild();
+        // THE SET GOES TO THE DSP THREAD, built here because building it
+        // is allocation: a filter per channel, a resampler and a second of
+        // ring. Only when something that changes the DSP has changed -
+        // otherwise all of that would be rebuilt sixty times a second to
+        // hand the DSP thread what it already has.
+        {
+            const double rate = pipeline_.activeSource().sampleRateHz();
+            const double centre = pipeline_.activeSource().centerFrequencyHz();
+            const bool moved = (rate != patchBuiltRate_) || (centre != patchBuiltCentre_);
+            if (patchUi_.dirty || moved || !patchWasOpen_) {
+                patchBuiltRate_ = rate;
+                patchBuiltCentre_ = centre;
+                pipeline_.patchRunner().publish(cascade::core::patch::buildStripSet(
+                    patchPlan_, patchGraph_, rate,
+                    cascade::core::patch::listeningChannel(patchGraph_),
+                    cascade::core::Pipeline::kAudioRateHz));
+            }
+            patchWasOpen_ = true;
+        }
+
         if (patchUi_.dirty) {
             patchUi_.dirty = false;
             patchText_ = cascade::core::patch::serialise(
