@@ -2180,6 +2180,8 @@ private:
     bool featureRequestOpenedByEnv_ = false;
     // The same one-shot latch for FOXSDR_OPEN_DEMOD_SCOPE - see its use.
     bool demodScopeOpenedByEnv_ = false;
+    // ...and for FOXSDR_OPEN_MAP.
+    bool mapOpenedByEnv_ = false;
     // The typed text and the typed contact line - IN MEMORY ONLY, per
     // PRIVACY.md and the file header of feature_request.hpp: neither field
     // is ever read from or written to AppConfig, and neither reaches the

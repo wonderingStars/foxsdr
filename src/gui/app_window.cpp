@@ -1555,6 +1555,23 @@ int AppWindow::run(int frames) {
             demodScopeOpen_ = true;
         }
 
+        // The same latch for a MAP PAGE, and for the same reason the scope has
+        // one: what it draws can only be judged by looking at it, and since
+        // 0.79.1 no window opens itself at launch, so a rendered check has no
+        // way to get the page up without driving the mouse - which lands on
+        // whatever happens to be under the cursor and has cost hours before.
+        //
+        // The value NAMES the plugin whose page to open, spelled as the rail
+        // labels it ("ADS-B"), because there is a page per track source and
+        // "the map" is not one thing. Empty is ignored rather than guessing.
+        if (!mapOpenedByEnv_) {
+            const char* which = std::getenv("FOXSDR_OPEN_MAP");
+            if (which != nullptr && which[0] != '\0') {
+                mapOpenedByEnv_ = true;
+                ensureMapPage(which).open = true;
+            }
+        }
+
         drawUi();
 
         // Collects a config write configWriter_ finished, whether it was

@@ -624,6 +624,65 @@ typedef struct CascadeIqDecoderApi {
 #define CASCADE_TRACK_FLAG_EMERGENCY 0x00000001u
 #define CASCADE_TRACK_FLAG_SELECTED 0x00000002u
 
+/*
+ * WHAT KIND OF AIRCRAFT, carried in five bits of `flags` rather than in a
+ * field of its own.
+ *
+ * WHY NOT A FIELD. CascadeTrack has no structSize. It is an ARRAY the host
+ * allocates and the plugin writes into, so a new member would move every field
+ * after it and every plugin built against the older header would write its
+ * altitude into the host's course. `flags` had thirty unused bits; this costs
+ * five of them and no existing plugin can notice, because a plugin that never
+ * sets them reports zero and zero is exactly "not stated".
+ *
+ * WHY A VOCABULARY AND NOT THE WIRE FORMAT. ADS-B carries this as a three-bit
+ * field whose meaning depends on which of three type codes framed it - the
+ * same three bits mean "glider" under one and "light aeroplane" under another.
+ * Translating in the plugin, which already speaks that protocol, keeps 1090 MHz
+ * bit layouts out of the host's renderer and lets some future source describe a
+ * helicopter without first having to impersonate a Mode S transponder.
+ *
+ * WHAT THE HOST DOES WITH IT: picks a silhouette, and nothing else. It does
+ * not affect colour, which already carries altitude and age, and it never
+ * affects whether a target is drawn. An UNRECOGNISED value draws the generic
+ * aircraft, so a plugin may report a category newer than the host without
+ * asking what version the host is - the same forgiveness CASCADE_TRACK_UNKNOWN
+ * gets, for the same reason.
+ *
+ * Meaningful only when kind == CASCADE_TRACK_AIRCRAFT. The bits are ignored
+ * for every other kind and must be left zero there.
+ */
+#define CASCADE_TRACK_CATEGORY_SHIFT 8u
+#define CASCADE_TRACK_CATEGORY_MASK 0x00001F00u
+#define CASCADE_TRACK_CATEGORY(flags) \
+    (((flags) & CASCADE_TRACK_CATEGORY_MASK) >> CASCADE_TRACK_CATEGORY_SHIFT)
+#define CASCADE_TRACK_WITH_CATEGORY(cat) \
+    ((((uint32_t)(cat)) << CASCADE_TRACK_CATEGORY_SHIFT) & CASCADE_TRACK_CATEGORY_MASK)
+
+/* The weight bands are the ones the air carries, not ICAO's wake-turbulence
+ * letters, and the two do not agree - ICAO "Medium" spans both MEDIUM1 and
+ * MEDIUM2 here. Kept as broadcast so nothing is lost in translation; a host
+ * that wants the coarser grouping can do it, and one that does not cannot
+ * recover what was merged. */
+#define CASCADE_AIRCRAFT_NONE 0u          /* not stated - generic silhouette  */
+#define CASCADE_AIRCRAFT_LIGHT 1u         /* under 7 t                        */
+#define CASCADE_AIRCRAFT_MEDIUM1 2u       /* 7 t to 34 t                      */
+#define CASCADE_AIRCRAFT_MEDIUM2 3u       /* 34 t to 136 t                    */
+#define CASCADE_AIRCRAFT_HIGH_VORTEX 4u   /* heavy wake for its weight        */
+#define CASCADE_AIRCRAFT_HEAVY 5u         /* over 136 t                       */
+#define CASCADE_AIRCRAFT_HIGH_PERF 6u     /* over 5 g and over 400 kt         */
+#define CASCADE_AIRCRAFT_ROTORCRAFT 7u
+#define CASCADE_AIRCRAFT_GLIDER 8u        /* glider or sailplane              */
+#define CASCADE_AIRCRAFT_LIGHTER_THAN_AIR 9u
+#define CASCADE_AIRCRAFT_PARACHUTIST 10u
+#define CASCADE_AIRCRAFT_ULTRALIGHT 11u   /* also hang-glider and paraglider  */
+#define CASCADE_AIRCRAFT_UAV 12u          /* unmanned                         */
+#define CASCADE_AIRCRAFT_SPACE 13u        /* space or transatmospheric        */
+#define CASCADE_AIRCRAFT_SURFACE_EMERGENCY 14u /* on the ground, not flying   */
+#define CASCADE_AIRCRAFT_SURFACE_SERVICE 15u
+#define CASCADE_AIRCRAFT_GROUND_OBSTRUCTION 16u
+#define CASCADE_AIRCRAFT_CATEGORY_COUNT 17u
+
 typedef struct CascadeTrack {
     /* Stable across updates - it is how the host knows this is the same thing
      * moving rather than a new thing appearing. An ICAO address, an MMSI, a

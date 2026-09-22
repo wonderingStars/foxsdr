@@ -16,6 +16,7 @@
 #include "gui/fonts.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
+#include "gui/track_silhouette.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -296,59 +297,6 @@ ImU32 fadedColour(ImU32 c, float alpha) {
     unsigned int v = static_cast<unsigned int>(a + 0.5f);
     if (v > 255u) { v = 255u; }
     return (c & ~(0xFFu << IM_COL32_A_SHIFT)) | (v << IM_COL32_A_SHIFT);
-}
-
-// The plane silhouette, lifted from the map so the two pictures draw the same
-// aircraft. The table is the RIGHT half of the outline, nose up, in a unit box
-// (y negative toward the nose); the left half is the mirror walked backwards,
-// which keeps the two sides identical by construction. The shape is concave,
-// hence AddConcavePolyFilled.
-constexpr float kPlaneHalf[][2] = {
-    {0.00f, -1.00f},  // nose
-    {0.13f, -0.70f},  // cockpit taper
-    {0.13f, -0.26f},  // wing root, leading edge
-    {0.98f, 0.16f},   // wing tip, leading edge
-    {0.98f, 0.38f},   // wing tip, trailing edge
-    {0.13f, 0.20f},   // wing root, trailing edge
-    {0.13f, 0.62f},   // fuselage ahead of the tail
-    {0.48f, 0.88f},   // tailplane tip, leading edge
-    {0.48f, 1.02f},   // tailplane tip, trailing edge
-    {0.08f, 0.94f},   // tail root
-    {0.00f, 0.96f},   // tail, on the centreline
-};
-constexpr int kPlaneHalfCount = static_cast<int>(sizeof(kPlaneHalf) / sizeof(kPlaneHalf[0]));
-
-// `filled` false draws the same silhouette as an OUTLINE, which is how an
-// aircraft with NO REPORTED ALTITUDE is told apart from one at sea level:
-// those are different facts, and a hue comparison at nine pixels is not a
-// reliable way to separate them where a hollow shape against a solid one is.
-void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, ImU32 col,
-              bool filled = true) {
-    // Course 0 is north, which on a scope face is straight up; an unknown
-    // course (NaN by ABI contract) draws the plane pointing north rather than
-    // inventing a heading.
-    const double a = (std::isnan(courseDeg) ? 0.0 : courseDeg) * kPi / 180.0;
-    const float ca = static_cast<float>(std::cos(a));
-    const float sa = static_cast<float>(std::sin(a));
-    ImVec2 pts[2 * kPlaneHalfCount - 2];
-    int n = 0;
-    const auto put = [&](float x, float y) {
-        pts[n++] = ImVec2(c.x + (x * ca - y * sa) * scale, c.y + (x * sa + y * ca) * scale);
-    };
-    for (int i = 0; i < kPlaneHalfCount; ++i) { put(kPlaneHalf[i][0], kPlaneHalf[i][1]); }
-    for (int i = kPlaneHalfCount - 2; i >= 1; --i) { put(-kPlaneHalf[i][0], kPlaneHalf[i][1]); }
-    // A dark rim on every plane, taking its alpha FROM the fill so an ageing
-    // target fades as one thing. On a scope it does more work than on the map:
-    // a small orange or lime silhouette sitting on a green ring needs an edge
-    // or it reads as part of the furniture.
-    const ImU32 rim = IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu);
-    if (filled) {
-        dl->AddConcavePolyFilled(pts, n, col);
-        dl->AddPolyline(pts, n, rim, ImDrawFlags_Closed, 1.5f);
-    } else {
-        dl->AddPolyline(pts, n, rim, ImDrawFlags_Closed, 3.25f);
-        dl->AddPolyline(pts, n, col, ImDrawFlags_Closed, 1.5f);
-    }
 }
 
 // --- the detail panel ----------------------------------------------------------
@@ -2625,9 +2573,11 @@ void ScopeView::draw(float width, float height,
             dl->AddCircleFilled(s, 13.65f, col);
             dl->AddCircle(s, 13.65f, IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu),
                           0, 1.5f);
-            addPlane(dl, s, ht.t.courseDeg, 8.4f, kGround);
+            addTrackSymbol(dl, s, ht.t.courseDeg, 8.4f, kGround, true,
+                           trackCategory(ht.t.kind, ht.t.flags));
         } else {
-            addPlane(dl, s, ht.t.courseDeg, 9.45f, col, altKnown);
+            addTrackSymbol(dl, s, ht.t.courseDeg, 9.45f, col, altKnown,
+                           trackCategory(ht.t.kind, ht.t.flags));
         }
 
         const char* lbl = ht.t.label[0] != '\0' ? ht.t.label : ht.t.id;

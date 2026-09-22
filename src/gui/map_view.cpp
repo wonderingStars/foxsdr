@@ -18,6 +18,7 @@
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_detail_view.hpp"
+#include "gui/track_silhouette.hpp"
 #include "gui/track_info_cache.hpp"
 #include "imgui.h"
 
@@ -155,64 +156,6 @@ ImU32 fadedColour(ImU32 c, float alpha) {
 // band rather than a fat line, narrow enough that several aircraft converging
 // on an approach do not merge into one shape.
 constexpr float kTrailRibbonHalfPx = 3.0f;
-
-constexpr float kPlaneHalf[][2] = {
-    {0.00f, -1.00f},  // nose
-    {0.13f, -0.70f},  // cockpit taper
-    {0.13f, -0.26f},  // wing root, leading edge
-    {0.98f, 0.16f},   // wing tip, leading edge
-    {0.98f, 0.38f},   // wing tip, trailing edge
-    {0.13f, 0.20f},   // wing root, trailing edge
-    {0.13f, 0.62f},   // fuselage ahead of the tail
-    {0.48f, 0.88f},   // tailplane tip, leading edge
-    {0.48f, 1.02f},   // tailplane tip, trailing edge
-    {0.08f, 0.94f},   // tail root
-    {0.00f, 0.96f},   // tail, on the centreline
-};
-constexpr int kPlaneHalfCount = static_cast<int>(sizeof(kPlaneHalf) / sizeof(kPlaneHalf[0]));
-
-// `filled` false draws the same silhouette as an OUTLINE. It is how an aircraft
-// with NO REPORTED ALTITUDE is told apart from one at sea level: those two are
-// different facts, they must not look alike, and a hue comparison at nine
-// pixels is not a reliable way to tell them apart - a hollow shape against a
-// solid one is. Only aircraft get this cue, because altitude is a thing an
-// aircraft is expected to report and a ship or a base station is not.
-void addPlane(ImDrawList* dl, const ImVec2& c, double courseDeg, float scale, ImU32 col,
-              bool filled = true) {
-    // Course 0 is north, which on screen is straight up; an unknown course
-    // (NaN by ABI contract) draws the plane pointing north rather than
-    // inventing a heading line the way the tick for other kinds would.
-    const double a = (std::isnan(courseDeg) ? 0.0 : courseDeg) * kPi / 180.0;
-    const float ca = static_cast<float>(std::cos(a));
-    const float sa = static_cast<float>(std::sin(a));
-    ImVec2 pts[2 * kPlaneHalfCount - 2];
-    int n = 0;
-    const auto put = [&](float x, float y) {
-        pts[n++] = ImVec2(c.x + (x * ca - y * sa) * scale, c.y + (x * sa + y * ca) * scale);
-    };
-    for (int i = 0; i < kPlaneHalfCount; ++i) { put(kPlaneHalf[i][0], kPlaneHalf[i][1]); }
-    // Mirror, skipping both centreline points so no vertex repeats.
-    for (int i = kPlaneHalfCount - 2; i >= 1; --i) {
-        put(-kPlaneHalf[i][0], kPlaneHalf[i][1]);
-    }
-    // A BLACK RIM ON EVERY PLANE, fading with the marker. Requested after use
-    // over real basemap tiles: a small red silhouette over urban tile colours
-    // or another aircraft's trail loses its edge, and the rim is what keeps it
-    // reading as a shape rather than a smudge. The rim takes its alpha FROM
-    // the fill colour so an ageing target fades as one thing - a solid black
-    // outline around a ghost would read as a different, newer object.
-    const ImU32 rim = IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu);
-    if (filled) {
-        dl->AddConcavePolyFilled(pts, n, col);
-        dl->AddPolyline(pts, n, rim, ImDrawFlags_Closed, 1.5f);
-    } else {
-        // The hollow variant is a CUE (no reported altitude - see above), so
-        // the black cannot replace the coloured outline; it goes UNDER it,
-        // wider, as a halo. The cue survives, the contrast arrives.
-        dl->AddPolyline(pts, n, rim, ImDrawFlags_Closed, 3.25f);
-        dl->AddPolyline(pts, n, col, ImDrawFlags_Closed, 1.5f);
-    }
-}
 
 // EVERY WORD ON THIS MAP IS DRAWN OVER SOMEBODY ELSE'S PICTURE, so its
 // contrast cannot come from the palette.
@@ -1631,15 +1574,20 @@ void MapView::draw(float width, float height,
             // after field use - the silhouettes read slightly small against
             // the new rims, and growing all three keeps the selected
             // knockout's margins exactly as designed.
+            //
+            // WHICH silhouette comes from what the aircraft broadcast about
+            // itself - see gui/track_silhouette.hpp. An aircraft that stated
+            // nothing draws exactly the shape this map has always drawn.
+            const std::uint32_t cat = trackCategory(ht.t.kind, ht.t.flags);
             if (picked) {
                 dl->AddCircleFilled(s, 13.65f, col);
                 dl->AddCircle(s, 13.65f, IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu),
                               0, 1.5f);
                 // The silhouette is KNOCKED OUT of the disc, so it is drawn in
                 // the map's own ground rather than in a dark of its own.
-                addPlane(dl, s, ht.t.courseDeg, 8.4f, theme::kWell);
+                addTrackSymbol(dl, s, ht.t.courseDeg, 8.4f, theme::kWell, true, cat);
             } else {
-                addPlane(dl, s, ht.t.courseDeg, 9.45f, col, altKnown);
+                addTrackSymbol(dl, s, ht.t.courseDeg, 9.45f, col, altKnown, cat);
             }
         } else {
             // A course, where known, is drawn as a heading tick. It is the
