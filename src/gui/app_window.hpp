@@ -30,6 +30,7 @@ struct GLFWwindow;
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
+#include "core/patch_plan.hpp"
 #include "gui/patch_view_math.hpp"
 #include "core/plugin_ui.hpp"
 #include "core/plugin_repo.hpp"
@@ -2436,6 +2437,9 @@ private:
     // canvas says it changed. currentConfig() runs every frame and must
     // not serialise a document on each one.
     std::string patchText_;
+    // This frame's compile() of the patch: what would be built, and every
+    // reason it could not be. Recomputed while the page is open.
+    cascade::core::patch::Plan patchPlan_;
     // How many parts have been dropped from the bin, used only to
     // stagger the next one so a run of clicks does not stack every
     // node on the same spot.

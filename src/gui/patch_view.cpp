@@ -100,7 +100,8 @@ void seedDefaultPatch(Graph& g, const char* radioName) {
               60.0f, 80.0f);
 }
 
-void drawPatchCanvas(Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size) {
+void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
+                     ImVec2 origin, ImVec2 size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGuiIO& io = ImGui::GetIO();
 
@@ -218,6 +219,13 @@ void drawPatchCanvas(Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size) {
         const ImVec2 a = iv(worldToScreen(v, tl));
         const ImVec2 b = iv(worldToScreen(v, Vec2{tl.x + size2.x, tl.y + size2.y}));
         drawNodePlate(dl, a, b, ui.selected == n.id);
+        if (core::patch::hasBlockingProblem(plan, n.id)) {
+            // The EDGE, not the plate. The plate is brass because the node
+            // is still a node; recolouring it would say this is a different
+            // kind of thing rather than a thing with something wrong.
+            dl->AddRect(a, b, theme::kAlarm, theme::kPanelRounding, 0,
+                        2.0f * ui.view.zoom);
+        }
 
         // The caption, engraved into the brass.
         const float cap = 11.0f * v.zoom;

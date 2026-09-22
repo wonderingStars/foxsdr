@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 #include "core/patch_io.hpp"
+#include "core/patch_plan.hpp"
 #include "gui/patch_view.hpp"
 
 #include <algorithm>
@@ -10877,14 +10878,43 @@ void AppWindow::drawPatchPage() {
         constexpr float kGap = 8.0f;
         const float canvasW = std::max(160.0f, avail.x - kInspectorW - kGap);
 
+        // ONE COMPILE A FRAME, before anything is drawn, so the marks on
+        // the canvas and the words in the inspector are the same answer.
+        // It is a pure walk of a graph with a handful of nodes; the
+        // alternative - caching it against a dirty flag - would be a
+        // second piece of state to keep true for no measurable gain.
+        patchPlan_ = cascade::core::patch::compile(
+            patchGraph_, pipeline_.activeSource().sampleRateHz(),
+            pipeline_.activeSource().centerFrequencyHz());
+
         if (avail.x > 8.0f && avail.y > 8.0f) {
-            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, origin,
+            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, patchPlan_, origin,
                                                  ImVec2(canvasW, avail.y));
         }
 
         // --- the inspector ----------------------------------------------------
         ImGui::SetCursorScreenPos(ImVec2(origin.x + canvasW + kGap, origin.y));
         if (ImGui::BeginChild("##patchinspector", ImVec2(kInspectorW, avail.y), true)) {
+            // WHAT THE PATCH AS A WHOLE IS DOING, first, because it is the
+            // question someone opening this page is actually asking. Phosphor
+            // for working, rust for not - and never amber, which belongs to
+            // numbers.
+            if (patchPlan_.runnable) {
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
+                ImGui::TextUnformatted("This patch can run.");
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
+                ImGui::TextUnformatted("This patch cannot run yet.");
+            }
+            ImGui::PopStyleColor();
+            if (!patchPlan_.channels.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                         cascade::gui::theme::kInkMuted));
+                ImGui::Text("%zu channel(s), decimate by %u",
+                            patchPlan_.channels.size(), patchPlan_.channels[0].decimation);
+                ImGui::PopStyleColor();
+            }
+            ImGui::Separator();
             cascade::core::patch::Node* sel =
                 patchGraph_.mutableNode(patchUi_.selected);
             if (sel == nullptr) {
@@ -10946,6 +10976,24 @@ void AppWindow::drawPatchPage() {
                         ImGui::TextWrapped("This node has nothing to set yet.");
                         ImGui::PopStyleColor();
                         break;
+                }
+
+                const std::vector<cascade::core::patch::Problem> probs =
+                    cascade::core::patch::problemsFor(patchPlan_, sel->id);
+                if (!probs.empty()) {
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    for (const cascade::core::patch::Problem pr : probs) {
+                        // An advisory is worth saying and not worth
+                        // alarming about, so it is muted rather than rust.
+                        ImGui::PushStyleColor(
+                            ImGuiCol_Text,
+                            cascade::core::patch::isAdvisory(pr)
+                                ? cascade::gui::theme::vec(cascade::gui::theme::kInkMuted)
+                                : cascade::gui::theme::bad());
+                        ImGui::TextWrapped("%s", cascade::core::patch::problemText(pr));
+                        ImGui::PopStyleColor();
+                    }
                 }
 
                 ImGui::Spacing();

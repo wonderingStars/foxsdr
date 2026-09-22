@@ -15,6 +15,7 @@
 #define CASCADE_GUI_PATCH_VIEW_HPP
 
 #include "core/patch_graph.hpp"
+#include "core/patch_plan.hpp"
 #include "gui/patch_view_math.hpp"
 #include "imgui.h"
 
@@ -37,7 +38,11 @@ ImU32 portColour(core::patch::PortType t);
 // Draws the canvas into the current window, filling `size` from `origin`
 // (screen coordinates), and handles the pointer. The graph may be modified:
 // nodes move, wires are made and cut.
-void drawPatchCanvas(core::patch::Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size);
+// `plan` is this frame's compile() of the same graph. The canvas marks the
+// nodes it names; it never computes one itself, because the plan needs the
+// radio's rate and centre and the canvas has no business knowing those.
+void drawPatchCanvas(core::patch::Graph& g, Interaction& ui,
+                     const core::patch::Plan& plan, ImVec2 origin, ImVec2 size);
 
 // The patch a page opens with when the user has none: the receiver they are
 // already using, with nothing wired. An empty canvas gives no clue what a node
