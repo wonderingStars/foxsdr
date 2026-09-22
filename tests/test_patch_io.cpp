@@ -19,6 +19,7 @@
 
 using cascade::core::patch::Connect;
 using cascade::core::patch::Graph;
+using cascade::core::patch::kPatchFormat;
 using cascade::core::patch::kPatchMagic;
 using cascade::core::patch::LoadResult;
 using cascade::core::patch::NodeId;
@@ -72,6 +73,13 @@ bool sameShape(const Graph& a, const Graph& b) {
 }
 
 std::string header() { return std::string(kPatchMagic) + " 1\n"; }
+
+// The CURRENT format. The version-1 fixtures elsewhere in this file are not
+// stale: a format 1 document is still something this build must read, so
+// they go on exercising that path deliberately.
+std::string header2() {
+    return std::string(kPatchMagic) + " " + std::to_string(kPatchFormat) + "\n";
+}
 
 // Indexing guarded only by a preceding CHECK is an out-of-bounds read in
 // exactly the run that has something to report: the test dies with an access
@@ -155,19 +163,53 @@ int main() {
         CHECK(r.graph.nodes().empty());
     }
 
-    // [5] A LATER format loses what this build cannot read and keeps the rest.
-    // Refusing the whole file would make a patch unusable after a downgrade.
+    // [5] A LATER format keeps what this build can read. An unknown LINE is
+    // skipped rather than counted, because it is not a dropped item - it is a
+    // line from a format this build was made before.
+    //
+    // A later format's NODE lines are read with THIS build's layout. That is a
+    // deliberate limit rather than an oversight: the name is read to the end of
+    // the line so it may contain spaces, so any field a future format appends
+    // before the name would be indistinguishable from part of it - and a
+    // channel is routinely named "131.725", so guessing whether a leading
+    // number is a setting or a name is genuinely ambiguous. Reading by version
+    // and letting a future field land in the name loses a label; guessing
+    // would lose a frequency.
     {
         const std::string text = std::string(kPatchMagic) + " 9\n"
-                                 "node 1 0 0 10 20 Radio\n"
+                                 "node 1 0 0 10 20 0 0 Radio\n"
                                  "flux 7 capacitor\n"          // from the future
-                                 "node 2 1 0 30 40 Channel\n"
+                                 "node 2 1 0 30 40 131725000 0 Channel\n"
                                  "wire 1 0 2 0\n";
         const LoadResult r = parse(text);
         CHECK(r.ok);
         CHECK(r.graph.nodes().size() == 2u);
         CHECK(r.graph.wires().size() == 1u);
         CHECK(r.dropped == 0);   // an unknown LINE is not a dropped item
+    }
+
+    // [5b] A REAL format 1 document still loads, and its nodes take the
+    // default settings rather than reading their own name as a number. This is
+    // the case that actually happens - a patch saved by an earlier build.
+    {
+        const std::string v1 = std::string(kPatchMagic) + " 1\n"
+                               "view 10 20 1.5\n"
+                               "node 1 0 0 60 80 Radio A\n"
+                               "node 2 1 0 260 40 131.725\n"   // a NAME that is a number
+                               "wire 1 0 2 0\n";
+        const LoadResult r = parse(v1);
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 2u);
+        CHECK(r.graph.wires().size() == 1u);
+        CHECK(nameAt(r.graph, 0) == "Radio A");
+        // The name survives intact rather than being eaten as a frequency.
+        CHECK(nameAt(r.graph, 1) == "131.725");
+        for (const auto& n : r.graph.nodes()) {
+            CHECK(n.freqHz == 0.0);
+            CHECK(n.mode == 0);
+        }
+        CHECK_NEAR(r.zoom, 1.5f, 0.001f);
     }
 
     // [6] A wire the rules forbid is dropped, not honoured. This is the whole
@@ -276,6 +318,33 @@ int main() {
             CHECK(kindOf(r.graph, w.to) == NodeKind::Channel);
         }
         CHECK(r.dropped == 0);
+    }
+
+    // [15] Settings survive the round trip, and a format-2 node line that is
+    // missing them is dropped rather than read with the name as a number.
+    {
+        Graph g;
+        const NodeId ch = g.addNode(NodeKind::Channel, "131.725", PortType::Iq, 10.0f, 20.0f);
+        const NodeId dm = g.addNode(NodeKind::Demod, "AM", PortType::Iq, 200.0f, 20.0f);
+        g.mutableNode(ch)->freqHz = 131725000.0;
+        g.mutableNode(dm)->mode = 3;
+
+        const LoadResult r = parse(serialise(g, 0.0f, 0.0f, 1.0f));
+        CHECK(r.graph.nodes().size() == 2u);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes()[0].freqHz == 131725000.0);
+        CHECK(r.graph.nodes()[0].name == "131.725");
+        CHECK(r.graph.nodes()[1].mode == 3);
+
+        // A frequency is carried exactly, not rounded through a float - a
+        // channel 500 Hz off is a channel that decodes nothing.
+        CHECK(r.graph.nodes()[0].freqHz == g.nodes()[0].freqHz);
+
+        // Truncated at the settings: dropped, not misread.
+        const LoadResult bad = parse(header2() + "node 1 1 0 10 20 Channel\n");
+        CHECK(bad.ok);
+        CHECK(bad.graph.nodes().empty());
+        CHECK(bad.dropped == 1);
     }
 
     return testSummary("test_patch_io");

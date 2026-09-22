@@ -20,8 +20,15 @@
 //
 //   foxsdr-patch 1
 //   view <panX> <panY> <zoom>
-//   node <id> <kind> <feed> <x> <y> <name to end of line>
+//   node <id> <kind> <feed> <x> <y> <freqHz> <mode> <name to end of line>
 //   wire <fromId> <fromPort> <toId> <toPort>
+//
+// THE NAME IS ALWAYS LAST, and that is why adding the two settings was a
+// format CHANGE rather than an addition: the name is read to the end of the
+// line so it may contain spaces, so anything appended after it would be
+// swallowed into it. Format 1 lines are still read - their nodes simply get
+// the default settings - because a patch saved by a build from this morning
+// should not be lost by a build from this afternoon.
 //
 // Ids in the file are the file's own. They are remapped on load, because the
 // graph hands out its own and reusing a file's would collide with whatever is
@@ -42,7 +49,7 @@
 namespace cascade::core::patch {
 
 inline constexpr const char* kPatchMagic = "foxsdr-patch";
-inline constexpr int kPatchFormat = 1;
+inline constexpr int kPatchFormat = 2;
 
 struct LoadResult {
     Graph graph;
@@ -86,7 +93,7 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
         }
         o << "node " << n.id << ' ' << static_cast<unsigned>(n.kind) << ' '
           << static_cast<unsigned>(feed) << ' ' << n.x << ' ' << n.y << ' '
-          << sanitiseName(n.name) << '\n';
+          << n.freqHz << ' ' << n.mode << ' ' << sanitiseName(n.name) << '\n';
     }
     for (const Wire& w : g.wires()) {
         o << "wire " << w.from << ' ' << w.fromPort << ' ' << w.to << ' ' << w.toPort << '\n';
@@ -100,10 +107,10 @@ inline LoadResult parse(const std::string& text) {
     std::string line;
 
     if (!std::getline(in, line)) { return r; }
+    int version = 0;
     {
         std::istringstream h(line);
         std::string magic;
-        int version = 0;
         if (!(h >> magic >> version) || magic != kPatchMagic || version < 1) { return r; }
         // A LATER format is read, not refused: every line this build does not
         // understand is skipped, so the worst case is losing what was added
@@ -143,12 +150,25 @@ inline LoadResult parse(const std::string& text) {
                 ++r.dropped;
                 continue;
             }
+            // Format 1 has no settings on the line; its nodes take the
+            // defaults rather than reading the name as a number.
+            double freqHz = 0.0;
+            int mode = 0;
+            if (version >= 2 && !(s >> freqHz >> mode)) {
+                ++r.dropped;
+                continue;
+            }
+
             std::string name;
             std::getline(s, name);
             if (!name.empty() && name.front() == ' ') { name.erase(0, 1); }
 
             const NodeId made = r.graph.addNode(static_cast<NodeKind>(kind), name,
                                                 static_cast<PortType>(feed), x, y);
+            if (Node* n = r.graph.mutableNode(made); n != nullptr) {
+                n->freqHz = freqHz;
+                n->mode = mode;
+            }
             remap[static_cast<NodeId>(fileId)] = made;
             continue;
         }

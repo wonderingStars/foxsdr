@@ -43,6 +43,8 @@ ImVec2 iv(Vec2 v) { return ImVec2{v.x, v.y}; }
 
 Vec2 vv(ImVec2 v) { return Vec2{v.x, v.y}; }
 
+}  // namespace
+
 const char* kindCaption(NodeKind k) {
     switch (k) {
         case NodeKind::Radio: return "RADIO";
@@ -64,8 +66,6 @@ void drawNodePlate(ImDrawList* dl, ImVec2 a, ImVec2 b, bool selected) {
     dl->AddRect(a, b, selected ? theme::kIvory : theme::kBrassBright, theme::kPanelRounding,
                 0, theme::kHairline);
 }
-
-}  // namespace
 
 const char* refusalText(Connect why) {
     switch (why) {

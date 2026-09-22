@@ -10869,9 +10869,95 @@ void AppWindow::drawPatchPage() {
 
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
+
+        // The canvas takes what is left after the inspector, which is a fixed
+        // width: a panel that grew with the window would put the frequency box
+        // somewhere different on every machine.
+        constexpr float kInspectorW = 236.0f;
+        constexpr float kGap = 8.0f;
+        const float canvasW = std::max(160.0f, avail.x - kInspectorW - kGap);
+
         if (avail.x > 8.0f && avail.y > 8.0f) {
-            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, origin, avail);
+            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, origin,
+                                                 ImVec2(canvasW, avail.y));
         }
+
+        // --- the inspector ----------------------------------------------------
+        ImGui::SetCursorScreenPos(ImVec2(origin.x + canvasW + kGap, origin.y));
+        if (ImGui::BeginChild("##patchinspector", ImVec2(kInspectorW, avail.y), true)) {
+            cascade::core::patch::Node* sel =
+                patchGraph_.mutableNode(patchUi_.selected);
+            if (sel == nullptr) {
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                         cascade::gui::theme::kInkMuted));
+                ImGui::TextWrapped("Nothing selected.");
+                ImGui::Spacing();
+                ImGui::TextWrapped(
+                    "Click a node to set what it does. Drag from one port to "
+                    "another to wire them; drag a node by its title bar to move "
+                    "it. Delete removes whatever is selected.");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::TextUnformatted(cascade::gui::patch::kindCaption(sel->kind));
+                ImGui::Separator();
+
+                char nameBuf[64];
+                std::snprintf(nameBuf, sizeof(nameBuf), "%s", sel->name.c_str());
+                ImGui::TextUnformatted("Name");
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputText("##patchname", nameBuf, sizeof(nameBuf))) {
+                    sel->name = nameBuf;
+                    patchUi_.dirty = true;
+                }
+
+                switch (sel->kind) {
+                    case cascade::core::patch::NodeKind::Channel: {
+                        // IN MHz, because that is how every other frequency in
+                        // this application is entered, and stored in Hz because
+                        // that is what the arithmetic wants. Six decimals is 1 Hz
+                        // - a channel half a kilohertz out decodes nothing, so
+                        // the box has to be able to say exactly where it is.
+                        ImGui::Spacing();
+                        ImGui::TextUnformatted("Frequency (MHz)");
+                        double mhz = sel->freqHz / 1e6;
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        if (ImGui::InputDouble("##patchfreq", &mhz, 0.0125, 0.1, "%.6f")) {
+                            sel->freqHz = mhz * 1e6;
+                            patchUi_.dirty = true;
+                        }
+                        break;
+                    }
+                    case cascade::core::patch::NodeKind::Demod: {
+                        ImGui::Spacing();
+                        ImGui::TextUnformatted("Mode");
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        int m = sel->mode;
+                        if (m < 0 || m >= IM_ARRAYSIZE(kModeNames)) { m = 0; }
+                        if (ImGui::Combo("##patchmode", &m, kModeNames, IM_ARRAYSIZE(kModeNames))) {
+                            sel->mode = m;
+                            patchUi_.dirty = true;
+                        }
+                        break;
+                    }
+                    default:
+                        ImGui::Spacing();
+                        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                                 cascade::gui::theme::kInkMuted));
+                        ImGui::TextWrapped("This node has nothing to set yet.");
+                        ImGui::PopStyleColor();
+                        break;
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                if (ImGui::Button("Remove this node", ImVec2(-FLT_MIN, 0.0f))) {
+                    patchGraph_.removeNode(patchUi_.selected);
+                    patchUi_.selected = cascade::core::patch::kNoNode;
+                    patchUi_.dirty = true;
+                }
+            }
+        }
+        ImGui::EndChild();
         if (patchUi_.dirty) {
             patchUi_.dirty = false;
             patchText_ = cascade::core::patch::serialise(

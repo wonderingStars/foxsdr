@@ -99,6 +99,24 @@ struct Node {
     std::vector<PortType> outputs;
     float x = 0.0f;
     float y = 0.0f;
+
+    // --- what the node is SET to ---------------------------------------------
+    //
+    // Two fields rather than a generic property bag. A bag is tempting - every
+    // kind wants something different - but it pushes every validation to
+    // run time and spells each key twice, once where it is written and once
+    // where it is read. These are the only settings a node currently has, and
+    // a third can be added the day something needs one.
+    //
+    // WHICH KIND USES WHICH, and an unused field is simply ignored:
+    //   Channel  freqHz  the ABSOLUTE frequency the strip is centred on, so a
+    //                    patch keeps meaning the same thing when the receiver
+    //                    is retuned. The offset from the radio is arithmetic,
+    //                    not stored - storing the offset would silently move
+    //                    every channel the moment the dial did.
+    //   Demod    mode    which demodulator: an index into the host's mode list.
+    double freqHz = 0.0;
+    int mode = 0;
 };
 
 // --- the port tables ---------------------------------------------------------

@@ -26,6 +26,9 @@ namespace cascade::gui::patch {
 // What a refusal should say, in words a person can act on. Never returns null.
 const char* refusalText(core::patch::Connect why);
 
+// The word engraved on a node's title bar: RADIO, CHANNEL, DEMOD and so on.
+const char* kindCaption(core::patch::NodeKind k);
+
 // A colour per port type, taken from the bench palette rather than invented:
 // phosphor is what the radio received, so it carries I/Q and audio; text and
 // control are lettering colours because they carry no samples.
