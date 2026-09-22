@@ -2432,6 +2432,10 @@ private:
     cascade::gui::patch::Interaction patchUi_;
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;
+    // The patch as core/patch_io.hpp writes it, rebuilt only when the
+    // canvas says it changed. currentConfig() runs every frame and must
+    // not serialise a document on each one.
+    std::string patchText_;
     // How many parts have been dropped from the bin, used only to
     // stagger the next one so a run of clicks does not stack every
     // node on the same spot.

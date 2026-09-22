@@ -259,6 +259,11 @@ struct Interaction {
 
     bool panning = false;
 
+    // Set whenever the canvas changes the graph or the view. The owner
+    // re-serialises on it and clears it, so the document is rebuilt when
+    // it actually moved rather than once a frame forever.
+    bool dirty = false;
+
     // Exactly one of these is set at a time: selecting a node clears the wire
     // and the other way round. Two selections at once would make one Delete
     // key mean two things, and which it meant would depend on what was clicked

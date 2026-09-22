@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
+#include "core/patch_io.hpp"
 #include "gui/patch_view.hpp"
 
 #include <algorithm>
@@ -614,6 +615,7 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
+           a.patch == b.patch &&
            a.bandPlanSelection == b.bandPlanSelection &&
            a.bandPlanSize == b.bandPlanSize && a.bandPlanPalette == b.bandPlanPalette &&
            // The frequency display style: picked in the VIEW bank, so without
@@ -10795,6 +10797,10 @@ void AppWindow::drawPatchPage() {
     if (!patchSeeded_) {
         patchSeeded_ = true;
         cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
+        // The starter counts as a change, or it would be rebuilt from
+        // scratch on every launch and the first node the user drags
+        // would be the only thing that ever persisted.
+        patchUi_.dirty = true;
     }
 
     // Square-ish and large: a patch is read across, and a canvas that starts
@@ -10855,6 +10861,7 @@ void AppWindow::drawPatchPage() {
                                               binPos.y + 90.0f + stagger});
                 patchGraph_.addNode(kParts[i].kind, kParts[i].label, kParts[i].feed, at.x, at.y);
                 ++nodesPlaced_;
+                patchUi_.dirty = true;
             }
         }
 
@@ -10864,6 +10871,11 @@ void AppWindow::drawPatchPage() {
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         if (avail.x > 8.0f && avail.y > 8.0f) {
             cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, origin, avail);
+        }
+        if (patchUi_.dirty) {
+            patchUi_.dirty = false;
+            patchText_ = cascade::core::patch::serialise(
+                patchGraph_, patchUi_.view.pan.x, patchUi_.view.pan.y, patchUi_.view.zoom);
         }
     }
     endPage();
@@ -19279,6 +19291,27 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     autoNotch_ = cfg.autoNotch;
     pipeline_.setAutoNotchEnabled(autoNotch_);
     bandPlanOverlay_ = cfg.bandPlanOverlay;
+    // THE PATCH. Loaded through patch_io::parse, which offers every wire
+    // to connect() rather than trusting the file - so a hand-edited or
+    // truncated document cannot produce a graph the canvas could never
+    // have built. patchSeeded_ is set from what actually arrived, so an
+    // empty or unreadable patch still gets the one-radio starter and a
+    // real one is not overwritten by it.
+    if (!cfg.patch.empty()) {
+        cascade::core::patch::LoadResult pr = cascade::core::patch::parse(cfg.patch);
+        if (pr.ok) {
+            patchGraph_ = std::move(pr.graph);
+            patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
+            patchUi_.view.zoom = pr.zoom;
+            patchSeeded_ = !patchGraph_.nodes().empty();
+            patchText_ = cfg.patch;
+            if (pr.dropped > 0) {
+                std::fprintf(stderr,
+                             "cascade: patch loaded with %d connection(s) dropped\n",
+                             pr.dropped);
+            }
+        }
+    }
     bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
     bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
     // applyConfig runs AFTER the startup loadBandPlan(), so a restored
@@ -19835,6 +19868,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // generator installed and the radio remembered, and the radio is what
     // goes back into the file. Everything else - a clean restore, any
     // deliberate switch - is the live source, exactly as before.
+    cfg.patch = patchText_;
     const cascade::gui::SavedSource src = cascade::gui::sourceToSave(
         sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, iqOpenPath_,
         pipeline_.activeSource().sampleRateHz(), restoreKeep_);

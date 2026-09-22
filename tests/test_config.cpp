@@ -255,6 +255,9 @@ AppConfig junkConfig() {
 // Field-by-field equality with one CHECK each, so a mismatch names the field.
 void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.schemaVersion == b.schemaVersion);
+    // A patch is a multi-line document carried as one string; it has to
+    // be compared here or the round-trip test would not cover it at all.
+    CHECK(a.patch == b.patch);
     CHECK(a.sourceKind == b.sourceKind);
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
@@ -3044,6 +3047,45 @@ int main() {
             CHECK(cascade::net::parseControlRequest("{\"transmitPtt\":true}", cr, cerr));
             CHECK(cr.transmitPtt.value_or(false));
         }
+    }
+
+    // --- a patch survives the config, newlines and all ---------------------
+    //
+    // The patch is core/patch_io.hpp's line-based document stored as ONE JSON
+    // string, so every record separator is a newline inside a quoted value.
+    // A single-line fixture would pass whatever the escaper did with those, so
+    // this one is deliberately several lines with a name containing spaces.
+    {
+        AppConfig in;
+        in.patch =
+            "foxsdr-patch 1\n"
+            "view -120 45.5 1.25\n"
+            "node 1 0 0 60 80 Radio A\n"
+            "node 2 1 0 260 40 131.725\n"
+            "wire 1 0 2 0\n";
+
+        const std::string path = p("patch_roundtrip.json");
+        std::string err = "stale";
+        CHECK(ConfigStore::save(path, in, err));
+        CHECK(err.empty());
+
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(out.patch == in.patch);
+
+        // The newlines really are still newlines, not the two characters
+        // backslash-n, which is what a naive escaper leaves behind.
+        CHECK(out.patch.find('\n') != std::string::npos);
+        CHECK(out.patch.find("\\n") == std::string::npos);
+
+        // And a config that never mentions a patch leaves it empty rather than
+        // inventing one.
+        const std::string none = p("patch_absent.json");
+        CHECK(writeText(none, "{}\n"));
+        AppConfig blank = junkConfig();
+        CHECK(ConfigStore::load(none, blank, err));
+        CHECK(blank.patch.empty());
     }
 
     const int rc = testSummary("test_config");

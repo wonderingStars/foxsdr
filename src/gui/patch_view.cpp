@@ -123,6 +123,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
             ui.view.pan.x += io.MouseDelta.x;
             ui.view.pan.y += io.MouseDelta.y;
+            ui.dirty = true;
         } else {
             ui.panning = false;
         }
@@ -144,6 +145,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size) {
         v = zoomAbout(v, vv(io.MousePos), io.MouseWheel > 0.0f ? 1.12f : 1.0f / 1.12f);
         ui.view.zoom = v.zoom;
         ui.view.pan = Vec2{v.pan.x - origin.x, v.pan.y - origin.y};
+        ui.dirty = true;
     }
 
     // --- the grid -------------------------------------------------------------
@@ -289,6 +291,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size) {
             if (n != nullptr) {
                 n->x = mouseWorld.x - ui.grab.x;
                 n->y = mouseWorld.y - ui.grab.y;
+                ui.dirty = true;
             }
         } else {
             ui.dragNode = kNoNode;
@@ -306,6 +309,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size) {
             const PortHit& in = ui.wireFrom.input ? ui.wireFrom : drop;
             if (!out.input && in.input) {
                 const Connect r = g.connect(out.node, out.port, in.node, in.port);
+                if (r == Connect::Ok) { ui.dirty = true; }
                 if (r != Connect::Ok) {
                     ui.refusal = r;
                     ui.refusedAt = ImGui::GetTime();
@@ -327,9 +331,11 @@ void drawPatchCanvas(Graph& g, Interaction& ui, ImVec2 origin, ImVec2 size) {
         if (ui.wireSelected) {
             g.disconnect(ui.selectedWire);
             ui.wireSelected = false;
+            ui.dirty = true;
         } else if (ui.selected != kNoNode) {
             g.removeNode(ui.selected);
             ui.selected = kNoNode;
+            ui.dirty = true;
         }
     }
 

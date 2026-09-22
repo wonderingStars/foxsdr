@@ -244,6 +244,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getDouble(j, "notchQ", out.notchQ);
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
+    getString(j, "patch", out.patch);
     getString(j, "bandPlanSelection", out.bandPlanSelection);
     // Both are a closed set of three spellings, unlike bandPlanSelection
     // (which is validated against whatever is actually installed, elsewhere,
@@ -688,6 +689,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["notchQ"] = cfg.notchQ;
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
+    j["patch"] = cfg.patch;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["bandPlanSize"] = cfg.bandPlanSize;
     j["bandPlanPalette"] = cfg.bandPlanPalette;

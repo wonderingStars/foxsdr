@@ -217,6 +217,13 @@ struct AppConfig {
     // broadcast edges; and defaulting to any one region is simply incorrect
     // for most of the planet. "world" is the only choice that is never wrong,
     // and the picker is one click from the right regional plan.
+    // THE PATCH, as core/patch_io.hpp writes it: a small line-based
+    // document stored as one string. It lives in the config rather than
+    // in a file of its own so it inherits the config's crash-safe write
+    // (temp file, flush, rename) and its off-thread save, both of which
+    // exist because of a real hang report and neither of which is worth
+    // reimplementing for a second document.
+    std::string patch;
     std::string bandPlanSelection = "world";
 
     // Ribbon size and segment-colour palette for the overlay above (issue #1:
