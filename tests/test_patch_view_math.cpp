@@ -1,0 +1,350 @@
+// Tests for gui/patch_view_math.hpp - where things sit on the patch canvas and
+// what the pointer is over.
+//
+// Hit-testing is the part of a patcher that fails without anyone filing a bug.
+// A port whose clickable circle sits four pixels from where it is drawn reads
+// as a fiddly application rather than as a defect, and staring at the rendering
+// never finds it. So the geometry the drawing uses and the geometry the click
+// uses come from the same functions, and those functions are pinned here with
+// expected numbers.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "gui/patch_view_math.hpp"
+
+#include "core/patch_graph.hpp"
+#include "test_check.hpp"
+
+using cascade::core::patch::Connect;
+using cascade::core::patch::Graph;
+using cascade::core::patch::kNoNode;
+using cascade::core::patch::NodeId;
+using cascade::core::patch::NodeKind;
+using cascade::core::patch::PortType;
+using cascade::core::patch::Wire;
+
+using cascade::gui::patch::bezier;
+using cascade::gui::patch::distanceToWire;
+using cascade::gui::patch::inputPortPos;
+using cascade::gui::patch::kBottomPad;
+using cascade::gui::patch::kFirstPortY;
+using cascade::gui::patch::kHeaderHeight;
+using cascade::gui::patch::kMaxZoom;
+using cascade::gui::patch::kMinNodeHeight;
+using cascade::gui::patch::kMinZoom;
+using cascade::gui::patch::kNodeWidth;
+using cascade::gui::patch::kPortPitch;
+using cascade::gui::patch::kWireMaxReach;
+using cascade::gui::patch::kWireMinReach;
+using cascade::gui::patch::nodeAt;
+using cascade::gui::patch::nodeHeight;
+using cascade::gui::patch::outputPortPos;
+using cascade::gui::patch::pointInHeader;
+using cascade::gui::patch::pointInNode;
+using cascade::gui::patch::portAt;
+using cascade::gui::patch::PortHit;
+using cascade::gui::patch::screenToWorld;
+using cascade::gui::patch::Vec2;
+using cascade::gui::patch::View;
+using cascade::gui::patch::wireCurve;
+using cascade::gui::patch::wireEnds;
+using cascade::gui::patch::worldToScreen;
+using cascade::gui::patch::zoomAbout;
+
+namespace {
+
+// Commas inside BRACES are not protected from the preprocessor, so
+// CHECK(f(Vec2{a, b})) is two macro arguments and MSVC quietly expands it with
+// only the first - an assertion that compiles, runs and checks the wrong
+// thing. Commas inside PARENTHESES are protected, so every point and wire in
+// this file is built through a function.
+constexpr Vec2 V(float x, float y) { return Vec2{x, y}; }
+
+constexpr Wire W(NodeId from, unsigned fromPort, NodeId to, unsigned toPort) {
+    return Wire{from, fromPort, to, toPort};
+}
+
+}  // namespace
+
+int main() {
+    // [1] A box is tall enough for its ports, and never shorter than the
+    // minimum. A node whose ports fall outside its own outline is the most
+    // visible way this can be wrong.
+    {
+        // A one-port node is header + offset + one pitch + pad = 64, NOT the
+        // 54 floor. Worth stating plainly because the floor therefore governs
+        // only a node with no ports at all - every real kind has at least one,
+        // so it is a guard against a future portless node collapsing, not a
+        // height anything currently uses.
+        const float one = kFirstPortY + kPortPitch + kBottomPad;
+        CHECK_NEAR(nodeHeight(0, 1), one, 0.001f);   // a radio: one output
+        CHECK_NEAR(nodeHeight(1, 1), one, 0.001f);   // a channel
+        CHECK(one > kMinNodeHeight);
+        CHECK(nodeHeight(0, 0) == kMinNodeHeight);   // where the floor applies
+
+        const float four = nodeHeight(4, 1);
+        const float six = nodeHeight(6, 1);
+        CHECK(four > kMinNodeHeight);
+        CHECK(six > four);
+        CHECK_NEAR(six - four, 2.0f * kPortPitch, 0.001f);
+        // Height follows whichever side has MORE ports.
+        CHECK(nodeHeight(1, 5) == nodeHeight(5, 1));
+    }
+
+    // [2] Ports sit on the edges, evenly spaced, and inside the outline.
+    {
+        Graph g;
+        const NodeId id = g.addNode(NodeKind::Demod, "AM", PortType::Iq, 100.0f, 40.0f);
+        const auto& n = *g.find(id);
+
+        CHECK(inputPortPos(n, 0).x == 100.0f);                 // left edge
+        CHECK(outputPortPos(n, 0).x == 100.0f + kNodeWidth);   // right edge
+        CHECK(inputPortPos(n, 0).y == outputPortPos(n, 0).y);  // row 0 lines up
+
+        // Every port is vertically within the box, and below the header.
+        const float h = nodeHeight(n);
+        CHECK(inputPortPos(n, 0).y > n.y + kHeaderHeight);
+        CHECK(inputPortPos(n, 0).y < n.y + h);
+
+        // Spacing is the stated pitch. Node is a plain struct, so a
+        // many-ported one can be built directly rather than waiting for a node
+        // kind that happens to have several - the arithmetic is what is under
+        // test, not the port table (test_patch_graph covers that).
+        cascade::core::patch::Node wide;
+        wide.x = 5.0f;
+        wide.y = 7.0f;
+        wide.inputs = {PortType::Iq, PortType::Audio, PortType::Text, PortType::Control};
+        wide.outputs = {PortType::Text};
+
+        for (unsigned i = 1; i < 4; ++i) {
+            CHECK_NEAR(inputPortPos(wide, i).y - inputPortPos(wide, i - 1).y, kPortPitch, 0.001f);
+        }
+        // All four still fit inside a box sized for them.
+        const float wh = nodeHeight(wide);
+        CHECK(inputPortPos(wide, 3).y < wide.y + wh);
+        CHECK(inputPortPos(wide, 0).x == wide.x);
+        CHECK(outputPortPos(wide, 0).x == wide.x + kNodeWidth);
+    }
+
+    // [3] The outline, and the header a drag moves the node by.
+    {
+        Graph g;
+        const NodeId id = g.addNode(NodeKind::Channel, "C", PortType::Iq, 10.0f, 20.0f);
+        const auto& n = *g.find(id);
+        const float h = nodeHeight(n);
+
+        CHECK(pointInNode(n, V(10.0f, 20.0f)));                       // top-left corner
+        CHECK(pointInNode(n, V(10.0f + kNodeWidth, 20.0f + h)));      // bottom-right
+        CHECK(pointInNode(n, V(60.0f, 40.0f)));                       // inside
+        CHECK(!pointInNode(n, V(9.0f, 40.0f)));                       // just left
+        CHECK(!pointInNode(n, V(60.0f, 20.0f + h + 1.0f)));           // just below
+
+        CHECK(pointInHeader(n, V(60.0f, 21.0f)));
+        CHECK(!pointInHeader(n, V(60.0f, 20.0f + kHeaderHeight + 1.0f)));
+        // The header is part of the node, so anything in it is in both.
+        CHECK(pointInNode(n, V(60.0f, 21.0f)));
+    }
+
+    // [4] World and screen round-trip. Getting this wrong puts every click a
+    // scroll-distance away from where it looked.
+    {
+        const View v{V(-120.0f, 45.0f), 1.75f};
+        for (const Vec2 w : {V(0.0f, 0.0f), V(300.0f, -80.0f), V(-42.5f, 900.0f)}) {
+            const Vec2 back = screenToWorld(v, worldToScreen(v, w));
+            CHECK_NEAR(back.x, w.x, 0.001f);
+            CHECK_NEAR(back.y, w.y, 0.001f);
+        }
+        // At zoom 1 with no pan the two spaces coincide.
+        const View unit{V(0.0f, 0.0f), 1.0f};
+        CHECK(worldToScreen(unit, V(7.0f, 9.0f)) == V(7.0f, 9.0f));
+    }
+
+    // [5] Zooming keeps whatever is under the pointer under the pointer, and
+    // stops at the limits. A canvas that drifts while you zoom feels broken
+    // even though nothing is.
+    {
+        const View v{V(30.0f, -10.0f), 1.0f};
+        const Vec2 anchor{400.0f, 250.0f};
+        const Vec2 worldUnder = screenToWorld(v, anchor);
+
+        const View zoomed = zoomAbout(v, anchor, 1.6f);
+        CHECK_NEAR(zoomed.zoom, 1.6f, 0.0001f);
+        const Vec2 nowAt = worldToScreen(zoomed, worldUnder);
+        CHECK_NEAR(nowAt.x, anchor.x, 0.01f);
+        CHECK_NEAR(nowAt.y, anchor.y, 0.01f);
+
+        // ...and the same holds after zooming out.
+        const View out = zoomAbout(zoomed, anchor, 0.25f);
+        const Vec2 stillAt = worldToScreen(out, worldUnder);
+        CHECK_NEAR(stillAt.x, anchor.x, 0.01f);
+        CHECK_NEAR(stillAt.y, anchor.y, 0.01f);
+
+        // Limits hold however hard it is pushed.
+        View deep = v;
+        for (int i = 0; i < 40; ++i) { deep = zoomAbout(deep, anchor, 2.0f); }
+        CHECK_NEAR(deep.zoom, kMaxZoom, 0.0001f);
+        View shallow = v;
+        for (int i = 0; i < 40; ++i) { shallow = zoomAbout(shallow, anchor, 0.5f); }
+        CHECK_NEAR(shallow.zoom, kMinZoom, 0.0001f);
+    }
+
+    // [6] Which node the pointer is over, including the overlap rule: the one
+    // drawn last is on top, so it must be the one hit.
+    {
+        Graph g;
+        const NodeId under = g.addNode(NodeKind::Channel, "under", PortType::Iq, 0.0f, 0.0f);
+        const NodeId over = g.addNode(NodeKind::Channel, "over", PortType::Iq, 20.0f, 10.0f);
+
+        CHECK(nodeAt(g, V(5.0f, 5.0f)) == under);      // only the first covers this
+        CHECK(nodeAt(g, V(30.0f, 20.0f)) == over);     // both cover it; last wins
+        CHECK(nodeAt(g, V(-50.0f, -50.0f)) == kNoNode);
+
+        Graph empty;
+        CHECK(nodeAt(empty, V(0.0f, 0.0f)) == kNoNode);
+    }
+
+    // [7] Which PORT the pointer is over. Nearest within the radius, not first
+    // found, and inputs are told from outputs.
+    {
+        Graph g;
+        const NodeId a = g.addNode(NodeKind::Radio, "R", PortType::Iq, 0.0f, 0.0f);
+        const NodeId b = g.addNode(NodeKind::Channel, "C", PortType::Iq, 300.0f, 0.0f);
+        const auto& na = *g.find(a);
+        const auto& nb = *g.find(b);
+
+        const PortHit onOut = portAt(g, outputPortPos(na, 0));
+        CHECK(onOut.found);
+        CHECK(onOut.node == a);
+        CHECK(!onOut.input);
+
+        const PortHit onIn = portAt(g, inputPortPos(nb, 0));
+        CHECK(onIn.found);
+        CHECK(onIn.node == b);
+        CHECK(onIn.input);
+
+        // Well away from anything.
+        CHECK(!portAt(g, V(160.0f, 400.0f)).found);
+        // Just outside the grab radius of a real port.
+        const Vec2 near = outputPortPos(na, 0);
+        CHECK(!portAt(g, V(near.x + 30.0f, near.y)).found);
+
+        // Two ports within reach at once: the nearer must win. Placed so the
+        // input of `c` is close to the output of `a`.
+        Graph t;
+        const NodeId src = t.addNode(NodeKind::Radio, "R", PortType::Iq, 0.0f, 0.0f);
+        const NodeId dst = t.addNode(NodeKind::Channel, "C", PortType::Iq, kNodeWidth + 6.0f, 0.0f);
+        const Vec2 srcOut = outputPortPos(*t.find(src), 0);
+        const Vec2 dstIn = inputPortPos(*t.find(dst), 0);
+        CHECK(portAt(t, V(srcOut.x + 1.0f, srcOut.y)).node == src);
+        CHECK(portAt(t, V(dstIn.x - 1.0f, dstIn.y)).node == dst);
+    }
+
+    // [8] Wire tangents are horizontal and the reach is clamped at both ends.
+    // Horizontal is what makes a patch read left-to-right as a signal path.
+    {
+        Vec2 c1, c2;
+
+        // A short wire: reach clamped UP to the minimum so it still bulges.
+        wireCurve(V(0.0f, 0.0f), V(10.0f, 0.0f), c1, c2);
+        CHECK(c1.y == 0.0f);
+        CHECK(c2.y == 0.0f);
+        CHECK_NEAR(c1.x, kWireMinReach, 0.001f);
+
+        // A long one: clamped DOWN to the maximum so it does not flatten.
+        wireCurve(V(0.0f, 0.0f), V(2000.0f, 0.0f), c1, c2);
+        CHECK_NEAR(c1.x, kWireMaxReach, 0.001f);
+        CHECK_NEAR(c2.x, 2000.0f - kWireMaxReach, 0.001f);
+
+        // Tangents stay horizontal even when the ends are far apart vertically.
+        wireCurve(V(0.0f, 0.0f), V(300.0f, 500.0f), c1, c2);
+        CHECK(c1.y == 0.0f);
+        CHECK(c2.y == 500.0f);
+
+        // ...and when the destination is to the LEFT, which happens whenever a
+        // node is dragged back past its source. The curve must still leave to
+        // the right and arrive from the left.
+        wireCurve(V(400.0f, 0.0f), V(100.0f, 0.0f), c1, c2);
+        CHECK(c1.x > 400.0f);
+        CHECK(c2.x < 100.0f);
+    }
+
+    // [9] The curve actually starts and ends on its ports. A wire that misses
+    // the dot it belongs to is the single most visible drawing bug here.
+    {
+        const Vec2 a{10.0f, 20.0f};
+        const Vec2 b{400.0f, 300.0f};
+        Vec2 c1, c2;
+        wireCurve(a, b, c1, c2);
+        const Vec2 start = bezier(a, c1, c2, b, 0.0f);
+        const Vec2 end = bezier(a, c1, c2, b, 1.0f);
+        CHECK_NEAR(start.x, a.x, 0.0001f);
+        CHECK_NEAR(start.y, a.y, 0.0001f);
+        CHECK_NEAR(end.x, b.x, 0.0001f);
+        CHECK_NEAR(end.y, b.y, 0.0001f);
+        // The midpoint of a level wire sits on the same line, by symmetry.
+        Vec2 d1, d2;
+        const Vec2 la{0.0f, 50.0f};
+        const Vec2 lb{400.0f, 50.0f};
+        wireCurve(la, lb, d1, d2);
+        CHECK_NEAR(bezier(la, d1, d2, lb, 0.5f).y, 50.0f, 0.0001f);
+    }
+
+    // [10] Clicking a wire. Near the curve is near; away from it is not.
+    {
+        const Vec2 a{0.0f, 0.0f};
+        const Vec2 b{400.0f, 0.0f};
+        CHECK(distanceToWire(a, b, V(0.0f, 0.0f)) < 0.5f);       // on an endpoint
+        CHECK(distanceToWire(a, b, V(200.0f, 0.0f)) < 1.0f);     // on the middle
+        CHECK(distanceToWire(a, b, V(200.0f, 60.0f)) > 40.0f);   // well off it
+        CHECK(distanceToWire(a, b, V(200.0f, 4.0f)) < 6.0f);     // just beside it
+
+        // A wire between two coincident points is a point, not a crash.
+        CHECK(distanceToWire(V(5.0f, 5.0f), V(5.0f, 5.0f), V(5.0f, 5.0f)) < 60.0f);
+
+        // A sloping wire: a point on the straight chord is NOT necessarily on
+        // the curve, which is the whole reason this samples the curve.
+        const float chordMid = distanceToWire(V(0.0f, 0.0f), V(300.0f, 200.0f),
+                                              V(150.0f, 100.0f));
+        CHECK(chordMid < 30.0f);
+    }
+
+    // [11] Endpoints looked up through the graph, and the stale-wire guard.
+    {
+        Graph g;
+        const NodeId r = g.addNode(NodeKind::Radio, "R", PortType::Iq, 0.0f, 0.0f);
+        const NodeId c = g.addNode(NodeKind::Channel, "C", PortType::Iq, 300.0f, 60.0f);
+        CHECK(g.connect(r, 0, c, 0) == Connect::Ok);
+
+        const auto ends = wireEnds(g, g.wires()[0]);
+        CHECK(ends.found);
+        CHECK(ends.from == outputPortPos(*g.find(r), 0));
+        CHECK(ends.to == inputPortPos(*g.find(c), 0));
+
+        // A wire naming a node that is gone, or a port that does not exist,
+        // answers "not found" rather than reading past the end.
+        CHECK(!wireEnds(g, W(9999u, 0, c, 0)).found);
+        CHECK(!wireEnds(g, W(r, 0, 9999u, 0)).found);
+        CHECK(!wireEnds(g, W(r, 7, c, 0)).found);
+        CHECK(!wireEnds(g, W(r, 0, c, 7)).found);
+    }
+
+    // [12] Moving a node moves its ports and therefore its wires - the
+    // property that makes dragging look right.
+    {
+        Graph g;
+        const NodeId r = g.addNode(NodeKind::Radio, "R", PortType::Iq, 0.0f, 0.0f);
+        const NodeId c = g.addNode(NodeKind::Channel, "C", PortType::Iq, 300.0f, 0.0f);
+        CHECK(g.connect(r, 0, c, 0) == Connect::Ok);
+        const auto before = wireEnds(g, g.wires()[0]);
+
+        g.mutableNode(c)->x += 120.0f;
+        g.mutableNode(c)->y -= 35.0f;
+        const auto after = wireEnds(g, g.wires()[0]);
+
+        CHECK(after.found);
+        CHECK(after.from == before.from);                  // the source did not move
+        CHECK_NEAR(after.to.x, before.to.x + 120.0f, 0.001f);
+        CHECK_NEAR(after.to.y, before.to.y - 35.0f, 0.001f);
+    }
+
+    return testSummary("test_patch_view_math");
+}
