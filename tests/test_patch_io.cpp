@@ -347,6 +347,33 @@ int main() {
         CHECK(bad.dropped == 1);
     }
 
+    // [15b] FREQUENCIES WITH MORE THAN SIX SIGNIFICANT DIGITS survive exactly.
+    // [15] passes with 131.725 MHz only because that number HAS six digits,
+    // and six is the stream's default precision: 446.00625 MHz (PMR446) was
+    // written 4.46006e+08 and came back 250 Hz off, 118.008333 MHz (an 8.33 kHz
+    // airband channel) 333 Hz off - a saved patch that decodes nothing after a
+    // restart. Found from the patch document a scripted run printed in 0.99.15.
+    {
+        Graph g;
+        const double freqs[] = {446006250.0, 118008333.0, 1090000000.0, 137912500.0,
+                                7074000.5};
+        for (const double f : freqs) {
+            const NodeId ch = g.addNode(NodeKind::Channel, "c", PortType::Iq, 1234.5678f, -98.765f);
+            g.mutableNode(ch)->freqHz = f;
+        }
+        const LoadResult r = parse(serialise(g, 0.0f, 0.0f, 1.0f));
+        CHECK(r.graph.nodes().size() == 5u);
+        for (std::size_t i = 0; i < 5u && i < r.graph.nodes().size(); ++i) {
+            CHECK(r.graph.nodes()[i].freqHz == freqs[i]);
+        }
+        // Positions are floats and must come back as the SAME float too, or
+        // a node creeps a little on every save.
+        if (!r.graph.nodes().empty()) {
+            CHECK(r.graph.nodes()[0].x == 1234.5678f);
+            CHECK(r.graph.nodes()[0].y == -98.765f);
+        }
+    }
+
     // [16] FORMAT 3: every node's size and a decoder's plugin survive the
     // round trip - including a plugin key with a space and a percent sign in
     // it, because a key is a file name and file names hold both.

@@ -48,6 +48,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <iomanip>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -145,7 +147,16 @@ inline bool decodePluginKey(const std::string& token, std::string& key) {
 }
 
 inline std::string serialise(const Graph& g, float panX, float panY, float zoom) {
+    // ROUND-TRIP PRECISION, for every number. A stream's default is six
+    // significant digits, which wrote 446.00625 MHz as 4.46006e+08 - a
+    // channel 250 Hz off after a save and a load, and one that decodes
+    // nothing. max_digits10 is the count that guarantees a value reads back
+    // as the SAME value: 17 for a double (frequencies), 9 for a float
+    // (positions, sizes, the view), which is set per field below.
+    constexpr int kF = std::numeric_limits<float>::max_digits10;
+    constexpr int kD = std::numeric_limits<double>::max_digits10;
     std::ostringstream o;
+    o << std::setprecision(kF);
     o << kPatchMagic << ' ' << kPatchFormat << '\n';
     o << "view " << panX << ' ' << panY << ' ' << zoom << '\n';
     for (const Node& n : g.nodes()) {
@@ -161,8 +172,8 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
         }
         o << "node " << n.id << ' ' << static_cast<unsigned>(n.kind) << ' '
           << static_cast<unsigned>(feed) << ' ' << n.x << ' ' << n.y << ' ' << n.w << ' '
-          << n.h << ' ' << n.freqHz << ' ' << n.mode << ' ' << encodePluginKey(n.plugin)
-          << ' ' << sanitiseName(n.name) << '\n';
+          << n.h << ' ' << std::setprecision(kD) << n.freqHz << std::setprecision(kF) << ' '
+          << n.mode << ' ' << encodePluginKey(n.plugin) << ' ' << sanitiseName(n.name) << '\n';
     }
     for (const Wire& w : g.wires()) {
         o << "wire " << w.from << ' ' << w.fromPort << ' ' << w.to << ' ' << w.toPort << '\n';
