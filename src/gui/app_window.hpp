@@ -29,6 +29,8 @@ struct GLFWwindow;
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
+#include "core/patch_graph.hpp"
+#include "gui/patch_view_math.hpp"
 #include "core/plugin_ui.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
@@ -1078,6 +1080,15 @@ private:
     // Pushes the receiver's centre into the transmitter when SPLIT is off,
     // and nothing when it is on. Called once a frame.
     void followTransmitFrequency();
+
+    // --- the patch page ------------------------------------------------------
+    // The canvas: radios, channels, decoders and displays wired together.
+    void drawPatchPage();
+    // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
+    // rather than in VIEW by the same test that put the recorder and the
+    // transmitter in that bank: a patch is not a way of LOOKING at the signal
+    // path, it IS the signal path, and it decides what the path consists of.
+    void drawPatchSection();
 
     // --- the demod scope -----------------------------------------------------
     // The page itself: the tube, its keys and its readouts.
@@ -2413,6 +2424,19 @@ private:
     // the longest sweep the audio one holds half a second and the I/Q one
     // rather more, so these are the largest scratch buffers in the window and
     // resizing them once a frame would be the most expensive thing on it.
+    // The patch, and where the user has scrolled it to. The GRAPH outlives the
+    // page - it is the document, and the page is closed far more often than
+    // the radios are - so it is owned here rather than by the canvas.
+    bool patchOpen_ = false;
+    cascade::core::patch::Graph patchGraph_;
+    cascade::gui::patch::Interaction patchUi_;
+    bool patchSeeded_ = false;
+    bool patchOpenedByEnv_ = false;
+    // How many parts have been dropped from the bin, used only to
+    // stagger the next one so a run of clicks does not stack every
+    // node on the same spot.
+    int nodesPlaced_ = 0;
+
     bool demodScopeOpen_ = false;
     DemodScopeState demodScope_;
     std::vector<float> scopeAudioBuf_;

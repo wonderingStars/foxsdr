@@ -239,6 +239,45 @@ struct WireEnds {
     bool found = false;
 };
 
+// --- what the canvas remembers between frames ---------------------------------
+//
+// All interaction, no document: the document is the Graph. It lives in this
+// header rather than beside the drawing because it holds no ImGui types and
+// app_window.hpp, which owns one, deliberately does not include imgui.h.
+struct Interaction {
+    View view;
+
+    // Dragging a node by its header. `grab` is the offset from the node's
+    // origin to the pointer, in world units, so the node does not jump to
+    // centre itself under the cursor on the first frame.
+    NodeId dragNode = kNoNode;
+    Vec2 grab;
+
+    // Dragging a wire out of a port.
+    bool wiring = false;
+    PortHit wireFrom;
+
+    bool panning = false;
+
+    // Exactly one of these is set at a time: selecting a node clears the wire
+    // and the other way round. Two selections at once would make one Delete
+    // key mean two things, and which it meant would depend on what was clicked
+    // before whatever you are looking at.
+    NodeId selected = kNoNode;
+    cascade::core::patch::Wire selectedWire;
+    bool wireSelected = false;
+
+    // WHY A REFUSAL IS REMEMBERED WITH A TIME. connect() answers instantly and
+    // the wire simply does not appear, which on its own tells the user nothing
+    // about why. Holding the reason for a couple of seconds and lettering it
+    // by the pointer turns "it did not work" into "those two carry different
+    // things" - which is the whole reason connect() returns a named reason
+    // rather than a bool.
+    cascade::core::patch::Connect refusal = cascade::core::patch::Connect::Ok;
+    double refusedAt = 0.0;
+    Vec2 refusedNear;
+};
+
 inline WireEnds wireEnds(const Graph& g, const cascade::core::patch::Wire& w) {
     const Node* a = g.find(w.from);
     const Node* b = g.find(w.to);

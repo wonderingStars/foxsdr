@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
+#include "gui/patch_view.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1553,6 +1554,16 @@ int AppWindow::run(int frames) {
         if (!demodScopeOpenedByEnv_ && std::getenv("FOXSDR_OPEN_DEMOD_SCOPE") != nullptr) {
             demodScopeOpenedByEnv_ = true;
             demodScopeOpen_ = true;
+        }
+
+        // AND THE PATCH CANVAS, for exactly the reason the two above have
+        // one: a canvas can only be judged by looking at it, nothing in a
+        // config file opens a page since 0.79.1, and the alternative is
+        // driving the mouse - which lands on whatever happens to be under
+        // the cursor and has cost hours before now.
+        if (!patchOpenedByEnv_ && std::getenv("FOXSDR_OPEN_PATCH") != nullptr) {
+            patchOpenedByEnv_ = true;
+            patchOpen_ = true;
         }
 
         // The same latch for a MAP PAGE, and for the same reason the scope has
@@ -5362,6 +5373,9 @@ void AppWindow::drawMenuColumn() {
             // it captures the signal path's own product - raw I/Q or the
             // demodulated audio - and has nothing to do with decoding.
             benchGroup("SIGNAL PATH");
+            // First, because a patch does not sit IN the signal path, it
+            // decides what the signal path consists of.
+            drawPatchSection();
             drawSourceSection();
             drawRadioSection();
             drawAudioFilterSection();
@@ -10746,6 +10760,115 @@ void AppWindow::drawRadarSection() {
     drawScopeModeControl();
 }
 
+void AppWindow::drawPatchSection() {
+    // A KEY, NOT A DRAWER, the same primitive the demod scope's row uses:
+    // everything a patch can be set to is ON the canvas, because a node wired
+    // from a rail you cannot see the wires from is a control operated blind.
+    //
+    // WHAT THE CHIP HONESTLY SAYS is how many nodes the patch holds - true
+    // whether the page is open or not - and the LAMP is whether the page is
+    // showing. An empty patch says EMPTY rather than 0, because "0 nodes" and
+    // "nothing built yet" read differently to someone who has never opened it.
+    char chip[16];
+    const std::size_t nodes = patchGraph_.nodes().size();
+    if (nodes == 0) {
+        std::snprintf(chip, sizeof(chip), "EMPTY");
+    } else {
+        std::snprintf(chip, sizeof(chip), "%zu NODE%s", nodes, nodes == 1 ? "" : "S");
+    }
+    if (benchSwitchRow("Patch###patch", patchOpen_, chip, cascade::gui::theme::kPhosphor,
+                       patchOpen_, true,
+                       "Opens the patch canvas: radios, channels, decoders and\n"
+                       "displays wired together by hand. Drag from a port to wire it.\n"
+                       "A connection that cannot carry what the port produces is\n"
+                       "refused, and says why.")) {
+        patchOpen_ = !patchOpen_;
+    }
+}
+
+void AppWindow::drawPatchPage() {
+    if (!patchOpen_) { return; }
+
+    // The patch a page opens with when the user has none: one radio, nothing
+    // wired. An empty canvas gives no clue what a node even is; one node does,
+    // and one node is not an opinion about what they want to build.
+    if (!patchSeeded_) {
+        patchSeeded_ = true;
+        cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
+    }
+
+    // Square-ish and large: a patch is read across, and a canvas that starts
+    // small teaches the user to pan before it teaches them anything else.
+    constexpr float kPatchW = 900.0f;
+    constexpr float kPatchH = 620.0f;
+    // THE OPENING RECTANGLE IS THE CALL SITE'S JOB - beginPage's defaults are
+    // what "Reset window sizes" re-applies, not the first placement. Centred
+    // in the main window rather than tucked into a corner, because this page
+    // is worked IN rather than watched beside the spectrum.
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
+    const float px = mv->Pos.x + std::max(0.0f, (mv->Size.x - kPatchW) * 0.5f);
+    const float py = mv->Pos.y + std::max(0.0f, (mv->Size.y - kPatchH) * 0.5f);
+    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(kPatchW, kPatchH), ImGuiCond_FirstUseEver);
+
+    if (beginPage("Patch###patchwindow", "PATCH", &patchOpen_, 0, kPatchW, kPatchH)) {
+        // --- the parts bin ----------------------------------------------------
+        // Two decoder keys rather than one, because an I/Q decoder and an audio
+        // decoder are genuinely different parts - that is the plugin ABI's own
+        // distinction (CASCADE_CAP_IQ_DECODER against CASCADE_CAP_DECODER) and
+        // handing the wrong one its feed decodes nothing at all.
+        struct Part {
+            const char* label;
+            cascade::core::patch::NodeKind kind;
+            cascade::core::patch::PortType feed;
+        };
+        static const Part kParts[] = {
+            {"Radio", cascade::core::patch::NodeKind::Radio,
+             cascade::core::patch::PortType::Iq},
+            {"Channel", cascade::core::patch::NodeKind::Channel,
+             cascade::core::patch::PortType::Iq},
+            {"Demod", cascade::core::patch::NodeKind::Demod,
+             cascade::core::patch::PortType::Iq},
+            {"Decoder I/Q", cascade::core::patch::NodeKind::Decoder,
+             cascade::core::patch::PortType::Iq},
+            {"Decoder audio", cascade::core::patch::NodeKind::Decoder,
+             cascade::core::patch::PortType::Audio},
+            {"Spectrum", cascade::core::patch::NodeKind::Display,
+             cascade::core::patch::PortType::Iq},
+            {"Speaker", cascade::core::patch::NodeKind::Sink,
+             cascade::core::patch::PortType::Audio},
+            {"Text out", cascade::core::patch::NodeKind::Sink,
+             cascade::core::patch::PortType::Text},
+        };
+
+        // A new node lands where the view IS, not at the world origin, which
+        // after any pan is somewhere off the screen - a part that appears
+        // nowhere visible reads as a button that did nothing.
+        const ImVec2 binPos = ImGui::GetCursorScreenPos();
+        for (int i = 0; i < IM_ARRAYSIZE(kParts); ++i) {
+            if (i != 0) { ImGui::SameLine(); }
+            if (ImGui::Button(kParts[i].label)) {
+                const float stagger = 22.0f * static_cast<float>(nodesPlaced_ % 7);
+                const cascade::gui::patch::Vec2 at = cascade::gui::patch::screenToWorld(
+                    patchUi_.view,
+                    cascade::gui::patch::Vec2{binPos.x + 60.0f + stagger,
+                                              binPos.y + 90.0f + stagger});
+                patchGraph_.addNode(kParts[i].kind, kParts[i].label, kParts[i].feed, at.x, at.y);
+                ++nodesPlaced_;
+            }
+        }
+
+        ImGui::Separator();
+
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        if (avail.x > 8.0f && avail.y > 8.0f) {
+            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, origin, avail);
+        }
+    }
+    endPage();
+}
+
 void AppWindow::drawDemodScopeSection() {
     // A KEY, NOT A DRAWER, and the same primitive the plugin store's row uses:
     // everything this page can be set to is ON the page, where the tube is,
@@ -12750,6 +12873,7 @@ void AppWindow::drawPluginWindows() {
     // The bench oscilloscope, drawn here with the other torn-off pages so it
     // is a real window like every one of them: movable, resizable, and able to
     // sit on a second monitor beside the spectrum it is explaining.
+    drawPatchPage();
     drawDemodScopePage();
     drawFeatureRequestPage();
 
