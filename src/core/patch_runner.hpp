@@ -30,10 +30,20 @@
 // a dozen allocations inside the audio callback, which is the definition of a
 // dropout. The build belongs where a pause is invisible.
 //
-// A SET THE DSP THREAD NEVER ADOPTED is dropped when the next one replaces it,
-// and its destructor runs on whichever thread happened to release the last
-// reference. That is fine - it owns only memory - and it is why the set holds
-// no handles to anything that must be closed on a particular thread.
+// EVERY SET DIES ON THE GUI THREAD. A set the DSP thread stops running -
+// because a newer one was adopted, or because clear() asked it to stop - is
+// not destroyed there. It is handed back through a retired list, and reap(),
+// called by the GUI thread every frame, destroys it. A set that was published
+// and superseded before it was ever adopted is released inside publish() or
+// clear(), which are GUI-thread calls anyway. So no set's destructor ever runs
+// on the audio thread, which is what lets a set own things that must be closed
+// on the control thread - a plugin's decoder handle, whose destroy() the ABI
+// requires there and after the last process().
+//
+// clear() IS A REQUEST. Before 0.99.15 it reset the running set directly, and
+// it is called from the GUI thread when the patch page closes - so closing the
+// page with a patch playing freed the strips the DSP thread was inside. The
+// runner test reproduced that as a segfault on every run.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_PATCH_RUNNER_HPP
@@ -145,9 +155,17 @@ public:
     // GUI THREAD. Hands a complete set over. Returns immediately; the DSP
     // thread picks it up at the top of its next block.
     void publish(std::shared_ptr<StripSet> set) {
-        std::lock_guard<std::mutex> lock(pendingMutex_);
-        pending_ = std::move(set);
-        hasPending_.store(true, std::memory_order_release);
+        // A set published and never adopted is released HERE, on this
+        // thread, and after the lock - destroying it under the mutex would
+        // hold the DSP thread out for however long its destructor takes.
+        std::shared_ptr<StripSet> superseded;
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            superseded = std::move(pending_);
+            pending_ = std::move(set);
+            stopPending_ = false;
+            hasPending_.store(true, std::memory_order_release);
+        }
     }
 
     // DSP THREAD. Takes any published set. Returns true when one was adopted,
@@ -161,11 +179,14 @@ public:
     bool adopt() {
         if (!hasPending_.load(std::memory_order_acquire)) { return false; }
         std::shared_ptr<StripSet> taken;
+        bool stop = false;
         {
             std::lock_guard<std::mutex> lock(pendingMutex_);
             locks_.fetch_add(1, std::memory_order_relaxed);
             taken = std::move(pending_);
             pending_.reset();
+            stop = stopPending_;
+            stopPending_ = false;
             // CLEARED HERE, unconditionally, including when the pointer
             // turns out to be empty. Leaving it set is externally
             // invisible - adopt() still answers false - and makes the DSP
@@ -173,15 +194,26 @@ public:
             // is the one thing this file exists to avoid. A mutant that
             // removed this survived until lockCount() was asserted.
             hasPending_.store(false, std::memory_order_release);
+
+            // THE OLD SET GOES BACK TO THE GUI THREAD, not to the
+            // destructor. Retired under the lock this block already holds,
+            // so reap() never races the push. The vector is reserved at
+            // construction and emptied every GUI frame, so this does not
+            // allocate on the audio thread in practice; if the GUI thread
+            // ever stalls long enough to fill it, growing it here is still
+            // the right trade - the alternative is destroying a plugin
+            // handle on the wrong thread.
+            if ((taken || stop) && active_) { retired_.push_back(std::move(active_)); }
         }
-        if (!taken) { return false; }
+        if (!taken) {
+            if (stop) { resetRing(); }
+            return false;
+        }
         active_ = std::move(taken);
         // THE RING GOES WITH THE OLD SET. Its contents are at the previous
         // channel's rate and from the previous channel's frequency; playing
         // them after a rewire is playing the patch the user just replaced.
-        ringRead_ = 0;
-        ringWrite_ = 0;
-        ringCount_ = 0;
+        resetRing();
         generation_.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -283,23 +315,60 @@ public:
 
     bool running() const { return static_cast<bool>(active_); }
 
-    // DSP THREAD. Forgets everything, so a stopped receiver does not leave a
-    // patch holding buffers that will be stale when it starts again.
+    // GUI THREAD. Asks the DSP thread to stop running the patch at its next
+    // block, and drops anything published but not yet adopted.
+    //
+    // A REQUEST, NOT AN ACT: see the note at the top of this file. The set
+    // that is running is the DSP thread's until the DSP thread lets it go, and
+    // it comes back through reap(). A receiver that is stopped runs no blocks,
+    // so the request waits until it starts again - harmless, because a stopped
+    // receiver feeds the set nothing in the meantime.
     void clear() {
-        active_.reset();
-        ringRead_ = 0;
-        ringWrite_ = 0;
-        ringCount_ = 0;
-        std::lock_guard<std::mutex> lock(pendingMutex_);
-        pending_.reset();
-        hasPending_.store(false, std::memory_order_release);
+        std::shared_ptr<StripSet> dropped;
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            dropped = std::move(pending_);
+            stopPending_ = true;
+            hasPending_.store(true, std::memory_order_release);
+        }
+    }
+
+    // GUI THREAD, every frame, whether or not the patch page is open - the
+    // set a closing page stops is retired AFTER the page has gone. Destroys
+    // every set the DSP thread has stopped running.
+    void reap() {
+        std::vector<std::shared_ptr<StripSet>> dead;
+        dead.reserve(kRetiredReserve);
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            // Swapped, so retired_ comes away with the fresh reservation
+            // and the DSP thread's next push does not allocate.
+            dead.swap(retired_);
+        }
+        // `dead` is destroyed here, on this thread, outside the lock.
     }
 
 private:
+    static constexpr std::size_t kRetiredReserve = 32;
+
+    void resetRing() {
+        ringRead_ = 0;
+        ringWrite_ = 0;
+        ringCount_ = 0;
+    }
+
     // Written by the GUI thread under the mutex, read by the DSP thread.
     std::mutex pendingMutex_;
     std::shared_ptr<StripSet> pending_;
+    bool stopPending_ = false;
     std::atomic<bool> hasPending_{false};
+    // Sets the DSP thread has stopped running, waiting for reap(). Pushed by
+    // the DSP thread and swapped out by the GUI thread, both under the mutex.
+    std::vector<std::shared_ptr<StripSet>> retired_ = [] {
+        std::vector<std::shared_ptr<StripSet>> v;
+        v.reserve(kRetiredReserve);
+        return v;
+    }();
 
     // DSP THREAD ONLY after adoption. No other thread may touch this.
     std::shared_ptr<StripSet> active_;

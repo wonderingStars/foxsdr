@@ -10825,6 +10825,13 @@ void AppWindow::drawPatchSection() {
 }
 
 void AppWindow::drawPatchPage() {
+    // FIRST, AND EVERY FRAME, open or not. The DSP thread never destroys a
+    // patch it stops running; it hands it back, and this is where it dies -
+    // on the GUI thread, which is the only place a plugin handle inside it
+    // may be destroyed. Above the early return below because closing the
+    // page is exactly what retires a set, one block AFTER the page has gone.
+    pipeline_.patchRunner().reap();
+
     if (!patchOpen_) {
         // CLOSING THE PAGE STOPS THE PATCH. The page took the radios over
         // when it opened, so handing them back when it closes is the only

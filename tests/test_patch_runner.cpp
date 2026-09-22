@@ -108,6 +108,11 @@ double rms(const float* p, std::size_t n) {
 }  // namespace
 
 int main() {
+    // UNBUFFERED, because the failure this file guards against is a crash on
+    // another thread, and a crash takes buffered output with it - the run that
+    // proved the page-close race printed nothing at all.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::printf("patch runner tests\n");
     // [1] A runner with nothing published runs nothing, and says so rather
     // than pretending.
     {
@@ -273,18 +278,83 @@ int main() {
         CHECK(!r.adopt());
     }
 
-    // [10] clear() forgets everything, including anything pending. A stopped
-    // receiver must not leave a patch holding buffers that go stale.
+    // [10] clear() IS A REQUEST, NOT AN ACT. It is called from the GUI thread
+    // when the patch page closes (app_window drawPatchPage), and the set it
+    // would free is the one the DSP thread is running. So clear() must not
+    // touch the running set at all: the DSP thread drops it at its next
+    // block, exactly as it adopts a new one, and the dropped set is DESTROYED
+    // on the GUI thread by reap() - which matters the moment a set holds
+    // plugin handles, whose destroy() the ABI requires on the control thread
+    // and after the last process().
+    //
+    // THIS REPLACES A TEST THAT ASSERTED THE OPPOSITE. The old [10] called
+    // clear() and immediately required !running(), which can only hold if
+    // clear() frees the set on the caller's thread - and the caller is the
+    // GUI thread, while process() is on the DSP thread. That was a
+    // use-after-free in 0.99.14 whenever the page was closed with a patch
+    // playing, written down as the expected behaviour.
     {
         Patch p(2);
         Runner r;
-        r.publish(p.build());
-        CHECK(r.adopt());
+        const auto sig = tone(100000.0, 2400);
+        std::weak_ptr<StripSet> first;
+        {
+            auto s = p.build();
+            first = s;
+            r.publish(std::move(s));
+        }
+        r.process(sig.data(), sig.size());
+        CHECK(r.running());
         r.publish(p.build());          // something pending as well
         r.clear();
+
+        // The GUI thread's call changed nothing the DSP thread owns.
+        CHECK(r.running());
+        CHECK(r.channelCount() == 2u);
+
+        // The DSP thread carries it out at the top of its next block, and
+        // the pending set goes with it rather than being adopted.
+        r.process(sig.data(), sig.size());
         CHECK(!r.running());
         CHECK(r.channelCount() == 0u);
-        CHECK(!r.adopt());             // the pending one went too
+        CHECK(!r.adopt());
+
+        // The dropped set is still alive - the DSP thread handed it back
+        // rather than destroying it - until the GUI thread reaps it.
+        CHECK(!first.expired());
+        r.reap();
+        CHECK(first.expired());
+
+        // And a patch published after a clear runs normally.
+        r.publish(p.build());
+        r.process(sig.data(), sig.size());
+        CHECK(r.running());
+        CHECK(r.channelCount() == 2u);
+    }
+
+    // [10b] A SWAPPED-OUT SET IS DESTROYED ON THE GUI THREAD TOO. Adopting a
+    // new set retires the old one; it must survive until reap(), not die
+    // inside process() on the audio thread.
+    {
+        Patch a(1);
+        Patch b(3);
+        Runner r;
+        const auto sig = tone(100000.0, 2400);
+        std::weak_ptr<StripSet> old;
+        {
+            auto s = a.build();
+            old = s;
+            r.publish(std::move(s));
+        }
+        r.process(sig.data(), sig.size());
+        r.publish(b.build());
+        r.process(sig.data(), sig.size());   // adopts b, retires a
+        CHECK(r.channelCount() == 3u);
+        CHECK(!old.expired());               // not destroyed on the DSP thread
+        r.reap();
+        CHECK(old.expired());
+        r.reap();                            // a second reap is harmless
+        CHECK(r.channelCount() == 3u);
     }
 
     // [11] THE HAND-OFF, WITH TWO REAL THREADS. One runs process() as fast as
@@ -335,6 +405,49 @@ int main() {
         // And it still works afterwards.
         r.process(sig.data(), sig.size());
         CHECK(r.channelCount() == 1u || r.channelCount() == 5u);
+    }
+
+    // [11b] CLOSING THE PAGE WHILE IT PLAYS, with two real threads: the GUI
+    // side publishes, clears and reaps while the DSP side runs process() and
+    // pullAudio() flat out. Before 0.99.15 this was a data race on the active
+    // set (clear() reset it from the GUI thread) and a thread sanitiser
+    // reports it on the old code; the assertions here are that nothing
+    // tore and that the runner is usable afterwards.
+    {
+        Patch a(2);
+        Runner r;
+        const auto sig = tone(100000.0, 2400);
+        std::atomic<bool> stop{false};
+        std::atomic<std::uint64_t> blocks{0};
+
+        std::thread dsp([&] {
+            float l[256];
+            float rr[256];
+            while (!stop.load(std::memory_order_relaxed)) {
+                r.process(sig.data(), sig.size());
+                r.pullAudio(l, rr, 256);
+                std::size_t n = 0;
+                const float* audio = r.listeningAudio(n);
+                if (audio != nullptr && n > 0) { volatile float sink = audio[n - 1]; (void)sink; }
+                blocks.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+
+        for (int i = 0; i < 300; ++i) {
+            r.publish(a.build(a.channels[i % 2]));
+            std::this_thread::yield();
+            if (i % 3 == 0) { r.clear(); }
+            r.reap();
+        }
+        r.publish(a.build(a.channels[0]));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        stop.store(true, std::memory_order_relaxed);
+        dsp.join();
+        r.reap();
+
+        CHECK(blocks.load() > 0u);
+        CHECK(r.running());
+        CHECK(r.channelCount() == 2u);
     }
 
     // [12] The demodulator each channel gets comes from the Demod node it
@@ -495,14 +608,22 @@ int main() {
 
     // [18] clear() empties the ring too, so a stopped receiver does not resume
     // by playing a second of what it heard before it stopped.
+    //
+    // CHANGED WITH [10] in 0.99.15: the ring is the DSP thread's, so the GUI
+    // thread's clear() may not touch it either. The property is unchanged -
+    // the ring is empty and nothing plays - but it now holds from the DSP
+    // block that carries out the request, not from the call itself.
     {
         Patch p(1);
         Runner r;
         r.publish(p.build(p.channels[0]));
         const auto sig = tone(100000.0, 240000);
         r.process(sig.data(), sig.size());
-        CHECK(r.bufferedFrames() > 0u);
+        const std::size_t before = r.bufferedFrames();
+        CHECK(before > 0u);
         r.clear();
+        CHECK(r.bufferedFrames() == before);   // the GUI side wrote nothing
+        r.process(sig.data(), sig.size());     // the DSP block that acts on it
         CHECK(r.bufferedFrames() == 0u);
 
         float l[16];
