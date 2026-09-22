@@ -98,8 +98,15 @@ public:
     // Consumes `n` samples and APPENDS the demodulated audio to `out`. Appends
     // rather than overwrites so a caller can accumulate several blocks without
     // a second buffer.
+    //
+    // `iqOut`, when given, also receives the channel itself - the filtered,
+    // decimated complex baseband with this channel's frequency at DC, one
+    // sample per audio sample. That is what an I/Q decoder plugin hung off a
+    // channel is fed: the channel's own slice of the band, tuned, rather than
+    // the whole capture at the radio's centre.
     void process(const std::complex<float>* in, std::size_t n, Demod mode,
-                 std::vector<float>& out) {
+                 std::vector<float>& out,
+                 std::vector<std::complex<float>>* iqOut = nullptr) {
         if (in == nullptr || taps_.empty()) { return; }
 
         for (std::size_t i = 0; i < n; ++i) {
@@ -132,6 +139,7 @@ public:
                 idx = (idx + 1 == history_.size()) ? 0 : idx + 1;
             }
 
+            if (iqOut != nullptr) { iqOut->push_back(acc); }
             out.push_back(demodulate(acc, mode));
         }
     }

@@ -18,17 +18,24 @@
 // unknown leading word are skipped rather than refused, so a patch written by
 // a later build loses what this build cannot understand and keeps the rest.
 //
-//   foxsdr-patch 1
+//   foxsdr-patch 3
 //   view <panX> <panY> <zoom>
-//   node <id> <kind> <feed> <x> <y> <freqHz> <mode> <name to end of line>
+//   node <id> <kind> <feed> <x> <y> <w> <h> <freqHz> <mode> <plugin> <name to end of line>
 //   wire <fromId> <fromPort> <toId> <toPort>
 //
-// THE NAME IS ALWAYS LAST, and that is why adding the two settings was a
-// format CHANGE rather than an addition: the name is read to the end of the
-// line so it may contain spaces, so anything appended after it would be
-// swallowed into it. Format 1 lines are still read - their nodes simply get
-// the default settings - because a patch saved by a build from this morning
-// should not be lost by a build from this afternoon.
+// THE NAME IS ALWAYS LAST, and that is why adding fields is a format CHANGE
+// rather than an addition: the name is read to the end of the line so it may
+// contain spaces, so anything appended after it would be swallowed into it.
+// Older lines are still read, because a patch saved by a build from this
+// morning should not be lost by a build from this afternoon:
+//
+//   format 1  node <id> <kind> <feed> <x> <y> <name>
+//   format 2  ... <x> <y> <freqHz> <mode> <name>             (settings)
+//   format 3  ... <x> <y> <w> <h> <freqHz> <mode> <plugin> <name>
+//
+// A node from format 1 or 2 opens at its kind's default size and runs no
+// plugin. <plugin> is the module key percent-encoded to one token, or "-" for
+// none, because a key is a file name and a file name may hold a space.
 //
 // Ids in the file are the file's own. They are remapped on load, because the
 // graph hands out its own and reusing a file's would collide with whatever is
@@ -38,6 +45,7 @@
 #ifndef CASCADE_CORE_PATCH_IO_HPP
 #define CASCADE_CORE_PATCH_IO_HPP
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -49,7 +57,12 @@
 namespace cascade::core::patch {
 
 inline constexpr const char* kPatchMagic = "foxsdr-patch";
-inline constexpr int kPatchFormat = 2;
+inline constexpr int kPatchFormat = 3;
+
+// The largest size a loaded node may claim. A hand-edited or corrupt file can
+// say anything, and a node 10^9 units wide covers the whole canvas and every
+// other node under it; clamped, it is merely a large node the user can shrink.
+inline constexpr float kMaxLoadedNodeSize = 4000.0f;
 
 struct LoadResult {
     Graph graph;
@@ -76,6 +89,61 @@ inline std::string sanitiseName(const std::string& in) {
     return out;
 }
 
+// A plugin key as one whitespace-free token. Everything outside a small safe
+// set is written %XX, so a space, a '%' or anything non-ASCII in a file name
+// survives the round trip byte for byte. Empty is "-", and a key that is
+// itself exactly "-" is written "%2D", so the sentinel can never be produced
+// by a real key - whether or not anyone would ever name a module that.
+inline std::string encodePluginKey(const std::string& key) {
+    if (key.empty()) { return "-"; }
+    if (key == "-") { return "%2D"; }
+    static const char* kHex = "0123456789ABCDEF";
+    std::string out;
+    for (const char ch : key) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        const bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                          (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        if (safe) {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(kHex[c >> 4]);
+            out.push_back(kHex[c & 0x0F]);
+        }
+    }
+    return out;
+}
+
+// The inverse. A malformed escape - '%' not followed by two hex digits - makes
+// the whole key unreadable rather than half-decoded: a key that is nearly
+// right names a DIFFERENT plugin, or none, and the node should say "no plugin"
+// honestly instead of trying to load something the user never chose.
+inline bool decodePluginKey(const std::string& token, std::string& key) {
+    key.clear();
+    if (token == "-") { return true; }
+    auto hex = [](char c, int& v) {
+        if (c >= '0' && c <= '9') { v = c - '0'; return true; }
+        if (c >= 'A' && c <= 'F') { v = c - 'A' + 10; return true; }
+        if (c >= 'a' && c <= 'f') { v = c - 'a' + 10; return true; }
+        return false;
+    };
+    for (std::size_t i = 0; i < token.size(); ++i) {
+        if (token[i] != '%') {
+            key.push_back(token[i]);
+            continue;
+        }
+        int hi = 0, lo = 0;
+        // Both digits must exist: "%4" at the end of the token is truncated.
+        if (i + 2 >= token.size() || !hex(token[i + 1], hi) || !hex(token[i + 2], lo)) {
+            key.clear();
+            return false;
+        }
+        key.push_back(static_cast<char>((hi << 4) | lo));
+        i += 2;
+    }
+    return true;
+}
+
 inline std::string serialise(const Graph& g, float panX, float panY, float zoom) {
     std::ostringstream o;
     o << kPatchMagic << ' ' << kPatchFormat << '\n';
@@ -92,8 +160,9 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
             feed = n.outputs[0];
         }
         o << "node " << n.id << ' ' << static_cast<unsigned>(n.kind) << ' '
-          << static_cast<unsigned>(feed) << ' ' << n.x << ' ' << n.y << ' '
-          << n.freqHz << ' ' << n.mode << ' ' << sanitiseName(n.name) << '\n';
+          << static_cast<unsigned>(feed) << ' ' << n.x << ' ' << n.y << ' ' << n.w << ' '
+          << n.h << ' ' << n.freqHz << ' ' << n.mode << ' ' << encodePluginKey(n.plugin)
+          << ' ' << sanitiseName(n.name) << '\n';
     }
     for (const Wire& w : g.wires()) {
         o << "wire " << w.from << ' ' << w.fromPort << ' ' << w.to << ' ' << w.toPort << '\n';
@@ -150,6 +219,12 @@ inline LoadResult parse(const std::string& text) {
                 ++r.dropped;
                 continue;
             }
+            // Format 3 puts the size straight after the position.
+            float w = 0.0f, h = 0.0f;
+            if (version >= 3 && !(s >> w >> h)) {
+                ++r.dropped;
+                continue;
+            }
             // Format 1 has no settings on the line; its nodes take the
             // defaults rather than reading the name as a number.
             double freqHz = 0.0;
@@ -157,6 +232,19 @@ inline LoadResult parse(const std::string& text) {
             if (version >= 2 && !(s >> freqHz >> mode)) {
                 ++r.dropped;
                 continue;
+            }
+            // Format 3's plugin token. An undecodable one keeps the node -
+            // its place, its wires and its name are still the user's - but
+            // with no plugin, which it then reports as a node that cannot
+            // run. Counted, so the load can say it repaired something.
+            std::string plugin;
+            if (version >= 3) {
+                std::string token;
+                if (!(s >> token)) {
+                    ++r.dropped;
+                    continue;
+                }
+                if (!decodePluginKey(token, plugin)) { ++r.dropped; }
             }
 
             std::string name;
@@ -168,6 +256,14 @@ inline LoadResult parse(const std::string& text) {
             if (Node* n = r.graph.mutableNode(made); n != nullptr) {
                 n->freqHz = freqHz;
                 n->mode = mode;
+                n->plugin = plugin;
+                // A size is taken only when it is a real one. Zero, negative
+                // or NaN (every comparison false) keeps the default addNode
+                // gave the kind; anything absurdly large is clamped.
+                if (w > 0.0f && h > 0.0f) {
+                    n->w = std::min(w, kMaxLoadedNodeSize);
+                    n->h = std::min(h, kMaxLoadedNodeSize);
+                }
             }
             remap[static_cast<NodeId>(fileId)] = made;
             continue;

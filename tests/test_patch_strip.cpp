@@ -344,5 +344,79 @@ int main() {
         CHECK(outHalf.size() == out.size());
     }
 
+    // [I1] THE CHANNEL ITSELF, for an I/Q decoder. A carrier 3 kHz above the
+    // channel's frequency must come out of the I/Q tap as a complex tone at
+    // +3 kHz at the decimated rate - rotating the right way, at the right
+    // speed, one sample per audio sample. A tap that handed out the undecimated
+    // or unmixed stream would pass a count check and fail this one.
+    {
+        const double chanOffset = 60000.0;
+        const double beat = 3000.0;
+        Strip s;
+        s.configure(chanOffset, kInRate, kDecim);
+        const auto in = carrier(chanOffset + beat, 1.0, 48000);
+        std::vector<float> audio;
+        std::vector<std::complex<float>> iq;
+        s.process(in.data(), in.size(), Demod::Am, audio, &iq);
+        CHECK(iq.size() == audio.size());
+        CHECK(iq.size() == in.size() / kDecim);
+
+        // Mean phase step over the settled tail, from the product of each
+        // sample with the conjugate of the one before it.
+        const double outRate = kInRate / kDecim;
+        std::complex<double> acc(0.0, 0.0);
+        double mag = 0.0;
+        for (std::size_t i = iq.size() / 2; i + 1 < iq.size(); ++i) {
+            const std::complex<double> a(iq[i].real(), iq[i].imag());
+            const std::complex<double> b(iq[i + 1].real(), iq[i + 1].imag());
+            acc += b * std::conj(a);
+            mag += std::abs(b);
+        }
+        const double step = std::arg(acc);
+        const double measuredHz = step * outRate / (2.0 * kPi);
+        CHECK(std::fabs(measuredHz - beat) < 20.0);     // +3 kHz, not -3 or 63
+        // A unit carrier stays near unit through a unity-gain filter.
+        const double meanMag = mag / static_cast<double>(iq.size() / 2);
+        CHECK(meanMag > 0.9 && meanMag < 1.1);
+
+        // FILTERED, not merely mixed. A carrier TEN TIMES stronger sitting
+        // 150 kHz above the channel - far outside it - must not reach the
+        // tap. A tap taken before the low-pass would be dominated by it; with
+        // a clean single carrier alone the two cannot be told apart.
+        {
+            Strip f;
+            f.configure(chanOffset, kInRate, kDecim);
+            const auto wanted = carrier(chanOffset + beat, 1.0, 48000);
+            const auto loud = carrier(chanOffset + 150000.0, 10.0, 48000);
+            std::vector<std::complex<float>> mix(wanted.size());
+            for (std::size_t i = 0; i < mix.size(); ++i) { mix[i] = wanted[i] + loud[i]; }
+            std::vector<float> a2;
+            std::vector<std::complex<float>> iq2;
+            f.process(mix.data(), mix.size(), Demod::Am, a2, &iq2);
+            std::complex<double> r2(0.0, 0.0);
+            double m2 = 0.0;
+            std::size_t cnt = 0;
+            for (std::size_t i = iq2.size() / 2; i + 1 < iq2.size(); ++i) {
+                const std::complex<double> a(iq2[i].real(), iq2[i].imag());
+                const std::complex<double> b(iq2[i + 1].real(), iq2[i + 1].imag());
+                r2 += b * std::conj(a);
+                m2 += std::abs(b);
+                ++cnt;
+            }
+            const double hz2 = std::arg(r2) * outRate / (2.0 * kPi);
+            CHECK(std::fabs(hz2 - beat) < 50.0);
+            const double mean2 = (cnt > 0) ? m2 / static_cast<double>(cnt) : 0.0;
+            CHECK(mean2 > 0.8 && mean2 < 1.3);   // the wanted carrier, not the loud one
+        }
+
+        // Without the tap, the audio is unchanged - the tap is an addition,
+        // not a different computation.
+        Strip t;
+        t.configure(chanOffset, kInRate, kDecim);
+        std::vector<float> audio2;
+        t.process(in.data(), in.size(), Demod::Am, audio2);
+        CHECK(audio2 == audio);
+    }
+
     return testSummary("test_patch_strip");
 }

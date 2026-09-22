@@ -237,28 +237,42 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                         theme::kEngraved, title);
         }
 
-        // The well under it. Nothing live runs through the graph yet, so it is
-        // empty rather than filled with a number that would be a guess - a
-        // figure nobody computed is worse than no figure.
+        // The well under it: the node's live face. Empty when nothing has been
+        // measured or decoded - a figure nobody computed is worse than none.
         const ImVec2 wa{a.x + 6.0f * v.zoom, a.y + (kHeaderHeight - 2.0f) * v.zoom};
         const ImVec2 wb{b.x - 6.0f * v.zoom, b.y - 6.0f * v.zoom};
         if (wb.x > wa.x && wb.y > wa.y) {
             dl->AddRectFilled(wa, wb, theme::kWell, theme::kKeyRounding);
 
-            // The reading, if this node has one. AMBER, because the palette
-            // reserves amber for numbers, and ON GLASS rather than on the
-            // brass, because theme.hpp's rule is that a caption may be
-            // engraved and a live figure may not.
+            // The reading, if this node has one. Numbers are AMBER, because
+            // the palette reserves amber for numbers; decoded text is
+            // PHOSPHOR, because it is what the radio actually received. Both
+            // ON GLASS rather than on the brass, because theme.hpp's rule is
+            // that a caption may be engraved and a live figure may not.
             for (const NodeReading& r : readings) {
                 if (r.node != n.id) { continue; }
                 const float fs = 13.0f * v.zoom;
-                if (fs >= 6.0f) {
+                if (fs < 6.0f) { break; }
+                const ImVec2 at{wa.x + 5.0f * v.zoom, wa.y + 3.0f * v.zoom};
+                if (r.hasDb) {
                     char txt[24];
-                    std::snprintf(txt, sizeof(txt), "%.0f dB",
-                                  static_cast<double>(r.db));
-                    dl->AddText(font, fs,
-                                ImVec2{wa.x + 5.0f * v.zoom, wa.y + 3.0f * v.zoom},
-                                theme::kAmber, txt);
+                    std::snprintf(txt, sizeof(txt), "%.0f dB", static_cast<double>(r.db));
+                    dl->AddText(font, fs, at, theme::kAmber, txt);
+                } else {
+                    char txt[32];
+                    std::snprintf(txt, sizeof(txt), "%llu line%s",
+                                  static_cast<unsigned long long>(r.lines),
+                                  r.lines == 1 ? "" : "s");
+                    dl->AddText(font, fs, at, theme::kAmber, txt);
+                    if (!r.text.empty()) {
+                        // Wrapped to the well and clipped to it: a long line
+                        // must not spill across the neighbouring nodes.
+                        dl->PushClipRect(wa, wb, true);
+                        dl->AddText(font, fs * 0.92f,
+                                    ImVec2{at.x, at.y + fs * 1.35f}, theme::kPhosphor,
+                                    r.text.c_str(), nullptr, (wb.x - at.x) - 4.0f * v.zoom);
+                        dl->PopClipRect();
+                    }
                 }
                 break;
             }

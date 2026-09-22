@@ -53,11 +53,15 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "core/patch_graph.hpp"
+#include "core/plugin_abi.h"
 #include "core/patch_plan.hpp"
 #include "core/patch_strip.hpp"
 #include "dsp/resampler.hpp"
@@ -72,12 +76,94 @@ struct RunningChannel {
     Demod mode = Demod::Am;
     std::vector<float> audio;
     std::size_t produced = 0;   // samples written into `audio` this block
+    // The channel itself, tuned and decimated, for an I/Q decoder hung off
+    // it. Filled only when one is (`wantIq`), because copying baseband nobody
+    // reads is work on the audio thread for nothing.
+    bool wantIq = false;
+    std::vector<std::complex<float>> iq;
+};
+
+// --- plugin decoders -----------------------------------------------------------
+//
+// What the builder needs to call one catalogue entry: its API table, exactly
+// one of the two set. Parallel to the DecoderInfo list compile() was given -
+// index i here is index i there. Pointers into a loaded module, so they are
+// valid only until the plugin host unloads it, and Runner::flushNow() must run
+// before it does.
+struct PluginApis {
+    const CascadeDecoderApi* audio = nullptr;
+    const CascadeIqDecoderApi* iq = nullptr;
+};
+
+// The largest block a decoder is handed in one call. A radio-fed decoder sees
+// whole device blocks, which can be large; slicing them keeps every scratch
+// buffer a fixed size allocated at build time.
+inline constexpr std::size_t kDecoderSlice = 16384;
+
+// One running plugin instance.
+//
+// ITS HANDLE IS DESTROYED IN ITS DESTRUCTOR, and that is safe only because of
+// where the destructor runs: a RunningDecoder lives inside a StripSet, and a
+// StripSet only ever dies on the GUI thread, after the DSP thread has stopped
+// running it (see the note at the top of this file). That is precisely the
+// ABI's rule - destroy() on the control thread, after the last process() and
+// poll_text() - so the lifetime rules of the set ARE the plugin's lifetime
+// rules, and nothing here has to remember to call destroy().
+struct RunningDecoder {
+    NodeId node = kNoNode;
+    NodeId channel = kNoNode;
+    DecoderSource source = DecoderSource::Radio;
+    std::string name;                     // the node's name, which tags its text
+    const CascadeDecoderApi* audioApi = nullptr;
+    const CascadeIqDecoderApi* iqApi = nullptr;
+    void* handle = nullptr;
+    bool failed = false;                  // poll_text said "permanently failed"
+
+    // Resampling from the source's rate to the plugin's. Absent when they
+    // match. An I/Q stream needs two - I and Q through identical filters, so
+    // they stay in phase - and an audio stream one.
+    std::unique_ptr<cascade::dsp::RationalResampler> rsI;
+    std::unique_ptr<cascade::dsp::RationalResampler> rsQ;
+    std::vector<float> inI, inQ, outI, outQ;   // one slice each, preallocated
+    std::vector<float> interleaved;            // I,Q,I,Q for process()
+
+    std::string partial;                  // a line poll_text split across polls
+    std::uint64_t framesFed = 0;          // what process() has been handed
+    // Index into StripSet::channels of the channel this is fed from, fixed at
+    // build time so the audio thread does not search for it every block.
+    std::size_t chanIndex = static_cast<std::size_t>(-1);
+
+    RunningDecoder() = default;
+    RunningDecoder(const RunningDecoder&) = delete;
+    RunningDecoder& operator=(const RunningDecoder&) = delete;
+    ~RunningDecoder() {
+        if (handle == nullptr) { return; }
+        if (iqApi != nullptr) {
+            iqApi->destroy(handle);
+        } else if (audioApi != nullptr) {
+            audioApi->destroy(handle);
+        }
+    }
+};
+
+// A decoded line on its way to the GUI, tagged with the node that said it.
+struct PatchLine {
+    NodeId node = kNoNode;
+    std::string source;
+    std::string text;
 };
 
 // Everything the DSP thread needs to run a patch. Built complete on the GUI
 // thread; touched by exactly one thread at a time thereafter.
 struct StripSet {
     std::vector<RunningChannel> channels;
+    // Behind unique_ptr because a RunningDecoder owns a plugin handle and
+    // must never be copied or moved-from in a way that could destroy it twice.
+    std::vector<std::unique_ptr<RunningDecoder>> decoders;
+    // Decoder nodes whose plugin was asked to create() an instance and
+    // returned NULL. Kept so the canvas can say "the plugin refused to start"
+    // rather than showing a node that looks ready and does nothing.
+    std::vector<NodeId> refused;
 
     // THE LISTENING CHANNEL'S CONVERSION TO THE SINK'S RATE. A strip runs
     // at whatever whole division of the device rate lands nearest 48 kHz -
@@ -99,9 +185,165 @@ struct StripSet {
 inline constexpr std::size_t kMaxBlockAudio = 65536;
 
 // Builds the set a plan describes. GUI THREAD ONLY - it allocates.
+// A plugin's text lines are capped at this length. A decoder that never sends a
+// newline would otherwise grow `partial` without bound on the audio thread.
+inline constexpr std::size_t kMaxLineBytes = 4096;
+
+// Builds the decoder instances a plan describes into `set`. GUI THREAD ONLY:
+// it calls create(), which the ABI requires on the control thread, and it
+// allocates every buffer the DSP thread will use.
+inline void buildDecoders(StripSet& set, const Plan& plan, const Graph& g,
+                          const std::vector<DecoderInfo>& catalogue,
+                          const std::vector<PluginApis>& apis) {
+    for (const DecoderPlan& dp : plan.decoders) {
+        if (dp.plugin >= apis.size() || dp.plugin >= catalogue.size()) { continue; }
+        const PluginApis& a = apis[dp.plugin];
+        const bool iqFeed = dp.source != DecoderSource::Audio;
+
+        auto d = std::make_unique<RunningDecoder>();
+        d->node = dp.node;
+        d->channel = dp.channel;
+        d->source = dp.source;
+        const Node* n = g.find(dp.node);
+        d->name = (n != nullptr && !n->name.empty()) ? n->name : catalogue[dp.plugin].name;
+
+        if (dp.source != DecoderSource::Radio) {
+            for (std::size_t i = 0; i < set.channels.size(); ++i) {
+                if (set.channels[i].node == dp.channel) {
+                    d->chanIndex = i;
+                    break;
+                }
+            }
+            if (d->chanIndex >= set.channels.size()) { continue; }
+        }
+
+        const bool resample = std::fabs(dp.rateHz - dp.inRateHz) > 1e-6 * dp.rateHz;
+        const unsigned inR = resample ? resampleInputRate(dp.inRateHz, dp.rateHz) : 0u;
+        if (resample && inR == 0u) {
+            // The plan refuses these, so this is a guard for a caller that
+            // built a plan by hand - never a resampler with a zero rate.
+            set.refused.push_back(dp.node);
+            continue;
+        }
+
+        // create() last among the things that can fail, so a node skipped
+        // for any other reason never leaves a live handle behind.
+        if (iqFeed) {
+            if (a.iq == nullptr) {
+                set.refused.push_back(dp.node);
+                continue;
+            }
+            d->iqApi = a.iq;
+            d->handle = a.iq->create(dp.rateHz, dp.centreHz);
+        } else {
+            if (a.audio == nullptr) {
+                set.refused.push_back(dp.node);
+                continue;
+            }
+            d->audioApi = a.audio;
+            d->handle = a.audio->create(static_cast<std::uint32_t>(dp.rateHz + 0.5));
+        }
+        if (d->handle == nullptr) {
+            // The ABI's "the plugin is unusable": nothing else may be called
+            // on it, and with a null handle the destructor calls nothing.
+            set.refused.push_back(dp.node);
+            continue;
+        }
+
+        std::size_t outCap = kDecoderSlice;
+        if (resample) {
+            const auto outR = static_cast<unsigned>(dp.rateHz + 0.5);
+            d->rsI = std::make_unique<cascade::dsp::RationalResampler>(outR, inR);
+            if (iqFeed) { d->rsQ = std::make_unique<cascade::dsp::RationalResampler>(outR, inR); }
+            outCap = d->rsI->maxOut(kDecoderSlice) + 8;
+            d->outI.assign(outCap, 0.0f);
+            if (iqFeed) { d->outQ.assign(outCap, 0.0f); }
+        }
+        d->inI.assign(kDecoderSlice, 0.0f);
+        if (iqFeed) {
+            d->inQ.assign(kDecoderSlice, 0.0f);
+            d->interleaved.assign(2 * outCap, 0.0f);
+        }
+        d->partial.reserve(kMaxLineBytes);
+
+        if (dp.source == DecoderSource::Channel) {
+            RunningChannel& rc = set.channels[d->chanIndex];
+            if (!rc.wantIq) {
+                rc.wantIq = true;
+                rc.iq.assign(kMaxBlockAudio, std::complex<float>(0.0f, 0.0f));
+            }
+        }
+        set.decoders.push_back(std::move(d));
+    }
+}
+
+// EVERYTHING buildStripSet() READS, AND NOTHING ELSE, as one comparable string.
+//
+// The GUI republishes a patch when this changes, and only then. Before plugin
+// decoders it republished on any edit - including every frame of a node being
+// dragged - which merely rebuilt some filters. With decoders in the set, every
+// republish destroys and re-creates every plugin instance, so a drag across the
+// canvas would restart every decoder sixty times a second and lose whatever
+// each was half-way through decoding. Position, size, zoom and pan are not in
+// here because the DSP does not read them.
+//
+// The decoder's NAME is, because it tags every line the decoder produces; the
+// API pointers are, because a rescan can reload a module at a new address
+// under the same key, and a set still holding the old pointers would call
+// into an unmapped image.
+inline std::string dspSignature(const Plan& plan, const Graph& g, double deviceRateHz,
+                                NodeId listening, double audioRateHz,
+                                const std::vector<DecoderInfo>* catalogue,
+                                const std::vector<PluginApis>* apis) {
+    std::string s;
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "r%.17g l%u a%.17g|", deviceRateHz,
+                  static_cast<unsigned>(listening), audioRateHz);
+    s += buf;
+    for (const ChannelPlan& c : plan.channels) {
+        // The mode each channel is demodulated with, exactly as the builder
+        // derives it: from the Demod node it feeds.
+        int mode = -1;
+        for (const Wire& w : g.wires()) {
+            if (w.from != c.node) { continue; }
+            const Node* dst = g.find(w.to);
+            if (dst != nullptr && dst->kind == NodeKind::Demod) {
+                mode = dst->mode;
+                break;
+            }
+        }
+        std::snprintf(buf, sizeof(buf), "c%u o%.17g d%u m%d|", static_cast<unsigned>(c.node),
+                      c.offsetHz, c.decimation, mode);
+        s += buf;
+    }
+    for (const DecoderPlan& d : plan.decoders) {
+        std::snprintf(buf, sizeof(buf), "d%u s%u ch%u i%.17g o%.17g f%.17g|",
+                      static_cast<unsigned>(d.node), static_cast<unsigned>(d.source),
+                      static_cast<unsigned>(d.channel), d.inRateHz, d.rateHz, d.centreHz);
+        s += buf;
+        if (catalogue != nullptr && d.plugin < catalogue->size()) {
+            s += (*catalogue)[d.plugin].key;
+            s += '|';
+        }
+        if (apis != nullptr && d.plugin < apis->size()) {
+            std::snprintf(buf, sizeof(buf), "%p %p|",
+                          static_cast<const void*>((*apis)[d.plugin].iq),
+                          static_cast<const void*>((*apis)[d.plugin].audio));
+            s += buf;
+        }
+        if (const Node* n = g.find(d.node); n != nullptr) {
+            s += n->name;
+            s += '|';
+        }
+    }
+    return s;
+}
+
 inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
                                                double deviceRateHz, NodeId listening,
-                                               double audioRateHz = 48000.0) {
+                                               double audioRateHz = 48000.0,
+                                               const std::vector<DecoderInfo>* catalogue = nullptr,
+                                               const std::vector<PluginApis>* apis = nullptr) {
     auto set = std::make_shared<StripSet>();
     set->listening = listening;
     set->channels.reserve(plan.channels.size());
@@ -147,6 +389,10 @@ inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
         }
         break;
     }
+
+    if (catalogue != nullptr && apis != nullptr) {
+        buildDecoders(*set, plan, g, *catalogue, *apis);
+    }
     return set;
 }
 
@@ -177,6 +423,120 @@ public:
     // never waits on the GUI thread except in the instant a patch actually
     // changed, where the GUI thread holds the mutex for one pointer move.
     bool adopt() {
+        const DspScope scope(*this);
+        if (!scope.entered) { return false; }
+        return adoptImpl();
+    }
+
+    // DSP THREAD. Runs every channel over the block. Adopts first, so a patch
+    // published between blocks takes effect at a block boundary and never
+    // halfway through one.
+    void process(const std::complex<float>* in, std::size_t n) {
+        const DspScope scope(*this);
+        if (!scope.entered) { return; }   // a flush has the runner
+        adoptImpl();
+        processImpl(in, n);
+    }
+
+    // DSP THREAD. Fills `left` and `right` with `frames` of the patch's
+    // audio and returns TRUE; returns FALSE when no patch is listening,
+    // leaving both buffers untouched so the caller keeps its demodulated
+    // audio.
+    //
+    // DELIBERATELY THE SAME SHAPE AS PluginRunner::pullPluginAudio, down to
+    // the short-block rule: a patch that has not produced enough this block
+    // is still the thing being listened to, so the shortfall is silence
+    // rather than a handback to the demodulator. Handing back would make a
+    // momentarily starved patch chatter between two sources, which is worse
+    // than a gap and much harder to diagnose.
+    //
+    // During a flushNow() this answers FALSE - the patch is not playing for
+    // those few blocks, so the receiver's own audio carries on.
+    bool pullAudio(float* left, float* right, std::size_t frames) {
+        const DspScope scope(*this);
+        if (!scope.entered) { return false; }
+        return pullAudioImpl(left, right, frames);
+    }
+
+    // DSP THREAD. The audio of the channel the patch is listening to, or
+    // nothing when it is not running one. Test-facing: the pointer is only
+    // good until the next process(), and nothing outside the tests reads it.
+    const float* listeningAudio(std::size_t& count) const {
+        count = 0;
+        const DspScope scope(const_cast<Runner&>(*this));
+        if (!scope.entered) { return nullptr; }
+        return listeningAudioImpl(count);
+    }
+
+    // GUI THREAD, and SYNCHRONOUS. Stops the patch and destroys every set
+    // the runner holds - running, pending and retired - before it returns.
+    //
+    // WHY THIS EXISTS BESIDE clear(). clear() is the everyday stop: it asks,
+    // and the set dies at a later reap(). That is not good enough before the
+    // plugin host unmaps its modules, because a set may own decoder handles
+    // and a destroy() that runs after its DLL is gone is a crash in somebody
+    // else's code with no useful stack. So this does it NOW.
+    //
+    // HOW, WITHOUT A LOCK ON THE AUDIO PATH. Every DSP entry point marks
+    // itself inside (inDsp_) and then checks frozen_; this sets frozen_ and
+    // then waits until inDsp_ is clear. Both sides use sequentially
+    // consistent operations, so at least one of them sees the other: either
+    // the DSP thread sees the freeze and leaves without touching anything,
+    // or this sees the DSP thread inside and waits for it to finish its
+    // block. The wait is one DSP block at most - process() never blocks on
+    // anything this thread holds - and it happens only on a plugin rescan or
+    // removal, which is a pause the user has asked for.
+    void flushNow() {
+        frozen_.store(true, std::memory_order_seq_cst);
+        while (inDsp_.load(std::memory_order_seq_cst)) { std::this_thread::yield(); }
+
+        // The DSP thread is out and stays out until frozen_ clears, so this
+        // thread may touch what it owns.
+        std::shared_ptr<StripSet> running = std::move(active_);
+        std::shared_ptr<StripSet> pending;
+        std::vector<std::shared_ptr<StripSet>> dead;
+        dead.reserve(kRetiredReserve);
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            pending = std::move(pending_);
+            stopPending_ = false;
+            hasPending_.store(false, std::memory_order_release);
+            dead.swap(retired_);
+        }
+        resetRing();
+        // The seq_cst store is what hands everything written above back to
+        // the DSP thread: its next entry loads frozen_ and sees false only
+        // after this, so it sees an empty runner.
+        frozen_.store(false, std::memory_order_seq_cst);
+
+        // Destroyed here, on this thread, with nothing held.
+        running.reset();
+        pending.reset();
+        dead.clear();
+    }
+
+private:
+    // Marks the calling DSP thread inside the runner for the length of one
+    // call, unless a flush has frozen it. See flushNow().
+    struct DspScope {
+        Runner& r;
+        bool entered = false;
+        explicit DspScope(Runner& runner) : r(runner) {
+            r.inDsp_.store(true, std::memory_order_seq_cst);
+            entered = !r.frozen_.load(std::memory_order_seq_cst);
+            if (!entered) { r.inDsp_.store(false, std::memory_order_seq_cst); }
+        }
+        ~DspScope() {
+            if (entered) { r.inDsp_.store(false, std::memory_order_seq_cst); }
+        }
+        DspScope(const DspScope&) = delete;
+        DspScope& operator=(const DspScope&) = delete;
+    };
+
+    std::atomic<bool> frozen_{false};
+    std::atomic<bool> inDsp_{false};
+
+    bool adoptImpl() {
         if (!hasPending_.load(std::memory_order_acquire)) { return false; }
         std::shared_ptr<StripSet> taken;
         bool stop = false;
@@ -218,20 +578,25 @@ public:
         return true;
     }
 
-    // DSP THREAD. Runs every channel over the block. Adopts first, so a patch
-    // published between blocks takes effect at a block boundary and never
-    // halfway through one.
-    void process(const std::complex<float>* in, std::size_t n) {
-        adopt();
+    // The body of process(), run inside a DspScope after adoptImpl().
+    void processImpl(const std::complex<float>* in, std::size_t n) {
         if (!active_ || in == nullptr) { return; }
         for (RunningChannel& rc : active_->channels) {
             rc.produced = 0;
             scratch_.clear();
-            rc.strip.process(in, n, rc.mode, scratch_);
+            iqScratch_.clear();
+            rc.strip.process(in, n, rc.mode, scratch_, rc.wantIq ? &iqScratch_ : nullptr);
             const std::size_t take = (scratch_.size() < rc.audio.size()) ? scratch_.size()
                                                                          : rc.audio.size();
             for (std::size_t i = 0; i < take; ++i) { rc.audio[i] = scratch_[i]; }
             rc.produced = take;
+            if (rc.wantIq) {
+                // Same count as the audio by construction (one I/Q sample per
+                // demodulated one), and capped by the same preallocation.
+                for (std::size_t i = 0; i < take && i < iqScratch_.size(); ++i) {
+                    rc.iq[i] = iqScratch_[i];
+                }
+            }
 
             // The listening channel also goes to the sink's rate and into
             // the ring the audio stage draws from.
@@ -242,20 +607,149 @@ public:
                 pushRing(active_->resampled.data(), got);
             }
         }
+
+        // THE DECODERS, after every channel has produced its block, so a
+        // decoder always reads its channel's samples from THIS block.
+        for (const std::unique_ptr<RunningDecoder>& up : active_->decoders) {
+            RunningDecoder& d = *up;
+            if (d.failed) { continue; }
+            switch (d.source) {
+                case DecoderSource::Radio:
+                    feedIq(d, in, n);
+                    break;
+                case DecoderSource::Channel: {
+                    const RunningChannel& rc = active_->channels[d.chanIndex];
+                    feedIq(d, rc.iq.data(), rc.produced);
+                    break;
+                }
+                case DecoderSource::Audio: {
+                    const RunningChannel& rc = active_->channels[d.chanIndex];
+                    feedAudio(d, rc.audio.data(), rc.produced);
+                    break;
+                }
+            }
+            pollText(d);
+        }
     }
 
-    // DSP THREAD. Fills `left` and `right` with `frames` of the patch's
-    // audio and returns TRUE; returns FALSE when no patch is listening,
-    // leaving both buffers untouched so the caller keeps its demodulated
-    // audio.
-    //
-    // DELIBERATELY THE SAME SHAPE AS PluginRunner::pullPluginAudio, down to
-    // the short-block rule: a patch that has not produced enough this block
-    // is still the thing being listened to, so the shortfall is silence
-    // rather than a handback to the demodulator. Handing back would make a
-    // momentarily starved patch chatter between two sources, which is worse
-    // than a gap and much harder to diagnose.
-    bool pullAudio(float* left, float* right, std::size_t frames) {
+    // Hands `count` complex samples to an I/Q decoder, through its resampler
+    // when it has one, a fixed-size slice at a time.
+    static void feedIq(RunningDecoder& d, const std::complex<float>* x, std::size_t count) {
+        for (std::size_t off = 0; off < count; off += kDecoderSlice) {
+            const std::size_t m = (count - off < kDecoderSlice) ? (count - off) : kDecoderSlice;
+            if (!d.rsI) {
+                // std::complex<float> is layout-compatible with float[2], and
+                // that is the ABI's I,Q,I,Q rule - a view, not a copy.
+                d.iqApi->process(d.handle, reinterpret_cast<const float*>(x + off), m);
+                d.framesFed += m;
+                continue;
+            }
+            for (std::size_t i = 0; i < m; ++i) {
+                d.inI[i] = x[off + i].real();
+                d.inQ[i] = x[off + i].imag();
+            }
+            const std::size_t ki = d.rsI->process(d.inI.data(), m, d.outI.data(), d.outI.size());
+            const std::size_t kq = d.rsQ->process(d.inQ.data(), m, d.outQ.data(), d.outQ.size());
+            // Identical filters on identical input counts produce identical
+            // output counts; the min is a guard, not an expectation.
+            const std::size_t k = (ki < kq) ? ki : kq;
+            for (std::size_t i = 0; i < k; ++i) {
+                d.interleaved[2 * i] = d.outI[i];
+                d.interleaved[2 * i + 1] = d.outQ[i];
+            }
+            if (k > 0) {
+                d.iqApi->process(d.handle, d.interleaved.data(), k);
+                d.framesFed += k;
+            }
+        }
+    }
+
+    static void feedAudio(RunningDecoder& d, const float* x, std::size_t count) {
+        for (std::size_t off = 0; off < count; off += kDecoderSlice) {
+            const std::size_t m = (count - off < kDecoderSlice) ? (count - off) : kDecoderSlice;
+            if (!d.rsI) {
+                d.audioApi->process(d.handle, x + off, m);
+                d.framesFed += m;
+                continue;
+            }
+            const std::size_t k = d.rsI->process(x + off, m, d.outI.data(), d.outI.size());
+            if (k > 0) {
+                d.audioApi->process(d.handle, d.outI.data(), k);
+                d.framesFed += k;
+            }
+        }
+    }
+
+    // Reads whatever text the decoder has, splits it into lines, and queues
+    // complete ones for the GUI. Bounded: a handful of polls per block, and a
+    // line never longer than kMaxLineBytes, so a misbehaving plugin cannot
+    // hold the audio thread or grow memory without limit.
+    void pollText(RunningDecoder& d) {
+        char buf[1024];
+        for (int tries = 0; tries < 8; ++tries) {
+            const std::int32_t r = (d.iqApi != nullptr)
+                                       ? d.iqApi->poll_text(d.handle, buf, sizeof(buf))
+                                       : d.audioApi->poll_text(d.handle, buf, sizeof(buf));
+            if (r < 0) {
+                // "Failed permanently": fed and polled no further. The handle
+                // is KEPT until the set dies, so destroy() still runs exactly
+                // once, after the last call of anything else on it.
+                d.failed = true;
+                return;
+            }
+            if (r == 0) { return; }
+            // Never trust a length past what was offered.
+            const std::size_t len = (static_cast<std::size_t>(r) < sizeof(buf))
+                                        ? static_cast<std::size_t>(r)
+                                        : sizeof(buf);
+            for (std::size_t i = 0; i < len; ++i) {
+                const char c = buf[i];
+                if (c == '\n') {
+                    if (!d.partial.empty()) { emitLine(d); }
+                    d.partial.clear();
+                } else if (c != '\r' && d.partial.size() < kMaxLineBytes) {
+                    d.partial.push_back(c);
+                }
+            }
+        }
+    }
+
+    // THE ONE LOCK THIS FILE TAKES ON THE AUDIO THREAD OUTSIDE A HAND-OFF, and
+    // only when a decoder has finished a line - never per block. The GUI side
+    // holds it for a vector swap and nothing else, so the audio thread cannot
+    // be made to wait behind allocation or I/O. The queue is bounded; a GUI
+    // that stops draining loses the NEWEST lines and counts them, rather than
+    // the audio thread growing it forever.
+    void emitLine(const RunningDecoder& d) {
+        std::lock_guard<std::mutex> lock(textMutex_);
+        if (lines_.size() >= kMaxPendingLines) {
+            ++droppedLines_;
+            return;
+        }
+        lines_.push_back(PatchLine{d.node, d.name, d.partial});
+    }
+
+public:
+    // GUI THREAD. Every line the patch's decoders have finished since the last
+    // call, oldest first.
+    std::vector<PatchLine> drainText() {
+        std::vector<PatchLine> out;
+        std::lock_guard<std::mutex> lock(textMutex_);
+        out.swap(lines_);
+        return out;
+    }
+
+    // Lines lost because nobody drained them in time.
+    std::uint64_t droppedLines() const {
+        std::lock_guard<std::mutex> lock(textMutex_);
+        return droppedLines_;
+    }
+
+    static constexpr std::size_t kMaxPendingLines = 1000;
+
+private:
+    // The body of pullAudio(); see there for the contract.
+    bool pullAudioImpl(float* left, float* right, std::size_t frames) {
         if (!active_ || active_->listening == kNoNode || !active_->toAudio) {
             return false;
         }
@@ -275,6 +769,7 @@ public:
         return true;
     }
 
+public:
     // Frames of silence handed out because the patch had nothing ready.
     // The honest health number for this path, and the one a dropout shows
     // up in - a patch that is never ready is a patch producing nothing.
@@ -282,9 +777,9 @@ public:
 
     std::size_t bufferedFrames() const { return ringCount_; }
 
-    // DSP THREAD. The audio of the channel the patch is listening to, or
-    // nothing when it is not running one.
-    const float* listeningAudio(std::size_t& count) const {
+private:
+    // The body of listeningAudio().
+    const float* listeningAudioImpl(std::size_t& count) const {
         count = 0;
         // The kNoNode test is an early-out, not a guard: the loop below
         // compares every channel against listening, and no real node id is
@@ -300,6 +795,7 @@ public:
         return nullptr;
     }
 
+public:
     // How many sets have been adopted. Test-facing, and cheap enough to leave
     // in: it is the only way to tell "the swap happened" from "the swap was
     // published and quietly dropped".
@@ -373,6 +869,12 @@ private:
     // DSP THREAD ONLY after adoption. No other thread may touch this.
     std::shared_ptr<StripSet> active_;
     std::vector<float> scratch_;
+    std::vector<std::complex<float>> iqScratch_;
+
+    // Decoded lines on their way to the GUI; see emitLine().
+    mutable std::mutex textMutex_;
+    std::vector<PatchLine> lines_;
+    std::uint64_t droppedLines_ = 0;
 
     // A second of audio at 48 kHz, allocated once. DSP thread only: it is
     // written by process() and read by pullAudio(), which the pipeline

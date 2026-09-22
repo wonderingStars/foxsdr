@@ -177,9 +177,9 @@ int main() {
     // would lose a frequency.
     {
         const std::string text = std::string(kPatchMagic) + " 9\n"
-                                 "node 1 0 0 10 20 0 0 Radio\n"
+                                 "node 1 0 0 10 20 232 128 0 0 - Radio\n"
                                  "flux 7 capacitor\n"          // from the future
-                                 "node 2 1 0 30 40 131725000 0 Channel\n"
+                                 "node 2 1 0 30 40 232 104 131725000 0 - Channel\n"
                                  "wire 1 0 2 0\n";
         const LoadResult r = parse(text);
         CHECK(r.ok);
@@ -345,6 +345,124 @@ int main() {
         CHECK(bad.ok);
         CHECK(bad.graph.nodes().empty());
         CHECK(bad.dropped == 1);
+    }
+
+    // [16] FORMAT 3: every node's size and a decoder's plugin survive the
+    // round trip - including a plugin key with a space and a percent sign in
+    // it, because a key is a file name and file names hold both.
+    {
+        Graph g;
+        const NodeId ch = g.addNode(NodeKind::Channel, "Tower", PortType::Iq, 10.0f, 20.0f);
+        const NodeId dec = g.addNode(NodeKind::Decoder, "POCSAG 1200", PortType::Iq, 300.0f, 20.0f);
+        g.mutableNode(ch)->w = 410.0f;
+        g.mutableNode(ch)->h = 222.5f;
+        g.mutableNode(dec)->plugin = "pocsag decoder 100%-1.0.2.dll";
+
+        const std::string text = serialise(g, 0.0f, 0.0f, 1.0f);
+        CHECK(text.find("pocsag%20decoder%20100%25-1.0.2.dll") != std::string::npos);
+        const LoadResult r = parse(text);
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 2u);
+        if (r.graph.nodes().size() == 2u) {
+            CHECK(r.graph.nodes()[0].w == 410.0f);
+            CHECK(r.graph.nodes()[0].h == 222.5f);
+            CHECK(r.graph.nodes()[0].plugin.empty());
+            CHECK(r.graph.nodes()[1].plugin == "pocsag decoder 100%-1.0.2.dll");
+            CHECK(r.graph.nodes()[1].name == "POCSAG 1200");
+        }
+    }
+
+    // [17] A FORMAT 2 document - what 0.99.14 wrote - still loads: every
+    // node at its kind's default size and running no plugin, and nothing
+    // counted as dropped, because nothing was.
+    {
+        const LoadResult r = parse(std::string(kPatchMagic) + " 2\n"
+                                   "node 1 0 0 60 80 0 0 Radio\n"
+                                   "node 2 1 0 260 40 131725000 0 Tower\n"
+                                   "wire 1 0 2 0\n");
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 2u);
+        CHECK(r.graph.wires().size() == 1u);
+        if (r.graph.nodes().size() == 2u) {
+            float w = 0.0f, h = 0.0f;
+            cascade::core::patch::defaultNodeSize(NodeKind::Channel, w, h);
+            CHECK(r.graph.nodes()[1].w == w);
+            CHECK(r.graph.nodes()[1].h == h);
+            CHECK(r.graph.nodes()[1].freqHz == 131725000.0);
+            CHECK(r.graph.nodes()[1].name == "Tower");
+            CHECK(r.graph.nodes()[1].plugin.empty());
+        }
+    }
+
+    // [18] A size the file cannot mean is not taken: zero, negative and NaN
+    // keep the default, and an absurd one is clamped rather than covering the
+    // canvas.
+    {
+        float dw = 0.0f, dh = 0.0f;
+        cascade::core::patch::defaultNodeSize(NodeKind::Channel, dw, dh);
+        const LoadResult r = parse(header2() +
+                                   "node 1 1 0 0 0 0 0 0 0 - Zero\n"
+                                   "node 2 1 0 0 0 -50 -9 0 0 - Negative\n"
+                                   "node 3 1 0 0 0 nan nan 0 0 - NotANumber\n"
+                                   "node 4 1 0 0 0 1e9 1e9 0 0 - Huge\n");
+        CHECK(r.ok);
+        // NaN may or may not parse as a float depending on the library; if it
+        // does not, the line is dropped - either way no node has a NaN size.
+        for (const auto& n : r.graph.nodes()) {
+            CHECK(n.w == n.w);   // not NaN
+            CHECK(n.w > 0.0f);
+            CHECK(n.w <= cascade::core::patch::kMaxLoadedNodeSize);
+            CHECK(n.h <= cascade::core::patch::kMaxLoadedNodeSize);
+            if (n.name == "Zero" || n.name == "Negative" || n.name == "NotANumber") {
+                CHECK(n.w == dw);
+                CHECK(n.h == dh);
+            }
+            if (n.name == "Huge") {
+                CHECK(n.w == cascade::core::patch::kMaxLoadedNodeSize);
+            }
+        }
+        CHECK(nameAt(r.graph, 0) == "Zero");
+        CHECK(nameAt(r.graph, 1) == "Negative");
+    }
+
+    // [19] An undecodable plugin token keeps the NODE - its place, wires and
+    // name are the user's - but with no plugin, and the repair is counted.
+    {
+        const LoadResult r = parse(header2() +
+                                   "node 1 3 0 0 0 216 108 0 0 bad%4 Truncated\n"
+                                   "node 2 3 0 0 0 216 108 0 0 bad%zz Nonhex\n"
+                                   "node 3 3 0 0 0 216 108 0 0 good%20one Fine\n");
+        CHECK(r.ok);
+        CHECK(r.graph.nodes().size() == 3u);
+        CHECK(r.dropped == 2);
+        if (r.graph.nodes().size() == 3u) {
+            CHECK(r.graph.nodes()[0].plugin.empty());
+            CHECK(r.graph.nodes()[1].plugin.empty());
+            CHECK(r.graph.nodes()[2].plugin == "good one");
+            CHECK(r.graph.nodes()[0].name == "Truncated");
+        }
+    }
+
+    // [20] The key encoding is exact for EVERY byte, and "-" means none.
+    {
+        std::string all;
+        for (int c = 1; c < 256; ++c) { all.push_back(static_cast<char>(c)); }
+        const std::string enc = cascade::core::patch::encodePluginKey(all);
+        CHECK(enc.find(' ') == std::string::npos);
+        CHECK(enc.find('\n') == std::string::npos);
+        std::string back;
+        CHECK(cascade::core::patch::decodePluginKey(enc, back));
+        CHECK(back == all);
+        CHECK(cascade::core::patch::encodePluginKey("") == "-");
+        CHECK(cascade::core::patch::decodePluginKey("-", back));
+        CHECK(back.empty());
+        // A real key that is just a hyphen cannot be confused with "none".
+        CHECK(cascade::core::patch::encodePluginKey("-") != "-");
+        CHECK(cascade::core::patch::decodePluginKey(
+            cascade::core::patch::encodePluginKey("-"), back));
+        CHECK(back == "-");
     }
 
     return testSummary("test_patch_io");

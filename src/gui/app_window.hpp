@@ -31,6 +31,7 @@ struct GLFWwindow;
 #include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
+#include "core/patch_runner.hpp"
 #include "gui/patch_view_math.hpp"
 #include "core/plugin_ui.hpp"
 #include "core/plugin_repo.hpp"
@@ -2445,13 +2446,41 @@ private:
     // rather than kept, because a stale level is worse than none: it reads
     // as a live measurement of a channel that may no longer exist.
     std::vector<cascade::gui::patch::NodeReading> patchReadings_;
-    // What the running set was built for. A new one is published only
-    // when one of these changes - otherwise a set of strips and filters
-    // would be allocated sixty times a second to hand the DSP thread
-    // something identical to what it already has.
-    double patchBuiltRate_ = 0.0;
-    double patchBuiltCentre_ = 0.0;
+    // WHAT THE RUNNING SET WAS BUILT FROM, as core::patch::dspSignature()
+    // spells it. A new set is published only when this changes. It used to
+    // be the rate and centre plus "anything was edited", which rebuilt the
+    // set on every frame of a node drag; now that a set holds plugin
+    // instances, that would restart every decoder sixty times a second.
+    std::string patchDspSig_;
     bool patchWasOpen_ = false;
+    // The installed decoder plugins as the patch sees them, parallel lists.
+    // Rebuilt from the plugin host each frame the page is open (a dozen
+    // records), and EMPTIED in detachAndUnloadPlugins() before any module is
+    // unmapped - the API pointers point into those modules.
+    std::vector<cascade::core::patch::DecoderInfo> patchCatalogue_;
+    std::vector<cascade::core::patch::PluginApis> patchApis_;
+    // Decoder nodes whose plugin returned no instance from create() in the
+    // last build, so the node can say so rather than look ready.
+    std::vector<cascade::core::patch::NodeId> patchRefused_;
+    // Decoder nodes whose FIRST line since the last build has been logged.
+    // One line per decoder per build goes to the application log - enough to
+    // prove from a user's log that a patch decoder was fed and produced
+    // output, without copying a busy decoder's whole stream into it.
+    std::set<cascade::core::patch::NodeId> patchFirstLineLogged_;
+    // Each decoder node's latest line and running count since the last
+    // build, for its face on the canvas. Kept whether or not the node is
+    // wired to a Text out, because a decoder working with nowhere to send its
+    // text is still working, and the face is where that is visible.
+    struct PatchDecoderFace {
+        std::string last;
+        std::uint64_t lines = 0;
+    };
+    std::map<cascade::core::patch::NodeId, PatchDecoderFace> patchDecoderFaces_;
+    // GUI thread: rebuilds the two lists above from pluginHost_.
+    void rebuildPatchCatalogue();
+    // True when the node's Text output reaches a Text sink - the only way
+    // its lines are shown in the Decoder output window.
+    bool patchDecoderIsShown(cascade::core::patch::NodeId node) const;
     // How many parts have been dropped from the bin, used only to
     // stagger the next one so a run of clicks does not stack every
     // node on the same spot.

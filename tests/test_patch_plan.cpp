@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include "core/patch_graph.hpp"
@@ -419,6 +420,296 @@ int main() {
         // quietCh was created FIRST, so a walk that picked the first channel
         // rather than following the speaker's own wires would answer wrongly.
         CHECK(listeningChannel(g) == heardCh);
+    }
+
+    // ===================== DECODER NODES (0.99.15) =====================
+    //
+    // A catalogue of three plugins, shaped like real ones: an I/Q decoder
+    // that takes any rate, one that needs 192 kHz of baseband (AIS-like), and
+    // an audio decoder that needs 22050 Hz.
+    using cascade::core::patch::DecoderInfo;
+    using cascade::core::patch::DecoderPlan;
+    using cascade::core::patch::DecoderSource;
+    const std::vector<DecoderInfo> cat = {
+        {"anyiq.dll", "Any I/Q", PortType::Iq, 0.0},
+        {"ais.dll", "AIS", PortType::Iq, 192000.0},
+        {"pager.dll", "Pager", PortType::Audio, 22050.0},
+    };
+    const auto decoderPlanFor = [](const Plan& p, NodeId id) -> const DecoderPlan* {
+        for (const DecoderPlan& d : p.decoders) {
+            if (d.node == id) { return &d; }
+        }
+        return nullptr;
+    };
+    const auto chanPlanFor = [](const Plan& p, NodeId id) -> const ChannelPlan* {
+        for (const ChannelPlan& c : p.channels) {
+            if (c.node == id) { return &c; }
+        }
+        return nullptr;
+    };
+
+    // [D1] Without a catalogue, decoder nodes are not judged and nothing is
+    // planned for them - the pre-0.99.15 behaviour, kept for any caller that
+    // knows no plugins.
+    {
+        Working w;
+        const NodeId dec = w.g.addNode(NodeKind::Decoder, "d", PortType::Iq);
+        CHECK(w.g.connect(w.chan, 0, dec, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre);
+        CHECK(p.decoders.empty());
+        CHECK(!has(p, dec, Problem::NoPlugin));
+    }
+
+    // [D2..D4] Each way a decoder node cannot run is named at the node.
+    {
+        Working w;
+        const NodeId none = w.g.addNode(NodeKind::Decoder, "none", PortType::Iq);
+        const NodeId gone = w.g.addNode(NodeKind::Decoder, "gone", PortType::Iq);
+        const NodeId wrong = w.g.addNode(NodeKind::Decoder, "wrong", PortType::Iq);
+        w.g.mutableNode(gone)->plugin = "uninstalled.dll";
+        w.g.mutableNode(wrong)->plugin = "pager.dll";      // an AUDIO plugin on an I/Q port
+        CHECK(w.g.connect(w.chan, 0, none, 0) == Connect::Ok);
+        CHECK(w.g.connect(w.chan, 0, gone, 0) == Connect::Ok);
+        CHECK(w.g.connect(w.chan, 0, wrong, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre, &cat);
+        CHECK(has(p, none, Problem::NoPlugin));
+        CHECK(has(p, gone, Problem::PluginMissing));
+        CHECK(has(p, wrong, Problem::PluginWrongFeed));
+        CHECK(hasBlockingProblem(p, none));
+        CHECK(p.decoders.empty());
+        // And none of them stops the rest of the patch: the channel and its
+        // demodulator are still planned.
+        CHECK(chanPlanFor(p, w.chan) != nullptr);
+        // Every new problem has words.
+        for (const Problem pr : {Problem::NoPlugin, Problem::PluginMissing,
+                                 Problem::PluginWrongFeed, Problem::DecoderTooFast}) {
+            CHECK(std::string(problemText(pr)) != "this cannot run");
+        }
+    }
+
+    // [D5] An any-rate I/Q decoder on a channel runs at the channel's rate,
+    // centred on the CHANNEL's frequency, not the radio's.
+    {
+        Working w;
+        const NodeId dec = w.g.addNode(NodeKind::Decoder, "d", PortType::Iq);
+        w.g.mutableNode(dec)->plugin = "anyiq.dll";
+        CHECK(w.g.connect(w.chan, 0, dec, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre, &cat);
+        const DecoderPlan* d = decoderPlanFor(p, dec);
+        const ChannelPlan* c = chanPlanFor(p, w.chan);
+        CHECK(d != nullptr);
+        CHECK(c != nullptr);
+        if (d != nullptr && c != nullptr) {
+            CHECK(d->source == DecoderSource::Channel);
+            CHECK(d->channel == w.chan);
+            CHECK(d->plugin == 0u);
+            CHECK(d->inRateHz == c->outRateHz);
+            CHECK(d->rateHz == c->outRateHz);          // "any": no resampler
+            CHECK(d->centreHz == kCentre + 200000.0);  // the channel's frequency
+            CHECK(c->outRateHz == kChannelRateHz);     // unchanged by an any-rate plugin
+        }
+    }
+
+    // [D6] A 192 kHz I/Q decoder raises ITS channel to the slowest whole
+    // division that is fast enough - 2.4 MS/s / 12 = 200 kHz - and is fed
+    // 192 kHz through a resampler. The demodulator on the same channel is
+    // still planned.
+    {
+        Working w;
+        const NodeId dec = w.g.addNode(NodeKind::Decoder, "ais", PortType::Iq);
+        w.g.mutableNode(dec)->plugin = "ais.dll";
+        CHECK(w.g.connect(w.chan, 0, dec, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre, &cat);
+        const ChannelPlan* c = chanPlanFor(p, w.chan);
+        const DecoderPlan* d = decoderPlanFor(p, dec);
+        CHECK(c != nullptr);
+        CHECK(d != nullptr);
+        if (c != nullptr && d != nullptr) {
+            CHECK(c->decimation == 12u);
+            CHECK(c->outRateHz == 200000.0);
+            CHECK(d->inRateHz == 200000.0);
+            CHECK(d->rateHz == 192000.0);
+        }
+        CHECK(!hasBlockingProblem(p, w.demod));
+    }
+
+    // [D7] An I/Q decoder straight off the radio gets the whole capture at
+    // the radio's centre, resampled to what it asks for.
+    {
+        const std::vector<DecoderInfo> wide = {{"adsb.dll", "ADS-B", PortType::Iq, 2000000.0}};
+        Graph g;
+        const NodeId radio = g.addNode(NodeKind::Radio, "Radio", PortType::Iq);
+        const NodeId dec = g.addNode(NodeKind::Decoder, "adsb", PortType::Iq);
+        g.mutableNode(dec)->plugin = "adsb.dll";
+        CHECK(g.connect(radio, 0, dec, 0) == Connect::Ok);
+        const Plan p = compile(g, kRate, kCentre, &wide);
+        const DecoderPlan* d = decoderPlanFor(p, dec);
+        CHECK(d != nullptr);
+        if (d != nullptr) {
+            CHECK(d->source == DecoderSource::Radio);
+            CHECK(d->channel == kNoNode);
+            CHECK(d->inRateHz == kRate);
+            CHECK(d->rateHz == 2000000.0);
+            CHECK(d->centreHz == kCentre);
+        }
+    }
+
+    // [D8] A plugin faster than anything the source can give is refused AT
+    // THE DECODER - and on a channel, the channel still runs for everything
+    // else rather than being dragged to a decimation of zero.
+    {
+        const std::vector<DecoderInfo> tooFast = {{"huge.dll", "Huge", PortType::Iq, 3000000.0}};
+        Working w;
+        const NodeId onChan = w.g.addNode(NodeKind::Decoder, "c", PortType::Iq);
+        const NodeId onRadio = w.g.addNode(NodeKind::Decoder, "r", PortType::Iq);
+        w.g.mutableNode(onChan)->plugin = "huge.dll";
+        w.g.mutableNode(onRadio)->plugin = "huge.dll";
+        CHECK(w.g.connect(w.chan, 0, onChan, 0) == Connect::Ok);
+        CHECK(w.g.connect(w.radio, 0, onRadio, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre, &tooFast);
+        CHECK(has(p, onChan, Problem::DecoderTooFast));
+        CHECK(has(p, onRadio, Problem::DecoderTooFast));
+        CHECK(p.decoders.empty());
+        const ChannelPlan* c = chanPlanFor(p, w.chan);
+        CHECK(c != nullptr);
+        if (c != nullptr) {
+            CHECK(c->decimation >= 1u);
+            CHECK(c->outRateHz == kChannelRateHz);
+        }
+    }
+
+    // [D9] An audio decoder behind a demodulator is fed that channel's
+    // audio, resampled to the rate it asks for.
+    {
+        Working w;
+        const NodeId dec = w.g.addNode(NodeKind::Decoder, "pager", PortType::Audio);
+        w.g.mutableNode(dec)->plugin = "pager.dll";
+        CHECK(w.g.connect(w.demod, 0, dec, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre, &cat);
+        const DecoderPlan* d = decoderPlanFor(p, dec);
+        CHECK(d != nullptr);
+        if (d != nullptr) {
+            CHECK(d->source == DecoderSource::Audio);
+            CHECK(d->channel == w.chan);
+            CHECK(d->inRateHz == kChannelRateHz);
+            CHECK(d->rateHz == 22050.0);
+        }
+    }
+
+    // [D9b] An "any rate" AUDIO decoder is fed 48 kHz - what the receiver's own
+    // plugin runner gives it - not the channel's own rate. On a 2 MS/s radio
+    // the channel runs at 50 kHz, a rate such a plugin has never been handed.
+    {
+        const std::vector<DecoderInfo> anyAudio = {{"sstv.dll", "SSTV", PortType::Audio, 0.0}};
+        Working w;
+        const NodeId dec = w.g.addNode(NodeKind::Decoder, "sstv", PortType::Audio);
+        w.g.mutableNode(dec)->plugin = "sstv.dll";
+        CHECK(w.g.connect(w.demod, 0, dec, 0) == Connect::Ok);
+        const Plan p = compile(w.g, 2000000.0, kCentre, &anyAudio);
+        const DecoderPlan* d = decoderPlanFor(p, dec);
+        CHECK(d != nullptr);
+        if (d != nullptr) {
+            CHECK(d->inRateHz != kChannelRateHz);   // the premise: 2 MS/s / 40 = 50 kHz
+            CHECK(d->rateHz == kChannelRateHz);
+        }
+    }
+
+    // [D9c] ONE MODULE, TWO DECODERS. A plugin may declare an audio decoder
+    // and an I/Q decoder; each node gets the entry for the input its port
+    // carries, not simply the first entry with that key.
+    {
+        const std::vector<DecoderInfo> dual = {
+            {"dual.dll", "Dual (audio)", PortType::Audio, 0.0},
+            {"dual.dll", "Dual (I/Q)", PortType::Iq, 0.0},
+        };
+        Working w;
+        const NodeId onIq = w.g.addNode(NodeKind::Decoder, "iq", PortType::Iq);
+        const NodeId onAudio = w.g.addNode(NodeKind::Decoder, "audio", PortType::Audio);
+        w.g.mutableNode(onIq)->plugin = "dual.dll";
+        w.g.mutableNode(onAudio)->plugin = "dual.dll";
+        CHECK(w.g.connect(w.chan, 0, onIq, 0) == Connect::Ok);
+        CHECK(w.g.connect(w.demod, 0, onAudio, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre, &dual);
+        const DecoderPlan* a = decoderPlanFor(p, onIq);
+        const DecoderPlan* b = decoderPlanFor(p, onAudio);
+        CHECK(a != nullptr);
+        CHECK(b != nullptr);
+        if (a != nullptr) { CHECK(a->plugin == 1u); }
+        if (b != nullptr) { CHECK(b->plugin == 0u); }
+        CHECK(!has(p, onIq, Problem::PluginWrongFeed));
+        CHECK(!has(p, onAudio, Problem::PluginWrongFeed));
+    }
+
+    // [D10] A decoder naming a MISSING plugin must not drag its channel up to
+    // a rate nothing will use.
+    {
+        const std::vector<DecoderInfo> none;
+        Working w;
+        const NodeId dec = w.g.addNode(NodeKind::Decoder, "ghost", PortType::Iq);
+        w.g.mutableNode(dec)->plugin = "ais.dll";   // not in THIS catalogue
+        CHECK(w.g.connect(w.chan, 0, dec, 0) == Connect::Ok);
+        const Plan p = compile(w.g, kRate, kCentre, &none);
+        const ChannelPlan* c = chanPlanFor(p, w.chan);
+        CHECK(c != nullptr);
+        if (c != nullptr) { CHECK(c->outRateHz == kChannelRateHz); }
+        CHECK(has(p, dec, Problem::PluginMissing));
+    }
+
+    // [D11] The resampler bound: exact ratios pass through untouched, an
+    // awkward one is nudged by no more than the stated tolerance to a ratio
+    // the resampler can build, and nonsense is refused.
+    {
+        using cascade::core::patch::gcdU;
+        using cascade::core::patch::kMaxDecoderInterp;
+        using cascade::core::patch::kMaxRateNudgePpm;
+        using cascade::core::patch::resampleInputRate;
+        CHECK(resampleInputRate(48000.0, 24000.0) == 48000u);
+        CHECK(resampleInputRate(2400000.0, 48000.0) == 2400000u);
+        CHECK(resampleInputRate(200000.0, 192000.0) == 200000u);   // 24/25
+        // 2.048 MS/s / 3, against 192 kHz: coprime enough to need a nudge.
+        const double awkward = 2048000.0 / 3.0;
+        const unsigned r = resampleInputRate(awkward, 192000.0);
+        CHECK(r != 0u);
+        CHECK(std::fabs(static_cast<double>(r) - awkward) / awkward * 1e6 <= kMaxRateNudgePpm + 1.0);
+        CHECK(192000ull / gcdU(192000ull, r) <= kMaxDecoderInterp);
+        CHECK(resampleInputRate(0.0, 48000.0) == 0u);
+        CHECK(resampleInputRate(48000.0, 0.0) == 0u);
+    }
+
+    // [D12] THE POINT OF ALL THIS: two decoders on two frequencies off one
+    // radio, each centred on its own channel.
+    {
+        Graph g;
+        const NodeId radio = g.addNode(NodeKind::Radio, "Radio", PortType::Iq);
+        const NodeId c1 = g.addNode(NodeKind::Channel, "c1", PortType::Iq);
+        const NodeId c2 = g.addNode(NodeKind::Channel, "c2", PortType::Iq);
+        const NodeId d1 = g.addNode(NodeKind::Decoder, "d1", PortType::Iq);
+        const NodeId d2 = g.addNode(NodeKind::Decoder, "d2", PortType::Iq);
+        const NodeId text = g.addNode(NodeKind::Sink, "Text", PortType::Text);
+        g.mutableNode(c1)->freqHz = kCentre - 300000.0;
+        g.mutableNode(c2)->freqHz = kCentre + 450000.0;
+        g.mutableNode(d1)->plugin = "anyiq.dll";
+        g.mutableNode(d2)->plugin = "anyiq.dll";
+        CHECK(g.connect(radio, 0, c1, 0) == Connect::Ok);
+        CHECK(g.connect(radio, 0, c2, 0) == Connect::Ok);
+        CHECK(g.connect(c1, 0, d1, 0) == Connect::Ok);
+        CHECK(g.connect(c2, 0, d2, 0) == Connect::Ok);
+        CHECK(g.connect(d1, 0, text, 0) == Connect::Ok);
+        CHECK(g.connect(d2, 0, text, 0) == Connect::Ok);   // text fans in
+        const Plan p = compile(g, kRate, kCentre, &cat);
+        CHECK(p.decoders.size() == 2u);
+        const DecoderPlan* a = decoderPlanFor(p, d1);
+        const DecoderPlan* b = decoderPlanFor(p, d2);
+        CHECK(a != nullptr);
+        CHECK(b != nullptr);
+        if (a != nullptr && b != nullptr) {
+            CHECK(a->centreHz == kCentre - 300000.0);
+            CHECK(b->centreHz == kCentre + 450000.0);
+            CHECK(a->channel == c1);
+            CHECK(b->channel == c2);
+        }
+        CHECK(blocking(p) == 0u);
+        CHECK(p.runnable);
     }
 
     return testSummary("test_patch_plan");

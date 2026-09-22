@@ -8613,6 +8613,19 @@ void AppWindow::detachAndUnloadPlugins() {
     // else's DLL with no useful stack.
     pipeline_.setPluginRunner(nullptr);
     pluginRunner_.clear();
+    // THE PATCH'S DECODERS, BY THE SAME RULE AND SYNCHRONOUSLY. A patch set
+    // can hold instances of these very plugins (0.99.15), and unlike the
+    // runner above it is not detached by a pointer - the DSP thread may be
+    // inside it this instant. flushNow() shuts the DSP thread out, waits for
+    // any block in progress, and destroys every set it holds before it
+    // returns. The catalogue goes too: its API pointers point into the
+    // modules about to go. The page rebuilds both from whatever loads next,
+    // and the empty signature makes it republish.
+    pipeline_.patchRunner().flushNow();
+    patchCatalogue_.clear();
+    patchApis_.clear();
+    patchDspSig_.clear();
+    patchRefused_.clear();
     // Same rule as the runner: a track-source or panel handle is memory inside
     // a module whose destroy() is code in that same module.
     pluginUi_.clear();
@@ -10798,6 +10811,54 @@ void AppWindow::drawRadarSection() {
     drawScopeModeControl();
 }
 
+void AppWindow::rebuildPatchCatalogue() {
+    patchCatalogue_.clear();
+    patchApis_.clear();
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        // A plugin the user has STOPPED stays out of the patch too: a stop is
+        // a decision about the plugin, not about one place it runs.
+        const std::string key = cascade::core::pluginKey(p);
+        if (pluginIsStopped(key)) { continue; }
+        // One entry per decoder table, so a module with both an audio and an
+        // I/Q decoder is two parts - with the same key and different inputs.
+        if (p.decoder != nullptr) {
+            cascade::core::patch::DecoderInfo info;
+            info.key = key;
+            info.name = p.name;
+            info.feed = cascade::core::patch::PortType::Audio;
+            info.requiredRateHz = static_cast<double>(p.decoder->requiredRateHz);
+            patchCatalogue_.push_back(info);
+            cascade::core::patch::PluginApis a;
+            a.audio = p.decoder;
+            patchApis_.push_back(a);
+        }
+        if (p.iqDecoder != nullptr) {
+            cascade::core::patch::DecoderInfo info;
+            info.key = key;
+            info.name = p.name;
+            info.feed = cascade::core::patch::PortType::Iq;
+            info.requiredRateHz = p.iqDecoder->requiredRateHz;
+            patchCatalogue_.push_back(info);
+            cascade::core::patch::PluginApis a;
+            a.iq = p.iqDecoder;
+            patchApis_.push_back(a);
+        }
+    }
+}
+
+bool AppWindow::patchDecoderIsShown(cascade::core::patch::NodeId node) const {
+    for (const cascade::core::patch::Wire& w : patchGraph_.wires()) {
+        if (w.from != node) { continue; }
+        const cascade::core::patch::Node* dst = patchGraph_.find(w.to);
+        if (dst != nullptr && dst->kind == cascade::core::patch::NodeKind::Sink &&
+            !dst->inputs.empty() && dst->inputs[0] == cascade::core::patch::PortType::Text) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void AppWindow::drawPatchSection() {
     // A KEY, NOT A DRAWER, the same primitive the demod scope's row uses:
     // everything a patch can be set to is ON the canvas, because a node wired
@@ -10840,6 +10901,9 @@ void AppWindow::drawPatchPage() {
         if (patchWasOpen_) {
             patchWasOpen_ = false;
             pipeline_.patchRunner().clear();
+            // Forgotten with the set, so reopening builds a fresh one.
+            patchDspSig_.clear();
+            patchRefused_.clear();
         }
         return;
     }
@@ -10871,11 +10935,18 @@ void AppWindow::drawPatchPage() {
     ImGui::SetNextWindowSize(ImVec2(kPatchW, kPatchH), ImGuiCond_FirstUseEver);
 
     if (beginPage("Patch###patchwindow", "PATCH", &patchOpen_, 0, kPatchW, kPatchH)) {
+        // The installed decoder plugins, fresh each frame: a plugin installed
+        // from the store a moment ago is a part now, and one the user just
+        // stopped is not.
+        rebuildPatchCatalogue();
+
         // --- the parts bin ----------------------------------------------------
-        // Two decoder keys rather than one, because an I/Q decoder and an audio
-        // decoder are genuinely different parts - that is the plugin ABI's own
-        // distinction (CASCADE_CAP_IQ_DECODER against CASCADE_CAP_DECODER) and
-        // handing the wrong one its feed decodes nothing at all.
+        // The fixed parts first; then ONE PART PER INSTALLED DECODER PLUGIN,
+        // named, on a row of its own below. A decoder part is not a generic
+        // "decoder" the user then has to configure - it is that plugin, with
+        // the input the plugin's own ABI table says it takes (I/Q for a
+        // CASCADE_CAP_IQ_DECODER, audio for a CASCADE_CAP_DECODER), so the
+        // port it arrives with is already the right one.
         struct Part {
             const char* label;
             cascade::core::patch::NodeKind kind;
@@ -10888,10 +10959,6 @@ void AppWindow::drawPatchPage() {
              cascade::core::patch::PortType::Iq},
             {"Demod", cascade::core::patch::NodeKind::Demod,
              cascade::core::patch::PortType::Iq},
-            {"Decoder I/Q", cascade::core::patch::NodeKind::Decoder,
-             cascade::core::patch::PortType::Iq},
-            {"Decoder audio", cascade::core::patch::NodeKind::Decoder,
-             cascade::core::patch::PortType::Audio},
             {"Spectrum", cascade::core::patch::NodeKind::Display,
              cascade::core::patch::PortType::Iq},
             {"Speaker", cascade::core::patch::NodeKind::Sink,
@@ -10918,6 +10985,62 @@ void AppWindow::drawPatchPage() {
             }
         }
 
+        // The decoder row. Engraved caption, then a key per plugin.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        ImGui::TextUnformatted("Decoders");
+        ImGui::PopStyleColor();
+        if (patchCatalogue_.empty()) {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+            // Where to get one, named by the rail bank it lives in - checked
+            // against drawDecodeBank(), which draws the plugin store first.
+            ImGui::TextUnformatted(
+                "- none installed. Add decoder plugins from the plugin store in DECODE.");
+            ImGui::PopStyleColor();
+        }
+        for (std::size_t i = 0; i < patchCatalogue_.size(); ++i) {
+            const cascade::core::patch::DecoderInfo& info = patchCatalogue_[i];
+            ImGui::SameLine();
+            // The input is in the label only when it disambiguates - a
+            // module that is both an audio and an I/Q decoder shows two keys.
+            bool twin = false;
+            for (std::size_t j = 0; j < patchCatalogue_.size(); ++j) {
+                if (j != i && patchCatalogue_[j].key == info.key) { twin = true; }
+            }
+            char label[128];
+            std::snprintf(label, sizeof(label), "%s%s###dec%zu", info.name.c_str(),
+                          !twin ? ""
+                          : info.feed == cascade::core::patch::PortType::Iq ? " (I/Q)"
+                                                                           : " (audio)",
+                          i);
+            if (ImGui::Button(label)) {
+                const float stagger = 22.0f * static_cast<float>(nodesPlaced_ % 7);
+                const cascade::gui::patch::Vec2 at = cascade::gui::patch::screenToWorld(
+                    patchUi_.view,
+                    cascade::gui::patch::Vec2{binPos.x + 60.0f + stagger,
+                                              binPos.y + 110.0f + stagger});
+                const cascade::core::patch::NodeId made = patchGraph_.addNode(
+                    cascade::core::patch::NodeKind::Decoder, info.name, info.feed, at.x, at.y);
+                if (cascade::core::patch::Node* n = patchGraph_.mutableNode(made)) {
+                    n->plugin = info.key;
+                }
+                ++nodesPlaced_;
+                patchUi_.dirty = true;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s\n%s input, %s\nWire it from a %s.", info.key.c_str(),
+                                  info.feed == cascade::core::patch::PortType::Iq ? "I/Q"
+                                                                                  : "Audio",
+                                  info.requiredRateHz > 0.0 ? "needs a fixed rate"
+                                                            : "any rate",
+                                  info.feed == cascade::core::patch::PortType::Iq
+                                      ? "channel (or the radio itself)"
+                                      : "demodulator");
+            }
+        }
+
         ImGui::Separator();
 
         const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -10937,7 +11060,14 @@ void AppWindow::drawPatchPage() {
         // second piece of state to keep true for no measurable gain.
         patchPlan_ = cascade::core::patch::compile(
             patchGraph_, pipeline_.activeSource().sampleRateHz(),
-            pipeline_.activeSource().centerFrequencyHz());
+            pipeline_.activeSource().centerFrequencyHz(), &patchCatalogue_);
+        // A plugin that refused to create() an instance in the last build is
+        // a problem the plan cannot know about - it is only discovered by
+        // asking the plugin - so it is added here, where the canvas and the
+        // inspector will both read it.
+        for (const cascade::core::patch::NodeId id : patchRefused_) {
+            patchPlan_.problems.push_back({id, cascade::core::patch::Problem::PluginRefused});
+        }
 
         // The live half: what each planned channel is hearing, read out of
         // the wideband spectrum the pipeline already publishes. lastFrame_ is
@@ -10947,7 +11077,30 @@ void AppWindow::drawPatchPage() {
         for (const auto& ch : patchPlan_.channels) {
             const cascade::core::patch::Level lv = cascade::core::patch::channelLevelDb(
                 lastFrame_.dbBins, pipeline_.activeSource().sampleRateHz(), ch.offsetHz);
-            if (lv.valid) { patchReadings_.push_back({ch.node, lv.db}); }
+            if (lv.valid) {
+                cascade::gui::patch::NodeReading r;
+                r.node = ch.node;
+                r.db = lv.db;
+                patchReadings_.push_back(std::move(r));
+            }
+        }
+        // Every RUNNING decoder gets a face, including one that has said
+        // nothing yet: "0 lines" on a decoder that is being fed is itself
+        // the answer to "is it running".
+        for (const auto& dp : patchPlan_.decoders) {
+            if (std::find(patchRefused_.begin(), patchRefused_.end(), dp.node) !=
+                patchRefused_.end()) {
+                continue;
+            }
+            cascade::gui::patch::NodeReading r;
+            r.node = dp.node;
+            r.hasDb = false;
+            const auto it = patchDecoderFaces_.find(dp.node);
+            if (it != patchDecoderFaces_.end()) {
+                r.text = it->second.last;
+                r.lines = it->second.lines;
+            }
+            patchReadings_.push_back(std::move(r));
         }
 
         if (avail.x > 8.0f && avail.y > 8.0f) {
@@ -11046,6 +11199,78 @@ void AppWindow::drawPatchPage() {
                         }
                         break;
                     }
+                    case cascade::core::patch::NodeKind::Decoder: {
+                        // WHICH PLUGIN, chosen from those installed that take
+                        // this node's input. This is also the repair path: a
+                        // plugin's key is its file name, which carries its
+                        // version, so after an upgrade a saved node names a
+                        // file that is gone and says so - and is re-pointed
+                        // here in one click rather than rebuilt.
+                        ImGui::Spacing();
+                        ImGui::TextUnformatted("Plugin");
+                        const cascade::core::patch::PortType feed =
+                            sel->inputs.empty() ? cascade::core::patch::PortType::Iq
+                                                : sel->inputs[0];
+                        std::string current = sel->plugin.empty() ? "(none)" : sel->plugin;
+                        for (const cascade::core::patch::DecoderInfo& info : patchCatalogue_) {
+                            if (info.key == sel->plugin && info.feed == feed) {
+                                current = info.name;
+                                break;
+                            }
+                        }
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        if (ImGui::BeginCombo("##patchplugin", current.c_str())) {
+                            for (std::size_t i = 0; i < patchCatalogue_.size(); ++i) {
+                                const cascade::core::patch::DecoderInfo& info = patchCatalogue_[i];
+                                if (info.feed != feed) { continue; }
+                                ImGui::PushID(static_cast<int>(i));
+                                const bool isSel = info.key == sel->plugin;
+                                if (ImGui::Selectable(info.name.c_str(), isSel)) {
+                                    sel->plugin = info.key;
+                                    patchUi_.dirty = true;
+                                }
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip("%s", info.key.c_str());
+                                }
+                                ImGui::PopID();
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                                 cascade::gui::theme::kInkMuted));
+                        ImGui::TextWrapped("%s input.",
+                                           feed == cascade::core::patch::PortType::Iq
+                                               ? "I/Q - wire it from a channel, or from the "
+                                                 "radio for the whole band"
+                                               : "Audio - wire it from a demodulator");
+                        ImGui::PopStyleColor();
+                        // What the plan will actually hand it. A number, so
+                        // amber, and on its own line where it can be read.
+                        for (const cascade::core::patch::DecoderPlan& dp : patchPlan_.decoders) {
+                            if (dp.node != sel->id) { continue; }
+                            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                                     cascade::gui::theme::kAmber));
+                            if (dp.rateHz != dp.inRateHz) {
+                                ImGui::Text("fed %.0f Hz (from %.0f)", dp.rateHz, dp.inRateHz);
+                            } else {
+                                ImGui::Text("fed %.0f Hz", dp.rateHz);
+                            }
+                            if (dp.source != cascade::core::patch::DecoderSource::Audio) {
+                                ImGui::Text("centred on %.6f MHz", dp.centreHz / 1e6);
+                            }
+                            ImGui::PopStyleColor();
+                            break;
+                        }
+                        if (!patchDecoderIsShown(sel->id)) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                                     cascade::gui::theme::kInkMuted));
+                            ImGui::TextWrapped(
+                                "Wire its output to a Text out part to read what it decodes "
+                                "in the Decoder output window.");
+                            ImGui::PopStyleColor();
+                        }
+                        break;
+                    }
                     default:
                         ImGui::Spacing();
                         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
@@ -11084,21 +11309,57 @@ void AppWindow::drawPatchPage() {
         }
         ImGui::EndChild();
         // THE SET GOES TO THE DSP THREAD, built here because building it
-        // is allocation: a filter per channel, a resampler and a second of
-        // ring. Only when something that changes the DSP has changed -
-        // otherwise all of that would be rebuilt sixty times a second to
-        // hand the DSP thread what it already has.
+        // is allocation - a filter per channel, a resampler, a second of ring
+        // - and, since 0.99.15, create() on every plugin decoder in it. So it
+        // is rebuilt ONLY when something the DSP reads has changed, which
+        // dspSignature() spells out: dragging or resizing a node must not
+        // restart every decoder in the patch.
         {
             const double rate = pipeline_.activeSource().sampleRateHz();
-            const double centre = pipeline_.activeSource().centerFrequencyHz();
-            const bool moved = (rate != patchBuiltRate_) || (centre != patchBuiltCentre_);
-            if (patchUi_.dirty || moved || !patchWasOpen_) {
-                patchBuiltRate_ = rate;
-                patchBuiltCentre_ = centre;
-                pipeline_.patchRunner().publish(cascade::core::patch::buildStripSet(
-                    patchPlan_, patchGraph_, rate,
-                    cascade::core::patch::listeningChannel(patchGraph_),
-                    cascade::core::Pipeline::kAudioRateHz));
+            const cascade::core::patch::NodeId listening =
+                cascade::core::patch::listeningChannel(patchGraph_);
+            const std::string sig = cascade::core::patch::dspSignature(
+                patchPlan_, patchGraph_, rate, listening, cascade::core::Pipeline::kAudioRateHz,
+                &patchCatalogue_, &patchApis_);
+            if (sig != patchDspSig_ || !patchWasOpen_) {
+                patchDspSig_ = sig;
+                std::shared_ptr<cascade::core::patch::StripSet> set =
+                    cascade::core::patch::buildStripSet(
+                        patchPlan_, patchGraph_, rate, listening,
+                        cascade::core::Pipeline::kAudioRateHz, &patchCatalogue_, &patchApis_);
+                // Read before the hand-off: once published, the set is the
+                // DSP thread's and this thread may not look inside it.
+                patchRefused_ = set->refused;
+                patchFirstLineLogged_.clear();
+                patchDecoderFaces_.clear();
+                // What was started, and what refused - in the log, because
+                // "my patch decoder shows nothing" is otherwise unanswerable
+                // from a user's report: the log says whether it ran, at what
+                // rate, and centred where.
+                for (const auto& d : set->decoders) {
+                    for (const cascade::core::patch::DecoderPlan& dp : patchPlan_.decoders) {
+                        if (dp.node != d->node) { continue; }
+                        cascade::core::diagLogf(
+                            "patch: decoder '%s' (%s) started at %.0f Hz from %s, centred "
+                            "%.6f MHz",
+                            d->name.c_str(),
+                            dp.plugin < patchCatalogue_.size()
+                                ? patchCatalogue_[dp.plugin].key.c_str() : "?",
+                            dp.rateHz,
+                            dp.source == cascade::core::patch::DecoderSource::Radio ? "the radio"
+                            : dp.source == cascade::core::patch::DecoderSource::Channel
+                                ? "a channel" : "a demodulator",
+                            dp.centreHz / 1e6);
+                        break;
+                    }
+                }
+                for (const cascade::core::patch::NodeId id : patchRefused_) {
+                    const cascade::core::patch::Node* n = patchGraph_.find(id);
+                    cascade::core::diagLogf("patch: decoder '%s' (%s) refused to start",
+                                            n != nullptr ? n->name.c_str() : "?",
+                                            n != nullptr ? n->plugin.c_str() : "?");
+                }
+                pipeline_.patchRunner().publish(std::move(set));
             }
             patchWasOpen_ = true;
         }
@@ -15284,6 +15545,30 @@ void AppWindow::pumpDecoderOutput() {
         cascade::core::DecodedLine l;
         l.plugin = "Aircraft info";
         l.text = std::move(s);
+        decoderLog_.push_back(std::move(l));
+    }
+    // THE PATCH'S DECODERS, drained every frame for the same reason the
+    // runner's are: its queue is bounded and drops. A line is SHOWN only when
+    // its node's Text output is wired to a Text sink - that wire is what the
+    // Text out part is for, and a decoder wired to nothing is marked on the
+    // canvas as having nobody listening. Tagged with the NODE's name, so two
+    // POCSAG decoders on two frequencies read as two sources, not one.
+    for (cascade::core::patch::PatchLine& pl : pipeline_.patchRunner().drainText()) {
+        {
+            PatchDecoderFace& face = patchDecoderFaces_[pl.node];
+            face.last = pl.text;
+            ++face.lines;
+        }
+        if (patchFirstLineLogged_.insert(pl.node).second) {
+            cascade::core::diagLogf("patch: first line from '%s'%s: %.160s", pl.source.c_str(),
+                                    patchDecoderIsShown(pl.node) ? "" : " (not wired to a Text out)",
+                                    pl.text.c_str());
+        }
+        if (!patchDecoderIsShown(pl.node)) { continue; }
+        ++decoderLinesTotal_;
+        cascade::core::DecodedLine l;
+        l.plugin = std::move(pl.source);
+        l.text = std::move(pl.text);
         decoderLog_.push_back(std::move(l));
     }
     while (decoderLog_.size() > kDecoderLogMax) { decoderLog_.pop_front(); }

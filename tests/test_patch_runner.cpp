@@ -450,6 +450,82 @@ int main() {
         CHECK(r.channelCount() == 2u);
     }
 
+    // [11c] flushNow() DESTROYS EVERYTHING BEFORE IT RETURNS. This is what
+    // runs before plugin modules are unmapped: a set may hold decoder handles,
+    // and a handle whose destroy() runs after its DLL is gone is a crash in
+    // someone else's code. So unlike clear(), it cannot wait for a later
+    // reap() - and unlike the old clear(), it must not pull a set out from
+    // under a process() that is still running.
+    {
+        // With NO DSP thread at all - a stopped receiver - it just destroys.
+        Patch p(2);
+        Runner r;
+        std::weak_ptr<StripSet> held;
+        std::weak_ptr<StripSet> waiting;
+        {
+            auto s = p.build();
+            held = s;
+            r.publish(std::move(s));
+        }
+        const auto sig = tone(100000.0, 2400);
+        r.process(sig.data(), sig.size());
+        {
+            auto s = p.build();
+            waiting = s;
+            r.publish(std::move(s));   // published, not yet adopted
+        }
+        CHECK(!held.expired());
+        CHECK(!waiting.expired());
+        r.flushNow();
+        CHECK(held.expired());         // the running one, synchronously
+        CHECK(waiting.expired());      // and the pending one
+        CHECK(!r.running());
+        CHECK(r.bufferedFrames() == 0u);
+        // Usable afterwards.
+        r.publish(p.build());
+        r.process(sig.data(), sig.size());
+        CHECK(r.running());
+    }
+    {
+        // With a DSP thread running flat out: every flush completes, every set
+        // it saw is gone when it returns, and nothing tears.
+        Patch a(2);
+        Runner r;
+        const auto sig = tone(100000.0, 2400);
+        std::atomic<bool> stop{false};
+        std::atomic<std::uint64_t> blocks{0};
+        std::thread dsp([&] {
+            float l[256];
+            float rr[256];
+            while (!stop.load(std::memory_order_relaxed)) {
+                r.process(sig.data(), sig.size());
+                r.pullAudio(l, rr, 256);
+                blocks.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+        int stillAlive = 0;
+        for (int i = 0; i < 200; ++i) {
+            std::weak_ptr<StripSet> w;
+            {
+                auto s = a.build(a.channels[i % 2]);
+                w = s;
+                r.publish(std::move(s));
+            }
+            if (i % 4 == 0) { std::this_thread::yield(); }
+            r.flushNow();
+            if (!w.expired()) { ++stillAlive; }
+        }
+        CHECK(stillAlive == 0);
+        // The DSP thread was still running throughout, and still is.
+        const std::uint64_t before = blocks.load();
+        r.publish(a.build(a.channels[0]));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        CHECK(blocks.load() > before);
+        CHECK(r.running());
+        stop.store(true, std::memory_order_relaxed);
+        dsp.join();
+    }
+
     // [12] The demodulator each channel gets comes from the Demod node it
     // feeds - and a channel feeding no demodulator takes AM rather than
     // guessing, because a wrong demodulator is silence, not a worse version

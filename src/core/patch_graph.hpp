@@ -100,6 +100,20 @@ struct Node {
     float x = 0.0f;
     float y = 0.0f;
 
+    // --- how big the node is --------------------------------------------------
+    //
+    // PER NODE, not per kind, and saved with the patch. A node on this canvas
+    // is not a label for an instrument, it IS the instrument - its whole
+    // control surface is on its face - so the user sizes it the way they size
+    // any other panel: a demodulator they are working can be opened out, and
+    // one they are only monitoring squeezed down to its reading.
+    //
+    // Zero means "this came from a file that predates sizes"; the loader fills
+    // it with the kind's default rather than leaving a zero-area node that
+    // could never be clicked.
+    float w = 0.0f;
+    float h = 0.0f;
+
     // --- what the node is SET to ---------------------------------------------
     //
     // Two fields rather than a generic property bag. A bag is tempting - every
@@ -115,8 +129,15 @@ struct Node {
     //                    not stored - storing the offset would silently move
     //                    every channel the moment the dial did.
     //   Demod    mode    which demodulator: an index into the host's mode list.
+    //   Decoder  plugin  WHICH plugin the node runs: the module key the plugin
+    //                    host loaded it under (its file name). A key and not
+    //                    a display name, because two plugins may share a
+    //                    display name and one module never shares a file.
+    //                    Empty means "no plugin chosen", which is a node that
+    //                    cannot run and says so.
     double freqHz = 0.0;
     int mode = 0;
+    std::string plugin;
 };
 
 // --- the port tables ---------------------------------------------------------
@@ -158,6 +179,36 @@ inline void portsFor(NodeKind kind, PortType feed, std::vector<PortType>& in,
     }
 }
 
+// --- how big a node starts ---------------------------------------------------
+//
+// A node opens at the size its own controls need, not at one size for all of
+// them: a speaker has a switch and a meter, a demodulator has a mode, a filter
+// and a reading, and a display is mostly picture. Starting them all equal
+// means every useful node opens too small and every simple one too large, and
+// the user's first action on a fresh patch is resizing things.
+//
+// In world units - logical pixels at zoom 1. Here rather than in the view
+// header because the LOADER needs them too, and the loader must not have to
+// include anything that draws.
+inline void defaultNodeSize(NodeKind kind, float& w, float& h) {
+    switch (kind) {
+        case NodeKind::Radio: w = 232.0f; h = 128.0f; return;
+        case NodeKind::Channel: w = 232.0f; h = 104.0f; return;
+        case NodeKind::Demod: w = 232.0f; h = 132.0f; return;
+        case NodeKind::Decoder: w = 216.0f; h = 108.0f; return;
+        case NodeKind::Display: w = 300.0f; h = 188.0f; return;
+        case NodeKind::Sink: w = 216.0f; h = 116.0f; return;
+    }
+    w = 216.0f;
+    h = 108.0f;
+}
+
+// The floor a resize may not go below. Small enough to squeeze a node down to
+// its title and its reading, large enough that the title bar keeps a grab
+// handle and a close key - a node dragged to nothing cannot be dragged back.
+inline constexpr float kMinNodeW = 132.0f;
+inline constexpr float kMinNodeH = 56.0f;
+
 class Graph {
 public:
     // --- building ------------------------------------------------------------
@@ -170,6 +221,7 @@ public:
         n.name = name;
         n.x = x;
         n.y = y;
+        defaultNodeSize(kind, n.w, n.h);
         portsFor(kind, feed, n.inputs, n.outputs);
         nodes_.push_back(std::move(n));
         return nodes_.back().id;

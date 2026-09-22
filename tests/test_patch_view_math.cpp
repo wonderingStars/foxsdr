@@ -37,6 +37,11 @@ using cascade::gui::patch::kWireMaxReach;
 using cascade::gui::patch::kWireMinReach;
 using cascade::gui::patch::nodeAt;
 using cascade::gui::patch::nodeHeight;
+using cascade::gui::patch::nodeWidth;
+using cascade::gui::patch::kResizeGrip;
+using cascade::gui::patch::nodeSize;
+using cascade::gui::patch::pointInResizeGrip;
+using cascade::gui::patch::resizeNodeTo;
 using cascade::gui::patch::outputPortPos;
 using cascade::gui::patch::pointInHeader;
 using cascade::gui::patch::pointInNode;
@@ -97,7 +102,7 @@ int main() {
         const auto& n = *g.find(id);
 
         CHECK(inputPortPos(n, 0).x == 100.0f);                 // left edge
-        CHECK(outputPortPos(n, 0).x == 100.0f + kNodeWidth);   // right edge
+        CHECK(outputPortPos(n, 0).x == 100.0f + nodeWidth(n)); // right edge
         CHECK(inputPortPos(n, 0).y == outputPortPos(n, 0).y);  // row 0 lines up
 
         // Every port is vertically within the box, and below the header.
@@ -133,7 +138,7 @@ int main() {
         const float h = nodeHeight(n);
 
         CHECK(pointInNode(n, V(10.0f, 20.0f)));                       // top-left corner
-        CHECK(pointInNode(n, V(10.0f + kNodeWidth, 20.0f + h)));      // bottom-right
+        CHECK(pointInNode(n, V(10.0f + nodeWidth(n), 20.0f + h)));    // bottom-right
         CHECK(pointInNode(n, V(60.0f, 40.0f)));                       // inside
         CHECK(!pointInNode(n, V(9.0f, 40.0f)));                       // just left
         CHECK(!pointInNode(n, V(60.0f, 20.0f + h + 1.0f)));           // just below
@@ -231,7 +236,8 @@ int main() {
         // input of `c` is close to the output of `a`.
         Graph t;
         const NodeId src = t.addNode(NodeKind::Radio, "R", PortType::Iq, 0.0f, 0.0f);
-        const NodeId dst = t.addNode(NodeKind::Channel, "C", PortType::Iq, kNodeWidth + 6.0f, 0.0f);
+        const NodeId dst = t.addNode(NodeKind::Channel, "C", PortType::Iq,
+                                     nodeWidth(*t.find(src)) + 6.0f, 0.0f);
         const Vec2 srcOut = outputPortPos(*t.find(src), 0);
         const Vec2 dstIn = inputPortPos(*t.find(dst), 0);
         CHECK(portAt(t, V(srcOut.x + 1.0f, srcOut.y)).node == src);
@@ -344,6 +350,110 @@ int main() {
         CHECK(after.from == before.from);                  // the source did not move
         CHECK_NEAR(after.to.x, before.to.x + 120.0f, 0.001f);
         CHECK_NEAR(after.to.y, before.to.y - 35.0f, 0.001f);
+    }
+
+    // [S1] EVERY KIND OPENS AT ITS OWN SIZE, and the geometry reads the
+    // node's size rather than one width for all. A speaker and a display are
+    // not the same shape of instrument.
+    {
+        Graph g;
+        const NodeId radio = g.addNode(NodeKind::Radio, "R", PortType::Iq, 0.0f, 0.0f);
+        const NodeId disp = g.addNode(NodeKind::Display, "S", PortType::Iq, 0.0f, 0.0f);
+        const auto& r = *g.find(radio);
+        const auto& d = *g.find(disp);
+        float rw = 0.0f, rh = 0.0f, dw = 0.0f, dh = 0.0f;
+        cascade::core::patch::defaultNodeSize(NodeKind::Radio, rw, rh);
+        cascade::core::patch::defaultNodeSize(NodeKind::Display, dw, dh);
+        CHECK(r.w == rw);
+        CHECK(r.h == rh);
+        CHECK(nodeWidth(r) == rw);
+        CHECK(nodeHeight(r) == rh);
+        CHECK(nodeWidth(d) == dw);
+        CHECK(dw > rw);                          // a display is wider than a radio
+        CHECK(dw > kNodeWidth);                  // and nothing is stuck at the old 150
+        // Every default is at or above the floors, or the floor would be
+        // silently resizing a node the first time it is drawn.
+        for (const NodeKind k : {NodeKind::Radio, NodeKind::Channel, NodeKind::Demod,
+                                 NodeKind::Decoder, NodeKind::Display, NodeKind::Sink}) {
+            float w = 0.0f, h = 0.0f;
+            cascade::core::patch::defaultNodeSize(k, w, h);
+            CHECK(w >= cascade::core::patch::kMinNodeW);
+            CHECK(h >= cascade::core::patch::kMinNodeH);
+        }
+    }
+
+    // [S2] A RESIZED NODE TAKES ITS OUTPUTS WITH IT. The inputs stay on the
+    // left edge; the outputs sit on whatever the right edge now is, so a wire
+    // still meets the dot exactly - the failure this guards against is a node
+    // drawn wide with its ports hit-tested at the old width.
+    {
+        Graph g;
+        const NodeId id = g.addNode(NodeKind::Demod, "AM", PortType::Iq, 40.0f, 30.0f);
+        cascade::core::patch::Node& n = *g.mutableNode(id);
+        const Vec2 inBefore = inputPortPos(n, 0);
+        resizeNodeTo(n, V(40.0f + 400.0f, 30.0f + 300.0f));
+        CHECK(n.w == 400.0f);
+        CHECK(n.h == 300.0f);
+        CHECK(outputPortPos(n, 0).x == 440.0f);
+        CHECK(inputPortPos(n, 0).x == inBefore.x);
+        CHECK(inputPortPos(n, 0).y == inBefore.y);   // ports do not slide down
+        // The grab radius follows the port to its new place.
+        CHECK(portAt(g, V(439.0f, outputPortPos(n, 0).y)).found);
+        CHECK(!portAt(g, V(40.0f + nodeWidth(n) - 250.0f, outputPortPos(n, 0).y)).found);
+        // And the outline answers at the new size.
+        CHECK(pointInNode(n, V(435.0f, 325.0f)));
+        CHECK(!pointInNode(n, V(445.0f, 325.0f)));
+    }
+
+    // [S3] A resize cannot take a node below its floors - not below the
+    // minimum size, and not so short that a port falls off its own bottom.
+    {
+        Graph g;
+        const NodeId id = g.addNode(NodeKind::Channel, "C", PortType::Iq, 100.0f, 100.0f);
+        cascade::core::patch::Node& n = *g.mutableNode(id);
+        resizeNodeTo(n, V(90.0f, 90.0f));        // dragged up and past the origin
+        CHECK(n.w == cascade::core::patch::kMinNodeW);
+        CHECK(n.h >= cascade::core::patch::kMinNodeH);
+        CHECK(n.h >= nodeHeight(n.inputs.size(), n.outputs.size()));
+        CHECK(inputPortPos(n, 0).y < n.y + nodeHeight(n));
+
+        // A many-ported node's port floor beats a small requested height.
+        cascade::core::patch::Node many;
+        many.x = 0.0f;
+        many.y = 0.0f;
+        many.inputs.assign(8, PortType::Text);
+        resizeNodeTo(many, V(200.0f, 60.0f));
+        const float floor = nodeHeight(many.inputs.size(), many.outputs.size());
+        CHECK(floor > 60.0f);
+        CHECK(many.h == floor);
+        CHECK(inputPortPos(many, 7).y < many.y + nodeHeight(many));
+    }
+
+    // [S4] The grip is the bottom-right corner and nowhere else - in
+    // particular not the right EDGE, where the output ports are.
+    {
+        Graph g;
+        const NodeId id = g.addNode(NodeKind::Sink, "Speaker", PortType::Audio, 0.0f, 0.0f);
+        const auto& n = *g.find(id);
+        const Vec2 s = nodeSize(n);
+        CHECK(pointInResizeGrip(n, V(s.x - 2.0f, s.y - 2.0f)));
+        CHECK(pointInResizeGrip(n, V(s.x - kResizeGrip, s.y - kResizeGrip)));
+        CHECK(!pointInResizeGrip(n, V(s.x - kResizeGrip - 1.0f, s.y - 2.0f)));
+        CHECK(!pointInResizeGrip(n, V(s.x - 2.0f, kFirstPortY)));   // beside the port rows
+        CHECK(!pointInResizeGrip(n, V(s.x + 3.0f, s.y - 2.0f)));    // outside
+        CHECK(!pointInResizeGrip(n, V(2.0f, 2.0f)));
+    }
+
+    // [S5] A node with no size - a plain struct, or a file from before sizes
+    // - still has a usable outline rather than a zero-area one.
+    {
+        cascade::core::patch::Node bare;
+        bare.inputs = {PortType::Iq};
+        bare.outputs = {PortType::Audio};
+        CHECK(bare.w == 0.0f);
+        CHECK(nodeWidth(bare) == kNodeWidth);
+        CHECK(nodeHeight(bare) == nodeHeight(1, 1));
+        CHECK(pointInNode(bare, V(kNodeWidth - 1.0f, 10.0f)));
     }
 
     return testSummary("test_patch_view_math");

@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 #include "core/patch_graph.hpp"
 
@@ -71,29 +72,77 @@ inline float nodeHeight(std::size_t inputs, std::size_t outputs) {
     return std::max(kMinNodeHeight, needed);
 }
 
-inline float nodeHeight(const Node& n) { return nodeHeight(n.inputs.size(), n.outputs.size()); }
+// --- a node's own size ---------------------------------------------------------
+//
+// A node carries its size (core::patch::Node::w/h), because on this canvas a
+// node is the instrument itself and the user sizes it like any panel. What is
+// drawn and hit-tested is that size, held to two floors:
+//
+//   * never narrower than kMinNodeW nor shorter than kMinNodeH, so the title
+//     bar keeps a grab handle and a close key; and
+//   * never shorter than its PORTS need (nodeHeight above), so no port can
+//     be resized off the bottom of its own node - a port outside the outline
+//     is a port the user can see and cannot find.
+//
+// A node with no size at all - built directly as a struct, or loaded from a
+// file that predates sizes - falls back to kNodeWidth and its port height.
+inline float nodeWidth(const Node& n) {
+    if (n.w <= 0.0f) { return kNodeWidth; }
+    return std::max(n.w, cascade::core::patch::kMinNodeW);
+}
 
-inline Vec2 nodeSize(const Node& n) { return Vec2{kNodeWidth, nodeHeight(n)}; }
+inline float nodeHeight(const Node& n) {
+    const float ports = nodeHeight(n.inputs.size(), n.outputs.size());
+    if (n.h <= 0.0f) { return ports; }
+    return std::max({n.h, cascade::core::patch::kMinNodeH, ports});
+}
+
+inline Vec2 nodeSize(const Node& n) { return Vec2{nodeWidth(n), nodeHeight(n)}; }
 
 // Ports sit ON the edge, not inside it, so a wire meets the box exactly where
-// the dot is drawn.
+// the dot is drawn. Outputs follow the RIGHT edge wherever a resize puts it.
 inline Vec2 inputPortPos(const Node& n, PortIndex i) {
     return Vec2{n.x, n.y + kFirstPortY + static_cast<float>(i) * kPortPitch};
 }
 
 inline Vec2 outputPortPos(const Node& n, PortIndex i) {
-    return Vec2{n.x + kNodeWidth, n.y + kFirstPortY + static_cast<float>(i) * kPortPitch};
+    return Vec2{n.x + nodeWidth(n), n.y + kFirstPortY + static_cast<float>(i) * kPortPitch};
 }
 
 inline bool pointInNode(const Node& n, Vec2 p) {
-    const float h = nodeHeight(n);
-    return p.x >= n.x && p.x <= n.x + kNodeWidth && p.y >= n.y && p.y <= n.y + h;
+    const Vec2 s = nodeSize(n);
+    return p.x >= n.x && p.x <= n.x + s.x && p.y >= n.y && p.y <= n.y + s.y;
 }
 
 // The title bar, which is the part a drag moves the node by. Dragging from the
-// body would fight with any control that later lives there.
+// body would fight with the controls that live there.
 inline bool pointInHeader(const Node& n, Vec2 p) {
-    return p.x >= n.x && p.x <= n.x + kNodeWidth && p.y >= n.y && p.y <= n.y + kHeaderHeight;
+    return p.x >= n.x && p.x <= n.x + nodeWidth(n) && p.y >= n.y &&
+           p.y <= n.y + kHeaderHeight;
+}
+
+// --- resizing ------------------------------------------------------------------
+//
+// The grip is the bottom-right corner, the one place on a panel every desktop
+// has taught the user to pull. A square rather than an edge strip, because the
+// edges are where the PORTS are, and a resize that starts when the user meant
+// to draw a wire is the worse of the two mistakes.
+inline constexpr float kResizeGrip = 12.0f;
+
+inline bool pointInResizeGrip(const Node& n, Vec2 p) {
+    const Vec2 s = nodeSize(n);
+    const float x1 = n.x + s.x;
+    const float y1 = n.y + s.y;
+    return p.x >= x1 - kResizeGrip && p.x <= x1 && p.y >= y1 - kResizeGrip && p.y <= y1;
+}
+
+// The size a node takes when its grip is dragged to `corner` (world units).
+// Held to the same floors nodeSize() applies, and written back into the node
+// as the size it now IS, so the saved patch and the drawn one never disagree.
+inline void resizeNodeTo(Node& n, Vec2 corner) {
+    const float ports = nodeHeight(n.inputs.size(), n.outputs.size());
+    n.w = std::max(corner.x - n.x, cascade::core::patch::kMinNodeW);
+    n.h = std::max({corner.y - n.y, cascade::core::patch::kMinNodeH, ports});
 }
 
 // --- the view -----------------------------------------------------------------
@@ -247,7 +296,15 @@ struct WireEnds {
 // arrives from the radio, and would make compile() untestable folded in.
 struct NodeReading {
     cascade::core::patch::NodeId node = kNoNode;
+    // A channel's level. Absent on a decoder, which has no level of its own.
+    bool hasDb = true;
     float db = 0.0f;
+    // A decoder's most recent line, and how many it has produced since the
+    // patch was last built. On the node's face, because a decoder that is
+    // being fed and one that is not look identical otherwise - the whole
+    // reason CASCADE_DECODE_TEST exists.
+    std::string text;
+    std::uint64_t lines = 0;
 };
 
 // --- what the canvas remembers between frames ---------------------------------
@@ -263,6 +320,11 @@ struct Interaction {
     // centre itself under the cursor on the first frame.
     NodeId dragNode = kNoNode;
     Vec2 grab;
+
+    // Resizing a node by its bottom-right grip. `grab` is reused as the
+    // offset from the node's CORNER to the pointer, for the same reason: the
+    // corner must not jump to the pointer on the first frame of the drag.
+    NodeId resizeNode = kNoNode;
 
     // Dragging a wire out of a port.
     bool wiring = false;
