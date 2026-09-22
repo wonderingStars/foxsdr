@@ -15,6 +15,8 @@
 #define CASCADE_GUI_PATCH_VIEW_HPP
 
 #include "core/patch_graph.hpp"
+#include <vector>
+
 #include "core/patch_plan.hpp"
 #include "gui/patch_view_math.hpp"
 #include "imgui.h"
@@ -42,7 +44,9 @@ ImU32 portColour(core::patch::PortType t);
 // nodes it names; it never computes one itself, because the plan needs the
 // radio's rate and centre and the canvas has no business knowing those.
 void drawPatchCanvas(core::patch::Graph& g, Interaction& ui,
-                     const core::patch::Plan& plan, ImVec2 origin, ImVec2 size);
+                     const core::patch::Plan& plan,
+                     const std::vector<NodeReading>& readings, ImVec2 origin,
+                     ImVec2 size);
 
 // The patch a page opens with when the user has none: the receiver they are
 // already using, with nothing wired. An empty canvas gives no clue what a node

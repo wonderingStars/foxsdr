@@ -2433,6 +2433,7 @@ private:
     cascade::gui::patch::Interaction patchUi_;
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;
+    bool patchFileLoaded_ = false;
     // The patch as core/patch_io.hpp writes it, rebuilt only when the
     // canvas says it changed. currentConfig() runs every frame and must
     // not serialise a document on each one.
@@ -2440,6 +2441,10 @@ private:
     // This frame's compile() of the patch: what would be built, and every
     // reason it could not be. Recomputed while the page is open.
     cascade::core::patch::Plan patchPlan_;
+    // What each planned channel is hearing this frame. Rebuilt per frame
+    // rather than kept, because a stale level is worse than none: it reads
+    // as a live measurement of a channel that may no longer exist.
+    std::vector<cascade::gui::patch::NodeReading> patchReadings_;
     // How many parts have been dropped from the bin, used only to
     // stagger the next one so a run of clicks does not stack every
     // node on the same spot.

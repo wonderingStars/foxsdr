@@ -62,7 +62,8 @@ inline const char* problemText(Problem p) {
         case Problem::NotFedByARadio: return "no radio upstream of this";
         case Problem::NoFrequency: return "no frequency set";
         case Problem::OutOfBand: return "outside the band the radio is receiving";
-        case Problem::RateUnreachable: return "this sample rate cannot reach 48 kHz";
+        case Problem::RateUnreachable:
+            return "no whole division of this sample rate lands in the audio band";
         case Problem::NothingListens: return "nothing is listening to this";
     }
     return "this cannot run";
@@ -104,6 +105,46 @@ inline unsigned wholeDecimation(double deviceRateHz, double targetHz = kChannelR
     // reporting 2.4 MS/s, and refusing it would be pedantry rather than care.
     if (std::fabs(exact - rounded) > 1e-6 * rounded) { return 0; }
     return static_cast<unsigned>(rounded);
+}
+
+// The band a channel's output must land in for a demodulator to work with it.
+// Wide on purpose: the point is to accept the rates real devices produce, not
+// to insist on one number.
+inline constexpr double kMinChannelRateHz = 24000.0;
+inline constexpr double kMaxChannelRateHz = 96000.0;
+
+struct RateChoice {
+    unsigned decimation = 0;
+    double rateHz = 0.0;
+    bool ok = false;
+};
+
+// The whole decimation that lands nearest kChannelRateHz while staying inside
+// the band above, or nothing when the device rate has none.
+//
+// WHY NOT EXACTLY 48 kHz. That rule belongs to a bit-clocked DECODER -
+// acars::Demod treats its symbol phases as sample offsets within a bit, so a
+// fractional samples-per-bit does not degrade, it walks off the bit - and not
+// to a channel. Applied to the channel it refused 2.000 MS/s and 2.048 MS/s,
+// which are the two commonest rates this product sees, so every channel on a
+// generator or an RTL-SDR was marked unbuildable. A channel only has to land
+// somewhere a demodulator can work; wholeDecimation() above is kept for the
+// day a decoder node says it needs an exact rate of its own.
+inline RateChoice chooseChannelRate(double deviceRateHz) {
+    RateChoice best;
+    if (!(deviceRateHz > 0.0)) { return best; }
+    double bestErr = 0.0;
+    for (unsigned d = 1; d <= 4096; ++d) {
+        const double r = deviceRateHz / static_cast<double>(d);
+        if (r < kMinChannelRateHz) { break; }   // only gets smaller from here
+        if (r > kMaxChannelRateHz) { continue; }
+        const double err = std::fabs(r - kChannelRateHz);
+        if (!best.ok || err < bestErr) {
+            best = RateChoice{d, r, true};
+            bestErr = err;
+        }
+    }
+    return best;
 }
 
 inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz) {
@@ -164,12 +205,12 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz) {
             plan.problems.push_back({n.id, Problem::OutOfBand});
             continue;
         }
-        const unsigned dec = wholeDecimation(deviceRateHz);
-        if (dec == 0) {
+        const RateChoice rc = chooseChannelRate(deviceRateHz);
+        if (!rc.ok) {
             plan.problems.push_back({n.id, Problem::RateUnreachable});
             continue;
         }
-        plan.channels.push_back({n.id, offset, dec, deviceRateHz / dec});
+        plan.channels.push_back({n.id, offset, rc.decimation, rc.rateHz});
     }
 
     // Anything that produces and is heard by nobody. Advisory.

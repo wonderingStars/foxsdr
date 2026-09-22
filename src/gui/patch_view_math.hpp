@@ -239,6 +239,17 @@ struct WireEnds {
     bool found = false;
 };
 
+// What a node is reading right now. Here rather than beside the drawing for
+// the same reason Interaction is: it holds no ImGui types, and
+// app_window.hpp owns a vector of them and does not include imgui.h.
+//
+// Kept OUT of Plan, which is a pure function of the graph: a level is live,
+// arrives from the radio, and would make compile() untestable folded in.
+struct NodeReading {
+    cascade::core::patch::NodeId node = kNoNode;
+    float db = 0.0f;
+};
+
 // --- what the canvas remembers between frames ---------------------------------
 //
 // All interaction, no document: the document is the Graph. It lives in this

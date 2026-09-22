@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 #include "core/patch_io.hpp"
+#include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
 #include "gui/patch_view.hpp"
 
@@ -1567,6 +1568,40 @@ int AppWindow::run(int frames) {
         if (!patchOpenedByEnv_ && std::getenv("FOXSDR_OPEN_PATCH") != nullptr) {
             patchOpenedByEnv_ = true;
             patchOpen_ = true;
+        }
+
+        // AND A PATCH FROM A FILE, once. A --frames run is hermetic - the
+        // config is neither loaded nor saved - so without this a patch
+        // cannot be put in front of the renderer at all, and the live level
+        // on a node could only ever be checked by eye. Loaded through the
+        // same patch_io::parse as the config, so a file gets exactly the
+        // same refusal of anything the rules forbid.
+        if (!patchFileLoaded_) {
+            if (const char* pf = std::getenv("FOXSDR_PATCH_FILE")) {
+                patchFileLoaded_ = true;
+                std::ifstream in(pf, std::ios::binary);
+                if (in) {
+                    const std::string text((std::istreambuf_iterator<char>(in)),
+                                           std::istreambuf_iterator<char>());
+                    cascade::core::patch::LoadResult pr =
+                        cascade::core::patch::parse(text);
+                    if (pr.ok) {
+                        patchGraph_ = std::move(pr.graph);
+                        patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
+                        patchUi_.view.zoom = pr.zoom;
+                        patchSeeded_ = true;
+                        patchText_ = text;
+                        std::fprintf(stderr,
+                                     "cascade: patch loaded from %s (%zu nodes, "
+                                     "%d dropped)\n",
+                                     pf, patchGraph_.nodes().size(), pr.dropped);
+                    } else {
+                        std::fprintf(stderr, "cascade: %s is not a patch\n", pf);
+                    }
+                } else {
+                    std::fprintf(stderr, "cascade: cannot read patch file %s\n", pf);
+                }
+            }
         }
 
         // The same latch for a MAP PAGE, and for the same reason the scope has
@@ -10887,8 +10922,20 @@ void AppWindow::drawPatchPage() {
             patchGraph_, pipeline_.activeSource().sampleRateHz(),
             pipeline_.activeSource().centerFrequencyHz());
 
+        // The live half: what each planned channel is hearing, read out of
+        // the wideband spectrum the pipeline already publishes. lastFrame_ is
+        // the SAME frame the waterfall is drawing, so the number on a node
+        // and the bump on the display cannot disagree.
+        patchReadings_.clear();
+        for (const auto& ch : patchPlan_.channels) {
+            const cascade::core::patch::Level lv = cascade::core::patch::channelLevelDb(
+                lastFrame_.dbBins, pipeline_.activeSource().sampleRateHz(), ch.offsetHz);
+            if (lv.valid) { patchReadings_.push_back({ch.node, lv.db}); }
+        }
+
         if (avail.x > 8.0f && avail.y > 8.0f) {
-            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, patchPlan_, origin,
+            cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, patchPlan_,
+                                                 patchReadings_, origin,
                                                  ImVec2(canvasW, avail.y));
         }
 
@@ -10907,6 +10954,19 @@ void AppWindow::drawPatchPage() {
                 ImGui::TextUnformatted("This patch cannot run yet.");
             }
             ImGui::PopStyleColor();
+            {
+                // The selected channel's own level, spelled out. The node
+                // face has room for a number; this has room to say what it
+                // is a number OF.
+                for (const auto& r : patchReadings_) {
+                    if (r.node != patchUi_.selected) { continue; }
+                    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                             cascade::gui::theme::kAmber));
+                    ImGui::Text("%.1f dB on this channel", static_cast<double>(r.db));
+                    ImGui::PopStyleColor();
+                    break;
+                }
+            }
             if (!patchPlan_.channels.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                          cascade::gui::theme::kInkMuted));

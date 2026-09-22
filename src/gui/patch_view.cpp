@@ -101,7 +101,8 @@ void seedDefaultPatch(Graph& g, const char* radioName) {
 }
 
 void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
-                     ImVec2 origin, ImVec2 size) {
+                     const std::vector<NodeReading>& readings, ImVec2 origin,
+                     ImVec2 size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGuiIO& io = ImGui::GetIO();
 
@@ -243,6 +244,24 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         const ImVec2 wb{b.x - 6.0f * v.zoom, b.y - 6.0f * v.zoom};
         if (wb.x > wa.x && wb.y > wa.y) {
             dl->AddRectFilled(wa, wb, theme::kWell, theme::kKeyRounding);
+
+            // The reading, if this node has one. AMBER, because the palette
+            // reserves amber for numbers, and ON GLASS rather than on the
+            // brass, because theme.hpp's rule is that a caption may be
+            // engraved and a live figure may not.
+            for (const NodeReading& r : readings) {
+                if (r.node != n.id) { continue; }
+                const float fs = 13.0f * v.zoom;
+                if (fs >= 6.0f) {
+                    char txt[24];
+                    std::snprintf(txt, sizeof(txt), "%.0f dB",
+                                  static_cast<double>(r.db));
+                    dl->AddText(font, fs,
+                                ImVec2{wa.x + 5.0f * v.zoom, wa.y + 3.0f * v.zoom},
+                                theme::kAmber, txt);
+                }
+                break;
+            }
         }
 
         // The ports, on the edges where the hit test looks for them.

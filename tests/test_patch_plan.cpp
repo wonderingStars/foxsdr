@@ -11,6 +11,7 @@
 #include "core/patch_plan.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "core/patch_graph.hpp"
@@ -28,6 +29,8 @@ using cascade::core::patch::NodeKind;
 using cascade::core::patch::Plan;
 using cascade::core::patch::PortType;
 using cascade::core::patch::Problem;
+using cascade::core::patch::RateChoice;
+using cascade::core::patch::chooseChannelRate;
 using cascade::core::patch::problemsFor;
 using cascade::core::patch::problemText;
 using cascade::core::patch::wholeDecimation;
@@ -148,19 +151,82 @@ int main() {
         CHECK(has(compile(w.g, kRate, kCentre), w.chan, Problem::OutOfBand));
     }
 
-    // [5] A device rate that cannot be divided down. This is the real
-    // 2.048 MS/s case, and it is a property of the RATE, so it lands on the
-    // channel that cannot be built rather than nowhere.
+    // [5] A device rate with no whole division landing in the audio band.
+    //
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and the change was deliberate. It
+    // required exactly 48 kHz, which refused 2.048 MS/s - and a rendered check
+    // on the built-in generator at 2.000 MS/s then marked every channel
+    // unbuildable. Those are the two commonest rates this product sees. The
+    // exact-rate rule belongs to a bit-clocked DECODER, not to a channel, so a
+    // channel now takes any whole division that lands in the band.
     {
         Working w;
-        const Plan p = compile(w.g, 2048000.0, kCentre);
+        // The rates real devices produce all work, at sensible decimations.
+        for (const double rate : {2400000.0, 2048000.0, 2000000.0, 1200000.0}) {
+            const Plan ok = compile(w.g, rate, kCentre);
+            CHECK(blocking(ok) == 0u);
+            CHECK(ok.channels.size() == 1u);
+            CHECK(ok.channels[0].outRateHz >= 24000.0);
+            CHECK(ok.channels[0].outRateHz <= 96000.0);
+        }
+
+        // A rate too low to divide into the band at all still cannot, and the
+        // complaint lands on the channel that cannot be built.
+        //
+        // THE CHANNEL HAS TO BE IN BAND FOR THIS TO BE THE RATE'S FAULT. At
+        // 20 kS/s the usable band is +/-9 kHz, and the fixture's channel sits
+        // 200 kHz off centre - so the first version of this test was really
+        // watching OutOfBand fire and never reached the rate check at all.
+        w.g.mutableNode(w.chan)->freqHz = kCentre;
+        const Plan p = compile(w.g, 20000.0, kCentre);
         CHECK(has(p, w.chan, Problem::RateUnreachable));
+        CHECK(!has(p, w.chan, Problem::OutOfBand));
         CHECK(p.channels.empty());
         CHECK(!p.runnable);
+    }
 
-        // The same patch at a rate that divides is fine, which proves the
-        // refusal was about the rate and not about the patch.
-        CHECK(blocking(compile(w.g, 2400000.0, kCentre)) == 0u);
+    // [5b] The chooser itself: nearest to 48 kHz, inside the band, or nothing.
+    {
+        // 2.4 MS/s reaches exactly 48 kHz, so it should choose that and not
+        // something merely legal.
+        const RateChoice a = chooseChannelRate(2400000.0);
+        CHECK(a.ok);
+        CHECK(a.decimation == 50u);
+        CHECK_NEAR(a.rateHz, 48000.0, 0.001);
+
+        // NEAREST, not neatest. The obvious guess for 2.048 MS/s is the
+        // power of two - 32, giving 64 kHz - and that is not what it should
+        // choose: 43 gives 47628 Hz, a hair from the 48 kHz everything else
+        // in this product runs at. Same for 2.000 MS/s: 42 -> 47619, not
+        // 32 -> 62500.
+        const RateChoice b = chooseChannelRate(2048000.0);
+        CHECK(b.ok);
+        CHECK(b.decimation == 43u);
+        CHECK_NEAR(b.rateHz, 2048000.0 / 43.0, 0.001);
+        CHECK(std::fabs(b.rateHz - 48000.0) < 1000.0);
+
+        const RateChoice c = chooseChannelRate(2000000.0);
+        CHECK(c.ok);
+        CHECK(c.decimation == 42u);
+        CHECK_NEAR(c.rateHz, 2000000.0 / 42.0, 0.001);
+        CHECK(std::fabs(c.rateHz - 48000.0) < 1000.0);
+
+        // Whatever it picks, it is always inside the band.
+        for (const double rate : {240000.0, 1000000.0, 3200000.0, 10000000.0}) {
+            const RateChoice r = chooseChannelRate(rate);
+            CHECK(r.ok);
+            CHECK(r.rateHz >= 24000.0);
+            CHECK(r.rateHz <= 96000.0);
+            CHECK_NEAR(rate / static_cast<double>(r.decimation), r.rateHz, 0.001);
+        }
+
+        // Below the band entirely, and nonsense, answer "no".
+        CHECK(!chooseChannelRate(20000.0).ok);
+        CHECK(!chooseChannelRate(0.0).ok);
+        CHECK(!chooseChannelRate(-2400000.0).ok);
+        // And a rate so high that no decimation within the search cap reaches
+        // the band - a refusal rather than a silently wrong huge decimation.
+        CHECK(!chooseChannelRate(1.0e9).ok);
     }
 
     // [6] Nothing feeds it. A node placed and never wired.
