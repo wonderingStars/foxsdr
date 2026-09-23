@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.17** (September 2026), in open beta and free for
+The current release is **0.99.18** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1199,10 +1199,11 @@ does.
 |---|---|
 | **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. |
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
-| **Demod** | AM or FM demodulation of a channel. |
+| **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
 | **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. |
 | **Text out** | A log of the lines from every decoder wired to it. |
+| **Map** | Aircraft, ships and stations from up to five decoders on one live map - each decoder's map output wired to one of its five inputs, so ADS-B from one radio and AIS from another share it. The same map, basemap and target details as the map pages. |
 | **Decoders** | One part per installed decoder plugin, by name. An I/Q decoder wired to a Channel is fed *that channel*, tuned, so several decoders on several frequencies run off one radio at once; wired to the Radio it gets the whole capture. An audio decoder goes behind a Demod. Picture decoders (APT, WEFAX, SSTV) are parts too and show their picture on the node. |
 
 A connection that cannot carry what a port produces is refused while it is

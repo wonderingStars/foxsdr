@@ -18,10 +18,10 @@
 // unknown leading word are skipped rather than refused, so a patch written by
 // a later build loses what this build cannot understand and keeps the rest.
 //
-//   foxsdr-patch 4
+//   foxsdr-patch 5
 //   view <panX> <panY> <zoom>
 //   node <id> <kind> <feed> <x> <y> <w> <h> <freqHz> <mode> <plugin> <device> <rateHz>
-//        <name to end of line>
+//        <squelch 0|1> <squelchDb> <name to end of line>
 //   wire <fromId> <fromPort> <toId> <toPort>
 //
 // THE NAME IS ALWAYS LAST, and that is why adding fields is a format CHANGE
@@ -34,6 +34,7 @@
 //   format 2  ... <x> <y> <freqHz> <mode> <name>             (settings)
 //   format 3  ... <x> <y> <w> <h> <freqHz> <mode> <plugin> <name>
 //   format 4  ... <plugin> <device> <rateHz> <name>    (a radio's own device, 0.99.17)
+//   format 5  ... <rateHz> <squelch> <squelchDb> <name>  (a demodulator's squelch, 0.99.18)
 //
 // <device> is encoded exactly as <plugin> is. A format-3 radio has no device,
 // so it loads as one still to be chosen rather than guessing which radio it
@@ -65,7 +66,7 @@
 namespace cascade::core::patch {
 
 inline constexpr const char* kPatchMagic = "foxsdr-patch";
-inline constexpr int kPatchFormat = 4;
+inline constexpr int kPatchFormat = 5;
 
 // The largest size a loaded node may claim. A hand-edited or corrupt file can
 // say anything, and a node 10^9 units wide covers the whole canvas and every
@@ -181,7 +182,7 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
           << n.h << ' ' << std::setprecision(kD) << n.freqHz << std::setprecision(kF) << ' '
           << n.mode << ' ' << encodePluginKey(n.plugin) << ' ' << encodePluginKey(n.device)
           << ' ' << std::setprecision(kD) << n.rateHz << std::setprecision(kF) << ' '
-          << sanitiseName(n.name) << '\n';
+          << (n.squelch ? 1 : 0) << ' ' << n.squelchDb << ' ' << sanitiseName(n.name) << '\n';
     }
     for (const Wire& w : g.wires()) {
         o << "wire " << w.from << ' ' << w.fromPort << ' ' << w.to << ' ' << w.toPort << '\n';
@@ -233,8 +234,8 @@ inline LoadResult parse(const std::string& text) {
                 ++r.dropped;
                 continue;
             }
-            if (kind > static_cast<unsigned>(NodeKind::Sink) ||
-                feed > static_cast<unsigned>(PortType::Control)) {
+            if (kind > static_cast<unsigned>(NodeKind::Map) ||
+                feed > static_cast<unsigned>(PortType::Track)) {
                 ++r.dropped;
                 continue;
             }
@@ -278,6 +279,20 @@ inline LoadResult parse(const std::string& text) {
                 if (!decodePluginKey(token, device)) { ++r.dropped; }
                 if (!(rateHz >= 0.0) || rateHz > 1e10) { rateHz = 0.0; }
             }
+            // Format 5's squelch. Older documents take the default (on, at
+            // -50 dB) - a patch saved before there was a squelch is exactly
+            // the patch that was recording noise.
+            int squelchOn = 1;
+            float squelchDb = Node{}.squelchDb;
+            if (version >= 5) {
+                if (!(s >> squelchOn >> squelchDb)) {
+                    ++r.dropped;
+                    continue;
+                }
+                if (!(squelchDb >= kSquelchMinDb) || squelchDb > kSquelchMaxDb) {
+                    squelchDb = Node{}.squelchDb;
+                }
+            }
 
             std::string name;
             std::getline(s, name);
@@ -297,6 +312,8 @@ inline LoadResult parse(const std::string& text) {
                 n->plugin = plugin;
                 n->device = device;
                 n->rateHz = rateHz;
+                n->squelch = squelchOn != 0;
+                n->squelchDb = squelchDb;
                 // A size is taken only when it is a real one. Zero, negative
                 // or NaN (every comparison false) keeps the default addNode
                 // gave the kind; anything absurdly large is clamped.

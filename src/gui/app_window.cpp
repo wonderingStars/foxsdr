@@ -9732,10 +9732,21 @@ void AppWindow::refreshPluginRunner() {
     pluginRunner_.setStopped(pluginsStopped_);
     pluginUi_.setStopped(pluginsStopped_);
     pipeline_.setPluginRunner(nullptr);
-    pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
-                          pipeline_.inputRateHz(),
-                          pipeline_.activeSource().centerFrequencyHz());
-    pipeline_.setPluginRunner(&pluginRunner_);
+    if (patchOpen_) {
+        // THE PATCH PAGE HAS THE DECODERS (0.99.18). While it is open the
+        // receiver runs only on the generator, and a plugin publishes its map
+        // targets through ONE snapshot per module (the ADS-B plugin says so in
+        // its own source) - so the receiver's ADS-B instance, fed generator
+        // noise, would overwrite the aircraft the patch's ADS-B instance is
+        // finding, every block. No receiver decoders while the page is open;
+        // closing it calls this again and they come back.
+        pluginRunner_.clear();
+    } else {
+        pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
+                              pipeline_.inputRateHz(),
+                              pipeline_.activeSource().centerFrequencyHz());
+        pipeline_.setPluginRunner(&pluginRunner_);
+    }
     // AND THE MUTE SNAPSHOT AFTER THE REBUILD, not before it. It carries the
     // running state, and running now means the runner is ACTUALLY FEEDING the
     // plugin (see rebuildMuteStates) - a question only the rebuild above can
@@ -10960,6 +10971,7 @@ void AppWindow::rebuildPatchCatalogue() {
             info.name = p.name;
             info.feed = cascade::core::patch::PortType::Audio;
             info.requiredRateHz = static_cast<double>(p.decoder->requiredRateHz);
+            info.tracks = p.trackSource != nullptr;   // it can put targets on a map
             patchCatalogue_.push_back(info);
             cascade::core::patch::PluginApis a;
             a.audio = p.decoder;
@@ -10971,6 +10983,7 @@ void AppWindow::rebuildPatchCatalogue() {
             info.name = p.name;
             info.feed = cascade::core::patch::PortType::Iq;
             info.requiredRateHz = p.iqDecoder->requiredRateHz;
+            info.tracks = p.trackSource != nullptr;   // it can put targets on a map
             patchCatalogue_.push_back(info);
             cascade::core::patch::PluginApis a;
             a.iq = p.iqDecoder;
@@ -10987,6 +11000,7 @@ void AppWindow::rebuildPatchCatalogue() {
                             : cascade::core::patch::PortType::Audio;
             info.requiredRateHz = p.imageDecoder->requiredRateHz;
             info.image = true;
+            info.tracks = p.trackSource != nullptr;   // it can put targets on a map
             patchCatalogue_.push_back(info);
             cascade::core::patch::PluginApis a;
             a.image = p.imageDecoder;
@@ -11099,6 +11113,9 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     }
     for (auto it = patchSinkLines_.begin(); it != patchSinkLines_.end();) {
         it = gone(it->first) ? patchSinkLines_.erase(it) : std::next(it);
+    }
+    for (auto it = patchMapViews_.begin(); it != patchMapViews_.end();) {
+        it = gone(it->first) ? patchMapViews_.erase(it) : std::next(it);
     }
     for (auto it = patchPictures_.begin(); it != patchPictures_.end();) {
         if (gone(it->first)) {
@@ -11267,6 +11284,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     n.mode = m;
                     patchUi_.dirty = true;
                 }
+                drawPatchSquelch(n, faceW);
                 break;
             }
             case pc::NodeKind::Sink: {
@@ -11474,6 +11492,55 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 }
                 break;
             }
+            case pc::NodeKind::Map: {
+                // THE MAP (0.99.18): every target of every decoder module wired
+                // in - up to kMapInputs of them, from any of the patch's
+                // radios - on one chart, drawn by the same MapView the map
+                // pages use, with its basemap and its target details.
+                patchCollectMapTargets(n.id);
+                if (pc::mapSources(patchGraph_, n.id, patchCatalogue_).empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                    ImGui::TextWrapped(
+                        "Wire a decoder's map output here - ADS-B, AIS, APRS - up to %zu.",
+                        pc::kMapInputs);
+                    ImGui::PopStyleColor();
+                    break;
+                }
+                std::size_t air = 0, sea = 0, fixed = 0, other = 0;
+                for (const cascade::core::HostTrack& t : patchMapTracks_) {
+                    switch (t.t.kind) {
+                        case CASCADE_TRACK_AIRCRAFT: ++air; break;
+                        case CASCADE_TRACK_VESSEL: ++sea; break;
+                        case CASCADE_TRACK_STATION: ++fixed; break;
+                        default: ++other; break;
+                    }
+                }
+                ImGui::PushStyleColor(ImGuiCol_Text, amber);
+                if (patchMapTracks_.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                    ImGui::TextUnformatted("no targets yet");
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::Text("%zu aircraft  %zu vessels  %zu stations%s", air, sea, fixed,
+                                other > 0 ? "  +" : "");
+                }
+                ImGui::PopStyleColor();
+                std::unique_ptr<MapView>& view = patchMapViews_[n.id];
+                if (!view) {
+                    view = std::make_unique<MapView>();
+                    if (rxSet_) { view->setHome(rxLat_, rxLon_); }
+                    view->requestFitToTracks();
+                }
+                const float mapW = faceW;
+                const float mapH = s1.y - ImGui::GetCursorScreenPos().y - 4.0f * zoom;
+                if (mapW > 40.0f && mapH > 40.0f) {
+                    view->setTrailOptions(mapTrails_, mapTrailAltColours_);
+                    view->setTrailStyle(mapTrailStyle_);
+                    view->draw(mapW, mapH, patchMapTracks_, patchMapPaths_, &basemap_,
+                               &trackInfo_);
+                }
+                break;
+            }
             case pc::NodeKind::Decoder: {
                 // A text decoder's face is its output - the count and latest
                 // line the canvas draws. A PICTURE decoder's face is its
@@ -11576,6 +11643,8 @@ void AppWindow::drawPatchPage() {
             // Every patch radio stops, every speaker's file is finalised, and
             // the receiver gets its radio back (0.99.17).
             patchStopAll(true);
+            // ...and the receiver's decoders come back.
+            refreshPluginRunner();
         }
         return;
     }
@@ -11650,6 +11719,8 @@ void AppWindow::drawPatchPage() {
              cascade::core::patch::PortType::Audio},
             {"Text out", cascade::core::patch::NodeKind::Sink,
              cascade::core::patch::PortType::Text},
+            {"Map", cascade::core::patch::NodeKind::Map,
+             cascade::core::patch::PortType::Track},
         };
 
         // A PRESS IS REMEMBERED HERE AND PLACED BELOW, once the canvas this
@@ -11926,6 +11997,9 @@ void AppWindow::drawPatchPage() {
                     case cascade::core::patch::NodeKind::Radio:
                         drawPatchRadioInspector(*sel);
                         break;
+                    case cascade::core::patch::NodeKind::Map:
+                        drawPatchMapInspector(*sel);
+                        break;
                     case cascade::core::patch::NodeKind::Sink:
                         if (!sel->inputs.empty() &&
                             sel->inputs[0] == cascade::core::patch::PortType::Audio) {
@@ -11967,6 +12041,8 @@ void AppWindow::drawPatchPage() {
                             sel->mode = m;
                             patchUi_.dirty = true;
                         }
+                        ImGui::Spacing();
+                        drawPatchSquelch(*sel, ImGui::GetContentRegionAvail().x);
                         break;
                     }
                     case cascade::core::patch::NodeKind::Decoder: {

@@ -122,6 +122,9 @@ public:
     }
 
     bool isOpen() const { return open_; }
+    // The channel power the gate is judging, in dB - what a squelch control
+    // shows beside its threshold so the user can see where to set it.
+    float levelDb() const { return meter_.powerDb(); }
 
     // Measures power on in (the pre-demod baseband) and gates audioInOut in
     // place. The two arrays share n: the squelch runs at the audio block

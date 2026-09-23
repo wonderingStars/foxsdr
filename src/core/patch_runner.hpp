@@ -49,6 +49,7 @@
 #ifndef CASCADE_CORE_PATCH_RUNNER_HPP
 #define CASCADE_CORE_PATCH_RUNNER_HPP
 
+#include <array>
 #include <atomic>
 #include <complex>
 #include <cstddef>
@@ -67,6 +68,7 @@
 #include "core/patch_audio.hpp"
 #include "core/patch_strip.hpp"
 #include "dsp/resampler.hpp"
+#include "dsp/squelch.hpp"
 
 namespace cascade::core::patch {
 
@@ -83,7 +85,20 @@ struct RunningChannel {
     // reads is work on the audio thread for nothing.
     bool wantIq = false;
     std::vector<std::complex<float>> iq;
+    // THE SQUELCH (0.99.18), for a channel that feeds a demodulator. It gates
+    // a COPY of the audio - `gated` - which is what the speakers and files
+    // are given; a decoder behind the demodulator still gets every sample,
+    // because a squelch that opens a few milliseconds late clips the start of
+    // exactly the burst a decoder is waiting for. Always present when there is
+    // a demodulator: "off" is a threshold nothing falls below, so turning it
+    // on and off never rebuilds the set (which would restart its decoders).
+    std::unique_ptr<cascade::dsp::Squelch> squelch;
+    float squelchDb = 0.0f;       // the threshold the squelch is set to now
+    std::vector<float> gated;
 };
+
+// The threshold that means "squelch off": far below any channel's noise.
+inline constexpr float kSquelchOffDb = -200.0f;
 
 // --- plugin decoders -----------------------------------------------------------
 //
@@ -412,6 +427,14 @@ inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
                 // guessing - a wrong demodulator is silence, not a worse
                 // version of the right one.
                 rc.mode = (dst->mode == 0 || dst->mode == 1) ? Demod::Fm : Demod::Am;
+                // Its squelch, at the demodulator's own setting from the start;
+                // later changes arrive live through Runner::setSquelchDb.
+                if (rc.strip.outRateHz() > 0.0) {
+                    rc.squelch = std::make_unique<cascade::dsp::Squelch>(rc.strip.outRateHz());
+                    rc.squelchDb = dst->squelch ? dst->squelchDb : kSquelchOffDb;
+                    rc.squelch->setThresholdDb(rc.squelchDb);
+                    rc.gated.assign(kMaxBlockAudio, 0.0f);
+                }
                 break;
             }
         }
@@ -636,7 +659,65 @@ public:
         dead.clear();
     }
 
+    // --- the squelch, live (0.99.18) ------------------------------------------
+    // GUI THREAD. A channel's squelch threshold (kSquelchOffDb for off), taken
+    // by the DSP thread from its next block. A slider drag therefore moves the
+    // gate without rebuilding the set - a rebuild restarts every decoder on it.
+    // Up to kSquelchSlots channels; one beyond that keeps its built threshold.
+    void setSquelchDb(NodeId channel, float db) {
+        for (SqCtl& c : sqCtl_) {
+            if (c.node.load(std::memory_order_relaxed) == channel) {
+                c.db.store(db, std::memory_order_relaxed);
+                return;
+            }
+        }
+        for (SqCtl& c : sqCtl_) {
+            if (c.node.load(std::memory_order_relaxed) == kNoNode) {
+                c.db.store(db, std::memory_order_relaxed);
+                c.node.store(channel, std::memory_order_release);
+                return;
+            }
+        }
+    }
+
+    // ANY THREAD. A channel's squelch as of its latest block: the level it is
+    // judging and whether it is open. False when the channel has not run one.
+    bool squelchState(NodeId channel, float& levelDb, bool& open) const {
+        for (const SqRead& r : sqRead_) {
+            if (r.node.load(std::memory_order_acquire) != channel) { continue; }
+            levelDb = r.db.load(std::memory_order_relaxed);
+            open = r.open.load(std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    }
+
+    static constexpr std::size_t kSquelchSlots = 64;
+
 private:
+    struct SqCtl {
+        std::atomic<NodeId> node{kNoNode};
+        std::atomic<float> db{kSquelchOffDb};
+    };
+    struct SqRead {
+        std::atomic<NodeId> node{kNoNode};
+        std::atomic<float> db{-200.0f};
+        std::atomic<bool> open{false};
+    };
+    std::array<SqCtl, kSquelchSlots> sqCtl_{};
+    std::array<SqRead, kSquelchSlots> sqRead_{};
+
+    // DSP THREAD: the threshold the GUI set for `channel`, or `current` when it
+    // has set none.
+    float squelchFor(NodeId channel, float current) const {
+        for (const SqCtl& c : sqCtl_) {
+            if (c.node.load(std::memory_order_acquire) == channel) {
+                return c.db.load(std::memory_order_relaxed);
+            }
+        }
+        return current;
+    }
+
     // Marks the calling DSP thread inside the runner for the length of one
     // call, unless a flush has frozen it. See flushNow().
     struct DspScope {
@@ -702,11 +783,15 @@ private:
     // The body of process(), run inside a DspScope after adoptImpl().
     void processImpl(const std::complex<float>* in, std::size_t n) {
         if (!active_ || in == nullptr) { return; }
-        for (RunningChannel& rc : active_->channels) {
+        for (std::size_t ci = 0; ci < active_->channels.size(); ++ci) {
+            RunningChannel& rc = active_->channels[ci];
             rc.produced = 0;
             scratch_.clear();
             iqScratch_.clear();
-            rc.strip.process(in, n, rc.mode, scratch_, rc.wantIq ? &iqScratch_ : nullptr);
+            // The squelch judges the channel's own I/Q, so it is asked for
+            // whenever there is a squelch, not only for an I/Q decoder.
+            rc.strip.process(in, n, rc.mode, scratch_,
+                             (rc.wantIq || rc.squelch) ? &iqScratch_ : nullptr);
             const std::size_t take = (scratch_.size() < rc.audio.size()) ? scratch_.size()
                                                                          : rc.audio.size();
             for (std::size_t i = 0; i < take; ++i) { rc.audio[i] = scratch_[i]; }
@@ -719,11 +804,30 @@ private:
                 }
             }
 
+            // THE SQUELCH: this block's audio, gated, into `gated` - at the
+            // threshold the GUI last set for this channel.
+            if (rc.squelch && take > 0 && iqScratch_.size() >= take) {
+                const float want = squelchFor(rc.node, rc.squelchDb);
+                if (want != rc.squelchDb) {
+                    rc.squelchDb = want;
+                    rc.squelch->setThresholdDb(want);
+                }
+                for (std::size_t i = 0; i < take; ++i) { rc.gated[i] = rc.audio[i]; }
+                rc.squelch->process(iqScratch_.data(), take, rc.gated.data());
+                if (ci < kSquelchSlots) {
+                    SqRead& r = sqRead_[ci];
+                    r.db.store(rc.squelch->levelDb(), std::memory_order_relaxed);
+                    r.open.store(rc.squelch->isOpen(), std::memory_order_relaxed);
+                    r.node.store(rc.node, std::memory_order_release);
+                }
+            }
+            const float* heard = rc.squelch ? rc.gated.data() : rc.audio.data();
+
             // The listening channel also goes to the sink's rate and into
             // the ring the audio stage draws from.
             if (rc.node == active_->listening && active_->toAudio && take > 0) {
                 const std::size_t got = active_->toAudio->process(
-                    rc.audio.data(), take, active_->resampled.data(),
+                    heard, take, active_->resampled.data(),
                     active_->resampled.size());
                 pushRing(active_->resampled.data(), got);
             }
@@ -733,8 +837,10 @@ private:
         for (StripSet::AudioTap& t : active_->taps) {
             const RunningChannel& rc = active_->channels[t.chanIndex];
             if (rc.produced == 0 || !t.rs || !t.dest) { continue; }
+            // What the speaker hears is the SQUELCHED audio.
+            const float* heard = rc.squelch ? rc.gated.data() : rc.audio.data();
             const std::size_t got =
-                t.rs->process(rc.audio.data(), rc.produced, t.out.data(), t.out.size());
+                t.rs->process(heard, rc.produced, t.out.data(), t.out.size());
             if (got > 0) { t.dest->write(t.out.data(), got); }
         }
 

@@ -83,6 +83,8 @@ std::string header2() {
 
 // A FORMAT-3 document: node lines with no <device> <rateHz> before the name.
 std::string header3() { return std::string(kPatchMagic) + " 3\n"; }
+// A FORMAT-4 document: node lines with <device> <rateHz> and no squelch.
+std::string header4() { return std::string(kPatchMagic) + " 4\n"; }
 
 // Indexing guarded only by a preceding CHECK is an out-of-bounds read in
 // exactly the run that has something to report: the test dies with an access
@@ -180,9 +182,9 @@ int main() {
     // would lose a frequency.
     {
         const std::string text = std::string(kPatchMagic) + " 9\n"
-                                 "node 1 0 0 10 20 232 128 0 0 - siggen 2000000 Radio\n"
+                                 "node 1 0 0 10 20 232 128 0 0 - siggen 2000000 1 -50 Radio\n"
                                  "flux 7 capacitor\n"          // from the future
-                                 "node 2 1 0 30 40 232 104 131725000 0 - - 0 Channel\n"
+                                 "node 2 1 0 30 40 232 104 131725000 0 - - 0 1 -50 Channel\n"
                                  "wire 1 0 2 0\n";
         const LoadResult r = parse(text);
         CHECK(r.ok);
@@ -517,7 +519,7 @@ int main() {
         g.mutableNode(b)->rateHz = 2000000.0;
         g.mutableNode(s)->device = "audio:Headphones (Arctis Nova Pro Wireless)";
         const std::string text = serialise(g, 0.0f, 0.0f, 1.0f);
-        CHECK(text.rfind(std::string(kPatchMagic) + " 4", 0) == 0);
+        CHECK(text.rfind(std::string(kPatchMagic) + " " + std::to_string(kPatchFormat), 0) == 0);
         const LoadResult r = parse(text);
         CHECK(r.ok);
         CHECK(r.dropped == 0);
@@ -551,7 +553,7 @@ int main() {
     // [F4c] A SIXTH RADIO in a file is refused by the graph, counted as
     // dropped, and a wire to it goes with it - the other five load.
     {
-        std::string text = header2();
+        std::string text = header4();
         for (int i = 1; i <= 6; ++i) {
             text += "node " + std::to_string(i) + " 0 0 0 0 232 128 0 0 - siggen 2000000 R" +
                     std::to_string(i) + "\n";
@@ -566,9 +568,73 @@ int main() {
         CHECK(r.dropped == 2);                  // the sixth radio and its wire
     }
 
+    // [F5] FORMAT 5 (0.99.18): a demodulator's squelch - on or off, and its
+    // threshold - comes back exactly; a format-4 demodulator loads with the
+    // default (on, -50 dB); an absurd threshold in a file is not trusted.
+    {
+        Graph g;
+        const NodeId a = g.addNode(NodeKind::Demod, "Off", PortType::Iq);
+        const NodeId b = g.addNode(NodeKind::Demod, "Low", PortType::Iq);
+        g.mutableNode(a)->squelch = false;
+        g.mutableNode(a)->squelchDb = -72.5f;
+        g.mutableNode(b)->squelchDb = -101.25f;
+        const LoadResult r = parse(serialise(g, 0.0f, 0.0f, 1.0f));
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 2u);
+        if (r.graph.nodes().size() == 2u) {
+            CHECK(!r.graph.nodes()[0].squelch);
+            CHECK(r.graph.nodes()[0].squelchDb == -72.5f);
+            CHECK(r.graph.nodes()[0].name == "Off");
+            CHECK(r.graph.nodes()[1].squelch);
+            CHECK(r.graph.nodes()[1].squelchDb == -101.25f);
+        }
+        const LoadResult old = parse(std::string(kPatchMagic) +
+                                     " 4\nnode 1 2 0 0 0 232 132 0 1 - - 0 FM\n");
+        CHECK(old.ok);
+        CHECK(old.graph.nodes().size() == 1u);
+        if (old.graph.nodes().size() == 1u) {
+            CHECK(old.graph.nodes()[0].squelch);
+            CHECK(old.graph.nodes()[0].squelchDb == -50.0f);
+            CHECK(old.graph.nodes()[0].name == "FM");
+        }
+        const LoadResult odd = parse(header2() + "node 1 2 0 0 0 232 132 0 1 - - 0 1 55 Loud\n"
+                                                 "node 2 2 0 0 0 232 132 0 1 - - 0 1 nan N\n");
+        CHECK(odd.ok);
+        for (const auto& n : odd.graph.nodes()) { CHECK(n.squelchDb == -50.0f); }
+    }
+
+    // [MAP] A Map part and the decoders wired to its inputs come back - the
+    // node kind and the Track port are both new, and an older build refuses
+    // them rather than misreading them.
+    {
+        Graph g;
+        const NodeId d1 = g.addNode(NodeKind::Decoder, "ADS-B", PortType::Iq);
+        const NodeId d2 = g.addNode(NodeKind::Decoder, "AIS", PortType::Iq);
+        const NodeId m = g.addNode(NodeKind::Map, "Sky and sea", PortType::Track);
+        CHECK(g.connect(d1, 1, m, 0) == Connect::Ok);
+        CHECK(g.connect(d2, 1, m, 3) == Connect::Ok);
+        const LoadResult r = parse(serialise(g, 0.0f, 0.0f, 1.0f));
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 3u);
+        CHECK(r.graph.wires().size() == 2u);
+        CHECK(r.graph.count(NodeKind::Map) == 1u);
+        if (r.graph.wires().size() == 2u) {
+            CHECK(r.graph.wires()[0].fromPort == 1u && r.graph.wires()[0].toPort == 0u);
+            CHECK(r.graph.wires()[1].fromPort == 1u && r.graph.wires()[1].toPort == 3u);
+        }
+        CHECK(nameAt(r.graph, 2) == "Sky and sea");
+        // A kind past Map in a file is dropped, not guessed at.
+        const LoadResult bad = parse(header2() + "node 1 7 0 0 0 232 128 0 0 - - 0 1 -50 X\n");
+        CHECK(bad.ok);
+        CHECK(bad.graph.nodes().empty());
+        CHECK(bad.dropped == 1);
+    }
+
     // [F4d] A negative or absurd rate in a file is not trusted.
     {
-        const LoadResult r = parse(header2() + "node 1 0 0 0 0 232 128 0 0 - siggen -5 A\n"
+        const LoadResult r = parse(header4() + "node 1 0 0 0 0 232 128 0 0 - siggen -5 A\n"
                                                "node 2 0 0 0 0 232 128 0 0 - siggen 1e99 B\n");
         CHECK(r.ok);
         CHECK(r.graph.nodes().size() == 2u);

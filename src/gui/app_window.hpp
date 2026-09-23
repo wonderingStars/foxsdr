@@ -2609,6 +2609,22 @@ private:
     // Stops every patch radio and drops every output. `restoreMain` then hands
     // the receiver its radio back.
     void patchStopAll(bool restoreMain);
+    // THE MAP PARTS (0.99.18): each Map node's own view (its pan, zoom and
+    // selection are its own, like a map page's), and this frame's targets for
+    // it - the tracks of every decoder module wired into it.
+    std::map<cascade::core::patch::NodeId, std::unique_ptr<MapView>> patchMapViews_;
+    std::vector<cascade::core::HostTrack> patchMapTracks_;
+    std::vector<cascade::core::HostPath> patchMapPaths_;
+    // Fills the two lists above for one Map node.
+    void patchCollectMapTargets(cascade::core::patch::NodeId map);
+    void drawPatchMapInspector(cascade::core::patch::Node& n);
+    // A demodulator's squelch: the switch, the threshold and the live level,
+    // on its face and in the inspector alike (0.99.18). `width` is the control
+    // width in pixels.
+    void drawPatchSquelch(cascade::core::patch::Node& n, float width);
+    // Every demodulator's squelch setting, handed to the runner of the radio
+    // its channel is on - every frame, lock-free, so a drag is live.
+    void patchPushSquelch();
     // The inspector's panels for a Radio and a speaker.
     void drawPatchRadioInspector(cascade::core::patch::Node& n);
     void drawPatchSinkInspector(cascade::core::patch::Node& n);

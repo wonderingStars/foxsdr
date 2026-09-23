@@ -811,22 +811,78 @@ int main() {
     {
         using cascade::core::patch::DecoderInfo;
         using cascade::core::patch::hasIqTwin;
-        std::vector<DecoderInfo> cat(5);
-        cat[0] = {"pocsag.dll", "POCSAG", PortType::Audio, 0.0, false};
-        cat[1] = {"pocsag.dll", "POCSAG", PortType::Iq, 0.0, false};
-        cat[2] = {"aprs.dll", "APRS", PortType::Audio, 0.0, false};
-        cat[3] = {"sstv.dll#image", "SSTV", PortType::Audio, 0.0, true};
-        cat[4] = {"apt.dll", "APT", PortType::Audio, 0.0, false};
-        CHECK(hasIqTwin(cat, 0));    // POCSAG audio: its I/Q twin exists
-        CHECK(!hasIqTwin(cat, 1));   // the I/Q one itself has no OTHER I/Q twin
-        CHECK(!hasIqTwin(cat, 2));   // APRS: audio only
-        CHECK(!hasIqTwin(cat, 3));
-        CHECK(!hasIqTwin(cat, 4));
-        CHECK(!hasIqTwin(cat, 99));  // out of range is not a twin
+        std::vector<DecoderInfo> twins(5);
+        twins[0] = {"pocsag.dll", "POCSAG", PortType::Audio, 0.0, false};
+        twins[1] = {"pocsag.dll", "POCSAG", PortType::Iq, 0.0, false};
+        twins[2] = {"aprs.dll", "APRS", PortType::Audio, 0.0, false};
+        twins[3] = {"sstv.dll#image", "SSTV", PortType::Audio, 0.0, true};
+        twins[4] = {"apt.dll", "APT", PortType::Audio, 0.0, false};
+        CHECK(hasIqTwin(twins, 0));    // POCSAG audio: its I/Q twin exists
+        CHECK(!hasIqTwin(twins, 1));   // the I/Q one itself has no OTHER I/Q twin
+        CHECK(!hasIqTwin(twins, 2));   // APRS: audio only
+        CHECK(!hasIqTwin(twins, 3));
+        CHECK(!hasIqTwin(twins, 4));
+        CHECK(!hasIqTwin(twins, 99));  // out of range is not a twin
         // A picture decoder on I/Q is not a twin of a text decoder's audio key.
         std::vector<DecoderInfo> pic{{"apt.dll", "APT", PortType::Audio, 0.0, false},
                                      {"apt.dll", "APT", PortType::Iq, 0.0, true}};
         CHECK(!hasIqTwin(pic, 0));
+    }
+
+    // [MAP] A MAP SHOWS EVERY MODULE WIRED INTO IT, from any radio: ADS-B on
+    // one and AIS on another are one map's two sources. A decoder whose module
+    // has no map side is named on the decoder, advisory - its text still
+    // works. A map with nothing wired cannot run; one with a source can.
+    {
+        using cascade::core::patch::DecoderInfo;
+        using cascade::core::patch::mapSources;
+        using cascade::core::patch::RadioInfo;
+        Graph g;
+        const NodeId r1 = g.addNode(NodeKind::Radio, "R1", PortType::Iq);
+        const NodeId r2 = g.addNode(NodeKind::Radio, "R2", PortType::Iq);
+        g.mutableNode(r1)->device = "siggen";
+        g.mutableNode(r2)->device = "siggen";
+        const NodeId adsb = g.addNode(NodeKind::Decoder, "ADS-B", PortType::Iq);
+        const NodeId ais = g.addNode(NodeKind::Decoder, "AIS", PortType::Iq);
+        const NodeId pager = g.addNode(NodeKind::Decoder, "Pager", PortType::Iq);
+        const NodeId adsb2 = g.addNode(NodeKind::Decoder, "ADS-B again", PortType::Iq);
+        g.mutableNode(adsb)->plugin = "adsb.dll";
+        g.mutableNode(ais)->plugin = "ais.dll";
+        g.mutableNode(pager)->plugin = "pocsag.dll";
+        g.mutableNode(adsb2)->plugin = "adsb.dll";
+        const NodeId map = g.addNode(NodeKind::Map, "Map", PortType::Track);
+        const std::vector<DecoderInfo> mapCat{
+            {"adsb.dll", "ADS-B Aircraft", PortType::Iq, 0.0, false, true},
+            {"ais.dll", "AIS Ships", PortType::Iq, 0.0, false, true},
+            {"pocsag.dll", "POCSAG", PortType::Iq, 0.0, false, false}};
+        const std::vector<RadioInfo> radios{{r1, 2.4e6, 1090e6}, {r2, 2.4e6, 162e6}};
+
+        // Nothing wired: the map cannot run.
+        {
+            const Plan p = compile(g, radios, &mapCat);
+            CHECK(has(p, map, Problem::NothingFeedsIt));
+            CHECK(mapSources(g, map, mapCat).empty());
+        }
+        CHECK(g.connect(r1, 0, adsb, 0) == Connect::Ok);
+        CHECK(g.connect(r2, 0, ais, 0) == Connect::Ok);
+        CHECK(g.connect(r2, 0, pager, 0) == Connect::Ok);
+        CHECK(g.connect(r1, 0, adsb2, 0) == Connect::Ok);
+        CHECK(g.connect(adsb, 1, map, 0) == Connect::Ok);
+        CHECK(g.connect(ais, 1, map, 1) == Connect::Ok);
+        CHECK(g.connect(pager, 1, map, 2) == Connect::Ok);
+        CHECK(g.connect(adsb2, 1, map, 3) == Connect::Ok);
+        const Plan p = compile(g, radios, &mapCat);
+        const std::vector<std::string> src = mapSources(g, map, mapCat);
+        // Both modules, once each - the second ADS-B adds no second source -
+        // and the pager, which has no map side, adds nothing.
+        CHECK(src == std::vector<std::string>({"ADS-B Aircraft", "AIS Ships"}));
+        CHECK(has(p, pager, Problem::NoTracks));
+        CHECK(isAdvisory(Problem::NoTracks));
+        CHECK(!has(p, adsb, Problem::NoTracks));
+        CHECK(!has(p, map, Problem::NothingFeedsIt));
+        CHECK(blocking(p) == 0u);
+        CHECK(p.runnable);   // a map is something to run
+        CHECK(std::string(problemText(Problem::NoTracks)).find("map") != std::string::npos);
     }
 
     // [M3] The single-receiver overload applies no device rules: a radio with

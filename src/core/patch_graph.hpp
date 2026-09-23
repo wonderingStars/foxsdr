@@ -56,7 +56,9 @@ inline constexpr NodeId kNoNode = 0u;
 
 using PortIndex = std::uint32_t;
 
-enum class PortType : std::uint8_t { Iq, Audio, Text, Control };
+// Track (0.99.18): a decoder's map targets - aircraft, ships, stations -
+// on their way to a Map part.
+enum class PortType : std::uint8_t { Iq, Audio, Text, Control, Track };
 
 enum class NodeKind : std::uint8_t {
     Radio,    // one device; the only node with no input
@@ -65,7 +67,13 @@ enum class NodeKind : std::uint8_t {
     Decoder,  // a plugin: Iq OR Audio in, Text out
     Display,  // a view: consumes, produces nothing
     Sink,     // speaker, recorder, network: consumes, produces nothing
+    Map,      // targets from up to kMapInputs decoders on one map (0.99.18)
 };
+
+// HOW MANY DECODERS ONE MAP TAKES (owner, 2026-09-23: "allow one map to take
+// up to 5 radio inputs") - one per radio a patch can have, so aircraft from
+// one radio, ships from another and APRS stations from a third share a map.
+inline constexpr std::size_t kMapInputs = 5;
 
 // Why a connection was refused. The canvas shows these while the wire is still
 // being dragged, so each one has to name a cause a person can act on.
@@ -149,7 +157,18 @@ struct Node {
     std::string plugin;
     std::string device;
     double rateHz = 0.0;
+    //   Demod    squelch/squelchDb  (0.99.18) whether this demodulator's
+    //                    sound is gated, and at what channel power. On by
+    //                    default at the receiver's own default of -50 dB: an
+    //                    ungated FM demodulator on an empty channel is full-
+    //                    scale noise, and every speaker records to a file.
+    bool squelch = true;
+    float squelchDb = -50.0f;
 };
+
+// The squelch range the controls offer, in dB of channel power.
+inline constexpr float kSquelchMinDb = -120.0f;
+inline constexpr float kSquelchMaxDb = 0.0f;
 
 // AT MOST FIVE RADIOS IN ONE PATCH (owner, 2026-09-23: "the ability to add up
 // to 5 sdrs"). Each one is a device open, a reader thread and a sample stream
@@ -186,12 +205,18 @@ inline void portsFor(NodeKind kind, PortType feed, std::vector<PortType>& in,
         case NodeKind::Decoder:
             in.push_back(feed == PortType::Iq ? PortType::Iq : PortType::Audio);
             out.push_back(PortType::Text);
+            // ...and what it puts on a map, for a module that has a track
+            // source (the plan says so when one that has none is wired).
+            out.push_back(PortType::Track);
             break;
         case NodeKind::Display:
             in.push_back(feed);
             break;
         case NodeKind::Sink:
             in.push_back(feed);
+            break;
+        case NodeKind::Map:
+            for (std::size_t i = 0; i < kMapInputs; ++i) { in.push_back(PortType::Track); }
             break;
     }
 }
@@ -215,6 +240,7 @@ inline void defaultNodeSize(NodeKind kind, float& w, float& h) {
         case NodeKind::Decoder: w = 216.0f; h = 108.0f; return;
         case NodeKind::Display: w = 300.0f; h = 188.0f; return;
         case NodeKind::Sink: w = 216.0f; h = 116.0f; return;
+        case NodeKind::Map: w = 420.0f; h = 320.0f; return;
     }
     w = 216.0f;
     h = 108.0f;

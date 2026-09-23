@@ -21,6 +21,7 @@ using cascade::core::patch::Graph;
 using cascade::core::patch::kNoNode;
 using cascade::core::patch::NodeId;
 using cascade::core::patch::NodeKind;
+using cascade::core::patch::PortIndex;
 using cascade::core::patch::PortType;
 using cascade::core::patch::Wire;
 
@@ -90,7 +91,32 @@ int main() {
         // not interchangeable, and the graph must know which it has.
         CHECK(g.find(iqDec)->inputs == std::vector<PortType>{PortType::Iq});
         CHECK(g.find(auDec)->inputs == std::vector<PortType>{PortType::Audio});
-        CHECK(g.find(iqDec)->outputs == std::vector<PortType>{PortType::Text});
+        // Text, and (0.99.18) its map targets for a Map part - output 0 stays
+        // Text, so every patch saved before a decoder had a map output keeps
+        // its wires.
+        CHECK(g.find(iqDec)->outputs == std::vector<PortType>({PortType::Text, PortType::Track}));
+    }
+
+    // [MAP] A MAP TAKES UP TO FIVE DECODERS (0.99.18): five Track inputs, one
+    // wire each, from decoders' map outputs - never from their text output,
+    // and never a sixth.
+    {
+        Graph g;
+        const NodeId map = g.addNode(NodeKind::Map, "Map", PortType::Track);
+        CHECK(g.find(map)->inputs ==
+              std::vector<PortType>(cascade::core::patch::kMapInputs, PortType::Track));
+        CHECK(g.find(map)->outputs.empty());
+        NodeId decs[6] = {};
+        for (int i = 0; i < 6; ++i) {
+            decs[i] = g.addNode(NodeKind::Decoder, "D", PortType::Iq);
+        }
+        CHECK(g.connect(decs[0], 0, map, 0) == Connect::TypeMismatch);   // text is not a target
+        for (PortIndex i = 0; i < 5; ++i) {
+            CHECK(g.connect(decs[i], 1, map, i) == Connect::Ok);
+        }
+        CHECK(g.connect(decs[5], 1, map, 0) == Connect::InputOccupied);   // one wire per input
+        CHECK(g.connect(decs[5], 1, map, 5) == Connect::NoSuchPort);      // and there is no sixth
+        CHECK(g.wires().size() == 5u);
     }
 
     // [2] A type mismatch is refused, and named. This is the one a canvas would

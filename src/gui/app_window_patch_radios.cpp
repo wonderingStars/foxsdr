@@ -167,7 +167,12 @@ void AppWindow::patchReconcile() {
     // read only when the Source combo is opened, and a patch radio named by a
     // saved patch would be labelled "not connected" until then. scanNative()
     // opens nothing and is safe while radios stream (see its comment).
-    if (!patchWasOpen_) { scanNative(); }
+    if (!patchWasOpen_) {
+        scanNative();
+        // The receiver's decoders stand down while the page is open - see
+        // refreshPluginRunner for why a module's map targets need that.
+        refreshPluginRunner();
+    }
 
     // --- the receiver's radio goes to the patch ------------------------------
     // Only a live DEVICE is taken (a file or the generator is not a radio),
@@ -483,6 +488,9 @@ void AppWindow::patchPublishSets() {
         radio->runner().publish(std::move(set));
         patchRadioSig_[id] = sig;
     }
+    // Every demodulator's squelch, live - after any publish, so a new set's
+    // channels get the setting from their first block.
+    patchPushSquelch();
     patchRefused_.clear();
     for (const auto& [id, list] : patchRefusedBy_) {
         (void)id;
@@ -547,6 +555,132 @@ void AppWindow::patchStopAll(bool restoreMain) {
     if (keep.centreHz > 0.0) { pipeline_.activeSource().setCenterFrequencyHz(keep.centreHz); }
     cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
     selectSource(row);
+}
+
+namespace {
+
+// The Channel a Demod node is fed from, or kNoNode.
+pc::NodeId demodChannel(const pc::Graph& g, pc::NodeId demod) {
+    for (const pc::Wire& w : g.wires()) {
+        if (w.to != demod) { continue; }
+        const pc::Node* f = g.find(w.from);
+        return (f != nullptr && f->kind == pc::NodeKind::Channel) ? f->id : pc::kNoNode;
+    }
+    return pc::kNoNode;
+}
+
+}  // namespace
+
+void AppWindow::patchCollectMapTargets(pc::NodeId map) {
+    patchMapTracks_.clear();
+    patchMapPaths_.clear();
+    // Targets are tagged with their module's display name by the plugin UI,
+    // which already applies the host's staleness rule - the same list the map
+    // pages draw, so a patch map and a map page never disagree about what is
+    // there.
+    const std::vector<std::string> sources = pc::mapSources(patchGraph_, map, patchCatalogue_);
+    if (sources.empty()) { return; }
+    const auto wanted = [&sources](const std::string& plugin) {
+        return std::find(sources.begin(), sources.end(), plugin) != sources.end();
+    };
+    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+        if (wanted(t.plugin)) { patchMapTracks_.push_back(t); }
+    }
+    for (const cascade::core::HostPath& p : pluginUi_.paths()) {
+        if (wanted(p.plugin)) { patchMapPaths_.push_back(p); }
+    }
+}
+
+void AppWindow::drawPatchMapInspector(pc::Node& n) {
+    const auto muted = cascade::gui::theme::vec(cascade::gui::theme::kInkMuted);
+    const auto amber = cascade::gui::theme::vec(cascade::gui::theme::kAmber);
+    ImGui::Spacing();
+    std::size_t wired = 0;
+    for (const pc::Wire& w : patchGraph_.wires()) {
+        if (w.to == n.id) { ++wired; }
+    }
+    ImGui::Text("%zu of %zu inputs wired", wired, pc::kMapInputs);
+    patchCollectMapTargets(n.id);
+    for (const std::string& src : pc::mapSources(patchGraph_, n.id, patchCatalogue_)) {
+        std::size_t count = 0;
+        for (const cascade::core::HostTrack& t : patchMapTracks_) {
+            if (t.plugin == src) { ++count; }
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, amber);
+        ImGui::Text("%zu", count);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", src.c_str());
+    }
+    const auto view = patchMapViews_.find(n.id);
+    if (view != patchMapViews_.end() && view->second) {
+        if (ImGui::Button("Fit to targets", ImVec2(-FLT_MIN, 0.0f))) {
+            view->second->requestFitToTracks();
+        }
+        if (ImGui::Button("Whole world", ImVec2(-FLT_MIN, 0.0f))) {
+            view->second->requestWholeWorld();
+        }
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+    ImGui::TextWrapped(
+        "Wire the map output of up to %zu decoders here - aircraft from one radio, ships from "
+        "another - and they share this map. Drag it to pan, scroll it to zoom.",
+        pc::kMapInputs);
+    ImGui::PopStyleColor();
+}
+
+void AppWindow::patchPushSquelch() {
+    for (const pc::Node& n : patchGraph_.nodes()) {
+        if (n.kind != pc::NodeKind::Demod) { continue; }
+        const pc::NodeId chan = demodChannel(patchGraph_, n.id);
+        if (chan == pc::kNoNode) { continue; }
+        const auto r = patchRadios_.find(pc::radioOf(patchGraph_, chan));
+        if (r == patchRadios_.end()) { continue; }
+        r->second->runner().setSquelchDb(chan, n.squelch ? n.squelchDb : pc::kSquelchOffDb);
+    }
+}
+
+void AppWindow::drawPatchSquelch(pc::Node& n, float width) {
+    bool on = n.squelch;
+    if (ImGui::Checkbox("Squelch##sq", &on)) {
+        n.squelch = on;
+        patchUi_.dirty = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Silences this demodulator's sound while the channel is quieter\n"
+                          "than the threshold - so a speaker or a recording hears signals,\n"
+                          "not the noise between them. Decoders are still given every sample.");
+    }
+    if (n.squelch) {
+        float db = n.squelchDb;
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::SliderFloat("##sqdb", &db, pc::kSquelchMinDb, pc::kSquelchMaxDb, "%.0f dB")) {
+            n.squelchDb = db;
+            patchUi_.dirty = true;
+        }
+    }
+    // WHERE TO SET IT: the level the gate is judging, and whether it is open.
+    const pc::NodeId chan = demodChannel(patchGraph_, n.id);
+    const auto r = patchRadios_.find(pc::radioOf(patchGraph_, chan));
+    float level = 0.0f;
+    bool open = false;
+    if (chan != pc::kNoNode && r != patchRadios_.end() &&
+        r->second->runner().squelchState(chan, level, open)) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+        ImGui::Text("%.0f dB", static_cast<double>(level));
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        if (!n.squelch || open) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+            ImGui::TextUnformatted(n.squelch ? "open" : "no squelch");
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+            ImGui::TextUnformatted("closed");
+        }
+        ImGui::PopStyleColor();
+    }
 }
 
 void AppWindow::drawPatchRadioInspector(pc::Node& n) {

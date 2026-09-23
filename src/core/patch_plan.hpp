@@ -61,12 +61,15 @@ enum class Problem : std::uint8_t {
     NoDevice,          // a Radio with no device chosen
     DeviceTwice,       // a Radio naming a device another Radio already uses
     RadioFailed,       // the device would not open - set by the caller, not by compile()
+    NoTracks,          // a decoder wired to a Map whose module puts nothing on a map
 };
 
 // Advisory problems do not stop a patch running; they are worth saying and not
 // worth refusing. A decoder wired to nothing still decodes, it just has no
 // window - that is a thing people do deliberately while building a patch.
-inline bool isAdvisory(Problem p) { return p == Problem::NothingListens; }
+inline bool isAdvisory(Problem p) {
+    return p == Problem::NothingListens || p == Problem::NoTracks;
+}
 
 inline const char* problemText(Problem p) {
     switch (p) {
@@ -88,6 +91,7 @@ inline const char* problemText(Problem p) {
         case Problem::DeviceTwice:
             return "another radio in this patch already uses that device - one device, one radio";
         case Problem::RadioFailed: return "the device would not open";
+        case Problem::NoTracks: return "this decoder puts nothing on a map";
     }
     return "this cannot run";
 }
@@ -114,6 +118,9 @@ struct DecoderInfo {
     // both a text and a picture decoder on the same input, and those are two
     // different parts.
     bool image = false;
+    // Whether the module ALSO has a track source (CASCADE_CAP_TRACK_SOURCE) -
+    // aircraft, ships, stations it can put on a Map part (0.99.18).
+    bool tracks = false;
 };
 
 inline constexpr const char* kImageKeySuffix = "#image";
@@ -653,6 +660,21 @@ inline Plan compile(const Graph& g, const std::vector<RadioInfo>& radios,
         plan.sinks.push_back({n.id, chan, radioOf(g, n.id)});
     }
 
+    // A decoder wired to a Map whose module has nothing to put on one. Said on
+    // the decoder, advisory: its text still works, only the map stays empty.
+    if (catalogue != nullptr) {
+        for (const Wire& w : g.wires()) {
+            const Node* from = g.find(w.from);
+            const Node* to = g.find(w.to);
+            if (from == nullptr || to == nullptr || to->kind != NodeKind::Map) { continue; }
+            if (from->kind != NodeKind::Decoder || from->plugin.empty()) { continue; }
+            const std::size_t i = findDecoder(*catalogue, from->plugin);
+            if (i != kNoDecoder && !(*catalogue)[i].tracks) {
+                plan.problems.push_back({from->id, Problem::NoTracks});
+            }
+        }
+    }
+
     // Anything that produces and is heard by nobody. Advisory.
     for (const Node& n : g.nodes()) {
         if (n.outputs.empty()) { continue; }
@@ -671,7 +693,8 @@ inline Plan compile(const Graph& g, const std::vector<RadioInfo>& radios,
     // A patch with nothing in it is not "runnable" - there is nothing to run.
     // Saying otherwise would put a green light on an empty canvas.
     const bool anySink = std::any_of(g.nodes().begin(), g.nodes().end(), [](const Node& n) {
-        return n.kind == NodeKind::Sink || n.kind == NodeKind::Display;
+        return n.kind == NodeKind::Sink || n.kind == NodeKind::Display ||
+               n.kind == NodeKind::Map;
     });
     plan.runnable = !blocked && anySink;
     return plan;
@@ -687,6 +710,26 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
         if (n.kind == NodeKind::Radio) { radios.push_back({n.id, deviceRateHz, radioCentreHz}); }
     }
     return compile(g, radios, catalogue, false);
+}
+
+// THE MODULES A MAP SHOWS (0.99.18): the display name of the plugin behind
+// every decoder wired into it - the name the host tags each track with -
+// once each, in wire order. A decoder with no plugin, or one not installed,
+// adds nothing.
+inline std::vector<std::string> mapSources(const Graph& g, NodeId map,
+                                           const std::vector<DecoderInfo>& catalogue) {
+    std::vector<std::string> out;
+    for (const Wire& w : g.wires()) {
+        if (w.to != map) { continue; }
+        const Node* from = g.find(w.from);
+        if (from == nullptr || from->kind != NodeKind::Decoder) { continue; }
+        const std::size_t i = findDecoder(catalogue, from->plugin);
+        if (i == kNoDecoder || !catalogue[i].tracks) { continue; }
+        if (std::find(out.begin(), out.end(), catalogue[i].name) == out.end()) {
+            out.push_back(catalogue[i].name);
+        }
+    }
+    return out;
 }
 
 // Every problem pinned to one node, for the canvas and the inspector.

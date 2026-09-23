@@ -53,6 +53,7 @@ const char* kindCaption(NodeKind k) {
         case NodeKind::Decoder: return "DECODER";
         case NodeKind::Display: return "DISPLAY";
         case NodeKind::Sink: return "SINK";
+        case NodeKind::Map: return "MAP";
     }
     return "NODE";
 }
@@ -90,6 +91,8 @@ ImU32 portColour(PortType t) {
         // These carry no samples, so they take lettering colours.
         case PortType::Text: return theme::kCream;
         case PortType::Control: return theme::kBrassTint;
+        // Targets on a map: ivory, the colour of the chart itself.
+        case PortType::Track: return theme::kIvory;
     }
     return theme::kInkMuted;
 }
