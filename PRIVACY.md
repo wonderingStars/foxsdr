@@ -72,6 +72,12 @@ exactly as many.
   which build you are running - never an identifier, never a frequency, never
   the log, never anything from your config. Exactly what it contains is listed
   field by field below.
+- **A bug report or a dislike is sent only when you press SEND on the REPORT A
+  BUG / DISLIKE page.** It carries which of the two you chose, the text you
+  typed, an optional contact line, and which build you are running - the same
+  as a feature request plus that one choice, and nothing else. It is not a
+  crash report and carries nothing a crash report does. Listed field by field
+  below.
 
 ## What is sent when usage reporting is enabled
 
@@ -285,8 +291,8 @@ happens locally, in `tools/report-reader`, not on the server.
 
 ## Feature requests
 
-The main screen has a **REQUEST A FEATURE** key, above the maker's plate in
-the STATUS column. Pressing it opens a page with a text box, an optional
+The main screen has a **REQUEST A FEATURE** key near the foot of the STATUS
+column, above the REPORT A BUG / DISLIKE key and the maker's plate. Pressing it opens a page with a text box, an optional
 "Email or callsign" line, and a SEND key. Nothing is sent until you press
 SEND - not while you type, not when you open the page, and never in the
 background - and there is no queue: a request that fails to send is still
@@ -336,6 +342,46 @@ our server's existing geolocation resolves one from the connection - **never
 your IP address itself**. Third-party text is HTML-escaped before it is shown
 on our admin page, because it is exactly that: something you wrote, not
 something we generated.
+
+## Bug reports and dislikes
+
+Directly under REQUEST A FEATURE is a **REPORT A BUG / DISLIKE** key, the
+same size, on the same terms. Its page asks first what you are reporting -
+**Something is broken (bug)** or **Something I dislike** - with neither
+chosen until you choose one, then has the same text box, the same optional
+"Email or callsign" line and the same SEND key. Nothing is sent until you
+press SEND, nothing is queued or retried, and the typed text and contact line
+live in memory only: never in `config.json`, never in the diagnostics log,
+which records only which kind was sent, how many characters it carried and
+what the server answered (`problem report (bug): sent, 42 characters, HTTP
+200`, or the failure in the same shape).
+
+It is **not** a crash or freeze report. A report typed here carries no stack,
+no log, no loaded-plugin list and no identifier; if FoxSDR crashed, the crash
+report described above is a separate thing with its own switch.
+
+### What is sent when you report a bug or a dislike
+
+One request, to `https://foxsdr.com/api/problem-report`, only when you press
+SEND:
+
+| Field | Example | Why |
+|---|---|---|
+| `schema` | `1` | Which version of this list the report follows. |
+| `kind` | `bug` or `dislike` | Which of the two you chose at the top of the page: something that does not work, or something that works as designed and that you would rather it did not. |
+| `text` | `The waterfall freezes when I change the sample rate` | What you typed, trimmed of leading and trailing blank space. Between 10 and 2000 characters. |
+| `contact` | `g4xyz@example.com`, or empty | An email address or callsign, ENTIRELY OPTIONAL, so we can ask a follow-up question. Up to 120 characters. Kept on screen after a successful send. |
+| `version` | `0.99.20` | Which release, so a bug already fixed is not chased again. |
+| `platform` | `windows`, `linux` or `android` | Which build sent it. |
+| `arch` | `x64` or `arm64` | As above. |
+
+That is the complete list: a feature request's six fields plus `kind`. No
+install identifier, no hardware, no log, no config, no frequency, no
+location, no plugin list. It is asserted **in both directions** by
+`tests/test_problem_report.cpp`, which also reads this table and requires the
+two lists to match. The server answers, rate-limits and waits exactly as it
+does for a feature request (above), and keeps the same record plus the kind:
+never your IP address.
 
 ## What is never sent
 

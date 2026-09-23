@@ -195,10 +195,12 @@ are still moving. What is in the current build:
 - **Browser access.** The full interface over HTTP on your LAN, at feature
   parity with the desktop, with password authentication and live audio. Off by
   default; see [Browser access](#browser-access) for the security posture.
-- **A REQUEST A FEATURE key**, above the maker's plate in the STATUS column on
-  the main screen. Opens a page with a text box and an optional contact line;
-  nothing is sent until you press SEND, and there is no queue. See
-  [Privacy](#privacy) for exactly what leaves the machine.
+- **A REQUEST A FEATURE key**, and under it **a REPORT A BUG / DISLIKE key**,
+  above the maker's plate in the STATUS column on the main screen. Each opens
+  a page with a text box and an optional contact line (the second first asks
+  whether something is broken or something you dislike); nothing is sent until
+  you press SEND, and there is no queue. See [Privacy](#privacy) for exactly
+  what leaves the machine.
 
 **Verification, honestly stated.** The DSP core and every decoder carry unit
 tests (`ctest` runs 82 entries: 75 test binaries and seven checks on the
@@ -1609,6 +1611,9 @@ each says what starts it:
   page: your text, an optional contact line, and the version/platform/
   architecture you are running - never automatically, never retried, never
   queued. See [PRIVACY.md](PRIVACY.md) for the complete field list.
+- **A bug report or a dislike**, only when you press SEND on the REPORT A BUG /
+  DISLIKE page: the same fields as a feature request plus which of the two you
+  chose, on the same terms. See [PRIVACY.md](PRIVACY.md).
 
 A plugin is native code loaded into this application's own process, so an
 installed plugin may make requests of its own — a basemap plugin fetching map

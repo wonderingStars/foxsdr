@@ -1568,6 +1568,8 @@ int AppWindow::run(int frames) {
         // post-send cooldown has passed, returns the SEND key to Idle on its
         // own - see core/feature_request.hpp for why this never blocks.
         featureRequestSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
+        // ...and the same for the REPORT A BUG / DISLIKE page's sender.
+        problemReportSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
         // flight. Everything else about the browser is unchanged — this is
@@ -1590,6 +1592,11 @@ int AppWindow::run(int frames) {
         if (!featureRequestOpenedByEnv_ && std::getenv("FOXSDR_OPEN_FEATURE_REQUEST") != nullptr) {
             featureRequestOpenedByEnv_ = true;
             featureRequestOpen_ = true;
+        }
+        // The REPORT A BUG / DISLIKE page's twin of the seam above.
+        if (!problemReportOpenedByEnv_ && std::getenv("FOXSDR_OPEN_PROBLEM_REPORT") != nullptr) {
+            problemReportOpenedByEnv_ = true;
+            problemReportOpen_ = true;
         }
         // AND THE SCOPE, for the same reason and under the same rule. The
         // multiplex position can only be judged by looking at it - a table of
@@ -2103,6 +2110,7 @@ int AppWindow::run(int frames) {
     // policy state to journal back to the config, because there is no sweep
     // and nothing to retry (see core/feature_request.hpp).
     featureRequestSender_.cancel();
+    problemReportSender_.cancel();
     if (!configPath_.empty()) { saveConfigNow(); }
     flushBookmarkSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
@@ -3589,8 +3597,17 @@ void AppWindow::drawStatusColumn() {
     // everybody who serves the receiver to a browser (rendered check,
     // 2026-09-17). A caption-height key with 5 px either side fits in the room
     // the six cards leave at that size.
+    //
+    // THE REPORT A BUG / DISLIKE KEY (2026-09-23) sits directly under it and
+    // directly on the plate, the same height and the same width, so the two
+    // read as one pair of keys: ask for something, or say something is wrong.
+    // It is measured before the feature key for the same reason the feature
+    // key is measured before the cards - everything above has to know where
+    // its room ends.
     const float featureKeyH = tinyH + 8.0f;
-    const ImVec2 featureKeyBR(colBR.x - kPad, plateTL.y - 5.0f);
+    const ImVec2 problemKeyBR(colBR.x - kPad, plateTL.y - 5.0f);
+    const ImVec2 problemKeyTL(colTL.x + kPad, problemKeyBR.y - featureKeyH);
+    const ImVec2 featureKeyBR(colBR.x - kPad, problemKeyTL.y - 5.0f);
     const ImVec2 featureKeyTL(colTL.x + kPad, featureKeyBR.y - featureKeyH);
     const float cardsBottom = featureKeyTL.y - 5.0f;
 
@@ -4072,6 +4089,17 @@ void AppWindow::drawStatusColumn() {
         if (cascade::gui::benchWordKey(dl, featureKeyTL, featureKeyBR, "REQUEST A FEATURE",
                                        true, "status-feature-request")) {
             featureRequestOpen_ = true;
+        }
+    }
+
+    // --- REPORT A BUG / DISLIKE ------------------------------------------------
+    //
+    // The same lettered-brass key, directly under the one above, under the same
+    // skip-it-whole rule. It opens drawProblemReportPage().
+    if (problemKeyBR.y > bodyTop && problemKeyBR.x > problemKeyTL.x + 16.0f) {
+        if (cascade::gui::benchWordKey(dl, problemKeyTL, problemKeyBR, "REPORT A BUG / DISLIKE",
+                                       true, "status-problem-report")) {
+            problemReportOpen_ = true;
         }
     }
 
@@ -14365,6 +14393,7 @@ void AppWindow::drawPluginWindows() {
     drawPatchPage();
     drawDemodScopePage();
     drawFeatureRequestPage();
+    drawProblemReportPage();
 
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
@@ -17421,6 +17450,214 @@ void AppWindow::drawFeatureRequestPage() {
         featureRequestText_.clear();
     }
     featureRequestLastLoggedState_ = state;
+}
+
+// --- REPORT A BUG / DISLIKE (see core/problem_report.hpp) -------------------
+//
+// The feature-request page's twin, with one thing more at the top: the choice
+// of what this is. Two radio buttons and NEITHER chosen when the page opens -
+// a default would file every hurried report as whichever came first, and the
+// site triages the two kinds apart. Everything below the choice is the same
+// page as drawFeatureRequestPage(): the same bounds and counter, the same
+// sentence naming exactly what is sent, the same SEND rules and status line,
+// the same one log line that never carries the words.
+void AppWindow::drawProblemReportPage() {
+    if (!problemReportOpen_) { return; }
+    constexpr float kW = 480.0f;
+    // TALLER THAN THE FEATURE PAGE by the kind row, its question and the
+    // wrapped reason line under SEND. At 470 (rendered check, 2026-09-23) the
+    // SEND key was cut by the page's foot and the reason it was disabled sat
+    // below the fold, so the page opened looking like a key that did nothing.
+    constexpr float kH = 540.0f;
+    float px = 0.0f;
+    float py = 0.0f;
+    float pw = kW;
+    float ph = kH;
+    {
+        const ImGuiViewport* mv = ImGui::GetMainViewport();
+        cascade::gui::pageOpenInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, kW, kH, px,
+                                     py, pw, ph);
+    }
+    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(pw, ph), ImGuiCond_FirstUseEver);
+    if (!beginPage("Report a bug or dislike###problemreportwindow", "REPORT A BUG / DISLIKE",
+                   &problemReportOpen_, 0, pw, ph)) {
+        endPage();
+        return;
+    }
+
+    const std::uint64_t nowEpoch = static_cast<std::uint64_t>(std::time(nullptr));
+    const cascade::core::FeatureRequestState state = problemReportSender_.state();
+    const bool sending = (state == cascade::core::FeatureRequestState::Sending);
+
+    // --- what this is ------------------------------------------------------
+    ImGui::TextUnformatted("What are you reporting?");
+    ImGui::BeginDisabled(sending);
+    if (ImGui::RadioButton("Something is broken (bug)",
+                           problemReportKind_ == cascade::core::kProblemKindBug)) {
+        problemReportKind_ = cascade::core::kProblemKindBug;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Something I dislike",
+                           problemReportKind_ == cascade::core::kProblemKindDislike)) {
+        problemReportKind_ = cascade::core::kProblemKindDislike;
+    }
+    ImGui::EndDisabled();
+
+    // --- the text --------------------------------------------------------
+    ImGui::TextUnformatted(problemReportKind_ == cascade::core::kProblemKindDislike
+                               ? "What do you dislike, and what would you rather it did?"
+                               : "What went wrong, and what were you doing when it did?");
+    {
+        char buf[cascade::core::kFeatureRequestTextBufferBytes];
+        std::snprintf(buf, sizeof(buf), "%s", problemReportText_.c_str());
+        ImGui::BeginDisabled(sending);
+        if (ImGui::InputTextMultiline("##problemreporttext", buf, sizeof(buf),
+                                      ImVec2(-1.0f, 160.0f))) {
+            problemReportText_ = buf;
+        }
+        ImGui::EndDisabled();
+    }
+    const std::size_t chars = cascade::core::featureRequestTextCharCount(problemReportText_);
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+    ImGui::Text("%zu / %zu characters", chars, cascade::core::kFeatureRequestMaxChars);
+    ImGui::PopStyleColor();
+
+    // --- the optional contact line ----------------------------------------
+    ImGui::TextUnformatted("Email or callsign (optional)");
+    {
+        char buf[cascade::core::kFeatureRequestContactBufferBytes];
+        std::snprintf(buf, sizeof(buf), "%s", problemReportContact_.c_str());
+        ImGui::BeginDisabled(sending);
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##problemreportcontact", buf, sizeof(buf))) {
+            problemReportContact_ = buf;
+        }
+        ImGui::EndDisabled();
+    }
+
+    ImGui::Separator();
+
+    // --- THE SENTENCE, exactly what leaves the machine ---------------------
+    {
+        std::string sentence = "Sends whether this is a bug or a dislike, your message above";
+        const bool haveContact =
+            cascade::core::validateProblemReportContact(problemReportContact_).empty() &&
+            cascade::core::featureRequestContactCharCount(problemReportContact_) > 0;
+        if (haveContact) { sentence += ", the contact line below it"; }
+        sentence += ", the FoxSDR version, and whether this is running on Windows, Linux "
+                    "or Android, x64 or arm64. Nothing else - no identifier, no log, no crash "
+                    "report, no settings, no frequency.";
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        ImGui::TextWrapped("%s", sentence.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    // --- whether SEND is allowed, and why not when it is not ----------------
+    const std::string kindError = cascade::core::validateProblemReportKind(problemReportKind_);
+    const std::string textError = cascade::core::validateProblemReportText(problemReportText_);
+    const std::string contactError =
+        cascade::core::validateProblemReportContact(problemReportContact_);
+    const std::uint64_t blockedUntil = problemReportSender_.blockedUntil();
+    const bool cooling = !sending && blockedUntil > nowEpoch;
+
+    std::string disabledReason;
+    if (sending) {
+        disabledReason = "sending";
+    } else if (!kindError.empty()) {
+        disabledReason = kindError;
+    } else if (!textError.empty()) {
+        disabledReason = textError;
+    } else if (!contactError.empty()) {
+        disabledReason = contactError;
+    } else if (cooling) {
+        const std::uint64_t left = blockedUntil - nowEpoch;
+        disabledReason = "wait " + std::to_string(left) + "s before sending another";
+    }
+    const bool canSend = disabledReason.empty();
+
+    ImGui::BeginDisabled(!canSend);
+    const bool pressed = ImGui::Button("SEND", ImVec2(120.0f, 0.0f));
+    ImGui::EndDisabled();
+    if (!disabledReason.empty()) {
+        // Wrapped rather than on the SEND key's line: the kind's sentence is
+        // longer than the feature page's reasons, and an unwrapped one ran
+        // off the page's right edge.
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+        ImGui::TextWrapped("(%s)", disabledReason.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    if (pressed && canSend) {
+        cascade::core::ProblemReportPayload payload;
+        payload.kind = problemReportKind_;
+        payload.text = problemReportText_;
+        payload.contact = problemReportContact_;
+        payload.version = cascade::versionString();
+        payload.platform = cascade::core::featureRequestPlatform();
+        payload.arch = cascade::core::featureRequestArch();
+        problemReportSentChars_ = cascade::core::featureRequestTextCharCount(problemReportText_);
+        problemReportSentKind_ = problemReportKind_;
+        problemReportSender_.sendJson(cascade::core::problemReportEndpoint(),
+                                      cascade::core::problemReportJson(payload), nowEpoch);
+    }
+
+    // --- the status line -------------------------------------------------
+    switch (state) {
+        case cascade::core::FeatureRequestState::Idle:
+            break;
+        case cascade::core::FeatureRequestState::Sending:
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+            ImGui::TextUnformatted("Sending...");
+            ImGui::PopStyleColor();
+            break;
+        case cascade::core::FeatureRequestState::Sent:
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+            ImGui::TextUnformatted("Thank you - your report was sent.");
+            ImGui::PopStyleColor();
+            break;
+        case cascade::core::FeatureRequestState::Failed:
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
+            ImGui::TextWrapped("%s", problemReportSender_.failureMessage().c_str());
+            ImGui::PopStyleColor();
+            break;
+        case cascade::core::FeatureRequestState::CoolingDown: {
+            std::string msg = problemReportSender_.failureMessage();
+            if (msg.empty()) {
+                msg = "The server asked us to wait before sending another report.";
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+            ImGui::TextWrapped("%s", msg.c_str());
+            ImGui::PopStyleColor();
+            break;
+        }
+    }
+
+    endPage();
+
+    // THE LOG LINE, exactly once per send - the kind the person chose, how
+    // many characters and what the server answered, never the words and
+    // never the contact, as PRIVACY.md promises.
+    if (problemReportLastLoggedState_ == cascade::core::FeatureRequestState::Sending &&
+        state != cascade::core::FeatureRequestState::Sending) {
+        if (state == cascade::core::FeatureRequestState::Sent) {
+            cascade::core::diagLogf("problem report (%s): sent, %zu characters, HTTP %d",
+                                    problemReportSentKind_.c_str(), problemReportSentChars_,
+                                    problemReportSender_.lastStatus());
+        } else {
+            cascade::core::diagLogf("problem report (%s): failed, %zu characters, HTTP %d - %s",
+                                    problemReportSentKind_.c_str(), problemReportSentChars_,
+                                    problemReportSender_.lastStatus(),
+                                    problemReportSender_.failureMessage().c_str());
+        }
+    }
+    // The same one-frame clear as the feature page (featureRequestClearsTextNow
+    // is about the sender's states, not about which body it carried). The
+    // kind and the contact stay.
+    if (cascade::core::featureRequestClearsTextNow(problemReportLastLoggedState_, state)) {
+        problemReportText_.clear();
+    }
+    problemReportLastLoggedState_ = state;
 }
 
 // --- THE DEMOD SCOPE (0.94.0) -----------------------------------------------

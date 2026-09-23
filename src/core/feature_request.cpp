@@ -198,6 +198,11 @@ FeatureRequestSender::~FeatureRequestSender() { cancel(); }
 
 bool FeatureRequestSender::send(const std::string& url, const FeatureRequestPayload& payload,
                                 std::uint64_t nowEpoch) {
+    return sendJson(url, featureRequestJson(payload), nowEpoch);
+}
+
+bool FeatureRequestSender::sendJson(const std::string& url, const std::string& json,
+                                    std::uint64_t nowEpoch) {
     {
         std::lock_guard<std::mutex> lk(mu_);
         if (snap_.state == FeatureRequestState::Sending) { return false; }
@@ -215,7 +220,6 @@ bool FeatureRequestSender::send(const std::string& url, const FeatureRequestPayl
     workerDone_.store(false, std::memory_order_relaxed);
 
     cancel_ = std::make_shared<UploadCancel>();
-    const std::string json = featureRequestJson(payload);
     std::shared_ptr<UploadCancel> cancel = cancel_;
     thread_ = std::thread([this, url, json, cancel, nowEpoch]() {
         const RawPostResult raw = postBounded(url, json, cancel, /*captureBody=*/true);

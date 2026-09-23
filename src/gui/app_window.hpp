@@ -94,6 +94,7 @@ struct GLFWwindow;
 #include "core/telemetry.hpp"
 #include "core/crash_upload.hpp"
 #include "core/feature_request.hpp"
+#include "core/problem_report.hpp"
 #include "core/hang_watchdog.hpp"
 #include "gui/freq_scale.hpp"
 // Pulls in the bind policy and the credential types too, but NOT httplib —
@@ -2232,7 +2233,8 @@ private:
     //
     // A KEY ON THE MAIN SCREEN, not a rail row: this is not a mode of the
     // receiver and has no lamp to keep lit, so it lives on the STATUS column,
-    // above the maker's plate - see drawStatusColumn(). Never persisted and
+    // above REPORT A BUG / DISLIKE and the maker's plate - see
+    // drawStatusColumn(). Never persisted and
     // never reopened at start-up (the same rule as demodScopeOpen_ above:
     // nothing here rides in AppConfig, so there is nothing FOR startupState()
     // to have to clear).
@@ -2262,6 +2264,30 @@ private:
         cascade::core::FeatureRequestState::Idle;
     std::size_t featureRequestSentChars_ = 0;
     void drawFeatureRequestPage();
+
+    // --- REPORT A BUG / DISLIKE (see core/problem_report.hpp) ----------------
+    //
+    // The second key on the STATUS column, directly under REQUEST A FEATURE
+    // and the same size, and the same rules to the letter: never persisted,
+    // never reopened at start-up, nothing typed ever reaches AppConfig or the
+    // diagnostics log. `problemReportKind_` is empty until the person picks
+    // one of the two - the page has no default, so every report's kind was
+    // chosen - and it and the contact line survive a successful send; the
+    // text is cleared on the one frame the success is first seen.
+    bool problemReportOpen_ = false;
+    // FOXSDR_OPEN_PROBLEM_REPORT's one-shot latch, beside the feature
+    // request's.
+    bool problemReportOpenedByEnv_ = false;
+    std::string problemReportKind_;
+    std::string problemReportText_;
+    std::string problemReportContact_;
+    cascade::core::ProblemReportSender problemReportSender_;
+    cascade::core::FeatureRequestState problemReportLastLoggedState_ =
+        cascade::core::FeatureRequestState::Idle;
+    std::size_t problemReportSentChars_ = 0;
+    // The kind the send in flight carried, for its one log line.
+    std::string problemReportSentKind_;
+    void drawProblemReportPage();
     // "Serial ports" settings section: the machine's ports as a table, and
     // the GPS row (drawGpsPositionControl) that used to be findable only
     // under the rail's Radar section. Drawn before Diagnostics, on the SYSTEM

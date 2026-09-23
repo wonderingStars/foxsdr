@@ -233,6 +233,15 @@ public:
     bool send(const std::string& url, const FeatureRequestPayload& payload,
               std::uint64_t nowEpoch);
 
+    // The same, for a body that is already built. send() is exactly
+    // sendJson(url, featureRequestJson(payload), nowEpoch); this seam exists
+    // for the REPORT A BUG / DISLIKE page (core/problem_report.hpp), whose
+    // seven-field body is built by problemReportJson() and whose send needs
+    // every rule above - the in-flight refusal, the cooldown, the
+    // Retry-After, the cancel-then-join - unchanged. One state machine
+    // driving two bodies, rather than a copy of it for the second.
+    bool sendJson(const std::string& url, const std::string& json, std::uint64_t nowEpoch);
+
     // Called once a frame. Joins a worker that has finished (the join is
     // immediate - the worker has already returned by the time it is seen to
     // be done) and, once a terminal state's cooldown has passed against
