@@ -8785,8 +8785,9 @@ void AppWindow::rescanPlugins() {
 }
 
 std::vector<cascade::core::PluginUpdate> AppWindow::plannedPluginUpdates() const {
-    // Pure, and empty until the user has fetched a catalogue this session:
-    // catalog_ is only ever filled by CHECK NOW in the plugin store window.
+    // Pure, and empty until a catalogue has been fetched this session:
+    // catalog_ is only ever filled by the plugin store window - its first
+    // open in a session, or CHECK NOW.
     return cascade::core::PluginRepo::planUpdates(catalog_, pluginInventory_.plugins);
 }
 
@@ -8833,8 +8834,8 @@ void AppWindow::drawPluginStoreSection() {
                        storeBusy || pendingUpdates > 0, true,
                        "Opens the plugin store: the catalogue, what each module "
                        "reaches for,\nwhat it costs to fit, and the updates the "
-                       "catalogue offers.\nNothing is fetched until you ask inside "
-                       "that window.")) {
+                       "catalogue offers.\nThe first time you open it in a session it "
+                       "reads the catalogue;\nnothing is fetched at startup.")) {
         pluginBrowseOpen_ = !pluginBrowseOpen_;
     }
 
@@ -8856,9 +8857,9 @@ void AppWindow::drawPluginStoreSection() {
     if (ImGui::IsItemDeactivatedAfterEdit()) { pluginCatalogueUrl_ = pluginUrlBuf_; }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("An https:// catalogue, or a path to a local index.json.\n"
-                          "Nothing is fetched until you press CHECK NOW in the plugin\n"
-                          "store window. Plugin downloads are always https and always\n"
-                          "sha256-verified.");
+                          "Read when you first open the plugin store in a session, or\n"
+                          "press CHECK NOW there - never at startup. Plugin downloads\n"
+                          "are always https and always sha256-verified.");
     }
 
     // THE RETIRED MODULES HANG UNDER THE STORE'S KEY, and they are the one
@@ -9178,8 +9179,8 @@ void AppWindow::drawBlockedPluginRows() {
                 // dead one - and it now lives in a DIFFERENT WINDOW, so the
                 // directions have to name that window or they send the user
                 // hunting along this rail for a key that left it.
-                ImGui::TextDisabled("Open the plugin store with the key above, then "
-                                    "press CHECK NOW, to fetch the update.");
+                ImGui::TextDisabled("Open the plugin store with the key above to "
+                                    "fetch the update.");
             }
         }
 
@@ -10171,6 +10172,49 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
             toggleMax = true;
         }
     }
+
+    // A CORNER GRIP YOU CAN SEE AND HIT (0.99.16). ImGui's own resize zones
+    // are a 4 px band on each edge and a transparent corner, and a near miss
+    // lands on the body and MOVES the page instead; a user asked for the
+    // patch page to be resizable when it already was. Submitted here, before
+    // the page's content, so it takes the press ahead of anything in the well
+    // it overlaps. Three engraved ridges beyond the screw mark it, lit while
+    // the pointer is on it, with the diagonal resize cursor. A maximised page
+    // has no grip: its size is the screen's.
+    if (!pc.collapsed && !pc.maximised && !autoSizePage && m > 0.0f && self != nullptr) {
+        const float gs = cascade::gui::pageGripSize(m);
+        ImGui::SetCursorScreenPos(ImVec2(br.x - gs, br.y - gs));
+        ImGui::InvisibleButton("##pagegrip", ImVec2(gs, gs));
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        if (ImGui::IsItemActivated()) {
+            pc.gripW0 = size.x;
+            pc.gripH0 = size.y;
+            pc.gripMx = mouse.x;
+            pc.gripMy = mouse.y;
+        }
+        const bool gripLive = ImGui::IsItemActive();
+        if (gripLive) {
+            float nw = size.x;
+            float nh = size.y;
+            cascade::gui::pageGripResize(pc.gripW0, pc.gripH0, mouse.x - pc.gripMx,
+                                         mouse.y - pc.gripMy, nw, nh);
+            ImGui::SetWindowSize(id, ImVec2(nw, nh));
+        }
+        const bool gripLit = gripLive || ImGui::IsItemHovered() ||
+                             ImGui::GetHoveredID() == ImGui::GetWindowResizeCornerID(self, 0) ||
+                             ImGui::GetActiveID() == ImGui::GetWindowResizeCornerID(self, 0);
+        if (gripLit) { ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE); }
+        const ImU32 groove = gripLit ? cascade::gui::theme::kPhosphor
+                                     : cascade::gui::theme::kEnamelDark;
+        const ImU32 lip = IM_COL32(0xE8, 0xDA, 0xB8, gripLit ? 0x00 : 0x90);
+        for (const float c : {36.0f, 42.0f, 48.0f}) {
+            const ImVec2 a(br.x - 3.0f, br.y - (c - 3.0f));
+            const ImVec2 b(br.x - (c - 3.0f), br.y - 3.0f);
+            dl->AddLine(a, b, groove, 1.6f);
+            dl->AddLine(ImVec2(a.x + 1.0f, a.y + 1.0f), ImVec2(b.x + 1.0f, b.y + 1.0f), lip, 1.0f);
+        }
+    }
+
     if (press.close && open != nullptr) { *open = false; }
     if (press.minimise) {
         if (ownWindow) {
@@ -11461,22 +11505,17 @@ void AppWindow::drawPatchPage() {
              cascade::core::patch::PortType::Text},
         };
 
-        // A new node lands where the view IS, not at the world origin, which
-        // after any pan is somewhere off the screen - a part that appears
-        // nowhere visible reads as a button that did nothing.
-        const ImVec2 binPos = ImGui::GetCursorScreenPos();
+        // A PRESS IS REMEMBERED HERE AND PLACED BELOW, once the canvas this
+        // frame will draw has a size: a new node lands inside the canvas in
+        // view (gui::patch::newPartPosition), not at the world origin, which
+        // after any pan is off the screen. 0.99.15 placed it from the key's
+        // DESKTOP position instead, which put it as far off the canvas as the
+        // window was from the corner of the monitor - "the buttons do nothing".
+        int pressedPart = -1;
+        int pressedDecoder = -1;
         for (int i = 0; i < IM_ARRAYSIZE(kParts); ++i) {
             if (i != 0) { ImGui::SameLine(); }
-            if (ImGui::Button(kParts[i].label)) {
-                const float stagger = 22.0f * static_cast<float>(nodesPlaced_ % 7);
-                const cascade::gui::patch::Vec2 at = cascade::gui::patch::screenToWorld(
-                    patchUi_.view,
-                    cascade::gui::patch::Vec2{binPos.x + 60.0f + stagger,
-                                              binPos.y + 90.0f + stagger});
-                patchGraph_.addNode(kParts[i].kind, kParts[i].label, kParts[i].feed, at.x, at.y);
-                ++nodesPlaced_;
-                patchUi_.dirty = true;
-            }
+            if (ImGui::Button(kParts[i].label)) { pressedPart = i; }
         }
 
         // The decoder row. Engraved caption, then a key per plugin.
@@ -11494,9 +11533,13 @@ void AppWindow::drawPatchPage() {
                 "- none installed. Add decoder plugins from the plugin store in DECODE.");
             ImGui::PopStyleColor();
         }
+        // THE ROW WRAPS. It grows by a key for every plugin installed, and on
+        // 0.99.15 every key past the page's right edge was simply not there to
+        // press.
+        const float rowRight = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+        const float keySpacing = ImGui::GetStyle().ItemSpacing.x;
         for (std::size_t i = 0; i < patchCatalogue_.size(); ++i) {
             const cascade::core::patch::DecoderInfo& info = patchCatalogue_[i];
-            ImGui::SameLine();
             // The input is in the label only when it disambiguates - a
             // module that is both an audio and an I/Q decoder shows two keys.
             bool twin = false;
@@ -11513,20 +11556,13 @@ void AppWindow::drawPatchPage() {
                           : info.feed == cascade::core::patch::PortType::Iq ? " (I/Q)"
                                                                            : " (audio)",
                           i);
-            if (ImGui::Button(label)) {
-                const float stagger = 22.0f * static_cast<float>(nodesPlaced_ % 7);
-                const cascade::gui::patch::Vec2 at = cascade::gui::patch::screenToWorld(
-                    patchUi_.view,
-                    cascade::gui::patch::Vec2{binPos.x + 60.0f + stagger,
-                                              binPos.y + 110.0f + stagger});
-                const cascade::core::patch::NodeId made = patchGraph_.addNode(
-                    cascade::core::patch::NodeKind::Decoder, info.name, info.feed, at.x, at.y);
-                if (cascade::core::patch::Node* n = patchGraph_.mutableNode(made)) {
-                    n->plugin = info.key;
-                }
-                ++nodesPlaced_;
-                patchUi_.dirty = true;
+            const float keyW = ImGui::CalcTextSize(label, nullptr, true).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
+            if (!cascade::gui::patch::keyWraps(ImGui::GetItemRectMax().x, keySpacing, keyW,
+                                                rowRight)) {
+                ImGui::SameLine();
             }
+            if (ImGui::Button(label)) { pressedDecoder = static_cast<int>(i); }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s\n%s input, %s\nWire it from a %s.", info.key.c_str(),
                                   info.feed == cascade::core::patch::PortType::Iq ? "I/Q"
@@ -11550,6 +11586,26 @@ void AppWindow::drawPatchPage() {
         constexpr float kInspectorW = 236.0f;
         constexpr float kGap = 8.0f;
         const float canvasW = std::max(160.0f, avail.x - kInspectorW - kGap);
+
+        // THE PRESS FROM THE PARTS BIN, placed now that the canvas has a size.
+        if (pressedPart >= 0 || pressedDecoder >= 0) {
+            const cascade::gui::patch::Vec2 at = cascade::gui::patch::newPartPosition(
+                patchUi_.view, canvasW, avail.y, nodesPlaced_);
+            if (pressedPart >= 0) {
+                const Part& p = kParts[pressedPart];
+                patchGraph_.addNode(p.kind, p.label, p.feed, at.x, at.y);
+            } else {
+                const cascade::core::patch::DecoderInfo& info =
+                    patchCatalogue_[static_cast<std::size_t>(pressedDecoder)];
+                const cascade::core::patch::NodeId made = patchGraph_.addNode(
+                    cascade::core::patch::NodeKind::Decoder, info.name, info.feed, at.x, at.y);
+                if (cascade::core::patch::Node* n = patchGraph_.mutableNode(made)) {
+                    n->plugin = info.key;
+                }
+            }
+            ++nodesPlaced_;
+            patchUi_.dirty = true;
+        }
 
         // ONE COMPILE A FRAME, before anything is drawn, so the marks on
         // the canvas and the words in the inspector are the same answer.
@@ -12812,6 +12868,12 @@ void AppWindow::drawPluginStoreWindow() {
     }
     if (!pluginBrowseOpen_) { return; }
     telemetryNotePanel("plugin store");
+    // THE FIRST OPEN READS THE CATALOGUE (0.99.16, gui/store_first_open.hpp):
+    // once per session, never at startup, never retried on its own.
+    if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, !catalog_.empty(),
+                                             catalogPending_ || installPending_)) {
+        startCatalogFetch();
+    }
 
     // A REAL OPERATING SYSTEM WINDOW, by the same two devices the map pages
     // use: an opening rectangle that overhangs the main window, and
@@ -20456,10 +20518,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     }
 
     // The plugin store. Restoring the URL does NOT start a fetch - see
-    // AppConfig::pluginCatalogueUrl. The user still has to press CHECK NOW,
-    // on this launch as on every other. The window's open flag arrives
-    // cleared (startupState): the store opens from its rail key, never by
-    // itself.
+    // AppConfig::pluginCatalogueUrl. The catalogue is read only when the
+    // user opens the store (once a session) or presses CHECK NOW. The
+    // window's open flag arrives cleared (startupState): the store opens
+    // from its rail key, never by itself - which is what keeps its
+    // first-open read from ever being a startup fetch.
     pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
     std::snprintf(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;

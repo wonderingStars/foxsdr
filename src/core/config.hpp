@@ -554,11 +554,12 @@ struct AppConfig {
 
     // Whether the plugin store window was open at the last exit. Recorded,
     // and since 0.79.1 NOT restored - the application starts on the bench
-    // alone (see startupState below). It never caused a fetch on startup even
-    // when it was restored: nothing in this product touches the catalogue
-    // origin until the user presses CHECK NOW in that window; that promise is
-    // what the store's privacy note makes, and a config field that could
-    // reinstate a network call behind the user's back would break it.
+    // alone (see startupState below). Nothing in this product touches the
+    // catalogue origin until the user OPENS that window (its first open in a
+    // session reads the catalogue, 0.99.16) or presses CHECK NOW in it. That
+    // is the promise the store's privacy note makes, and restoring this flag
+    // would turn the first-open read into a startup fetch - so it stays
+    // recorded and unrestored.
     bool pluginBrowserOpen = false;
 
     // --- The fitted modules window --------------------------------------------

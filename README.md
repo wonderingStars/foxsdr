@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.15** (September 2026), in open beta and free for
+The current release is **0.99.16** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1027,9 +1027,9 @@ with a chip saying what it holds (WAIT, RX or IMG for a picture, a row count
 for a panel): press the row to open it, its key to close it. (Before 0.79.1
 the pages you left open came back, the decoder output opened itself on a
 decoder's first line, a map page opened itself on its first target, and a
-plugin's window appeared whenever the plugin published one.) The catalogue is contacted only when you
-press **CHECK NOW** inside the store window: nothing is fetched at startup, and
-no plugin ever updates itself.
+plugin's window appeared whenever the plugin published one.) The catalogue is contacted when you
+open the store window (the first time in a session) or press **CHECK NOW**
+inside it: nothing is fetched at startup, and no plugin ever updates itself.
 
 A plugin may declare several capabilities. Decoders are fed real samples —
 either the tuned, demodulated audio or the raw receiver band — and produce
@@ -1188,9 +1188,12 @@ alone and keep loading.
 
 ## The patch page
 
-**SIGNAL PATH → Patch** opens a canvas where a receiver is built by hand: parts
-are dropped from the bin at the top and wired port to port. Each part is the
-instrument itself, operated on its own face.
+**SIGNAL PATH → Patch** opens a canvas where a receiver is built by hand: press
+a part in the bin at the top and it appears at the top-left of the canvas you
+are looking at (pressing again steps each new one down and across), then wire
+them port to port. Each part is the instrument itself, operated on its own face.
+The page resizes from the ridged grip in its bottom-right corner, as every page
+does.
 
 | Part | What it does |
 |---|---|
@@ -1546,10 +1549,10 @@ each says what starts it:
   default and is the **Check for updates at startup** tick in **SYSTEM →
   Updates**; nothing is downloaded or installed unless you press the button.
   It is not the usage report and the two share nothing.
-- **The plugin catalogue.** Fetched only when you press **CHECK NOW** in the
-  Plugin store window. Nothing is fetched at startup — since 0.79.1 that
-  window does not even reopen by itself, and opening it by hand fetches
-  nothing either — and no plugin ever updates itself.
+- **The plugin catalogue.** Fetched when you open the Plugin store window
+  (the first time in a session, since 0.99.16) and whenever you press
+  **CHECK NOW** in it. Nothing is fetched at startup — since 0.79.1 that
+  window does not reopen by itself — and no plugin ever updates itself.
 - **A plugin download**, when you press **FIT MODULE** or **UPDATE MODULE** for
   one — always https, sha256-verified against the catalogue, size-capped and
   refused on a cross-host redirect.

@@ -47,6 +47,7 @@ struct GLFWwindow;
 // that puts an already-wrong one back. ImGui-free for the same reason as the
 // headers below it - the tests include it without a graphics context.
 #include "gui/page_geometry.hpp"
+#include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/audio_open.hpp"
 #include "gui/config_writer.hpp"
@@ -2308,6 +2309,12 @@ private:
         // "Reset window sizes" has been pressed since this page was last
         // drawn, so its next frame re-places it - see gui/page_geometry.hpp.
         std::uint32_t seenResetGen = 0;
+        // The corner grip's drag: the page size and pointer position when it
+        // began (gui/page_geometry.hpp pageGripResize).
+        float gripW0 = 0.0f;
+        float gripH0 = 0.0f;
+        float gripMx = 0.0f;
+        float gripMy = 0.0f;
     };
     std::map<std::string, PageChrome> pageChrome_;
     // Bumped by resetPageWindows(). One counter for the whole application
@@ -2932,6 +2939,8 @@ private:
     std::future<CatalogFetchResult> catalogFuture_;
     std::future<PluginInstallResult> installFuture_;
     bool catalogPending_ = false;
+    // The store's one automatic catalogue read per session (gui/store_first_open.hpp).
+    cascade::gui::StoreFirstOpen storeFirstOpen_;
     bool installPending_ = false;
     std::string installBusyName_;  // shown in "Downloading <name>..."
 

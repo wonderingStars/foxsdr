@@ -59,9 +59,10 @@ exactly as many.
   sends **the version you are running and nothing else** — no identifier, no
   install id, no cookie kept — and it is not the usage report; the two share
   nothing. Nothing is downloaded or installed without you pressing a button.
-- The application makes one other network request, only when you press
-  **CHECK NOW** in the plugin store window, to fetch the plugin catalogue
-  from GitHub (raw.githubusercontent.com). Nothing is fetched at startup.
+- The application makes one other network request, to fetch the plugin
+  catalogue from GitHub (raw.githubusercontent.com): the first time you
+  open the plugin store window in a session, and whenever you press
+  **CHECK NOW** in it. Nothing is fetched at startup.
 - The Satellites plugin, when it is fitted and tracking, fetches orbital
   element sets from CelesTrak about every twelve hours, falling back to a
   copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request

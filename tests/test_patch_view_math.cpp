@@ -488,5 +488,55 @@ int main() {
         CHECK(pointInNode(bare, V(kNodeWidth - 1.0f, 10.0f)));
     }
 
+    // [S6] A PART PRESSED IN THE BIN LANDS ON THE CANVAS IN VIEW. 0.99.15 fed
+    // the key's desktop position through the canvas-relative view, and nodes
+    // appeared off the canvas ("the buttons do nothing"). Whatever the pan,
+    // the zoom and the press count, the new node's title bar must be inside
+    // the canvas.
+    {
+        using cascade::gui::patch::keyWraps;
+        using cascade::gui::patch::newPartPosition;
+        const View views[] = {
+            View{V(0.0f, 0.0f), 1.0f},        // a fresh page
+            View{V(-2400.0f, -900.0f), 1.0f}, // panned far right and down
+            View{V(1800.0f, 700.0f), 1.0f},   // panned the other way
+            View{V(-300.0f, 250.0f), kMinZoom},
+            View{V(150.0f, -600.0f), kMaxZoom},
+        };
+        const float sizes[][2] = {{620.0f, 440.0f}, {1400.0f, 900.0f}, {180.0f, 90.0f}};
+        int inView = 0;
+        int cases = 0;
+        for (const View& v : views) {
+            for (const auto& sz : sizes) {
+                for (int placed = 0; placed < 20; ++placed) {
+                    ++cases;
+                    const Vec2 w = newPartPosition(v, sz[0], sz[1], placed);
+                    const Vec2 s = worldToScreen(v, w);   // canvas-local pixels
+                    const Vec2 title = worldToScreen(v, V(w.x + 10.0f, w.y + kHeaderHeight * 0.5f));
+                    if (s.x >= 0.0f && s.y >= 0.0f && title.x < sz[0] && title.y < sz[1]) {
+                        ++inView;
+                    }
+                }
+            }
+        }
+        CHECK(cases == 300);
+        CHECK(inView == cases);
+        // A fresh page puts the first part near the top-left, not at a spot
+        // that depends on anything but the canvas.
+        const Vec2 first = newPartPosition(View{V(0.0f, 0.0f), 1.0f}, 620.0f, 440.0f, 0);
+        CHECK(std::fabs(first.x - 28.0f) < 1e-3f && std::fabs(first.y - 28.0f) < 1e-3f);
+        // Presses step, so a stack of new parts can be told apart...
+        const Vec2 second = newPartPosition(View{V(0.0f, 0.0f), 1.0f}, 620.0f, 440.0f, 1);
+        CHECK(second.x > first.x && second.y > first.y);
+        // ...and a negative count (never produced, but an int) is still in view.
+        const Vec2 neg = newPartPosition(View{V(0.0f, 0.0f), 1.0f}, 620.0f, 440.0f, -3);
+        CHECK(neg.x >= 0.0f && neg.y >= 0.0f && neg.x < 620.0f);
+
+        // The key row wraps at the edge and not before it.
+        CHECK(!keyWraps(100.0f, 8.0f, 80.0f, 188.0f));   // ends exactly at the edge
+        CHECK(keyWraps(100.0f, 8.0f, 81.0f, 188.0f));    // one pixel over
+        CHECK(!keyWraps(0.0f, 8.0f, 50.0f, 1000.0f));
+    }
+
     return testSummary("test_patch_view_math");
 }

@@ -207,5 +207,26 @@ int main() {
         CHECK(y == 20.0f);
     }
 
+    // THE CORNER GRIP (0.99.16): a drag grows or shrinks the page by exactly
+    // the pointer's travel, never below the floor, and the grip is larger than
+    // the margin so it reaches past the screw into something you can hit.
+    {
+        using cascade::gui::pageGripResize;
+        using cascade::gui::pageGripSize;
+        float w = 0.0f;
+        float h = 0.0f;
+        pageGripResize(900.0f, 620.0f, 150.0f, 60.0f, w, h);
+        CHECK(w == 1050.0f);
+        CHECK(h == 680.0f);
+        pageGripResize(900.0f, 620.0f, -200.0f, -100.0f, w, h);   // smaller works too
+        CHECK(w == 700.0f);
+        CHECK(h == 520.0f);
+        pageGripResize(900.0f, 620.0f, -5000.0f, -5000.0f, w, h); // but not past the floor
+        CHECK(w == kPageMinW);
+        CHECK(h == kPageMinH);
+        CHECK(pageGripSize(22.0f) > 22.0f);
+        CHECK(pageGripSize(22.0f) >= 28.0f);   // at least ImGui's own grip at the page font
+    }
+
     return testSummary("test_page_geometry");
 }

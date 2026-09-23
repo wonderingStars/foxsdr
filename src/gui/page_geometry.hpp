@@ -96,6 +96,23 @@ inline bool pageNeedsReset(std::uint32_t& seenGen, std::uint32_t currentGen) {
     return true;
 }
 
+// THE CORNER GRIP A PAGE CAN BE RESIZED BY, and one a user can find (0.99.16).
+// ImGui's own resize zones are still there, but they are a 4 px band on each
+// edge and a corner grip the cabinet draws transparent, and a near miss lands
+// on the page's body - which MOVES the window. "It needs to be able to resize
+// the window" was a user who had tried. This grip is a square covering the
+// cabinet's bottom-right margin plus a little of the corner of the well.
+// `margin` is the cabinet margin drawCabinet reported.
+inline float pageGripSize(float margin) { return margin + 10.0f; }
+
+// The size a grip drag asks for: the size the page had when the drag began,
+// plus how far the pointer has moved since, held to the page floor.
+inline void pageGripResize(float startW, float startH, float dx, float dy, float& w, float& h) {
+    w = startW + dx;
+    h = startH + dy;
+    clampPageSize(w, h);
+}
+
 }  // namespace cascade::gui
 
 #endif  // CASCADE_GUI_PAGE_GEOMETRY_HPP

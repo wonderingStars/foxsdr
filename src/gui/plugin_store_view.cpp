@@ -1587,9 +1587,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         bannerLamp = theme::kGold;
         bannerLit = false;
         bannerNote =
-            "Nothing has been fetched, so nothing here is a count of what exists. This "
-            "application does not contact the catalogue on its own - press CHECK NOW and "
-            "it will ask once.";
+            "Nothing has been fetched, so nothing here is a count of what exists. The "
+            "catalogue is read the first time this window opens in a session, and again "
+            "whenever you press CHECK NOW - never at startup.";
     } else if (catState == CatalogueState::Failed) {
         // ASKED, AND IT DID NOT ANSWER. Telling this user to press CHECK NOW
         // is telling them to do again the thing that just failed, so the

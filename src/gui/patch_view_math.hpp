@@ -193,6 +193,41 @@ inline Vec2 screenToWorld(const View& v, Vec2 s) {
 // Zoom about a fixed SCREEN point, so the thing under the pointer stays under
 // the pointer. Zooming about the origin instead is the version that makes a
 // canvas feel like it is fighting you.
+// --- where a new part lands ---------------------------------------------------
+//
+// INSIDE THE CANVAS THE USER IS LOOKING AT, whatever the pan and zoom. `v` is
+// the CANVAS-RELATIVE view the page keeps (pan (0,0) puts the world origin at
+// the canvas's top-left corner), and canvasW/canvasH are the canvas in screen
+// pixels. Nothing here knows where the window is on the desktop, and that is
+// the point: until 0.99.16 the parts bin fed the key's DESKTOP position
+// through this view, so a node landed as far from the canvas as the window
+// was from the top-left of the screen - off the canvas altogether on most
+// monitors, and "the buttons do nothing" was the report.
+//
+// Repeated presses step down and right so a stack of new parts can be told
+// apart, and the step is held back on a canvas too small for it so the title
+// bar - the handle that drags the node - is always in view.
+inline constexpr float kDropInset = 28.0f;
+inline constexpr float kDropStagger = 22.0f;
+inline constexpr float kDropKeepVisibleW = 120.0f;
+
+inline Vec2 newPartPosition(const View& v, float canvasW, float canvasH, int placed) {
+    const int slot = ((placed % 7) + 7) % 7;
+    const float step = kDropStagger * static_cast<float>(slot);
+    const float maxX = std::max(0.0f, canvasW - kDropKeepVisibleW);
+    const float maxY = std::max(0.0f, canvasH - kHeaderHeight * v.zoom - 4.0f);
+    const Vec2 local{std::min(kDropInset + step, maxX), std::min(kDropInset + step, maxY)};
+    return screenToWorld(v, local);
+}
+
+// A row of keys that flows onto another line instead of running off the page:
+// true when a key itemW wide, placed after an item ending at lineEndX, would
+// cross rightEdge. The decoder row of the parts bin grows with every plugin
+// installed, and on 0.99.15 everything past the window's edge was unreachable.
+inline bool keyWraps(float lineEndX, float spacing, float itemW, float rightEdge) {
+    return lineEndX + spacing + itemW > rightEdge;
+}
+
 inline View zoomAbout(const View& v, Vec2 screenAnchor, float factor) {
     View out = v;
     out.zoom = std::clamp(v.zoom * factor, kMinZoom, kMaxZoom);
