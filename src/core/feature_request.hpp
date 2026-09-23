@@ -103,18 +103,24 @@ const std::vector<std::string>& featureRequestFieldNames();
 // person sees the same sentence whether the client catches the problem or the
 // server does.
 constexpr std::size_t kFeatureRequestMinChars = 10;
-constexpr std::size_t kFeatureRequestMaxChars = 2000;
+// 100000, not the 2000 it was until 0.99.24: what a person writes is kept
+// whole (owner, 2026-09-23, "even if its 10k words" - about sixty thousand
+// characters). The site moved first (2.32.0), so this client never sends
+// more than the server it talks to accepts.
+constexpr std::size_t kFeatureRequestMaxChars = 100000;
 constexpr std::size_t kFeatureRequestMaxContactChars = 120;
 
-// THE TEXT FIELDS' BUFFERS, IN BYTES. The limits above are characters and a
+// THE CONTACT FIELD'S BUFFER, IN BYTES. The limits above are characters and a
 // character is up to four bytes of UTF-8, so a buffer sized from the character
 // count alone (the page's first version: 2000 + 64) stopped taking input at
 // about a thousand Cyrillic letters or five hundred emoji while the counter
 // under it still read "1032 / 2000" - a limit nobody set and nothing
 // explained. Four bytes a character, plus the terminator, plus enough slack
 // that one character PAST the limit can be typed and refused in words rather
-// than silently not appearing.
-constexpr std::size_t kFeatureRequestTextBufferBytes = (kFeatureRequestMaxChars + 16) * 4 + 1;
+// than silently not appearing. The MESSAGE boxes have no fixed buffer at all
+// since 0.99.24: they edit the std::string directly (imgui_stdlib), because a
+// buffer for 100000 four-byte characters would be 400 KB on the stack every
+// frame.
 constexpr std::size_t kFeatureRequestContactBufferBytes =
     (kFeatureRequestMaxContactChars + 16) * 4 + 1;
 

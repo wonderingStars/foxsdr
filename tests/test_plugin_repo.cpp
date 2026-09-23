@@ -1026,6 +1026,58 @@ int main() {
     }
 
     // ---------------------------------------------------------------------
+    // REMOVE MEANS GONE FROM THE LIST, NOT ONLY FROM THE DISK (2026-09-23).
+    //
+    // The owner pressed Remove on a disabled plugin (Decoder Workbench 0.2.0,
+    // disabled by a bad catalogue floor) and "it doesn't go": the file was
+    // deleted, but the disabled row is built from the MANIFEST record, which
+    // nothing removed - so the rescan found the record, still below its floor,
+    // and drew the same row again. The file was the only thing that left.
+    // ---------------------------------------------------------------------
+    {
+        PluginRepo repo;
+        const fs::path d = tmpDir("remove_blocked_forgets");
+        fs::create_directories(d);
+        const std::string dir = d.string();
+        const std::string kSuffix = ".disabled";
+        const std::string wbFile = mod("workbench-0.2.0-abi3");
+        std::vector<InstalledPlugin> recs;
+        recs.push_back(installedRec("workbench", "0.2.0", CASCADE_PLUGIN_ABI_VERSION, wbFile));
+        recs.push_back(installedRec("pocsag", "1.0.2", CASCADE_PLUGIN_ABI_VERSION, mod("pocsag")));
+        const std::vector<CachedPolicy> pols{policy("workbench", "0.99.0", "0.2.0"),
+                                             policy("pocsag", "1.0.0", "1.0.2")};
+        std::string err;
+        CHECK(PluginRepo::saveManifest(dir, recs, pols, err));
+        writeText(d / (wbFile + kSuffix), "quarantined bytes");
+        writeText(d / mod("pocsag"), "a live plugin");
+
+        PluginInventory inv;
+        CHECK(PluginRepo::loadInventory(dir, inv, err));
+        CHECK(PluginRepo::blockedPlugins(inv.plugins, inv.policies).size() == 1u);
+
+        CHECK(repo.removeQuarantined(dir, wbFile, kSuffix, err));
+
+        PluginInventory after;
+        CHECK(PluginRepo::loadInventory(dir, after, err));
+        // The row is gone...
+        CHECK(PluginRepo::blockedPlugins(after.plugins, after.policies).empty());
+        // ...because the record is gone.
+        bool wbRecorded = false;
+        bool pocsagRecorded = false;
+        for (const InstalledPlugin& p : after.plugins) {
+            if (p.id == "workbench") { wbRecorded = true; }
+            if (p.id == "pocsag") { pocsagRecorded = true; }
+        }
+        CHECK(!wbRecorded);
+        // Nothing else was forgotten: the other plugin's record, and every
+        // cached floor (catalogue knowledge, not an install record).
+        CHECK(pocsagRecorded);
+        CHECK(after.policies.size() == 2u);
+        std::error_code ec;
+        fs::remove_all(d, ec);
+    }
+
+    // ---------------------------------------------------------------------
     // removeQuarantined(): deleting a plugin the host renamed aside
     //
     // A retired or ABI-mismatched plugin is not on disk under its own name -

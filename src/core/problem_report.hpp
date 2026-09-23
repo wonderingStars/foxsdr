@@ -19,8 +19,8 @@
 //
 // WHY THIS FILE IS SMALL. Everything a problem report shares with a feature
 // request is REUSED, not copied:
-//   - the bounds (10..2000 characters of text, 120 of contact, the buffer
-//     sizes) and the functions that count and judge them, because the server
+//   - the bounds (10..100000 characters of text, 120 of contact, the contact
+//     buffer size) and the functions that count and judge them, because the server
 //     applies the feature request's bounds to this endpoint by reference and
 //     the two pages must agree with it and with each other;
 //   - platform/arch vocabulary (featureRequestPlatform()/featureRequestArch());

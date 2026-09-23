@@ -467,14 +467,28 @@ int main() {
         CHECK(!featureRequestClearsTextNow(S::Sending, S::Sending));
         CHECK(!featureRequestClearsTextNow(S::Idle, S::Idle));
 
-        // THE BUFFERS HOLD WHAT THE LIMITS ALLOW: 2000 four-byte characters
-        // and a terminator, with room for the one character too many that
-        // validation then refuses in words.
-        // RED WHEN a buffer is sized from the character count alone.
-        const std::string longest(cascade::core::kFeatureRequestMaxChars * 4u, 'x');
-        CHECK(longest.size() + 4u + 1u <= cascade::core::kFeatureRequestTextBufferBytes);
+        // THE CONTACT BUFFER HOLDS WHAT ITS LIMIT ALLOWS: 120 four-byte
+        // characters and a terminator, with room for the one character too
+        // many that validation then refuses in words. (The message boxes edit
+        // their std::string directly since 0.99.24 and have no buffer to size.)
+        // RED WHEN the buffer is sized from the character count alone.
         CHECK(cascade::core::kFeatureRequestMaxContactChars * 4u + 4u + 1u <=
               cascade::core::kFeatureRequestContactBufferBytes);
+
+        // TEN THOUSAND WORDS FIT (owner, 2026-09-23). About sixty thousand
+        // characters, in two-byte letters, is inside the ceiling; the refusal
+        // starts one character past it and says so in words.
+        // RED WHEN the ceiling goes back to 2000.
+        {
+            std::string tenThousandWords;
+            for (int i = 1; i <= 10000; ++i) {
+                tenThousandWords += "\xD1\x81\xD0\xBB\xD0\xBE\xD0\xB2\xD0\xBE";  // "слово"
+                tenThousandWords += std::to_string(i);
+                tenThousandWords += (i % 12 == 0) ? '\n' : ' ';
+            }
+            CHECK(featureRequestTextCharCount(tenThousandWords) > 50000u);
+            CHECK(validateFeatureRequestText(tenThousandWords).empty());
+        }
     }
 
     // --- THE TWO HALVES AGAINST EACH OTHER, only when asked ------------------

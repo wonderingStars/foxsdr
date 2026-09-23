@@ -314,7 +314,7 @@ SEND:
 | Field | Example | Why |
 |---|---|---|
 | `schema` | `1` | Which version of this list the request follows. |
-| `text` | `Please add a squelch tail hang timer` | What you typed, trimmed of leading and trailing blank space. Between 10 and 2000 characters. |
+| `text` | `Please add a squelch tail hang timer` | What you typed, trimmed of leading and trailing blank space. Between 10 and 100000 characters. |
 | `contact` | `g4xyz@example.com`, or empty | An email address or callsign, ENTIRELY OPTIONAL, so we can follow up. Up to 120 characters. Kept on screen after a successful send, in case you file a second request. |
 | `version` | `0.99.0` | Which release, so a request against an old build is not chased in the current one. |
 | `platform` | `windows`, `linux` or `android` | Which build filed it. |
@@ -369,7 +369,7 @@ SEND:
 |---|---|---|
 | `schema` | `1` | Which version of this list the report follows. |
 | `kind` | `bug` or `dislike` | Which of the two you chose at the top of the page: something that does not work, or something that works as designed and that you would rather it did not. |
-| `text` | `The waterfall freezes when I change the sample rate` | What you typed, trimmed of leading and trailing blank space. Between 10 and 2000 characters. |
+| `text` | `The waterfall freezes when I change the sample rate` | What you typed, trimmed of leading and trailing blank space. Between 10 and 100000 characters. |
 | `contact` | `g4xyz@example.com`, or empty | An email address or callsign, ENTIRELY OPTIONAL, so we can ask a follow-up question. Up to 120 characters. Kept on screen after a successful send. |
 | `version` | `0.99.20` | Which release, so a bug already fixed is not chased again. |
 | `platform` | `windows`, `linux` or `android` | Which build sent it. |

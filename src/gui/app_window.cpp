@@ -31,6 +31,7 @@
 // rail has to drag the page through the same machinery a title bar uses, or a
 // page could no longer be torn out of the main window and merged back into it.
 #include <imgui_internal.h>
+#include <imgui_stdlib.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -17412,18 +17413,13 @@ void AppWindow::drawFeatureRequestPage() {
     // --- the text --------------------------------------------------------
     ImGui::TextUnformatted("What would you like FoxSDR to do?");
     {
-        // A FIXED BUFFER, like every other text field on this bench
-        // (transmitArgs_ above, bookmark names elsewhere) - sized past the
-        // contract's own 2000-character ceiling so a full-length message is
-        // never silently truncated by the widget before validation gets a
-        // chance to say so in words.
-        char buf[cascade::core::kFeatureRequestTextBufferBytes];
-        std::snprintf(buf, sizeof(buf), "%s", featureRequestText_.c_str());
+        // NO FIXED BUFFER: the widget edits the string itself (imgui_stdlib
+        // grows it as the person types), so nothing they write is cut by the
+        // widget - the ceiling is 100000 characters, and reaching it is said
+        // in words by validation, never done silently.
         ImGui::BeginDisabled(sending);
-        if (ImGui::InputTextMultiline("##featurerequesttext", buf, sizeof(buf),
-                                      ImVec2(-1.0f, 160.0f))) {
-            featureRequestText_ = buf;
-        }
+        ImGui::InputTextMultiline("##featurerequesttext", &featureRequestText_,
+                                  ImVec2(-1.0f, 160.0f));
         ImGui::EndDisabled();
     }
     // THE SAME COUNT validateFeatureRequestText() JUDGES THE BOUNDARY
@@ -17635,13 +17631,10 @@ void AppWindow::drawProblemReportPage() {
                                ? "What do you dislike, and what would you rather it did?"
                                : "What went wrong, and what were you doing when it did?");
     {
-        char buf[cascade::core::kFeatureRequestTextBufferBytes];
-        std::snprintf(buf, sizeof(buf), "%s", problemReportText_.c_str());
+        // No fixed buffer, as in the feature-request box above.
         ImGui::BeginDisabled(sending);
-        if (ImGui::InputTextMultiline("##problemreporttext", buf, sizeof(buf),
-                                      ImVec2(-1.0f, 160.0f))) {
-            problemReportText_ = buf;
-        }
+        ImGui::InputTextMultiline("##problemreporttext", &problemReportText_,
+                                  ImVec2(-1.0f, 160.0f));
         ImGui::EndDisabled();
     }
     const std::size_t chars = cascade::core::featureRequestTextCharCount(problemReportText_);

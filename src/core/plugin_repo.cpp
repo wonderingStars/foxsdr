@@ -2243,6 +2243,46 @@ bool PluginRepo::applyUpdate(const PluginUpdate& u, const std::string& pluginsDi
     return true;
 }
 
+namespace {
+
+// THE RECORD GOES WITH THE FILE (2026-09-23). A plugin removed from disk kept
+// its manifest record, and for a DISABLED plugin that record is the row: the
+// rescan found it, still below its floor, and drew the same "disabled" row the
+// user had just pressed Remove on. So a removal also drops every record naming
+// that file. Cached floors are catalogue knowledge, not install records, and
+// are kept. No manifest, or one that cannot be read, is left exactly as it is:
+// the file is already gone, and a manifest this code cannot parse is not one
+// it should rewrite.
+bool forgetFile(const std::string& pluginsDir, const std::string& fileName, std::string& error) {
+    const fs::path mpath(PluginRepo::manifestPath(pluginsDir));
+    std::error_code ec;
+    if (!fs::exists(mpath, ec)) { return true; }
+    std::ifstream f(mpath, std::ios::binary);
+    if (!f) { return true; }
+    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    f.close();
+    std::vector<InstalledPlugin> plugins;
+    std::vector<CachedPolicy> policies;
+    std::vector<std::string> notes;
+    std::string perr;
+    if (!PluginRepo::parseManifest(text, plugins, policies, notes, perr)) { return true; }
+    const std::size_t before = plugins.size();
+    plugins.erase(std::remove_if(plugins.begin(), plugins.end(),
+                                 [&](const InstalledPlugin& p) {
+                                     return iequalsAscii(p.file, fileName);
+                                 }),
+                  plugins.end());
+    if (plugins.size() == before) { return true; }
+    std::string werr;
+    if (!PluginRepo::saveManifest(pluginsDir, plugins, policies, werr)) {
+        error = "the file was deleted, but the plugin record could not be updated: " + werr;
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 bool PluginRepo::remove(const std::string& pluginsDir, const std::string& fileName,
                         std::string& error) {
     error.clear();
@@ -2261,7 +2301,7 @@ bool PluginRepo::remove(const std::string& pluginsDir, const std::string& fileNa
                 (ec ? ec.message() : std::string("the file is probably in use"));
         return false;
     }
-    return true;
+    return forgetFile(pluginsDir, safeName, error);
 }
 
 bool PluginRepo::removeQuarantined(const std::string& pluginsDir, const std::string& fileName,
@@ -2309,7 +2349,7 @@ bool PluginRepo::removeQuarantined(const std::string& pluginsDir, const std::str
                 (ec ? ec.message() : std::string("the file is probably in use"));
         return false;
     }
-    return true;
+    return forgetFile(pluginsDir, safeName, error);
 }
 
 }  // namespace cascade::core
