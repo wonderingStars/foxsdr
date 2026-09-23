@@ -61,9 +61,9 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.95.0** (September 2026), in open beta and free for
-noncommercial use, with **24 plugins** in the catalogue. These are screenshots
-of the shipping build.
+The current release is **0.99.15** (September 2026), in open beta and free for
+noncommercial use, with its decoders and instruments delivered as plugins from
+a catalogue. These are screenshots of an earlier shipping build.
 
 ![The FoxSDR receiver at 1090 MHz beside the ADS-B map: the FUNCTION SELECT rail, spectrum and waterfall, the status column, and eight aircraft plotted over the north of England.](docs/screenshots/receiver-and-adsb-map.png)
 
@@ -1185,6 +1185,30 @@ catalogue has been fetched that offers a newer build, and a **Remove** whether
 it does or not — an ABI mismatch has no other way out. Plugins the
 catalogue has never described (private or hand-installed builds) are left
 alone and keep loading.
+
+## The patch page
+
+**SIGNAL PATH → Patch** opens a canvas where a receiver is built by hand: parts
+are dropped from the bin at the top and wired port to port. Each part is the
+instrument itself, operated on its own face.
+
+| Part | What it does |
+|---|---|
+| **Radio** | The receiver's capture. Shows the source, its centre and its sample rate. |
+| **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
+| **Demod** | AM or FM demodulation of a channel. |
+| **Speaker** | Plays the demodulated channel wired to it, and says which. |
+| **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. |
+| **Text out** | A log of the lines from every decoder wired to it. |
+| **Decoders** | One part per installed decoder plugin, by name. An I/Q decoder wired to a Channel is fed *that channel*, tuned, so several decoders on several frequencies run off one radio at once; wired to the Radio it gets the whole capture. An audio decoder goes behind a Demod. Picture decoders (APT, WEFAX, SSTV) are parts too and show their picture on the node. |
+
+A connection that cannot carry what a port produces is refused while it is
+being drawn, and says why. A node that cannot run gets a rust edge and the
+reason in words — nothing feeds it, no frequency, outside the band the radio is
+receiving, plugin not installed, the plugin needs a faster rate than its source
+has. Nodes close from the key in their title bar and resize from the grip in
+their bottom-right corner. The patch is saved with the rest of the settings and
+runs while its page is open.
 
 ## Keyboard
 
