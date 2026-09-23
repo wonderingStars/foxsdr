@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.99.20 LANGUAGES C CXX)
+project(cascade VERSION 0.99.21 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
