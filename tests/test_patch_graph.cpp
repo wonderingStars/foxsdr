@@ -23,6 +23,8 @@ using cascade::core::patch::NodeId;
 using cascade::core::patch::NodeKind;
 using cascade::core::patch::PortIndex;
 using cascade::core::patch::PortType;
+using cascade::core::patch::switchAllRadiosOff;
+using cascade::core::patch::switchOnForStart;
 using cascade::core::patch::Wire;
 
 namespace {
@@ -392,6 +394,37 @@ int main() {
         CHECK(g.removeNode(first));
         CHECK(g.addNode(NodeKind::Radio, "again") != kNoNode);
         CHECK(g.addNode(NodeKind::Radio, "over") == kNoNode);
+    }
+
+    // [SW] THE RADIOS' OWN SWITCHES (0.99.18). A new radio is on. START leaves
+    // the user's choice alone while any radio is on, and switches them all on
+    // when none is; ALL OFF switches every radio off and touches nothing else.
+    {
+        Graph g;
+        const NodeId a = g.addNode(NodeKind::Radio, "A");
+        const NodeId b = g.addNode(NodeKind::Radio, "B");
+        const NodeId c = g.addNode(NodeKind::Channel, "C");
+        CHECK(g.find(a)->on);
+        CHECK(g.find(b)->on);
+
+        g.mutableNode(b)->on = false;
+        CHECK(!switchOnForStart(g));            // A is on: B stays off
+        CHECK(g.find(a)->on);
+        CHECK(!g.find(b)->on);
+
+        CHECK(switchAllRadiosOff(g));
+        CHECK(!g.find(a)->on);
+        CHECK(!g.find(b)->on);
+        CHECK(g.find(c)->on);                   // not a radio: untouched
+        CHECK(!switchAllRadiosOff(g));          // nothing left to switch
+
+        CHECK(switchOnForStart(g));             // none on: all on
+        CHECK(g.find(a)->on);
+        CHECK(g.find(b)->on);
+
+        Graph empty;                            // no radios: nothing to do
+        CHECK(!switchOnForStart(empty));
+        CHECK(!switchAllRadiosOff(empty));
     }
 
     return testSummary("test_patch_graph");

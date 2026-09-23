@@ -164,6 +164,10 @@ struct Node {
     //                    scale noise, and every speaker records to a file.
     bool squelch = true;
     float squelchDb = -50.0f;
+    //   Radio    on      (0.99.18) this radio's own switch: off, it stays
+    //                    closed even while the patch runs. Saved, so a patch
+    //                    of five radios comes back with the same ones on.
+    bool on = true;
 };
 
 // The squelch range the controls offer, in dB of channel power.
@@ -433,6 +437,43 @@ private:
     std::vector<Wire> wires_;
     NodeId nextId_ = 1u;  // 0 is kNoNode
 };
+
+// THE PATCH TRANSPORT'S TWO RULES about the radios' own switches (0.99.18).
+//
+// START with no radio switched on switches every radio on: after ALL OFF that
+// is the only useful thing START can mean, and a START that runs nothing would
+// be a key that does not work. With any radio on, START leaves the switches
+// exactly as the user set them. Returns whether a switch changed.
+inline bool switchOnForStart(Graph& g) {
+    for (const Node& n : g.nodes()) {
+        if (n.kind == NodeKind::Radio && n.on) { return false; }
+    }
+    bool changed = false;
+    std::vector<NodeId> radios;
+    for (const Node& n : g.nodes()) {
+        if (n.kind == NodeKind::Radio) { radios.push_back(n.id); }
+    }
+    for (const NodeId id : radios) {
+        if (Node* n = g.mutableNode(id)) {
+            n->on = true;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+// ALL OFF switches every radio off - the switches then all read OFF, which is
+// what the red key says it does. Returns whether a switch changed.
+inline bool switchAllRadiosOff(Graph& g) {
+    std::vector<NodeId> on;
+    for (const Node& n : g.nodes()) {
+        if (n.kind == NodeKind::Radio && n.on) { on.push_back(n.id); }
+    }
+    for (const NodeId id : on) {
+        if (Node* n = g.mutableNode(id)) { n->on = false; }
+    }
+    return !on.empty();
+}
 
 }  // namespace cascade::core::patch
 

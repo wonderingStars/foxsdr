@@ -85,6 +85,8 @@ std::string header2() {
 std::string header3() { return std::string(kPatchMagic) + " 3\n"; }
 // A FORMAT-4 document: node lines with <device> <rateHz> and no squelch.
 std::string header4() { return std::string(kPatchMagic) + " 4\n"; }
+// A FORMAT-5 document: a squelch, and no radio switch.
+std::string header5() { return std::string(kPatchMagic) + " 5\n"; }
 
 // Indexing guarded only by a preceding CHECK is an out-of-bounds read in
 // exactly the run that has something to report: the test dies with an access
@@ -182,9 +184,9 @@ int main() {
     // would lose a frequency.
     {
         const std::string text = std::string(kPatchMagic) + " 9\n"
-                                 "node 1 0 0 10 20 232 128 0 0 - siggen 2000000 1 -50 Radio\n"
+                                 "node 1 0 0 10 20 232 128 0 0 - siggen 2000000 1 -50 1 Radio\n"
                                  "flux 7 capacitor\n"          // from the future
-                                 "node 2 1 0 30 40 232 104 131725000 0 - - 0 1 -50 Channel\n"
+                                 "node 2 1 0 30 40 232 104 131725000 0 - - 0 1 -50 1 Channel\n"
                                  "wire 1 0 2 0\n";
         const LoadResult r = parse(text);
         CHECK(r.ok);
@@ -598,7 +600,7 @@ int main() {
             CHECK(old.graph.nodes()[0].squelchDb == -50.0f);
             CHECK(old.graph.nodes()[0].name == "FM");
         }
-        const LoadResult odd = parse(header2() + "node 1 2 0 0 0 232 132 0 1 - - 0 1 55 Loud\n"
+        const LoadResult odd = parse(header5() + "node 1 2 0 0 0 232 132 0 1 - - 0 1 55 Loud\n"
                                                  "node 2 2 0 0 0 232 132 0 1 - - 0 1 nan N\n");
         CHECK(odd.ok);
         for (const auto& n : odd.graph.nodes()) { CHECK(n.squelchDb == -50.0f); }
@@ -626,10 +628,34 @@ int main() {
         }
         CHECK(nameAt(r.graph, 2) == "Sky and sea");
         // A kind past Map in a file is dropped, not guessed at.
-        const LoadResult bad = parse(header2() + "node 1 7 0 0 0 232 128 0 0 - - 0 1 -50 X\n");
+        const LoadResult bad = parse(header2() + "node 1 7 0 0 0 232 128 0 0 - - 0 1 -50 1 X\n");
         CHECK(bad.ok);
         CHECK(bad.graph.nodes().empty());
         CHECK(bad.dropped == 1);
+    }
+
+    // [F6] FORMAT 6: a radio's own switch comes back; a format-5 radio is on.
+    {
+        Graph g;
+        const NodeId a = g.addNode(NodeKind::Radio, "Off radio", PortType::Iq);
+        g.addNode(NodeKind::Radio, "On radio", PortType::Iq);
+        g.mutableNode(a)->on = false;
+        const LoadResult r = parse(serialise(g, 0.0f, 0.0f, 1.0f));
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 2u);
+        if (r.graph.nodes().size() == 2u) {
+            CHECK(!r.graph.nodes()[0].on);
+            CHECK(r.graph.nodes()[0].name == "Off radio");
+            CHECK(r.graph.nodes()[1].on);
+        }
+        const LoadResult five = parse(header5() + "node 1 0 0 0 0 232 128 0 0 - siggen 2000000 1 -50 R\n");
+        CHECK(five.ok);
+        CHECK(five.graph.nodes().size() == 1u);
+        if (five.graph.nodes().size() == 1u) {
+            CHECK(five.graph.nodes()[0].on);
+            CHECK(five.graph.nodes()[0].name == "R");
+        }
     }
 
     // [F4d] A negative or absurd rate in a file is not trusted.

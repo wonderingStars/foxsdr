@@ -1197,7 +1197,7 @@ does.
 
 | Part | What it does |
 |---|---|
-| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. |
+| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. |
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
@@ -1211,13 +1211,18 @@ being drawn, and says why. A node that cannot run gets a rust edge and the
 reason in words — nothing feeds it, no frequency, outside the band the radio is
 receiving, plugin not installed, the plugin needs a faster rate than its source
 has, or another radio already uses that device. Nodes close from the key in
-their title bar and resize from the grip in their bottom-right corner. The patch
-is saved with the rest of the settings and runs while its page is open.
+their title bar and resize from the grip in their bottom-right corner. A part
+that hangs over the edge of the canvas keeps drawing, cut off at the edge. The
+patch, with every radio's switch, is saved with the rest of the settings.
 
-**While the page is open, the patch has the radios.** Opening it hands the
-receiver's own radio to the patch (the receiver switches to the signal
-generator, and the Source list greys its radios out); closing it stops every
-patch radio, finishes every file and gives the receiver its radio back. MP3
+**The patch runs from its own START key**, the same round key as the main
+panel's, at the top of the page, so nothing needs the main panel. START opens
+every radio that is switched on (all of them, if none is) and hands the
+receiver's own radio to the patch - the receiver switches to the signal
+generator, its decoders stand down and the Source list greys its radios out.
+STOP, the large red **ALL OFF** (which also switches every radio off), or
+closing the page stops every patch radio, finishes every file and gives the
+receiver its radio and decoders back. Opening the page starts nothing. MP3
 uses Windows' own encoder; on Linux the MP3 choice is unavailable and WAV is
 written instead. A decoder module that can decode straight from the radio's I/Q
 is offered only that way - its audio variant, which needs a demodulator in

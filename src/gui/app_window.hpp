@@ -2444,6 +2444,13 @@ private:
     cascade::gui::patch::Interaction patchUi_;
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;
+    // THE PATCH'S OWN TRANSPORT (0.99.18). Opening the page no longer starts
+    // anything: START on the page opens the radios that are switched on and
+    // takes the receiver's radio; STOP or ALL OFF closes them and gives it
+    // back. Session-only - a patch never starts itself at launch.
+    bool patchRunning_ = false;
+    bool patchWasRunning_ = false;
+    bool patchStartedByEnv_ = false;
     bool sourceDeviceByEnv_ = false;   // FOXSDR_SOURCE_DEVICE, bounded runs only
     bool patchFileLoaded_ = false;
     // The patch as core/patch_io.hpp writes it, rebuilt only when the
@@ -2609,6 +2616,13 @@ private:
     // Stops every patch radio and drops every output. `restoreMain` then hands
     // the receiver its radio back.
     void patchStopAll(bool restoreMain);
+    // The patch transport (0.99.18): the START/STOP key, the red ALL OFF,
+    // what a change of running does, and each radio's own switch.
+    void patchPressStart();
+    void patchAllOff();
+    void patchApplyRunning();
+    void drawPatchTransport();
+    void drawPatchRadioSwitch(cascade::core::patch::Node& n);
     // THE MAP PARTS (0.99.18): each Map node's own view (its pan, zoom and
     // selection are its own, like a map page's), and this frame's targets for
     // it - the tracks of every decoder module wired into it.

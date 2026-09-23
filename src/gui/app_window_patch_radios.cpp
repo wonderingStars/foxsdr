@@ -13,9 +13,11 @@
 //   - "put all sound to mp3 or wav unless set to speakers or another device":
 //     every speaker has an output, a WAV file by default (patchPublishSets);
 //   - "when the patch panel is running unpopulate the sdr from the main sdr
-//     software so it show signal generator": opening the page switches the
-//     receiver to the generator and remembers its radio; closing the page
-//     opens it again (patchReconcile / patchStopAll).
+//     software so it show signal generator": START on the page switches the
+//     receiver to the generator and remembers its radio; STOP, ALL OFF or
+//     closing the page opens it again (patchReconcile / patchStopAll).
+// And since 0.99.18 each radio has its own ON/OFF switch (Node::on), which
+// closes that radio alone while the rest of the patch keeps running.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
@@ -34,6 +36,7 @@
 #include "core/mp3_writer.hpp"
 #include "core/patch_audio.hpp"
 #include "core/patch_devices.hpp"
+#include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 #include "source/siggen_source.hpp"
 #include "source/soapy_source.hpp"
@@ -167,17 +170,14 @@ void AppWindow::patchReconcile() {
     // read only when the Source combo is opened, and a patch radio named by a
     // saved patch would be labelled "not connected" until then. scanNative()
     // opens nothing and is safe while radios stream (see its comment).
-    if (!patchWasOpen_) {
-        scanNative();
-        // The receiver's decoders stand down while the page is open - see
-        // refreshPluginRunner for why a module's map targets need that.
-        refreshPluginRunner();
-    }
+    if (!patchWasOpen_) { scanNative(); }
 
     // --- the receiver's radio goes to the patch ------------------------------
+    // ONLY WHILE THE PATCH RUNS (0.99.18): an open page with the patch stopped
+    // leaves the receiver alone, so a patch can be built while listening.
     // Only a live DEVICE is taken (a file or the generator is not a radio),
     // and never mid-open: the answer is waited for, then taken.
-    if (device_ != nullptr && !deviceOpenPending_) {
+    if (patchRunning_ && device_ != nullptr && !deviceOpenPending_) {
         PatchMainKeep keep;
         keep.valid = true;
         keep.kind = sourceKind_;
@@ -187,7 +187,7 @@ void AppWindow::patchReconcile() {
         keep.centreHz = pipeline_.activeSource().centerFrequencyHz();
         cascade::core::diagLogf(
             "patch: the receiver's radio (%s) is handed to the patch page; the receiver "
-            "runs on the signal generator until the page is closed",
+            "runs on the signal generator until the patch is stopped",
             keep.label.c_str());
         selectSource(0);
         // ...AND THE CONFIG STILL NAMES IT: currentConfig() saves the radio
@@ -221,9 +221,10 @@ void AppWindow::patchReconcile() {
         it = patchRadioPending_.erase(it);
         patchRadioPendingAs_.erase(id);
         const pc::Node* n = patchGraph_.find(id);
-        if (n == nullptr || openedAs(*n) != as) {
-            // The node went, or was changed while the device opened: this
-            // device is not wanted any more. Dropping r closes it.
+        if (n == nullptr || openedAs(*n) != as || !n->on || !patchRunning_) {
+            // The node went, was changed or switched off while the device
+            // opened, or the patch stopped: this device is not wanted any
+            // more. Dropping r closes it.
             continue;
         }
         if (!r.src) {
@@ -253,9 +254,18 @@ void AppWindow::patchReconcile() {
     }
 
     // --- which radios should run ------------------------------------------------
+    // A radio runs while the patch runs AND its own switch is on. A radio
+    // switched off forgets why it last failed, so switching it on again is
+    // also the way to try a device that would not open.
     std::set<pc::NodeId> wanted;
     for (const pc::Node& n : patchGraph_.nodes()) {
         if (n.kind != pc::NodeKind::Radio || n.device.empty()) { continue; }
+        if (!n.on) {
+            patchRadioFailedAs_.erase(n.id);
+            patchRadioError_.erase(n.id);
+            continue;
+        }
+        if (!patchRunning_) { continue; }
         if (deviceTakenEarlier(patchGraph_, n)) { continue; }   // DeviceTwice: never opened
         wanted.insert(n.id);
     }
@@ -555,6 +565,124 @@ void AppWindow::patchStopAll(bool restoreMain) {
     if (keep.centreHz > 0.0) { pipeline_.activeSource().setCenterFrequencyHz(keep.centreHz); }
     cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
     selectSource(row);
+}
+
+void AppWindow::patchPressStart() {
+    if (patchRunning_) {
+        patchRunning_ = false;
+        return;
+    }
+    // START WITH EVERY RADIO SWITCHED OFF SWITCHES THEM ALL ON (see
+    // switchOnForStart for why).
+    if (pc::switchOnForStart(patchGraph_)) { patchUi_.dirty = true; }
+    patchRunning_ = true;
+}
+
+void AppWindow::patchAllOff() {
+    // EVERY RADIO OFF, and the patch stopped: the receiver gets its radio back
+    // when patchApplyRunning sees the change.
+    if (pc::switchAllRadiosOff(patchGraph_)) { patchUi_.dirty = true; }
+    patchRunning_ = false;
+}
+
+void AppWindow::patchApplyRunning() {
+    if (patchRunning_ == patchWasRunning_) { return; }
+    patchWasRunning_ = patchRunning_;
+    if (patchRunning_) {
+        cascade::core::diagLogf("patch: START - the patch's radios open");
+    } else {
+        cascade::core::diagLogf("patch: STOP - every patch radio closes");
+        // Every radio stops, every speaker's file is finalised, and the
+        // receiver gets its radio back.
+        patchStopAll(true);
+    }
+    // The receiver's decoders stand down while the patch runs and come back
+    // when it stops.
+    refreshPluginRunner();
+}
+
+void AppWindow::drawPatchTransport() {
+    // THE SAME TRANSPORT AS THE MAIN PANEL (owner, 0.99.18: "a start button
+    // like we have on the main panel so the user doesnt have to go between the
+    // panels"). The dome is the receiver's own drawBenchStopButton, lettered
+    // from the same bool it acts on, so it cannot say START while running.
+    constexpr float kR = 24.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const ImVec2 centre(at.x + kR * 1.1f, at.y + kR * 1.1f);
+    if (drawBenchStopButton(dl, centre, kR, patchRunning_)) { patchPressStart(); }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(patchRunning_
+                              ? "Stop the patch: every patch radio closes, recordings are\n"
+                                "finished, and the receiver gets its radio back."
+                              : "Start the patch: every radio switched on opens. The receiver\n"
+                                "hands its radio over and runs on the signal generator.");
+    }
+
+    // ALL OFF: larger, red, and always there. Every radio's switch goes off
+    // and the patch stops.
+    ImGui::SetCursorScreenPos(ImVec2(at.x + kR * 2.5f, at.y + kR * 0.25f));
+    ImGui::PushStyleColor(ImGuiCol_Button, cascade::gui::theme::kAlarm);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, cascade::gui::theme::kAlarmHot);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, cascade::gui::theme::kAlarmHot);
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::kIvory);
+    if (ImGui::Button("ALL OFF###patchalloff", ImVec2(150.0f, kR * 1.7f))) { patchAllOff(); }
+    ImGui::PopStyleColor(4);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Switch every radio off and stop the patch. START switches\n"
+                          "them all on again.");
+    }
+
+    // What is running, in words.
+    std::size_t radios = 0, on = 0;
+    for (const pc::Node& n : patchGraph_.nodes()) {
+        if (n.kind != pc::NodeKind::Radio) { continue; }
+        ++radios;
+        if (n.on) { ++on; }
+    }
+    ImGui::SameLine();
+    ImGui::SetCursorScreenPos(
+        ImVec2(ImGui::GetCursorScreenPos().x + 8.0f, at.y + kR * 1.1f - ImGui::GetTextLineHeight() * 0.5f));
+    char line[96];
+    if (patchRunning_) {
+        std::snprintf(line, sizeof(line), "RUNNING - %zu of %zu radio%s open", patchRadios_.size(),
+                      radios, radios == 1 ? "" : "s");
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+    } else {
+        std::snprintf(line, sizeof(line), "STOPPED - %zu of %zu radio%s switched on", on, radios,
+                      radios == 1 ? "" : "s");
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+    }
+    ImGui::TextUnformatted(line);
+    ImGui::PopStyleColor();
+
+    // Below the dome, for whatever comes next on the page.
+    ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + kR * 2.3f));
+    ImGui::Dummy(ImVec2(0.0f, 0.0f));
+}
+
+void AppWindow::drawPatchRadioSwitch(pc::Node& n) {
+    // LIT while this radio is actually open, amber while it is switched on and
+    // waiting (the patch stopped, or the device still opening), dark when off.
+    const bool live = patchRadios_.count(n.id) != 0;
+    const ImU32 face = !n.on ? cascade::gui::theme::kEnamel
+                       : live ? cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.45f)
+                              : cascade::gui::theme::withAlpha(cascade::gui::theme::kAmber, 0.35f);
+    ImGui::PushStyleColor(ImGuiCol_Button, face);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          cascade::gui::theme::withAlpha(cascade::gui::theme::kIvory, 0.25f));
+    if (ImGui::SmallButton(n.on ? "ON###radioOn" : "OFF###radioOn")) {
+        n.on = !n.on;
+        patchUi_.dirty = true;
+        cascade::core::diagLogf("patch: radio '%s' switched %s", n.name.c_str(), n.on ? "on" : "off");
+    }
+    ImGui::PopStyleColor(2);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(n.on ? "This radio is switched on. Press to close it alone - the rest\n"
+                                 "of the patch keeps running."
+                               : "This radio is switched off. Press to switch it on; it opens\n"
+                                 "while the patch is running.");
+    }
 }
 
 namespace {

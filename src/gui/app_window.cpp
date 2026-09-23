@@ -1621,6 +1621,28 @@ int AppWindow::run(int frames) {
                     patchOpen_ = !patchOpen_;
                 }
             }
+            // THE PATCH'S START KEY (0.99.18): FOXSDR_PATCH_START presses it once
+            // at the first frame; FOXSDR_PATCH_RUN_AT lists frames at which it
+            // is pressed again (START, then STOP, ...), and FOXSDR_PATCH_ALLOFF_AT
+            // frames at which ALL OFF is. Pressing, not setting: each goes
+            // through the same function the keys on the page call.
+            if (!patchStartedByEnv_) {
+                patchStartedByEnv_ = true;
+                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { patchRunning_ = true; }
+            }
+            if (const char* at = std::getenv("FOXSDR_PATCH_RUN_AT"); at != nullptr && *at != '\0') {
+                const std::string list = std::string(",") + at + ",";
+                if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
+                    patchPressStart();
+                }
+            }
+            if (const char* at = std::getenv("FOXSDR_PATCH_ALLOFF_AT");
+                at != nullptr && *at != '\0') {
+                const std::string list = std::string(",") + at + ",";
+                if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
+                    patchAllOff();
+                }
+            }
         }
 
         // AND A PATCH FROM A FILE, once. A --frames run is hermetic - the
@@ -1758,10 +1780,17 @@ int AppWindow::run(int frames) {
         // path is logged so a script can find it.
         {
             static const char* shotDir = std::getenv("FOXSDR_SHOT_DIR");
-            static const long shotAt = [] {
+            // One frame, or several separated by commas ("300,600") so one
+            // bounded run can show a view before and after something changes.
+            static const std::string shotList = [] {
                 const char* v = std::getenv("FOXSDR_SHOT_AT_FRAME");
-                return (v != nullptr && v[0] != '\0') ? std::strtol(v, nullptr, 10) : -1L;
+                return (v != nullptr && v[0] != '\0') ? "," + std::string(v) + "," : std::string{};
             }();
+            const long shotAt =
+                (!shotList.empty() &&
+                 shotList.find("," + std::to_string(rendered) + ",") != std::string::npos)
+                    ? static_cast<long>(rendered)
+                    : -1L;
             // F12 stays hard-wired beside the bindable Screenshot action (which
             // raises shotRequest_): it is the key every harness and every note
             // in this project tells a tester to press, and an instruction that
@@ -6420,15 +6449,17 @@ void AppWindow::drawSourceSection() {
             // PushID: two identical devices (same model, no serial in the
             // label) must still be distinct rows.
             ImGui::PushID(i);
-            // THE PATCH HAS THE RADIOS while its page is open (0.99.17): a
-            // device row here would open a radio a patch node may already
-            // hold. Shown, greyed, and saying why.
-            const bool patchHasRadios = patchOpen_ && i >= kNativeRowBase;
+            // THE PATCH HAS THE RADIOS while it runs (0.99.17; while it RUNS
+            // rather than while its page is open since 0.99.18): a device row
+            // here would open a radio a patch node may already hold. Shown,
+            // greyed, and saying why.
+            const bool patchHasRadios = patchRunning_ && i >= kNativeRowBase;
             ImGui::BeginDisabled(patchHasRadios);
             if (ImGui::Selectable(rowLabel(i), i == sourceSel_)) { selectSource(i); }
             ImGui::EndDisabled();
             if (patchHasRadios && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("The patch page is using the radios - close it to use one here.");
+                ImGui::SetTooltip("The patch is running and has the radios - press STOP or ALL OFF\n"
+                                  "on the patch page to use one here.");
             }
             ImGui::PopID();
         }
@@ -9732,14 +9763,14 @@ void AppWindow::refreshPluginRunner() {
     pluginRunner_.setStopped(pluginsStopped_);
     pluginUi_.setStopped(pluginsStopped_);
     pipeline_.setPluginRunner(nullptr);
-    if (patchOpen_) {
-        // THE PATCH PAGE HAS THE DECODERS (0.99.18). While it is open the
+    if (patchRunning_) {
+        // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
         // receiver runs only on the generator, and a plugin publishes its map
         // targets through ONE snapshot per module (the ADS-B plugin says so in
         // its own source) - so the receiver's ADS-B instance, fed generator
         // noise, would overwrite the aircraft the patch's ADS-B instance is
-        // finding, every block. No receiver decoders while the page is open;
-        // closing it calls this again and they come back.
+        // finding, every block. No receiver decoders while the patch runs;
+        // stopping it calls this again and they come back.
         pluginRunner_.clear();
     } else {
         pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
@@ -11136,6 +11167,11 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f * zoom, 2.0f * zoom));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * zoom, 3.0f * zoom));
     ImGui::PushClipRect(c0, c1, true);
+    // What the faces' widgets push the window's layout extent out to is put
+    // back afterwards: a face that overhangs the canvas must not give the page
+    // a scrollbar.
+    ImGuiWindow* faceWindow = ImGui::GetCurrentWindow();
+    const ImVec2 layoutMax = faceWindow->DC.CursorMaxPos;
 
     const auto amber = cascade::gui::theme::vec(cascade::gui::theme::kAmber);
     const auto muted = cascade::gui::theme::vec(cascade::gui::theme::kInkMuted);
@@ -11151,10 +11187,15 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         const pg::Rect f = pg::faceRect(n);
         const pg::Vec2 s0 = pg::worldToScreen(v, pg::Vec2{f.x0, f.y0});
         const pg::Vec2 s1 = pg::worldToScreen(v, pg::Vec2{f.x1, f.y1});
-        // ONLY WHOLLY VISIBLE FACES get widgets. A widget half past the canvas
-        // edge would still take clicks there, and one placed outside the page
-        // would grow the page's scroll region.
-        if (s0.x < c0.x || s0.y < c0.y || s1.x > c1.x || s1.y > c1.y) { continue; }
+        // A FACE PART-WAY OFF THE CANVAS IS DRAWN, CLIPPED (0.99.18). It used to
+        // be skipped whole, and a Spectrum part resized or dragged so that it
+        // overhung the canvas edge simply stopped drawing - which reads as a
+        // scope that has stopped refreshing (owner's report, reproduced). The
+        // clip rect below is cut to the canvas as well as to later nodes, and
+        // ImGui does not hover an item outside the clip rect, so a half-visible
+        // control cannot take a click past the edge; the layout extent the
+        // widgets push out is restored at the end, so no scrollbar appears.
+        if (s1.x <= c0.x || s0.x >= c1.x || s1.y <= c0.y || s0.y >= c1.y) { continue; }
         const float faceW = s1.x - s0.x - 10.0f * zoom;
         if (faceW < 40.0f) { continue; }
         // A FACE UNDER ANOTHER NODE IS CUT AWAY FROM IT. The canvas draws every
@@ -11168,6 +11209,15 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         // stops a covered control taking clicks. What remains too small to use
         // draws nothing; its readings are still drawn, in order, by the canvas.
         pg::Rect vis = f;
+        {
+            // Cut to the part of the canvas in view, in world units.
+            const pg::Vec2 w0 = pg::screenToWorld(v, pg::Vec2{c0.x, c0.y});
+            const pg::Vec2 w1 = pg::screenToWorld(v, pg::Vec2{c1.x, c1.y});
+            vis.x0 = std::max(vis.x0, w0.x);
+            vis.y0 = std::max(vis.y0, w0.y);
+            vis.x1 = std::min(vis.x1, w1.x);
+            vis.y1 = std::min(vis.y1, w1.y);
+        }
         {
             bool later = false;
             for (const pc::Node& other : patchGraph_.nodes()) {
@@ -11217,6 +11267,10 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
 
         switch (n.kind) {
             case pc::NodeKind::Radio: {
+                // ITS OWN SWITCH (0.99.18), first on the face: this radio
+                // alone, on or off, while the rest of the patch carries on.
+                drawPatchRadioSwitch(n);
+                ImGui::SameLine();
                 // ITS OWN DEVICE (0.99.17): which one, where it is tuned, and
                 // what it is doing. The device and rate are set in the panel on
                 // the right; the centre is typed here, as a channel's is.
@@ -11245,6 +11299,14 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 } else if (n.device.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("Choose a device on the right.");
+                    ImGui::PopStyleColor();
+                } else if (!n.on) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                    ImGui::TextWrapped("Switched off.");
+                    ImGui::PopStyleColor();
+                } else if (!patchRunning_) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                    ImGui::TextWrapped("Ready - press START.");
                     ImGui::PopStyleColor();
                 } else {
                     // ONE DEVICE, ONE RADIO, said on the face of the radio that
@@ -11590,6 +11652,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
         ImGui::PopID();
     }
 
+    faceWindow->DC.CursorMaxPos = layoutMax;
     ImGui::PopClipRect();
     ImGui::PopStyleVar(2);
     ImGui::PopFont();
@@ -11606,7 +11669,11 @@ void AppWindow::drawPatchSection() {
     // "nothing built yet" read differently to someone who has never opened it.
     char chip[16];
     const std::size_t nodes = patchGraph_.nodes().size();
-    if (nodes == 0) {
+    if (patchRunning_) {
+        // Running is the one thing worth saying from the rail: the receiver
+        // is on the generator because of it.
+        std::snprintf(chip, sizeof(chip), "RUNNING");
+    } else if (nodes == 0) {
         std::snprintf(chip, sizeof(chip), "EMPTY");
     } else {
         std::snprintf(chip, sizeof(chip), "%zu NODE%s", nodes, nodes == 1 ? "" : "S");
@@ -11636,6 +11703,8 @@ void AppWindow::drawPatchPage() {
         // have closed is a receiver whose controls you cannot find.
         if (patchWasOpen_) {
             patchWasOpen_ = false;
+            patchRunning_ = false;
+            patchWasRunning_ = false;
             pipeline_.patchRunner().clear();
             // Forgotten with the set, so reopening builds a fresh one.
             patchDspSig_.clear();
@@ -11655,13 +11724,17 @@ void AppWindow::drawPatchPage() {
     if (!patchSeeded_) {
         patchSeeded_ = true;
         cascade::gui::patch::seedDefaultPatch(patchGraph_, "Radio");
-        // The starter radio is the receiver's own radio (patchReconcile fills
-        // it in when it takes it) or, with none, the generator.
-        if (device_ == nullptr && !patchMainKeep_.valid) {
-            for (const cascade::core::patch::Node& n0 : patchGraph_.nodes()) {
-                if (n0.kind != cascade::core::patch::NodeKind::Radio) { continue; }
-                if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
-                    if (n->device.empty()) { n->device = patchDefaultDeviceKey(); }
+        // The starter radio is the receiver's own radio or, with none, the
+        // generator - named now, because the patch no longer starts (and so
+        // takes the receiver's radio) the moment the page opens.
+        for (const cascade::core::patch::Node& n0 : patchGraph_.nodes()) {
+            if (n0.kind != cascade::core::patch::NodeKind::Radio) { continue; }
+            if (cascade::core::patch::Node* n = patchGraph_.mutableNode(n0.id)) {
+                if (n->device.empty()) {
+                    n->device = patchDefaultDeviceKey();
+                    if (n->freqHz <= 0.0 && device_ != nullptr) {
+                        n->freqHz = pipeline_.activeSource().centerFrequencyHz();
+                    }
                 }
             }
         }
@@ -11690,9 +11763,16 @@ void AppWindow::drawPatchPage() {
         // from the store a moment ago is a part now, and one the user just
         // stopped is not.
         rebuildPatchCatalogue();
+        // START AND STOP TAKE EFFECT HERE, before the radios are reconciled:
+        // stopping closes every patch radio, finalises every file and gives the
+        // receiver its radio back; either way the receiver's decoders follow
+        // (they stand down while the patch runs - see refreshPluginRunner).
+        patchApplyRunning();
         // The patch's own radios: taken, opened, closed and retuned to match
         // the nodes, before anything is compiled or drawn this frame.
         patchReconcile();
+
+        drawPatchTransport();
 
         // --- the parts bin ----------------------------------------------------
         // The fixed parts first; then ONE PART PER INSTALLED DECODER PLUGIN,

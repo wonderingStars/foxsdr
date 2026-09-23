@@ -18,10 +18,10 @@
 // unknown leading word are skipped rather than refused, so a patch written by
 // a later build loses what this build cannot understand and keeps the rest.
 //
-//   foxsdr-patch 5
+//   foxsdr-patch 6
 //   view <panX> <panY> <zoom>
 //   node <id> <kind> <feed> <x> <y> <w> <h> <freqHz> <mode> <plugin> <device> <rateHz>
-//        <squelch 0|1> <squelchDb> <name to end of line>
+//        <squelch 0|1> <squelchDb> <on 0|1> <name to end of line>
 //   wire <fromId> <fromPort> <toId> <toPort>
 //
 // THE NAME IS ALWAYS LAST, and that is why adding fields is a format CHANGE
@@ -35,6 +35,7 @@
 //   format 3  ... <x> <y> <w> <h> <freqHz> <mode> <plugin> <name>
 //   format 4  ... <plugin> <device> <rateHz> <name>    (a radio's own device, 0.99.17)
 //   format 5  ... <rateHz> <squelch> <squelchDb> <name>  (a demodulator's squelch, 0.99.18)
+//   format 6  ... <squelchDb> <on> <name>                (a radio's own switch, 0.99.18)
 //
 // <device> is encoded exactly as <plugin> is. A format-3 radio has no device,
 // so it loads as one still to be chosen rather than guessing which radio it
@@ -66,7 +67,7 @@
 namespace cascade::core::patch {
 
 inline constexpr const char* kPatchMagic = "foxsdr-patch";
-inline constexpr int kPatchFormat = 5;
+inline constexpr int kPatchFormat = 6;
 
 // The largest size a loaded node may claim. A hand-edited or corrupt file can
 // say anything, and a node 10^9 units wide covers the whole canvas and every
@@ -182,7 +183,8 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
           << n.h << ' ' << std::setprecision(kD) << n.freqHz << std::setprecision(kF) << ' '
           << n.mode << ' ' << encodePluginKey(n.plugin) << ' ' << encodePluginKey(n.device)
           << ' ' << std::setprecision(kD) << n.rateHz << std::setprecision(kF) << ' '
-          << (n.squelch ? 1 : 0) << ' ' << n.squelchDb << ' ' << sanitiseName(n.name) << '\n';
+          << (n.squelch ? 1 : 0) << ' ' << n.squelchDb << ' ' << (n.on ? 1 : 0) << ' '
+          << sanitiseName(n.name) << '\n';
     }
     for (const Wire& w : g.wires()) {
         o << "wire " << w.from << ' ' << w.fromPort << ' ' << w.to << ' ' << w.toPort << '\n';
@@ -293,6 +295,12 @@ inline LoadResult parse(const std::string& text) {
                     squelchDb = Node{}.squelchDb;
                 }
             }
+            // Format 6's radio switch; older documents have every radio on.
+            int onFlag = 1;
+            if (version >= 6 && !(s >> onFlag)) {
+                ++r.dropped;
+                continue;
+            }
 
             std::string name;
             std::getline(s, name);
@@ -314,6 +322,7 @@ inline LoadResult parse(const std::string& text) {
                 n->rateHz = rateHz;
                 n->squelch = squelchOn != 0;
                 n->squelchDb = squelchDb;
+                n->on = onFlag != 0;
                 // A size is taken only when it is a real one. Zero, negative
                 // or NaN (every comparison false) keeps the default addNode
                 // gave the kind; anything absurdly large is clamped.
