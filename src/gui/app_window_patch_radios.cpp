@@ -752,7 +752,8 @@ void AppWindow::drawPatchMapInspector(pc::Node& n) {
     ImGui::PushStyleColor(ImGuiCol_Text, muted);
     ImGui::TextWrapped(
         "Wire the map output of up to %zu decoders here - aircraft from one radio, ships from "
-        "another - and they share this map. Drag it to pan, scroll it to zoom.",
+        "another - and they share this map. Drag it to pan; zoom with the + and - keys in its "
+        "corner, or the mouse wheel.",
         pc::kMapInputs);
     ImGui::PopStyleColor();
 }

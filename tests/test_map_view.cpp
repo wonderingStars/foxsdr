@@ -21,6 +21,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/map_view.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -31,8 +32,11 @@
 #include "test_check.hpp"
 
 using cascade::gui::coordApertureGlyph;
+using cascade::gui::kMapMinSpanDeg;
+using cascade::gui::mapZoomKeys;
 using cascade::gui::satelliteCardNotes;
 using cascade::gui::wholeWorldSpanDeg;
+using cascade::gui::zoomKeySpan;
 
 namespace {
 
@@ -405,12 +409,182 @@ void testMapDrawsWithNoReceiverPosition() {
     }
 }
 
+// --- the zoom keys (0.99.20) ----------------------------------------------------
+//
+// Asked for on the patch page's Map part: the wheel zoomed it, nothing said so,
+// and a touchpad has no wheel. The keys are a "+" over a "-" in the chart's
+// bottom-right corner, on every map this view draws.
+
+void testZoomKeyFigures() {
+    // Where they sit, from the header's statement: a third of a key in from
+    // the corner, "-" in the corner, "+" a sixth of a key above it.
+    const auto k = mapZoomKeys(10.0f, 20.0f, 400.0f, 300.0f, 24.0f, 0.0f);
+    CHECK(k.shown);
+    CHECK_NEAR(k.outX1, 10.0 + 400.0 - 8.0, 1e-6);
+    CHECK_NEAR(k.outY1, 20.0 + 300.0 - 8.0, 1e-6);
+    CHECK_NEAR(k.outX1 - k.outX0, 24.0, 1e-6);
+    CHECK_NEAR(k.outY1 - k.outY0, 24.0, 1e-6);
+    CHECK_NEAR(k.inX0, k.outX0, 1e-6);
+    CHECK_NEAR(k.inX1, k.outX1, 1e-6);
+    CHECK_NEAR(k.inY1, k.outY0 - 4.0, 1e-6);   // "+" ABOVE "-", not overlapping
+    CHECK_NEAR(k.inY1 - k.inY0, 24.0, 1e-6);
+    // Wholly inside the chart.
+    CHECK(k.inX0 >= 10.0f && k.inY0 >= 20.0f && k.outX1 <= 410.0f && k.outY1 <= 320.0f);
+
+    // STOOD ABOVE THE LONGITUDE FIGURES: with a 21 px strip along the floor
+    // the "-" key's bottom edge is a third of a key above the strip's top, and
+    // no part of either key reaches into it.
+    const auto kf = mapZoomKeys(10.0f, 20.0f, 400.0f, 300.0f, 24.0f, 21.0f);
+    CHECK(kf.shown);
+    CHECK_NEAR(kf.outY1, 20.0 + 300.0 - 21.0 - 8.0, 1e-6);
+    CHECK(kf.outY1 <= 20.0f + 300.0f - 21.0f);
+    CHECK_NEAR(kf.outX1, k.outX1, 1e-6);   // the strip moves them up, not across
+
+    // Too small to carry them: under three keys wide, or four keys tall above
+    // the strip.
+    CHECK(!mapZoomKeys(0.0f, 0.0f, 71.0f, 300.0f, 24.0f, 0.0f).shown);
+    CHECK(!mapZoomKeys(0.0f, 0.0f, 400.0f, 95.0f, 24.0f, 0.0f).shown);
+    CHECK(mapZoomKeys(0.0f, 0.0f, 72.0f, 96.0f, 24.0f, 0.0f).shown);
+    CHECK(!mapZoomKeys(0.0f, 0.0f, 72.0f, 116.0f, 24.0f, 21.0f).shown);
+    CHECK(mapZoomKeys(0.0f, 0.0f, 72.0f, 117.0f, 24.0f, 21.0f).shown);
+    CHECK(!mapZoomKeys(0.0f, 0.0f, 400.0f, 300.0f, 0.0f, 0.0f).shown);
+
+    // One press halves or doubles, clamped at both ends.
+    CHECK_NEAR(zoomKeySpan(10.0, true, 360.0), 5.0, 1e-12);
+    CHECK_NEAR(zoomKeySpan(10.0, false, 360.0), 20.0, 1e-12);
+    CHECK_NEAR(zoomKeySpan(300.0, false, 360.0), 360.0, 1e-12);
+    CHECK_NEAR(zoomKeySpan(360.0, false, 360.0), 360.0, 1e-12);   // at the limit: no move
+    CHECK_NEAR(zoomKeySpan(0.03, true, 360.0), kMapMinSpanDeg, 1e-12);
+    CHECK_NEAR(zoomKeySpan(kMapMinSpanDeg, true, 360.0), kMapMinSpanDeg, 1e-12);
+    // A nonsense limit below the floor does not invert the clamp.
+    CHECK_NEAR(zoomKeySpan(1.0, false, 0.0), kMapMinSpanDeg, 1e-12);
+}
+
+// One frame of the bare map with the pointer at `p` and the left button in
+// `down`, through the real ImGui input queue.
+void mapFrameWithMouse(cascade::gui::MapView& view, float w, float h, ImVec2 p, bool down) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(p.x, p.y);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, down);
+    drawMapFrame(view, w, h, false, 0, false);
+}
+
+// Press and release at `p` - a click, not a drag.
+void clickMapAt(cascade::gui::MapView& view, float w, float h, ImVec2 p) {
+    mapFrameWithMouse(view, w, h, p, false);
+    mapFrameWithMouse(view, w, h, p, true);
+    mapFrameWithMouse(view, w, h, p, false);
+    mapFrameWithMouse(view, w, h, p, false);
+}
+
+void testZoomKeysDriveTheView() {
+    const float w = 800.0f;
+    const float h = 500.0f;
+    cascade::gui::MapView view;
+    view.setProjection(cascade::gui::MapProjection::Equirectangular);
+    const ImVec2 away(w * 0.5f, h * 0.25f);
+    for (int f = 0; f < 3; ++f) { mapFrameWithMouse(view, w, h, away, false); }
+
+    // The key the draw code uses: the frame height, never under 22 px, stood
+    // above the longitude strip of one line box and the 3 px caption gap.
+    const float keyPx = std::max(22.0f, std::round(ImGui::GetFrameHeight()));
+    const auto k = mapZoomKeys(0.0f, 0.0f, w, h, keyPx, ImGui::GetTextLineHeight() + 3.0f);
+    CHECK(k.shown);
+    const ImVec2 plus((k.inX0 + k.inX1) * 0.5f, (k.inY0 + k.inY1) * 0.5f);
+    const ImVec2 minus((k.outX0 + k.outX1) * 0.5f, (k.outY0 + k.outY1) * 0.5f);
+
+    const double s0 = view.spanDeg();
+    const double lat0 = view.viewCentreLatDeg();
+    const double lon0 = view.viewCentreLonDeg();
+
+    // "+" halves the span and leaves the centre where it was.
+    clickMapAt(view, w, h, plus);
+    CHECK_NEAR(view.spanDeg(), s0 * 0.5, 1e-9);
+    CHECK_NEAR(view.viewCentreLatDeg(), lat0, 1e-9);
+    CHECK_NEAR(view.viewCentreLonDeg(), lon0, 1e-9);
+
+    // "-" doubles it back.
+    clickMapAt(view, w, h, minus);
+    CHECK_NEAR(view.spanDeg(), s0, 1e-9);
+
+    // A click on open chart is not a key.
+    clickMapAt(view, w, h, away);
+    CHECK_NEAR(view.spanDeg(), s0, 1e-9);
+
+    // ONE PRESS DOES ONE THING. With the receiver pick armed, a press on a key
+    // zooms and leaves the pick armed - it must not also drop the antenna
+    // under the key. The next click on the chart is the one that answers it.
+    view.armReceiverPick();
+    clickMapAt(view, w, h, plus);
+    CHECK(!view.receiverPositionRequested());
+    CHECK(view.receiverPickArmed());
+    CHECK_NEAR(view.spanDeg(), s0 * 0.5, 1e-9);
+    clickMapAt(view, w, h, minus);
+    CHECK(!view.receiverPositionRequested());
+    clickMapAt(view, w, h, away);
+    CHECK(view.receiverPositionRequested());
+    view.clearReceiverPositionRequest();
+    CHECK_NEAR(view.spanDeg(), s0, 1e-9);
+
+    // A press that starts on a key and is dragged off is neither a key press
+    // nor a pan: the span stays and the chart does not move.
+    mapFrameWithMouse(view, w, h, plus, false);
+    mapFrameWithMouse(view, w, h, plus, true);
+    for (int i = 1; i <= 8; ++i) {
+        mapFrameWithMouse(view, w, h, ImVec2(plus.x - 30.0f * i, plus.y - 20.0f * i), true);
+    }
+    mapFrameWithMouse(view, w, h, ImVec2(plus.x - 240.0f, plus.y - 160.0f), false);
+    mapFrameWithMouse(view, w, h, away, false);
+    CHECK_NEAR(view.spanDeg(), s0, 1e-9);
+    CHECK_NEAR(view.viewCentreLatDeg(), lat0, 1e-9);
+    CHECK_NEAR(view.viewCentreLonDeg(), lon0, 1e-9);
+
+    // A BUTTON, NOT A HOT SPOT: pressed on "+" one pixel inside its left edge
+    // and let go two pixels outside it - three pixels of travel, well under
+    // the drag threshold, so it IS a click - but not a click ON the key, and
+    // it zooms nothing.
+    {
+        const ImVec2 in(k.inX0 + 1.0f, plus.y);
+        const ImVec2 out(k.inX0 - 2.0f, plus.y);
+        mapFrameWithMouse(view, w, h, in, false);
+        mapFrameWithMouse(view, w, h, in, true);
+        mapFrameWithMouse(view, w, h, out, true);
+        mapFrameWithMouse(view, w, h, out, false);
+        mapFrameWithMouse(view, w, h, away, false);
+        CHECK_NEAR(view.spanDeg(), s0, 1e-9);
+    }
+
+    // ...whereas the same drag begun on open chart still pans it, so the guard
+    // above is about the key and not a map that stopped panning.
+    mapFrameWithMouse(view, w, h, away, true);
+    for (int i = 1; i <= 8; ++i) {
+        mapFrameWithMouse(view, w, h, ImVec2(away.x - 30.0f * i, away.y + 20.0f * i), true);
+    }
+    mapFrameWithMouse(view, w, h, ImVec2(away.x - 240.0f, away.y + 160.0f), false);
+    CHECK(std::fabs(view.viewCentreLonDeg() - lon0) > 1.0);
+
+    // "-" stops at the whole world and then does nothing.
+    const double limit = wholeWorldSpanDeg(w, h);
+    for (int i = 0; i < 12; ++i) { clickMapAt(view, w, h, minus); }
+    CHECK_NEAR(view.spanDeg(), limit, 1e-9);
+    clickMapAt(view, w, h, minus);
+    CHECK_NEAR(view.spanDeg(), limit, 1e-9);
+
+    // The wheel still zooms, over the chart, by its own finer step.
+    const double before = view.spanDeg();
+    mapFrameWithMouse(view, w, h, away, false);
+    ImGui::GetIO().AddMouseWheelEvent(0.0f, 1.0f);
+    mapFrameWithMouse(view, w, h, away, false);
+    CHECK_NEAR(view.spanDeg(), before * 0.85, 1e-6);
+}
+
 }  // namespace
 
 int main() {
     testWholeWorldSpan();
     testCoordApertures();
     testCardNotes();
+    testZoomKeyFigures();
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -424,6 +598,7 @@ int main() {
 
     testPanelDrawsWithNoReceiverPosition();
     testMapDrawsWithNoReceiverPosition();
+    testZoomKeysDriveTheView();
 
     ImGui::DestroyContext();
     return testSummary("test_map_view");

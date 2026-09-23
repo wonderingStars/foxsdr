@@ -544,6 +544,38 @@ double wholeWorldSpanDeg(float widthPx, float heightPx) {
     return (byHeight > 360.0) ? byHeight : 360.0;
 }
 
+MapZoomKeys mapZoomKeys(float originX, float originY, float widthPx, float heightPx,
+                        float keyPx, float floorPx) {
+    MapZoomKeys k;
+    const float floor = (floorPx > 0.0f) ? floorPx : 0.0f;
+    // Too small to carry them: the keys would cover most of what they zoom.
+    if (!(keyPx > 0.0f) || !(widthPx >= keyPx * 3.0f) ||
+        !(heightPx - floor >= keyPx * 4.0f)) {
+        return k;
+    }
+    // Inset from the chart's right edge by a third of a key and stood that far
+    // above the longitude strip, "-" in the corner and "+" stacked above it
+    // with a small gap - the order every map uses, so "in" is the upper key.
+    const float margin = std::round(keyPx / 3.0f);
+    const float gap = std::round(keyPx / 6.0f);
+    k.outX1 = originX + widthPx - margin;
+    k.outY1 = originY + heightPx - floor - margin;
+    k.outX0 = k.outX1 - keyPx;
+    k.outY0 = k.outY1 - keyPx;
+    k.inX0 = k.outX0;
+    k.inX1 = k.outX1;
+    k.inY1 = k.outY0 - gap;
+    k.inY0 = k.inY1 - keyPx;
+    k.shown = true;
+    return k;
+}
+
+double zoomKeySpan(double spanDeg, bool zoomIn, double zoomOutLimitDeg) {
+    const double hi = (zoomOutLimitDeg > kMapMinSpanDeg) ? zoomOutLimitDeg : kMapMinSpanDeg;
+    const double next = zoomIn ? spanDeg * kZoomKeyStep : spanDeg / kZoomKeyStep;
+    return std::clamp(next, kMapMinSpanDeg, hi);
+}
+
 void MapView::setHome(double latDeg, double lonDeg) {
     homeLat_ = latDeg;
     homeLon_ = lonDeg;
@@ -718,6 +750,47 @@ void MapView::draw(float width, float height,
     // and let the SAME press also change the selection - the click that placed
     // the antenna would have selected whatever was under it as well.
     bool clickConsumed = false;
+    // Read now, while "##mapcanvas" is still the last item submitted.
+    const bool mapActive = ImGui::IsItemActive();
+
+    // THE ZOOM KEYS - see mapZoomKeys. Hit-tested by hand inside the map's own
+    // button rather than submitted as widgets: a widget laid over
+    // "##mapcanvas" is never hovered (the earlier item owns the pointer), and
+    // on the patch page the map is itself laid over the canvas, so a third
+    // layer of overlap is not something to lean on. A key acts like a button:
+    // pressed AND released on it, without a drag.
+    const float zoomKeyPx = std::max(22.0f, std::round(ImGui::GetFrameHeight()));
+    // The longitude figures' strip: one line box and the 3 px caption gap
+    // (mapLineH + kLabelGap in the graticule below).
+    const float zoomKeyFloor = ImGui::GetTextLineHeight() + 3.0f;
+    const MapZoomKeys zoomKeys =
+        mapZoomKeys(origin.x, origin.y, width, height, zoomKeyPx, zoomKeyFloor);
+    const auto onKey = [&zoomKeys](const ImVec2& p, bool in) {
+        if (!zoomKeys.shown) { return false; }
+        const float x0 = in ? zoomKeys.inX0 : zoomKeys.outX0;
+        const float y0 = in ? zoomKeys.inY0 : zoomKeys.outY0;
+        const float x1 = in ? zoomKeys.inX1 : zoomKeys.outX1;
+        const float y1 = in ? zoomKeys.inY1 : zoomKeys.outY1;
+        return p.x >= x0 && p.x < x1 && p.y >= y0 && p.y < y1;
+    };
+    const ImVec2 keyMouse = ImGui::GetIO().MousePos;
+    const ImVec2 keyPress = ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Left];
+    const bool overZoomIn = hovered && onKey(keyMouse, true);
+    const bool overZoomOut = hovered && onKey(keyMouse, false);
+    // The press that is (or was, on the release frame) holding the map began
+    // on a key: it is that key's press, and it never pans the chart.
+    const bool pressOnZoomIn = (mapActive || clickNoDrag) && onKey(keyPress, true);
+    const bool pressOnZoomOut = (mapActive || clickNoDrag) && onKey(keyPress, false);
+    if (clickNoDrag && (pressOnZoomIn || pressOnZoomOut)) {
+        if (pressOnZoomIn && overZoomIn) {
+            spanDeg_ = zoomKeySpan(spanDeg_, true, zoomOutLimitDeg);
+        } else if (pressOnZoomOut && overZoomOut) {
+            spanDeg_ = zoomKeySpan(spanDeg_, false, zoomOutLimitDeg);
+        }
+        // Either way it was a press on a key, not on the chart: it selects
+        // nothing and does not answer an armed receiver pick.
+        clickConsumed = true;
+    }
     if (hovered && pickHomeArmed_) {
         // The cursor says the map is armed. Without it the only sign is a lit
         // lamp on a button three panels away.
@@ -814,7 +887,7 @@ void MapView::draw(float width, float height,
             // means the thing being examined slides away as you zoom in.
             const auto before = toWorld(ImGui::GetIO().MousePos);
             spanDeg_ = std::clamp(spanDeg_ * std::pow(0.85, static_cast<double>(wheel)),
-                                  0.02, zoomOutLimitDeg);
+                                  kMapMinSpanDeg, zoomOutLimitDeg);
             const double lonSpan2 = spanDeg_;
             const double latSpan2 = spanDeg_ * static_cast<double>(height) / width;
             const ImVec2 m = ImGui::GetIO().MousePos;
@@ -840,7 +913,8 @@ void MapView::draw(float width, float height,
             }
         }
     }
-    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    if (mapActive && !pressOnZoomIn && !pressOnZoomOut &&
+        ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         if (!followId_.empty()) {
             // FOLLOWING WINS THE FRAME, THE USER GETS ASKED. Applying the drag
             // here used to move the centre for one frame and the follow above
@@ -871,7 +945,7 @@ void MapView::draw(float width, float height,
     // THE VIEW DOES NOT APPLY IT. A receiver position reaches every map page,
     // the radar scope and the coverage accumulator, none of which this class
     // knows about; it raises a request and the owner acts on it.
-    if (pickHomeArmed_ && hovered && clickNoDrag) {
+    if (pickHomeArmed_ && hovered && clickNoDrag && !clickConsumed) {
         const auto picked = toWorld(ImGui::GetIO().MousePos);
         // Refused rather than clamped, by the same range test the config
         // sanitizer and the typed entry use. A click past the pole is a click
@@ -1610,7 +1684,7 @@ void MapView::draw(float width, float height,
         // shipped; at 18 px the label rode three below the target's own dot.
         addMapLabel(dl, ImVec2(lblX, s.y - mapLineH * 0.5f), col, lbl);
 
-        if (hovered) {
+        if (hovered && !overZoomIn && !overZoomOut) {
             const float dx = mouse.x - s.x;
             const float dy = mouse.y - s.y;
             const float d = std::sqrt(dx * dx + dy * dy);
@@ -1794,6 +1868,61 @@ void MapView::draw(float width, float height,
             // on this chart that is a MEASUREMENT was set overlapping its own
             // scale, which is where a descender lands.
             addMapLabel(dl, ImVec2(a.x, a.y - mapLineH - kLabelGap), barCol, buf);
+        }
+    }
+
+    // --- the zoom keys, last so nothing on the chart covers them -----------
+    // Brass keys like the deck's, with the sign drawn as strokes rather than
+    // set in a face: a "+" and a "-" in any of this application's fonts sit at
+    // different heights and weights, and these two have to read as a pair.
+    // A key that cannot move the view any further is drawn dead, the way
+    // drawDeckKey draws one, so "it did nothing" has a visible reason.
+    if (zoomKeys.shown) {
+        const auto key = [&](float x0, float y0, float x1, float y1, bool plus, bool over,
+                             bool pressed, bool live) {
+            const ImVec2 tl(x0, y0);
+            const ImVec2 br(x1, y1);
+            const float r = theme::kKeyRounding;
+            const bool held = live && pressed && over && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            if (!live) {
+                dl->AddRectFilled(tl, br, theme::withAlpha(theme::kWell, 0.85f), r);
+                dl->AddRect(tl, br, theme::withAlpha(theme::kBrassDark, 0.80f), r, 0,
+                            theme::kHairline);
+            } else {
+                if (!held) {
+                    dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f),
+                                      ImVec2(br.x + 1.0f, br.y + 2.0f),
+                                      theme::withAlpha(theme::kVoid, 0.45f), r);
+                }
+                const ImU32 top =
+                    held ? theme::kBrassMid : (over ? theme::kIvory : theme::kCream);
+                const ImU32 bot = held ? theme::kBrassDark : theme::kBrassBright;
+                dl->AddRectFilled(tl, br, bot, r);
+                if (br.x - tl.x > r * 2.0f) {
+                    dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y),
+                                                top, top, bot, bot);
+                }
+                addBenchBevel(dl, tl, br, r, !held);
+            }
+            const ImU32 ink = live ? theme::kEnamel : theme::kInkMuted;
+            const float cx = std::round((tl.x + br.x) * 0.5f);
+            const float cy = std::round((tl.y + br.y) * 0.5f) + (held ? 1.0f : 0.0f);
+            const float arm = std::round((br.x - tl.x) * 0.28f);
+            const float stroke = std::max(2.0f, std::round((br.x - tl.x) / 11.0f));
+            dl->AddLine(ImVec2(cx - arm, cy), ImVec2(cx + arm, cy), ink, stroke);
+            if (plus) { dl->AddLine(ImVec2(cx, cy - arm), ImVec2(cx, cy + arm), ink, stroke); }
+        };
+        const bool liveIn = zoomKeySpan(spanDeg_, true, zoomOutLimitDeg) < spanDeg_;
+        const bool liveOut = zoomKeySpan(spanDeg_, false, zoomOutLimitDeg) > spanDeg_;
+        key(zoomKeys.inX0, zoomKeys.inY0, zoomKeys.inX1, zoomKeys.inY1, true, overZoomIn,
+            pressOnZoomIn, liveIn);
+        key(zoomKeys.outX0, zoomKeys.outY0, zoomKeys.outX1, zoomKeys.outY1, false, overZoomOut,
+            pressOnZoomOut, liveOut);
+        if ((overZoomIn || overZoomOut) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            ImGui::SetTooltip(overZoomIn ? (liveIn ? "Zoom in - or turn the mouse wheel over the map"
+                                                   : "Zoomed in as far as the map goes")
+                                         : (liveOut ? "Zoom out - or turn the mouse wheel over the map"
+                                                    : "Zoomed out as far as the map goes"));
         }
     }
 

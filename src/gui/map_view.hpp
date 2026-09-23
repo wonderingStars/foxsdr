@@ -177,6 +177,45 @@ double wholeWorldSpanDeg(float widthPx, float heightPx);
 // well therefore does not resize the moment a position arrives.
 char coordApertureGlyph(char shape, bool known);
 
+// --- the zoom keys on the chart (0.99.20) ------------------------------------
+//
+// A "+" and a "-" in the map's bottom-right corner, on every map this view
+// draws: the map pages and the patch page's Map part alike. The wheel has
+// always zoomed the map, and still does, but nothing on the chart said so and a
+// touchpad or a tablet may have no wheel to turn - asked for by the owner on
+// 2026-09-23 as "allow the user to zoom in on the map on the patch panel".
+//
+// BOTTOM-RIGHT because the other three corners are taken: the altitude legend
+// hangs from the top right, the scale bar sits bottom left, and the latitude
+// figures run down the left edge.
+
+// The narrowest the view may be, in degrees of longitude across. Shared by the
+// wheel and the keys so the two cannot stop at different depths.
+inline constexpr double kMapMinSpanDeg = 0.02;
+
+// One press of a key halves (zoom in) or doubles (zoom out) the span, which is
+// the step every web map uses; a wheel notch stays the finer 0.85.
+inline constexpr double kZoomKeyStep = 0.5;
+
+// Where the two keys sit, in screen pixels, for a map drawn at origin with this
+// size and keys `keyPx` square. `floorPx` is the strip along the chart's floor
+// the longitude figures are printed in; the keys stand above it rather than
+// over a number. `shown` is false when the map is too small to carry them
+// without covering the chart (under three keys wide, or under four keys tall
+// above that strip), and then no key is drawn and none can be pressed.
+struct MapZoomKeys {
+    bool shown = false;
+    float inX0 = 0.0f, inY0 = 0.0f, inX1 = 0.0f, inY1 = 0.0f;      // "+"
+    float outX0 = 0.0f, outY0 = 0.0f, outX1 = 0.0f, outY1 = 0.0f;  // "-"
+};
+MapZoomKeys mapZoomKeys(float originX, float originY, float widthPx, float heightPx,
+                        float keyPx, float floorPx);
+
+// The span after one press, clamped to [kMapMinSpanDeg, zoomOutLimitDeg]. A
+// press that cannot move the view (already at the limit) returns the span it
+// was given, which is how the draw code knows to show that key as dead.
+double zoomKeySpan(double spanDeg, bool zoomIn, double zoomOutLimitDeg);
+
 // HOW WIDE AND HOW TALL ONE OF THOSE APERTURES IS, measured in the counter
 // face at the size it is lettered at rather than typed as a literal.
 //
