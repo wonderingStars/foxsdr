@@ -33,7 +33,7 @@
 namespace cascade::gui {
 
 struct ScriptStep {
-    enum class Verb { World, Screen, Down, Up, Key, Text };
+    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel };
     long frame = 0;
     Verb verb = Verb::World;
     float x = 0.0f;
@@ -92,6 +92,11 @@ inline ScriptParse parseInputScript(const std::string& text) {
         } else if (verb == "key") {
             st.verb = ScriptStep::Verb::Key;
             ok = static_cast<bool>(s >> st.arg) && knownScriptKey(st.arg);
+        } else if (verb == "wheel") {
+            // "wheel -3": three notches towards the user, as a mouse wheel
+            // scrolling down a list gives (0.99.19).
+            st.verb = ScriptStep::Verb::Wheel;
+            ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
         } else if (verb == "text") {
             st.verb = ScriptStep::Verb::Text;
             std::getline(s, st.arg);

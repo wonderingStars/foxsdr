@@ -1316,9 +1316,20 @@ private:
     // clock and the squelch-open state, applies returned retunes.
     void scannerFrame();
 
-    // Persists the bookmark list after every mutation; failures land in
+    // Persists the bookmark list after a mutation; failures land in
     // bookmarkError_ (red text). No-op in hermetic mode (empty path).
+    // DEBOUNCED since 0.99.19: it marks the list dirty and the write happens
+    // about a second after the last change (flushBookmarkSave, every frame and
+    // at exit) - a 33 000-entry list takes ~40 ms to write, and a hitch on
+    // every star clicked is exactly the slowdown an imported list must not add.
     void saveBookmarks();
+    void flushBookmarkSave(bool force);
+    // Imports an SDR# frequencies.xml or a CSV into the bookmarks.
+    void importBookmarkFile(const std::string& path);
+    // The filtered, cached view the Bookmarks list draws from.
+    void rebuildBookmarkView();
+    // Bookmarks inside the visible span, as marks on the spectrum.
+    void drawBookmarkMarkers(float x0, float y0, float width, float height);
 
     // --- Config persistence (P5) ---------------------------------------------
     // Pushes every AppConfig field into the pipeline/panel mirrors; source
@@ -1943,6 +1954,33 @@ private:
     std::string bookmarkPath_;   // empty = bookmark persistence disabled
     std::string bookmarkError_;  // red text in the Bookmarks section
     char bookmarkName_[128] = "";  // editable name for the next "Add current"
+    // --- A large imported list (0.99.19) ----------------------------------------
+    // The list can be tens of thousands of entries, so nothing here walks it
+    // per frame: the view is a cached index rebuilt only when the list or the
+    // filter changes, the list is drawn through a clipper, and the spectrum
+    // marks come from a binary search of the visible span.
+    char bookmarkFilter_[96] = "";
+    int bookmarkGroupSel_ = 0;           // 0 = every group
+    bool bookmarkFavOnly_ = false;
+    bool bookmarkMarkers_ = true;        // draw bookmarks on the spectrum
+    char bookmarkImportPath_[512] = "";
+    std::string bookmarkImportNote_;     // what the last import did
+    std::vector<std::string> bookmarkGroups_;
+    std::vector<std::uint32_t> bookmarkView_;
+    unsigned bookmarkViewVersion_ = ~0u;
+    std::string bookmarkViewKey_;
+    bool bookmarkSaveDirty_ = false;
+    double bookmarkSaveDueS_ = 0.0;
+    // A file dropped on the window, picked up by the next frame.
+    std::string pendingDropPath_;
+    // FOXSDR_BOOKMARK_IMPORT (bounded runs): opens VIEW > Bookmarks with the
+    // path in the import box, for a scripted press of Import.
+    bool bookmarkImportByEnv_ = false;
+    bool bookmarkOpenByEnv_ = false;
+    bool bookmarkScrollByEnv_ = false;
+    // The browser gets at most a few hundred bookmarks (favourites and the
+    // ones nearest the tuned frequency); this maps its row numbers back.
+    std::vector<std::size_t> webBookmarkIndex_;
 
     // --- Scanner state (P6) -----------------------------------------------------
     // The Scanner itself is a pure state machine (core/scanner.hpp); these

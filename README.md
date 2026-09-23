@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.18** (September 2026), in open beta and free for
+The current release is **0.99.19** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1185,6 +1185,37 @@ catalogue has been fetched that offers a newer build, and a **Remove** whether
 it does or not — an ABI mismatch has no other way out. Plugins the
 catalogue has never described (private or hand-installed builds) are left
 alone and keep loading.
+
+## Frequency lists
+
+**VIEW > Bookmarks** holds any number of named frequencies - tens of thousands
+is fine - with a group, a mode, a bandwidth and a favourite star each. Click a
+row to tune it.
+
+- **Import** an SDR# `frequencies.xml`, or a CSV saved from Excel: type or
+  paste its path and press Import, or drop the file anywhere on the window.
+  SDR#'s Name, GroupName, Frequency, DetectorType, FilterBandwidth and
+  IsFavourite come across; the file does not have to be perfectly formed (a
+  hand-merged list with one entry per line reads fine). A CSV can have its
+  columns in any order under a header naming them - frequency, name, group,
+  mode, bandwidth, favourite - or no header at all (frequency, name, group,
+  mode, bandwidth); frequencies are Hz, or MHz when the header says so or the
+  number is plainly MHz; commas, semicolons and tabs all work, and so does a
+  decimal comma. Importing the same file twice adds nothing twice. SDR#'s
+  converter Shift is not applied: the frequency is taken as written, and the
+  import says when a list carried one.
+- **Find** with the search box (names, groups, or the start of a frequency in
+  MHz), the group list, and Favourites only. "Remove this group" takes a whole
+  imported group out again.
+- **Export for SDR#** writes the entries currently shown - so a search or a
+  group picks what is shared - as a `frequencies.xml` in the recordings
+  folder.
+- **On the spectrum**, every bookmark inside the visible span is marked: a
+  short tick in a strip above the frequency scale, a full line and its name
+  for favourites, and names for everything once few enough are on screen to
+  be read. Only the span on screen is ever looked at, so a list of 33 000
+  costs the display nothing; the browser page is sent the favourites and the
+  few hundred nearest the tuned frequency, not the whole list.
 
 ## The patch page
 

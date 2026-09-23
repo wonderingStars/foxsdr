@@ -65,5 +65,15 @@ int main() {
         CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::Down);
     }
 
+    // [4] The wheel: notches as given, and a wheel that moves nothing is a
+    // mistake, not a step.
+    {
+        const ScriptParse p = parseInputScript("5 wheel -3\n6 wheel 1.5\n7 wheel 0\n8 wheel\n");
+        CHECK(p.bad == 2);
+        CHECK(p.steps.size() == 2u);
+        CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::Wheel && p.steps[0].y == -3.0f);
+        CHECK(p.steps.size() == 2u && p.steps[1].y == 1.5f);
+    }
+
     return testSummary("test_input_script");
 }

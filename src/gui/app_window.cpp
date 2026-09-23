@@ -41,6 +41,7 @@
 #include "core/version.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
+#include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 // Generated window-icon pixels. Reached by a path relative to this file
 // because resources/ is deliberately not on any target's include path — the
@@ -296,6 +297,9 @@ constexpr float kSoapyGainDefaultDb = 30.0f;
 // config store (the mode is persisted by NAME so a saved file survives any
 // future enum reorder). Button order is the SDR++ parity layout; the enum
 // order differs (LSB before CW), so the mapping is by name, never by index.
+// The window a dropped file is handed to (see glfwSetDropCallback in run()).
+cascade::gui::AppWindow* g_dropTarget = nullptr;
+
 constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
                                        "USB", "CW",  "LSB", "RAW"};
 constexpr cascade::dsp::DemodMode kModeMap[8] = {
@@ -1187,6 +1191,15 @@ int AppWindow::run(int frames) {
     // only gets less room to scroll in.
     glfwSetWindowSizeLimits(window, kMinWindowW, kMinWindowH, GLFW_DONT_CARE,
                             GLFW_DONT_CARE);
+    // A FREQUENCY LIST DROPPED ON THE WINDOW is imported (0.99.19): an SDR#
+    // frequencies.xml or a CSV, which is quicker than typing a path. The
+    // callback only records the path; the import runs in the frame loop.
+    g_dropTarget = this;
+    glfwSetDropCallback(window, [](GLFWwindow*, int count, const char** paths) {
+        if (g_dropTarget != nullptr && count > 0 && paths != nullptr && paths[0] != nullptr) {
+            g_dropTarget->pendingDropPath_ = paths[0];
+        }
+    });
     // Before the context is made current: purely a window-manager property,
     // independent of GL, so even a run that fails at backend init has already
     // shown the right icon.
@@ -1614,6 +1627,18 @@ int AppWindow::run(int frames) {
                     }
                 }
             }
+            // A FREQUENCY LIST IN THE IMPORT BOX (0.99.19): VIEW opened on
+            // Bookmarks with FOXSDR_BOOKMARK_IMPORT's path typed in, so a
+            // scripted click on Import goes through the button a user presses.
+            if (!bookmarkImportByEnv_) {
+                bookmarkImportByEnv_ = true;
+                if (const char* p = std::getenv("FOXSDR_BOOKMARK_IMPORT"); p != nullptr && *p != '\0') {
+                    std::snprintf(bookmarkImportPath_, sizeof(bookmarkImportPath_), "%s", p);
+                    railBank_ = static_cast<int>(cascade::gui::RailBank::View);
+                    bookmarkOpenByEnv_ = true;
+                    bookmarkScrollByEnv_ = true;
+                }
+            }
             if (const char* at = std::getenv("FOXSDR_PATCH_TOGGLE_AT");
                 at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
@@ -2020,6 +2045,7 @@ int AppWindow::run(int frames) {
     // and nothing to retry (see core/feature_request.hpp).
     featureRequestSender_.cancel();
     if (!configPath_.empty()) { saveConfigNow(); }
+    flushBookmarkSave(true);
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
     // The deliberate shutdown wedge, in the place the real one lives: the
@@ -2872,6 +2898,12 @@ void AppWindow::drawUi() {
     // panels are drawn so the window shows the new state this frame rather
     // than one frame late.
     applyWebControls();
+    if (!pendingDropPath_.empty()) {
+        const std::string dropped = std::move(pendingDropPath_);
+        pendingDropPath_.clear();
+        importBookmarkFile(dropped);
+    }
+    flushBookmarkSave(false);
     publishWebSnapshot();
     publishWebAudio();
     publishWebImages();
@@ -8298,6 +8330,9 @@ void AppWindow::drawCenterPanels() {
     if (bandPlanOverlay_) {
         drawBandPlanOverlay(specPos.x, specPos.y, width, spectrumHeight);
     }
+    if (bookmarkMarkers_ && !freqMgr_.list().empty()) {
+        drawBookmarkMarkers(specPos.x, specPos.y, width, spectrumHeight);
+    }
 
     for (int i = 0; i < tickCount; ++i) {
         // ticks() only returns in-view frequencies, so x stays in-panel.
@@ -11116,6 +11151,9 @@ void AppWindow::applyInputScript(long frame) {
             }
             case cascade::gui::ScriptStep::Verb::Text:
                 io.AddInputCharactersUTF8(st.arg.c_str());
+                break;
+            case cascade::gui::ScriptStep::Verb::Wheel:
+                io.AddMouseWheelEvent(0.0f, st.y);
                 break;
         }
         ++inputScriptPos_;
@@ -18441,6 +18479,93 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
 
 // --- Bookmarks (P6) --------------------------------------------------------------
 
+void AppWindow::rebuildBookmarkView() {
+    // The key is everything the view depends on, so an unchanged filter over
+    // an unchanged list costs one string compare a frame and nothing else.
+    const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
+    if (bookmarkViewVersion_ != freqMgr_.version()) {
+        // Group names: sorted, unique, rebuilt only when the list changed.
+        std::vector<std::string> groups;
+        for (const cascade::core::Bookmark& b : list) {
+            if (!b.group.empty()) { groups.push_back(b.group); }
+        }
+        std::sort(groups.begin(), groups.end());
+        groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
+        const std::string was =
+            (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size()))
+                ? bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)]
+                : std::string();
+        bookmarkGroups_ = std::move(groups);
+        // Keep the selected group selected when it still exists.
+        bookmarkGroupSel_ = 0;
+        for (std::size_t g = 0; g < bookmarkGroups_.size() && !was.empty(); ++g) {
+            if (bookmarkGroups_[g] == was) { bookmarkGroupSel_ = static_cast<int>(g) + 1; }
+        }
+    }
+    std::string key = std::to_string(freqMgr_.version()) + "|" + std::to_string(bookmarkGroupSel_) +
+                      "|" + (bookmarkFavOnly_ ? "f" : "-") + "|" + bookmarkFilter_;
+    if (key == bookmarkViewKey_) { return; }
+    bookmarkViewKey_ = std::move(key);
+    bookmarkViewVersion_ = freqMgr_.version();
+
+    // Case-insensitive substring over name and group; a filter that reads as
+    // a number also matches frequencies that start with it in MHz ("145.5").
+    std::string needle = bookmarkFilter_;
+    for (char& c : needle) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    const std::string group = (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size()))
+                                  ? bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)]
+                                  : std::string();
+    const auto contains = [](const std::string& hay, const std::string& n) {
+        if (n.empty()) { return true; }
+        const auto it = std::search(hay.begin(), hay.end(), n.begin(), n.end(), [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) == b;
+        });
+        return it != hay.end();
+    };
+    bookmarkView_.clear();
+    char mhz[32];
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        const cascade::core::Bookmark& b = list[i];
+        if (bookmarkFavOnly_ && !b.favourite) { continue; }
+        if (!group.empty() && b.group != group) { continue; }
+        if (!needle.empty()) {
+            std::snprintf(mhz, sizeof(mhz), "%.6f", b.freqHz / 1e6);
+            if (!contains(b.name, needle) && !contains(b.group, needle) &&
+                std::strncmp(mhz, needle.c_str(), needle.size()) != 0) {
+                continue;
+            }
+        }
+        bookmarkView_.push_back(static_cast<std::uint32_t>(i));
+    }
+}
+
+void AppWindow::importBookmarkFile(const std::string& path) {
+    std::string p = path;
+    // A path pasted from Explorer's "Copy as path" arrives quoted.
+    if (p.size() >= 2 && p.front() == '"' && p.back() == '"') { p = p.substr(1, p.size() - 2); }
+    const auto t0 = std::chrono::steady_clock::now();
+    cascade::core::ImportResult r = cascade::core::importFrequencyFile(p);
+    if (!r.error.empty() && r.items.empty()) {
+        bookmarkImportNote_ = "Could not import: " + r.error;
+        cascade::core::diagWarnf("bookmarks: import of %s failed: %s", p.c_str(), r.error.c_str());
+        return;
+    }
+    const std::size_t found = r.items.size();
+    const std::size_t added = freqMgr_.addMany(std::move(r.items));
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    char note[320];
+    std::snprintf(note, sizeof(note),
+                  "%s: %zu entries read, %zu added%s%s%s", r.format.c_str(), found, added,
+                  found > added ? " (the rest were already here)" : "",
+                  r.skipped > 0 ? ", some had no usable frequency" : "",
+                  r.shifted > 0 ? ", converter Shift values were not applied" : "");
+    bookmarkImportNote_ = note;
+    cascade::core::diagLogf("bookmarks: imported %s (%s) - %zu read, %zu added, %zu skipped, %zu shifted, %.0f ms",
+                            p.c_str(), r.format.c_str(), found, added, r.skipped, r.shifted, ms);
+    if (added > 0) { saveBookmarks(); }
+}
+
 void AppWindow::drawBookmarksSection() {
     // HOW MANY ARE SAVED, which is what this section holds and the only thing
     // about it worth reading from the rail. The lamp is lit while there is at
@@ -18449,11 +18574,19 @@ void AppWindow::drawBookmarksSection() {
     const std::size_t bookmarkCount = freqMgr_.list().size();
     char bookmarkChip[16];
     std::snprintf(bookmarkChip, sizeof(bookmarkChip), "%zu", bookmarkCount);
+    if (bookmarkOpenByEnv_) {
+        bookmarkOpenByEnv_ = false;
+        ImGui::SetNextItemOpen(true);
+    }
     if (!benchSection("Bookmarks", false, bookmarkChip, cascade::gui::theme::kPhosphor,
                       bookmarkCount > 0)) {
         return;
     }
     telemetryNotePanel("bookmarks");
+    if (bookmarkScrollByEnv_) {
+        bookmarkScrollByEnv_ = false;
+        ImGui::SetScrollHereY(0.0f);
+    }
 
     ImGui::SetNextItemWidth(-90.0f);
     ImGui::InputTextWithHint("##bm_name", "name", bookmarkName_,
@@ -18479,46 +18612,178 @@ void AppWindow::drawBookmarksSection() {
         saveBookmarks();
     }
 
-    // Rows: click-to-tune selectable + per-row delete. The delete is
+    // --- a frequency list from elsewhere (0.99.19) -------------------------
+    // SDR#'s frequencies.xml or a CSV saved from Excel: typed or pasted here,
+    // or dropped anywhere on the window.
+    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::InputTextWithHint("##bm_import", "SDR# frequencies.xml or .csv - or drop it on the window",
+                             bookmarkImportPath_, sizeof(bookmarkImportPath_));
+    ImGui::SameLine();
+    ImGui::BeginDisabled(bookmarkImportPath_[0] == '\0');
+    if (ImGui::Button("Import", ImVec2(82.0f, 0.0f))) { importBookmarkFile(bookmarkImportPath_); }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Adds every entry of an SDR# frequencies.xml, or of a CSV with a\n"
+                          "frequency column (and name, group, mode, bandwidth if it has them).\n"
+                          "Importing the same file again adds nothing twice.");
+    }
+    if (!bookmarkImportNote_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        ImGui::TextWrapped("%s", bookmarkImportNote_.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    // --- the view: search, group, favourites -------------------------------
+    rebuildBookmarkView();
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##bm_filter", "search names, groups or MHz", bookmarkFilter_,
+                             sizeof(bookmarkFilter_));
+    if (!bookmarkGroups_.empty()) {
+        const char* current = bookmarkGroupSel_ == 0
+                                  ? "Every group"
+                                  : bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)].c_str();
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::BeginCombo("##bm_group", current, ImGuiComboFlags_HeightLarge)) {
+            if (ImGui::Selectable("Every group", bookmarkGroupSel_ == 0)) { bookmarkGroupSel_ = 0; }
+            ImGuiListClipper clip;
+            clip.Begin(static_cast<int>(bookmarkGroups_.size()));
+            while (clip.Step()) {
+                for (int g = clip.DisplayStart; g < clip.DisplayEnd; ++g) {
+                    ImGui::PushID(g);
+                    if (ImGui::Selectable(bookmarkGroups_[static_cast<std::size_t>(g)].c_str(),
+                                          bookmarkGroupSel_ == g + 1)) {
+                        bookmarkGroupSel_ = g + 1;
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    ImGui::Checkbox("Favourites only", &bookmarkFavOnly_);
+    ImGui::SameLine();
+    ImGui::Checkbox("On the spectrum", &bookmarkMarkers_);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Marks every bookmark inside the spectrum's span, named where\n"
+                          "there is room. Only the ones on screen are looked at, so a list\n"
+                          "of tens of thousands costs nothing.");
+    }
+    rebuildBookmarkView();
+    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+    ImGui::Text("%zu shown of %zu", bookmarkView_.size(), bookmarkCount);
+    ImGui::PopStyleColor();
+    if (!bookmarkView_.empty()) {
+        ImGui::SameLine();
+        // THE ONES SHOWN go out, so a search or a group picks what is shared.
+        // Into the recordings folder, beside everything else FoxSDR writes,
+        // as SDR#'s own format - which any SDR# user can load as it is.
+        if (ImGui::SmallButton("Export for SDR#")) {
+            std::vector<cascade::core::Bookmark> out;
+            out.reserve(bookmarkView_.size());
+            for (const std::uint32_t i : bookmarkView_) {
+                if (i < freqMgr_.list().size()) { out.push_back(freqMgr_.list()[i]); }
+            }
+            std::error_code ec;
+            std::filesystem::create_directories(std::filesystem::path(recordDir_), ec);
+            const std::time_t now = std::time(nullptr);
+            std::tm tmv{};
+#ifdef _WIN32
+            localtime_s(&tmv, &now);
+#else
+            localtime_r(&now, &tmv);
+#endif
+            char name[64];
+            std::strftime(name, sizeof(name), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml", &tmv);
+            const std::filesystem::path path = std::filesystem::path(recordDir_) / name;
+            std::ofstream f(path, std::ios::binary | std::ios::trunc);
+            const std::string xml = cascade::core::exportSdrSharpXml(out);
+            f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
+            f.close();
+            const std::string shown = recordDir_ + "/" + name;
+            bookmarkImportNote_ = f ? "Exported " + std::to_string(out.size()) + " to " + shown
+                                    : "Could not write " + shown;
+        }
+    }
+    if (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Remove this group")) {
+            const std::string g = bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)];
+            const std::size_t n = freqMgr_.removeGroup(g);
+            bookmarkImportNote_ = "Removed " + std::to_string(n) + " from \"" + g + "\"";
+            bookmarkGroupSel_ = 0;
+            saveBookmarks();
+            rebuildBookmarkView();
+        }
+    }
+
+    // Rows: favourite star, click-to-tune, per-row delete - through a
+    // clipper, so only the rows on screen are ever laid out. The delete is
     // deferred past the loop so removeAt can never invalidate an index the
     // same frame still iterates.
     int deleteIdx = -1;
+    int starIdx = -1;
     const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
     const float delW = ImGui::GetFrameHeight();
-    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
-        const cascade::core::Bookmark& b = list[static_cast<std::size_t>(i)];
-        ImGui::PushID(i);
-        char label[192];
-        std::snprintf(label, sizeof(label), "%s  %.4f MHz", b.name.c_str(),
-                      b.freqHz / 1.0e6);
-        const float rowW = ImGui::GetContentRegionAvail().x - delW -
-                           ImGui::GetStyle().ItemSpacing.x;
-        if (ImGui::Selectable(label, false, ImGuiSelectableFlags_None,
-                              ImVec2(rowW, 0.0f))) {
-            // Click-to-tune: frequency through the shared absolute-tune
-            // path (same as scanner retunes), then mode and bandwidth. An
-            // unknown mode name — a newer build's file, kept verbatim by
-            // FreqManager on purpose — leaves the current mode untouched.
-            tuneAbsoluteHz(b.freqHz);
-            for (int m = 0; m < 8; ++m) {
-                if (b.mode == kModeNames[m]) {
-                    modeIndex_ = m;
-                    pipeline_.setDemodMode(kModeMap[m]);
-                    break;
+    const float rows = std::min(12.0f, static_cast<float>(bookmarkView_.size()));
+    if (!bookmarkView_.empty() &&
+        ImGui::BeginChild("##bm_rows", ImVec2(-1.0f, rows * ImGui::GetFrameHeightWithSpacing() + 4.0f),
+                          ImGuiChildFlags_None)) {
+        ImGuiListClipper clip;
+        clip.Begin(static_cast<int>(bookmarkView_.size()));
+        while (clip.Step()) {
+            for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r) {
+                const int i = static_cast<int>(bookmarkView_[static_cast<std::size_t>(r)]);
+                if (i >= static_cast<int>(list.size())) { continue; }
+                const cascade::core::Bookmark& b = list[static_cast<std::size_t>(i)];
+                ImGui::PushID(i);
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      b.favourite ? cascade::gui::theme::vec(cascade::gui::theme::kAmber)
+                                                  : cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+                if (ImGui::Button(b.favourite ? "*##fav" : ".##fav", ImVec2(delW, 0.0f))) { starIdx = i; }
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                char label[256];
+                if (b.group.empty()) {
+                    std::snprintf(label, sizeof(label), "%s  %.4f MHz", b.name.c_str(), b.freqHz / 1.0e6);
+                } else {
+                    std::snprintf(label, sizeof(label), "%s  %.4f MHz  [%s]", b.name.c_str(),
+                                  b.freqHz / 1.0e6, b.group.c_str());
                 }
+                const float rowW = ImGui::GetContentRegionAvail().x - delW - ImGui::GetStyle().ItemSpacing.x;
+                if (ImGui::Selectable(label, false, ImGuiSelectableFlags_None, ImVec2(rowW, 0.0f))) {
+                    // Click-to-tune: frequency through the shared absolute-tune
+                    // path (same as scanner retunes), then mode and bandwidth. An
+                    // unknown mode name - a newer build's file, kept verbatim by
+                    // FreqManager on purpose - leaves the current mode untouched.
+                    tuneAbsoluteHz(b.freqHz);
+                    for (int m = 0; m < 8; ++m) {
+                        if (b.mode == kModeNames[m]) {
+                            modeIndex_ = m;
+                            pipeline_.setDemodMode(kModeMap[m]);
+                            break;
+                        }
+                    }
+                    // Same clamp as the config restore: [3 kHz, 90% of channel rate].
+                    const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+                    vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
+                    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+                    // -1 for a bookmark saved at a bandwidth the list does not carry
+                    // (one taken while a preset had the VFO at 40 kHz, say): the combo
+                    // letters the real figure and ticks nothing.
+                    bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
+                ImGui::PopID();
             }
-            // Same clamp as the config restore: [3 kHz, 90% of channel rate].
-            const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
-            vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
-            // -1 for a bookmark saved at a bandwidth the list does not carry
-            // (one taken while a preset had the VFO at 40 kHz, say): the combo
-            // letters the real figure and ticks nothing.
-            bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
         }
-        ImGui::SameLine();
-        if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
-        ImGui::PopID();
+    }
+    if (!bookmarkView_.empty()) { ImGui::EndChild(); }
+    if (starIdx >= 0 && starIdx < static_cast<int>(list.size())) {
+        cascade::core::Bookmark b = list[static_cast<std::size_t>(starIdx)];
+        b.favourite = !b.favourite;
+        freqMgr_.updateAt(static_cast<std::size_t>(starIdx), b);
+        saveBookmarks();
     }
     if (deleteIdx >= 0) {
         freqMgr_.removeAt(static_cast<std::size_t>(deleteIdx));
@@ -18534,12 +18799,93 @@ void AppWindow::drawBookmarksSection() {
 
 void AppWindow::saveBookmarks() {
     if (bookmarkPath_.empty()) { return; }  // hermetic run: never touch disk
+    bookmarkSaveDirty_ = true;
+    bookmarkSaveDueS_ = ImGui::GetTime() + 1.0;
+}
+
+void AppWindow::flushBookmarkSave(bool force) {
+    if (!bookmarkSaveDirty_ || bookmarkPath_.empty()) { return; }
+    if (!force && ImGui::GetCurrentContext() != nullptr && ImGui::GetTime() < bookmarkSaveDueS_) { return; }
+    bookmarkSaveDirty_ = false;
     std::string err;
     if (freqMgr_.save(bookmarkPath_, err)) {
         bookmarkError_.clear();  // a successful save clears a stale error
     } else {
         bookmarkError_ = err;
     }
+}
+
+void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float height) {
+    // ONLY THE SPAN ON SCREEN IS LOOKED AT: a binary search for its two ends,
+    // so a list of 33 000 costs what the dozen in view cost. The user who
+    // asked for this said a big list made SDR# stutter; that must not happen
+    // here.
+    const auto span = freqMgr_.range(scale_.viewLowHz(), scale_.viewHighHz());
+    if (span.first >= span.second) { return; }
+    const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+    const ImU32 tick = cascade::gui::theme::withAlpha(cascade::gui::theme::kAmber, 0.70f);
+    const ImU32 favTick = cascade::gui::theme::kAmber;
+    const ImU32 line = cascade::gui::theme::withAlpha(cascade::gui::theme::kAmber, 0.22f);
+    const ImU32 text = cascade::gui::theme::withAlpha(cascade::gui::theme::kIvory, 0.85f);
+    ImFont* font = cascade::gui::fonts::ui();
+    const float fontPx = ImGui::GetFontSize() * 0.8f;
+    // A DENSE SPAN IS NOT A WALL. The first version drew every bookmark as a
+    // full-height line, and 3 000 of them in 2.6 MHz painted the spectrum
+    // amber from edge to edge - the trace was gone. So every bookmark gets a
+    // short tick in a strip under the band-plan ribbon, at most one per pixel
+    // column; a faint full-height line only while few are on screen; and
+    // names only where there is room for them to be read. Favourites are
+    // drawn first, full height always, so they win the room.
+    const std::size_t count = span.second - span.first;
+    const std::size_t stride = std::max<std::size_t>(1, count / static_cast<std::size_t>(std::max(1.0f, width)));
+    const bool sparse = static_cast<float>(count) * 12.0f <= width;
+    // The strip sits just above the frequency axis figures: the top edge is
+    // taken by the band-plan ribbon and the panel's title, and a tick run
+    // through the title made it unreadable in the first rendered check.
+    const float axisH = ImGui::GetTextLineHeight() + 4.0f;
+    const float strip1 = y0 + height - axisH, strip0 = strip1 - 7.0f;
+    // Names go below the panel's own header lines - both corners of the top
+    // carry text - never through them.
+    const float headerY = spectrum_ != nullptr ? spectrum_->headerBottom() : y0;
+    const float labelY = headerY + ImGui::GetTextLineHeight() + 2.0f;
+    // The x extents of the names drawn so far; a name that would touch one is
+    // left off (its tick still shows). A few dozen at most on any width.
+    std::vector<std::pair<float, float>> placed;
+    placed.reserve(64);
+    for (int pass = 0; pass < 2; ++pass) {
+        float lastTickX = -1e9f;
+        for (std::size_t i = span.first; i < span.second; i += (pass == 0 ? 1 : stride)) {
+            const cascade::core::Bookmark& b = list[i];
+            if ((pass == 0) != b.favourite) { continue; }
+            const float x = x0 + static_cast<float>(scale_.hzToX(b.freqHz)) * width;
+            if (pass == 1 && x - lastTickX < 1.0f) { continue; }
+            lastTickX = x;
+            dl->AddLine(ImVec2(x, strip0), ImVec2(x, strip1), b.favourite ? favTick : tick,
+                        b.favourite ? 2.0f : 1.0f);
+            if (b.favourite || sparse) {
+                dl->AddLine(ImVec2(x, labelY), ImVec2(x, strip0), b.favourite ? tick : line, 1.0f);
+            }
+            if (!(b.favourite || sparse)) { continue; }
+            if (b.name.empty() || placed.size() >= 64) { continue; }
+            const ImVec2 sz = font != nullptr ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, b.name.c_str())
+                                              : ImGui::CalcTextSize(b.name.c_str());
+            const float a = x + 3.0f, e = x + 3.0f + sz.x;
+            if (e > x0 + width) { continue; }
+            bool clash = false;
+            for (const auto& p : placed) {
+                if (a < p.second + 6.0f && e + 6.0f > p.first) {
+                    clash = true;
+                    break;
+                }
+            }
+            if (clash) { continue; }
+            dl->AddText(font, fontPx, ImVec2(a, labelY), text, b.name.c_str());
+            placed.emplace_back(a, e);
+        }
+    }
+    dl->PopClipRect();
 }
 
 // --- Shared absolute tuning (P6) -----------------------------------------------
@@ -19063,8 +19409,18 @@ void AppWindow::publishWebSnapshot() {
     s.recordDir = recordDir_;
     s.recordError = recordError_;
 
-    for (const cascade::core::Bookmark& b : freqMgr_.list()) {
-        s.bookmarks.push_back({b.name, b.freqHz, b.mode, b.bandwidthHz});
+    // A FEW HUNDRED AT MOST go to the browser: an imported list of 33 000
+    // would be copied every frame and serialised on every poll, for a page
+    // that can only ever show a screenful. Favourites first, then the ones
+    // nearest the tuned frequency; webBookmarkIndex_ maps the browser's row
+    // numbers back to the real list for tune and remove.
+    {
+        const std::vector<cascade::core::Bookmark>& all = freqMgr_.list();
+        webBookmarkIndex_ = freqMgr_.nearestSubset(currentAbsoluteHz(), 300, 100);
+        for (const std::size_t i : webBookmarkIndex_) {
+            const cascade::core::Bookmark& b = all[i];
+            s.bookmarks.push_back({b.name, b.freqHz, b.mode, b.bandwidthHz});
+        }
     }
 
     s.scannerActive = scanner_.active();
@@ -19554,7 +19910,9 @@ void AppWindow::applyWebControls() {
             saveBookmarks();
         }
         if (r.bookmarkTune.has_value()) {
-            const std::size_t i = static_cast<std::size_t>(*r.bookmarkTune);
+            // The browser's row number, mapped back to the real list.
+            const std::size_t row = static_cast<std::size_t>(*r.bookmarkTune);
+            const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
             if (i < freqMgr_.list().size()) {
                 const cascade::core::Bookmark b = freqMgr_.list()[i];
                 for (int m = 0; m < 8; ++m) {
@@ -19573,7 +19931,9 @@ void AppWindow::applyWebControls() {
             }
         }
         if (r.bookmarkRemove.has_value()) {
-            if (freqMgr_.removeAt(static_cast<std::size_t>(*r.bookmarkRemove))) {
+            const std::size_t row = static_cast<std::size_t>(*r.bookmarkRemove);
+            const std::size_t i = row < webBookmarkIndex_.size() ? webBookmarkIndex_[row] : ~std::size_t{0};
+            if (freqMgr_.removeAt(i)) {
                 saveBookmarks();
             }
         }

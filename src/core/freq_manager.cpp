@@ -3,9 +3,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 
@@ -60,6 +62,7 @@ bool FreqManager::load(const std::string& path, std::string& error) {
     // Clear first: every return below then already satisfies the contract
     // that failure paths leave an EMPTY list, never a stale one.
     list_.clear();
+    ++version_;
     error.clear();
 
     std::error_code ec;
@@ -126,6 +129,11 @@ bool FreqManager::load(const std::string& path, std::string& error) {
         getString(e, "name", b.name);
         getString(e, "mode", b.mode);  // unknown mode strings kept verbatim
         getDouble(e, "bandwidthHz", b.bandwidthHz);
+        getString(e, "group", b.group);
+        {
+            const auto fav = e.find("favourite");
+            if (fav != e.end() && fav->is_boolean()) { b.favourite = fav->get<bool>(); }
+        }
         if (!std::isfinite(b.bandwidthHz) || b.bandwidthHz <= 0.0) {
             // The demod chain divides by bandwidth; repair with the struct
             // default rather than inventing an epsilon floor.
@@ -167,6 +175,8 @@ bool FreqManager::save(const std::string& path, std::string& error) const {
         e["freqHz"] = b.freqHz;
         e["mode"] = b.mode;
         e["bandwidthHz"] = b.bandwidthHz;
+        if (!b.group.empty()) { e["group"] = b.group; }
+        if (b.favourite) { e["favourite"] = true; }
         arr.push_back(std::move(e));
     }
     json j;
@@ -229,6 +239,7 @@ std::size_t FreqManager::insertSorted(Bookmark b) {
                                      });
     const std::size_t idx = static_cast<std::size_t>(it - list_.begin());
     list_.insert(it, std::move(b));
+    ++version_;
     return idx;
 }
 
@@ -260,6 +271,7 @@ bool FreqManager::removeAt(std::size_t index) {
         return false;
     }
     list_.erase(list_.begin() + static_cast<std::ptrdiff_t>(index));
+    ++version_;
     return true;
 }
 
@@ -273,6 +285,80 @@ bool FreqManager::updateAt(std::size_t index, const Bookmark& b) {
     list_.erase(list_.begin() + static_cast<std::ptrdiff_t>(index));
     insertSorted(b);
     return true;
+}
+
+std::size_t FreqManager::addMany(std::vector<Bookmark> items) {
+    // What is already here, by (frequency, name), so a re-import is a no-op.
+    // Hashing the pair as a string keeps this O(n) for the lookups.
+    const auto key = [](const Bookmark& b) {
+        char f[40];
+        std::snprintf(f, sizeof(f), "%.3f|", b.freqHz);
+        return std::string(f) + b.name;
+    };
+    std::unordered_set<std::string> have;
+    have.reserve(list_.size() + items.size());
+    for (const Bookmark& b : list_) { have.insert(key(b)); }
+    std::size_t added = 0;
+    list_.reserve(list_.size() + items.size());
+    for (Bookmark& b : items) {
+        if (!std::isfinite(b.freqHz) || b.freqHz < 0.0) { continue; }
+        if (!have.insert(key(b)).second) { continue; }
+        list_.push_back(std::move(b));
+        ++added;
+    }
+    if (added > 0) {
+        std::stable_sort(list_.begin(), list_.end(),
+                         [](const Bookmark& a, const Bookmark& b) { return a.freqHz < b.freqHz; });
+        ++version_;
+    }
+    return added;
+}
+
+std::size_t FreqManager::removeGroup(const std::string& group) {
+    const std::size_t before = list_.size();
+    list_.erase(std::remove_if(list_.begin(), list_.end(),
+                               [&](const Bookmark& b) { return b.group == group; }),
+                list_.end());
+    const std::size_t removed = before - list_.size();
+    if (removed > 0) { ++version_; }
+    return removed;
+}
+
+std::vector<std::size_t> FreqManager::nearestSubset(double hereHz, std::size_t maxCount,
+                                                    std::size_t maxFavourites) const {
+    std::vector<std::size_t> out;
+    if (list_.size() <= maxCount) {
+        for (std::size_t i = 0; i < list_.size(); ++i) { out.push_back(i); }
+        return out;
+    }
+    for (std::size_t i = 0; i < list_.size() && out.size() < std::min(maxFavourites, maxCount); ++i) {
+        if (list_[i].favourite) { out.push_back(i); }
+    }
+    const std::size_t favs = out.size();
+    // Walk outward from where hereHz would sit, nearer side first.
+    std::size_t hi = range(hereHz, 1.0e300).first;
+    std::size_t lo = hi;
+    while (out.size() < maxCount && (lo > 0 || hi < list_.size())) {
+        const bool takeLo = lo > 0 && (hi >= list_.size() ||
+                                       hereHz - list_[lo - 1].freqHz <= list_[hi].freqHz - hereHz);
+        const std::size_t i = takeLo ? --lo : hi++;
+        // A favourite already taken is not taken twice; one beyond the
+        // favourite cap is as welcome here as any other.
+        if (list_[i].favourite && std::binary_search(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(favs), i)) {
+            continue;
+        }
+        out.push_back(i);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::pair<std::size_t, std::size_t> FreqManager::range(double loHz, double hiHz) const {
+    const auto lo = std::lower_bound(list_.begin(), list_.end(), loHz,
+                                     [](const Bookmark& x, double f) { return x.freqHz < f; });
+    const auto hi = std::upper_bound(lo, list_.end(), hiHz,
+                                     [](double f, const Bookmark& x) { return f < x.freqHz; });
+    return {static_cast<std::size_t>(lo - list_.begin()), static_cast<std::size_t>(hi - list_.begin())};
 }
 
 }  // namespace cascade::core

@@ -8,7 +8,8 @@
 //       "schemaVersion": 1,
 //       "bookmarks": [
 //           { "name": "...", "freqHz": 145500000.0,
-//             "mode": "NFM", "bandwidthHz": 12500.0 },
+//             "mode": "NFM", "bandwidthHz": 12500.0,
+//             "group": "...", "favourite": true },
 //           ...
 //       ]
 //   }
@@ -29,6 +30,11 @@
 //     user's whole bookmark list down. An entry is skipped when it is not a
 //     JSON object, or its freqHz is absent / non-numeric / non-finite /
 //     negative (a bookmark without a usable frequency points at nothing).
+//
+// "group" and "favourite" (0.99.19, for imported lists such as SDR#'s
+// frequencies.xml) are OPTIONAL and written only when set, so a list with no
+// groups saves byte-for-byte as it always did and an older build reading a
+// newer file simply ignores them - no schema bump.
 //
 // Per-entry sanitization on load (repair, not reject):
 //   - name         missing or wrong-typed -> "" (still a valid bookmark)
@@ -52,6 +58,7 @@
 
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cascade::core {
@@ -61,6 +68,8 @@ struct Bookmark {
     double freqHz = 0;
     std::string mode = "WFM";
     double bandwidthHz = 150000;
+    std::string group;       // "" = ungrouped
+    bool favourite = false;
 };
 
 class FreqManager {
@@ -102,6 +111,33 @@ public:
     bool removeAt(std::size_t index);
     bool updateAt(std::size_t index, const Bookmark& b);
 
+    // BULK ADD for an imported list of thousands (0.99.19). Appends, then one
+    // stable sort - O(n log n), where add() in a loop would be O(n^2) and
+    // took seconds for a 33 000-entry list. Names are NOT deduplicated here:
+    // a real list names a thousand channels "ATIS" and suffixing them would
+    // be noise. What IS skipped is an entry identical in name and frequency
+    // to one already present, so importing the same file twice adds nothing.
+    // Returns how many were added.
+    std::size_t addMany(std::vector<Bookmark> items);
+
+    // Removes every entry whose group is `group`. Returns how many.
+    std::size_t removeGroup(const std::string& group);
+
+    // Index range [first, last) of entries with lo <= freqHz <= hi - a binary
+    // search, so drawing the ones on screen costs nothing for the rest.
+    std::pair<std::size_t, std::size_t> range(double loHz, double hiHz) const;
+
+    // The indices of at most `maxCount` entries to show where a whole list
+    // cannot go (the browser page): favourites first, up to `maxFavourites`,
+    // then the ones nearest `hereHz`. Returned in list order. The whole list
+    // when it is small enough.
+    std::vector<std::size_t> nearestSubset(double hereHz, std::size_t maxCount,
+                                           std::size_t maxFavourites) const;
+
+    // Bumped on every change, so a view of the list (a filtered index, the
+    // group names) can be cached and rebuilt only when it is stale.
+    unsigned version() const { return version_; }
+
 private:
     // Sorted insert helper: keeps list_ ordered and returns the landing
     // index. upper_bound (not lower_bound) so equal frequencies append
@@ -109,6 +145,7 @@ private:
     std::size_t insertSorted(Bookmark b);
 
     std::vector<Bookmark> list_;
+    unsigned version_ = 0;
 };
 
 }  // namespace cascade::core
