@@ -1351,6 +1351,24 @@ int AppWindow::run(int frames) {
     if (frames >= 0) {
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        // The scripted pointer (gui/input_script.hpp). Bounded runs only, so
+        // an interactive session can never be driven by a stray variable.
+        if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
+            script != nullptr && *script != '\0') {
+            std::ifstream in(script, std::ios::binary);
+            if (in) {
+                const std::string text((std::istreambuf_iterator<char>(in)),
+                                       std::istreambuf_iterator<char>());
+                const cascade::gui::ScriptParse sp = cascade::gui::parseInputScript(text);
+                inputScript_ = sp.steps;
+                inputScriptPos_ = 0;
+                inputScriptActive_ = !inputScript_.empty();
+                std::fprintf(stderr, "cascade: input script %s: %zu steps, %d bad lines\n",
+                             script, inputScript_.size(), sp.bad);
+            } else {
+                std::fprintf(stderr, "cascade: input script %s could not be read\n", script);
+            }
+        }
         const char* shutdownStall = std::getenv("CASCADE_DIAG_SHUTDOWN_STALL_MS");
         if (shutdownStall != nullptr && *shutdownStall != '\0') {
             shutdownStallMs = std::atoi(shutdownStall);
@@ -1514,6 +1532,7 @@ int AppWindow::run(int frames) {
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
+        if (inputScriptActive_) { applyInputScript(rendered); }
         ImGui::NewFrame();
 
         frameCounter_ = rendered;
@@ -2069,6 +2088,16 @@ int AppWindow::run(int frames) {
     // "rendered 3 frames" via PASS_REGULAR_EXPRESSION, so an off-by-one in the
     // frame bound goes red instead of shipping silently.
     std::printf("cascade: rendered %d frames\n", rendered);
+    // What a scripted run did to the patch, as the document itself: sizes,
+    // frequencies and node counts are then checked as numbers, not by eye.
+    if (inputScriptActive_) {
+        std::printf("cascade: script steps run %zu of %zu\n", inputScriptPos_,
+                    inputScript_.size());
+        std::printf("cascade: patch after script:\n%s",
+                    cascade::core::patch::serialise(patchGraph_, patchUi_.view.pan.x,
+                                                    patchUi_.view.pan.y, patchUi_.view.zoom)
+                        .c_str());
+    }
     // The measurement the hang threshold is justified against, printed rather
     // than asserted in a comment: tests/test_diag_hang.cpp reads this line back
     // and requires it to be under half the shipped threshold, so a change that
@@ -10859,6 +10888,396 @@ bool AppWindow::patchDecoderIsShown(cascade::core::patch::NodeId node) const {
     return false;
 }
 
+void AppWindow::applyInputScript(long frame) {
+    ImGuiIO& io = ImGui::GetIO();
+    // The scripted pointer is RE-ASSERTED every frame before this frame's
+    // steps: the platform backend may post the real cursor's position on a
+    // frame with no step, and the script's pointer must not wander with it.
+    if (scriptMouseSet_) { io.AddMousePosEvent(scriptMouseX_, scriptMouseY_); }
+    while (inputScriptPos_ < inputScript_.size() && inputScript_[inputScriptPos_].frame <= frame) {
+        const cascade::gui::ScriptStep& st = inputScript_[inputScriptPos_];
+        switch (st.verb) {
+            case cascade::gui::ScriptStep::Verb::World:
+                // Last frame's canvas placement and this frame's view: the
+                // same transform the canvas will draw with.
+                scriptMouseX_ = patchCanvasOriginX_ + patchUi_.view.pan.x + st.x * patchUi_.view.zoom;
+                scriptMouseY_ = patchCanvasOriginY_ + patchUi_.view.pan.y + st.y * patchUi_.view.zoom;
+                scriptMouseSet_ = true;
+                io.AddMousePosEvent(scriptMouseX_, scriptMouseY_);
+                break;
+            case cascade::gui::ScriptStep::Verb::Screen:
+                scriptMouseX_ = st.x;
+                scriptMouseY_ = st.y;
+                scriptMouseSet_ = true;
+                io.AddMousePosEvent(scriptMouseX_, scriptMouseY_);
+                break;
+            case cascade::gui::ScriptStep::Verb::Down:
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+                break;
+            case cascade::gui::ScriptStep::Verb::Up:
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                break;
+            case cascade::gui::ScriptStep::Verb::Key: {
+                // A down and an up in one frame is still two frames to ImGui:
+                // its input queue trickles them, so the key is seen pressed.
+                if (st.arg == "ctrl+a") {
+                    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                    io.AddKeyEvent(ImGuiKey_A, true);
+                    io.AddKeyEvent(ImGuiKey_A, false);
+                    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                    break;
+                }
+                ImGuiKey k = ImGuiKey_None;
+                if (st.arg == "enter") { k = ImGuiKey_Enter; }
+                if (st.arg == "delete") { k = ImGuiKey_Delete; }
+                if (st.arg == "backspace") { k = ImGuiKey_Backspace; }
+                if (st.arg == "escape") { k = ImGuiKey_Escape; }
+                if (st.arg == "tab") { k = ImGuiKey_Tab; }
+                if (k != ImGuiKey_None) {
+                    io.AddKeyEvent(k, true);
+                    io.AddKeyEvent(k, false);
+                }
+                break;
+            }
+            case cascade::gui::ScriptStep::Verb::Text:
+                io.AddInputCharactersUTF8(st.arg.c_str());
+                break;
+        }
+        ++inputScriptPos_;
+    }
+}
+
+void AppWindow::drawPatchFaces(float originX, float originY, float width, float height) {
+    patchCanvasOriginX_ = originX;
+    patchCanvasOriginY_ = originY;
+    namespace pg = cascade::gui::patch;
+    namespace pc = cascade::core::patch;
+    const float zoom = patchUi_.view.zoom;
+    // Below this the controls are too small to operate and are left off; the
+    // readings the canvas draws itself stay, so a zoomed-out patch is still a
+    // patch you can read.
+    if (zoom < 0.6f) { return; }
+
+    // A closed node's memory goes with it: a waterfall of a hundred rows and a
+    // log of two hundred lines are not worth keeping for a node that is gone.
+    const auto gone = [this](pc::NodeId id) { return patchGraph_.find(id) == nullptr; };
+    for (auto it = patchScopes_.begin(); it != patchScopes_.end();) {
+        it = gone(it->first) ? patchScopes_.erase(it) : std::next(it);
+    }
+    for (auto it = patchScopeSeq_.begin(); it != patchScopeSeq_.end();) {
+        it = gone(it->first) ? patchScopeSeq_.erase(it) : std::next(it);
+    }
+    for (auto it = patchSinkLines_.begin(); it != patchSinkLines_.end();) {
+        it = gone(it->first) ? patchSinkLines_.erase(it) : std::next(it);
+    }
+
+    const pg::View v{pg::Vec2{originX + patchUi_.view.pan.x, originY + patchUi_.view.pan.y}, zoom};
+    const ImVec2 c0{originX, originY};
+    const ImVec2 c1{originX + width, originY + height};
+
+    // Scaled with the canvas, crisply: 1.92's PushFont takes a size.
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * zoom * 0.92f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f * zoom, 2.0f * zoom));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * zoom, 3.0f * zoom));
+    ImGui::PushClipRect(c0, c1, true);
+
+    const auto amber = cascade::gui::theme::vec(cascade::gui::theme::kAmber);
+    const auto muted = cascade::gui::theme::vec(cascade::gui::theme::kInkMuted);
+    const auto phosphor = cascade::gui::theme::vec(cascade::gui::theme::kPhosphor);
+    const pc::NodeId listening = pc::listeningChannel(patchGraph_);
+
+    std::vector<pc::NodeId> ids;
+    ids.reserve(patchGraph_.nodes().size());
+    for (const pc::Node& each : patchGraph_.nodes()) { ids.push_back(each.id); }
+    for (const pc::NodeId id : ids) {
+        pc::Node* np = patchGraph_.mutableNode(id);
+        if (np == nullptr) { continue; }
+        pc::Node& n = *np;
+        const pg::Rect f = pg::faceRect(n);
+        const pg::Vec2 s0 = pg::worldToScreen(v, pg::Vec2{f.x0, f.y0});
+        const pg::Vec2 s1 = pg::worldToScreen(v, pg::Vec2{f.x1, f.y1});
+        // ONLY WHOLLY VISIBLE FACES get widgets. A widget half past the canvas
+        // edge would still take clicks there, and one placed outside the page
+        // would grow the page's scroll region.
+        if (s0.x < c0.x || s0.y < c0.y || s1.x > c1.x || s1.y > c1.y) { continue; }
+        const float faceW = s1.x - s0.x - 10.0f * zoom;
+        if (faceW < 40.0f) { continue; }
+        // A FACE UNDER ANOTHER NODE IS CUT AWAY FROM IT. The canvas draws every
+        // node's plate first and these contents afterwards, so without this a
+        // node lower in the stack paints its controls and waterfall over the
+        // node on top of it - the first scripted resize showed a demodulator's
+        // mode box floating over the node dragged across it. Each node drawn
+        // later (later is on top: nodeAt's rule) trims the visible part of this
+        // face from whichever side loses least, the way a window partly under
+        // another is still visible where it is not covered. The clip also
+        // stops a covered control taking clicks. What remains too small to use
+        // draws nothing; its readings are still drawn, in order, by the canvas.
+        pg::Rect vis = f;
+        {
+            bool later = false;
+            for (const pc::Node& other : patchGraph_.nodes()) {
+                if (other.id == n.id) {
+                    later = true;
+                    continue;
+                }
+                if (!later) { continue; }
+                const pg::Vec2 os = pg::nodeSize(other);
+                const float ox0 = other.x, oy0 = other.y, ox1 = other.x + os.x, oy1 = other.y + os.y;
+                if (!(ox0 < vis.x1 && ox1 > vis.x0 && oy0 < vis.y1 && oy1 > vis.y0)) { continue; }
+                pg::Rect cand[4] = {vis, vis, vis, vis};
+                cand[0].x1 = std::min(vis.x1, ox0);   // keep what is left of it
+                cand[1].x0 = std::max(vis.x0, ox1);   // right of it
+                cand[2].y1 = std::min(vis.y1, oy0);   // above it
+                cand[3].y0 = std::max(vis.y0, oy1);   // below it
+                float bestArea = -1.0f;
+                pg::Rect best = vis;
+                for (const pg::Rect& c : cand) {
+                    const float a = std::max(0.0f, c.x1 - c.x0) * std::max(0.0f, c.y1 - c.y0);
+                    if (a > bestArea) {
+                        bestArea = a;
+                        best = c;
+                    }
+                }
+                vis = best;
+            }
+        }
+        if (vis.x1 - vis.x0 < 30.0f || vis.y1 - vis.y0 < 14.0f) { continue; }
+        const pg::Vec2 v0 = pg::worldToScreen(v, pg::Vec2{vis.x0, vis.y0});
+        const pg::Vec2 v1 = pg::worldToScreen(v, pg::Vec2{vis.x1, vis.y1});
+        // Controls start below the reading line the canvas draws on the face
+        // (a level, or a decoder's count), or at the top for kinds that have
+        // no reading.
+        const bool hasReadingLine = n.kind == pc::NodeKind::Channel;
+        const float top = s0.y + (hasReadingLine ? 22.0f : 4.0f) * zoom;
+        ImGui::PushID(static_cast<int>(n.id));
+        // EACH FACE IS ITS OWN LITTLE PANEL: clipped to the face, wrapping at
+        // its right edge, and grouped so every new line starts at the face's
+        // left edge. Without the group ImGui starts each new line at the
+        // page's left margin - the first rendered check put a speaker's
+        // channel name outside any node, on the bare canvas.
+        ImGui::PushClipRect(ImVec2(v0.x, v0.y), ImVec2(v1.x, v1.y), true);
+        ImGui::PushTextWrapPos(s1.x - 4.0f * zoom - ImGui::GetWindowPos().x);
+        ImGui::SetCursorScreenPos(ImVec2(s0.x + 5.0f * zoom, top));
+        ImGui::BeginGroup();
+
+        switch (n.kind) {
+            case pc::NodeKind::Radio: {
+                // What the radio IS doing - numbers in amber, the name in the
+                // ordinary ink. Read-only here: the radio's own controls are
+                // the receiver's, in SIGNAL PATH.
+                ImGui::TextUnformatted(pipeline_.activeSourceName());
+                ImGui::PushStyleColor(ImGuiCol_Text, amber);
+                ImGui::Text("%.6f MHz", pipeline_.activeSource().centerFrequencyHz() / 1e6);
+                ImGui::Text("%.3f MS/s", pipeline_.activeSource().sampleRateHz() / 1e6);
+                ImGui::PopStyleColor();
+                break;
+            }
+            case pc::NodeKind::Channel: {
+                double mhz = n.freqHz / 1e6;
+                ImGui::SetNextItemWidth(faceW);
+                if (ImGui::InputDouble("##f", &mhz, 0.0, 0.0, "%.6f MHz",
+                                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    n.freqHz = mhz * 1e6;
+                    patchUi_.dirty = true;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Type a frequency and press Enter.");
+                }
+                break;
+            }
+            case pc::NodeKind::Demod: {
+                int m = n.mode;
+                if (m < 0 || m >= IM_ARRAYSIZE(kModeNames)) { m = 0; }
+                ImGui::SetNextItemWidth(faceW);
+                if (ImGui::Combo("##m", &m, kModeNames, IM_ARRAYSIZE(kModeNames))) {
+                    n.mode = m;
+                    patchUi_.dirty = true;
+                }
+                break;
+            }
+            case pc::NodeKind::Sink: {
+                const bool text = !n.inputs.empty() && n.inputs[0] == pc::PortType::Text;
+                if (!text) {
+                    // A speaker: say what it is playing, by the channel's name.
+                    const pc::Node* ch = patchGraph_.find(listening);
+                    bool thisOne = false;
+                    for (const pc::Wire& w : patchGraph_.wires()) {
+                        if (w.to == n.id) { thisOne = true; }
+                    }
+                    if (thisOne && ch != nullptr) {
+                        ImGui::TextUnformatted("playing");
+                        ImGui::PushStyleColor(ImGuiCol_Text, phosphor);
+                        ImGui::TextWrapped("%s", ch->name.c_str());
+                        ImGui::PopStyleColor();
+                    } else {
+                        ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                        ImGui::TextWrapped("Wire a demodulator here to listen.");
+                        ImGui::PopStyleColor();
+                    }
+                    break;
+                }
+                // Text out: the newest lines that fit, oldest at the top.
+                const auto it = patchSinkLines_.find(n.id);
+                if (it == patchSinkLines_.end() || it->second.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                    ImGui::TextWrapped("Decoded lines appear here.");
+                    ImGui::PopStyleColor();
+                    break;
+                }
+                const float lineH = ImGui::GetTextLineHeightWithSpacing();
+                const int fit = std::max(1, static_cast<int>((s1.y - top) / lineH) - 1);
+                const std::deque<std::string>& q = it->second;
+                const std::size_t start = q.size() > static_cast<std::size_t>(fit)
+                                              ? q.size() - static_cast<std::size_t>(fit)
+                                              : 0u;
+                // One row per line, cut at the face's edge rather than
+                // wrapped, so the newest lines stay in view at the bottom.
+                // The face's wrap position is lifted for the log: wrapped,
+                // one long line took three rows and the rendered check showed
+                // the newest lines pushed off the bottom.
+                ImGui::PushTextWrapPos(-1.0f);
+                ImGui::PushStyleColor(ImGuiCol_Text, phosphor);
+                for (std::size_t i = start; i < q.size(); ++i) {
+                    ImGui::TextUnformatted(q[i].c_str());
+                }
+                ImGui::PopStyleColor();
+                ImGui::PopTextWrapPos();
+                break;
+            }
+            case pc::NodeKind::Display: {
+                // A LIVE SPECTRUM AND WATERFALL of whatever feeds it, cut out of
+                // the same wideband frame the main waterfall draws, so the two
+                // are one measurement. From the RADIO: the whole capture, with
+                // every planned channel marked and named. From a CHANNEL: that
+                // channel's slice, its centre marked.
+                const pc::Node* feeder = nullptr;
+                for (const pc::Wire& w : patchGraph_.wires()) {
+                    if (w.to == n.id) {
+                        feeder = patchGraph_.find(w.from);
+                        break;
+                    }
+                }
+                const double rate = pipeline_.activeSource().sampleRateHz();
+                double lo = 0.0;
+                double hi = 0.0;
+                bool ok = false;
+                if (feeder != nullptr && feeder->kind == pc::NodeKind::Radio && rate > 0.0) {
+                    lo = -0.5 * rate;
+                    hi = 0.5 * rate;
+                    ok = true;
+                } else if (feeder != nullptr && feeder->kind == pc::NodeKind::Channel) {
+                    if (const pc::ChannelPlan* cp = pc::findChannel(patchPlan_, feeder->id)) {
+                        lo = cp->offsetHz - 0.5 * cp->outRateHz;
+                        hi = cp->offsetHz + 0.5 * cp->outRateHz;
+                        ok = true;
+                    }
+                }
+                if (!ok) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                    ImGui::TextWrapped("Wire the radio or a channel here to see its spectrum.");
+                    ImGui::PopStyleColor();
+                    break;
+                }
+                if (lastFrame_.dbBins.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+                    ImGui::TextWrapped("No spectrum yet - start the receiver.");
+                    ImGui::PopStyleColor();
+                    break;
+                }
+
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const float x0 = s0.x + 3.0f * zoom;
+                const float x1 = s1.x - 3.0f * zoom;
+                const float y0 = s0.y + 3.0f * zoom;
+                const float y1 = s1.y - 3.0f * zoom;
+                if (x1 - x0 < 20.0f || y1 - y0 < 20.0f) { break; }
+                const float traceH = (y1 - y0) * 0.38f;
+                // Two pixels a column and a row at most, and a hard cap, so a
+                // node dragged huge costs a bounded number of rectangles.
+                const int cols = std::clamp(static_cast<int>((x1 - x0) / 2.0f), 16, 200);
+                const int rows = std::clamp(static_cast<int>((y1 - y0 - traceH) / 2.0f), 4, 100);
+
+                std::vector<float> colsDb;
+                pg::binsToColumns(lastFrame_.dbBins, rate, lo, hi, cols, -200.0f, colsDb);
+                const pg::DbRange range = pg::autoRange(colsDb);
+                pg::ScopeHistory& hist = patchScopes_[n.id];
+                hist.reshape(cols, rows, lo, hi);
+                std::uint64_t& seq = patchScopeSeq_[n.id];
+                if (seq != lastFrame_.seq) {
+                    seq = lastFrame_.seq;
+                    std::vector<float> norm(colsDb.size());
+                    for (std::size_t i = 0; i < colsDb.size(); ++i) {
+                        norm[i] = pg::normalise(colsDb[i], range);
+                    }
+                    hist.push(norm);
+                }
+
+                // The trace: phosphor, because it is what the radio received.
+                std::vector<ImVec2> pts;
+                pts.reserve(colsDb.size());
+                const float colW = (x1 - x0) / static_cast<float>(cols);
+                for (int c = 0; c < cols; ++c) {
+                    const float t = pg::normalise(colsDb[static_cast<std::size_t>(c)], range);
+                    pts.emplace_back(x0 + (static_cast<float>(c) + 0.5f) * colW,
+                                     y0 + traceH - t * (traceH - 2.0f * zoom));
+                }
+                dl->AddPolyline(pts.data(), static_cast<int>(pts.size()),
+                                cascade::gui::theme::kPhosphor, 0, 1.2f * zoom);
+
+                // The waterfall, newest at the top, in the main waterfall's
+                // own colour map.
+                const float wy0 = y0 + traceH + 2.0f * zoom;
+                const float cellH = (y1 - wy0) / static_cast<float>(rows);
+                for (int age = 0; age < hist.filled(); ++age) {
+                    const float* row = hist.row(age);
+                    if (row == nullptr) { break; }
+                    const float y = wy0 + static_cast<float>(age) * cellH;
+                    for (int c = 0; c < cols; ++c) {
+                        const float x = x0 + static_cast<float>(c) * colW;
+                        dl->AddRectFilled(ImVec2(x, y), ImVec2(x + colW + 0.5f, y + cellH + 0.5f),
+                                          cascade::gui::waterfallColor(row[c]));
+                    }
+                }
+
+                // Markers: every planned channel across the whole band, or the
+                // channel's own centre on a slice. Cream lettering, so a
+                // marker never reads as a number or a warning.
+                const auto marker = [&](double off, const char* label) {
+                    const float mx = pg::markerX(off, lo, hi, x1 - x0);
+                    if (mx < 0.0f) { return; }
+                    dl->AddLine(ImVec2(x0 + mx, y0), ImVec2(x0 + mx, y1),
+                                (cascade::gui::theme::kCream & 0x00FFFFFFu) | 0x90000000u, 1.0f);
+                    if (label != nullptr) {
+                        dl->AddText(ImVec2(x0 + mx + 3.0f * zoom, y0 + 1.0f * zoom),
+                                    cascade::gui::theme::kCream, label);
+                    }
+                };
+                if (feeder->kind == pc::NodeKind::Radio) {
+                    for (const pc::ChannelPlan& cp : patchPlan_.channels) {
+                        const pc::Node* ch = patchGraph_.find(cp.node);
+                        marker(cp.offsetHz, ch != nullptr ? ch->name.c_str() : nullptr);
+                    }
+                } else {
+                    marker(0.5 * (lo + hi), nullptr);
+                }
+                break;
+            }
+            case pc::NodeKind::Decoder:
+                // Its face is its output - the count and latest line the
+                // canvas draws. The plugin is chosen in the inspector.
+                break;
+        }
+        ImGui::EndGroup();
+        ImGui::PopTextWrapPos();
+        ImGui::PopClipRect();
+        ImGui::PopID();
+    }
+
+    ImGui::PopClipRect();
+    ImGui::PopStyleVar(2);
+    ImGui::PopFont();
+}
+
 void AppWindow::drawPatchSection() {
     // A KEY, NOT A DRAWER, the same primitive the demod scope's row uses:
     // everything a patch can be set to is ON the canvas, because a node wired
@@ -11107,6 +11526,9 @@ void AppWindow::drawPatchPage() {
             cascade::gui::patch::drawPatchCanvas(patchGraph_, patchUi_, patchPlan_,
                                                  patchReadings_, origin,
                                                  ImVec2(canvasW, avail.y));
+            // AFTER the canvas, so these widgets sit on top of it and take
+            // their own clicks (the canvas button allows overlap).
+            drawPatchFaces(origin.x, origin.y, canvasW, avail.y);
         }
 
         // --- the inspector ----------------------------------------------------
@@ -15565,6 +15987,15 @@ void AppWindow::pumpDecoderOutput() {
                                     pl.text.c_str());
         }
         if (!patchDecoderIsShown(pl.node)) { continue; }
+        // Onto the face of every Text out this decoder is wired to.
+        for (const cascade::core::patch::Wire& w : patchGraph_.wires()) {
+            if (w.from != pl.node) { continue; }
+            const cascade::core::patch::Node* dst = patchGraph_.find(w.to);
+            if (dst == nullptr || dst->kind != cascade::core::patch::NodeKind::Sink) { continue; }
+            std::deque<std::string>& q = patchSinkLines_[w.to];
+            q.push_back(pl.source + ": " + pl.text);
+            while (q.size() > 200) { q.pop_front(); }
+        }
         ++decoderLinesTotal_;
         cascade::core::DecodedLine l;
         l.plugin = std::move(pl.source);

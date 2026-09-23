@@ -444,6 +444,38 @@ int main() {
         CHECK(!pointInResizeGrip(n, V(2.0f, 2.0f)));
     }
 
+    // [S4b] The close key is in the title bar at the right, and nowhere near
+    // a port: a click aimed at an output port must never close the node.
+    {
+        using cascade::gui::patch::closeKeyRect;
+        using cascade::gui::patch::faceRect;
+        using cascade::gui::patch::kCloseKey;
+        using cascade::gui::patch::pointInCloseKey;
+        Graph g;
+        const NodeId id = g.addNode(NodeKind::Demod, "AM", PortType::Iq, 50.0f, 70.0f);
+        cascade::core::patch::Node& n = *g.mutableNode(id);
+        const auto r = closeKeyRect(n);
+        CHECK(r.x1 <= n.x + nodeWidth(n));
+        CHECK(r.x1 - r.x0 == kCloseKey);
+        CHECK(r.y0 >= n.y);
+        CHECK(r.y1 <= n.y + kHeaderHeight);          // inside the title bar
+        CHECK(pointInCloseKey(n, V((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f)));
+        const Vec2 port = outputPortPos(n, 0);
+        CHECK(!pointInCloseKey(n, port));
+        CHECK(port.y > r.y1);                          // ports start below it
+        CHECK(!pointInCloseKey(n, V(n.x + 10.0f, n.y + 10.0f)));   // left of the title
+        // It follows the right edge through a resize.
+        resizeNodeTo(n, V(n.x + 480.0f, n.y + 200.0f));
+        CHECK(pointInCloseKey(n, V(n.x + 480.0f - 10.0f, (r.y0 + r.y1) * 0.5f)));
+        // The face is inside the node, below the title, and grows with it.
+        const auto f = faceRect(n);
+        CHECK(f.x0 > n.x && f.x1 < n.x + nodeWidth(n));
+        CHECK(f.y0 >= n.y + kHeaderHeight - 2.0f);
+        CHECK(f.y1 < n.y + nodeHeight(n));
+        CHECK(f.x1 - f.x0 > 400.0f);
+        CHECK(!pointInResizeGrip(n, V(f.x0 + 10.0f, f.y0 + 10.0f)));   // a face click is not a resize
+    }
+
     // [S5] A node with no size - a plain struct, or a file from before sizes
     // - still has a usable outline rather than a zero-area one.
     {

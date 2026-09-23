@@ -33,6 +33,8 @@ struct GLFWwindow;
 #include "core/patch_plan.hpp"
 #include "core/patch_runner.hpp"
 #include "gui/patch_view_math.hpp"
+#include "gui/patch_scope_math.hpp"
+#include "gui/input_script.hpp"
 #include "core/plugin_ui.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
@@ -2476,6 +2478,33 @@ private:
         std::uint64_t lines = 0;
     };
     std::map<cascade::core::patch::NodeId, PatchDecoderFace> patchDecoderFaces_;
+    // Each Text out node's recent lines, newest last, for its face - the
+    // patch's own decoder log. Bounded per node.
+    std::map<cascade::core::patch::NodeId, std::deque<std::string>> patchSinkLines_;
+    // Each Spectrum node's waterfall memory, and the spectrum frame it last
+    // took a row from - a row per published frame, not per GUI frame, so the
+    // waterfall scrolls at the same pace as the main one.
+    std::map<cascade::core::patch::NodeId, cascade::gui::patch::ScopeHistory> patchScopes_;
+    std::map<cascade::core::patch::NodeId, std::uint64_t> patchScopeSeq_;
+    // Where the patch canvas was drawn last frame, in ImGui screen space:
+    // what lets an input script aim at a node by its patch coordinates.
+    float patchCanvasOriginX_ = 0.0f;
+    float patchCanvasOriginY_ = 0.0f;
+
+    // --- the scripted pointer (bounded runs only; see gui/input_script.hpp) ---
+    std::vector<cascade::gui::ScriptStep> inputScript_;
+    std::size_t inputScriptPos_ = 0;
+    bool inputScriptActive_ = false;
+    bool scriptMouseSet_ = false;
+    float scriptMouseX_ = 0.0f;
+    float scriptMouseY_ = 0.0f;
+    // Feeds this frame's steps into ImGui's input queue. Called between the
+    // platform backend's NewFrame and ImGui::NewFrame, so the script's events
+    // are the last word on the frame.
+    void applyInputScript(long frame);
+    // The controls on every node's face, drawn over the canvas after it:
+    // the node IS the instrument, so what it is set to is set on it.
+    void drawPatchFaces(float originX, float originY, float width, float height);
     // GUI thread: rebuilds the two lists above from pluginHost_.
     void rebuildPatchCatalogue();
     // True when the node's Text output reaches a Text sink - the only way

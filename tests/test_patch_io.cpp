@@ -355,15 +355,22 @@ int main() {
     // restart. Found from the patch document a scripted run printed in 0.99.15.
     {
         Graph g;
+        // The last two need TEN or more significant digits - a 23 cm channel
+        // to the hertz, and a quarter-hertz offset. Nine digits (a float's
+        // round-trip count) is not enough for them, so they are what proves
+        // the frequency is written at a DOUBLE's precision and not merely at
+        // "more than six": a break-it pass that wrote frequencies at the float
+        // setting survived every other value here.
         const double freqs[] = {446006250.0, 118008333.0, 1090000000.0, 137912500.0,
-                                7074000.5};
+                                7074000.5, 1296123457.0, 144800000.25};
+        constexpr std::size_t kCount = sizeof(freqs) / sizeof(freqs[0]);
         for (const double f : freqs) {
             const NodeId ch = g.addNode(NodeKind::Channel, "c", PortType::Iq, 1234.5678f, -98.765f);
             g.mutableNode(ch)->freqHz = f;
         }
         const LoadResult r = parse(serialise(g, 0.0f, 0.0f, 1.0f));
-        CHECK(r.graph.nodes().size() == 5u);
-        for (std::size_t i = 0; i < 5u && i < r.graph.nodes().size(); ++i) {
+        CHECK(r.graph.nodes().size() == kCount);
+        for (std::size_t i = 0; i < kCount && i < r.graph.nodes().size(); ++i) {
             CHECK(r.graph.nodes()[i].freqHz == freqs[i]);
         }
         // Positions are floats and must come back as the SAME float too, or

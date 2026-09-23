@@ -107,6 +107,12 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     ImGuiIO& io = ImGui::GetIO();
 
     ImGui::SetCursorScreenPos(origin);
+    // OVERLAPPABLE, because the controls on each node's face are real widgets
+    // submitted after this button, on top of it. Without this the canvas owns
+    // every click and a node's frequency box could never be typed into; with
+    // it, a widget the pointer is over takes the click and the canvas does not
+    // see it (ImGui decides by last frame's hovered item).
+    ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##patchcanvas", size,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle |
                                ImGuiButtonFlags_MouseButtonRight);
@@ -233,8 +239,41 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         if (cap >= 5.0f) {
             char title[96];
             std::snprintf(title, sizeof(title), "%s  %s", kindCaption(n.kind), n.name.c_str());
+            // Clipped short of the close key, so a long name never runs
+            // under it.
+            const Rect ck = closeKeyRect(n);
+            const ImVec2 ck0 = iv(worldToScreen(v, Vec2{ck.x0, ck.y0}));
+            dl->PushClipRect(a, ImVec2{ck0.x - 2.0f, b.y}, true);
             dl->AddText(font, cap, ImVec2{a.x + 7.0f * v.zoom, a.y + 5.0f * v.zoom},
                         theme::kEngraved, title);
+            dl->PopClipRect();
+        }
+
+        // THE CLOSE KEY, engraved like the caption and ivory under the
+        // pointer - the bench's "this is live" cue, not a warning colour,
+        // because closing a node is an ordinary act, not a fault.
+        if (v.zoom >= 0.5f) {
+            const Rect ck = closeKeyRect(n);
+            const ImVec2 c0 = iv(worldToScreen(v, Vec2{ck.x0, ck.y0}));
+            const ImVec2 c1 = iv(worldToScreen(v, Vec2{ck.x1, ck.y1}));
+            const bool over = pointInCloseKey(n, screenToWorld(v, vv(io.MousePos)));
+            const ImU32 col = over ? theme::kIvory : theme::kEngraved;
+            const float in = 3.5f * v.zoom;
+            dl->AddLine(ImVec2{c0.x + in, c0.y + in}, ImVec2{c1.x - in, c1.y - in}, col,
+                        1.4f * v.zoom);
+            dl->AddLine(ImVec2{c1.x - in, c0.y + in}, ImVec2{c0.x + in, c1.y - in}, col,
+                        1.4f * v.zoom);
+        }
+
+        // THE GRIP: three short diagonals in the bottom-right corner, where
+        // pointInResizeGrip() looks for it.
+        if (v.zoom >= 0.5f) {
+            for (int k = 1; k <= 3; ++k) {
+                const float d = 3.5f * static_cast<float>(k) * v.zoom;
+                dl->AddLine(ImVec2{b.x - d - 2.0f * v.zoom, b.y - 2.0f * v.zoom},
+                            ImVec2{b.x - 2.0f * v.zoom, b.y - d - 2.0f * v.zoom},
+                            theme::kBrassTint, 1.0f);
+            }
         }
 
         // The well under it: the node's live face. Empty when nothing has been
@@ -301,12 +340,26 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         } else {
             const NodeId hit = nodeAt(g, mouseWorld);
             if (hit != kNoNode) {
-                ui.selected = hit;
-                ui.wireSelected = false;
                 const Node* n = g.find(hit);
-                if (pointInHeader(*n, mouseWorld)) {
-                    ui.dragNode = hit;
-                    ui.grab = Vec2{mouseWorld.x - n->x, mouseWorld.y - n->y};
+                if (pointInCloseKey(*n, mouseWorld)) {
+                    // Closing takes the node's wires with it (removeNode).
+                    g.removeNode(hit);
+                    if (ui.selected == hit) { ui.selected = kNoNode; }
+                    ui.wireSelected = false;
+                    ui.dirty = true;
+                } else {
+                    ui.selected = hit;
+                    ui.wireSelected = false;
+                    if (pointInResizeGrip(*n, mouseWorld)) {
+                        // `grab` is the pointer's offset from the CORNER, so
+                        // the corner does not jump to the pointer.
+                        const Vec2 s = nodeSize(*n);
+                        ui.resizeNode = hit;
+                        ui.grab = Vec2{mouseWorld.x - (n->x + s.x), mouseWorld.y - (n->y + s.y)};
+                    } else if (pointInHeader(*n, mouseWorld)) {
+                        ui.dragNode = hit;
+                        ui.grab = Vec2{mouseWorld.x - n->x, mouseWorld.y - n->y};
+                    }
                 }
             } else {
                 // Empty canvas: a click near a wire selects it, otherwise the
@@ -339,6 +392,18 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         }
     }
 
+    if (ui.resizeNode != kNoNode) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            Node* n = g.mutableNode(ui.resizeNode);
+            if (n != nullptr) {
+                resizeNodeTo(*n, Vec2{mouseWorld.x - ui.grab.x, mouseWorld.y - ui.grab.y});
+                ui.dirty = true;
+            }
+        } else {
+            ui.resizeNode = kNoNode;
+        }
+    }
+
     if (ui.wiring && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         const PortHit drop = portAt(g, mouseWorld);
         ui.refusal = Connect::Ok;
@@ -367,8 +432,11 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         ui.wiring = false;
     }
 
-    // Delete removes whichever ONE thing is selected.
-    if (hovered && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+    // Delete removes whichever ONE thing is selected - but never while a text
+    // box has the keyboard. A node's frequency box lives on the canvas now, and
+    // Delete pressed while editing it must edit the number, not destroy the
+    // node it belongs to.
+    if (hovered && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
         if (ui.wireSelected) {
             g.disconnect(ui.selectedWire);
             ui.wireSelected = false;

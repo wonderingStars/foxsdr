@@ -136,6 +136,36 @@ inline bool pointInResizeGrip(const Node& n, Vec2 p) {
     return p.x >= x1 - kResizeGrip && p.x <= x1 && p.y >= y1 - kResizeGrip && p.y <= y1;
 }
 
+// --- the close key and the face ---------------------------------------------
+//
+// The close key sits at the right end of the title bar, where every window on
+// the desktop keeps one. Inside the header and clear of the ports, which start
+// below it, so a click meant for an output port can never close the node.
+inline constexpr float kCloseKey = 14.0f;
+
+struct Rect {
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+};
+
+inline Rect closeKeyRect(const Node& n) {
+    const float x1 = n.x + nodeWidth(n) - 4.0f;
+    const float y0 = n.y + (kHeaderHeight - kCloseKey) * 0.5f;
+    return Rect{x1 - kCloseKey, y0, x1, y0 + kCloseKey};
+}
+
+inline bool pointInCloseKey(const Node& n, Vec2 p) {
+    const Rect r = closeKeyRect(n);
+    return p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1;
+}
+
+// The node's FACE - the dark well under the title where its readings and its
+// controls live. One definition, used by the drawing and by the controls laid
+// over it, so the two cannot drift apart.
+inline Rect faceRect(const Node& n) {
+    const Vec2 s = nodeSize(n);
+    return Rect{n.x + 6.0f, n.y + kHeaderHeight - 2.0f, n.x + s.x - 6.0f, n.y + s.y - 6.0f};
+}
+
 // The size a node takes when its grip is dragged to `corner` (world units).
 // Held to the same floors nodeSize() applies, and written back into the node
 // as the size it now IS, so the saved patch and the drawn one never disagree.
