@@ -154,6 +154,10 @@ public:
     // outcomes, the timeout and the retry; call enumerateIsolated() directly
     // if you need to tell "no devices" from "the probe died".
     static std::vector<SoapyDeviceInfo> enumerate();
+    // The same scan with these drivers left out, which is safe to run while a
+    // radio of theirs is open (2026-09-23) - see EnumOptions::skipDrivers and
+    // gui/device_scan_plan.hpp. Empty is exactly enumerate().
+    static std::vector<SoapyDeviceInfo> enumerate(const std::vector<std::string>& skipDrivers);
 
     // The walk itself, in THIS process, under the structured-exception guard
     // (source/vendor_guard.hpp). This is what the child process runs, and what

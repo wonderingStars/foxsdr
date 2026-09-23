@@ -209,6 +209,10 @@ struct EnumResult {
 
     // Only ever filled by a --list-drivers child; see kKeyDrivers.
     std::vector<std::string> drivers;
+
+    // The drivers a skipDrivers scan left out, lower-cased, in the order the
+    // listing gave them - see EnumOptions::skipDrivers.
+    std::vector<std::string> skippedDrivers;
 };
 
 struct EnumOptions {
@@ -264,6 +268,17 @@ struct EnumOptions {
     // install is a failure this product has already shipped once. Tests turn
     // it off so that a spawn failure is visible as a spawn failure.
     bool allowInProcessFallback = true;
+
+    // DRIVERS NOT TO ASK, because a device of theirs is open in this process
+    // (2026-09-23). Non-empty makes this a scan that can run while radios
+    // stream: the whole bus is NOT probed; the drivers are listed in a child
+    // and every one NOT named here is asked in a child of its own. Case is
+    // ignored. Why only some: the 0.90.0 field fault was SoapyRTLSDR's probe
+    // opening and resetting every RTL dongle - the streaming one included - so
+    // the danger is to a device of the SAME family as the driver probing, and
+    // gui/device_scan_plan.hpp decides which families are open. Empty (the
+    // default) is the ordinary scan, unchanged.
+    std::vector<std::string> skipDrivers;
 };
 
 // Enumerates in a child process. Never throws.

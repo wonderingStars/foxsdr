@@ -473,6 +473,12 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerate() {
     return enumerateIsolated().devices;
 }
 
+std::vector<SoapyDeviceInfo> SoapySource::enumerate(const std::vector<std::string>& skipDrivers) {
+    EnumOptions options;
+    options.skipDrivers = skipDrivers;
+    return enumerateIsolated(options).devices;
+}
+
 bool SoapySource::anyDeviceOpen() {
     return s_openDevices.load(std::memory_order_relaxed) > 0;
 }

@@ -10,6 +10,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -593,22 +594,54 @@ std::string enumerateHelperPath() {
 //
 // Each driver gets ONE child: a driver that faults faults every time here by
 // construction, and this path is already the slow one.
+std::string lowerAscii(std::string s) {
+    for (char& c : s) {
+        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    return s;
+}
+
+// THE SAME WALK SERVES TWO CALLERS. After a whole-bus death (skipDrivers
+// empty, `restricted` false) it asks every driver. While radios are open
+// (`restricted` true) it is the ONLY walk: options.skipDrivers are left out,
+// because their probe would open a device this process is streaming from.
 void sweepEachDriver(const std::string& helper, const EnumOptions& options,
-                     const std::string& crashDir, EnumResult& result) {
+                     const std::string& crashDir, EnumResult& result, bool restricted) {
     EnumResult listing;
     runOneChild(helper, options.timeoutMs, crashDir, listing, "--list-drivers");
     result.sweepChildren += listing.attempts;
     if (listing.outcome != EnumOutcome::Ok || listing.drivers.empty()) {
+        if (restricted) {
+            // Nothing was probed, so nothing was risked: say so and give the
+            // listing's own outcome, which is the honest answer.
+            result.outcome = listing.outcome == EnumOutcome::Ok ? EnumOutcome::Ok
+                                                                : listing.outcome;
+            result.exitCode = listing.exitCode;
+            core::diagWarnf("soapy: the driver list could not be read for a scan beside an "
+                            "open radio - no devices listed this scan");
+            return;
+        }
         core::diagWarnf(
             "soapy: every whole-bus probe died and the driver list could not be read "
             "either - no devices listed this scan");
         return;
     }
 
+    std::vector<std::string> skip;
+    for (const std::string& s : options.skipDrivers) { skip.push_back(lowerAscii(s)); }
+    std::vector<std::string> asked;
+    for (const std::string& d : listing.drivers) {
+        if (std::find(skip.begin(), skip.end(), lowerAscii(d)) != skip.end()) {
+            result.skippedDrivers.push_back(lowerAscii(d));
+        } else {
+            asked.push_back(d);
+        }
+    }
+
     result.sweptPerDriver = true;
-    result.sweptDrivers = listing.drivers;
+    result.sweptDrivers = asked;
     std::vector<SoapyDeviceInfo> found;
-    for (const std::string& driver : listing.drivers) {
+    for (const std::string& driver : asked) {
         EnumResult one;
         runOneChild(helper, options.timeoutMs, crashDir, one, "--driver=" + driver);
         result.sweepChildren += one.attempts;
@@ -635,6 +668,23 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     }
 
     result.devices = std::move(found);
+    if (restricted) {
+        // Ok unless every driver asked died: the list is the honest answer for
+        // the drivers that could be asked. Leaving every driver out (only the
+        // open radios' families are installed) is Ok and empty, not a death.
+        const bool allDied = !asked.empty() && result.faultedDrivers.size() == asked.size();
+        result.outcome = allDied ? EnumOutcome::ChildDied : EnumOutcome::Ok;
+        if (!allDied) { result.exitCode = 0; }
+        std::string left;
+        for (const std::string& s : result.skippedDrivers) { left += (left.empty() ? "" : ", ") + s; }
+        core::diagLogf(
+            "soapy: scanned beside an open radio - %d driver(s) asked, %d left out (%s: their "
+            "probe would reset the open radio), %d faulted, %d device(s) listed",
+            static_cast<int>(asked.size()), static_cast<int>(result.skippedDrivers.size()),
+            left.empty() ? "none" : left.c_str(), static_cast<int>(result.faultedDrivers.size()),
+            static_cast<int>(result.devices.size()));
+        return;
+    }
     // Ok even when some drivers faulted: the list is the honest answer for the
     // drivers that worked, and the ones that did not are named in the log and
     // in faultedDrivers. Only a sweep that produced nothing at all stays a
@@ -663,7 +713,11 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
     // diagnostics off - so the child's capture is exactly the parent's consent.
     const std::string childCrashDir = core::activeCrashDir();
 
-    if (!helper.empty()) {
+    if (!helper.empty() && !options.skipDrivers.empty()) {
+        // BESIDE AN OPEN RADIO: never the whole bus, only the drivers that
+        // cannot touch it, each in its own child. See EnumOptions::skipDrivers.
+        sweepEachDriver(helper, options, childCrashDir, result, true);
+    } else if (!helper.empty()) {
         const int maxAttempts = (options.attempts > 0) ? options.attempts : 1;
         for (int i = 0; i < maxAttempts; ++i) {
             EnumResult attempt;
@@ -714,13 +768,18 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         }
         // EVERY ATTEMPT DIED. One bad driver must not hide the rest.
         if (result.outcome == EnumOutcome::ChildDied && options.perDriverSweep) {
-            sweepEachDriver(helper, options, childCrashDir, result);
+            sweepEachDriver(helper, options, childCrashDir, result, false);
         }
     } else {
         result.outcome = EnumOutcome::SpawnFailed;
     }
 
-    if (result.outcome == EnumOutcome::SpawnFailed && options.allowInProcessFallback) {
+    // NEVER IN-PROCESS BESIDE AN OPEN RADIO. The in-process walk refuses only
+    // while a SoapySDR device is open, and a scan with skipDrivers exists
+    // precisely because the open radio may be a NATIVE one it cannot see - the
+    // whole-bus walk here would probe that dongle from inside this process.
+    if (result.outcome == EnumOutcome::SpawnFailed && options.allowInProcessFallback &&
+        options.skipDrivers.empty()) {
         core::diagWarnf(
             "soapy: no enumeration helper could be started ('%s') - walking the bus "
             "in-process instead, which is not crash-isolated",

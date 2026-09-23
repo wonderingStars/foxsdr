@@ -271,6 +271,31 @@ int fakeHelper(int argc, char** argv) {
         // "bad", and the whole-bus probe, die the same way the field does.
         return 7;
     }
+    if (mode == "tworadios") {
+        // A STREAMING RTL-SDR BESIDE A B200 (2026-09-23). The whole bus lists
+        // both; each driver lists its own; and the rtlsdr driver, asked on its
+        // own, DIES with 42 - so a scan that was told to leave it out and asks
+        // it anyway is a named failure, not a quiet extra row.
+        const std::string driver = driverArg(argc, argv);
+        const char* cap = gotCrashDir ? "true" : "false";
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"rtlsdr\",\"uhd\"],\"devices\":[]}\n", cap);
+            return 0;
+        }
+        if (driver == "rtlsdr") { return 42; }
+        if (driver == "uhd") {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":2,\"capture\":%s,"
+                        "\"devices\":[{\"label\":\"B200\",\"args\":\"driver=uhd,serial=31\"}]}\n",
+                        cap);
+            return 0;
+        }
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":2,\"capture\":%s,"
+                    "\"devices\":[{\"label\":\"RTL-SDR\",\"args\":\"driver=rtlsdr,serial=1\"},"
+                    "{\"label\":\"B200\",\"args\":\"driver=uhd,serial=31\"}]}\n",
+                    cap);
+        return 0;
+    }
     if (mode == "garbage") {
         std::printf("this is not json at all\n");
         return 0;
@@ -896,6 +921,62 @@ int main(int argc, char** argv) {
         CHECK(r.attempts == 1);
         CHECK(r.sweepChildren == 0);
         CHECK(!r.sweptPerDriver);
+    }
+    {
+        // SCANNING WHILE A RADIO IS OPEN (2026-09-23). The owner's B200 never
+        // appeared on the patch page while the receiver had an RTL-SDR open,
+        // because the whole scan was deferred: SoapyRTLSDR's probe opens and
+        // resets every RTL dongle on the bus, the streaming one included (the
+        // 0.90.0 field fault). Only THAT driver has to stay out. skipDrivers
+        // names it, the whole bus is never probed, and every other driver is
+        // asked on its own - so the B200 is found and the dongle is untouched.
+        setMode("tworadios");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        o.skipDrivers = {"RTLSDR"};  // case does not matter: registries vary
+        const EnumResult r = enumerateIsolated(o);
+        const Rows wantRows{{"B200", "driver=uhd,serial=31"}};
+        const std::vector<std::string> wantSkipped{"rtlsdr"};
+        const std::vector<std::string> wantAsked{"uhd"};
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(rowsOf(r) == wantRows);
+        CHECK(r.attempts == 0);         // no whole-bus child at all
+        CHECK(r.sweepChildren == 2);    // the listing, then uhd on its own
+        CHECK(r.childDeaths == 0);      // rtlsdr was never asked (it dies with 42)
+        CHECK(r.faultedDrivers.empty());
+        CHECK(r.sweptDrivers == wantAsked);
+        CHECK(r.skippedDrivers == wantSkipped);
+    }
+    {
+        // ...and with nothing to leave out, the same machine gets the ordinary
+        // single whole-bus child, both radios listed.
+        setMode("tworadios");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        const Rows wantRows{{"RTL-SDR", "driver=rtlsdr,serial=1"}, {"B200", "driver=uhd,serial=31"}};
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(rowsOf(r) == wantRows);
+        CHECK(r.attempts == 1);
+        CHECK(r.sweepChildren == 0);
+        CHECK(r.skippedDrivers.empty());
+    }
+    {
+        // NO IN-PROCESS FALLBACK BESIDE AN OPEN RADIO. With no helper, the
+        // ordinary scan walks the bus in this process; a scan told to leave a
+        // driver out must not, because the in-process walk asks every driver -
+        // the one whose radio is open included - and refuses only for a
+        // SoapySDR device, not a native one.
+        EnumOptions o;
+        o.helperPath = "X:\\nowhere\\definitely-not-here.exe";
+        o.allowInProcessFallback = true;
+        o.skipDrivers = {"rtlsdr"};
+        const EnumResult r = enumerateIsolated(o);
+        CHECK(r.outcome == EnumOutcome::SpawnFailed);
+        CHECK(!r.fellBackInProcess);
+        CHECK(r.devices.empty());
     }
 
     // --- ChildDied: the fault this file exists for, contained ---------------

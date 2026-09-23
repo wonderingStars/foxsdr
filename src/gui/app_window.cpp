@@ -6578,7 +6578,9 @@ void AppWindow::drawSourceSection() {
         // to run while a radio is streaming.
         if (!sourceComboWasOpen_) {
             scanNative();
-            if (!soapyScanned_) { scanSoapy(); }
+            // A scan that had to leave the open radios' drivers out is redone
+            // whole at the first chance with nothing open (2026-09-23).
+            if (!soapyScanned_ || (soapyScanPartial_ && !soapyScanGated())) { scanSoapy(); }
         }
         const int rowCount = soapyRowBase() + static_cast<int>(soapyDevices_.size());
         for (int i = 0; i < rowCount; ++i) {
@@ -6621,10 +6623,23 @@ void AppWindow::drawSourceSection() {
         scanSoapy();  // defers itself, and says so once, while a radio is open
     }
     if (scanGated) {
-        const std::string why = "Refreshed the native radios. The SoapySDR scan is deferred "
-                                "while " + soapyScanGateDevice() +
-                                " is open - the vendor probe opens and resets every dongle "
-                                "it finds. Close the radio to look for other SoapySDR devices.";
+        // WHAT THE SCAN DOES BESIDE AN OPEN RADIO (2026-09-23): usually it
+        // still runs, leaving out only the open radios' own drivers; it is
+        // deferred only when it cannot vouch for one (device_scan_plan.hpp).
+        const cascade::gui::SoapyScanPlan plan = soapyScanPlan();
+        std::string why;
+        if (plan.mode == cascade::gui::SoapyScanMode::SkipSome) {
+            std::string names;
+            for (const std::string& d : plan.skipDrivers) { names += (names.empty() ? "" : ", ") + d; }
+            why = "While " + soapyScanGateDevice() + " is open, Refresh looks for every other "
+                  "kind of radio but leaves out the " + names + " driver - its probe would "
+                  "reset the open radio. Close it to look for more of that kind.";
+        } else {
+            why = "Refreshed the native radios. The SoapySDR scan is deferred while " +
+                  soapyScanGateDevice() +
+                  " is open - the vendor probe opens and resets every dongle it finds. Close "
+                  "the radio to look for other SoapySDR devices.";
+        }
         if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", why.c_str()); }
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", why.c_str());
@@ -6738,7 +6753,7 @@ void AppWindow::drawSourceSection() {
     //
     // Shown only after a scan has actually completed and found nothing, so it
     // never flashes up during the first enumeration.
-    if (soapyScanned_ && !soapyBusy && soapyDevices_.empty()) {
+    if (soapyScanned_ && !soapyScanPartial_ && !soapyBusy && soapyDevices_.empty()) {
         ImGui::Separator();
         ImGui::TextColored(cascade::gui::theme::warning(), "No radio hardware found");
         ImGui::TextWrapped(
@@ -7205,8 +7220,43 @@ bool AppWindow::soapyScanGated() const {
     // what is asked here: device_ is, whatever kind it is. The three
     // conditions are unchanged in meaning; only the type of the first has
     // widened.
+    //
+    // AND THE PATCH PAGE'S RADIOS (2026-09-23). A patch runs up to five radios
+    // of its own, natively or through SoapySDR, and a native patch dongle was
+    // invisible to this gate: a whole-bus scan could have probed it
+    // mid-stream exactly as the 0.90.0 report describes.
     return device_ != nullptr || deviceOpenPending_ ||
-           cascade::source::SoapySource::anyDeviceOpen();
+           cascade::source::SoapySource::anyDeviceOpen() || !patchRadios_.empty() ||
+           !patchRadioPending_.empty();
+}
+
+cascade::gui::SoapyScanPlan AppWindow::soapyScanPlan() const {
+    // Every radio this process has open: the receiver's and each patch radio's,
+    // named by family the way both name them. A patch radio on the generator
+    // is not a radio. See gui/device_scan_plan.hpp for the rule.
+    std::vector<cascade::gui::OpenRadio> open;
+    int soapyListed = 0;
+    if (device_ != nullptr) {
+        open.push_back({sourceKind_, deviceArgs_});
+        if (sourceKind_ == "soapy") { ++soapyListed; }
+    }
+    for (const auto& entry : patchRadios_) {
+        const cascade::core::patch::Node* n = patchGraph_.find(entry.first);
+        if (n == nullptr) {
+            // A running radio whose node is gone: its family cannot be named,
+            // so the plan defers - never a guess.
+            open.push_back({"unknown", std::string()});
+            continue;
+        }
+        if (cascade::core::patch::isGeneratorKey(n->device)) { continue; }
+        const std::string kind = cascade::core::patch::deviceDriver(n->device);
+        open.push_back({kind, cascade::core::patch::deviceArgs(n->device)});
+        if (kind == "soapy") { ++soapyListed; }
+    }
+    const int unaccounted =
+        std::max(0, cascade::source::SoapySource::openDeviceCount() - soapyListed);
+    const bool opening = deviceOpenPending_ || !patchRadioPending_.empty();
+    return cascade::gui::planSoapyScan(open, unaccounted, opening);
 }
 
 std::string AppWindow::soapyScanGateDevice() const {
@@ -7216,23 +7266,69 @@ std::string AppWindow::soapyScanGateDevice() const {
     // args are nothing BUT a serial, so sanitiseDevice would answer "".
     if (device_ != nullptr && !deviceModel_.empty()) { return deviceModel_; }
     if (deviceOpenPending_ && !deviceBusyLabel_.empty()) { return deviceBusyLabel_; }
+    // A patch radio, by the name the user gave its part - never its args.
+    for (const auto& entry : patchRadios_) {
+        if (const cascade::core::patch::Node* n = patchGraph_.find(entry.first)) {
+            return "the patch radio '" + n->name + "'";
+        }
+    }
+    if (!patchRadioPending_.empty()) { return "a patch radio"; }
     return "a radio this session could not release";
 }
 
 void AppWindow::scanSoapy() {
-    // Kick the enumeration onto a worker and return immediately — see the
+    // Kick the enumeration onto a worker and return immediately - see the
     // header for why this may not run inline. One at a time: a second scan
     // while one is in flight would race the result into soapyDevices_.
     //
-    // AND NEVER WHILE A RADIO IS OPEN (0.90.1) - gui::deviceScanAllowed has
-    // the field report. The deferral leaves three things right: soapyScanned_
-    // stays FALSE, or the section would never scan once the radio closes; the
-    // open device has a row, so a session that has not scanned yet (the
-    // radio restored from the config, the combo opened for the first time)
-    // still shows it in the list rather than a blank; and the log says why
-    // ONCE, because the combo asks again on every frame it is open.
-    if (!cascade::gui::deviceScanAllowed(soapyScanGated(), soapyScanPending_,
-                                         deviceOpenPending_)) {
+    // THREE ANSWERS since 2026-09-23 (gui/device_scan_plan.hpp):
+    //
+    //  - nothing open: the whole-bus scan, exactly as before;
+    //  - radios open, every one of a known family: a scan that leaves THEIR
+    //    drivers out and asks every other driver on its own - so a B200 is
+    //    found beside a streaming RTL-SDR, which the owner could not do;
+    //  - anything it cannot vouch for (a radio still opening, a family it
+    //    does not know, a SoapySDR device nobody accounts for): DEFERRED, as
+    //    in 0.90.1 - gui::deviceScanAllowed has the field report. A deferral
+    //    leaves soapyScanned_ FALSE, or the section would never scan once the
+    //    radio closes, and says why ONCE, because the combo asks every frame.
+    //
+    // Either way the receiver's open SoapySDR device keeps a row, so a
+    // session that has not scanned yet still shows it rather than a blank.
+    const auto keepOpenRow = [this]() {
+        // A NATIVE RADIO NEEDS NOTHING HERE: scanNative() is never deferred,
+        // so nativeDevices_ always holds its row and sourceSel_ already
+        // points at it. Only a Soapy device can be open with no scan behind
+        // it (restored from the config, or opened before the gate closed).
+        if (soapyView_ == nullptr || deviceArgs_.empty()) { return; }
+        bool listed = false;
+        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+            if (soapyDevices_[i].args == deviceArgs_) {
+                listed = true;
+                sourceSel_ = soapyRowBase() + static_cast<int>(i);
+            }
+        }
+        if (!listed) {
+            // The row a scan would have produced, from what the open
+            // itself told us: the live name less its "SoapySDR: " prefix
+            // is the label a vendor module gives its device, and the args
+            // are the exact string that reopens it. A later real scan
+            // replaces the whole list and re-finds the device by args.
+            cascade::source::SoapyDeviceInfo row;
+            row.label = pipeline_.activeSource().name();
+            const std::size_t colon = row.label.rfind(": ");
+            if (colon != std::string::npos) { row.label = row.label.substr(colon + 2); }
+            row.args = deviceArgs_;
+            soapyDevices_.push_back(std::move(row));
+            sourceSel_ = soapyRowBase() + static_cast<int>(soapyDevices_.size() - 1);
+        }
+    };
+
+    if (soapyScanPending_) { return; }
+    const bool whole = cascade::gui::deviceScanAllowed(soapyScanGated(), soapyScanPending_,
+                                                       deviceOpenPending_);
+    const cascade::gui::SoapyScanPlan plan = soapyScanPlan();
+    if (!whole && plan.mode != cascade::gui::SoapyScanMode::SkipSome) {
         if (soapyScanGated() && !soapyScanDeferredLogged_) {
             soapyScanDeferredLogged_ = true;
             cascade::core::diagLogf(
@@ -7241,41 +7337,30 @@ void AppWindow::scanSoapy() {
                 "devices)",
                 soapyScanGateDevice().c_str());
         }
-        // A NATIVE RADIO NEEDS NOTHING HERE: scanNative() is never deferred,
-        // so nativeDevices_ always holds its row and sourceSel_ already
-        // points at it. Only a Soapy device can be open with no scan behind
-        // it (restored from the config, or opened before the gate closed).
-        if (soapyView_ != nullptr && !deviceArgs_.empty()) {
-            bool listed = false;
-            for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
-                if (soapyDevices_[i].args == deviceArgs_) {
-                    listed = true;
-                    sourceSel_ = soapyRowBase() + static_cast<int>(i);
-                }
-            }
-            if (!listed) {
-                // The row a scan would have produced, from what the open
-                // itself told us: the live name less its "SoapySDR: " prefix
-                // is the label a vendor module gives its device, and the args
-                // are the exact string that reopens it. A later real scan
-                // replaces the whole list and re-finds the device by args.
-                cascade::source::SoapyDeviceInfo row;
-                row.label = pipeline_.activeSource().name();
-                const std::size_t colon = row.label.rfind(": ");
-                if (colon != std::string::npos) { row.label = row.label.substr(colon + 2); }
-                row.args = deviceArgs_;
-                soapyDevices_.push_back(std::move(row));
-                sourceSel_ = soapyRowBase() + static_cast<int>(soapyDevices_.size() - 1);
-            }
-        }
+        keepOpenRow();
         return;
+    }
+    std::vector<std::string> skip;
+    if (!whole) {
+        keepOpenRow();
+        skip = plan.skipDrivers;
+        std::string names;
+        for (const std::string& d : skip) { names += (names.empty() ? "" : ", ") + d; }
+        cascade::core::diagLogf(
+            "soapy: scanning beside %s - every SoapySDR driver is asked except %s, whose "
+            "probe would reset the open radio",
+            soapyScanGateDevice().c_str(), names.c_str());
     }
     soapyScanned_ = true;  // claimed now so the combo does not re-request
     soapyScanPending_ = true;
+    soapyScanSkip_ = skip;
+    soapyScanPartial_ = !whole;
     // enumerate() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path.
-    soapyScanFuture_ =
-        std::async(std::launch::async, [] { return cascade::source::SoapySource::enumerate(); });
+    soapyScanFuture_ = std::async(std::launch::async, [skip] {
+        return skip.empty() ? cascade::source::SoapySource::enumerate()
+                            : cascade::source::SoapySource::enumerate(skip);
+    });
 }
 
 void AppWindow::pollSourceAsync() {
@@ -7284,10 +7369,25 @@ void AppWindow::pollSourceAsync() {
     if (soapyScanPending_ && soapyScanFuture_.valid() &&
         soapyScanFuture_.wait_for(kNoWait) == std::future_status::ready) {
         auto found = soapyScanFuture_.get();
+        // A SCAN BESIDE AN OPEN RADIO could not see that radio's family, so
+        // the rows of the drivers it left out are KEPT from the old list - the
+        // open radio's own row among them - and not silently dropped.
+        std::vector<cascade::source::SoapyDeviceInfo> kept;
+        for (const auto& d : soapyDevices_) {
+            if (cascade::gui::rowFromSkippedDriver(soapyScanSkip_, d.args)) { kept.push_back(d); }
+        }
         soapyDevices_.clear();
         for (auto& d : found) {
             if (!isAudioDriver(d.args)) { soapyDevices_.push_back(std::move(d)); }
         }
+        for (auto& d : kept) {
+            const bool present = std::any_of(soapyDevices_.begin(), soapyDevices_.end(),
+                                             [&](const cascade::source::SoapyDeviceInfo& x) {
+                                                 return x.args == d.args;
+                                             });
+            if (!present) { soapyDevices_.push_back(std::move(d)); }
+        }
+        soapyScanSkip_.clear();
         soapyScanPending_ = false;
         if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it

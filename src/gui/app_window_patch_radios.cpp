@@ -170,7 +170,21 @@ void AppWindow::patchReconcile() {
     // read only when the Source combo is opened, and a patch radio named by a
     // saved patch would be labelled "not connected" until then. scanNative()
     // opens nothing and is safe while radios stream (see its comment).
-    if (!patchWasOpen_) { scanNative(); }
+    //
+    // AND THE SOAPYSDR LIST TOO (2026-09-23). A B200 is only found by the
+    // SoapySDR scan, which the page never asked for: the owner's B200 did not
+    // appear here until it had been opened in the receiver. scanSoapy() now
+    // runs beside open radios, leaving their own drivers out, so asking here
+    // is safe with the receiver or the patch streaming.
+    //
+    // WANTED, NOT FIRED ONCE: the page often opens while a radio is still
+    // opening (a session restoring its source), when the plan must defer - and
+    // a scan asked for only on the first frame then never happened. So the
+    // wish is kept and the scan runs on the first frame the plan allows.
+    if (!patchWasOpen_) {
+        scanNative();
+        patchScanWanted_ = true;
+    }
 
     // --- the receiver's radio goes to the patch ------------------------------
     // ONLY WHILE THE PATCH RUNS (0.99.18): an open page with the patch stopped
@@ -341,6 +355,14 @@ void AppWindow::patchReconcile() {
         }
         const std::string driver = pc::deviceDriver(n->device);
         const std::string args = pc::deviceArgs(n->device);
+        // NOT UNDER A SCAN THAT MAY PROBE IT (2026-09-23). The Source panel
+        // greys itself out while a scan runs, so the receiver never opens a
+        // radio under one; the patch opens its own radios and did not wait -
+        // and a scan probing the dongle being opened is the 0.90.0 fault. It
+        // waits for the scan and is started on the frame after it ends.
+        if (soapyScanPending_ && cascade::gui::scanMayProbe(soapyScanSkip_, driver, args)) {
+            continue;
+        }
         const std::string label = patchDeviceLabel(n->device);
         patchRadioPendingAs_[id] = as;
         patchRadioError_.erase(id);
@@ -396,6 +418,18 @@ void AppWindow::patchReconcile() {
             r.src = std::move(dev);
             return r;
         });
+    }
+
+    // --- the page's own scan, once the radios above are under way -------------
+    // LAST, and that is the fix for the hardware check's finding: asked at the
+    // top of this function on the page's first frame, the scan saw no radio
+    // yet, went WHOLE-BUS, and the radios below then opened under it. Asked
+    // here, a radio just started is pending, the plan defers, and the scan
+    // runs once every radio is open - leaving their drivers out.
+    if (patchScanWanted_ && !soapyScanPending_ &&
+        soapyScanPlan().mode != cascade::gui::SoapyScanMode::Defer) {
+        patchScanWanted_ = false;
+        scanSoapy();
     }
 
     // --- every radio: retire dead sets, take the newest spectrum ---------------
@@ -836,6 +870,13 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             ImGui::PushID(static_cast<int>(i));
             std::string text = c.label;
             if (holder != nullptr) { text += "  (used by " + holder->name + ")"; }
+            // IN USE BY THE RECEIVER IS NOT "NOT AVAILABLE" (2026-09-23): the
+            // receiver lends its radio to the patch when the patch starts, so
+            // the row is offered, and says what will happen to it.
+            else if (device_ != nullptr &&
+                     pc::sameDevice(c.key, pc::makeDeviceKey(sourceKind_, deviceArgs_))) {
+                text += "  (the receiver's - lent to the patch when it starts)";
+            }
             ImGui::BeginDisabled(holder != nullptr);
             if (ImGui::Selectable(text.c_str(), c.key == n.device)) {
                 n.device = c.key;
@@ -846,9 +887,19 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
         }
         ImGui::EndCombo();
     }
-    if (soapyDevices_.empty()) {
+    // LOOK AGAIN from here, rather than sending the user to the Source panel:
+    // a radio plugged in after the page opened, or one a scan beside an open
+    // radio had to leave out, is one press away (2026-09-23).
+    ImGui::BeginDisabled(soapyScanPending_);
+    if (ImGui::SmallButton("Look for radios")) {
+        scanNative();
+        scanSoapy();
+    }
+    ImGui::EndDisabled();
+    if (soapyScanPending_) {
+        ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, muted);
-        ImGui::TextWrapped("SoapySDR radios appear here after a scan in SIGNAL PATH > Source.");
+        ImGui::TextUnformatted("looking...");
         ImGui::PopStyleColor();
     }
 

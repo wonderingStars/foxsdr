@@ -78,6 +78,7 @@ struct GLFWwindow;
 // like every other gui header included here.
 #include "gui/readout_hold.hpp"
 #include "gui/tune_control.hpp"
+#include "gui/device_scan_plan.hpp"
 #include "gui/viewport_policy.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
@@ -684,6 +685,10 @@ private:
     // deviceArgs_, the label of an open in flight, or a radio this session
     // could not release.
     std::string soapyScanGateDevice() const;
+    // What scanSoapy() would do right now (2026-09-23): a whole scan, one that
+    // leaves the open radios' drivers out, or nothing - built from the
+    // receiver's radio and every patch radio. See gui/device_scan_plan.hpp.
+    cascade::gui::SoapyScanPlan soapyScanPlan() const;
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
     // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
     // (opens immediately; on failure the combo selection is left unchanged).
@@ -1571,6 +1576,17 @@ private:
     // the gate opens again (drawSourceSection), so the next radio gets its
     // own line.
     bool soapyScanDeferredLogged_ = false;
+    // THE SCAN BESIDE AN OPEN RADIO (2026-09-23; gui/device_scan_plan.hpp).
+    // soapyScanSkip_ is the drivers the scan in flight left out - the open
+    // radios' own families - and pollSourceAsync keeps the rows of those
+    // drivers from the old list, since that scan could not have seen them.
+    // soapyScanPartial_ says the last scan was one of those, so the next
+    // chance with no radio open does a whole one.
+    std::vector<std::string> soapyScanSkip_;
+    bool soapyScanPartial_ = false;
+    // The patch page asked for a SoapySDR scan when it opened and has not had
+    // one yet (the plan was deferring - a radio still opening). See patchReconcile.
+    bool patchScanWanted_ = false;
 
     // --- Reopening after an absorbed driver fault (0.90.1) -----------------
     // When the automatic reopen was last attempted, in ImGui::GetTime()
