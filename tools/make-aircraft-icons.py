@@ -6,9 +6,9 @@ highlights - and Dear ImGui draws flat polygons. Rendering them once, here, with
 a real SVG renderer and shipping the result means the application needs no SVG
 library and no image decoder: the bytes go straight to glTexImage2D.
 
-WHY 128 PIXELS. The user may choose an icon size up to 64 px, and a texture
-drawn at half its own size (with mipmaps below that) stays sharp; drawn LARGER
-than itself it would blur. 128 covers the largest choice with room to spare.
+WHY 128 PIXELS. The user may choose an icon size up to 96 px (48 is standard),
+and a texture drawn no larger than itself (with mipmaps below that) stays
+sharp; drawn LARGER than itself it would blur. 128 covers the largest choice.
 
 WHY THE COLOUR IS BLED INTO THE TRANSPARENT PIXELS. A renderer leaves fully
 transparent pixels black. Bilinear filtering mixes an edge pixel with its
@@ -41,7 +41,7 @@ SIDE = 128
 # test_aircraft_icons checks the names match, so a reordering here cannot
 # silently hand a glider the helicopter's pixels.
 NAMES = ['airliner', 'heavy', 'light', 'glider', 'microlight', 'uav',
-         'balloon', 'surface', 'helicopter', 'unknown']
+         'balloon', 'surface', 'helicopter', 'unknown', 'helicopterlight']
 
 
 def render_sheet(svg_text, tmp):

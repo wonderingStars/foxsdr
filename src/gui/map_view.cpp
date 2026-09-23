@@ -153,10 +153,8 @@ ImU32 fadedColour(ImU32 c, float alpha) {
 // the nose); the left half is the mirror walked backwards, which keeps the
 // two sides identical by construction. The shape is concave, hence
 // AddConcavePolyFilled.
-// Half-width of a ribbon trail, in screen pixels. Wide enough to read as a
-// band rather than a fat line, narrow enough that several aircraft converging
-// on an approach do not merge into one shape.
-constexpr float kTrailRibbonHalfPx = 3.0f;
+// (The ribbon's fixed 3 px half-width lived here until 0.99.26; both trail
+// styles now take the user's width - see clampTrailWidthPx.)
 
 // EVERY WORD ON THIS MAP IS DRAWN OVER SOMEBODY ELSE'S PICTURE, so its
 // contrast cannot come from the palette.
@@ -1558,8 +1556,14 @@ void MapView::draw(float width, float height,
                 }
                 const ImVec2 a = toScreen(p.points[ia].latDeg, lonA);
                 const ImVec2 b = toScreen(p.points[ib].latDeg, lonB);
+                // THE USER'S WIDTH (Display > "Trail width", 0.99.26), from a
+                // hairline to the aircraft's wingspan.
+                const float trailW = static_cast<float>(trailWidthPx_);
                 if (trailStyle_ != 1) {
-                    dl->AddLine(a, b, segCol, 1.5f);
+                    dl->AddLine(a, b, segCol, trailW);
+                    // A wide line needs the same round join as the ribbon, or
+                    // every turn shows a notch.
+                    if (trailW > 3.0f) { dl->AddCircleFilled(b, trailW * 0.5f, segCol, 12); }
                     continue;
                 }
                 // THE RIBBON. The same segment and the same colour, given
@@ -1579,8 +1583,9 @@ void MapView::draw(float width, float height,
                 // to; normalising it would divide by zero and scatter NaN
                 // vertices through the draw list.
                 if (!(len > 0.001f)) { continue; }
-                const float nx = -dy / len * kTrailRibbonHalfPx;
-                const float ny = dx / len * kTrailRibbonHalfPx;
+                const float half = trailW * 0.5f;
+                const float nx = -dy / len * half;
+                const float ny = dx / len * half;
                 const ImVec2 quad[4] = {ImVec2(a.x + nx, a.y + ny),
                                         ImVec2(b.x + nx, b.y + ny),
                                         ImVec2(b.x - nx, b.y - ny),
@@ -1590,7 +1595,7 @@ void MapView::draw(float width, float height,
                 // angle leave a wedge of gap on the outside of every turn, and
                 // a trail is mostly turns; a disc of the same radius fills it
                 // without needing to solve the mitre.
-                dl->AddCircleFilled(b, kTrailRibbonHalfPx, segCol, 8);
+                dl->AddCircleFilled(b, half, segCol, 12);
             }
         }
     }
@@ -1653,8 +1658,9 @@ void MapView::draw(float width, float height,
             // colour is the halo under it, and the size is the user's
             // Display setting (48 px unless they changed it) - see
             // gui/aircraft_icons.hpp.
-            drawAircraftMarker(dl, s, ht.t.courseDeg, iconPx,
-                               trackCategory(ht.t.kind, ht.t.flags), col, altKnown, picked);
+            const std::uint32_t cat = trackCategory(ht.t.kind, ht.t.flags);
+            drawAircraftMarker(dl, s, ht.t.courseDeg, iconPx, cat, col, altKnown, picked,
+                               registryTypeFor(ht.t.id, ht.t.kind, cat, info));
         } else {
             // A course, where known, is drawn as a heading tick. It is the
             // difference between a field of dots and a picture of where things

@@ -2497,9 +2497,12 @@ void ScopeView::draw(float width, float height,
                 // RIBBON is the same path drawn wide. It is not a different
                 // reading - it is the same one made legible over a busy map,
                 // which is why it shares every colour rule with the line.
+                // THE USER'S WIDTH (0.99.26), the ribbon a little wider than
+                // the line and the selected aircraft's trail a little wider
+                // again, as before - the ratios are the old 1.4 / 4.5 pair's.
+                const float w = static_cast<float>(trailWidthPx_);
                 dl->AddLine(A, B, col,
-                            optTrail_ == 2 ? (picked ? 6.0f : 4.5f)
-                                           : (picked ? 2.2f : 1.4f));
+                            (optTrail_ == 2 ? w + 3.0f : w) * (picked ? 1.4f : 1.0f));
             }
         }
     }
@@ -2575,8 +2578,9 @@ void ScopeView::draw(float width, float height,
         }
         // The same marker the map draws - icon, shadow, altitude halo and
         // selection ring - at the same user-set size. See gui/aircraft_icons.hpp.
-        drawAircraftMarker(dl, s, ht.t.courseDeg, iconPx, trackCategory(ht.t.kind, ht.t.flags),
-                           col, altKnown, picked);
+        const std::uint32_t cat = trackCategory(ht.t.kind, ht.t.flags);
+        drawAircraftMarker(dl, s, ht.t.courseDeg, iconPx, cat, col, altKnown, picked,
+                           registryTypeFor(ht.t.id, ht.t.kind, cat, info));
 
         const char* lbl = ht.t.label[0] != '\0' ? ht.t.label : ht.t.id;
         // BESIDE THE SILHOUETTE AND LEVEL WITH IT. The -6 this was written as

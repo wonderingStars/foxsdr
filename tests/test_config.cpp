@@ -153,6 +153,7 @@ AppConfig junkConfig() {
     c.mapTrailStyle = 99;
     // Out of range both ways from the default of 32.
     c.aircraftIconPx = 999;
+    c.mapTrailWidthPx = 999;
     // The radar scope, both fields away from their defaults and the range off
     // the ladder entirely: a load path that forgets either assignment would
     // leave the mode on and the renderer holding a scale it has no rings for.
@@ -168,6 +169,7 @@ AppConfig junkConfig() {
     c.demodScopeTimebase = -7;
     c.demodScopeGain = 9999;
     c.demodScopeAutoGain = false;
+    c.demodScopeDisplay = 99;  // off the end of ScopeDisplay
     // The transmitter, away from every default - and the two indices off the
     // end of the tables they index, because one of them chooses between a
     // test tone and a live microphone.
@@ -292,6 +294,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
     CHECK(a.aircraftIconPx == b.aircraftIconPx);
+    CHECK(a.mapTrailWidthPx == b.mapTrailWidthPx);
     CHECK(a.scopeMode == b.scopeMode);
     CHECK(a.scopeRangeNm == b.scopeRangeNm);
     CHECK(a.demodScopeOpen == b.demodScopeOpen);
@@ -299,6 +302,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.demodScopeTimebase == b.demodScopeTimebase);
     CHECK(a.demodScopeGain == b.demodScopeGain);
     CHECK(a.demodScopeAutoGain == b.demodScopeAutoGain);
+    CHECK(a.demodScopeDisplay == b.demodScopeDisplay);
     CHECK(a.transmitOpen == b.transmitOpen);
     CHECK(a.transmitMode == b.transmitMode);
     CHECK(a.transmitInput == b.transmitInput);
@@ -384,6 +388,7 @@ int main() {
         in.demodScopeTimebase = 5;
         in.demodScopeGain = 1;
         in.demodScopeAutoGain = false;
+        in.demodScopeDisplay = 2;  // PERSIST, a setting: comes through
         in.transmitOpen = true;
         in.transmitMode = 4;
         in.transmitInput = 0;
@@ -411,6 +416,7 @@ int main() {
         CHECK(out.demodScopeTimebase == 5);
         CHECK(out.demodScopeGain == 1);
         CHECK(!out.demodScopeAutoGain);
+        CHECK(out.demodScopeDisplay == 2);
         // THE TRANSMIT PAGE IS A WINDOW, so it obeys the same rule: what was
         // showing is recorded and is not reopened. Its SETTINGS come through
         // untouched, because they are how it would transmit rather than
@@ -515,6 +521,7 @@ int main() {
         in.mapTrailAltitudeColours = true;
         in.mapTrailStyle = 1;  // Ribbon, which is not the default
         in.aircraftIconPx = 40;  // legal, and neither the default (48) nor junk
+        in.mapTrailWidthPx = 12;  // legal, not the default (4)
         // The radar scope. The range is a LEGAL ladder value that is neither
         // the default (200) nor what junkConfig() holds (12345, which snaps to
         // 400), so the roundtrip proves the FILE is what came back rather than
@@ -531,6 +538,7 @@ int main() {
         in.demodScopeTimebase = 1;  // 2 ms/DIV
         in.demodScopeGain = 7;      // 500 mV/DIV
         in.demodScopeAutoGain = false;
+        in.demodScopeDisplay = 1;   // AVG - not the default, so a missing save shows
         // Map pages: two, in an order the roundtrip must preserve, each with a
         // rectangle nobody would arrive at by accident and one with a NEGATIVE
         // x, because a second monitor to the left of the primary one is the
@@ -1432,6 +1440,19 @@ int main() {
         {
             const AppConfig fresh;
             CHECK(fresh.aircraftIconPx == 48);
+            CHECK(fresh.mapTrailWidthPx == 4);
+            // THE TRAIL WIDTH: read, and clamped to 1..96 on load.
+            struct WCase { const char* json; int want; };
+            const WCase widths[] = {
+                {"{\"mapTrailWidthPx\":20}", 20}, {"{\"mapTrailWidthPx\":0}", 1},
+                {"{\"mapTrailWidthPx\":500}", 96}, {"{\"mode\":\"AM\"}", 4},
+            };
+            for (const WCase& w : widths) {
+                CHECK(writeText(path, std::string(w.json) + "\n"));
+                out = junkConfig();
+                CHECK(ConfigStore::load(path, out, err));
+                CHECK(out.mapTrailWidthPx == w.want);
+            }
             struct IconCase { const char* json; int want; };
             const IconCase icons[] = {
                 {"{\"aircraftIconPx\":40}", 40},
@@ -1489,13 +1510,24 @@ int main() {
         // setting the user actually selected and move it.
         CHECK(writeText(path,
                         "{\"demodScopeSignal\":2,\"demodScopeTimebase\":4,"
-                        "\"demodScopeGain\":3,\"demodScopeAutoGain\":false}\n"));
+                        "\"demodScopeGain\":3,\"demodScopeAutoGain\":false,"
+                        "\"demodScopeDisplay\":1}\n"));
         out = junkConfig();
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.demodScopeSignal == 2);
         CHECK(out.demodScopeTimebase == 4);
         CHECK(out.demodScopeGain == 3);
         CHECK(!out.demodScopeAutoGain);
+        CHECK(out.demodScopeDisplay == 1);  // AVG, read from the file
+        // THE DISPLAY MODE IS CLAMPED TO THE LIVE TRACE, never to a mode that
+        // does not exist. RED WHEN the clamp is dropped.
+        for (const char* bad : {"{\"demodScopeDisplay\":3}\n", "{\"demodScopeDisplay\":-1}\n",
+                                "{\"demodScopeDisplay\":2000000000}\n"}) {
+            CHECK(writeText(path, bad));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.demodScopeDisplay == 0);
+        }
         // And a file that predates the whole page opens with it shut, at the
         // defaults, with the auto attenuator on.
         CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
@@ -1506,6 +1538,7 @@ int main() {
         CHECK(out.demodScopeTimebase == 3);
         CHECK(out.demodScopeGain == 5);
         CHECK(out.demodScopeAutoGain);
+        CHECK(out.demodScopeDisplay == 0);
 
         // A WRONG-TYPED VALUE IS TREATED AS ABSENT, the same rule every other
         // field here follows: one hand-edited mistake must not wipe the rest of

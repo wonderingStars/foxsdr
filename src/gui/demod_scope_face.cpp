@@ -63,6 +63,15 @@ constexpr ImU32 kBeamQGlow = IM_COL32(120, 200, 235, 56);
 // One dark row every three pixels: the same scan-line treatment the radar tube
 // wears, so the two faces read as glass from the same era.
 constexpr ImU32 kScanLine = IM_COL32(0, 0, 0, 30);
+// PERSIST: the remembered trace, the same phosphor at a fraction of the beam's
+// brightness, so the live trace always reads as the one on top.
+constexpr ImU32 kPersist = IM_COL32(143, 217, 160, 105);
+constexpr ImU32 kPersistGlow = IM_COL32(143, 217, 160, 34);
+constexpr ImU32 kPersistQ = IM_COL32(120, 200, 235, 95);
+constexpr ImU32 kPersistQGlow = IM_COL32(120, 200, 235, 30);
+// PERSIST on a spectrum: the held peaks in amber over a faint wash.
+constexpr ImU32 kHold = IM_COL32(236, 186, 92, 200);
+constexpr ImU32 kHoldWash = IM_COL32(236, 186, 92, 22);
 
 // A word on the glass, in the panel's own faces. Kept as one helper because
 // every caption on this face is set the same way and a second hand-rolled
@@ -170,6 +179,15 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
 
     glassText(dl, legend, px, ImVec2(a.x + 7.0f, y), theme::kIvory,
               scopeSignalCaption(signal));
+    // THE DISPLAY MODE ON THE GLASS, beside the caption, whenever it is not
+    // the live trace - a screenshot of an averaged spectrum that did not say
+    // so would be read as the signal itself.
+    const ScopeDisplay disp = scopeDisplayFromIndex(state.display);
+    if (disp != ScopeDisplay::Normal) {
+        const float capW = textWidth(legend, px, scopeSignalCaption(signal));
+        glassText(dl, legend, px, ImVec2(a.x + 7.0f + capW + 10.0f, y), theme::kAmber,
+                  scopeDisplayKey(disp));
+    }
 
     const bool spectral = (signal == ScopeSignal::Spectrum || signal == ScopeSignal::Mpx);
 
@@ -366,6 +384,11 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const std::size_t cols =
         std::min(scratchCap, static_cast<std::size_t>(std::max(1.0f, b.x - a.x)));
     const float unitsPerDiv = scopeGainPerDiv(state.gainIndex);
+    // PERSIST needs somewhere to remember; with no memory handed in the tube
+    // simply draws live, whatever the state says.
+    const bool persist = feed.memory != nullptr &&
+                         scopeDisplayFromIndex(state.display) == ScopeDisplay::Persist;
+    const float fullRange = unitsPerDiv * static_cast<float>(kScopeDivY);
 
     if (!feed.live) {
         addNoSignal(dl, a, b, "NO SAMPLES - RECEIVER STOPPED");
@@ -374,6 +397,17 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             case ScopeSignal::Audio: {
                 if (feed.audio != nullptr && feed.audioCount > 0 && lo != nullptr &&
                     hi != nullptr && scopeReduce(feed.audio, feed.audioCount, cols, lo, hi)) {
+                    if (persist) {
+                        const float* mLo = nullptr;
+                        const float* mHi = nullptr;
+                        if (feed.memory->persistEnvelope(
+                                ScopeMemory::kAudio, lo, hi, cols, feed.dtS, fullRange,
+                                scopeMemoryKey(1u, cols, static_cast<std::uint64_t>(state.timebase)),
+                                &mLo, &mHi)) {
+                            addTrace(dl, mLo, mHi, cols, a.x, unitsPerDiv, yCentre, divPx,
+                                     kPersist, kPersistGlow);
+                        }
+                    }
                     addTrace(dl, lo, hi, cols, a.x, unitsPerDiv, yCentre, divPx, kBeam,
                              kBeamGlow);
                 } else {
@@ -396,6 +430,47 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 // the wrong way round.
                 if (signal == ScopeSignal::Mpx) { drawMpxLabels(dl, a, b, feed); }
                 const std::size_t n = feed.spectrumBins;
+                // THE HELD PEAKS FIRST, dim, so the live line is drawn over
+                // them - see ScopeMemory::persistPeak.
+                if (persist) {
+                    const float* held = feed.memory->persistPeak(
+                        ScopeMemory::kSpectrum, feed.spectrumDb, n, feed.dtS,
+                        scopeMemoryKey(2u, static_cast<std::uint64_t>(signal), n));
+                    if (held != nullptr) {
+                        // AMBER, NOT PHOSPHOR. On a noisy spectrum the held
+                        // peaks sit a few pixels above a dense live trace, and
+                        // drawn in the beam's own green the two merged into
+                        // one (seen on the first rendered check). A max-hold
+                        // in its own colour, with a faint wash beneath it, is
+                        // how a spectrum analyser keeps the two apart.
+                        //
+                        // ONE VALUE PER PIXEL COLUMN FIRST. The multiplex has
+                        // thousands of bins across a few hundred pixels, and a
+                        // translucent wash drawn per bin stacked several deep
+                        // on every column into a solid amber block (the second
+                        // rendered check). The highest held bin in each column
+                        // is what the eye would see anyway; the column buffer
+                        // is the caller's `lo` scratch, unused on a spectrum.
+                        const std::size_t hc = (lo != nullptr) ? cols : 0;
+                        for (std::size_t c = 0; c < hc; ++c) { lo[c] = b.y; }
+                        for (std::size_t k = 0; k < n && hc > 0; ++k) {
+                            const float t = static_cast<float>(k) / static_cast<float>(n - 1);
+                            std::size_t c = static_cast<std::size_t>(t * static_cast<float>(hc - 1));
+                            if (c >= hc) { c = hc - 1; }
+                            lo[c] = std::min(lo[c], scopeSpectrumY(held[k], a.y, b.y));
+                        }
+                        const float colW = (hc > 1) ? (b.x - a.x) / static_cast<float>(hc - 1)
+                                                    : 0.0f;
+                        for (std::size_t c = 0; c < hc; ++c) {
+                            const float x = a.x + colW * static_cast<float>(c);
+                            dl->AddLine(ImVec2(x, lo[c]), ImVec2(x, b.y), kHoldWash, colW + 0.5f);
+                            if (c > 0) {
+                                dl->AddLine(ImVec2(x - colW, lo[c - 1]), ImVec2(x, lo[c]), kHold,
+                                            1.0f);
+                            }
+                        }
+                    }
+                }
                 // A LINE PER BIN, not a bar chart: the spectrum shares its
                 // tube with the traces above, and a filled histogram would
                 // read as a different instrument on the same glass.
@@ -424,11 +499,32 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 // dual-trace scope's position controls exist to avoid.
                 const float qCentre = yCentre + divPx * 2.0f;
                 const float iCentre = yCentre - divPx * 2.0f;
+                // Each arm's memory first, then that arm's live trace. The
+                // arms are reduced into the same scratch in turn, so each is
+                // remembered before the next overwrites it.
+                const std::uint64_t bbKey =
+                    scopeMemoryKey(3u, cols, static_cast<std::uint64_t>(state.timebase));
                 if (scopeReduce(feed.iqI, feed.iqCount, cols, lo, hi)) {
+                    const float* mLo = nullptr;
+                    const float* mHi = nullptr;
+                    if (persist && feed.memory->persistEnvelope(ScopeMemory::kI, lo, hi, cols,
+                                                                feed.dtS, fullRange, bbKey, &mLo,
+                                                                &mHi)) {
+                        addTrace(dl, mLo, mHi, cols, a.x, unitsPerDiv, iCentre, divPx,
+                                 kPersist, kPersistGlow);
+                    }
                     addTrace(dl, lo, hi, cols, a.x, unitsPerDiv, iCentre, divPx, kBeam,
                              kBeamGlow);
                 }
                 if (scopeReduce(feed.iqQ, feed.iqCount, cols, lo, hi)) {
+                    const float* mLo = nullptr;
+                    const float* mHi = nullptr;
+                    if (persist && feed.memory->persistEnvelope(ScopeMemory::kQ, lo, hi, cols,
+                                                                feed.dtS, fullRange, bbKey, &mLo,
+                                                                &mHi)) {
+                        addTrace(dl, mLo, mHi, cols, a.x, unitsPerDiv, qCentre, divPx,
+                                 kPersistQ, kPersistQGlow);
+                    }
                     addTrace(dl, lo, hi, cols, a.x, unitsPerDiv, qCentre, divPx, kBeamQ,
                              kBeamQGlow);
                 }
@@ -462,6 +558,27 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 // thousand is more than enough to close the figure, and the
                 // ones dropped are indistinguishable at this radius.
                 constexpr std::size_t kMaxPoints = 4096;
+                // PERSIST: recent frames' figures, fading with age, under the
+                // live one. Thinner than the live figure - a quarter of its
+                // points - because there can be dozens of them.
+                if (persist) {
+                    feed.memory->pushVector(
+                        feed.iqI, feed.iqQ, feed.iqCount, feed.nowS,
+                        scopeMemoryKey(4u, static_cast<std::uint64_t>(state.timebase)),
+                        kMaxPoints / 4);
+                    for (const ScopeMemory::Ghost& g : feed.memory->ghosts(feed.nowS)) {
+                        const float w = ScopeMemory::ghostWeight(feed.nowS - g.t);
+                        const ImU32 col = IM_COL32(143, 217, 160, static_cast<int>(90.0f * w));
+                        for (std::size_t k = 1; k < g.i.size(); ++k) {
+                            float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+                            scopeVectorPoint(g.i[k - 1], g.q[k - 1], unitsPerDiv, cx, yCentre,
+                                             divPx, x0, y0);
+                            scopeVectorPoint(g.i[k], g.q[k], unitsPerDiv, cx, yCentre, divPx,
+                                             x1, y1);
+                            dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), col, 1.0f);
+                        }
+                    }
+                }
                 const std::size_t step =
                     (feed.iqCount + kMaxPoints - 1) / kMaxPoints;
                 float px0 = 0.0f;

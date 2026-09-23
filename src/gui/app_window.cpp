@@ -633,12 +633,21 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
            a.aircraftIconPx == b.aircraftIconPx &&
+           a.mapTrailWidthPx == b.mapTrailWidthPx &&
            // The scope's mode and range. Both are user switches that change
            // only on a click or a wheel notch, so they belong here: without
            // them, leaving the application in scope mode - or on a range other
            // than the one it opened with - would survive a restart only if
            // something else happened to trigger a save.
            a.scopeMode == b.scopeMode && a.scopeRangeNm == b.scopeRangeNm &&
+           // The demod scope's keys, which change only on a press - without
+           // them here a choice reached the file only if something else
+           // changed in the same session (found adding the display mode).
+           a.demodScopeSignal == b.demodScopeSignal &&
+           a.demodScopeTimebase == b.demodScopeTimebase &&
+           a.demodScopeGain == b.demodScopeGain &&
+           a.demodScopeAutoGain == b.demodScopeAutoGain &&
+           a.demodScopeDisplay == b.demodScopeDisplay &&
            // Map page geometry takes part, which is what makes a resize save
            // at all. The debounce restarts on every change, so a drag writes
            // once when it stops rather than once per frame while it is
@@ -5931,6 +5940,26 @@ void AppWindow::drawSinksSection() {
 // The Display section: the shared dB window and the band-plan overlay.
 // Moved out of drawMenuColumn unchanged, for the reason drawRadioSection
 // gives.
+void AppWindow::drawTrailWidthControl(const char* label) {
+    // UP TO THE WINGSPAN (owner, 2026-09-23: "as large as the planes wings
+    // span"), which follows the icon size - so shrinking the icons pulls a
+    // wider trail down with them rather than leaving a trail broader than the
+    // aircraft drawing it.
+    const int maxW = cascade::gui::aircraftWingspanPx(aircraftIconPx_);
+    if (mapTrailWidthPx_ > maxW) { mapTrailWidthPx_ = maxW; }
+    ImGui::SliderInt(label, &mapTrailWidthPx_, cascade::gui::kTrailWidthMinPx, maxW, "%d px",
+                     ImGuiSliderFlags_AlwaysClamp);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Width of the aircraft trails on the maps and the radar scope,\n"
+                          "from a hairline up to the aircraft's wingspan (%d px at the\n"
+                          "current icon size). Standard is %d px. Right-click to put it back.",
+                          maxW, cascade::gui::kTrailWidthDefaultPx);
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        mapTrailWidthPx_ = cascade::gui::kTrailWidthDefaultPx;
+    }
+}
+
 void AppWindow::drawDisplaySection() {
     // THE BAND PLAN OVERLAY IS THE ONLY THING IN THIS SECTION THAT IS EITHER
     // ON OR OFF, so it is what the chip reports and the comment says so rather
@@ -6007,6 +6036,7 @@ void AppWindow::drawDisplaySection() {
         if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
             aircraftIconPx_ = cascade::gui::kAircraftIconDefaultPx;
         }
+        drawTrailWidthControl("Trail width");
 
         // Band plan overlay (P7). Always offered, even with no plan
         // installed — the checkbox is a display preference that persists, and
@@ -11874,6 +11904,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     view->setTrailOptions(mapTrails_, mapTrailAltColours_);
                     view->setTrailStyle(mapTrailStyle_);
                     view->setAircraftIconPx(aircraftIconPx_);
+                    view->setTrailWidthPx(mapTrailWidthPx_);
                     view->draw(mapW, mapH, patchMapTracks_, patchMapPaths_, &basemap_,
                                &trackInfo_);
                 }
@@ -12785,6 +12816,7 @@ void AppWindow::drawScopeMode() {
 
     if (!roomForFace) {
         scope_.setAircraftIconPx(aircraftIconPx_);
+        scope_.setTrailWidthPx(mapTrailWidthPx_);
         scope_.draw(avail.x, avail.y, pluginUi_.tracks(), &basemap_, &trackInfo_);
         scopeRangeNm_ = scope_.rangeNm();
         return;
@@ -12989,6 +13021,7 @@ void AppWindow::drawScopeMode() {
 
     ImGui::SetCursorScreenPos(ImVec2(innerL, instTop));
     scope_.setAircraftIconPx(aircraftIconPx_);
+    scope_.setTrailWidthPx(mapTrailWidthPx_);
     scope_.draw(innerR - innerL, instBot - instTop, pluginUi_.tracks(), &basemap_,
                 &trackInfo_);
 
@@ -14248,10 +14281,17 @@ void AppWindow::drawPluginWindows() {
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                     ImGui::SetTooltip(
-                        "Line draws a thin trail. Ribbon draws a wider translucent\n"
+                        "Line draws a solid trail. Ribbon draws a translucent\n"
                         "band, easier to follow over a detailed map, at the cost of\n"
                         "covering more of what is underneath.");
                 }
+                // THE WIDTH, beside the style it shapes (0.99.26) - the same
+                // setting as Display > "Trail width".
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!mapTrails_);
+                ImGui::SetNextItemWidth(130.0f);
+                drawTrailWidthControl("##trailwidth");
+                ImGui::EndDisabled();
                 ImGui::SameLine();
                 // RESET IS NOT OPTIONAL. A single spurious decode at an impossible
                 // range - and a noisy band produces them - would otherwise stretch
@@ -14321,6 +14361,7 @@ void AppWindow::drawPluginWindows() {
                 page.view->setTrailOptions(mapTrails_, mapTrailAltColours_);
                 page.view->setTrailStyle(mapTrailStyle_);
                 page.view->setAircraftIconPx(aircraftIconPx_);
+                page.view->setTrailWidthPx(mapTrailWidthPx_);
                 page.view->draw(avail.x, avail.y, pageTracks_, pagePaths_,
                                 &basemap_, &trackInfo_);
                 if (credit) {
@@ -18084,7 +18125,11 @@ void AppWindow::drawDemodScopePage() {
         // NO TIME BASE ON A SPECTRUM. The stepper is disabled rather than
         // hidden: a control that vanishes reads as a fault, and one that is
         // plainly greyed says "not on this input" without anybody guessing.
-        const bool spectrum = (sig == cascade::gui::ScopeSignal::Spectrum);
+        // BOTH SPECTRAL POSITIONS - the audio spectrum and the multiplex. The
+        // multiplex was left out when it was added, so its TIME and GAIN
+        // stayed live while doing nothing to the picture (found 0.99.26).
+        const bool spectrum = (sig == cascade::gui::ScopeSignal::Spectrum ||
+                               sig == cascade::gui::ScopeSignal::Mpx);
         ImGui::BeginDisabled(spectrum);
         ImGui::TextUnformatted("TIME");
         ImGui::SameLine();
@@ -18126,6 +18171,69 @@ void AppWindow::drawDemodScopePage() {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Ranges the attenuator to fit the signal, one detent at a\n"
                               "time. Turn it off to set the volts per division by hand.");
+        }
+
+        // --- the display mode (0.99.26) --------------------------------------
+        // Three latched keys like the input selector above: NORM, AVG,
+        // PERSIST. See ScopeDisplay in gui/demod_scope.hpp.
+        ImGui::TextUnformatted("DISPLAY");
+        for (int i = 0; i < cascade::gui::kScopeDisplayCount; ++i) {
+            const cascade::gui::ScopeDisplay d = cascade::gui::scopeDisplayFromIndex(i);
+            ImGui::SameLine();
+            const bool on = (demodScope_.display == i);
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+            }
+            if (ImGui::Button(cascade::gui::scopeDisplayKey(d), ImVec2(84.0f, 0.0f))) {
+                demodScope_.display = i;
+            }
+            if (on) { ImGui::PopStyleColor(2); }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", cascade::gui::scopeDisplayTip(d));
+            }
+        }
+
+        // THE MEMORY. Started afresh when the mode changes and whenever the
+        // chain is not producing - a stopped receiver resumed an hour later
+        // must not come back showing an hour-old average. Timed by the frame
+        // clock, so the blend and the fade mean the same on any display.
+        {
+            const double nowS = ImGui::GetTime();
+            const double dtS = (scopeMemoryLastS_ > 0.0) ? nowS - scopeMemoryLastS_ : 0.0;
+            scopeMemoryLastS_ = nowS;
+            if (demodScope_.display != scopeMemoryMode_ || !feed.live) {
+                scopeMemory_.reset();
+                scopeMemoryMode_ = demodScope_.display;
+            }
+            feed.memory = &scopeMemory_;
+            feed.dtS = dtS;
+            feed.nowS = nowS;
+            if (cascade::gui::scopeDisplayFromIndex(demodScope_.display) ==
+                cascade::gui::ScopeDisplay::Average) {
+                using cascade::gui::ScopeMemory;
+                using cascade::gui::scopeMemoryKey;
+                const auto tb = static_cast<std::uint64_t>(demodScope_.timebase);
+                if (feed.audio != nullptr && feed.audioCount > 0) {
+                    feed.audio = scopeMemory_.average(
+                        ScopeMemory::kAudio, feed.audio, feed.audioCount, dtS,
+                        scopeMemoryKey(10u, feed.audioCount, tb,
+                                       static_cast<std::uint64_t>(feed.audioRateHz)));
+                }
+                if (feed.iqI != nullptr && feed.iqQ != nullptr && feed.iqCount > 0) {
+                    const std::uint64_t k = scopeMemoryKey(
+                        11u, feed.iqCount, tb, static_cast<std::uint64_t>(feed.iqRateHz));
+                    feed.iqI = scopeMemory_.average(ScopeMemory::kI, feed.iqI, feed.iqCount, dtS, k);
+                    feed.iqQ = scopeMemory_.average(ScopeMemory::kQ, feed.iqQ, feed.iqCount, dtS, k);
+                }
+                if (feed.spectrumDb != nullptr && feed.spectrumBins > 0) {
+                    feed.spectrumDb = scopeMemory_.average(
+                        ScopeMemory::kSpectrum, feed.spectrumDb, feed.spectrumBins, dtS,
+                        scopeMemoryKey(12u, static_cast<std::uint64_t>(sig), feed.spectrumBins));
+                }
+            }
         }
 
         // --- the tube --------------------------------------------------------
@@ -21569,6 +21677,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
     mapTrailStyle_ = cfg.mapTrailStyle;
     aircraftIconPx_ = cascade::gui::clampAircraftIconPx(cfg.aircraftIconPx);
+    mapTrailWidthPx_ = std::clamp(cfg.mapTrailWidthPx, 1, cascade::gui::kAircraftIconMaxPx);
 
     // The radar scope. The MODE arrives off - startupState cleared it, because
     // the application starts on the bench whatever was showing at the last
@@ -21591,6 +21700,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     demodScope_.timebase = clampScopeTimebase(cfg.demodScopeTimebase);
     demodScope_.gainIndex = clampScopeGain(cfg.demodScopeGain);
     demodScope_.autoGain = cfg.demodScopeAutoGain;
+    demodScope_.display = cascade::gui::clampScopeDisplay(cfg.demodScopeDisplay);
     // THE TRANSMITTER'S SETTINGS, AND NOT ITS KEY. Everything restored here
     // is HOW it would transmit; nothing restored here can MAKE it transmit,
     // and there is nothing in AppConfig that could (core/config.hpp says why
@@ -22181,6 +22291,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
     cfg.aircraftIconPx = aircraftIconPx_;
+    cfg.mapTrailWidthPx = mapTrailWidthPx_;
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
     cfg.demodScopeOpen = demodScopeOpen_;
@@ -22188,6 +22299,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.demodScopeTimebase = demodScope_.timebase;
     cfg.demodScopeGain = demodScope_.gainIndex;
     cfg.demodScopeAutoGain = demodScope_.autoGain;
+    cfg.demodScopeDisplay = demodScope_.display;
     cfg.transmitOpen = transmitOpen_;
     cfg.transmitMode = transmitModeIndex_;
     cfg.transmitInput = transmitInputIndex_;

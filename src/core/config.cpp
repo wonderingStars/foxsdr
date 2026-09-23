@@ -295,6 +295,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // Clamped, not trusted - the same 16..96 gui::clampAircraftIconPx allows.
     getInt(j, "aircraftIconPx", out.aircraftIconPx);
     out.aircraftIconPx = std::clamp(out.aircraftIconPx, 16, 96);
+    getInt(j, "mapTrailWidthPx", out.mapTrailWidthPx);
+    out.mapTrailWidthPx = std::clamp(out.mapTrailWidthPx, 1, 96);
     // The radar scope. The range is SNAPPED TO THE LADDER the view defines,
     // never trusted: the file is user-editable, and every ring radius, every
     // ring label and the corner readout are derived from this one number, so a
@@ -317,6 +319,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getInt(j, "demodScopeGain", out.demodScopeGain);
     out.demodScopeGain = cascade::gui::clampScopeGain(out.demodScopeGain);
     getBool(j, "demodScopeAutoGain", out.demodScopeAutoGain);
+    getInt(j, "demodScopeDisplay", out.demodScopeDisplay);
+    out.demodScopeDisplay = cascade::gui::clampScopeDisplay(out.demodScopeDisplay);
     // The transmitter. Every index is snapped onto a table that exists; the
     // POWER deliberately is not, because this file does not know which board
     // will be opened - source::clampTxGainDb does it against the board's own
@@ -701,6 +705,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["aircraftIconPx"] = cfg.aircraftIconPx;
+    j["mapTrailWidthPx"] = cfg.mapTrailWidthPx;
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
     j["demodScopeOpen"] = cfg.demodScopeOpen;
@@ -708,6 +713,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["demodScopeTimebase"] = cfg.demodScopeTimebase;
     j["demodScopeGain"] = cfg.demodScopeGain;
     j["demodScopeAutoGain"] = cfg.demodScopeAutoGain;
+    j["demodScopeDisplay"] = cfg.demodScopeDisplay;
     j["transmitOpen"] = cfg.transmitOpen;
     j["transmitMode"] = cfg.transmitMode;
     j["transmitInput"] = cfg.transmitInput;

@@ -67,6 +67,7 @@ struct GLFWwindow;
 // DRAWING half of that scope lives in gui/demod_scope_face.hpp, which this
 // header deliberately does not reach.
 #include "gui/demod_scope.hpp"
+#include "gui/scope_memory.hpp"
 #include "gui/transmit_page.hpp"
 // The FFT the scope's spectrum position uses, held here by unique_ptr and so
 // needing to be a complete type. Arrives transitively through pipeline.hpp
@@ -650,6 +651,8 @@ private:
     void drawRadioSection();
     void drawSinksSection();
     void drawDisplaySection();
+    // The trail width slider (0.99.26), in Display and in the map deck alike.
+    void drawTrailWidthControl(const char* label);
     void drawDecodeBank();
     // FOXSDR_OPEN_DECODERS: puts the rail on DECODE for a self-capture.
     void selectDecodeBankForCapture();
@@ -2496,6 +2499,8 @@ private:
     int mapTrailStyle_ = 0;  // 0 line, 1 ribbon - see AppConfig::mapTrailStyle
     // Pixels across, every map and scope - see AppConfig::aircraftIconPx.
     int aircraftIconPx_ = cascade::gui::kAircraftIconDefaultPx;
+    // Trail width, pixels - see AppConfig::mapTrailWidthPx.
+    int mapTrailWidthPx_ = cascade::gui::kTrailWidthDefaultPx;
 
     // --- the ADS-B radar scope ----------------------------------------------
     // The renderer, and the two pieces of state that outlive it. The RANGE
@@ -2740,6 +2745,12 @@ private:
     std::vector<float> scopeQ_;
     std::vector<float> scopeLo_;
     std::vector<float> scopeHi_;
+    // What the tube remembers for AVG and PERSIST (gui/scope_memory.hpp), the
+    // mode it was filled under (a change of mode starts it afresh), and the
+    // time of the last frame it saw - the blends and fades are timed.
+    cascade::gui::ScopeMemory scopeMemory_;
+    int scopeMemoryMode_ = -1;
+    double scopeMemoryLastS_ = 0.0;
     // The audio spectrum, and the plan that makes it. Created on the first
     // frame the spectrum position is selected and kept afterwards: a pffft
     // setup is not free, and the page can be left on that position for hours.

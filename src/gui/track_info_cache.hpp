@@ -82,6 +82,24 @@ private:
     std::string partial_;
 };
 
+// THE REGISTRY'S ICAO TYPE FOR A HELICOPTER, so the map and the radar scope
+// can draw a single-engine one as the small two-blade helicopter
+// (gui/aircraft_icons.hpp, aircraftIconFor). Asked ONLY for rotorcraft - an
+// aircraft of any other category draws the same icon whatever its registry
+// type, so asking about it would be a lookup for nothing. Null while there is
+// no registry plugin, no answer yet, or no type in the answer. The pointer is
+// into the cache and is good until the next call into it.
+inline const char* registryTypeFor(const char* id, std::uint32_t kind, std::uint32_t category,
+                                   TrackInfoCache* info) {
+    if (category != CASCADE_AIRCRAFT_ROTORCRAFT || info == nullptr || !info->active() ||
+        id == nullptr) {
+        return nullptr;
+    }
+    const TrackInfoCache::Info* d = info->get(std::string(id), kind);
+    if (d == nullptr || !d->known || d->typeCode.empty()) { return nullptr; }
+    return d->typeCode.c_str();
+}
+
 }  // namespace cascade::gui
 
 #endif  // CASCADE_GUI_TRACK_INFO_CACHE_HPP

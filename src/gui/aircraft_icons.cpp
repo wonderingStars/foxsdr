@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -121,6 +122,38 @@ AircraftIcon aircraftIconForCategory(std::uint32_t category) {
     }
 }
 
+bool isSingleEngineHelicopterType(const char* icaoType) {
+    if (icaoType == nullptr || icaoType[0] == '\0') { return false; }
+    // Doc 8643 description H1P / H1T, checked 2026-09-23 - see the header.
+    static constexpr const char* kSingle[] = {"R22",  "R44",  "R66",  "B06",
+                                              "B407", "B505", "AS50", "EC20",
+                                              "EC30", "H500", "H269", "EN28",
+                                              "EN48", "G2CA", "A119", "B47G"};
+    // Designators are upper case; a registry that answered in lower case, or
+    // padded the field, is still the same aircraft.
+    char norm[8] = {};
+    std::size_t n = 0;
+    for (const char* p = icaoType; *p != '\0'; ++p) {
+        if (*p == ' ') { continue; }
+        if (n + 1 >= sizeof(norm)) { return false; }
+        char c = *p;
+        if (c >= 'a' && c <= 'z') { c = static_cast<char>(c - 'a' + 'A'); }
+        norm[n++] = c;
+    }
+    for (const char* t : kSingle) {
+        if (std::strcmp(norm, t) == 0) { return true; }
+    }
+    return false;
+}
+
+AircraftIcon aircraftIconFor(std::uint32_t category, const char* icaoType) {
+    const AircraftIcon base = aircraftIconForCategory(category);
+    if (base == AircraftIcon::Helicopter && isSingleEngineHelicopterType(icaoType)) {
+        return AircraftIcon::HelicopterLight;
+    }
+    return base;
+}
+
 IconQuad aircraftIconQuad(const ImVec2& centre, double courseDeg, float sizePx) {
     const double a = (std::isnan(courseDeg) ? 0.0 : courseDeg) * kPi / 180.0;
     const float ca = static_cast<float>(std::cos(a));
@@ -235,7 +268,8 @@ bool drawAircraftIcon(ImDrawList* dl, const ImVec2& centre, double courseDeg, fl
 float aircraftMarkerRadius(float sizePx) { return std::max(14.0f, sizePx * 0.6f); }
 
 void drawAircraftMarker(ImDrawList* dl, const ImVec2& centre, double courseDeg, float sizePx,
-                        std::uint32_t category, ImU32 altitudeCol, bool altKnown, bool picked) {
+                        std::uint32_t category, ImU32 altitudeCol, bool altKnown, bool picked,
+                        const char* icaoType) {
     if (dl == nullptr) { return; }
     const unsigned a8 = (altitudeCol >> IM_COL32_A_SHIFT) & 0xFFu;
     const auto withAlpha = [&](float f) {
@@ -251,7 +285,7 @@ void drawAircraftMarker(ImDrawList* dl, const ImVec2& centre, double courseDeg, 
         dl->AddCircle(centre, r + 1.5f, rim, 0, 1.5f);
         dl->AddCircle(centre, r, altitudeCol, 0, 3.0f);
     }
-    if (drawAircraftIcon(dl, centre, courseDeg, sizePx, aircraftIconForCategory(category),
+    if (drawAircraftIcon(dl, centre, courseDeg, sizePx, aircraftIconFor(category, icaoType),
                          static_cast<float>(a8) / 255.0f)) {
         return;
     }

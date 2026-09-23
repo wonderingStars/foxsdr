@@ -726,6 +726,7 @@ public:
     void setRangeNm(int nm) { rangeNm_ = clampScopeRangeNm(nm); }
     // The aircraft icon size, shared with the map - see MapView::setAircraftIconPx.
     void setAircraftIconPx(int px) { aircraftIconPx_ = clampAircraftIconPx(px); }
+    void setTrailWidthPx(int px) { trailWidthPx_ = clampTrailWidthPx(px, aircraftIconPx_); }
 
     // The aircraft the panel is describing, empty when none. An id rather than
     // a pointer or an index, for the reason every other selection in this
@@ -767,6 +768,7 @@ private:
     double rxLon_ = 0.0;
     int rangeNm_ = kScopeDefaultRangeNm;
     int aircraftIconPx_ = kAircraftIconDefaultPx;
+    int trailWidthPx_ = kTrailWidthDefaultPx;
     std::string selectedId_;
     int plotted_ = 0;
     bool askedTiles_ = false;

@@ -209,9 +209,60 @@ struct DemodScopeState {
     // scope showing a flat line at a gain nobody chose - and a user who has
     // never operated an attenuator would read that as the feature not working.
     bool autoGain = true;
+    // HOW THE TRACE IS SHOWN (0.99.26): a ScopeDisplay - live, averaged, or
+    // with persistence. Normal by default, so the scope looks exactly as it
+    // did for anybody who never presses the new keys.
+    int display = 0;
 
     bool operator==(const DemodScopeState&) const = default;
 };
+
+// --- the display mode ------------------------------------------------------
+//
+// Asked for by a tester looking at the FM multiplex (2026-09-23): "add
+// options to the display to either incorporate some averaging or have some
+// persistence in the display". Three latched keys, the way a bench scope's
+// acquisition and display buttons work:
+//   NORM     - the live trace, exactly as before;
+//   AVG      - successive traces blended (see gui/scope_memory.hpp): a
+//              spectrum settles into its long-term shape, and a triggered
+//              waveform sheds its noise;
+//   PERSIST  - the live trace over a fading memory of where the beam has
+//              been, like a long-persistence phosphor.
+enum class ScopeDisplay : int { Normal = 0, Average = 1, Persist = 2 };
+inline constexpr int kScopeDisplayCount = 3;
+
+inline int clampScopeDisplay(int index) {
+    if (index < 0 || index >= kScopeDisplayCount) { return 0; }
+    return index;
+}
+
+inline ScopeDisplay scopeDisplayFromIndex(int index) {
+    return static_cast<ScopeDisplay>(clampScopeDisplay(index));
+}
+
+inline const char* scopeDisplayKey(ScopeDisplay d) {
+    switch (d) {
+        case ScopeDisplay::Average: return "AVG";
+        case ScopeDisplay::Persist: return "PERSIST";
+        case ScopeDisplay::Normal:
+        default: return "NORM";
+    }
+}
+
+inline const char* scopeDisplayTip(ScopeDisplay d) {
+    switch (d) {
+        case ScopeDisplay::Average:
+            return "Average successive traces. A spectrum settles into its steady shape;\n"
+                   "a waveform sheds its noise if it repeats (a tone), and fades towards\n"
+                   "the centre if it does not (speech) - that is what averaging does.";
+        case ScopeDisplay::Persist:
+            return "Keep a fading memory of the trace behind the live one, like a\n"
+                   "long-persistence tube: peaks and excursions stay visible for a moment.";
+        case ScopeDisplay::Normal:
+        default: return "The live trace, nothing kept between frames.";
+    }
+}
 
 // --- the time base -----------------------------------------------------------
 //

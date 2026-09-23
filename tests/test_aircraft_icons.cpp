@@ -126,12 +126,52 @@ int main() {
     CHECK(aircraftIconForCategory(CASCADE_AIRCRAFT_CATEGORY_COUNT) == AircraftIcon::Unknown);
     CHECK(aircraftIconForCategory(999u) == AircraftIcon::Unknown);
 
-    // Every icon is reachable from some category - an unreachable picture
-    // would be dead weight in the binary.
+    // --- the light helicopter, from the registry type (0.99.26) -----------
+    //
+    // Every designator on the verified list (Doc 8643 description H1P/H1T,
+    // checked on doc8643.com 2026-09-23) makes a rotorcraft the light one.
+    {
+        const char* single[] = {"R22", "R44", "R66", "B06", "B407", "B505", "AS50", "EC20",
+                                "EC30", "H500", "H269", "EN28", "EN48", "G2CA", "A119", "B47G"};
+        for (const char* t : single) {
+            if (!cascade::gui::isSingleEngineHelicopterType(t)) {
+                std::printf("  (%s not recognised as single-engine)\n", t);
+            }
+            CHECK(cascade::gui::isSingleEngineHelicopterType(t));
+            CHECK(cascade::gui::aircraftIconFor(CASCADE_AIRCRAFT_ROTORCRAFT, t) ==
+                  AircraftIcon::HelicopterLight);
+        }
+        // The twins checked as H2T on the same site stay the five-blade
+        // helicopter. RED WHEN the list grows a twin by mistake.
+        const char* twins[] = {"H60", "EC35", "EC45", "A109", "S76", "B429", "AS55"};
+        for (const char* t : twins) {
+            CHECK(!cascade::gui::isSingleEngineHelicopterType(t));
+            CHECK(cascade::gui::aircraftIconFor(CASCADE_AIRCRAFT_ROTORCRAFT, t) ==
+                  AircraftIcon::Helicopter);
+        }
+        // A registry answering in lower case or padded is the same aircraft.
+        CHECK(cascade::gui::isSingleEngineHelicopterType("r44"));
+        CHECK(cascade::gui::isSingleEngineHelicopterType(" R44 "));
+        // Nothing known, nothing changed.
+        CHECK(!cascade::gui::isSingleEngineHelicopterType(nullptr));
+        CHECK(!cascade::gui::isSingleEngineHelicopterType(""));
+        CHECK(!cascade::gui::isSingleEngineHelicopterType("R44XXXXXXXXXXXX"));
+        CHECK(cascade::gui::aircraftIconFor(CASCADE_AIRCRAFT_ROTORCRAFT, nullptr) ==
+              AircraftIcon::Helicopter);
+        // ONLY A ROTORCRAFT. The type decides which helicopter, never whether
+        // it is one: a light aeroplane whose registry entry is somehow "R44"
+        // keeps the category it broadcast. RED WHEN the type overrides it.
+        CHECK(cascade::gui::aircraftIconFor(CASCADE_AIRCRAFT_LIGHT, "R44") == AircraftIcon::Light);
+        CHECK(cascade::gui::aircraftIconFor(CASCADE_AIRCRAFT_NONE, "R44") == AircraftIcon::Unknown);
+    }
+
+    // Every icon is reachable from some category and registry type - an
+    // unreachable picture would be dead weight in the binary.
     {
         std::set<int> used;
         for (std::uint32_t c = 0; c < CASCADE_AIRCRAFT_CATEGORY_COUNT; ++c) {
             used.insert(static_cast<int>(aircraftIconForCategory(c)));
+            used.insert(static_cast<int>(cascade::gui::aircraftIconFor(c, "R44")));
         }
         CHECK(static_cast<int>(used.size()) == kAircraftIconCount);
     }
@@ -152,6 +192,8 @@ int main() {
             {AircraftIcon::Unknown, AircraftIcon::Airliner, "no type vs airliner"},
             {AircraftIcon::Helicopter, AircraftIcon::Light, "helicopter vs light"},
             {AircraftIcon::Glider, AircraftIcon::Light, "glider vs light"},
+            {AircraftIcon::HelicopterLight, AircraftIcon::Helicopter,
+             "light helicopter vs helicopter"},
         };
         for (const Pair& p : pairs) {
             const double d = outlineDifference(atSize(p.a, 32), atSize(p.b, 32));
@@ -178,6 +220,44 @@ int main() {
     // The marker never shrinks its click target below what the flat icons had.
     CHECK(cascade::gui::aircraftMarkerRadius(16.0f) >= 14.0f);
     CHECK(cascade::gui::aircraftMarkerRadius(96.0f) >= 48.0f);
+
+    // --- the trail width (0.99.26) -----------------------------------------
+    //
+    // Up to the wingspan: the heavy's wing is 114 of the 128 pixels of its
+    // image, so at the 48 px standard a trail may be 43 px wide.
+    {
+        using cascade::gui::aircraftWingspanPx;
+        using cascade::gui::clampTrailWidthPx;
+        CHECK(cascade::gui::kTrailWidthDefaultPx == 4);
+        CHECK(aircraftWingspanPx(48) == 43);
+        CHECK(aircraftWingspanPx(96) == 86);  // 85.5, rounded half up
+        CHECK(aircraftWingspanPx(16) == 14);
+        // Never wider than the aircraft, never thinner than a hairline.
+        // RED WHEN the cap is dropped or computed from the wrong icon size.
+        CHECK(clampTrailWidthPx(1000, 48) == 43);
+        CHECK(clampTrailWidthPx(43, 48) == 43);
+        CHECK(clampTrailWidthPx(4, 48) == 4);
+        CHECK(clampTrailWidthPx(0, 48) == 1);
+        CHECK(clampTrailWidthPx(-7, 48) == 1);
+        // Shrinking the icons pulls a wide trail down with them.
+        CHECK(clampTrailWidthPx(40, 16) == 14);
+        // The span measured from the PIXELS agrees with the constant: the
+        // heavy's visible wing, tip to tip, is within one texel of it.
+        const std::uint8_t* hv = px::kRgba[static_cast<int>(AircraftIcon::Heavy)];
+        int minX = px::kSide, maxX = -1;
+        for (int y = 0; y < px::kSide; ++y) {
+            for (int x = 0; x < px::kSide; ++x) {
+                if (hv[(static_cast<std::size_t>(y) * px::kSide + x) * 4u + 3u] >= 64) {
+                    minX = std::min(minX, x);
+                    maxX = std::max(maxX, x);
+                }
+            }
+        }
+        const double measured = static_cast<double>(maxX - minX + 1) / px::kSide;
+        std::printf("  heavy wingspan measured %.3f of the icon, constant %.3f\n", measured,
+                    static_cast<double>(cascade::gui::kAircraftSpanFraction));
+        CHECK(std::fabs(measured - cascade::gui::kAircraftSpanFraction) <= 1.0 / px::kSide);
+    }
 
     // --- which way round ----------------------------------------------------
     {

@@ -295,6 +295,10 @@ struct AppConfig {
     // clamps to the same numbers (test_config checks the two agree - core
     // cannot include the gui header that owns them).
     int aircraftIconPx = 48;
+    // Trail width in pixels on the maps and the radar scope (Display > "Trail
+    // width", 0.99.26). 4 as standard; the loader clamps to 1..96 and the
+    // views cap it at the icon's wingspan (gui::clampTrailWidthPx).
+    int mapTrailWidthPx = 4;
 
     // --- The ADS-B radar scope ------------------------------------------------
     // A plan-position indicator - the receiver at the centre, range rings and
@@ -349,6 +353,8 @@ struct AppConfig {
     int demodScopeTimebase = 3;   // index into kScopeTimebaseMs; 3 is 10 ms/DIV
     int demodScopeGain = 5;       // index into kScopeGainPerDiv; 5 is 100 mV/DIV
     bool demodScopeAutoGain = true;
+    // NORM / AVG / PERSIST (gui::ScopeDisplay, 0.99.26); clamped on load.
+    int demodScopeDisplay = 0;
 
     // --- THE TRANSMITTER (0.95.0) --------------------------------------------
     //

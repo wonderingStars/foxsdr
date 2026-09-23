@@ -331,6 +331,9 @@ public:
     // gui/aircraft_icons.hpp). Clamped here, so a hand-edited config cannot
     // draw a 1000-pixel aeroplane.
     void setAircraftIconPx(int px) { aircraftIconPx_ = clampAircraftIconPx(px); }
+    // Trail width in pixels (Display > "Trail width"), capped at the icon's
+    // wingspan - see clampTrailWidthPx.
+    void setTrailWidthPx(int px) { trailWidthPx_ = clampTrailWidthPx(px, aircraftIconPx_); }
 
     void setTrailOptions(bool drawTrails, bool altitudeColours) {
         drawTrails_ = drawTrails;
@@ -506,6 +509,7 @@ private:
     // far apart and the path one runs first.
     int trailStyle_ = 0;
     int aircraftIconPx_ = kAircraftIconDefaultPx;
+    int trailWidthPx_ = kTrailWidthDefaultPx;
     // ONE FLAG PER LADDER, because there are two of them and they are read in
     // different units. A page whose trails were banded on the ORBITAL ladder
     // must not put an aviation legend on screen: "> 30 kft" over a picture

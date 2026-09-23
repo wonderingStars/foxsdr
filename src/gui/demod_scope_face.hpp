@@ -21,6 +21,7 @@
 #include <cstddef>
 
 #include "gui/demod_scope.hpp"
+#include "gui/scope_memory.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -75,6 +76,15 @@ struct DemodScopeFeed {
     // from "nothing is arriving" and this product has a standing rule against
     // conflating the two.
     bool live = false;
+
+    // WHAT THE TUBE REMEMBERS, for the PERSIST position (gui/scope_memory.hpp).
+    // Owned by the page, which also resets it when the display mode changes;
+    // null draws the live trace only, whatever the state says. `dtS` is the
+    // time since the last frame and `nowS` a steady clock, both in seconds -
+    // the fading is timed, not counted in frames.
+    ScopeMemory* memory = nullptr;
+    double dtS = 0.0;
+    double nowS = 0.0;
 };
 
 // DRAW THE WHOLE TUBE into `dl` between tl and br: the bay, the bezel, the
