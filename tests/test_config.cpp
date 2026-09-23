@@ -151,6 +151,8 @@ AppConfig junkConfig() {
     // Away from its default AND out of range, the same rule every other
     // clamped field here follows.
     c.mapTrailStyle = 99;
+    // Out of range both ways from the default of 32.
+    c.aircraftIconPx = 999;
     // The radar scope, both fields away from their defaults and the range off
     // the ladder entirely: a load path that forgets either assignment would
     // leave the mode on and the renderer holding a scale it has no rings for.
@@ -289,6 +291,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
+    CHECK(a.aircraftIconPx == b.aircraftIconPx);
     CHECK(a.scopeMode == b.scopeMode);
     CHECK(a.scopeRangeNm == b.scopeRangeNm);
     CHECK(a.demodScopeOpen == b.demodScopeOpen);
@@ -511,6 +514,7 @@ int main() {
         in.mapTrails = false;
         in.mapTrailAltitudeColours = true;
         in.mapTrailStyle = 1;  // Ribbon, which is not the default
+        in.aircraftIconPx = 40;  // legal, and neither the default (48) nor junk
         // The radar scope. The range is a LEGAL ladder value that is neither
         // the default (200) nor what junkConfig() holds (12345, which snaps to
         // 400), so the roundtrip proves the FILE is what came back rather than
@@ -1418,6 +1422,38 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(!out.scopeMode);
         CHECK(out.scopeRangeNm == 200);
+
+        // --- THE AIRCRAFT ICON SIZE (0.99.25) ------------------------------
+        //
+        // Pixels across on every map and the radar scope. 48 is the owner's
+        // standard, 16..96 the range - the same numbers
+        // gui::clampAircraftIconPx uses, which test_aircraft_icons pins from
+        // the other side. RED WHEN the getter, the clamp or the default moves.
+        {
+            const AppConfig fresh;
+            CHECK(fresh.aircraftIconPx == 48);
+            struct IconCase { const char* json; int want; };
+            const IconCase icons[] = {
+                {"{\"aircraftIconPx\":40}", 40},
+                {"{\"aircraftIconPx\":16}", 16},
+                {"{\"aircraftIconPx\":96}", 96},
+                {"{\"aircraftIconPx\":15}", 16},
+                {"{\"aircraftIconPx\":97}", 96},
+                {"{\"aircraftIconPx\":-5}", 16},
+                {"{\"aircraftIconPx\":2000000000}", 96},
+                {"{\"mode\":\"AM\"}", 48},  // a file from before the setting
+            };
+            for (const IconCase& c : icons) {
+                CHECK(writeText(path, std::string(c.json) + "\n"));
+                out = junkConfig();
+                CHECK(ConfigStore::load(path, out, err));
+                if (out.aircraftIconPx != c.want) {
+                    std::printf("  (icon size: %s gave %d, wanted %d)\n", c.json,
+                                out.aircraftIconPx, c.want);
+                }
+                CHECK(out.aircraftIconPx == c.want);
+            }
+        }
 
         // --- THE DEMOD SCOPE'S THREE LADDER INDICES ------------------------
         //

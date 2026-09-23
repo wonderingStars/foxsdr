@@ -632,6 +632,7 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
+           a.aircraftIconPx == b.aircraftIconPx &&
            // The scope's mode and range. Both are user switches that change
            // only on a click or a wheel notch, so they belong here: without
            // them, leaving the application in scope mode - or on a range other
@@ -2215,6 +2216,8 @@ int AppWindow::run(int frames) {
     // it after run() returns), so the view is destroyed explicitly here, not
     // left to ~AppWindow. The patch's picture textures, for the same reason.
     releasePatchPictureTextures();
+    // The aircraft icons are GL textures too, made on first draw.
+    cascade::gui::releaseAircraftIconTextures();
     waterfall_.reset();
 
     ImGui_ImplOpenGL3_Shutdown();
@@ -5983,6 +5986,26 @@ void AppWindow::drawDisplaySection() {
             tunerStyle_ = cascade::gui::tunerStyleFromName(
                 cascade::gui::kTunerStyleNames[std::clamp(
                     styleIndex, 0, cascade::gui::kTunerStyleCount - 1)]);
+        }
+
+        // THE AIRCRAFT ICON SIZE (owner, 2026-09-23: "allow the user to
+        // specify a size in the settings for them but make them a standard
+        // 32px"). Pixels across, on every map and the radar scope, applied
+        // live - each view is handed aircraftIconPx_ every frame - and saved
+        // by currentConfig() on the usual debounce. The range is the one
+        // gui::clampAircraftIconPx enforces; see gui/aircraft_icons.hpp.
+        if (ImGui::SliderInt("Aircraft icons", &aircraftIconPx_,
+                             cascade::gui::kAircraftIconMinPx, cascade::gui::kAircraftIconMaxPx,
+                             "%d px", ImGuiSliderFlags_AlwaysClamp)) {
+            aircraftIconPx_ = cascade::gui::clampAircraftIconPx(aircraftIconPx_);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Size of the aircraft on the maps and the radar scope.\n"
+                              "Standard is %d px. Right-click to put it back.",
+                              cascade::gui::kAircraftIconDefaultPx);
+        }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            aircraftIconPx_ = cascade::gui::kAircraftIconDefaultPx;
         }
 
         // Band plan overlay (P7). Always offered, even with no plan
@@ -11850,6 +11873,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 if (mapW > 40.0f && mapH > 40.0f) {
                     view->setTrailOptions(mapTrails_, mapTrailAltColours_);
                     view->setTrailStyle(mapTrailStyle_);
+                    view->setAircraftIconPx(aircraftIconPx_);
                     view->draw(mapW, mapH, patchMapTracks_, patchMapPaths_, &basemap_,
                                &trackInfo_);
                 }
@@ -12760,6 +12784,7 @@ void AppWindow::drawScopeMode() {
     const bool roomForFace = scale >= 0.42f && avail.x >= 900.0f;
 
     if (!roomForFace) {
+        scope_.setAircraftIconPx(aircraftIconPx_);
         scope_.draw(avail.x, avail.y, pluginUi_.tracks(), &basemap_, &trackInfo_);
         scopeRangeNm_ = scope_.rangeNm();
         return;
@@ -12963,6 +12988,7 @@ void AppWindow::drawScopeMode() {
     // The scope and its panel fill everything between the gauges.
 
     ImGui::SetCursorScreenPos(ImVec2(innerL, instTop));
+    scope_.setAircraftIconPx(aircraftIconPx_);
     scope_.draw(innerR - innerL, instBot - instTop, pluginUi_.tracks(), &basemap_,
                 &trackInfo_);
 
@@ -14294,6 +14320,7 @@ void AppWindow::drawPluginWindows() {
                 // checkbox on ANY page reaches every page's map on the next one.
                 page.view->setTrailOptions(mapTrails_, mapTrailAltColours_);
                 page.view->setTrailStyle(mapTrailStyle_);
+                page.view->setAircraftIconPx(aircraftIconPx_);
                 page.view->draw(avail.x, avail.y, pageTracks_, pagePaths_,
                                 &basemap_, &trackInfo_);
                 if (credit) {
@@ -21541,6 +21568,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     mapTrails_ = cfg.mapTrails;
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
     mapTrailStyle_ = cfg.mapTrailStyle;
+    aircraftIconPx_ = cascade::gui::clampAircraftIconPx(cfg.aircraftIconPx);
 
     // The radar scope. The MODE arrives off - startupState cleared it, because
     // the application starts on the bench whatever was showing at the last
@@ -22152,6 +22180,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
+    cfg.aircraftIconPx = aircraftIconPx_;
     cfg.scopeMode = scopeMode_;
     cfg.scopeRangeNm = scopeRangeNm_;
     cfg.demodScopeOpen = demodScopeOpen_;

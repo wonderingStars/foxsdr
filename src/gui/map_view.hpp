@@ -48,6 +48,7 @@
 #include <vector>
 
 #include "core/plugin_ui.hpp"
+#include "gui/aircraft_icons.hpp"
 #include "gui/track_metrics.hpp"
 
 namespace cascade::gui {
@@ -326,6 +327,11 @@ public:
     // 0 = line, 1 = ribbon. See AppConfig::mapTrailStyle.
     void setTrailStyle(int style) { trailStyle_ = style; }
 
+    // The aircraft icon size in pixels across - the Display setting (see
+    // gui/aircraft_icons.hpp). Clamped here, so a hand-edited config cannot
+    // draw a 1000-pixel aeroplane.
+    void setAircraftIconPx(int px) { aircraftIconPx_ = clampAircraftIconPx(px); }
+
     void setTrailOptions(bool drawTrails, bool altitudeColours) {
         drawTrails_ = drawTrails;
         trailAltitudeColours_ = altitudeColours;
@@ -499,6 +505,7 @@ private:
     // clutter. A frame member rather than a local because the two loops are
     // far apart and the path one runs first.
     int trailStyle_ = 0;
+    int aircraftIconPx_ = kAircraftIconDefaultPx;
     // ONE FLAG PER LADDER, because there are two of them and they are read in
     // different units. A page whose trails were banded on the ORBITAL ladder
     // must not put an aviation legend on screen: "> 30 kft" over a picture

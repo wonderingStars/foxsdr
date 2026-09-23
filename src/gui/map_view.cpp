@@ -18,6 +18,7 @@
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_detail_view.hpp"
+#include "gui/aircraft_icons.hpp"
 #include "gui/track_silhouette.hpp"
 #include "gui/track_info_cache.hpp"
 #include "imgui.h"
@@ -1603,7 +1604,9 @@ void MapView::draw(float width, float height,
     bool anyBanded = anyBandedTrail_;
     bool anyOrbitBanded = anyOrbitTrail_;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    float bestDist = 14.0f;  // hit radius in pixels
+    // Hit radius in pixels: an aircraft icon is as big as the user made it,
+    // and a click anywhere on it must select it.
+    float bestDist = aircraftMarkerRadius(static_cast<float>(aircraftIconPx_));
     const cascade::core::HostTrack* best = nullptr;
 
     for (const auto& ht : tracks) {
@@ -1637,32 +1640,21 @@ void MapView::draw(float width, float height,
         // An emergency also gets a ring of its own, so it survives being
         // selected (where the marker is knocked out of a disc and the emergency
         // hue is no longer the fill) and survives a colour-blind reading.
+        const bool isAircraft = ht.t.kind == CASCADE_TRACK_AIRCRAFT;
+        const float iconPx = static_cast<float>(aircraftIconPx_);
         if ((ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
-            dl->AddCircle(s, 16.0f, fadedColour(IM_COL32(255, 45, 45, 255), pres.alpha), 0,
-                          2.0f);
+            dl->AddCircle(s, isAircraft ? aircraftMarkerRadius(iconPx) + 3.0f : 16.0f,
+                          fadedColour(IM_COL32(255, 45, 45, 255), pres.alpha), 0, 2.0f);
         }
 
-        if (ht.t.kind == CASCADE_TRACK_AIRCRAFT) {
-            // The silhouette IS the heading indicator, so no tick.
-            // 9.45/8.4/13.65: the 9/8/13 set grown 5% together, requested
-            // after field use - the silhouettes read slightly small against
-            // the new rims, and growing all three keeps the selected
-            // knockout's margins exactly as designed.
-            //
-            // WHICH silhouette comes from what the aircraft broadcast about
-            // itself - see gui/track_silhouette.hpp. An aircraft that stated
-            // nothing draws exactly the shape this map has always drawn.
-            const std::uint32_t cat = trackCategory(ht.t.kind, ht.t.flags);
-            if (picked) {
-                dl->AddCircleFilled(s, 13.65f, col);
-                dl->AddCircle(s, 13.65f, IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu),
-                              0, 1.5f);
-                // The silhouette is KNOCKED OUT of the disc, so it is drawn in
-                // the map's own ground rather than in a dark of its own.
-                addTrackSymbol(dl, s, ht.t.courseDeg, 8.4f, theme::kWell, true, cat);
-            } else {
-                addTrackSymbol(dl, s, ht.t.courseDeg, 9.45f, col, altKnown, cat);
-            }
+        if (isAircraft) {
+            // THE ICON IS THE HEADING INDICATOR, so no tick. Which icon comes
+            // from what the aircraft broadcast about itself, the altitude
+            // colour is the halo under it, and the size is the user's
+            // Display setting (48 px unless they changed it) - see
+            // gui/aircraft_icons.hpp.
+            drawAircraftMarker(dl, s, ht.t.courseDeg, iconPx,
+                               trackCategory(ht.t.kind, ht.t.flags), col, altKnown, picked);
         } else {
             // A course, where known, is drawn as a heading tick. It is the
             // difference between a field of dots and a picture of where things
@@ -1678,7 +1670,8 @@ void MapView::draw(float width, float height,
         }
 
         const char* lbl = ht.t.label[0] != '\0' ? ht.t.label : ht.t.id;
-        const float lblX = s.x + (picked ? 15.0f : 8.0f);
+        const float lblX =
+            s.x + (isAircraft ? aircraftMarkerRadius(iconPx) + 3.0f : (picked ? 15.0f : 8.0f));
         // CENTRED ON THE MARK IT NAMES, which is half a line height up. The
         // six pixels that stood here centred no face this application has
         // shipped; at 18 px the label rode three below the target's own dot.

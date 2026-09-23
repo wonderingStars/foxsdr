@@ -289,6 +289,13 @@ struct AppConfig {
     // them without being asked. It is one control away.
     int mapTrailStyle = 0;
 
+    // HOW BIG AN AIRCRAFT IS DRAWN on the map and the radar scope, in pixels
+    // across (Display > "Aircraft icons", 0.99.25). 48 is the owner's standard;
+    // 16 to 96 is the range gui::clampAircraftIconPx allows, and the loader
+    // clamps to the same numbers (test_config checks the two agree - core
+    // cannot include the gui header that owns them).
+    int aircraftIconPx = 48;
+
     // --- The ADS-B radar scope ------------------------------------------------
     // A plan-position indicator - the receiver at the centre, range rings and
     // bearing ticks around it, aircraft plotted at their true range and

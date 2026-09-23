@@ -292,6 +292,9 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // CLAMPED ON LOAD, not trusted. The file is user-editable and an unknown
     // style would otherwise reach the draw loop and select nothing at all.
     if (out.mapTrailStyle < 0 || out.mapTrailStyle > 1) { out.mapTrailStyle = 0; }
+    // Clamped, not trusted - the same 16..96 gui::clampAircraftIconPx allows.
+    getInt(j, "aircraftIconPx", out.aircraftIconPx);
+    out.aircraftIconPx = std::clamp(out.aircraftIconPx, 16, 96);
     // The radar scope. The range is SNAPPED TO THE LADDER the view defines,
     // never trusted: the file is user-editable, and every ring radius, every
     // ring label and the corner readout are derived from this one number, so a
@@ -697,6 +700,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
+    j["aircraftIconPx"] = cfg.aircraftIconPx;
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
     j["demodScopeOpen"] = cfg.demodScopeOpen;

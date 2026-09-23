@@ -2494,6 +2494,8 @@ private:
     bool mapTrails_ = true;
     bool mapTrailAltColours_ = true;
     int mapTrailStyle_ = 0;  // 0 line, 1 ribbon - see AppConfig::mapTrailStyle
+    // Pixels across, every map and scope - see AppConfig::aircraftIconPx.
+    int aircraftIconPx_ = cascade::gui::kAircraftIconDefaultPx;
 
     // --- the ADS-B radar scope ----------------------------------------------
     // The renderer, and the two pieces of state that outlive it. The RANGE

@@ -16,6 +16,7 @@
 #include "gui/fonts.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
+#include "gui/aircraft_icons.hpp"
 #include "gui/track_silhouette.hpp"
 #include "imgui.h"
 
@@ -2504,7 +2505,8 @@ void ScopeView::draw(float width, float height,
     }
 
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    float bestDist = 14.0f;  // hit radius in pixels
+    // Hit radius: the whole icon, at whatever size the user set.
+    float bestDist = aircraftMarkerRadius(static_cast<float>(aircraftIconPx_));
     const cascade::core::HostTrack* hit = nullptr;
     const cascade::core::HostTrack* selected = nullptr;
 
@@ -2566,26 +2568,22 @@ void ScopeView::draw(float width, float height,
         // The emergency ring, so the state survives being selected (where the
         // silhouette is knocked out of a disc and the emergency hue is no
         // longer the fill) and survives a colour-blind reading.
+        const float iconPx = static_cast<float>(aircraftIconPx_);
+        const float markR = aircraftMarkerRadius(iconPx);
         if ((ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
-            dl->AddCircle(s, 16.0f, fadedColour(kAlert, pres.alpha), 0, 2.0f);
+            dl->AddCircle(s, markR + 3.0f, fadedColour(kAlert, pres.alpha), 0, 2.0f);
         }
-        if (picked) {
-            dl->AddCircleFilled(s, 13.65f, col);
-            dl->AddCircle(s, 13.65f, IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFFu),
-                          0, 1.5f);
-            addTrackSymbol(dl, s, ht.t.courseDeg, 8.4f, kGround, true,
-                           trackCategory(ht.t.kind, ht.t.flags));
-        } else {
-            addTrackSymbol(dl, s, ht.t.courseDeg, 9.45f, col, altKnown,
-                           trackCategory(ht.t.kind, ht.t.flags));
-        }
+        // The same marker the map draws - icon, shadow, altitude halo and
+        // selection ring - at the same user-set size. See gui/aircraft_icons.hpp.
+        drawAircraftMarker(dl, s, ht.t.courseDeg, iconPx, trackCategory(ht.t.kind, ht.t.flags),
+                           col, altKnown, picked);
 
         const char* lbl = ht.t.label[0] != '\0' ? ht.t.label : ht.t.id;
         // BESIDE THE SILHOUETTE AND LEVEL WITH IT. The -6 this was written as
         // was half a line of the face bound when it was written; a label
         // centred against a height nothing is drawn at rides above its own
         // aircraft, and on a busy face it lands on the target above instead.
-        dl->AddText(ImVec2(s.x + (picked ? 15.0f : 8.0f),
+        dl->AddText(ImVec2(s.x + markR + 3.0f,
                            s.y - ImGui::GetTextLineHeight() * 0.5f),
                     col, lbl);
 

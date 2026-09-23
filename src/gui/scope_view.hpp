@@ -46,6 +46,7 @@
 #include <vector>
 
 #include "core/plugin_ui.hpp"
+#include "gui/aircraft_icons.hpp"
 #include "gui/track_metrics.hpp"
 
 namespace cascade::gui {
@@ -723,6 +724,8 @@ public:
     // class can install a range the renderer has no rings for.
     int rangeNm() const { return rangeNm_; }
     void setRangeNm(int nm) { rangeNm_ = clampScopeRangeNm(nm); }
+    // The aircraft icon size, shared with the map - see MapView::setAircraftIconPx.
+    void setAircraftIconPx(int px) { aircraftIconPx_ = clampAircraftIconPx(px); }
 
     // The aircraft the panel is describing, empty when none. An id rather than
     // a pointer or an index, for the reason every other selection in this
@@ -763,6 +766,7 @@ private:
     double rxLat_ = 0.0;
     double rxLon_ = 0.0;
     int rangeNm_ = kScopeDefaultRangeNm;
+    int aircraftIconPx_ = kAircraftIconDefaultPx;
     std::string selectedId_;
     int plotted_ = 0;
     bool askedTiles_ = false;

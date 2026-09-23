@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="128" viewBox="0 0 1280 128">
+<!-- THE AIRCRAFT ICONS the map and the radar scope draw (FoxSDR 0.99.25).
+
+     SOURCE OF TRUTH for src/gui/aircraft_icon_pixels.hpp: edit a symbol here,
+     then run  py -3.14 tools/make-aircraft-icons.py  from the repository root
+     to re-render the pixels. Every symbol is a 200x200 top view (framed at -12..212 so nothing touches
+     the edge of its texture), nose up
+     (north), lit from the top-left. There is deliberately NO shadow in here:
+     the application casts one itself, offset on the SCREEN, so the light stays
+     in one place while the aircraft turns under it.
+
+     Designed 2026-09-23 and approved by the owner from a mockup sheet. -->
+<defs>
+  <!-- light from the top-left: bodies are cylinders, bright along the left-of-centre ridge -->
+  <linearGradient id="fus" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#5f6b77"/><stop offset="0.38" stop-color="#f7f9fb"/>
+    <stop offset="0.62" stop-color="#d3d9df"/><stop offset="1" stop-color="#56616c"/>
+  </linearGradient>
+  <linearGradient id="wing" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#f1f4f7"/><stop offset="1" stop-color="#8f9aa5"/>
+  </linearGradient>
+  <linearGradient id="wingL" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#9aa5b0"/>
+  </linearGradient>
+  <linearGradient id="eng" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#2d343b"/><stop offset="0.4" stop-color="#8e99a4"/><stop offset="1" stop-color="#2a3138"/>
+  </linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#6fa8d6"/><stop offset="0.35" stop-color="#1c3550"/><stop offset="1" stop-color="#0c1824"/>
+  </linearGradient>
+  <linearGradient id="sail" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#ffb347"/><stop offset="1" stop-color="#d9601f"/>
+  </linearGradient>
+  <linearGradient id="red" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#7d1010"/><stop offset="0.4" stop-color="#ef3b2c"/><stop offset="1" stop-color="#6d0d0d"/>
+  </linearGradient>
+  <linearGradient id="heli" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#8a5a00"/><stop offset="0.4" stop-color="#ffd24a"/><stop offset="1" stop-color="#7a4f00"/>
+  </linearGradient>
+  <linearGradient id="heli2" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#1f3d2a"/><stop offset="0.4" stop-color="#6fae7e"/><stop offset="1" stop-color="#1a3223"/>
+  </linearGradient>
+  <radialGradient id="disc" cx="0.5" cy="0.5" r="0.5">
+    <stop offset="0" stop-color="#ffffff" stop-opacity="0.05"/><stop offset="0.85" stop-color="#ffffff" stop-opacity="0.16"/>
+    <stop offset="1" stop-color="#ffffff" stop-opacity="0.02"/>
+  </radialGradient>
+  <radialGradient id="envelope" cx="0.38" cy="0.35" r="0.7">
+    <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/><stop offset="1" stop-color="#000000" stop-opacity="0.35"/>
+  </radialGradient>
+
+  <!-- AIRLINER: swept wing, two engines under it -->
+  <symbol id="airliner" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M92,84 L10,128 L10,139 L92,114 L108,114 L190,139 L190,128 L108,84 Z" fill="url(#wing)"/>
+    <path d="M10,128 L92,84" stroke="#ffffff" stroke-width="1.2" fill="none"/>
+    <rect x="53" y="98" width="12" height="26" rx="5" fill="url(#eng)"/><rect x="135" y="98" width="12" height="26" rx="5" fill="url(#eng)"/>
+    <ellipse cx="59" cy="99" rx="5" ry="2.4" fill="#111"/><ellipse cx="141" cy="99" rx="5" ry="2.4" fill="#111"/>
+    <path d="M97,166 L60,184 L60,192 L98,184 L102,184 L140,192 L140,184 L103,166 Z" fill="url(#wing)"/>
+    <path d="M100,8 C108,8 112,24 112,40 L112,168 C112,182 106,194 100,197 C94,194 88,182 88,168 L88,40 C88,24 92,8 100,8 Z" fill="url(#fus)"/>
+    <path d="M93,25 Q100,18 107,25 L106,30 Q100,26 94,30 Z" fill="url(#glass)" stroke="none"/>
+    <rect x="98.6" y="156" width="2.8" height="40" rx="1.2" fill="#46515c" stroke="none"/>
+    <path d="M92,60 L92,150" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.5" fill="none"/>
+  </g></symbol>
+
+  <!-- HEAVY: four engines, wider span, upper-deck hump -->
+  <symbol id="heavy" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M90,76 L2,128 L2,141 L90,110 L110,110 L198,141 L198,128 L110,76 Z" fill="url(#wing)"/>
+    <path d="M2,128 L90,76" stroke="#ffffff" stroke-width="1.2" fill="none"/>
+    <rect x="30" y="106" width="11" height="24" rx="5" fill="url(#eng)"/><rect x="58" y="96" width="12" height="26" rx="5" fill="url(#eng)"/>
+    <rect x="130" y="96" width="12" height="26" rx="5" fill="url(#eng)"/><rect x="159" y="106" width="11" height="24" rx="5" fill="url(#eng)"/>
+    <path d="M96,164 L52,184 L52,193 L97,184 L103,184 L148,193 L148,184 L104,164 Z" fill="url(#wing)"/>
+    <path d="M100,4 C110,4 115,22 115,40 L115,166 C115,182 107,195 100,198 C93,195 85,182 85,166 L85,40 C85,22 90,4 100,4 Z" fill="url(#fus)"/>
+    <path d="M100,12 C106,12 109,24 109,36 L109,62 C109,68 91,68 91,62 L91,36 C91,24 94,12 100,12 Z" fill="#ffffff" fill-opacity="0.35" stroke="#1b2127" stroke-width="1"/>
+    <path d="M93,20 Q100,13 107,20 L106,25 Q100,21 94,25 Z" fill="url(#glass)" stroke="none"/>
+    <rect x="98.5" y="152" width="3" height="44" rx="1.3" fill="#46515c" stroke="none"/>
+  </g></symbol>
+
+  <!-- LIGHT: high straight wing, propeller, short body (a Cessna-type single) -->
+  <symbol id="light" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M100,30 C107,30 111,40 111,52 L108,122 L103,178 L97,178 L92,122 L89,52 C89,40 93,30 100,30 Z" fill="url(#fus)"/>
+    <rect x="70" y="162" width="60" height="13" rx="4" fill="url(#wing)"/>
+    <rect x="98.6" y="150" width="2.8" height="30" rx="1.2" fill="#46515c" stroke="none"/>
+    <path d="M92,44 L108,44 L107,56 L93,56 Z" fill="url(#glass)" stroke="none"/>
+    <rect x="12" y="58" width="176" height="25" rx="5" fill="url(#wingL)"/>
+    <rect x="12" y="58" width="12" height="25" rx="4" fill="#c0392b" stroke="none"/><rect x="176" y="58" width="12" height="25" rx="4" fill="#27ae60" stroke="none"/>
+    <path d="M14,60 L186,60" stroke="#ffffff" stroke-width="1.3" fill="none"/>
+    <ellipse cx="100" cy="24" rx="30" ry="4.5" fill="#cfd6dd" fill-opacity="0.35" stroke="none"/>
+    <path d="M72,24 L128,24" stroke="#20262c" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="100" cy="25" r="5.5" fill="url(#eng)"/>
+  </g></symbol>
+
+  <!-- GLIDER: very long thin wing, T-tail, bubble canopy -->
+  <symbol id="glider" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.4" stroke-linejoin="round">
+    <path d="M100,30 C105,30 107,40 107,54 L104,120 L102,182 L98,182 L96,120 L93,54 C93,40 95,30 100,30 Z" fill="url(#fus)"/>
+    <path d="M100,74 L2,80 L2,86 L100,88 L198,86 L198,80 Z" fill="url(#wingL)"/>
+    <path d="M2,80 L100,74 L198,80" stroke="#ffffff" stroke-width="1" fill="none"/>
+    <rect x="76" y="176" width="48" height="8" rx="3" fill="url(#wing)"/>
+    <ellipse cx="100" cy="50" rx="5.5" ry="15" fill="url(#glass)" stroke="none"/>
+    <ellipse cx="98" cy="45" rx="1.6" ry="6" fill="#ffffff" fill-opacity="0.6" stroke="none"/>
+  </g></symbol>
+
+  <!-- MICROLIGHT: flex-wing trike - a coloured delta sail over a pod with a pusher prop -->
+  <symbol id="microlight" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M100,92 C107,92 110,104 108,120 L104,140 L96,140 L92,120 C90,104 93,92 100,92 Z" fill="url(#fus)"/>
+    <ellipse cx="100" cy="146" rx="20" ry="3.5" fill="#cfd6dd" fill-opacity="0.4" stroke="none"/>
+    <path d="M100,26 L194,118 L182,128 L100,100 L18,128 L6,118 Z" fill="url(#sail)" fill-opacity="0.95"/>
+    <path d="M100,26 L100,100" stroke="#7a2e05" stroke-width="2" fill="none"/>
+    <path d="M60,64 L50,112 M140,64 L150,112" stroke="#ffffff" stroke-opacity="0.6" stroke-width="3" fill="none"/>
+  </g></symbol>
+
+  <!-- UAV: long straight wing, bulbous nose, V-tail, pusher prop -->
+  <symbol id="uav" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M100,26 C110,26 113,40 112,56 L107,150 L93,150 L88,56 C87,40 90,26 100,26 Z" fill="url(#fus)" />
+    <path d="M100,82 L8,90 L8,98 L100,100 L192,98 L192,90 Z" fill="url(#wing)"/>
+    <path d="M97,142 L66,170 L72,174 L100,152 L128,174 L134,170 L103,142 Z" fill="url(#wing)"/>
+    <ellipse cx="100" cy="158" rx="16" ry="3" fill="#cfd6dd" fill-opacity="0.4" stroke="none"/>
+    <circle cx="100" cy="38" r="7" fill="#2b3239" stroke="none"/>
+  </g></symbol>
+
+  <!-- BALLOON: top view of an envelope with coloured gores and the crown vent -->
+  <symbol id="balloon" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.4">
+    <circle cx="100" cy="100" r="80" fill="#e74c3c"/>
+    <path d="M100,100 L100,20 A80,80 0 0,1 156.6,43.4 Z M100,100 L180,100 A80,80 0 0,1 156.6,156.6 Z M100,100 L100,180 A80,80 0 0,1 43.4,156.6 Z M100,100 L20,100 A80,80 0 0,1 43.4,43.4 Z" fill="#f1c40f"/>
+    <circle cx="100" cy="100" r="80" fill="url(#envelope)" stroke="#1b2127"/>
+    <circle cx="100" cy="100" r="13" fill="#2c3e50"/>
+  </g></symbol>
+
+  <!-- SURFACE: airport fire engine from above -->
+  <symbol id="surface" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.6" stroke-linejoin="round">
+    <rect x="66" y="30" width="68" height="146" rx="10" fill="url(#red)"/>
+    <rect x="72" y="36" width="56" height="26" rx="6" fill="url(#glass)" stroke="none"/>
+    <rect x="80" y="30" width="40" height="6" rx="2" fill="#3fa9ff" stroke="none"/>
+    <rect x="78" y="74" width="44" height="92" rx="4" fill="#e9ecef" fill-opacity="0.25"/>
+    <path d="M86,78 L86,160 M114,78 L114,160 M86,90 L114,90 M86,104 L114,104 M86,118 L114,118 M86,132 L114,132 M86,146 L114,146" stroke="#e9ecef" stroke-width="3" fill="none"/>
+  </g></symbol>
+
+  <!-- HELICOPTER: five-blade rotor, twin engine - every rotorcraft (ADS-B says only "rotorcraft") -->
+  <symbol id="helicopter" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M100,40 C116,40 124,58 124,84 C124,114 116,130 100,132 C84,130 76,114 76,84 C76,58 84,40 100,40 Z" fill="url(#heli2)"/>
+    <path d="M100,42 C113,42 119,52 120,64 C112,59 88,59 80,64 C81,52 87,42 100,42 Z" fill="url(#glass)" stroke="none"/>
+    <rect x="86" y="92" width="28" height="22" rx="4" fill="#2c3e50" fill-opacity="0.5" stroke="none"/>
+    <path d="M95,128 L97,176 L103,176 L105,128 Z" fill="url(#heli2)"/>
+    <path d="M100,164 L80,172 L80,178 L100,174 L120,178 L120,172 Z" fill="url(#heli2)"/>
+    <circle cx="100" cy="186" r="9" fill="#cfd6dd" fill-opacity="0.35" stroke="#1b2127" stroke-width="1.4"/>
+  </g>
+  <g stroke-linecap="round">
+    <circle cx="100" cy="84" r="88" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.2" stroke-dasharray="6 5"/>
+    <path d="M100,84 L100,-2" transform="translate(5,6)" stroke="#000" stroke-opacity="0.3" stroke-width="7"/>
+    <path d="M100,84 L181.8,57.4" transform="translate(5,6)" stroke="#000" stroke-opacity="0.3" stroke-width="7"/>
+    <path d="M100,84 L150.6,153.6" transform="translate(5,6)" stroke="#000" stroke-opacity="0.3" stroke-width="7"/>
+    <path d="M100,84 L49.4,153.6" transform="translate(5,6)" stroke="#000" stroke-opacity="0.3" stroke-width="7"/>
+    <path d="M100,84 L18.2,57.4" transform="translate(5,6)" stroke="#000" stroke-opacity="0.3" stroke-width="7"/>
+    <path d="M100,84 L100,-2" stroke="#1d2328" stroke-width="7.5"/>
+    <path d="M100,84 L181.8,57.4" stroke="#1d2328" stroke-width="7.5"/>
+    <path d="M100,84 L150.6,153.6" stroke="#1d2328" stroke-width="7.5"/>
+    <path d="M100,84 L49.4,153.6" stroke="#1d2328" stroke-width="7.5"/>
+    <path d="M100,84 L18.2,57.4" stroke="#1d2328" stroke-width="7.5"/>
+    <path d="M100,84 L100,-2" stroke="#e6ebef" stroke-width="4"/>
+    <path d="M100,84 L181.8,57.4" stroke="#e6ebef" stroke-width="4"/>
+    <path d="M100,84 L150.6,153.6" stroke="#e6ebef" stroke-width="4"/>
+    <path d="M100,84 L49.4,153.6" stroke="#e6ebef" stroke-width="4"/>
+    <path d="M100,84 L18.2,57.4" stroke="#e6ebef" stroke-width="4"/>
+    <circle cx="100" cy="84" r="8" fill="url(#eng)" stroke="#1b2127" stroke-width="1.4"/>
+  </g></symbol>
+
+  <!-- NO TYPE STATED: a plain neutral marker, deliberately NOT an airliner -->
+  <symbol id="unknown" viewBox="-12 -12 224 224"><g stroke="#1b2127" stroke-width="2" stroke-linejoin="round">
+    <path d="M100,22 L150,160 L100,134 L50,160 Z" fill="url(#wingL)"/>
+    <path d="M100,22 L100,134" stroke="#ffffff" stroke-opacity="0.7" stroke-width="2" fill="none"/>
+  </g></symbol>
+</defs>
+<use xlink:href="#airliner" x="0" y="0" width="128" height="128"/>
+<use xlink:href="#heavy" x="128" y="0" width="128" height="128"/>
+<use xlink:href="#light" x="256" y="0" width="128" height="128"/>
+<use xlink:href="#glider" x="384" y="0" width="128" height="128"/>
+<use xlink:href="#microlight" x="512" y="0" width="128" height="128"/>
+<use xlink:href="#uav" x="640" y="0" width="128" height="128"/>
+<use xlink:href="#balloon" x="768" y="0" width="128" height="128"/>
+<use xlink:href="#surface" x="896" y="0" width="128" height="128"/>
+<use xlink:href="#helicopter" x="1024" y="0" width="128" height="128"/>
+<use xlink:href="#unknown" x="1152" y="0" width="128" height="128"/>
+</svg>
