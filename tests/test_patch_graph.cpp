@@ -350,5 +350,23 @@ int main() {
         CHECK(everyFeederComesFirst(g));
     }
 
+    // [R5] AT MOST FIVE RADIOS (0.99.17). The sixth is refused by the graph
+    // itself, other kinds are not limited, and removing a radio makes room.
+    {
+        Graph g;
+        NodeId first = kNoNode;
+        for (std::size_t i = 0; i < cascade::core::patch::kMaxRadios; ++i) {
+            const NodeId id = g.addNode(NodeKind::Radio, "R");
+            CHECK(id != kNoNode);
+            if (i == 0) { first = id; }
+        }
+        CHECK(g.addNode(NodeKind::Radio, "sixth") == kNoNode);
+        CHECK(g.count(NodeKind::Radio) == cascade::core::patch::kMaxRadios);
+        CHECK(g.addNode(NodeKind::Channel, "C") != kNoNode);   // other kinds unaffected
+        CHECK(g.removeNode(first));
+        CHECK(g.addNode(NodeKind::Radio, "again") != kNoNode);
+        CHECK(g.addNode(NodeKind::Radio, "over") == kNoNode);
+    }
+
     return testSummary("test_patch_graph");
 }

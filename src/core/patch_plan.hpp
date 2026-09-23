@@ -31,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "core/patch_devices.hpp"
 #include "core/patch_graph.hpp"
 
 namespace cascade::core::patch {
@@ -57,6 +58,9 @@ enum class Problem : std::uint8_t {
     PluginWrongFeed,   // the node's port and the plugin's input disagree
     DecoderTooFast,    // the plugin needs a rate faster than its source runs
     PluginRefused,     // create() returned no instance - set by the runner, not by compile()
+    NoDevice,          // a Radio with no device chosen
+    DeviceTwice,       // a Radio naming a device another Radio already uses
+    RadioFailed,       // the device would not open - set by the caller, not by compile()
 };
 
 // Advisory problems do not stop a patch running; they are worth saying and not
@@ -80,6 +84,10 @@ inline const char* problemText(Problem p) {
         case Problem::DecoderTooFast:
             return "that plugin needs a faster sample rate than its source produces";
         case Problem::PluginRefused: return "the plugin refused to start - it may need a different rate";
+        case Problem::NoDevice: return "no device chosen for this radio";
+        case Problem::DeviceTwice:
+            return "another radio in this patch already uses that device - one device, one radio";
+        case Problem::RadioFailed: return "the device would not open";
     }
     return "this cannot run";
 }
@@ -110,6 +118,24 @@ struct DecoderInfo {
 
 inline constexpr const char* kImageKeySuffix = "#image";
 
+// Whether catalogue entry `i` has a TWIN that decodes straight from I/Q: the
+// same module key, an I/Q input, and not a picture decoder. The parts bin
+// leaves an AUDIO decoder with such a twin out (owner, 0.99.17: "if the
+// decoder doesnt need sound dont show the option for it") - it would be a
+// second key for the same module that only differs in needing a demodulator
+// in front of it.
+inline bool hasIqTwin(const std::vector<DecoderInfo>& catalogue, std::size_t i) {
+    if (i >= catalogue.size()) { return false; }
+    for (std::size_t j = 0; j < catalogue.size(); ++j) {
+        if (j == i) { continue; }
+        if (catalogue[j].key == catalogue[i].key && catalogue[j].feed == PortType::Iq &&
+            !catalogue[j].image) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Where a decoder's samples come from.
 //   Radio    an I/Q decoder wired straight to the radio: the whole capture,
 //            with the RADIO's centre at DC - the same stream the receiver's
@@ -129,6 +155,7 @@ struct DecoderPlan {
     double inRateHz = 0.0;           // what the source runs at
     double rateHz = 0.0;             // what create() is told
     double centreHz = 0.0;           // RF frequency at DC; I/Q decoders only
+    NodeId radio = kNoNode;          // which radio's samples it runs on
 };
 
 // The largest interpolation factor the resampler in front of a decoder may
@@ -184,12 +211,31 @@ struct ChannelPlan {
     double offsetHz = 0.0;   // from the radio's centre, signed
     unsigned decimation = 0;
     double outRateHz = 0.0;
+    NodeId radio = kNoNode;  // the radio it is cut from
+};
+
+// A speaker, and the channel whose demodulated audio it plays (0.99.17: every
+// audio sink plays, each to its own output, rather than the first one only).
+struct AudioSinkPlan {
+    NodeId sink = kNoNode;
+    NodeId channel = kNoNode;
+    NodeId radio = kNoNode;
+};
+
+// What one radio is actually doing: its node, and the rate and centre the
+// plan is measured against - the open device's readback when it is running,
+// the node's own settings before it is.
+struct RadioInfo {
+    NodeId node = kNoNode;
+    double rateHz = 0.0;
+    double centreHz = 0.0;
 };
 
 struct Plan {
     std::vector<NodeId> order;
     std::vector<ChannelPlan> channels;
     std::vector<DecoderPlan> decoders;
+    std::vector<AudioSinkPlan> sinks;
     std::vector<NodeProblem> problems;
     bool runnable = false;   // nothing blocking, and something to actually do
 };
@@ -336,12 +382,85 @@ inline NodeId listeningChannel(const Graph& g) {
     return kNoNode;
 }
 
-inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
-                    const std::vector<DecoderInfo>* catalogue = nullptr) {
+// The Radio a node's samples come from: its first input, followed upstream
+// until a Radio is reached. kNoNode for a node hanging off nothing. Bounded by
+// the node count, as listeningChannel is.
+inline NodeId radioOf(const Graph& g, NodeId id) {
+    NodeId at = id;
+    for (std::size_t step = 0; step < g.nodes().size() + 1; ++step) {
+        const Node* n = g.find(at);
+        if (n == nullptr) { return kNoNode; }
+        if (n->kind == NodeKind::Radio) { return at; }
+        NodeId feeder = kNoNode;
+        for (const Wire& w : g.wires()) {
+            if (w.to == at) {
+                feeder = w.from;
+                break;
+            }
+        }
+        if (feeder == kNoNode) { return kNoNode; }
+        at = feeder;
+    }
+    return kNoNode;
+}
+
+inline RadioInfo radioInfoFor(const std::vector<RadioInfo>& radios, NodeId radio) {
+    for (const RadioInfo& r : radios) {
+        if (r.node == radio) { return r; }
+    }
+    return RadioInfo{radio, 0.0, 0.0};
+}
+
+// The channel an audio sink plays: walked back from the sink to the first
+// Channel, as listeningChannel does for the first sink.
+inline NodeId channelFeeding(const Graph& g, NodeId sink) {
+    NodeId at = sink;
+    for (std::size_t step = 0; step < g.nodes().size() + 1; ++step) {
+        NodeId feeder = kNoNode;
+        for (const Wire& w : g.wires()) {
+            if (w.to == at) {
+                feeder = w.from;
+                break;
+            }
+        }
+        if (feeder == kNoNode) { return kNoNode; }
+        const Node* n = g.find(feeder);
+        if (n == nullptr) { return kNoNode; }
+        if (n->kind == NodeKind::Channel) { return n->id; }
+        at = feeder;
+    }
+    return kNoNode;
+}
+
+// EVERY RADIO IS ITS OWN (0.99.17). Each channel and decoder is measured
+// against the radio it hangs off - its rate, its centre - taken from `radios`
+// (the running device's readback, or the node's own settings before it opens).
+// `checkDevices` adds the device rules: a Radio must name a device, and no two
+// Radios may name the same one. It is off only for the single-receiver
+// overload below, which predates radios having devices of their own.
+inline Plan compile(const Graph& g, const std::vector<RadioInfo>& radios,
+                    const std::vector<DecoderInfo>* catalogue = nullptr,
+                    bool checkDevices = true) {
     Plan plan;
     plan.order = g.evaluationOrder();
 
-    const double halfBand = 0.5 * deviceRateHz * kUsableBandFraction;
+    if (checkDevices) {
+        std::vector<const Node*> seen;
+        for (const Node& n : g.nodes()) {
+            if (n.kind != NodeKind::Radio) { continue; }
+            if (n.device.empty()) {
+                plan.problems.push_back({n.id, Problem::NoDevice});
+                continue;
+            }
+            for (const Node* earlier : seen) {
+                if (sameDevice(earlier->device, n.device)) {
+                    plan.problems.push_back({n.id, Problem::DeviceTwice});
+                    break;
+                }
+            }
+            seen.push_back(&n);
+        }
+    }
 
     // Which nodes have a radio somewhere upstream. Walked in evaluation order,
     // so a node's feeders are always decided before it is - that ordering is
@@ -390,7 +509,11 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
             plan.problems.push_back({n.id, Problem::NoFrequency});
             continue;
         }
-        const double offset = n.freqHz - radioCentreHz;
+        const NodeId radio = radioOf(g, n.id);
+        const RadioInfo ri = radioInfoFor(radios, radio);
+        const double deviceRateHz = ri.rateHz;
+        const double halfBand = 0.5 * deviceRateHz * kUsableBandFraction;
+        const double offset = n.freqHz - ri.centreHz;
         if (std::fabs(offset) > halfBand) {
             plan.problems.push_back({n.id, Problem::OutOfBand});
             continue;
@@ -419,7 +542,7 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
             // channel still runs for anything else on it; the DECODER is the
             // node that cannot, and it says so below.
         }
-        plan.channels.push_back({n.id, offset, rc.decimation, rc.rateHz});
+        plan.channels.push_back({n.id, offset, rc.decimation, rc.rateHz, radio});
     }
 
     // Decoders: which plugin, fed from what, at what rate.
@@ -448,6 +571,8 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
         DecoderPlan dp;
         dp.node = n.id;
         dp.plugin = idx;
+        dp.radio = radioOf(g, n.id);
+        const RadioInfo ri = radioInfoFor(radios, dp.radio);
 
         // What is wired into it. Exactly one wire: samples do not fan in.
         const Node* feeder = nullptr;
@@ -462,8 +587,8 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
         const ChannelPlan* chan = nullptr;
         if (feeder->kind == NodeKind::Radio) {
             dp.source = DecoderSource::Radio;
-            dp.inRateHz = deviceRateHz;
-            dp.centreHz = radioCentreHz;
+            dp.inRateHz = ri.rateHz;
+            dp.centreHz = ri.centreHz;
         } else if (feeder->kind == NodeKind::Channel) {
             chan = findChannel(plan, feeder->id);
             dp.source = DecoderSource::Channel;
@@ -518,6 +643,16 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
         plan.decoders.push_back(dp);
     }
 
+    // Every speaker whose chain reaches a planned channel.
+    for (const Node& n : g.nodes()) {
+        if (n.kind != NodeKind::Sink) { continue; }
+        if (n.inputs.empty() || n.inputs[0] != PortType::Audio) { continue; }
+        if (!isFed(n.id)) { continue; }
+        const NodeId chan = channelFeeding(g, n.id);
+        if (chan == kNoNode || findChannel(plan, chan) == nullptr) { continue; }
+        plan.sinks.push_back({n.id, chan, radioOf(g, n.id)});
+    }
+
     // Anything that produces and is heard by nobody. Advisory.
     for (const Node& n : g.nodes()) {
         if (n.outputs.empty()) { continue; }
@@ -540,6 +675,18 @@ inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
     });
     plan.runnable = !blocked && anySink;
     return plan;
+}
+
+// ONE RECEIVER'S RADIO, as the patch was before radios had devices: every
+// Radio node is taken to be running at this rate and centre, and no device
+// rules apply.
+inline Plan compile(const Graph& g, double deviceRateHz, double radioCentreHz,
+                    const std::vector<DecoderInfo>* catalogue = nullptr) {
+    std::vector<RadioInfo> radios;
+    for (const Node& n : g.nodes()) {
+        if (n.kind == NodeKind::Radio) { radios.push_back({n.id, deviceRateHz, radioCentreHz}); }
+    }
+    return compile(g, radios, catalogue, false);
 }
 
 // Every problem pinned to one node, for the canvas and the inspector.

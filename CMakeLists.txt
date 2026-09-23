@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.99.16 LANGUAGES C CXX)
+project(cascade VERSION 0.99.17 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -331,6 +331,9 @@ if(WIN32)
     # pipes. All three are inbox on Windows 10+, so the installer payload
     # contract (cascade.exe + SoapySDR.dll) does not change.
     target_link_libraries(cascade_lib PUBLIC winusb setupapi cfgmgr32)
+    # Media Foundation: Windows' own MP3 encoder for the patch page's MP3
+    # output (core/mp3_writer.cpp, 0.99.17).
+    target_link_libraries(cascade_lib PUBLIC mf mfplat mfreadwrite mfuuid ole32)
 endif()
 
 if(NOT WIN32)

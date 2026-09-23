@@ -63,6 +63,13 @@ std::string Recorder::makeFilename(RecordKind kind, double sampleRateHz,
 
 bool Recorder::start(RecordKind kind, const std::string& directory,
                      double sampleRateHz, std::string& error) {
+    return start(kind, directory, sampleRateHz, error, std::string{});
+}
+
+std::string Recorder::path() const { return path_; }
+
+bool Recorder::start(RecordKind kind, const std::string& directory, double sampleRateHz,
+                     std::string& error, const std::string& namePrefix) {
     error.clear();
     if (recording_.load(std::memory_order_acquire)) {
         // Refusing beats implicitly finalizing the current take: an implicit
@@ -112,7 +119,16 @@ bool Recorder::start(RecordKind kind, const std::string& directory,
 #else
     localtime_r(&now, &tmv);
 #endif
-    const fs::path path = dir / makeFilename(kind, sampleRateHz, tmv);
+    std::string fileName = makeFilename(kind, sampleRateHz, tmv);
+    if (!namePrefix.empty()) {
+        char stamp[32];
+        std::snprintf(stamp, sizeof stamp, "_%04d%02d%02d_%02d%02d%02d.wav",
+                      tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
+                      tmv.tm_min, tmv.tm_sec);
+        fileName = namePrefix + stamp;
+    }
+    const fs::path path = dir / fileName;
+    path_ = path.string();
 
     std::FILE* f = std::fopen(path.string().c_str(), "wb");
     if (f == nullptr) {

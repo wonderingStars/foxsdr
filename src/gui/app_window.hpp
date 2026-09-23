@@ -31,6 +31,7 @@ struct GLFWwindow;
 #include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
+#include "core/patch_radio.hpp"
 #include "core/patch_runner.hpp"
 #include "gui/patch_view_math.hpp"
 #include "gui/patch_scope_math.hpp"
@@ -2443,6 +2444,7 @@ private:
     cascade::gui::patch::Interaction patchUi_;
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;
+    bool sourceDeviceByEnv_ = false;   // FOXSDR_SOURCE_DEVICE, bounded runs only
     bool patchFileLoaded_ = false;
     // The patch as core/patch_io.hpp writes it, rebuilt only when the
     // canvas says it changed. currentConfig() runs every frame and must
@@ -2531,6 +2533,85 @@ private:
     // stagger the next one so a run of clicks does not stack every
     // node on the same spot.
     int nodesPlaced_ = 0;
+
+    // --- the patch's own radios (0.99.17, app_window_patch_radios.cpp) --------
+    // UP TO FIVE, EACH ITS OWN DEVICE. Every Radio node with a device chosen
+    // runs a core::patch::PatchRadio while the page is open: its own device
+    // open, reader thread, runner and spectrum. Keyed by node.
+    std::map<cascade::core::patch::NodeId, std::unique_ptr<cascade::core::patch::PatchRadio>>
+        patchRadios_;
+    // What each running radio was opened AS ("<device key>@<rate>"), so a
+    // changed device or rate reopens it and nothing else does.
+    std::map<cascade::core::patch::NodeId, std::string> patchRadioOpenedAs_;
+    // A hardware open in flight, per node. The open is a multi-second USB
+    // walk, so it runs on a worker exactly as the receiver's own does.
+    struct PatchRadioOpen {
+        std::unique_ptr<cascade::source::IqSource> src;
+        std::string label;
+        std::string error;
+    };
+    std::map<cascade::core::patch::NodeId, std::future<PatchRadioOpen>> patchRadioPending_;
+    std::map<cascade::core::patch::NodeId, std::string> patchRadioPendingAs_;
+    // Why a radio is not running, when it tried and failed; drawn on its face
+    // and turned into Problem::RadioFailed for the plan.
+    std::map<cascade::core::patch::NodeId, std::string> patchRadioError_;
+    // The "<key>@<rate>" that failed, so a radio that would not open is not
+    // retried every frame - only when its device or rate is changed.
+    std::map<cascade::core::patch::NodeId, std::string> patchRadioFailedAs_;
+    // Decoder nodes that refused to start, per radio, merged into
+    // patchRefused_ for the plan.
+    std::map<cascade::core::patch::NodeId, std::vector<cascade::core::patch::NodeId>>
+        patchRefusedBy_;
+    // After the plan is compiled: make and drop speaker outputs, and publish
+    // each running radio's set when it has changed.
+    void patchPublishSets();
+    // Per radio: what its running set was built from (radioSignature).
+    std::map<cascade::core::patch::NodeId, std::string> patchRadioSig_;
+    // Each speaker's output, and the output key it was made for.
+    cascade::core::patch::DestTable patchDests_;
+    std::map<cascade::core::patch::NodeId, std::string> patchDestMadeFor_;
+    std::map<cascade::core::patch::NodeId, std::string> patchDestError_;
+    // Each radio's newest spectrum, for its Spectrum parts and channel levels.
+    struct PatchSpectrum {
+        std::vector<float> db;
+        std::uint64_t seq = 0;
+    };
+    std::map<cascade::core::patch::NodeId, PatchSpectrum> patchSpectra_;
+    // THE RECEIVER'S RADIO, HANDED TO THE PATCH (owner: "when the patch panel
+    // is running unpopulate the sdr from the main sdr software so it show
+    // signal generator"). Opening the page switches the receiver to the
+    // generator and remembers the radio here; closing the page opens it again.
+    struct PatchMainKeep {
+        bool valid = false;
+        std::string kind;
+        std::string args;
+        std::string label;
+        double rateHz = 0.0;
+        double centreHz = 0.0;
+    };
+    PatchMainKeep patchMainKeep_;
+    // One device a patch Radio can be set to, for the inspector's list.
+    struct PatchDeviceChoice {
+        std::string key;     // core/patch_devices.hpp
+        std::string label;
+    };
+    std::vector<PatchDeviceChoice> patchDeviceChoices() const;
+    std::string patchDeviceLabel(const std::string& key) const;
+    // The device a newly added Radio starts on: the receiver's own radio if
+    // no other Radio has it, else the first free device listed, else the
+    // generator.
+    std::string patchDefaultDeviceKey() const;
+    // Per frame while the page is open: take the receiver's radio, open and
+    // close radios to match the nodes, make and drop speaker outputs, and
+    // publish each radio's set when it has changed.
+    void patchReconcile();
+    std::vector<cascade::core::patch::RadioInfo> patchRadioInfos() const;
+    // Stops every patch radio and drops every output. `restoreMain` then hands
+    // the receiver its radio back.
+    void patchStopAll(bool restoreMain);
+    // The inspector's panels for a Radio and a speaker.
+    void drawPatchRadioInspector(cascade::core::patch::Node& n);
+    void drawPatchSinkInspector(cascade::core::patch::Node& n);
 
     bool demodScopeOpen_ = false;
     DemodScopeState demodScope_;

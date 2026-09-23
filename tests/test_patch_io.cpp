@@ -81,6 +81,9 @@ std::string header2() {
     return std::string(kPatchMagic) + " " + std::to_string(kPatchFormat) + "\n";
 }
 
+// A FORMAT-3 document: node lines with no <device> <rateHz> before the name.
+std::string header3() { return std::string(kPatchMagic) + " 3\n"; }
+
 // Indexing guarded only by a preceding CHECK is an out-of-bounds read in
 // exactly the run that has something to report: the test dies with an access
 // violation instead of naming the broken expectation, so the red check meant
@@ -177,9 +180,9 @@ int main() {
     // would lose a frequency.
     {
         const std::string text = std::string(kPatchMagic) + " 9\n"
-                                 "node 1 0 0 10 20 232 128 0 0 - Radio\n"
+                                 "node 1 0 0 10 20 232 128 0 0 - siggen 2000000 Radio\n"
                                  "flux 7 capacitor\n"          // from the future
-                                 "node 2 1 0 30 40 232 104 131725000 0 - Channel\n"
+                                 "node 2 1 0 30 40 232 104 131725000 0 - - 0 Channel\n"
                                  "wire 1 0 2 0\n";
         const LoadResult r = parse(text);
         CHECK(r.ok);
@@ -436,7 +439,7 @@ int main() {
     {
         float dw = 0.0f, dh = 0.0f;
         cascade::core::patch::defaultNodeSize(NodeKind::Channel, dw, dh);
-        const LoadResult r = parse(header2() +
+        const LoadResult r = parse(header3() +
                                    "node 1 1 0 0 0 0 0 0 0 - Zero\n"
                                    "node 2 1 0 0 0 -50 -9 0 0 - Negative\n"
                                    "node 3 1 0 0 0 nan nan 0 0 - NotANumber\n"
@@ -464,7 +467,7 @@ int main() {
     // [19] An undecodable plugin token keeps the NODE - its place, wires and
     // name are the user's - but with no plugin, and the repair is counted.
     {
-        const LoadResult r = parse(header2() +
+        const LoadResult r = parse(header3() +
                                    "node 1 3 0 0 0 216 108 0 0 bad%4 Truncated\n"
                                    "node 2 3 0 0 0 216 108 0 0 bad%zz Nonhex\n"
                                    "node 3 3 0 0 0 216 108 0 0 good%20one Fine\n");
@@ -497,6 +500,79 @@ int main() {
         CHECK(cascade::core::patch::decodePluginKey(
             cascade::core::patch::encodePluginKey("-"), back));
         CHECK(back == "-");
+    }
+
+    // [F4a] FORMAT 4 (0.99.17): a radio's device and rate, and a speaker's
+    // output, come back exactly - including a SoapySDR args string, which is
+    // full of commas, equals signs and sometimes spaces.
+    {
+        Graph g;
+        const NodeId a = g.addNode(NodeKind::Radio, "Airband", PortType::Iq, 10.0f, 20.0f);
+        const NodeId b = g.addNode(NodeKind::Radio, "Gen", PortType::Iq, 10.0f, 200.0f);
+        const NodeId s = g.addNode(NodeKind::Sink, "Out", PortType::Audio, 400.0f, 20.0f);
+        g.mutableNode(a)->device = "soapy|driver=uhd,serial=31E8A0B, type=b200";
+        g.mutableNode(a)->rateHz = 2048000.25;
+        g.mutableNode(a)->freqHz = 131725000.0;
+        g.mutableNode(b)->device = "siggen";
+        g.mutableNode(b)->rateHz = 2000000.0;
+        g.mutableNode(s)->device = "audio:Headphones (Arctis Nova Pro Wireless)";
+        const std::string text = serialise(g, 0.0f, 0.0f, 1.0f);
+        CHECK(text.rfind(std::string(kPatchMagic) + " 4", 0) == 0);
+        const LoadResult r = parse(text);
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 3u);
+        if (r.graph.nodes().size() == 3u) {
+            CHECK(r.graph.nodes()[0].device == "soapy|driver=uhd,serial=31E8A0B, type=b200");
+            CHECK(r.graph.nodes()[0].rateHz == 2048000.25);
+            CHECK(r.graph.nodes()[0].freqHz == 131725000.0);
+            CHECK(r.graph.nodes()[0].name == "Airband");
+            CHECK(r.graph.nodes()[1].device == "siggen");
+            CHECK(r.graph.nodes()[1].rateHz == 2000000.0);
+            CHECK(r.graph.nodes()[2].device == "audio:Headphones (Arctis Nova Pro Wireless)");
+            CHECK(r.graph.nodes()[2].name == "Out");
+        }
+    }
+
+    // [F4b] A FORMAT-3 radio has no device: it loads as one still to be chosen,
+    // with its name intact, rather than guessing which radio it meant.
+    {
+        const LoadResult r = parse(header3() + "node 1 0 0 10 20 232 128 100000000 0 - Radio\n");
+        CHECK(r.ok);
+        CHECK(r.dropped == 0);
+        CHECK(r.graph.nodes().size() == 1u);
+        if (r.graph.nodes().size() == 1u) {
+            CHECK(r.graph.nodes()[0].device.empty());
+            CHECK(r.graph.nodes()[0].rateHz == 0.0);
+            CHECK(r.graph.nodes()[0].name == "Radio");
+        }
+    }
+
+    // [F4c] A SIXTH RADIO in a file is refused by the graph, counted as
+    // dropped, and a wire to it goes with it - the other five load.
+    {
+        std::string text = header2();
+        for (int i = 1; i <= 6; ++i) {
+            text += "node " + std::to_string(i) + " 0 0 0 0 232 128 0 0 - siggen 2000000 R" +
+                    std::to_string(i) + "\n";
+        }
+        text += "node 7 1 0 0 0 232 104 100000000 0 - - 0 Chan\n";
+        text += "wire 6 0 7 0\n";
+        const LoadResult r = parse(text);
+        CHECK(r.ok);
+        CHECK(r.graph.count(NodeKind::Radio) == cascade::core::patch::kMaxRadios);
+        CHECK(r.graph.nodes().size() == 6u);    // five radios and the channel
+        CHECK(r.graph.wires().empty());
+        CHECK(r.dropped == 2);                  // the sixth radio and its wire
+    }
+
+    // [F4d] A negative or absurd rate in a file is not trusted.
+    {
+        const LoadResult r = parse(header2() + "node 1 0 0 0 0 232 128 0 0 - siggen -5 A\n"
+                                               "node 2 0 0 0 0 232 128 0 0 - siggen 1e99 B\n");
+        CHECK(r.ok);
+        CHECK(r.graph.nodes().size() == 2u);
+        for (const auto& n : r.graph.nodes()) { CHECK(n.rateHz == 0.0); }
     }
 
     return testSummary("test_patch_io");

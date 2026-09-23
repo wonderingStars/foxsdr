@@ -18,9 +18,10 @@
 // unknown leading word are skipped rather than refused, so a patch written by
 // a later build loses what this build cannot understand and keeps the rest.
 //
-//   foxsdr-patch 3
+//   foxsdr-patch 4
 //   view <panX> <panY> <zoom>
-//   node <id> <kind> <feed> <x> <y> <w> <h> <freqHz> <mode> <plugin> <name to end of line>
+//   node <id> <kind> <feed> <x> <y> <w> <h> <freqHz> <mode> <plugin> <device> <rateHz>
+//        <name to end of line>
 //   wire <fromId> <fromPort> <toId> <toPort>
 //
 // THE NAME IS ALWAYS LAST, and that is why adding fields is a format CHANGE
@@ -32,6 +33,11 @@
 //   format 1  node <id> <kind> <feed> <x> <y> <name>
 //   format 2  ... <x> <y> <freqHz> <mode> <name>             (settings)
 //   format 3  ... <x> <y> <w> <h> <freqHz> <mode> <plugin> <name>
+//   format 4  ... <plugin> <device> <rateHz> <name>    (a radio's own device, 0.99.17)
+//
+// <device> is encoded exactly as <plugin> is. A format-3 radio has no device,
+// so it loads as one still to be chosen rather than guessing which radio it
+// meant.
 //
 // A node from format 1 or 2 opens at its kind's default size and runs no
 // plugin. <plugin> is the module key percent-encoded to one token, or "-" for
@@ -59,7 +65,7 @@
 namespace cascade::core::patch {
 
 inline constexpr const char* kPatchMagic = "foxsdr-patch";
-inline constexpr int kPatchFormat = 3;
+inline constexpr int kPatchFormat = 4;
 
 // The largest size a loaded node may claim. A hand-edited or corrupt file can
 // say anything, and a node 10^9 units wide covers the whole canvas and every
@@ -173,7 +179,9 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
         o << "node " << n.id << ' ' << static_cast<unsigned>(n.kind) << ' '
           << static_cast<unsigned>(feed) << ' ' << n.x << ' ' << n.y << ' ' << n.w << ' '
           << n.h << ' ' << std::setprecision(kD) << n.freqHz << std::setprecision(kF) << ' '
-          << n.mode << ' ' << encodePluginKey(n.plugin) << ' ' << sanitiseName(n.name) << '\n';
+          << n.mode << ' ' << encodePluginKey(n.plugin) << ' ' << encodePluginKey(n.device)
+          << ' ' << std::setprecision(kD) << n.rateHz << std::setprecision(kF) << ' '
+          << sanitiseName(n.name) << '\n';
     }
     for (const Wire& w : g.wires()) {
         o << "wire " << w.from << ' ' << w.fromPort << ' ' << w.to << ' ' << w.toPort << '\n';
@@ -257,6 +265,19 @@ inline LoadResult parse(const std::string& text) {
                 }
                 if (!decodePluginKey(token, plugin)) { ++r.dropped; }
             }
+            // Format 4's device and rate, the same repair rule as the plugin:
+            // an undecodable device keeps the node with none chosen.
+            std::string device;
+            double rateHz = 0.0;
+            if (version >= 4) {
+                std::string token;
+                if (!(s >> token >> rateHz)) {
+                    ++r.dropped;
+                    continue;
+                }
+                if (!decodePluginKey(token, device)) { ++r.dropped; }
+                if (!(rateHz >= 0.0) || rateHz > 1e10) { rateHz = 0.0; }
+            }
 
             std::string name;
             std::getline(s, name);
@@ -264,10 +285,18 @@ inline LoadResult parse(const std::string& text) {
 
             const NodeId made = r.graph.addNode(static_cast<NodeKind>(kind), name,
                                                 static_cast<PortType>(feed), x, y);
+            // A radio past the fifth is refused by the graph itself; the file
+            // loses that node and anything wired to it, and says so.
+            if (made == kNoNode) {
+                ++r.dropped;
+                continue;
+            }
             if (Node* n = r.graph.mutableNode(made); n != nullptr) {
                 n->freqHz = freqHz;
                 n->mode = mode;
                 n->plugin = plugin;
+                n->device = device;
+                n->rateHz = rateHz;
                 // A size is taken only when it is a real one. Zero, negative
                 // or NaN (every comparison false) keeps the default addNode
                 // gave the kind; anything absurdly large is clamped.

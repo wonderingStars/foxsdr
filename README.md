@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.16** (September 2026), in open beta and free for
+The current release is **0.99.17** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1197,10 +1197,10 @@ does.
 
 | Part | What it does |
 |---|---|
-| **Radio** | The receiver's capture. Shows the source, its centre and its sample rate. |
+| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. |
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel. |
-| **Speaker** | Plays the demodulated channel wired to it, and says which. |
+| **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
 | **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. |
 | **Text out** | A log of the lines from every decoder wired to it. |
 | **Decoders** | One part per installed decoder plugin, by name. An I/Q decoder wired to a Channel is fed *that channel*, tuned, so several decoders on several frequencies run off one radio at once; wired to the Radio it gets the whole capture. An audio decoder goes behind a Demod. Picture decoders (APT, WEFAX, SSTV) are parts too and show their picture on the node. |
@@ -1209,9 +1209,18 @@ A connection that cannot carry what a port produces is refused while it is
 being drawn, and says why. A node that cannot run gets a rust edge and the
 reason in words — nothing feeds it, no frequency, outside the band the radio is
 receiving, plugin not installed, the plugin needs a faster rate than its source
-has. Nodes close from the key in their title bar and resize from the grip in
-their bottom-right corner. The patch is saved with the rest of the settings and
-runs while its page is open.
+has, or another radio already uses that device. Nodes close from the key in
+their title bar and resize from the grip in their bottom-right corner. The patch
+is saved with the rest of the settings and runs while its page is open.
+
+**While the page is open, the patch has the radios.** Opening it hands the
+receiver's own radio to the patch (the receiver switches to the signal
+generator, and the Source list greys its radios out); closing it stops every
+patch radio, finishes every file and gives the receiver its radio back. MP3
+uses Windows' own encoder; on Linux the MP3 choice is unavailable and WAV is
+written instead. A decoder module that can decode straight from the radio's I/Q
+is offered only that way - its audio variant, which needs a demodulator in
+front of it, is not shown.
 
 ## Keyboard
 

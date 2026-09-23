@@ -96,6 +96,16 @@ public:
     bool start(RecordKind kind, const std::string& directory,
                double sampleRateHz, std::string& error);
 
+    // The same, with the file named "<namePrefix>_<YYYYMMDD>_<HHMMSS>.wav"
+    // instead of makeFilename's. Several patch speakers record at once, each
+    // to its own file, so each carries its node in the name (0.99.17). An
+    // empty prefix is the plain start() above.
+    bool start(RecordKind kind, const std::string& directory, double sampleRateHz,
+               std::string& error, const std::string& namePrefix);
+
+    // The file the current or most recent take went to; "" before any start.
+    std::string path() const;
+
     // No-op unless recording the matching kind (wrong-kind and pre-start
     // calls are silently ignored so the DSP loop needs no conditionals).
     void writeIq(const std::complex<float>* s, std::size_t n);
@@ -178,6 +188,7 @@ private:
     std::uint64_t maxDataBytes_;
     std::vector<char> fileBuf_;          // setvbuf storage; must outlive file_
     std::vector<unsigned char> stage_;   // little-endian staging block
+    std::string path_;                   // set by start(), on the caller's thread
 };
 
 }  // namespace cascade::core

@@ -135,10 +135,27 @@ struct Node {
     //                    display name and one module never shares a file.
     //                    Empty means "no plugin chosen", which is a node that
     //                    cannot run and says so.
+    //   Radio    device  WHICH radio this node opens (0.99.17): a device key,
+    //                    "siggen" for the signal generator or
+    //                    "<driver>|<args>" for hardware - see patch_devices.hpp.
+    //                    Empty means none chosen yet. freqHz is the radio's
+    //                    centre and rateHz its requested sample rate.
+    //   Sink     device  WHERE an audio sink's sound goes: "wav", "mp3",
+    //                    "speakers" or "audio:<device name>". Empty is "wav",
+    //                    which is the owner's rule: sound goes to a file unless
+    //                    it is set to a speaker or another device.
     double freqHz = 0.0;
     int mode = 0;
     std::string plugin;
+    std::string device;
+    double rateHz = 0.0;
 };
+
+// AT MOST FIVE RADIOS IN ONE PATCH (owner, 2026-09-23: "the ability to add up
+// to 5 sdrs"). Each one is a device open, a reader thread and a sample stream
+// of its own, so the cap is a promise about what the machine is asked to
+// carry, not a limit of the model.
+inline constexpr std::size_t kMaxRadios = 5;
 
 // --- the port tables ---------------------------------------------------------
 //
@@ -213,8 +230,11 @@ class Graph {
 public:
     // --- building ------------------------------------------------------------
 
+    // A sixth Radio is refused (kNoNode) - here, so the parts bin, the loader
+    // and anything written later all meet the same limit.
     NodeId addNode(NodeKind kind, const std::string& name, PortType feed = PortType::Iq,
                    float x = 0.0f, float y = 0.0f) {
+        if (kind == NodeKind::Radio && count(NodeKind::Radio) >= kMaxRadios) { return kNoNode; }
         Node n;
         n.id = nextId_++;
         n.kind = kind;

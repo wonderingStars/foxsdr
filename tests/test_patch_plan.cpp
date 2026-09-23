@@ -712,5 +712,132 @@ int main() {
         CHECK(p.runnable);
     }
 
+    // ---- 0.99.17: every radio is its own ------------------------------------
+
+    // [M1] TWO RADIOS, TWO BANDS. Each channel is measured against the radio
+    // it hangs off: a channel at 145.5 MHz is in band on a radio centred at
+    // 145 MHz and would be far out of band on one at 131 MHz. Each channel,
+    // and each speaker, carries its own radio.
+    {
+        using cascade::core::patch::RadioInfo;
+        Graph g;
+        const NodeId r1 = g.addNode(NodeKind::Radio, "A", PortType::Iq);
+        const NodeId r2 = g.addNode(NodeKind::Radio, "B", PortType::Iq);
+        g.mutableNode(r1)->device = "siggen";
+        g.mutableNode(r2)->device = "rtlsdr|serial=00000001";
+        const NodeId c1 = g.addNode(NodeKind::Channel, "air", PortType::Iq);
+        const NodeId c2 = g.addNode(NodeKind::Channel, "2m", PortType::Iq);
+        const NodeId d1 = g.addNode(NodeKind::Demod, "AM", PortType::Iq);
+        const NodeId d2 = g.addNode(NodeKind::Demod, "FM", PortType::Iq);
+        const NodeId s1 = g.addNode(NodeKind::Sink, "S1", PortType::Audio);
+        const NodeId s2 = g.addNode(NodeKind::Sink, "S2", PortType::Audio);
+        g.mutableNode(c1)->freqHz = 131.2e6;
+        g.mutableNode(c2)->freqHz = 145.5e6;
+        CHECK(g.connect(r1, 0, c1, 0) == Connect::Ok);
+        CHECK(g.connect(r2, 0, c2, 0) == Connect::Ok);
+        CHECK(g.connect(c1, 0, d1, 0) == Connect::Ok);
+        CHECK(g.connect(c2, 0, d2, 0) == Connect::Ok);
+        CHECK(g.connect(d1, 0, s1, 0) == Connect::Ok);
+        CHECK(g.connect(d2, 0, s2, 0) == Connect::Ok);
+        const std::vector<RadioInfo> radios{{r1, 2.4e6, 131.0e6}, {r2, 2.048e6, 145.0e6}};
+        const Plan p = compile(g, radios);
+        CHECK(blocking(p) == 0u);
+        CHECK(p.runnable);
+        CHECK(p.channels.size() == 2u);
+        const ChannelPlan* a = cascade::core::patch::findChannel(p, c1);
+        const ChannelPlan* b = cascade::core::patch::findChannel(p, c2);
+        CHECK(a != nullptr && b != nullptr);
+        if (a != nullptr && b != nullptr) {
+            CHECK(a->radio == r1);
+            CHECK(b->radio == r2);
+            CHECK(std::fabs(a->offsetHz - 200000.0) < 1e-6);
+            CHECK(std::fabs(b->offsetHz - 500000.0) < 1e-6);
+            CHECK(a->decimation == 50u);          // 2.4 MS/s / 48 kHz
+            CHECK(b->decimation == 43u);          // 2.048 MS/s -> 47628 Hz, nearest 48 kHz
+        }
+        // Both speakers play, each with its own channel and radio.
+        CHECK(p.sinks.size() == 2u);
+        if (p.sinks.size() == 2u) {
+            CHECK(p.sinks[0].sink == s1 && p.sinks[0].channel == c1 && p.sinks[0].radio == r1);
+            CHECK(p.sinks[1].sink == s2 && p.sinks[1].channel == c2 && p.sinks[1].radio == r2);
+        }
+        // The same channel measured against the OTHER radio is out of band.
+        const std::vector<RadioInfo> swapped{{r1, 2.4e6, 145.0e6}, {r2, 2.048e6, 131.0e6}};
+        const Plan q = compile(g, swapped);
+        CHECK(has(q, c1, Problem::OutOfBand));
+        CHECK(has(q, c2, Problem::OutOfBand));
+        CHECK(!q.runnable);
+    }
+
+    // [M2] ONE DEVICE, ONE RADIO. A radio naming a device another radio
+    // already uses is refused - by exact key, and by serial across drivers
+    // (the same dongle listed natively and through SoapySDR). The generator is
+    // not hardware and may be used by any number of radios. A radio with no
+    // device is refused too.
+    {
+        using cascade::core::patch::RadioInfo;
+        Graph g;
+        const NodeId a = g.addNode(NodeKind::Radio, "A", PortType::Iq);
+        const NodeId b = g.addNode(NodeKind::Radio, "B", PortType::Iq);
+        const NodeId c = g.addNode(NodeKind::Radio, "C", PortType::Iq);
+        const NodeId d = g.addNode(NodeKind::Radio, "D", PortType::Iq);
+        const NodeId e = g.addNode(NodeKind::Radio, "E", PortType::Iq);
+        g.mutableNode(a)->device = "rtlsdr|serial=00000001";
+        g.mutableNode(b)->device = "soapy|driver=rtlsdr,serial=00000001";   // the same dongle
+        g.mutableNode(c)->device = "siggen";
+        g.mutableNode(d)->device = "siggen";
+        // e: none chosen
+        const Plan p = compile(g, std::vector<RadioInfo>{});
+        CHECK(!has(p, a, Problem::DeviceTwice));    // the first one keeps it
+        CHECK(has(p, b, Problem::DeviceTwice));
+        CHECK(!has(p, c, Problem::DeviceTwice));
+        CHECK(!has(p, d, Problem::DeviceTwice));    // the generator twice is fine
+        CHECK(has(p, e, Problem::NoDevice));
+        CHECK(!has(p, a, Problem::NoDevice));
+        CHECK(hasBlockingProblem(p, b));
+        CHECK(hasBlockingProblem(p, e));
+        CHECK(std::string(problemText(Problem::DeviceTwice)).find("one device, one radio") !=
+              std::string::npos);
+        // Different serials on the same driver are different radios.
+        g.mutableNode(b)->device = "rtlsdr|serial=00000002";
+        const Plan q = compile(g, std::vector<RadioInfo>{});
+        CHECK(!has(q, b, Problem::DeviceTwice));
+    }
+
+    // [M4] A DECODER THAT DOES NOT NEED SOUND DOES NOT OFFER IT: an audio
+    // decoder whose module also decodes straight from I/Q has an I/Q twin (and
+    // is left out of the parts bin); one without, or whose only other entry is
+    // a picture decoder, does not.
+    {
+        using cascade::core::patch::DecoderInfo;
+        using cascade::core::patch::hasIqTwin;
+        std::vector<DecoderInfo> cat(5);
+        cat[0] = {"pocsag.dll", "POCSAG", PortType::Audio, 0.0, false};
+        cat[1] = {"pocsag.dll", "POCSAG", PortType::Iq, 0.0, false};
+        cat[2] = {"aprs.dll", "APRS", PortType::Audio, 0.0, false};
+        cat[3] = {"sstv.dll#image", "SSTV", PortType::Audio, 0.0, true};
+        cat[4] = {"apt.dll", "APT", PortType::Audio, 0.0, false};
+        CHECK(hasIqTwin(cat, 0));    // POCSAG audio: its I/Q twin exists
+        CHECK(!hasIqTwin(cat, 1));   // the I/Q one itself has no OTHER I/Q twin
+        CHECK(!hasIqTwin(cat, 2));   // APRS: audio only
+        CHECK(!hasIqTwin(cat, 3));
+        CHECK(!hasIqTwin(cat, 4));
+        CHECK(!hasIqTwin(cat, 99));  // out of range is not a twin
+        // A picture decoder on I/Q is not a twin of a text decoder's audio key.
+        std::vector<DecoderInfo> pic{{"apt.dll", "APT", PortType::Audio, 0.0, false},
+                                     {"apt.dll", "APT", PortType::Iq, 0.0, true}};
+        CHECK(!hasIqTwin(pic, 0));
+    }
+
+    // [M3] The single-receiver overload applies no device rules: a radio with
+    // no device is the receiver's own radio, as it was before 0.99.17.
+    {
+        Working w;
+        const Plan p = compile(w.g, kRate, kCentre);
+        CHECK(!has(p, w.radio, Problem::NoDevice));
+        CHECK(p.runnable);
+        CHECK(p.sinks.size() == 1u);
+    }
+
     return testSummary("test_patch_plan");
 }

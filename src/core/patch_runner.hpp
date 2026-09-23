@@ -64,6 +64,7 @@
 #include "core/plugin_abi.h"
 #include "core/host_image.hpp"
 #include "core/patch_plan.hpp"
+#include "core/patch_audio.hpp"
 #include "core/patch_strip.hpp"
 #include "dsp/resampler.hpp"
 
@@ -191,6 +192,22 @@ struct StripSet {
     // two demodulated channels is not defined here - the graph refuses
     // fan-in on samples for the same reason.
     NodeId listening = kNoNode;
+
+    // EVERY SPEAKER, EACH TO ITS OWN OUTPUT (0.99.17). One tap per audio Sink
+    // on this radio: its channel's audio converted to 48 kHz and written to
+    // the sink's destination - a WAV or MP3 file, the speakers, or another
+    // sound device (patch_audio.hpp). The destination is SHARED with the GUI's
+    // table of outputs, so a rebuild that keeps a speaker keeps its file open
+    // rather than starting a new one; the set owning it is what guarantees it
+    // outlives every write.
+    struct AudioTap {
+        NodeId sink = kNoNode;
+        std::size_t chanIndex = 0;
+        std::unique_ptr<cascade::dsp::RationalResampler> rs;
+        std::vector<float> out;
+        std::shared_ptr<AudioDest> dest;
+    };
+    std::vector<AudioTap> taps;
 };
 
 // The most audio one block can produce per channel. process() writes no more
@@ -207,10 +224,12 @@ inline constexpr std::size_t kMaxLineBytes = 4096;
 // Builds the decoder instances a plan describes into `set`. GUI THREAD ONLY:
 // it calls create(), which the ABI requires on the control thread, and it
 // allocates every buffer the DSP thread will use.
+// `radio` limits it to the decoders on that radio; kNoNode builds them all.
 inline void buildDecoders(StripSet& set, const Plan& plan, const Graph& g,
                           const std::vector<DecoderInfo>& catalogue,
-                          const std::vector<PluginApis>& apis) {
+                          const std::vector<PluginApis>& apis, NodeId radio = kNoNode) {
     for (const DecoderPlan& dp : plan.decoders) {
+        if (radio != kNoNode && dp.radio != radio) { continue; }
         if (dp.plugin >= apis.size() || dp.plugin >= catalogue.size()) { continue; }
         const PluginApis& a = apis[dp.plugin];
         const bool iqFeed = dp.source != DecoderSource::Audio;
@@ -420,6 +439,82 @@ inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
         buildDecoders(*set, plan, g, *catalogue, *apis);
     }
     return set;
+}
+
+// A speaker's output, by sink node, as the GUI keeps them.
+using DestTable = std::vector<std::pair<NodeId, std::shared_ptr<AudioDest>>>;
+
+inline std::shared_ptr<AudioDest> destFor(const DestTable& dests, NodeId sink) {
+    for (const auto& d : dests) {
+        if (d.first == sink) { return d.second; }
+    }
+    return nullptr;
+}
+
+// ONE RADIO'S SET (0.99.17): its channels, its decoders, and a tap for every
+// speaker on it that has an output. GUI THREAD ONLY. Nothing belonging to
+// another radio is built, so each radio's reader thread runs only its own
+// strips.
+inline std::shared_ptr<StripSet> buildRadioSet(const Plan& plan, const Graph& g, NodeId radio,
+                                               double deviceRateHz,
+                                               const std::vector<DecoderInfo>* catalogue,
+                                               const std::vector<PluginApis>* apis,
+                                               const DestTable& dests) {
+    Plan mine;
+    for (const ChannelPlan& cp : plan.channels) {
+        if (cp.radio == radio) { mine.channels.push_back(cp); }
+    }
+    for (const DecoderPlan& dp : plan.decoders) {
+        if (dp.radio == radio) { mine.decoders.push_back(dp); }
+    }
+    std::shared_ptr<StripSet> set =
+        buildStripSet(mine, g, deviceRateHz, kNoNode, kOutRateHz, catalogue, apis);
+    for (const AudioSinkPlan& sp : plan.sinks) {
+        if (sp.radio != radio) { continue; }
+        std::shared_ptr<AudioDest> dest = destFor(dests, sp.sink);
+        if (!dest) { continue; }
+        for (std::size_t i = 0; i < set->channels.size(); ++i) {
+            if (set->channels[i].node != sp.channel) { continue; }
+            const double inRate = set->channels[i].strip.outRateHz();
+            if (!(inRate > 0.0)) { break; }
+            StripSet::AudioTap t;
+            t.sink = sp.sink;
+            t.chanIndex = i;
+            t.rs = std::make_unique<cascade::dsp::RationalResampler>(
+                static_cast<unsigned>(kOutRateHz + 0.5), static_cast<unsigned>(inRate + 0.5));
+            t.out.assign(t.rs->maxOut(kMaxBlockAudio) + 8, 0.0f);
+            t.dest = std::move(dest);
+            set->taps.push_back(std::move(t));
+            break;
+        }
+    }
+    return set;
+}
+
+// What makes one radio's running set stale: everything dspSignature covers for
+// its own channels and decoders, plus each of its speakers and the output
+// object behind it (a changed output means a rebuilt tap).
+inline std::string radioSignature(const Plan& plan, const Graph& g, NodeId radio,
+                                  double deviceRateHz,
+                                  const std::vector<DecoderInfo>* catalogue,
+                                  const std::vector<PluginApis>* apis, const DestTable& dests) {
+    Plan mine;
+    for (const ChannelPlan& cp : plan.channels) {
+        if (cp.radio == radio) { mine.channels.push_back(cp); }
+    }
+    for (const DecoderPlan& dp : plan.decoders) {
+        if (dp.radio == radio) { mine.decoders.push_back(dp); }
+    }
+    std::string s = dspSignature(mine, g, deviceRateHz, kNoNode, kOutRateHz, catalogue, apis);
+    char buf[96];
+    for (const AudioSinkPlan& sp : plan.sinks) {
+        if (sp.radio != radio) { continue; }
+        std::snprintf(buf, sizeof(buf), "s%u c%u %p|", static_cast<unsigned>(sp.sink),
+                      static_cast<unsigned>(sp.channel),
+                      static_cast<const void*>(destFor(dests, sp.sink).get()));
+        s += buf;
+    }
+    return s;
 }
 
 class Runner {
@@ -632,6 +727,15 @@ private:
                     active_->resampled.size());
                 pushRing(active_->resampled.data(), got);
             }
+        }
+
+        // EVERY SPEAKER'S OUTPUT, from this block of its channel.
+        for (StripSet::AudioTap& t : active_->taps) {
+            const RunningChannel& rc = active_->channels[t.chanIndex];
+            if (rc.produced == 0 || !t.rs || !t.dest) { continue; }
+            const std::size_t got =
+                t.rs->process(rc.audio.data(), rc.produced, t.out.data(), t.out.size());
+            if (got > 0) { t.dest->write(t.out.data(), got); }
         }
 
         // THE DECODERS, after every channel has produced its block, so a
