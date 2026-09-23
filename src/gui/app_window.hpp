@@ -2486,6 +2486,16 @@ private:
     // waterfall scrolls at the same pace as the main one.
     std::map<cascade::core::patch::NodeId, cascade::gui::patch::ScopeHistory> patchScopes_;
     std::map<cascade::core::patch::NodeId, std::uint64_t> patchScopeSeq_;
+    // Each picture decoder node's newest picture and its GL texture, uploaded
+    // only when the picture's revision moves. Textures are deleted when the
+    // node goes and at shutdown, while the GL context is current.
+    struct PatchPicture {
+        cascade::core::HostImage img;
+        unsigned int tex = 0;
+        std::uint64_t texRev = 0;
+    };
+    std::map<cascade::core::patch::NodeId, PatchPicture> patchPictures_;
+    void releasePatchPictureTextures();
     // Where the patch canvas was drawn last frame, in ImGui screen space:
     // what lets an input script aim at a node by its patch coordinates.
     float patchCanvasOriginX_ = 0.0f;

@@ -2050,7 +2050,8 @@ int AppWindow::run(int frames) {
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys
     // it after run() returns), so the view is destroyed explicitly here, not
-    // left to ~AppWindow.
+    // left to ~AppWindow. The patch's picture textures, for the same reason.
+    releasePatchPictureTextures();
     waterfall_.reset();
 
     ImGui_ImplOpenGL3_Shutdown();
@@ -10873,6 +10874,22 @@ void AppWindow::rebuildPatchCatalogue() {
             a.iq = p.iqDecoder;
             patchApis_.push_back(a);
         }
+        // A PICTURE decoder (APT, WEFAX, SSTV) - either input, through one
+        // table - is a part too, showing its picture on its own face.
+        if (p.imageDecoder != nullptr) {
+            cascade::core::patch::DecoderInfo info;
+            info.key = key + cascade::core::patch::kImageKeySuffix;
+            info.name = p.name;
+            info.feed = p.imageDecoder->inputKind == CASCADE_INPUT_IQ
+                            ? cascade::core::patch::PortType::Iq
+                            : cascade::core::patch::PortType::Audio;
+            info.requiredRateHz = p.imageDecoder->requiredRateHz;
+            info.image = true;
+            patchCatalogue_.push_back(info);
+            cascade::core::patch::PluginApis a;
+            a.image = p.imageDecoder;
+            patchApis_.push_back(a);
+        }
     }
 }
 
@@ -10886,6 +10903,17 @@ bool AppWindow::patchDecoderIsShown(cascade::core::patch::NodeId node) const {
         }
     }
     return false;
+}
+
+void AppWindow::releasePatchPictureTextures() {
+    for (auto& [node, pic] : patchPictures_) {
+        (void)node;
+        if (pic.tex != 0u) {
+            glDeleteTextures(1, &pic.tex);
+            pic.tex = 0u;
+        }
+    }
+    patchPictures_.clear();
 }
 
 void AppWindow::applyInputScript(long frame) {
@@ -10969,6 +10997,15 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     }
     for (auto it = patchSinkLines_.begin(); it != patchSinkLines_.end();) {
         it = gone(it->first) ? patchSinkLines_.erase(it) : std::next(it);
+    }
+    for (auto it = patchPictures_.begin(); it != patchPictures_.end();) {
+        if (gone(it->first)) {
+            // Deleted HERE, mid-frame, where the GL context is current.
+            if (it->second.tex != 0u) { glDeleteTextures(1, &it->second.tex); }
+            it = patchPictures_.erase(it);
+        } else {
+            ++it;
+        }
     }
 
     const pg::View v{pg::Vec2{originX + patchUi_.view.pan.x, originY + patchUi_.view.pan.y}, zoom};
@@ -11262,10 +11299,48 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 }
                 break;
             }
-            case pc::NodeKind::Decoder:
-                // Its face is its output - the count and latest line the
-                // canvas draws. The plugin is chosen in the inspector.
+            case pc::NodeKind::Decoder: {
+                // A text decoder's face is its output - the count and latest
+                // line the canvas draws. A PICTURE decoder's face is its
+                // picture, below that line, fitted and in proportion.
+                const auto it = patchPictures_.find(n.id);
+                if (it == patchPictures_.end() || it->second.img.width == 0u) { break; }
+                PatchPicture& pic = it->second;
+                if (pic.texRev != pic.img.revision) {
+                    if (pic.tex == 0u) { glGenTextures(1, &pic.tex); }
+                    glBindTexture(GL_TEXTURE_2D, pic.tex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    // Tightly packed rows, as the runner copies them - not the
+                    // 4-byte alignment OpenGL assumes, which shears a
+                    // greyscale picture whose width is not a multiple of four.
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                    const GLenum fmt =
+                        (pic.img.format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
+                    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt),
+                                 static_cast<GLsizei>(pic.img.width),
+                                 static_cast<GLsizei>(pic.img.height), 0, fmt, GL_UNSIGNED_BYTE,
+                                 pic.img.pixels.data());
+                    pic.texRev = pic.img.revision;
+                }
+                const float ax0 = s0.x + 4.0f * zoom;
+                const float ay0 = s0.y + 20.0f * zoom;
+                const float ax1 = s1.x - 4.0f * zoom;
+                const float ay1 = s1.y - 4.0f * zoom;
+                if (ax1 - ax0 < 8.0f || ay1 - ay0 < 8.0f) { break; }
+                const float sx = (ax1 - ax0) / static_cast<float>(pic.img.width);
+                const float sy = (ay1 - ay0) / static_cast<float>(pic.img.height);
+                const float sc = std::min(sx, sy);
+                const float w = static_cast<float>(pic.img.width) * sc;
+                const float h = static_cast<float>(pic.img.height) * sc;
+                const ImVec2 p0(ax0 + 0.5f * ((ax1 - ax0) - w), ay0);
+                ImGui::GetWindowDrawList()->AddImage(
+                    static_cast<ImTextureID>(static_cast<std::uintptr_t>(pic.tex)), p0,
+                    ImVec2(p0.x + w, p0.y + h));
                 break;
+            }
         }
         ImGui::EndGroup();
         ImGui::PopTextWrapPos();
@@ -11428,9 +11503,13 @@ void AppWindow::drawPatchPage() {
             for (std::size_t j = 0; j < patchCatalogue_.size(); ++j) {
                 if (j != i && patchCatalogue_[j].key == info.key) { twin = true; }
             }
+            // A picture decoder always says so - it is a different kind of
+            // part from a text decoder of the same name.
+            if (info.image) { twin = false; }
             char label[128];
             std::snprintf(label, sizeof(label), "%s%s###dec%zu", info.name.c_str(),
-                          !twin ? ""
+                          info.image ? " (picture)"
+                          : !twin    ? ""
                           : info.feed == cascade::core::patch::PortType::Iq ? " (I/Q)"
                                                                            : " (audio)",
                           i);
@@ -15975,6 +16054,10 @@ void AppWindow::pumpDecoderOutput() {
     // Text out part is for, and a decoder wired to nothing is marked on the
     // canvas as having nobody listening. Tagged with the NODE's name, so two
     // POCSAG decoders on two frequencies read as two sources, not one.
+    // Pictures: the newest per node, kept for its face.
+    for (auto& [node, img] : pipeline_.patchRunner().drainImages()) {
+        patchPictures_[node].img = std::move(img);
+    }
     for (cascade::core::patch::PatchLine& pl : pipeline_.patchRunner().drainText()) {
         {
             PatchDecoderFace& face = patchDecoderFaces_[pl.node];

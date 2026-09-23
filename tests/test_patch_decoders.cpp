@@ -198,6 +198,78 @@ CascadeDecoderApi makeAudioApi(std::uint32_t requiredRateHz) {
 // A plugin whose create() refuses.
 void* refuseCreate(double, double) { return nullptr; }
 
+// --- a picture fake -------------------------------------------------------------
+//
+// Hands out a 4x3 GRAY8 picture with TWO BYTES OF ROW PADDING (stride 6), so a
+// host that copies stride-wide rows instead of width-wide ones is caught, and
+// tracks every borrow so an unreleased one - or a destroy() with one
+// outstanding - is counted.
+struct PicLedger {
+    int polls = 0;
+    int given = 0;
+    int released = 0;
+    int outstandingAtDestroy = 0;
+    bool corrupt = false;       // next pictures have stride < width
+    bool fail = false;
+    std::uint64_t seq = 0;
+    std::uint8_t pixels[18] = {};
+    double createRate = 0.0;
+    double createCentre = -1.0;
+    std::uint64_t frames = 0;
+};
+PicLedger g_pic;
+
+void* picCreate(double rateHz, double centerHz) {
+    g_pic.createRate = rateHz;
+    g_pic.createCentre = centerHz;
+    return track(new Fake);
+}
+
+void picProcess(void*, const float*, std::size_t frames) { g_pic.frames += frames; }
+
+std::int32_t picPoll(void*, CascadeImage* out) {
+    ++g_pic.polls;
+    if (g_pic.fail) { return -1; }
+    for (int y = 0; y < 3; ++y) {
+        for (int x = 0; x < 6; ++x) {
+            // Real pixels are 10*y + x; the two padding bytes are 0xEE.
+            g_pic.pixels[y * 6 + x] = static_cast<std::uint8_t>(x < 4 ? 10 * y + x : 0xEE);
+        }
+    }
+    out->width = 4;
+    out->height = 3;
+    out->format = CASCADE_IMAGE_GRAY8;
+    out->stride = g_pic.corrupt ? 2u : 6u;
+    out->complete = 0;
+    out->sequence = ++g_pic.seq;
+    out->pixels = g_pic.pixels;
+    ++g_pic.given;
+    return 1;
+}
+
+void picRelease(void*, const CascadeImage*) { ++g_pic.released; }
+
+void picDestroy(void* h) {
+    g_pic.outstandingAtDestroy += g_pic.given - g_pic.released;
+    untrack(h);
+}
+
+CascadeImageDecoderApi makePicApi(std::uint32_t inputKind) {
+    CascadeImageDecoderApi a{};
+    a.structSize = sizeof(CascadeImageDecoderApi);
+    a.inputKind = inputKind;
+    a.requiredRateHz = 0.0;
+    a.preferredRateHz = 0.0;
+    a.create = picCreate;
+    a.process = picProcess;
+    a.retune = nullptr;
+    a.poll_image = picPoll;
+    a.release_image = picRelease;
+    a.poll_text = pollFake;
+    a.destroy = picDestroy;
+    return a;
+}
+
 // --- signals -------------------------------------------------------------------
 
 // A carrier at `offsetHz` from the radio centre, amplitude-modulated 50% by a
@@ -610,6 +682,127 @@ int main() {
         std::vector<PluginApis> apis2 = apis;
         apis2[0].iq = &reloaded;
         CHECK(sig(p.g, apis2) != base);
+    }
+
+    // ===================== PICTURE DECODERS =====================
+    const CascadeImageDecoderApi picIq = makePicApi(CASCADE_INPUT_IQ);
+    const CascadeImageDecoderApi picAudio = makePicApi(CASCADE_INPUT_AUDIO);
+    const std::vector<DecoderInfo> picCat = {
+        {std::string("pic.dll") + cascade::core::patch::kImageKeySuffix, "Pic I/Q", PortType::Iq,
+         0.0, true},
+        {std::string("sstv.dll") + cascade::core::patch::kImageKeySuffix, "Pic audio",
+         PortType::Audio, 0.0, true},
+    };
+    std::vector<PluginApis> picApis(2);
+    picApis[0].image = &picIq;
+    picApis[1].image = &picAudio;
+
+    // [P12] AN I/Q PICTURE DECODER ON A CHANNEL: created at the channel's
+    // rate and frequency, fed, and its picture reaches the GUI with the row
+    // padding stripped - and every borrow is released, none outstanding at
+    // destroy().
+    {
+        resetLedger();
+        g_pic = PicLedger{};
+        IqOnChannel p(chanHz, std::string("pic.dll") + cascade::core::patch::kImageKeySuffix);
+        const Plan plan = compile(p.g, kRate, kCentre, &picCat);
+        CHECK(plan.decoders.size() == 1u);
+        Runner r;
+        r.publish(buildStripSet(plan, p.g, kRate, kNoNode, 48000.0, &picCat, &picApis));
+        run(r, 200000.0, 10);                           // 100 ms of input
+        CHECK(g_pic.createRate == 48000.0);
+        CHECK(g_pic.createCentre == chanHz);
+        CHECK(g_pic.frames >= 4700u);
+        const auto imgs = r.drainImages();
+        CHECK(imgs.size() == 1u);                       // the newest only
+        if (imgs.size() == 1u) {
+            const cascade::core::HostImage& h = imgs[0].second;
+            CHECK(imgs[0].first == p.dec);
+            CHECK(h.width == 4u && h.height == 3u);
+            CHECK(h.format == CASCADE_IMAGE_GRAY8);
+            CHECK(h.pixels.size() == 12u);              // 4 x 3, no padding
+            bool exact = h.pixels.size() == 12u;
+            for (int y = 0; y < 3 && exact; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    if (h.pixels[static_cast<std::size_t>(y * 4 + x)] != 10 * y + x) { exact = false; }
+                }
+            }
+            CHECK(exact);
+            CHECK(h.plugin == "My decoder");            // tagged by the node
+        }
+        CHECK(g_pic.given == g_pic.released);
+        r.flushNow();
+        CHECK(g_pic.outstandingAtDestroy == 0);
+        CHECK(g_ledger.destroys == 1);
+    }
+
+    // [P13] AN AUDIO PICTURE DECODER (SSTV-like) behind a demodulator: an
+    // "any rate" one gets 48 kHz like any audio decoder, and centre 0, as the
+    // ABI says for audio input.
+    {
+        resetLedger();
+        g_pic = PicLedger{};
+        Graph g;
+        const NodeId radio = g.addNode(NodeKind::Radio, "Radio", PortType::Iq);
+        const NodeId chan = g.addNode(NodeKind::Channel, "c", PortType::Iq);
+        const NodeId dm = g.addNode(NodeKind::Demod, "FM", PortType::Iq);
+        const NodeId dec = g.addNode(NodeKind::Decoder, "SSTV", PortType::Audio);
+        g.mutableNode(chan)->freqHz = chanHz;
+        g.mutableNode(dec)->plugin = std::string("sstv.dll") + cascade::core::patch::kImageKeySuffix;
+        CHECK(g.connect(radio, 0, chan, 0) == Connect::Ok);
+        CHECK(g.connect(chan, 0, dm, 0) == Connect::Ok);
+        CHECK(g.connect(dm, 0, dec, 0) == Connect::Ok);
+        const Plan plan = compile(g, kRate, kCentre, &picCat);
+        CHECK(plan.decoders.size() == 1u);
+        Runner r;
+        r.publish(buildStripSet(plan, g, kRate, kNoNode, 48000.0, &picCat, &picApis));
+        run(r, 200000.0, 10);
+        CHECK(g_pic.createRate == 48000.0);
+        CHECK(g_pic.createCentre == 0.0);
+        CHECK(g_pic.frames > 4000u);
+        CHECK(r.drainImages().size() == 1u);
+        r.flushNow();
+        CHECK(g_pic.outstandingAtDestroy == 0);
+    }
+
+    // [P14] POLLING IS THROTTLED: two seconds of input is at most one poll per
+    // quarter-second of it (plus the first), not one per block - each poll is
+    // a copy on the audio thread.
+    {
+        resetLedger();
+        g_pic = PicLedger{};
+        IqOnChannel p(chanHz, std::string("pic.dll") + cascade::core::patch::kImageKeySuffix);
+        Runner r;
+        r.publish(buildStripSet(compile(p.g, kRate, kCentre, &picCat), p.g, kRate, kNoNode,
+                                48000.0, &picCat, &picApis));
+        run(r, 200000.0, 200, 24000);   // 200 blocks of 10 ms
+        CHECK(g_pic.polls >= 6);
+        CHECK(g_pic.polls <= 10);
+        r.flushNow();
+    }
+
+    // [P15] A CORRUPT PICTURE (stride shorter than a row) is not delivered -
+    // and is STILL released; and a decoder whose poll_image fails permanently
+    // is fed no further.
+    {
+        resetLedger();
+        g_pic = PicLedger{};
+        g_pic.corrupt = true;
+        IqOnChannel p(chanHz, std::string("pic.dll") + cascade::core::patch::kImageKeySuffix);
+        Runner r;
+        r.publish(buildStripSet(compile(p.g, kRate, kCentre, &picCat), p.g, kRate, kNoNode,
+                                48000.0, &picCat, &picApis));
+        run(r, 200000.0, 10);
+        CHECK(g_pic.given >= 1);
+        CHECK(g_pic.released == g_pic.given);
+        CHECK(r.drainImages().empty());
+        g_pic.fail = true;
+        run(r, 200000.0, 60);            // long enough for the next poll to fail
+        const std::uint64_t stopped = g_pic.frames;
+        run(r, 200000.0, 20);
+        CHECK(g_pic.frames == stopped);
+        r.flushNow();
+        CHECK(g_pic.outstandingAtDestroy == 0);
     }
 
     return testSummary("test_patch_decoders");

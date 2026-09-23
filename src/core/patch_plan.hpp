@@ -99,7 +99,16 @@ struct DecoderInfo {
     std::string name;
     PortType feed = PortType::Iq;
     double requiredRateHz = 0.0;
+    // A PICTURE decoder (CASCADE_CAP_IMAGE_DECODER): APT, WEFAX, SSTV. It is
+    // planned exactly like a text decoder of the same input - the difference
+    // is only in what it produces, which is the runner's and the canvas's
+    // business. Its key carries kImageKeySuffix, because one module may be
+    // both a text and a picture decoder on the same input, and those are two
+    // different parts.
+    bool image = false;
 };
+
+inline constexpr const char* kImageKeySuffix = "#image";
 
 // Where a decoder's samples come from.
 //   Radio    an I/Q decoder wired straight to the radio: the whole capture,

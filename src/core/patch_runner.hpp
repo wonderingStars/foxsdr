@@ -62,6 +62,7 @@
 
 #include "core/patch_graph.hpp"
 #include "core/plugin_abi.h"
+#include "core/host_image.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_strip.hpp"
 #include "dsp/resampler.hpp"
@@ -93,6 +94,7 @@ struct RunningChannel {
 struct PluginApis {
     const CascadeDecoderApi* audio = nullptr;
     const CascadeIqDecoderApi* iq = nullptr;
+    const CascadeImageDecoderApi* image = nullptr;
 };
 
 // The largest block a decoder is handed in one call. A radio-fed decoder sees
@@ -116,7 +118,15 @@ struct RunningDecoder {
     std::string name;                     // the node's name, which tags its text
     const CascadeDecoderApi* audioApi = nullptr;
     const CascadeIqDecoderApi* iqApi = nullptr;
+    const CascadeImageDecoderApi* imageApi = nullptr;
     void* handle = nullptr;
+    // PICTURES: polled on the DSP thread (poll_image must be serialised with
+    // process() on the same instance, and this path takes no lock), no more
+    // often than every kImagePollFrames of input, copied out and released at
+    // once. `rateHz` sizes that interval; `lastImagePoll` is when it last ran.
+    double rateHz = 0.0;
+    std::uint64_t lastImagePoll = 0;
+    std::uint64_t imageRevision = 0;
     bool failed = false;                  // poll_text said "permanently failed"
 
     // Resampling from the source's rate to the plugin's. Absent when they
@@ -142,6 +152,11 @@ struct RunningDecoder {
             iqApi->destroy(handle);
         } else if (audioApi != nullptr) {
             audioApi->destroy(handle);
+        } else if (imageApi != nullptr) {
+            // No borrow can be outstanding: every successful poll_image is
+            // released before pollImage() returns, as the ABI requires before
+            // destroy().
+            imageApi->destroy(handle);
         }
     }
 };
@@ -228,7 +243,17 @@ inline void buildDecoders(StripSet& set, const Plan& plan, const Graph& g,
 
         // create() last among the things that can fail, so a node skipped
         // for any other reason never leaves a live handle behind.
-        if (iqFeed) {
+        d->rateHz = dp.rateHz;
+        if (catalogue[dp.plugin].image) {
+            // A picture decoder takes either input through one table; an
+            // audio-input one is told centre 0, as the ABI specifies.
+            if (a.image == nullptr) {
+                set.refused.push_back(dp.node);
+                continue;
+            }
+            d->imageApi = a.image;
+            d->handle = a.image->create(dp.rateHz, iqFeed ? dp.centreHz : 0.0);
+        } else if (iqFeed) {
             if (a.iq == nullptr) {
                 set.refused.push_back(dp.node);
                 continue;
@@ -326,9 +351,10 @@ inline std::string dspSignature(const Plan& plan, const Graph& g, double deviceR
             s += '|';
         }
         if (apis != nullptr && d.plugin < apis->size()) {
-            std::snprintf(buf, sizeof(buf), "%p %p|",
+            std::snprintf(buf, sizeof(buf), "%p %p %p|",
                           static_cast<const void*>((*apis)[d.plugin].iq),
-                          static_cast<const void*>((*apis)[d.plugin].audio));
+                          static_cast<const void*>((*apis)[d.plugin].audio),
+                          static_cast<const void*>((*apis)[d.plugin].image));
             s += buf;
         }
         if (const Node* n = g.find(d.node); n != nullptr) {
@@ -629,6 +655,86 @@ private:
                 }
             }
             pollText(d);
+            if (d.imageApi != nullptr && !d.failed) { pollImage(d); }
+        }
+    }
+
+    // THE NEWEST PICTURE, polled at most every kImagePollSeconds of input.
+    // poll_image hands a BORROW of the plugin's pixels; they are copied into
+    // a HostImage and released before this returns, so no borrow is ever
+    // outstanding when the set - and with it destroy() - goes. The copy is an
+    // allocation on the audio thread, which is why it is throttled: a picture
+    // decoder builds a line or two a second, and a few copies a second of a
+    // weather-satellite frame is noise beside the demodulation.
+    static constexpr double kImagePollSeconds = 0.25;
+    void pollImage(RunningDecoder& d) {
+        const auto every = static_cast<std::uint64_t>(d.rateHz * kImagePollSeconds);
+        if (d.lastImagePoll != 0 && d.framesFed - d.lastImagePoll < every) { return; }
+        d.lastImagePoll = d.framesFed == 0 ? 1 : d.framesFed;
+        CascadeImage img{};
+        img.structSize = sizeof(CascadeImage);
+        const std::int32_t r = d.imageApi->poll_image(d.handle, &img);
+        if (r < 0) {
+            d.failed = true;
+            return;
+        }
+        if (r != 1) { return; }
+        // Checked the way the plugin runner checks it: a corrupt size must not
+        // make the host read or allocate absurd amounts.
+        const std::uint32_t bpp = img.format == CASCADE_IMAGE_RGB24 ? 3u
+                                  : img.format == CASCADE_IMAGE_GRAY8 ? 1u
+                                                                     : 0u;
+        const bool sane = bpp != 0u && img.pixels != nullptr && img.width >= 1u &&
+                          img.height >= 1u && img.width <= CASCADE_IMAGE_MAX_DIM &&
+                          img.height <= CASCADE_IMAGE_MAX_DIM &&
+                          img.stride >= img.width * bpp;
+        if (sane) {
+            cascade::core::HostImage h;
+            h.plugin = d.name;
+            h.width = img.width;
+            h.height = img.height;
+            h.format = img.format;
+            h.complete = img.complete != 0;
+            h.sequence = img.sequence;
+            h.revision = ++d.imageRevision;
+            const std::size_t row = static_cast<std::size_t>(img.width) * bpp;
+            h.pixels.resize(row * img.height);
+            for (std::uint32_t y = 0; y < img.height; ++y) {
+                const std::uint8_t* src = img.pixels + static_cast<std::size_t>(y) * img.stride;
+                std::copy(src, src + row, h.pixels.begin() + static_cast<std::ptrdiff_t>(y * row));
+            }
+            std::lock_guard<std::mutex> lock(imagesMutex_);
+            // The newest per node only: a GUI that is not looking loses
+            // superseded frames, never grows a queue of them.
+            bool replaced = false;
+            for (auto& slot : images_) {
+                if (slot.first == d.node) {
+                    slot.second = std::move(h);
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) { images_.emplace_back(d.node, std::move(h)); }
+        }
+        // Released whether or not it was sane: every successful poll_image
+        // gets exactly one release_image, before destroy().
+        d.imageApi->release_image(d.handle, &img);
+    }
+
+    // The one place each kind of table is called, so a picture decoder - which
+    // takes either input through one process() - is fed by the same code.
+    static void processIq(RunningDecoder& d, const float* interleaved, std::size_t frames) {
+        if (d.iqApi != nullptr) {
+            d.iqApi->process(d.handle, interleaved, frames);
+        } else if (d.imageApi != nullptr) {
+            d.imageApi->process(d.handle, interleaved, frames);
+        }
+    }
+    static void processAudio(RunningDecoder& d, const float* samples, std::size_t frames) {
+        if (d.audioApi != nullptr) {
+            d.audioApi->process(d.handle, samples, frames);
+        } else if (d.imageApi != nullptr) {
+            d.imageApi->process(d.handle, samples, frames);
         }
     }
 
@@ -640,7 +746,7 @@ private:
             if (!d.rsI) {
                 // std::complex<float> is layout-compatible with float[2], and
                 // that is the ABI's I,Q,I,Q rule - a view, not a copy.
-                d.iqApi->process(d.handle, reinterpret_cast<const float*>(x + off), m);
+                processIq(d, reinterpret_cast<const float*>(x + off), m);
                 d.framesFed += m;
                 continue;
             }
@@ -658,7 +764,7 @@ private:
                 d.interleaved[2 * i + 1] = d.outQ[i];
             }
             if (k > 0) {
-                d.iqApi->process(d.handle, d.interleaved.data(), k);
+                processIq(d, d.interleaved.data(), k);
                 d.framesFed += k;
             }
         }
@@ -668,13 +774,13 @@ private:
         for (std::size_t off = 0; off < count; off += kDecoderSlice) {
             const std::size_t m = (count - off < kDecoderSlice) ? (count - off) : kDecoderSlice;
             if (!d.rsI) {
-                d.audioApi->process(d.handle, x + off, m);
+                processAudio(d, x + off, m);
                 d.framesFed += m;
                 continue;
             }
             const std::size_t k = d.rsI->process(x + off, m, d.outI.data(), d.outI.size());
             if (k > 0) {
-                d.audioApi->process(d.handle, d.outI.data(), k);
+                processAudio(d, d.outI.data(), k);
                 d.framesFed += k;
             }
         }
@@ -687,9 +793,10 @@ private:
     void pollText(RunningDecoder& d) {
         char buf[1024];
         for (int tries = 0; tries < 8; ++tries) {
-            const std::int32_t r = (d.iqApi != nullptr)
-                                       ? d.iqApi->poll_text(d.handle, buf, sizeof(buf))
-                                       : d.audioApi->poll_text(d.handle, buf, sizeof(buf));
+            const std::int32_t r =
+                (d.iqApi != nullptr)      ? d.iqApi->poll_text(d.handle, buf, sizeof(buf))
+                : (d.audioApi != nullptr) ? d.audioApi->poll_text(d.handle, buf, sizeof(buf))
+                                          : d.imageApi->poll_text(d.handle, buf, sizeof(buf));
             if (r < 0) {
                 // "Failed permanently": fed and polled no further. The handle
                 // is KEPT until the set dies, so destroy() still runs exactly
@@ -736,6 +843,15 @@ public:
         std::vector<PatchLine> out;
         std::lock_guard<std::mutex> lock(textMutex_);
         out.swap(lines_);
+        return out;
+    }
+
+    // GUI THREAD. The newest picture from each picture decoder since the last
+    // call.
+    std::vector<std::pair<NodeId, cascade::core::HostImage>> drainImages() {
+        std::vector<std::pair<NodeId, cascade::core::HostImage>> out;
+        std::lock_guard<std::mutex> lock(imagesMutex_);
+        out.swap(images_);
         return out;
     }
 
@@ -875,6 +991,8 @@ private:
     mutable std::mutex textMutex_;
     std::vector<PatchLine> lines_;
     std::uint64_t droppedLines_ = 0;
+    std::mutex imagesMutex_;
+    std::vector<std::pair<NodeId, cascade::core::HostImage>> images_;
 
     // A second of audio at 48 kHz, allocated once. DSP thread only: it is
     // written by process() and read by pullAudio(), which the pipeline
