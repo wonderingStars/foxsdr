@@ -11802,13 +11802,20 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // radios - on one chart, drawn by the same MapView the map
                 // pages use, with its basemap and its target details.
                 patchCollectMapTargets(n.id);
-                if (pc::mapSources(patchGraph_, n.id, patchCatalogue_).empty()) {
+                // A MAP WITH NOTHING WIRED IS STILL A MAP (2026-09-23). It used
+                // to draw only this sentence, so a freshly placed Map part was
+                // an empty box: nothing to click, drag or zoom, where the
+                // plugin's own map window always shows the chart (owner: "you
+                // should be able to click on it in patch and zoom in the same
+                // way you do in the normal map"). The sentence stays, above
+                // the chart, until a decoder is wired in.
+                const bool unwired = pc::mapSources(patchGraph_, n.id, patchCatalogue_).empty();
+                if (unwired) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped(
                         "Wire a decoder's map output here - ADS-B, AIS, APRS - up to %zu.",
                         pc::kMapInputs);
                     ImGui::PopStyleColor();
-                    break;
                 }
                 std::size_t air = 0, sea = 0, fixed = 0, other = 0;
                 for (const cascade::core::HostTrack& t : patchMapTracks_) {
@@ -11820,7 +11827,9 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     }
                 }
                 ImGui::PushStyleColor(ImGuiCol_Text, amber);
-                if (patchMapTracks_.empty()) {
+                if (unwired) {
+                    // The sentence above already says why there is nothing on it.
+                } else if (patchMapTracks_.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextUnformatted("no targets yet");
                     ImGui::PopStyleColor();
