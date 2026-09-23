@@ -1191,6 +1191,15 @@ int AppWindow::run(int frames) {
     // only gets less room to scroll in.
     glfwSetWindowSizeLimits(window, kMinWindowW, kMinWindowH, GLFW_DONT_CARE,
                             GLFW_DONT_CARE);
+    // FOXSDR_WINDOW_SIZE="1920x1080" (captures): the window at an exact size,
+    // so a picture taken for the Store or the website is the size they need
+    // rather than a small one scaled up.
+    if (const char* ws = std::getenv("FOXSDR_WINDOW_SIZE"); ws != nullptr && *ws != '\0') {
+        int w = 0, h = 0;
+        if (std::sscanf(ws, "%dx%d", &w, &h) == 2 && w >= kMinWindowW && h >= kMinWindowH) {
+            glfwSetWindowSize(window, w, h);
+        }
+    }
     // A FREQUENCY LIST DROPPED ON THE WINDOW is imported (0.99.19): an SDR#
     // frequencies.xml or a CSV, which is quicker than typing a path. The
     // callback only records the path; the import runs in the frame loop.
@@ -1639,6 +1648,40 @@ int AppWindow::run(int frames) {
                     bookmarkScrollByEnv_ = true;
                 }
             }
+            // A PLUGIN'S PRESET PRESSED (captures): FOXSDR_PRESS_PRESET names a
+            // plugin by its display name; at frame 30, once plugins have loaded,
+            // its first preset is pressed through applyPluginPreset - or, for a
+            // plugin with none, its windows are opened the same way the preset
+            // would have opened them.
+            // After the radio has finished opening: a device opens off the GUI
+            // thread and its open re-applies the centre it had, so a tune made
+            // before that lands was simply overwritten (the first capture sweep).
+            if (!pressPresetByEnvDone_ && rendered >= 30 && !deviceOpenPending_) {
+                pressPresetByEnvDone_ = true;
+                // FOXSDR_TUNE_HZ (captures): where the receiver listens, through
+                // the same absolute-tune path the frequency dial uses.
+                if (const char* hz = std::getenv("FOXSDR_TUNE_HZ"); hz != nullptr && *hz != '\0') {
+                    const double f = std::atof(hz);
+                    if (f > 0.0) { tuneAbsoluteHz(f); }
+                }
+                if (const char* want = std::getenv("FOXSDR_PRESS_PRESET"); want != nullptr && *want != '\0') {
+                    bool found = false;
+                    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                        if (lp.name != want) { continue; }
+                        found = true;
+                        const std::vector<cascade::gui::IndexedPreset> ps = validatedPresets(lp);
+                        if (!ps.empty()) {
+                            applyPluginPreset(lp, ps.front().preset);
+                        } else {
+                            recordPluginStopped(cascade::core::pluginKey(lp), false);
+                            openPluginWindowsFor(lp);
+                        }
+                        break;
+                    }
+                    cascade::core::diagLogf("capture: preset for '%s' %s", want,
+                                            found ? "pressed" : "NOT FOUND - no such plugin loaded");
+                }
+            }
             if (const char* at = std::getenv("FOXSDR_PATCH_TOGGLE_AT");
                 at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
@@ -1851,6 +1894,22 @@ int AppWindow::run(int frames) {
                 const std::filesystem::path out = dir / name;
                 if (cascade::core::writeBmp24(img, out.string(), err)) {
                     cascade::core::diagLogf("shot: wrote %s", out.string().c_str());
+                    // WHERE EVERY WINDOW IS in this picture, beside it - so a
+                    // capture can be cropped to one window from the numbers
+                    // ImGui drew it with rather than from a guess at pixels.
+                    std::filesystem::path rects = out;
+                    rects.replace_extension(".windows.txt");
+                    if (std::FILE* rf = std::fopen(rects.string().c_str(), "wb")) {
+                        for (ImGuiWindow* wnd : ImGui::GetCurrentContext()->Windows) {
+                            if (wnd == nullptr || !wnd->WasActive || wnd->Hidden ||
+                                (wnd->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
+                                continue;
+                            }
+                            std::fprintf(rf, "%.0f\t%.0f\t%.0f\t%.0f\t%s\n", wnd->Pos.x, wnd->Pos.y,
+                                         wnd->Size.x, wnd->Size.y, wnd->Name);
+                        }
+                        std::fclose(rf);
+                    }
                 } else {
                     cascade::core::diagWarnf("shot: %s", err.c_str());
                 }
@@ -15633,6 +15692,15 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // yet. A decoder that has produced no picture still gets its window, which
     // says it is waiting - the truth, and what was asked to be seen. Each id
     // is the one drawPluginWindows draws by, built from the same display name.
+    openPluginWindowsFor(p);
+
+    char note[192];
+    std::snprintf(note, sizeof(note), "Tuned to %.4f MHz for %s", ps.frequencyHz / 1.0e6,
+                  p.name.c_str());
+    presetNote_ = note;
+}
+
+void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
     {
         const std::vector<std::string>& trackNames = pluginUi_.trackPluginNames();
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
@@ -15676,11 +15744,6 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         cascade::core::diagLogf("preset: opened the Decoder output window for %s",
                                 p.name.c_str());
     }
-
-    char note[192];
-    std::snprintf(note, sizeof(note), "Tuned to %.4f MHz for %s", ps.frequencyHz / 1.0e6,
-                  p.name.c_str());
-    presetNote_ = note;
 }
 
 void AppWindow::applyPluginTuneGrants() {

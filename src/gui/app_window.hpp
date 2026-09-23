@@ -857,6 +857,9 @@ private:
     // publishing where it listens, never a plugin retuning the radio — that
     // still needs the separate per-plugin permission.
     void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps);
+    // The window half of a preset press: the plugin's map page, picture,
+    // panels and instruments, or Decoder output for a text decoder.
+    void openPluginWindowsFor(const cascade::core::LoadedPlugin& p);
     // THE ONE ENUMERATION, used by drawPluginPresets, maybeAutoPreset,
     // rebuildMuteStates and the web status snapshot: walks `p`'s preset table
     // (capped at kMaxPresetsPerPlugin, exactly as every consumer has always
@@ -1978,6 +1981,10 @@ private:
     bool bookmarkImportByEnv_ = false;
     bool bookmarkOpenByEnv_ = false;
     bool bookmarkScrollByEnv_ = false;
+    // FOXSDR_PRESS_PRESET (bounded runs): the named plugin's first preset is
+    // pressed once the plugins have loaded - the user's own key, for a
+    // capture of that plugin at work.
+    bool pressPresetByEnvDone_ = false;
     // The browser gets at most a few hundred bookmarks (favourites and the
     // ones nearest the tuned frequency); this maps its row numbers back.
     std::vector<std::size_t> webBookmarkIndex_;
