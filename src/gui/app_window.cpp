@@ -3604,12 +3604,19 @@ void AppWindow::drawStatusColumn() {
     // It is measured before the feature key for the same reason the feature
     // key is measured before the cards - everything above has to know where
     // its room ends.
+    //
+    // A READING OUTRANKS THE MAKER'S PLATE. The second key needs about 27 px,
+    // and at the default 1280x720 window the column had 3 px to spare: with the
+    // plate kept, the WEB ACCESS card no longer fitted and was skipped whole -
+    // a live reading lost to a decoration. So the cards are laid out against the
+    // column's FULL height (the keys on its floor), and the plate is drawn only
+    // if, once they are in, it still fits between the last card and the keys.
+    // When it does not, the plate stands aside and the keys sit on the floor.
     const float featureKeyH = tinyH + 8.0f;
-    const ImVec2 problemKeyBR(colBR.x - kPad, plateTL.y - 5.0f);
-    const ImVec2 problemKeyTL(colTL.x + kPad, problemKeyBR.y - featureKeyH);
-    const ImVec2 featureKeyBR(colBR.x - kPad, problemKeyTL.y - 5.0f);
-    const ImVec2 featureKeyTL(colTL.x + kPad, featureKeyBR.y - featureKeyH);
-    const float cardsBottom = featureKeyTL.y - 5.0f;
+    const float keysH = featureKeyH * 2.0f + 5.0f;
+    const float floorY = colBR.y - kPad;
+    const float cardsBottomWithPlate = plateTL.y - 5.0f - keysH - 5.0f;
+    const float cardsBottom = floorY - keysH - 5.0f;
 
     const float cardL = colTL.x + kPad;
     const float cardR = colBR.x - kPad;
@@ -4071,6 +4078,16 @@ void AppWindow::drawStatusColumn() {
              faulted ? "FAULT" : (rxRunning ? "RUNNING" : "STOPPED"), lines, n);
     }
 
+    // Now the cards are in, place the keys: on the plate if the plate still
+    // fits under the last card, on the column's floor if it does not (see the
+    // note where cardsBottom is measured). y is 6 px past the last card drawn.
+    const bool plateShown = (y - 6.0f) <= cardsBottomWithPlate;
+    const float keysFloor = plateShown ? plateTL.y - 5.0f : floorY;
+    const ImVec2 problemKeyBR(colBR.x - kPad, keysFloor);
+    const ImVec2 problemKeyTL(colTL.x + kPad, problemKeyBR.y - featureKeyH);
+    const ImVec2 featureKeyBR(colBR.x - kPad, problemKeyTL.y - 5.0f);
+    const ImVec2 featureKeyTL(colTL.x + kPad, featureKeyBR.y - featureKeyH);
+
     // --- REQUEST A FEATURE -----------------------------------------------------
     //
     // THE ONE KEY IN THIS COLUMN, because everything else here is a reading
@@ -4110,7 +4127,7 @@ void AppWindow::drawStatusColumn() {
     // beneath. Two lines, because a maker's plate carries the maker and the
     // type. Drawn last so nothing can be laid over it, and skipped entirely on a
     // column too short to hold it above the title rule.
-    if (plateTL.y > bodyTop && plateBR.x > plateTL.x + 16.0f) {
+    if (plateShown && plateTL.y > bodyTop && plateBR.x > plateTL.x + 16.0f) {
         const float round = cascade::gui::theme::kKeyRounding;
         dl->AddRectFilled(plateTL, plateBR, cascade::gui::theme::kBrassShade, round);
         if (plateBR.x - plateTL.x > round * 2.0f) {
