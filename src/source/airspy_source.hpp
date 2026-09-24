@@ -401,6 +401,14 @@ public:
     // deleted.
     static unsigned long long readersAbandoned();
 
+    // Tests only: does the reader's link still point at a device? The same
+    // accessor, for the same reason, as HackRfSource::linkHoldsDeviceForTest:
+    // after an abandonment the stranded reader dereferences link_->dev, so
+    // closeDevice() must leave it alone, and the zombie never calls back into
+    // the fake once `run` is false - only the driver can be asked. Read-only,
+    // taken under the device mutex, and called from nowhere in the product.
+    bool linkHoldsDeviceForTest() const;
+
 private:
     // Everything the reader thread touches, in one object behind a shared_ptr
     // it captures BY VALUE - see the file header. An abandoned reader outlives
