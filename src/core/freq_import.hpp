@@ -19,12 +19,16 @@
 // CenterFrequency is SDR#'s own tuning choice and is ignored.
 //
 // CSV is the other door, because an Excel user can "Save as CSV" directly:
-// comma, semicolon or tab separated (whichever the first line uses most),
-// quoted fields allowed, an optional header naming the columns in any order
-// (frequency/freq, name, group, mode, bandwidth, favourite). Without a header
-// the columns are frequency, name, group, mode, bandwidth. A frequency is in
-// Hz unless the header says MHz or kHz, or it is under 100 000 - which no
-// receivable frequency in Hz is, and every one written in MHz is.
+// comma, semicolon or tab separated (whichever the header or first data line
+// uses most), quoted fields allowed, an optional header naming the columns in
+// any order (frequency/freq, name, group, mode, bandwidth, favourite). Without
+// a header the columns are frequency, name, group, mode, bandwidth. A frequency
+// is in Hz unless the header says MHz or kHz, or it is under 100 000 - which no
+// receivable frequency in Hz is, and every one written in MHz is. A bandwidth
+// is in Hz unless its header says MHz or kHz. Lines before the list starts -
+// a "# exported ..." comment, an Excel title row: anything that neither starts
+// with a number nor names a frequency column - are skipped and counted in
+// `skipped`, rather than taken as a header that names nothing.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once

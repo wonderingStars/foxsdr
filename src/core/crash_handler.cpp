@@ -172,9 +172,28 @@ void appendPad2(char* dst, std::size_t& at, std::size_t cap, unsigned v) {
     dst[at++] = static_cast<char>('0' + (v % 10));
 }
 
+// Every decimal digit of v, used only for the file name.
+void appendDecimal(char* dst, std::size_t& at, std::size_t cap, unsigned long v) {
+    char digits[16];
+    int n = 0;
+    if (v == 0) {
+        digits[n++] = '0';
+    } else {
+        while (v != 0 && n < 16) {
+            digits[n++] = static_cast<char>('0' + (v % 10));
+            v /= 10;
+        }
+    }
+    while (n > 0 && at + 1 < cap) { dst[at++] = digits[--n]; }
+}
+
 // "<dir>\crash-YYYYMMDD-HHMMSS-<pid>-<seq>.txt", built by hand. Unique per
 // process AND per report, so a second fault cannot silently overwrite the
-// first one's evidence.
+// first one's evidence - which is why <seq> is written in FULL. The name only
+// resolves to the second and the file is opened CREATE_ALWAYS, so the sequence
+// number is all that separates two reports written in the same second; this
+// used to print only its last digit, and the 11th report of a second then
+// truncated the 1st (tests/test_crash_absorbed_child.cpp, the burst case).
 void buildReportPath(char* out, std::size_t cap, const char* prefix, long seq) {
     std::size_t at = 0;
     for (std::size_t i = 0; g_crashDir[i] != '\0' && at + 1 < cap; ++i) { out[at++] = g_crashDir[i]; }
@@ -195,20 +214,9 @@ void buildReportPath(char* out, std::size_t cap, const char* prefix, long seq) {
     appendPad2(out, at, cap, st.wSecond);
     if (at + 1 < cap) { out[at++] = '-'; }
 
-    unsigned long pid = ::GetCurrentProcessId();
-    char digits[16];
-    int n = 0;
-    if (pid == 0) {
-        digits[n++] = '0';
-    } else {
-        while (pid != 0 && n < 16) {
-            digits[n++] = static_cast<char>('0' + (pid % 10));
-            pid /= 10;
-        }
-    }
-    while (n > 0 && at + 1 < cap) { out[at++] = digits[--n]; }
+    appendDecimal(out, at, cap, ::GetCurrentProcessId());
     if (at + 1 < cap) { out[at++] = '-'; }
-    if (at + 1 < cap) { out[at++] = static_cast<char>('0' + (seq % 10)); }
+    appendDecimal(out, at, cap, static_cast<unsigned long>(seq));
     const char* ext = ".txt";
     for (int i = 0; ext[i] != '\0' && at + 1 < cap; ++i) { out[at++] = ext[i]; }
     out[at] = '\0';

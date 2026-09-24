@@ -680,8 +680,13 @@ void SpectrumView::drawBinRange(const float* dbBins, int n, double firstBin,
     // 10 dB - the graticule is what the eye measures against and it costs
     // nothing - but a short well or a wide dB range puts those lines closer
     // together than a label is tall, and the ladder then prints through
-    // itself. See dbLabelStride.
-    const int labelStride = dbLabelStride(dbMin_, dbMax_, height, dbLabelH);
+    // itself. See dbLabelStride. It is asked about the GRID's height, not the
+    // panel's: the lines and their figures are laid out over
+    // [gridTopY, p1.y], and under a band-plan ribbon's reserved strip that is
+    // shorter than the panel - measured against the whole panel the stride
+    // came out a rung too fine and the figures lost their three pixels of air
+    // (tests/test_spectrum_db_labels.cpp).
+    const int labelStride = dbLabelStride(dbMin_, dbMax_, p1.y - gridTopY, dbLabelH);
     for (int i = 0; i < gridCount; ++i) {
         // Anchored on the decade index rather than on i, so the surviving
         // figures are round multiples (-100, -50, 0) and stay on the same

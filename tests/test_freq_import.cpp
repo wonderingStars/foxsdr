@@ -178,6 +178,106 @@ int main() {
         CHECK(r.skipped == 1u);
         if (!r.items.empty()) { CHECK(r.items[0].freqHz == 145500000.0); }
     }
+    // [C4] a unit in the BANDWIDTH header is honoured the way the frequency
+    // header's is: "Bandwidth (kHz)" + 12.5 is 12.5 kHz, not 12.5 Hz. Without
+    // a unit word the figure stays Hz, SDR#'s own convention.
+    {
+        const ImportResult r = cascade::core::importCsv(
+            "Frequency (MHz),Name,Bandwidth (kHz)\n"
+            "446.00625,Repeater,12.5\n");
+        CHECK(r.error.empty());
+        CHECK(r.items.size() == 1u);
+        if (r.items.size() == 1u) {
+            CHECK(r.items[0].freqHz == 446006250.0);
+            CHECK(r.items[0].bandwidthHz == 12500.0);
+        }
+        const ImportResult m = cascade::core::importCsv(
+            "Freq;Name;Filter MHz\n145500000;Wide;0,2\n");
+        CHECK(m.items.size() == 1u);
+        if (m.items.size() == 1u) { CHECK(m.items[0].bandwidthHz == 200000.0); }
+        const ImportResult bw = cascade::core::importCsv(
+            "Freq,Name,BW (kHz)\n145500000,Calling,12.5\n");
+        CHECK(bw.items.size() == 1u);
+        if (bw.items.size() == 1u) { CHECK(bw.items[0].bandwidthHz == 12500.0); }
+        const ImportResult h = cascade::core::importCsv(
+            "Freq,Name,Filter (Hz)\n145500000,Calling,6000\n"
+            "145525000,Other,,\n");
+        CHECK(h.items.size() == 2u);
+        if (h.items.size() == 2u) {
+            CHECK(h.items[0].bandwidthHz == 6000.0);
+            CHECK(h.items[1].bandwidthHz == 12500.0);  // blank: the mode's default
+        }
+        const ImportResult plain = cascade::core::importCsv(
+            "Frequency,Name,Bandwidth\n145500000,Calling,6000\n");
+        CHECK(plain.items.size() == 1u);
+        if (plain.items.size() == 1u) { CHECK(plain.items[0].bandwidthHz == 6000.0); }
+    }
+    // [C5] a headerless list whose first line is a COMMENT: the comment is
+    // skipped (and counted), the list is imported - not refused whole with
+    // "no frequency column in the header".
+    {
+        const ImportResult r = cascade::core::importCsv(
+            "# exported 2026-09-24\n"
+            "145500000,Calling\n"
+            "446.00625,PMR 1\n");
+        CHECK(r.error.empty());
+        CHECK(r.entries == 3u);
+        CHECK(r.skipped == 1u);
+        CHECK(r.items.size() == 2u);
+        if (r.items.size() == 2u) {
+            CHECK(r.items[0].freqHz == 145500000.0);
+            CHECK(r.items[0].name == "Calling");
+            CHECK(r.items[1].freqHz == 446006250.0);
+        }
+    }
+    // [C6] an Excel TITLE ROW over a European ';' list: the separator is read
+    // from the data, not from the title (which has none and would pick ',').
+    // (A title containing the word "frequency" names a frequency column and is
+    // read as a header - the header rule, which this does not change.)
+    {
+        const ImportResult r = cascade::core::importCsv(
+            "Airband and PMR list\n"
+            "446,00625;PMR 1;PMR\n"
+            "433,92;ISM\n");
+        CHECK(r.error.empty());
+        CHECK(r.skipped == 1u);
+        CHECK(r.items.size() == 2u);
+        if (r.items.size() == 2u) {
+            CHECK(r.items[0].freqHz == 446006250.0);
+            CHECK(r.items[0].name == "PMR 1");
+            CHECK(r.items[0].group == "PMR");
+            CHECK(r.items[1].freqHz == 433920000.0);
+        }
+    }
+    // [C7] a comment line ABOVE a real header: the header still names the
+    // columns, in its own order and with its own unit.
+    {
+        const ImportResult r = cascade::core::importCsv(
+            "# from Excel\n"
+            "Name;Frequency (MHz)\n"
+            "PMR 1;446,00625\n");
+        CHECK(r.error.empty());
+        CHECK(r.items.size() == 1u);
+        if (r.items.size() == 1u) {
+            CHECK(r.items[0].name == "PMR 1");
+            CHECK(r.items[0].freqHz == 446006250.0);
+        }
+    }
+    // [C8] nothing usable at all: still an error, and it names the line that
+    // was not a header so the user knows what was read.
+    {
+        const ImportResult r = cascade::core::importCsv("just some words\nand more words\n");
+        CHECK(r.items.empty());
+        CHECK(!r.error.empty());
+        CHECK(r.error.find("just some words") != std::string::npos);
+    }
+    // [C9] a header naming the columns but no frequency, over rows whose
+    // first cell is not a number either: refused, not imported as garbage.
+    {
+        const ImportResult r = cascade::core::importCsv("Name,Group\nTower,Airport\n");
+        CHECK(r.items.empty());
+        CHECK(!r.error.empty());
+    }
 
     // [BIG] 33 000 entries: read, added, re-imported, all quickly
     {

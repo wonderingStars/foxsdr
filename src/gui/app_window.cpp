@@ -815,44 +815,20 @@ std::string rateLabel(double hz) {
     return buf;
 }
 
-// WHAT THE TARGET IS, in the vocabulary buildTrackDetailLines reads it in.
+// The detail block for one target, as the rail's Target details section, the
+// map window's list and the Target details window all draw it.
 //
-// The detail block decides from this whether an altitude and a speed are
-// lettered in feet and knots or in kilometres and km/s, and every surface here
-// that draws it - the rail's Target details section, the map window's list and
-// the Target details window - handed it nothing, so it took its default and
-// described the ISS at "1381234 ft" doing "14890 kt".
-//
-// The translation lives at the call site rather than in track_metrics.hpp
-// because that header is deliberately free of plugin_abi.h; see its file
-// comment. map_view.cpp carries the same translation for its own tooltip,
-// which is one copy more than this rule should have - the shared home for it
-// is gui/track_detail_view.hpp, beside makeTrackDetailInput, and both of these
-// would then read it from there.
-//
-// A STATION AND ANYTHING THIS BUILD HAS NO NAME FOR KEEP THE AVIATION UNITS.
-// An APRS station reports its altitude in feet and its speed in knots, so
-// those are the right units for it and not a fallback.
-cascade::gui::TrackKind detailTrackKind(std::uint32_t kind) {
-    switch (kind) {
-        case CASCADE_TRACK_SATELLITE: return cascade::gui::TrackKind::Satellite;
-        case CASCADE_TRACK_AIRCRAFT: return cascade::gui::TrackKind::Aircraft;
-        case CASCADE_TRACK_VESSEL: return cascade::gui::TrackKind::Vessel;
-        default: return cascade::gui::TrackKind::Other;
-    }
-}
-
-// The detail block, gathered and drawn in two steps so the kind above can be
-// set in between. track_detail_view.hpp's own drawTrackDetail() makes the same
-// two calls back to back and leaves no room to say it, which is exactly how
-// these three surfaces came to describe a satellite in feet and knots.
+// WHAT THE TARGET IS decides whether its altitude and speed are lettered in
+// feet and knots or in kilometres and km/s. Every one of these surfaces once
+// handed the block nothing, so it took its default and described the ISS at
+// "1381234 ft" doing "14890 kt"; this function then set the kind by hand from
+// its own copy of the translation. makeTrackDetailInput now sets it itself
+// (gui/track_detail_view.hpp's detailTrackKind), so the one-step helper is
+// safe to call and there is one copy of the rule, not three.
 void drawTrackDetailOf(const cascade::core::HostTrack& ht,
                        cascade::gui::TrackInfoCache* info, bool hasHome,
                        double homeLatDeg, double homeLonDeg) {
-    cascade::gui::TrackDetailInput in =
-        cascade::gui::makeTrackDetailInput(ht, info, hasHome, homeLatDeg, homeLonDeg);
-    in.kind = detailTrackKind(ht.t.kind);
-    cascade::gui::drawTrackDetailLines(cascade::gui::buildTrackDetailLines(in));
+    cascade::gui::drawTrackDetail(ht, info, hasHome, homeLatDeg, homeLonDeg);
 }
 
 // --- Recorder / Bookmarks / Scanner constants (P6) ---------------------------

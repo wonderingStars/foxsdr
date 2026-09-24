@@ -75,5 +75,30 @@ int main() {
         CHECK(p.steps.size() == 2u && p.steps[1].y == 1.5f);
     }
 
+    // [5] A TEXT STEP TYPES THE REST OF THE LINE VERBATIM, '#' included. The
+    // comment strip used to run before the verb was read, so "Channel #12"
+    // typed "Channel " and parsed as a perfectly good step - a wrong string
+    // with nothing counted in `bad`. Other verbs keep their trailing
+    // comments, and a whole-line comment is still a comment.
+    {
+        const ScriptParse p = parseInputScript(
+            "# a comment line\n"
+            "5 text Channel #12\n"
+            "6 text #tag\r\n"
+            "7 down # still a comment here\n"
+            "8 key enter #and here\n");
+        CHECK(p.bad == 0);
+        CHECK(p.steps.size() == 4u);
+        if (p.steps.size() == 4u) {
+            CHECK(p.steps[0].verb == ScriptStep::Verb::Text);
+            CHECK(p.steps[0].arg == "Channel #12");
+            CHECK(p.steps[1].verb == ScriptStep::Verb::Text);
+            CHECK(p.steps[1].arg == "#tag");                  // CR still dropped
+            CHECK(p.steps[2].verb == ScriptStep::Verb::Down);
+            CHECK(p.steps[3].verb == ScriptStep::Verb::Key);
+            CHECK(p.steps[3].arg == "enter");
+        }
+    }
+
     return testSummary("test_input_script");
 }

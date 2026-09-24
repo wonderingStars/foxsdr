@@ -91,30 +91,12 @@ ImU32 colourFor(std::uint32_t kind) {
 // ABI says what a thing IS; that is what decides how its altitude is read.
 bool orbitalLadder(std::uint32_t kind) { return kind == CASCADE_TRACK_SATELLITE; }
 
-// THE SAME QUESTION IN track_metrics.hpp's OWN VOCABULARY, for the detail
-// block. That block has to describe a satellite in kilometres and km/s and an
-// aeroplane in feet and knots, which is the decision orbitalLadder above
-// already makes for the map's colours - so it is ASKED THROUGH orbitalLadder
-// rather than beside it. One line decides which kinds are orbital; a second
-// copy of that rule is how the legend and the tooltip come to disagree about
-// what the ISS is.
-//
-// The translation happens here and not in track_metrics.hpp because that header
-// is deliberately free of plugin_abi.h - see its file comment - so the ABI's
-// numbers become names at the call site, exactly as the two altitude ladders
-// already do.
-TrackKind detailTrackKind(std::uint32_t kind) {
-    if (orbitalLadder(kind)) { return TrackKind::Satellite; }
-    switch (kind) {
-        case CASCADE_TRACK_AIRCRAFT: return TrackKind::Aircraft;
-        case CASCADE_TRACK_VESSEL: return TrackKind::Vessel;
-        // A station, and anything a plugin sends that this build does not know
-        // a name for, keep the aviation units they have always been described
-        // in: an APRS station reports its altitude in feet and its speed in
-        // knots, so those are the right units and not a fallback.
-        default: return TrackKind::Other;
-    }
-}
+// The detail block asks the same question - is this thing in orbit? - to
+// choose kilometres and km/s over feet and knots. It is answered once, by
+// detailTrackKind() in gui/track_detail_view.hpp, which makeTrackDetailInput
+// calls itself; that function names CASCADE_TRACK_SATELLITE alone as orbital,
+// exactly as orbitalLadder above does, and tests/test_track_detail_kind.cpp
+// pins every kind the ABI names.
 
 int bandIndexFor(std::uint32_t kind, double altM) {
     return orbitalLadder(kind) ? orbitBandIndex(altM) : altitudeBandIndex(altM);
@@ -1724,17 +1706,12 @@ void MapView::draw(float width, float height,
         // also what starts the lookup for a target the per-frame sweep has not
         // reached yet - which happens inside makeTrackDetailInput.
         //
-        // GATHERED AND DRAWN IN TWO STEPS, so the one thing this view knows and
-        // the adapter does not can be said in between: WHAT THE TARGET IS, in
-        // the block's own vocabulary, which is what decides whether its
-        // altitude and speed are read in feet and knots or in kilometres and
-        // km/s. Hovering the ISS used to produce "1381234 ft" and "14890 kt"
-        // from this very tooltip.
+        // WHAT THE TARGET IS - which decides whether its altitude and speed
+        // are read in feet and knots or in kilometres and km/s - is also set
+        // inside makeTrackDetailInput. Hovering the ISS used to produce
+        // "1381234 ft" and "14890 kt" from this very tooltip.
         ImGui::BeginTooltip();
-        TrackDetailInput detailIn =
-            makeTrackDetailInput(*best, info, hasHome_, homeLat_, homeLon_);
-        detailIn.kind = detailTrackKind(best->t.kind);
-        drawTrackDetailLines(buildTrackDetailLines(detailIn));
+        drawTrackDetail(*best, info, hasHome_, homeLat_, homeLon_);
         ImGui::EndTooltip();
     }
 

@@ -263,60 +263,106 @@ ImportResult importCsv(std::string_view text) {
         r.error = "the file is empty";
         return r;
     }
-    const std::string_view first = lines[0];
-    const char seps[3] = {',', ';', '\t'};
-    char sep = ',';
-    std::ptrdiff_t best = -1;
-    for (const char s : seps) {
-        const std::ptrdiff_t n = std::count(first.begin(), first.end(), s);
-        if (n > best) {
-            best = n;
-            sep = s;
+    // The separator a line uses most. Picked from the line the columns are
+    // actually read from - a title row with no separators in it would
+    // otherwise pick ',' for a ';' file.
+    const auto pickSep = [](std::string_view line) {
+        const char seps[3] = {',', ';', '\t'};
+        char s = ',';
+        std::ptrdiff_t best = -1;
+        for (const char c : seps) {
+            const std::ptrdiff_t n = std::count(line.begin(), line.end(), c);
+            if (n > best) {
+                best = n;
+                s = c;
+            }
         }
-    }
+        return s;
+    };
+    // A unit word in a header cell: MHz, kHz or Hz, else 0 (not stated).
+    const auto unitIn = [](const std::string& u) {
+        if (u.find("MHZ") != std::string::npos) { return 1e6; }
+        if (u.find("KHZ") != std::string::npos) { return 1e3; }
+        if (u.find("HZ") != std::string::npos) { return 1.0; }
+        return 0.0;
+    };
 
+    // WHERE THE LIST STARTS. The first line whose first cell is a number is
+    // data in the default column order; the first line with a cell naming a
+    // frequency is a header naming the columns. A line that is neither - a
+    // "# exported ..." comment, an Excel title row - is not a header just
+    // because it is not a number: it is skipped, counted, and the search goes
+    // on. Deciding from line 1 alone used to refuse a whole 30 000-entry list
+    // with "no frequency column in the header" over one comment line.
     int cFreq = 0, cName = 1, cGroup = 2, cMode = 3, cBw = 4, cFav = -1;
-    double unit = 0.0;  // 0 = decide per value
-    std::size_t startAt = 0;
-    {
-        const std::vector<std::string> h = splitCsv(first, sep);
+    double unit = 0.0;    // 0 = decide per value
+    double bwUnit = 1.0;  // bandwidth is Hz (SDR#'s convention) unless the header says otherwise
+    char sep = ',';
+    std::size_t startAt = lines.size();
+    bool found = false;
+    for (std::size_t li = 0; li < lines.size() && !found; ++li) {
+        sep = pickSep(lines[li]);
+        const std::vector<std::string> h = splitCsv(lines[li], sep);
         double probe = 0.0;
         // The same decimal-comma reading the data rows get, or a first row of
         // "446,00625;PMR 1" is mistaken for a header and lost.
         std::string first0 = h.empty() ? std::string() : h[0];
         if (sep != ',') { std::replace(first0.begin(), first0.end(), ',', '.'); }
-        const bool isHeader = !h.empty() && !parseNumber(first0, probe);
-        if (isHeader) {
-            startAt = 1;
-            cFreq = cName = cGroup = cMode = cBw = cFav = -1;
-            for (int i = 0; i < static_cast<int>(h.size()); ++i) {
-                const std::string u = upper(h[static_cast<std::size_t>(i)]);
-                if (cFreq < 0 && u.find("FREQ") != std::string::npos) {
-                    cFreq = i;
-                    if (u.find("MHZ") != std::string::npos) { unit = 1e6; }
-                    else if (u.find("KHZ") != std::string::npos) { unit = 1e3; }
-                    else if (u.find("HZ") != std::string::npos) { unit = 1.0; }
-                } else if (cGroup < 0 && (u.find("GROUP") != std::string::npos || u == "CATEGORY")) {
-                    cGroup = i;
-                } else if (cName < 0 && (u.find("NAME") != std::string::npos || u == "DESCRIPTION" ||
-                                         u == "LABEL")) {
-                    cName = i;
-                } else if (cMode < 0 && (u.find("MODE") != std::string::npos ||
-                                         u.find("DETECTOR") != std::string::npos ||
-                                         u.find("MODULATION") != std::string::npos)) {
-                    cMode = i;
-                } else if (cBw < 0 && (u.find("BANDWIDTH") != std::string::npos ||
-                                       u.find("FILTER") != std::string::npos || u == "BW")) {
-                    cBw = i;
-                } else if (cFav < 0 && u.find("FAV") != std::string::npos) {
-                    cFav = i;
-                }
-            }
-            if (cFreq < 0) {
-                r.error = "no frequency column in the header";
-                return r;
+        if (!h.empty() && parseNumber(first0, probe)) {
+            startAt = li;
+            found = true;
+            break;
+        }
+        int hFreq = -1, hName = -1, hGroup = -1, hMode = -1, hBw = -1, hFav = -1;
+        double hUnit = 0.0, hBwUnit = 1.0;
+        for (int i = 0; i < static_cast<int>(h.size()); ++i) {
+            const std::string u = upper(h[static_cast<std::size_t>(i)]);
+            if (hFreq < 0 && u.find("FREQ") != std::string::npos) {
+                hFreq = i;
+                hUnit = unitIn(u);
+            } else if (hGroup < 0 && (u.find("GROUP") != std::string::npos || u == "CATEGORY")) {
+                hGroup = i;
+            } else if (hName < 0 && (u.find("NAME") != std::string::npos || u == "DESCRIPTION" ||
+                                     u == "LABEL")) {
+                hName = i;
+            } else if (hMode < 0 && (u.find("MODE") != std::string::npos ||
+                                     u.find("DETECTOR") != std::string::npos ||
+                                     u.find("MODULATION") != std::string::npos)) {
+                hMode = i;
+            } else if (hBw < 0 && (u.find("BANDWIDTH") != std::string::npos ||
+                                   u.find("FILTER") != std::string::npos || u == "BW" ||
+                                   u.rfind("BW ", 0) == 0 || u.rfind("BW(", 0) == 0)) {
+                hBw = i;
+                // The frequency column's unit rule, applied to the bandwidth:
+                // "Bandwidth (kHz)" + 12.5 is 12.5 kHz, not 12.5 Hz.
+                const double bu = unitIn(u);
+                if (bu > 0.0) { hBwUnit = bu; }
+            } else if (hFav < 0 && u.find("FAV") != std::string::npos) {
+                hFav = i;
             }
         }
+        if (hFreq >= 0) {
+            cFreq = hFreq;
+            cName = hName;
+            cGroup = hGroup;
+            cMode = hMode;
+            cBw = hBw;
+            cFav = hFav;
+            unit = hUnit;
+            bwUnit = hBwUnit;
+            startAt = li + 1;
+            found = true;
+            break;
+        }
+        // Neither: a line before the list starts.
+        ++r.entries;
+        ++r.skipped;
+    }
+    if (!found) {
+        std::string shown(trim(lines[0]).substr(0, 60));
+        r.error = "no line starts with a frequency and no header names a frequency column (line 1: \"" +
+                  shown + "\")";
+        return r;
     }
     const auto col = [](const std::vector<std::string>& v, int c) -> std::string {
         return (c >= 0 && c < static_cast<int>(v.size())) ? v[static_cast<std::size_t>(c)] : std::string();
@@ -341,7 +387,8 @@ ImportResult importCsv(std::string_view text) {
         double bw = 0.0;
         std::string bws = col(v, cBw);
         if (sep != ',') { std::replace(bws.begin(), bws.end(), ',', '.'); }
-        b.bandwidthHz = (parseNumber(bws, bw) && bw > 0.0) ? bw : defaultBandwidthForMode(b.mode);
+        b.bandwidthHz =
+            (parseNumber(bws, bw) && bw > 0.0) ? bw * bwUnit : defaultBandwidthForMode(b.mode);
         const std::string fav = upper(col(v, cFav));
         b.favourite = fav == "TRUE" || fav == "YES" || fav == "1" || fav == "Y";
         if (b.name.empty()) {
