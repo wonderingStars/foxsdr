@@ -45,6 +45,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -106,7 +107,32 @@ struct AirspyTranscript {
     }
     void push(AirspyControlRecord rec) {
         std::lock_guard<std::mutex> lk(mutex);
+        events.push_back(rec.in ? ("IN " + std::to_string(rec.request) + " idx " +
+                                   std::to_string(rec.index))
+                                : ("OUT " + std::to_string(rec.request) + " val " +
+                                   std::to_string(rec.value)));
         controls.push_back(std::move(rec));
+    }
+
+    // EVERYTHING THAT REACHES THE BULK PIPE, in order, alongside the control
+    // transfers: "OUT 1 val 0" (RECEIVER_MODE OFF), "CLEAR_HALT 0x81",
+    // "BEGIN_BULK", "END_BULK". The controls vector cannot answer "was the
+    // halt cleared BETWEEN receiver off and receiver on, and were the reads
+    // queued only AFTER receiver on" - which is the whole of libairspy's
+    // airspy_start_rx (airspy.c:1192-1218) - because resetPipe and the bulk
+    // calls are not control transfers.
+    std::vector<std::string> events;
+    void event(std::string e) {
+        std::lock_guard<std::mutex> lk(mutex);
+        events.push_back(std::move(e));
+    }
+    std::vector<std::string> eventSnapshot() const {
+        std::lock_guard<std::mutex> lk(mutex);
+        return events;
+    }
+    void clearEvents() {
+        std::lock_guard<std::mutex> lk(mutex);
+        events.clear();
     }
 };
 
@@ -156,6 +182,64 @@ public:
     std::atomic<Exhausted> onExhausted{Exhausted::Timeout};
     std::atomic<bool> releaseBlock{false};
 
+    // --- THE FIRMWARE'S BULK ENDPOINT -----------------------------------
+    //
+    // What the real Airspy does with endpoint 0x81, read out of
+    // airspyone_firmware (master cf1a374) rather than guessed, because the
+    // first field reports from real R2s (FoxSDR 0.99.27/0.99.28, firmware
+    // "AirSpy NOS v1.0.0-rc10") died on their FIRST bulk read with Windows
+    // error 31 and this fake, until then, would have streamed happily:
+    //
+    //  - airspy_m0/airspy_rx.c set_receiver_mode() calls usb_streaming_disable()
+    //    on EVERY mode change, which (airspy_usb_req.c) is
+    //    usb_endpoint_disable(&usb_endpoint_bulk_in): TXE cleared and the
+    //    endpoint flushed (common/usb.c usb_endpoint_disable). Only RX then
+    //    re-initialises it (usb_endpoint_init -> usb_endpoint_enable, which
+    //    also sets TXR, a data-toggle reset).
+    //  - So from power-on and after every RECEIVER_MODE OFF the bulk IN
+    //    endpoint is DISABLED, and IN tokens the host sends it are not
+    //    answered as a working endpoint answers them. Transfers queued against
+    //    it fail, and the host halts its end of the pipe: WinUSB then reports
+    //    ERROR_GEN_FAILURE (31) for that read and every read after it until
+    //    the pipe is reset. (Exactly how the LPC43xx controller answers a
+    //    token to a disabled endpoint is NOT documented in the firmware and is
+    //    the one link here taken from the field symptom rather than a source;
+    //    the symptom is what this models.)
+    //  - The firmware does the endpoint work FIRST and the receiver work
+    //    (ADCHS_start/stop, R820T init over I2C) before acknowledging, so a
+    //    RECEIVER_MODE transfer takes real time and a read already queued sees
+    //    the endpoint go away WHILE the control transfer is still in flight.
+    //    modeSwitchDelayMs is that time.
+    //
+    // ON by default, because the fake's whole job is to answer as the firmware
+    // does. A fresh fake is a radio that has just been plugged in: receiver
+    // off, endpoint disabled, host pipe clean.
+    std::atomic<bool> modelBulkEndpoint{true};
+    std::atomic<int> modeSwitchDelayMs{10};
+
+    // A radio a CRASHED session left behind: receiver still in RX, endpoint
+    // live, and the host's end of the pipe halted. Paolo's report says
+    // "last-run-unclean: yes".
+    void leaveStreamingFromCrashedSession() {
+        rxMode_.store(true);
+        endpointEnabled_.store(true);
+        hostHalted_.store(true);
+    }
+
+    // A TRANSIENT failure mid-stream: after this many more successful bulk
+    // reads the host pipe halts (as a stall or a bus error halts it) and stays
+    // halted until the driver clears it. -1 = never.
+    std::atomic<int> haltAfterReads{-1};
+    // A pipe that no amount of clearing brings back - what a radio whose USB
+    // link has actually failed looks like. resetPipe() then does not help.
+    std::atomic<bool> haltIsPermanent{false};
+
+    bool hostPipeHalted() const { return hostHalted_.load(); }
+    bool receiverInRx() const { return rxMode_.load(); }
+    std::vector<std::string> events() const { return tx_->eventSnapshot(); }
+    void clearEvents() { tx_->clearEvents(); }
+    int failedBulkReads() const { return failedReads_.load(); }
+
     // --- scripted bulk data ------------------------------------------------
     void queueBulk(std::vector<std::uint8_t> buf) {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -197,6 +281,23 @@ public:
         if (fails(request)) {
             lastError_ = "fake: the device is gone";
             return -1;
+        }
+        if (request == 1 && modelBulkEndpoint.load()) {  // AIRSPY_RECEIVER_MODE
+            // airspy_rx.c set_receiver_mode: usb_streaming_disable() first,
+            // whatever the new mode - so a read already queued on the pipe
+            // meets a disabled, flushed endpoint and the host halts the pipe.
+            endpointEnabled_.store(false);
+            if (streaming_.load()) { hostHalted_.store(true); }
+            if (value == 1) {
+                // RECEIVER_MODE_RX: usb_endpoint_init(&usb_endpoint_bulk_in).
+                endpointEnabled_.store(true);
+                rxMode_.store(true);
+            } else {
+                rxMode_.store(false);
+            }
+            // ADCHS_start/stop and the R820T's I2C traffic, before the ack.
+            const int delay = modeSwitchDelayMs.load();
+            if (delay > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delay)); }
         }
         return static_cast<int>(len);
     }
@@ -293,6 +394,16 @@ public:
         lastBufferBytes_.store(bufferBytes);
         lastBufferCount_.store(bufferCount);
         beginBulkCalls_.fetch_add(1);
+        tx_->event("BEGIN_BULK");
+        if (modelBulkEndpoint.load()) {
+            // The REAL transport resets the pipe itself before it queues
+            // anything (winusb_device.cpp beginBulkStream, usbfs_device.cpp
+            // likewise), so that much is cleared here too...
+            if (!haltIsPermanent.load()) { hostHalted_.store(false); }
+            // ...and then the ring goes onto the bus. Against a DISABLED
+            // endpoint - receiver not in RX - it halts again at once.
+            if (!endpointEnabled_.load()) { hostHalted_.store(true); }
+        }
         streaming_.store(true);
         return true;
     }
@@ -305,6 +416,15 @@ public:
         } clear{&inFlight_};
 
         if (!streaming_.load()) { return 0; }
+        if (modelBulkEndpoint.load()) {
+            if (hostHalted_.load()) { return haltedRead(); }
+            if (!rxMode_.load() || !endpointEnabled_.load()) {
+                // Receiver off: nothing to deliver, and nothing wrong yet. A
+                // mode change that halts the pipe ends the wait early, as the
+                // real read would complete with an error.
+                return quietWait(timeoutMs);
+            }
+        }
         {
             std::lock_guard<std::mutex> lk(mutex_);
             if (!bulk_.empty()) {
@@ -312,6 +432,15 @@ public:
                 bulk_.pop_front();
                 const std::size_t n = std::min(cap, buf.size());
                 if (dst != nullptr && n > 0) { std::memcpy(dst, buf.data(), n); }
+                const int left = haltAfterReads.load();
+                if (left > 0) {
+                    if (left == 1) {
+                        hostHalted_.store(true);
+                        haltAfterReads.store(-1);
+                    } else {
+                        haltAfterReads.store(left - 1);
+                    }
+                }
                 return static_cast<int>(n);
             }
         }
@@ -329,20 +458,18 @@ public:
                 return 0;
             }
             case Exhausted::Timeout:
-            default: {
+            default:
                 // What a real bulk pipe does with nothing queued: block for
                 // the timeout, then say nothing arrived. Capped so a suite is
                 // not paced by it.
-                const unsigned slice = timeoutMs > 5 ? 5 : timeoutMs;
-                std::this_thread::sleep_for(std::chrono::milliseconds(slice));
-                return 0;
-            }
+                return quietWait(timeoutMs);
         }
     }
 
     void endBulkStream() override {
         streaming_.store(false);
         endBulkCalls_.fetch_add(1);
+        tx_->event("END_BULK");
     }
 
     bool streaming() const override { return streaming_.load(); }
@@ -350,6 +477,15 @@ public:
     bool resetPipe(std::uint8_t endpoint) override {
         lastResetEndpoint_.store(endpoint);
         resetPipeCalls_.fetch_add(1);
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), "CLEAR_HALT 0x%02x", static_cast<unsigned>(endpoint));
+        tx_->event(buf);
+        if (modelBulkEndpoint.load() && !haltIsPermanent.load()) {
+            // CLEAR_FEATURE(ENDPOINT_HALT) plus the host's own reset. It does
+            // NOT help while reads are still queued against a disabled
+            // endpoint: they halt the pipe again straight away.
+            hostHalted_.store(streaming_.load() && !endpointEnabled_.load());
+        }
         return true;
     }
 
@@ -357,6 +493,28 @@ public:
     const std::string& lastError() const override { return lastError_; }
 
 private:
+    // WinUSB's words for a read on a halted pipe, as winusb_device.cpp's
+    // readBulk builds them from GetLastError() - the exact text of the field
+    // report's log line.
+    int haltedRead() {
+        failedReads_.fetch_add(1);
+        lastError_ = "a bulk read failed (Windows error 31)";
+        return -1;
+    }
+
+    // Blocks up to the timeout (capped at 5 ms so a suite is not paced by
+    // it) in 1 ms slices, returning -1 as soon as the pipe halts underneath
+    // the read - the way an overlapped read completes with an error the moment
+    // the endpoint goes, not at the end of its timeout.
+    int quietWait(unsigned timeoutMs) {
+        const unsigned total = timeoutMs > 5 ? 5 : timeoutMs;
+        for (unsigned waited = 0; waited < total; ++waited) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (modelBulkEndpoint.load() && hostHalted_.load()) { return haltedRead(); }
+        }
+        return 0;
+    }
+
     bool fails(std::uint8_t request) const {
         for (const std::uint8_t r : failingRequests) {
             if (r == request) { return true; }
@@ -371,6 +529,13 @@ private:
     std::string lastError_;
     std::atomic<bool> streaming_{false};
     std::atomic<bool> inFlight_{false};
+    // The firmware's side (see modelBulkEndpoint): receiver mode, whether
+    // endpoint 0x81 is enabled, and whether the HOST's end of the pipe is
+    // halted.
+    std::atomic<bool> rxMode_{false};
+    std::atomic<bool> endpointEnabled_{false};
+    std::atomic<bool> hostHalted_{false};
+    std::atomic<int> failedReads_{0};
     std::atomic<int> beginBulkCalls_{0};
     std::atomic<int> endBulkCalls_{0};
     std::atomic<int> resetPipeCalls_{0};

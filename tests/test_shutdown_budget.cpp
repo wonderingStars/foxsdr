@@ -535,6 +535,12 @@ const KnownWait kKnownWaits[] = {
     {"src/source/airspy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the Airspy reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
+    {"src/source/airspy_source.hpp", "kRearmForgiveAfter", 0,
+     "not a wait at all - how long samples must flow after the reader re-armed a halted pipe "
+     "before its re-arm budget is refilled; nothing sleeps or blocks on it. (The re-arm itself "
+     "can make stopStreamingLocked() wait on rearmMutex for at most one RECEIVER_MODE RX "
+     "control transfer, another kControlTimeout: 1750 + 500 = 2250 ms, still inside the "
+     "3000 ms Soapy column this one replaces)"},
     // THE NATIVE AIRSPY HF+ DRIVER. Same argument as the two above and the
     // same answer: its column is 500 + 1000 + 250 = 1750 ms, spent INSTEAD OF
     // the Soapy pair's 3000 rather than as well as it, because exactly one

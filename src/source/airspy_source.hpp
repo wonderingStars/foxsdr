@@ -156,6 +156,22 @@ public:
     // reader tallies before it writes one "source: stream health ..." line.
     static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
 
+    // How many times in a row the reader will RE-ARM the stream after a failed
+    // bulk read before it calls the radio dead. A re-arm is libairspy's own
+    // start sequence again (receiver off, clear the halt on 0x81, receiver
+    // on, queue the ring), and it is what clears a halted pipe. libairspy
+    // itself stops streaming on the first failed transfer and leaves the
+    // application to notice; this driver did the same and put "unplug it and
+    // plug it back in" on screen for a radio that was working (field reports,
+    // 0.99.27/0.99.28). Three, because a pipe that is still failing after the
+    // third clean restart is not a transient, and every attempt is a warning
+    // line in the log. The count starts again after kRearmForgiveAfter of
+    // clean streaming, so one halt an hour does not use up the session.
+    static constexpr int kMaxStreamRearms = 3;
+    // Not a wait - nothing sleeps on it; it is how long samples must flow
+    // after a re-arm before the budget above is refilled.
+    static constexpr std::chrono::milliseconds kRearmForgiveAfter{2000};
+
     AirspySource() = default;
     ~AirspySource() override;
 
@@ -254,15 +270,25 @@ public:
 
     // --- IqSource --------------------------------------------------------
 
-    // Queues the bulk ring, puts the receiver into RX and starts the reader
-    // thread, in that order - a receiver told to stream with nothing queued
-    // fills the firmware's buffer and overruns before the first read.
+    // libairspy's airspy_start_rx, step for step (airspy.c:1192-1218):
+    // RECEIVER_MODE off, clear the halt on the RX pipe, RECEIVER_MODE RX, and
+    // only THEN queue the bulk ring (create_io_threads -> prepare_transfers,
+    // :549-559) and start the reader. The ring must NOT go first: the firmware
+    // disables bulk endpoint 0x81 on every receiver-mode change and enables it
+    // only on RX (airspyone_firmware airspy_m0/airspy_rx.c set_receiver_mode),
+    // so reads queued before RX are reads against a disabled endpoint - and on
+    // real R2s they came back as Windows error 31 on the very first read.
     // Idempotent while running; false with lastError() when there is no
     // device.
     bool start() override;
 
-    // RECEIVER_MODE off, reader joined (bounded, see the file header), bulk
-    // ring torn down. Idempotent, safe before open.
+    // The reader is told to stop FIRST, then RECEIVER_MODE off, then the
+    // reader is joined (bounded, see the file header) and the ring torn down.
+    // In that order because OFF disables the endpoint under the reads still
+    // queued on it and they fail - which is expected, and must not be taken
+    // for a dead radio (libairspy's airspy_stop_rx raises stop_requested
+    // before it sends OFF for the same reason, airspy.c:1220-1235).
+    // Idempotent, safe before open.
     void stop() override;
 
     bool running() const override { return running_.load(std::memory_order_relaxed); }
@@ -385,6 +411,13 @@ private:
 
         std::atomic<bool> run{false};
 
+        // Held by stopStreamingLocked while it lowers `run`, and by the
+        // reader across the "is run still up? then RECEIVER_MODE RX and queue
+        // the ring" step of a re-arm. Without it a re-arm racing a stop could
+        // put the receiver back into RX just after stop() had switched it
+        // off, and leave a radio streaming into a host that has gone.
+        std::mutex rearmMutex;
+
         // NOT owned here. The AirspySource owns the handle, except on the
         // abandoning path, which deliberately leaks it so a stranded reader
         // still has a live object to be inside.
@@ -454,12 +487,21 @@ private:
     bool programCombinedLocked(int index, bool linearity);
     bool programBiasTLocked(bool on);
 
-    // Queue the bulk ring, RX, spawn the reader. Assumes devMutex_ held and
-    // the device open and not already running.
+    // Receiver off, clear the halt, RX, queue the bulk ring, spawn the reader
+    // - libairspy's order (see start()). Assumes devMutex_ held and the
+    // device open and not already running.
     bool startStreamingLocked();
-    // RX off, join the reader (bounded), tear the bulk ring down. Idempotent;
-    // assumes devMutex_ held.
+    // Lower the reader's run flag, RX off, join the reader (bounded), tear the
+    // bulk ring down. Idempotent; assumes devMutex_ held.
     void stopStreamingLocked();
+
+    // The reader's recovery from a failed bulk read: the start sequence again,
+    // on the reader thread and WITHOUT devMutex_ (the GUI thread may hold it
+    // while it waits for this very thread to stop). Done - the ring is queued
+    // again; Stopped - stop() got there first and nothing was restarted;
+    // Failed - a step failed and `why` says which.
+    enum class Rearm { Done, Stopped, Failed };
+    static Rearm rearmStreamOn(ReaderLink& link, std::string& why);
 
     // THE READER'S OWN HELPERS ARE STATIC AND TAKE THE LINK, not `this`. An
     // abandoned reader outlives the AirspySource; a member function reaching

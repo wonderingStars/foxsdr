@@ -1284,14 +1284,16 @@ int main() {
         CHECK(src.start());
         CHECK(src.running());
         // airspy_set_receiver_mode (airspy.c:1170-1190): the mode is the VALUE
-        // word, RX is 1.
+        // word, OFF is 0 and RX is 1. airspy_start_rx sends both, OFF first
+        // (:1202, :1210); test 17 pins where the halt-clear and the ring go.
         {
             const std::vector<AirspyControlRecord> c = fake->controls();
-            CHECK(c.size() == 1);
-            CHECK(isControl("start: RX", at(c, 0), false, 1, 1, 0));
+            CHECK(c.size() == 2);
+            CHECK(isControl("start: OFF", at(c, 0), false, 1, 0, 0));
+            CHECK(isControl("start: RX", at(c, 1), false, 1, 1, 0));
         }
-        // The ring is queued BEFORE the receiver is told to stream, on the RX
-        // endpoint, with libairspy's own packed geometry.
+        // The ring is queued AFTER the receiver is told to stream (test 17),
+        // on the RX endpoint, with libairspy's own packed geometry.
         CHECK(fake->beginBulkCalls() == 1);
         CHECK(fake->lastBulkEndpoint() == 0x81);
         CHECK(fake->lastBulkBufferBytes() == 147456);
@@ -1319,11 +1321,13 @@ int main() {
         CHECK(src.running());
         {
             const std::vector<AirspyControlRecord> c = fake->controls();
-            CHECK(c.size() == 3);
+            CHECK(c.size() == 4);
             CHECK(isControl("rate change: OFF first", at(c, 0), false, 1, 0, 0));
             CHECK(isControl("rate change: new index", at(c, 1), true, 12, 0, 1));
-            CHECK(isControl("rate change: RX again", at(c, 2), false, 1, 1, 0));
+            CHECK(isControl("rate change: restart OFF", at(c, 2), false, 1, 0, 0));
+            CHECK(isControl("rate change: RX again", at(c, 3), false, 1, 1, 0));
         }
+        CHECK(!src.faulted());
         CHECK(fake->beginBulkCalls() == beginsBefore + 1);
         CHECK_NEAR(src.sampleRateHz(), 2.5e6, 0.5);
         src.closeDevice();
@@ -1620,6 +1624,291 @@ int main() {
             CHECK(src.faultedWhile() == fc.what);
             src.closeDevice();
         }
+    }
+
+    // =====================================================================
+    // 17. THE START SEQUENCE IS libairspy's, step for step.
+    //
+    // airspy_start_rx (airspy.c:1192-1218 at airspyone_host fc61ab6):
+    // RECEIVER_MODE OFF, libusb_clear_halt on 0x81, RECEIVER_MODE RX, and only
+    // THEN create_io_threads -> prepare_transfers (:549-559), which submits the
+    // bulk transfers. The firmware disables endpoint 0x81 on every mode change
+    // and re-enables it only on RX (airspy_rx.c set_receiver_mode), so reads
+    // queued before RX are reads against a disabled endpoint. The field
+    // reports (0.99.27/0.99.28, Airspy R2, first read "Windows error 31")
+    // are what queueing them first looks like.
+    // =====================================================================
+    {
+        AirspySource src;
+        FakeAirspyUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        fake->clearEvents();
+        CHECK(src.start());
+        const std::vector<std::string> e = fake->events();
+        const std::vector<std::string> want = {"OUT 1 val 0", "CLEAR_HALT 0x81", "OUT 1 val 1",
+                                               "BEGIN_BULK"};
+        if (e != want) {
+            std::printf("     start sequence was:");
+            for (const std::string& s : e) { std::printf(" [%s]", s.c_str()); }
+            std::printf("\n     libairspy's is:     ");
+            for (const std::string& s : want) { std::printf(" [%s]", s.c_str()); }
+            std::printf("\n");
+        }
+        CHECK(e == want);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 18. THE FIELD REPORT, replayed: an R2 on firmware rc10 that a crashed
+    //     session left streaming, restored at 2.5 MS/s, then started. It must
+    //     stream, and no bulk read may fail on the way.
+    // =====================================================================
+    {
+        AirspySource src;
+        FakeAirspyUsb* fake = attachFake(src);
+        fake->leaveStreamingFromCrashedSession();
+        CHECK(src.open(""));
+        // app_window.cpp's restore path: openDeviceSync (open, then the saved
+        // rate), then the saved centre, then the pipeline starts the source.
+        CHECK(src.setSampleRateHz(2.5e6));
+        CHECK(src.setCenterFrequencyHz(100.0e6));
+        for (std::size_t b = 0; b < 3; ++b) {
+            std::vector<std::uint16_t> codes(64);
+            for (std::size_t i = 0; i < codes.size(); ++i) {
+                codes[i] = static_cast<std::uint16_t>(((b * 64 + i) * 211u + 7u) & 0xFFFu);
+            }
+            fake->queueBulk(packSamples(codes));
+        }
+        CHECK(src.start());
+        std::size_t got = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (got < 96 && !src.faulted() && std::chrono::steady_clock::now() < deadline) {
+            std::complex<float> chunk[32];
+            got += src.read(chunk, 32);
+        }
+        if (got != 96 || src.faulted()) {
+            std::printf("     field replay: %zu of 96 samples, faulted=%d, failed reads %d: %s\n",
+                        got, src.faulted() ? 1 : 0, fake->failedBulkReads(), src.lastError());
+        }
+        CHECK(got == 96);
+        CHECK(!src.faulted());
+        CHECK(fake->failedBulkReads() == 0);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 19. ONE FAILED READ IS NOT THE END OF THE SESSION.
+    //
+    // libairspy itself gives up on the first transfer that does not complete
+    // (airspy.c airspy_libusb_transfer_callback: streaming = false), and so did
+    // this driver - with "unplug it and plug it back in" on screen for a radio
+    // that was fine. A halted pipe is cleared by exactly the steps
+    // airspy_start_rx takes, so the reader takes them again: receiver off,
+    // clear the halt, receiver on, queue the ring. Bounded (test 20).
+    // =====================================================================
+    {
+        AirspySource src;
+        FakeAirspyUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        for (std::size_t b = 0; b < 3; ++b) {
+            std::vector<std::uint16_t> codes(64);
+            for (std::size_t i = 0; i < codes.size(); ++i) {
+                codes[i] = static_cast<std::uint16_t>(((b * 64 + i) * 173u + 99u) & 0xFFFu);
+            }
+            fake->queueBulk(packSamples(codes));
+        }
+        // The first buffer arrives, then the pipe halts under the second.
+        fake->haltAfterReads.store(1);
+        CHECK(src.start());
+        fake->clearEvents();
+        std::size_t got = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (got < 96 && !src.faulted() && std::chrono::steady_clock::now() < deadline) {
+            std::complex<float> chunk[32];
+            got += src.read(chunk, 32);
+        }
+        if (got != 96 || src.faulted()) {
+            std::printf("     one halt: %zu of 96 samples, faulted=%d: %s\n", got,
+                        src.faulted() ? 1 : 0, src.lastError());
+        }
+        CHECK(fake->failedBulkReads() >= 1);  // the halt really happened
+        CHECK(got == 96);                     // and nothing queued behind it was lost
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+        CHECK(src.running());
+        // The re-arm is the reference's start sequence, in its order, with
+        // the old ring torn down first.
+        {
+            const std::vector<std::string> e = fake->events();
+            const std::vector<std::string> want = {"END_BULK", "OUT 1 val 0", "CLEAR_HALT 0x81",
+                                                   "OUT 1 val 1", "BEGIN_BULK"};
+            bool found = false;
+            for (std::size_t s = 0; s + want.size() <= e.size() && !found; ++s) {
+                found = std::equal(want.begin(), want.end(), e.begin() + static_cast<long>(s));
+            }
+            if (!found) {
+                std::printf("     events after the halt:");
+                for (const std::string& s : e) { std::printf(" [%s]", s.c_str()); }
+                std::printf("\n");
+            }
+            CHECK(found);
+        }
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 20. ...BUT A PIPE THAT WILL NOT CLEAR still faults, after a bounded
+    //     number of re-arms, with the Windows error in the message.
+    // =====================================================================
+    {
+        const unsigned long long abandonedBefore = AirspySource::readersAbandoned();
+        AirspySource src;
+        FakeAirspyUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        fake->queueBulk(packSamples(std::vector<std::uint16_t>(64, 2048)));
+        fake->haltIsPermanent.store(true);
+        fake->haltAfterReads.store(1);
+        CHECK(src.start());
+        CHECK(waitFor([&src] { return src.faulted(); }, std::chrono::milliseconds(3000)));
+        CHECK(src.deviceDead());
+        CHECK(src.faultedWhile() == "reading samples");
+        CHECK(std::string(src.lastError()).find("Windows error 31") != std::string::npos);
+        // One ring from start(), then kMaxStreamRearms (3) re-armed ones.
+        CHECK(AirspySource::kMaxStreamRearms == 3);
+        int begins = 0;
+        for (const std::string& s : fake->events()) { begins += (s == "BEGIN_BULK") ? 1 : 0; }
+        if (begins != 4) { std::printf("     permanent halt: %d rings queued, want 4\n", begins); }
+        CHECK(begins == 4);
+        const auto t0 = std::chrono::steady_clock::now();
+        src.stop();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t0).count();
+        CHECK(elapsed < 500);
+        CHECK(AirspySource::readersAbandoned() == abandonedBefore);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 21. A RADIO THAT IS REALLY GONE is not re-armed: the first control
+    //     transfer of the re-arm fails, and the fault names the READ, which
+    //     is the first cause.
+    // =====================================================================
+    {
+        AirspySource src;
+        FakeAirspyUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        CHECK(src.start());
+        CHECK(waitFor([fake] { return fake->readBulkInFlight(); }, std::chrono::milliseconds(500)));
+        // Published to the reader through the bulk queue's mutex below: the
+        // reader only calls a control transfer after it has taken the buffer.
+        fake->failingRequests.push_back(1);  // RECEIVER_MODE
+        fake->haltAfterReads.store(1);
+        fake->queueBulk(packSamples(std::vector<std::uint16_t>(64, 2048)));
+        CHECK(waitFor([&src] { return src.faulted(); }, std::chrono::milliseconds(2000)));
+        CHECK(src.deviceDead());
+        CHECK(src.faultedWhile() == "reading samples");
+        int begins = 0;
+        for (const std::string& s : fake->events()) { begins += (s == "BEGIN_BULK") ? 1 : 0; }
+        CHECK(begins == 1);
+        src.stop();
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 22. STOPPING DOES NOT CONDEMN THE RADIO.
+    //
+    // RECEIVER_MODE OFF disables the bulk endpoint while reads are still
+    // queued on it, so those reads FAIL - on the real firmware and in this
+    // fake. libairspy's airspy_stop_rx sets stop_requested BEFORE it sends OFF
+    // (airspy.c:1220-1235) and its callback ignores everything after that.
+    // This driver lowered its run flag only after OFF had been acknowledged,
+    // so a read failing in between was recorded as a dead device - and the
+    // rate change that stopped the stream then refused to run.
+    // =====================================================================
+    {
+        AirspySource src;
+        FakeAirspyUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        CHECK(src.start());
+        CHECK(waitFor([fake] { return fake->readBulkInFlight(); }, std::chrono::milliseconds(500)));
+        fake->clearEvents();
+        src.stop();
+        if (src.faulted()) { std::printf("     stop() left: %s\n", src.lastError()); }
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+        CHECK(!fake->receiverInRx());
+        // A stop is ONE receiver-off and the ring torn down - and nothing
+        // else. The read that OFF fails must not be mistaken for a halt and
+        // "recovered" from: that would be the reader re-arming (and switching
+        // the receiver back on) behind the back of the stop.
+        {
+            const std::vector<std::string> e = fake->events();
+            const std::vector<std::string> want = {"OUT 1 val 0", "END_BULK"};
+            if (e != want) {
+                std::printf("     stop sequence was:");
+                for (const std::string& s : e) { std::printf(" [%s]", s.c_str()); }
+                std::printf("\n");
+            }
+            CHECK(e == want);
+        }
+        // The session goes on: a new rate, and streaming again.
+        CHECK(src.setSampleRateHz(2.5e6));
+        CHECK(src.start());
+        CHECK(src.running());
+        // And the live rate change, which stops and starts inside one call.
+        CHECK(waitFor([fake] { return fake->readBulkInFlight(); }, std::chrono::milliseconds(500)));
+        CHECK(src.setSampleRateHz(10.0e6));
+        CHECK(!src.faulted());
+        CHECK(src.running());
+        CHECK_NEAR(src.sampleRateHz(), 10.0e6, 0.5);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 23. A STOP THAT LANDS IN THE MIDDLE OF A RE-ARM leaves the receiver OFF.
+    //
+    // The reader re-arms without devMutex_ (the GUI thread may hold it while
+    // waiting for the reader), so a stop can arrive between the re-arm's
+    // receiver-off and its receiver-on. If the reader then went ahead, the
+    // radio would be streaming again after stop() had returned - into a host
+    // that has stopped listening. The receiver-mode switches are slowed down
+    // here so the stop lands inside the re-arm's OFF every time.
+    // =====================================================================
+    {
+        AirspySource src;
+        FakeAirspyUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        fake->modeSwitchDelayMs.store(60);
+        CHECK(src.start());
+        CHECK(waitFor([fake] { return fake->readBulkInFlight(); }, std::chrono::milliseconds(500)));
+        fake->clearEvents();
+        fake->haltAfterReads.store(1);
+        fake->queueBulk(packSamples(std::vector<std::uint16_t>(64, 2048)));
+        // The re-arm has begun: its first act is tearing the old ring down,
+        // and its second (the OFF) is now sleeping in the fake for 60 ms.
+        const bool inRearm = waitFor(
+            [fake] {
+                for (const std::string& s : fake->events()) {
+                    if (s == "END_BULK") { return true; }
+                }
+                return false;
+            },
+            std::chrono::milliseconds(1000));
+        CHECK(inRearm);
+        src.stop();
+        CHECK(!src.running());
+        CHECK(!src.faulted());
+        if (fake->receiverInRx()) {
+            std::printf("     the re-arm switched the receiver back on after stop():");
+            for (const std::string& s : fake->events()) { std::printf(" [%s]", s.c_str()); }
+            std::printf("\n");
+        }
+        CHECK(!fake->receiverInRx());
+        int begins = 0;
+        for (const std::string& s : fake->events()) { begins += (s == "BEGIN_BULK") ? 1 : 0; }
+        CHECK(begins == 0);
+        fake->modeSwitchDelayMs.store(10);
+        src.closeDevice();
     }
 
     return testSummary("test_airspy_source");

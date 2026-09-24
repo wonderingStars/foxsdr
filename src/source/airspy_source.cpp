@@ -640,11 +640,16 @@ bool AirspySource::open(const std::string& args) {
         std::snprintf(buf, sizeof(buf), "%s%.3f", rateList.empty() ? "" : ", ", r / 1e6);
         rateList += buf;
     }
-    core::diagLogf(
-        "airspy: opened %s - board id %u, firmware \"%s\", serial %s, rates %s MS/s complex "
-        "(packed 12-bit, %.3f MS/s at the ADC)",
-        label.c_str(), static_cast<unsigned>(boardId_), firmwareVersion_.c_str(),
-        partIdSerialNo_.c_str(), rateList.c_str(), rates_[startRate] * 2.0 / 1e6);
+    // TWO LINES, not one. A diagnostic line is cut at DiagLog::kLineBytes
+    // (192), and the single line this used to be lost its whole rate list off
+    // the end on a real R2 - the first field report's log stops at "serial
+    // ...26a464dc28593e93, " - which is exactly the part that says whether
+    // GET_SAMPLERATES answered.
+    core::diagLogf("airspy: opened %s - board id %u, firmware \"%s\", serial %s", label.c_str(),
+                   static_cast<unsigned>(boardId_), firmwareVersion_.c_str(),
+                   partIdSerialNo_.c_str());
+    core::diagLogf("airspy: rates %s MS/s complex (packed 12-bit, %.3f MS/s at the ADC)",
+                   rateList.c_str(), rates_[startRate] * 2.0 / 1e6);
     return true;
 }
 
@@ -690,17 +695,50 @@ std::string AirspySource::model() const {
 // --- streaming ------------------------------------------------------------
 
 bool AirspySource::startStreamingLocked() {
-    // ORDER MATTERS. The bulk ring is queued FIRST: a receiver told to stream
-    // with nothing queued fills the firmware's own buffer and overruns before
-    // the host's first read, which presents as a stream that starts corrupted
-    // and then recovers - the hardest kind of fault to attribute later.
-    if (!dev_->beginBulkStream(airspy::kRxEndpoint, airspy::kPackedTransferBytes,
-                               airspy::kTransferCount)) {
-        noteTransportFault("queueing the sample transfers", dev_->lastError());
+    // ORDER MATTERS, AND IT IS libairspy's: airspy_start_rx (airspy.c:1192-1218
+    // at airspyone_host fc61ab6) sends RECEIVER_MODE OFF, clears the halt on
+    // 0x81, sends RECEIVER_MODE RX, and only then does create_io_threads
+    // (:549-559) submit the bulk transfers.
+    //
+    // UP TO 0.99.31 THIS QUEUED THE RING FIRST, on the theory that a receiver
+    // streaming into nothing overruns. That theory is wrong for this firmware
+    // and the order it produced is what broke every real R2 in the field
+    // (0.99.27/0.99.28 reports: opened fine, first bulk read "Windows error
+    // 31", radio dead for the session). The firmware DISABLES bulk endpoint
+    // 0x81 on every receiver-mode change and enables it again only for RX
+    // (airspyone_firmware airspy_m0/airspy_rx.c set_receiver_mode ->
+    // usb_streaming_disable -> common/usb.c usb_endpoint_disable; RX ->
+    // usb_endpoint_init). Before RX, then, the endpoint is off, and a ring
+    // queued against it gets no working answer: the host halts the pipe and
+    // the first completion is ERROR_GEN_FAILURE. With RX first there is
+    // nothing on the pipe while the endpoint is disabled, and the firmware
+    // re-primes it before the host asks for anything.
+    //
+    // OFF first even though open() already sent it: this is also the restart
+    // after a stop, and a radio a crashed session left in RX is exactly the
+    // state the reference's own OFF exists to clear.
+    if (!setReceiverModeLocked(airspy::ReceiverMode::Off, "quietening the receiver")) {
         return false;
     }
+    // libusb_clear_halt's return is ignored by the reference too: on a pipe
+    // that was never halted there is nothing to clear, and the transport
+    // resets the pipe again as it queues the ring.
+    dev_->resetPipe(airspy::kRxEndpoint);
     if (!setReceiverModeLocked(airspy::ReceiverMode::Rx, "starting the receiver")) {
-        dev_->endBulkStream();
+        return false;
+    }
+    if (!dev_->beginBulkStream(airspy::kRxEndpoint, airspy::kPackedTransferBytes,
+                               airspy::kTransferCount)) {
+        const std::string why = dev_->lastError();
+        // The receiver is in RX with nothing to take its samples. Switched off
+        // again directly - controlOutLocked would refuse, because the fault
+        // noted below makes the device dead - so the radio is not left
+        // streaming into a host that is not listening.
+        dev_->controlOut(cascade::usb::kRequestTypeVendorOut,
+                         airspy::requestByte(airspy::VendorRequest::ReceiverMode),
+                         static_cast<std::uint16_t>(airspy::ReceiverMode::Off), 0, nullptr, 0,
+                         airspy::kControlTimeoutMs);
+        noteTransportFault("queueing the sample transfers", why);
         return false;
     }
     {
@@ -722,11 +760,26 @@ void AirspySource::stopStreamingLocked() {
         return;
     }
 
+    // THE READER IS TOLD FIRST, THEN THE RADIO. RECEIVER_MODE OFF disables
+    // bulk endpoint 0x81 in the firmware (see startStreamingLocked) while this
+    // driver's reads are still queued on it, and those reads FAIL. With the
+    // flag lowered first the reader treats that as the stop it is; up to
+    // 0.99.31 the flag came down after OFF had been acknowledged, and a read
+    // failing in between was recorded as a dead radio - which then refused the
+    // rate change that had stopped the stream. libairspy's airspy_stop_rx sets
+    // stop_requested before it sends OFF (airspy.c:1220-1235) for this reason.
+    //
+    // Under rearmMutex, so a re-arm in progress on the reader either finishes
+    // before this (and the OFF below then switches off what it restarted) or
+    // sees the flag down and restarts nothing.
+    {
+        std::lock_guard<std::mutex> rk(link_->rearmMutex);
+        link_->run.store(false, std::memory_order_relaxed);
+    }
+    link_->waitCv.notify_all();
     if (dev_ != nullptr && !deviceDead()) {
         setReceiverModeLocked(airspy::ReceiverMode::Off, "stopping the receiver");
     }
-    link_->run.store(false, std::memory_order_relaxed);
-    link_->waitCv.notify_all();
 
     if (reader_.joinable()) {
         // A BOUNDED JOIN, not a plain one (see the file header). The reader
@@ -786,6 +839,49 @@ void AirspySource::stop() {
 
 // --- the reader thread ----------------------------------------------------
 
+AirspySource::Rearm AirspySource::rearmStreamOn(ReaderLink& link, std::string& why) {
+    cascade::usb::UsbDevice* dev = link.dev;
+    const auto receiverMode = [dev](airspy::ReceiverMode m) {
+        return dev->controlOut(cascade::usb::kRequestTypeVendorOut,
+                               airspy::requestByte(airspy::VendorRequest::ReceiverMode),
+                               static_cast<std::uint16_t>(m), 0, nullptr, 0,
+                               airspy::kControlTimeoutMs) == 0;
+    };
+
+    // The old ring first. Safe here and nowhere else on this path: THIS is the
+    // only thread that ever calls readBulk, so nothing can be inside the ring
+    // that endBulkStream frees (usb_device.hpp's ordering rule).
+    dev->endBulkStream();
+    if (!link.run.load(std::memory_order_relaxed)) { return Rearm::Stopped; }
+
+    // Then airspy_start_rx's three steps (airspy.c:1202-1210) and its
+    // prepare_transfers (:559). Raw transport calls: the driver's *Locked
+    // helpers want devMutex_, which the GUI thread may be holding while it
+    // waits for this thread to leave.
+    if (!receiverMode(airspy::ReceiverMode::Off)) {
+        why = "receiver off: " + dev->lastError();
+        return Rearm::Failed;
+    }
+    dev->resetPipe(airspy::kRxEndpoint);
+
+    std::lock_guard<std::mutex> rk(link.rearmMutex);
+    // stop() lowers `run` under this same lock, so from here to the end it
+    // cannot slip in between the check and the RX: either it already has
+    // (restart nothing) or it will send its OFF after we are done.
+    if (!link.run.load(std::memory_order_relaxed)) { return Rearm::Stopped; }
+    if (!receiverMode(airspy::ReceiverMode::Rx)) {
+        why = "receiver on: " + dev->lastError();
+        return Rearm::Failed;
+    }
+    if (!dev->beginBulkStream(airspy::kRxEndpoint, airspy::kPackedTransferBytes,
+                              airspy::kTransferCount)) {
+        why = "queueing the sample transfers: " + dev->lastError();
+        receiverMode(airspy::ReceiverMode::Off);
+        return Rearm::Failed;
+    }
+    return Rearm::Done;
+}
+
 void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
     std::vector<std::uint8_t> raw(airspy::kPackedTransferBytes);
     std::vector<std::uint16_t> codes(airspy::kRealSamplesPerTransfer);
@@ -802,19 +898,55 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
 
     const unsigned timeoutMs = static_cast<unsigned>(kBulkReadWait.count());
 
+    // The re-arm budget (kMaxStreamRearms) and when it was last spent.
+    int rearms = 0;
+    auto lastRearm = std::chrono::steady_clock::now();
+
     while (link->run.load(std::memory_order_relaxed)) {
         const int got = link->dev->readBulk(raw.data(), raw.size(), timeoutMs);
         if (!link->run.load(std::memory_order_relaxed)) { break; }
 
         if (got < 0) {
-            // A NEGATIVE READ IS THE DEVICE GOING. There is nothing to retry:
-            // the pipe has failed, and every further read would fail the same
-            // way while the source loop waited for samples that cannot come.
-            // Fault, and leave - the loop polls faulted() and stops with this
-            // message.
+            // A FAILED READ IS A HALTED PIPE, which is not yet a dead radio.
+            // Up to 0.99.31 this faulted on the spot - as libairspy's own
+            // transfer callback gives up on the first incomplete transfer -
+            // and a user whose R2 had hit one halt was told to unplug it. A
+            // halt is cleared by the start sequence, so the reader runs it
+            // again (rearmStreamOn), a bounded number of times. A radio that
+            // really has gone fails the first control transfer of that and
+            // faults at once, with the read as the cause.
             noteRead(*link, got, 0, false);
-            noteTransportFaultOn(*link, "reading samples", link->dev->lastError());
-            break;
+            const std::string detail = link->dev->lastError();
+            if (rearms >= kMaxStreamRearms) {
+                char tail[96];
+                std::snprintf(tail, sizeof(tail), ", and again after %d restarts of the stream",
+                              kMaxStreamRearms);
+                noteTransportFaultOn(*link, "reading samples", detail + tail);
+                break;
+            }
+            ++rearms;
+            lastRearm = std::chrono::steady_clock::now();
+            core::diagWarnf(
+                "airspy: %s; restarting the stream the way libairspy starts it - receiver off, "
+                "clear the halt, receiver on (attempt %d of %d)",
+                detail.c_str(), rearms, kMaxStreamRearms);
+            std::string why;
+            const Rearm r = rearmStreamOn(*link, why);
+            if (r == Rearm::Stopped) { break; }
+            if (r == Rearm::Failed) {
+                noteTransportFaultOn(*link, "reading samples",
+                                     detail + "; restarting the stream failed: " + why);
+                break;
+            }
+            // A fresh stream, so a fresh converter - the same reset libairspy
+            // makes at every airspy_start_rx (airspy.c:1196). The filter
+            // history belongs to the samples before the break.
+            cnv.reset();
+            continue;
+        }
+        if (got > 0 && rearms > 0 &&
+            std::chrono::steady_clock::now() - lastRearm >= kRearmForgiveAfter) {
+            rearms = 0;
         }
 
         std::size_t samples = 0;
