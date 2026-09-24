@@ -14,6 +14,12 @@
 // of scripted buffers, so a test can hand the reader a known ramp and check
 // that every sample of it comes out of read() once, in order.
 //
+// It also answers the bulk pipe as the FIRMWARE does across a
+// transceiver-mode change - both the current firmware's behaviour and the
+// pre-2021 one that disables the endpoint (see Firmware below) - because a
+// fake that streams whatever order the driver does things in is what let a
+// start/stop order that breaks real radios pass this suite.
+//
 // It also has to be able to MISBEHAVE, because the interesting half of a
 // driver is what it does when the radio stops: a device that vanishes
 // mid-stream (readBulk answers negative), a pipe that never completes (the
@@ -127,6 +133,81 @@ public:
     std::atomic<Exhausted> onExhausted{Exhausted::Timeout};
     std::atomic<bool> releaseBlock{false};
 
+    // --- THE FIRMWARE'S BULK ENDPOINT -----------------------------------
+    //
+    // What a real HackRF does with endpoint 0x81 across SET_TRANSCEIVER_MODE,
+    // read out of greatscottgadgets/hackrf rather than guessed. It CHANGED in
+    // 2020, and radios in the field run both, so both are modelled:
+    //
+    //  FlushOnModeChange - firmware v2021.03.1 and later (commit d8250c6396,
+    //    "Don't re-init bulk endpoints on every set_transceiver_mode call").
+    //    The endpoint is initialised once, at SET_CONFIGURATION
+    //    (hackrf_usb.c usb_configuration_changed), and a mode change only
+    //    FLUSHES it (usb_api_transceiver.c request_transceiver_mode ->
+    //    usb_endpoint_flush): primed buffers are dropped, the endpoint stays
+    //    enabled, and the host's reads simply wait (NAK) until the firmware
+    //    primes it again in RECEIVE. Nothing ever fails. The fake's default,
+    //    matching its "2024.02.1" version string.
+    //
+    //  DisableOnModeChange - firmware v2018.01.1 and every release before it.
+    //    set_transceiver_mode calls usb_endpoint_disable(&usb_endpoint_bulk_in)
+    //    (TXE cleared, endpoint flushed - common/usb.c) on EVERY mode change,
+    //    and only RECEIVE re-initialises it (usb_endpoint_init). Nothing
+    //    enables it at SET_CONFIGURATION either, so from plug-in to the first
+    //    RECEIVE, and after every OFF, the endpoint is DISABLED. This is the
+    //    same code, on the same LPC43xx USB controller, as the Airspy
+    //    firmware (a declared HackRF derivative), and on a real Airspy R2
+    //    reads queued against that endpoint failed with Windows error 31 on
+    //    the first read. That symptom - the host halts its end of the pipe,
+    //    and every read fails until it is reset - is what is modelled here;
+    //    how the controller answers a token to a disabled endpoint is NOT in
+    //    the firmware source, and is taken from that field report.
+    //    The firmware does the disable inside the USB ISR BEFORE it
+    //    acknowledges the request (usb_vendor_request_set_transceiver_mode:
+    //    set_transceiver_mode, then usb_transfer_schedule_ack), after the
+    //    RF-path and clock work, so a read already queued fails while the
+    //    control transfer is still in flight. modeSwitchDelayMs is that work;
+    //    the real window is shorter than 10 ms but it is not zero, and this
+    //    makes the race land the same way every run.
+    enum class Firmware {
+        FlushOnModeChange,    // v2021.03.1 onwards
+        DisableOnModeChange,  // v2018.01.1 and earlier
+    };
+    std::atomic<Firmware> firmware{Firmware::FlushOnModeChange};
+    std::atomic<int> modeSwitchDelayMs{10};
+
+    // An old radio: the version string it reports and the endpoint behaviour
+    // that goes with it. Call before open(), which reads the version.
+    void runFirmware2018() {
+        firmwareVersion = "2018.01.1";
+        firmware.store(Firmware::DisableOnModeChange);
+        // usb_configuration_changed at v2018.01.1 sends the transceiver OFF
+        // and initialises no bulk endpoint: disabled until the first RECEIVE.
+        endpointEnabled_.store(false);
+    }
+
+    // beginBulkStream fails outright, as a transport that cannot allocate or
+    // submit its ring does.
+    std::atomic<bool> failBeginBulk{false};
+
+    bool receiverInRx() const { return rxMode_.load(); }
+    bool hostPipeHalted() const { return hostHalted_.load(); }
+    int failedBulkReads() const { return failedReads_.load(); }
+
+    // EVERYTHING THAT REACHES THE DEVICE, in order: "OUT 1 val 1"
+    // (SET_TRANSCEIVER_MODE RECEIVE), "IN 19", "BEGIN_BULK", "END_BULK". The
+    // controls() transcript cannot say whether the ring was queued before or
+    // after RECEIVE, because the bulk calls are not control transfers - and
+    // that ordering is the whole of hackrf_start_rx and hackrf_stop_rx.
+    std::vector<std::string> events() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return events_;
+    }
+    void clearEvents() {
+        std::lock_guard<std::mutex> lk(mutex_);
+        events_.clear();
+    }
+
     // --- scripted bulk data ------------------------------------------------
     void queueBulk(std::vector<std::uint8_t> buf) {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -170,10 +251,31 @@ public:
         {
             std::lock_guard<std::mutex> lk(mutex_);
             controls_.push_back(rec);
+            events_.push_back("OUT " + std::to_string(request) + " val " + std::to_string(value));
         }
         if (fails(request)) {
             lastError_ = "fake: the device is gone";
             return -1;
+        }
+        if (request == 1) {  // SET_TRANSCEIVER_MODE
+            if (firmware.load() == Firmware::DisableOnModeChange) {
+                // v2018.01.1 set_transceiver_mode: usb_endpoint_disable first,
+                // whatever the new mode - a read queued on the pipe now meets a
+                // disabled endpoint and the host halts the pipe under it.
+                endpointEnabled_.store(false);
+                if (streaming_.load()) { hostHalted_.store(true); }
+                // RECEIVE alone re-initialises it (usb_endpoint_init).
+                if (value == 1) { endpointEnabled_.store(true); }
+                rxMode_.store(value == 1);
+                // The ISR's work before the ack (see modeSwitchDelayMs).
+                const int delay = modeSwitchDelayMs.load();
+                if (delay > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delay)); }
+            } else {
+                // v2021.03.1+ request_transceiver_mode only flushes and acks;
+                // the endpoint stays enabled, nothing already queued fails,
+                // and the mode work happens later in the main loop.
+                rxMode_.store(value == 1);
+            }
         }
         return static_cast<int>(len);
     }
@@ -235,6 +337,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(mutex_);
             controls_.push_back(rec);
+            events_.push_back("IN " + std::to_string(request));
         }
         return answered;
     }
@@ -245,6 +348,23 @@ public:
         lastBufferBytes_.store(bufferBytes);
         lastBufferCount_.store(bufferCount);
         beginBulkCalls_.fetch_add(1);
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            events_.push_back("BEGIN_BULK");
+        }
+        if (failBeginBulk.load()) {
+            lastError_ = "fake: the transfer ring could not be queued";
+            return false;
+        }
+        // The real transport resets the pipe before it queues anything
+        // (winusb_device.cpp beginBulkStream: WinUsb_ResetPipe; usbfs likewise),
+        // which clears a halt the host's end was left in...
+        hostHalted_.store(false);
+        // ...and then the ring goes onto the bus. Against a DISABLED endpoint
+        // (old firmware, transceiver not in RECEIVE) it halts again at once.
+        if (firmware.load() == Firmware::DisableOnModeChange && !endpointEnabled_.load()) {
+            hostHalted_.store(true);
+        }
         streaming_.store(true);
         return true;
     }
@@ -257,6 +377,13 @@ public:
         } clear{&inFlight_};
 
         if (!streaming_.load()) { return 0; }
+        if (hostHalted_.load()) { return haltedRead(); }
+        if (!rxMode_.load()) {
+            // Transceiver off: the firmware primes nothing, so the read waits
+            // (NAK) and then says nothing arrived - unless the pipe halts
+            // underneath it, which completes it with an error at once.
+            return quietWait(timeoutMs);
+        }
         {
             std::lock_guard<std::mutex> lk(mutex_);
             if (!bulk_.empty()) {
@@ -281,20 +408,19 @@ public:
                 return 0;
             }
             case Exhausted::Timeout:
-            default: {
+            default:
                 // What a real bulk pipe does with nothing queued: block for
                 // the timeout, then say nothing arrived. Capped so a suite is
                 // not paced by it.
-                const unsigned slice = timeoutMs > 5 ? 5 : timeoutMs;
-                std::this_thread::sleep_for(std::chrono::milliseconds(slice));
-                return 0;
-            }
+                return quietWait(timeoutMs);
         }
     }
 
     void endBulkStream() override {
         streaming_.store(false);
         endBulkCalls_.fetch_add(1);
+        std::lock_guard<std::mutex> lk(mutex_);
+        events_.push_back("END_BULK");
     }
 
     bool streaming() const override { return streaming_.load(); }
@@ -308,6 +434,27 @@ public:
     const std::string& lastError() const override { return lastError_; }
 
 private:
+    // WinUSB's words for a read on a halted pipe, as winusb_device.cpp's
+    // readBulk builds them from GetLastError().
+    int haltedRead() {
+        failedReads_.fetch_add(1);
+        lastError_ = "a bulk read failed (Windows error 31)";
+        return -1;
+    }
+
+    // Blocks up to the timeout (capped at 5 ms so a suite is not paced by it)
+    // in 1 ms slices, returning -1 as soon as the pipe halts under the read -
+    // an overlapped read completes with an error the moment the endpoint
+    // goes, not at the end of its timeout.
+    int quietWait(unsigned timeoutMs) {
+        const unsigned total = timeoutMs > 5 ? 5 : timeoutMs;
+        for (unsigned waited = 0; waited < total; ++waited) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (hostHalted_.load()) { return haltedRead(); }
+        }
+        return 0;
+    }
+
     bool fails(std::uint8_t request) const {
         for (const std::uint8_t r : failingRequests) {
             if (r == request) { return true; }
@@ -317,6 +464,14 @@ private:
 
     mutable std::mutex mutex_;
     std::vector<ControlRecord> controls_;
+    std::vector<std::string> events_;
+    // The firmware's side (see Firmware): transceiver in RECEIVE, whether
+    // endpoint 0x81 is enabled (always, on current firmware), and whether the
+    // HOST's end of the pipe is halted.
+    std::atomic<bool> rxMode_{false};
+    std::atomic<bool> endpointEnabled_{true};
+    std::atomic<bool> hostHalted_{false};
+    std::atomic<int> failedReads_{0};
     std::deque<std::vector<std::uint8_t>> bulk_;
     std::string path_;
     std::string lastError_;

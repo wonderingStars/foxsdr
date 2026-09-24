@@ -201,15 +201,23 @@ public:
 
     // --- IqSource --------------------------------------------------------
 
-    // Queues the bulk ring, puts the transceiver into RECEIVE and starts the
-    // reader thread, in that order - a transceiver told to receive with
-    // nothing queued fills the firmware's buffer and overruns before the
-    // first read. Idempotent while running; false with lastError() when there
-    // is no device.
+    // libhackrf's hackrf_start_rx order (hackrf.c:2339-2352): the transceiver
+    // into RECEIVE FIRST, then the bulk ring, then the reader thread. The ring
+    // must NOT go first: firmware 2018.01.1 and earlier disables bulk endpoint
+    // 0x81 on every mode change and enables it only for RECEIVE
+    // (usb_api_transceiver.c set_transceiver_mode), so reads queued before
+    // RECEIVE are reads against a disabled endpoint - the Airspy firmware,
+    // which shares that code, fails them with Windows error 31 on real
+    // hardware. Firmware from v2021.03.1 on only flushes, and does not care.
+    // Idempotent while running; false with lastError() when there is no
+    // device.
     bool start() override;
 
-    // RECEIVE off, reader joined (bounded, see the file header), bulk ring
-    // torn down. Idempotent, safe before open.
+    // libhackrf's hackrf_stop_rx order (hackrf.c:2369-2378): the reader told
+    // to stop and joined (bounded, see the file header), the bulk ring torn
+    // down, and only THEN the transceiver OFF - so no read is left on the pipe
+    // for an old firmware's endpoint disable to fail and have mistaken for a
+    // dead radio. Idempotent, safe before open.
     void stop() override;
 
     bool running() const override { return running_.load(std::memory_order_relaxed); }
@@ -229,9 +237,9 @@ public:
     // hackrf_set_sample_rate_manual, and a rate change that left the old
     // filter behind would alias or throw away half the span.
     //
-    // ON A RUNNING STREAM the change is made with the radio QUIET: transceiver
-    // OFF, reader stopped, bulk ring torn down, the new rate and filter
-    // programmed, then the ring, RECEIVE and the reader again. running()
+    // ON A RUNNING STREAM the change is made with the radio QUIET: reader
+    // stopped, bulk ring torn down, transceiver OFF, the new rate and filter
+    // programmed, then RECEIVE, the ring and the reader again. running()
     // reads true throughout on the success path. That is the shape 0.89.0 had
     // to give the Soapy path after a live rate change killed the process on
     // the driver's own reader thread; there is no reason to learn it twice.
@@ -406,10 +414,12 @@ private:
     bool programAmpLocked(bool on);
     bool programBiasTLocked(bool on);
 
-    // Queue the bulk ring, RECEIVE, spawn the reader. Assumes devMutex_ held
-    // and the device open and not already running.
+    // RECEIVE, queue the bulk ring, spawn the reader - libhackrf's order (see
+    // start()). Assumes devMutex_ held and the device open and not already
+    // running.
     bool startStreamingLocked();
-    // RECEIVE off, join the reader (bounded), tear the bulk ring down.
+    // Lower the reader's run flag, join the reader (bounded), tear the bulk
+    // ring down, THEN transceiver off - libhackrf's order (see stop()).
     // Idempotent; assumes devMutex_ held.
     void stopStreamingLocked();
 

@@ -632,8 +632,9 @@ int main() {
             CHECK(c.size() == 1);
             CHECK(isControl("start: RECEIVE", at(c, 0), false, 1, 1, 0));
         }
-        // The ring is queued BEFORE the transceiver is told to receive, on the
-        // RX endpoint, with libhackrf's own transfer geometry.
+        // The ring is queued - AFTER the transceiver is told to receive, see
+        // section 12 - on the RX endpoint, with libhackrf's own transfer
+        // geometry.
         CHECK(fake->beginBulkCalls() == 1);
         CHECK(fake->lastBulkEndpoint() == 0x81);
         CHECK(fake->lastBulkBufferBytes() == 262144);
@@ -834,6 +835,14 @@ int main() {
         CHECK(src.deviceDead());
         CHECK(!src.running());
         CHECK(src.faultedWhile() == "waiting for the sample reader to stop");
+        // A stranded reader still does not leave the radio RECEIVING: the
+        // abandoning path sends its own OFF (stopStreamingLocked), because the
+        // ordinary OFF now comes after a ring teardown that cannot happen here.
+        CHECK(!fake->receiverInRx());
+        {
+            const std::vector<ControlRecord> c = fake->controls();
+            CHECK(!c.empty() && isControl("abandoned: OFF", c.back(), false, 1, 0, 0));
+        }
 
         // ...AND closeDevice() ON AN ABANDONED READER LEAVES ITS DEVICE
         // POINTER ALONE.
@@ -962,6 +971,183 @@ int main() {
         CHECK(!src.isOpen());
         CHECK(src.faulted());
         CHECK(src.faultedWhile() == "reading the part id and serial number");
+        src.closeDevice();
+    }
+
+    // The two firmware behaviours sections 13 and 14 run against, by name.
+    struct FirmwareCase {
+        const char* label;
+        bool old2018;
+    };
+    const FirmwareCase firmwares[] = {{"firmware 2024.02.1", false},
+                                      {"firmware 2018.01.1", true}};
+
+    // =====================================================================
+    // 12. START AND STOP ARE libhackrf's, step for step.
+    //
+    // hackrf_start_rx (hackrf.c:2339-2352 at 7f96cc8, the same shape back to
+    // v2018.01.1): SET_TRANSCEIVER_MODE RECEIVE, and only then
+    // prepare_setup_transfers submits the bulk transfers. hackrf_stop_rx
+    // (:2369-2378, this shape since v2021.03.1): cancel_transfers - which
+    // clears `streaming` first - and only then TRANSCEIVER_MODE OFF. Up to
+    // 0.99.31 this driver did both the other way round.
+    // =====================================================================
+    {
+        HackRfSource src;
+        FakeHackRfUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        const auto show = [](const char* what, const std::vector<std::string>& e,
+                             const std::vector<std::string>& want) {
+            if (e == want) { return; }
+            std::printf("     %s was:", what);
+            for (const std::string& s : e) { std::printf(" [%s]", s.c_str()); }
+            std::printf("\n     libhackrf's is:");
+            for (const std::string& s : want) { std::printf(" [%s]", s.c_str()); }
+            std::printf("\n");
+        };
+        fake->clearEvents();
+        CHECK(src.start());
+        {
+            const std::vector<std::string> want = {"OUT 1 val 1", "BEGIN_BULK"};
+            show("start sequence", fake->events(), want);
+            CHECK(fake->events() == want);
+        }
+        CHECK(waitFor([fake] { return fake->readBulkInFlight(); }, std::chrono::milliseconds(500)));
+        fake->clearEvents();
+        src.stop();
+        {
+            const std::vector<std::string> want = {"END_BULK", "OUT 1 val 0"};
+            show("stop sequence", fake->events(), want);
+            CHECK(fake->events() == want);
+        }
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 13. A RADIO STREAMS FROM A COLD START, on old firmware as on new.
+    //
+    // Firmware v2018.01.1 and earlier leaves bulk endpoint 0x81 DISABLED from
+    // plug-in until the first RECEIVE, and disables it again on every mode
+    // change (usb_api_transceiver.c set_transceiver_mode); the fake answers
+    // reads against it the way the Airspy R2 - same USB code, same controller -
+    // answered them in the field: Windows error 31, pipe halted. With the ring
+    // queued first the very first read fails and the radio is condemned.
+    // =====================================================================
+    for (const FirmwareCase& fw : firmwares) {
+        HackRfSource src;
+        FakeHackRfUsb* fake = attachFake(src);
+        if (fw.old2018) { fake->runFirmware2018(); }
+        CHECK(src.open(""));
+        CHECK(src.firmwareVersion() == (fw.old2018 ? "2018.01.1" : "2024.02.1"));
+        for (std::size_t b = 0; b < 3; ++b) {
+            std::vector<std::uint8_t> buf(64);
+            for (std::size_t i = 0; i < buf.size(); ++i) {
+                buf[i] = static_cast<std::uint8_t>((b * 64 + i) * 5 + 3);
+            }
+            fake->queueBulk(std::move(buf));
+        }
+        CHECK(src.start());
+        std::size_t got = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (got < 96 && !src.faulted() && std::chrono::steady_clock::now() < deadline) {
+            std::complex<float> chunk[32];
+            got += src.read(chunk, 32);
+        }
+        if (got != 96 || src.faulted() || fake->failedBulkReads() != 0) {
+            std::printf("     cold start, %s: %zu of 96 samples, faulted=%d, failed reads %d: %s\n",
+                        fw.label, got, src.faulted() ? 1 : 0, fake->failedBulkReads(),
+                        src.lastError());
+        }
+        CHECK(got == 96);
+        CHECK(!src.faulted());
+        CHECK(fake->failedBulkReads() == 0);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 14. STOPPING DOES NOT CONDEMN THE RADIO, on old firmware as on new.
+    //
+    // On firmware v2018.01.1 and earlier TRANSCEIVER_MODE OFF disables the
+    // bulk endpoint inside the ISR, before the request is even acknowledged.
+    // Up to 0.99.31 this driver sent that OFF with its ring still queued and
+    // its reader's flag still up, so the reads OFF failed were recorded as a
+    // dead radio - and the rate change that had stopped the stream then
+    // refused to run, as did every start() after. With the ring torn down
+    // before OFF (libhackrf's order, section 12) no read is on the pipe to
+    // fail, and the session goes on: a stop, a rate change, a start, a LIVE
+    // rate change, and samples at the end of it.
+    // =====================================================================
+    for (const FirmwareCase& fw : firmwares) {
+        HackRfSource src;
+        FakeHackRfUsb* fake = attachFake(src);
+        if (fw.old2018) { fake->runFirmware2018(); }
+        CHECK(src.open(""));
+        CHECK(src.start());
+        CHECK(waitFor([fake] { return fake->readBulkInFlight(); }, std::chrono::milliseconds(500)));
+        src.stop();
+        if (src.faulted() || fake->failedBulkReads() != 0) {
+            std::printf("     stop, %s: faulted=%d, failed reads %d: %s\n", fw.label,
+                        src.faulted() ? 1 : 0, fake->failedBulkReads(), src.lastError());
+        }
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+        CHECK(fake->failedBulkReads() == 0);
+        CHECK(!fake->receiverInRx());
+        CHECK(!fake->hostPipeHalted());
+
+        CHECK(src.setSampleRateHz(8.0e6));
+        CHECK(src.start());
+        CHECK(waitFor([fake] { return fake->readBulkInFlight(); }, std::chrono::milliseconds(500)));
+        const bool rateOk = src.setSampleRateHz(10.0e6);
+        if (!rateOk) { std::printf("     live rate change, %s: %s\n", fw.label, src.lastError()); }
+        CHECK(rateOk);
+        CHECK(!src.faulted());
+        CHECK(src.running());
+        CHECK_NEAR(src.sampleRateHz(), 10.0e6, 0.5);
+
+        fake->queueBulk(std::vector<std::uint8_t>(64, 0x40));
+        std::size_t got = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (got < 32 && !src.faulted() && std::chrono::steady_clock::now() < deadline) {
+            std::complex<float> chunk[32];
+            got += src.read(chunk, 32);
+        }
+        if (got != 32) {
+            std::printf("     after the live rate change, %s: %zu of 32 samples\n", fw.label, got);
+        }
+        CHECK(got == 32);
+        CHECK(fake->failedBulkReads() == 0);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 15. A START WHOSE RING CANNOT BE QUEUED leaves the transceiver OFF.
+    //
+    // RECEIVE now goes first, so a ring that fails to queue finds the radio
+    // already receiving. It is switched off again before the fault is
+    // recorded - a radio left streaming into a host that is not reading is
+    // exactly the state a crashed session leaves behind for the next one.
+    // =====================================================================
+    {
+        HackRfSource src;
+        FakeHackRfUsb* fake = attachFake(src);
+        CHECK(src.open(""));
+        fake->clearEvents();
+        fake->failBeginBulk.store(true);
+        CHECK(!src.start());
+        CHECK(!src.running());
+        CHECK(src.deviceDead());
+        CHECK(src.faultedWhile() == "queueing the sample transfers");
+        CHECK(std::string(src.lastError()).find("could not be queued") != std::string::npos);
+        CHECK(!fake->receiverInRx());
+        const std::vector<std::string> want = {"OUT 1 val 1", "BEGIN_BULK", "OUT 1 val 0"};
+        const std::vector<std::string> e = fake->events();
+        if (e != want) {
+            std::printf("     failed start was:");
+            for (const std::string& s : e) { std::printf(" [%s]", s.c_str()); }
+            std::printf("\n");
+        }
+        CHECK(e == want);
         src.closeDevice();
     }
 

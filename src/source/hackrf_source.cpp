@@ -541,18 +541,41 @@ std::string HackRfSource::partIdSerialNo() const {
 // --- streaming ------------------------------------------------------------
 
 bool HackRfSource::startStreamingLocked() {
-    // ORDER MATTERS. The bulk ring is queued FIRST: a transceiver told to
-    // receive with nothing queued fills the firmware's own buffer and
-    // overruns before the host's first read, which presents as a stream that
-    // starts corrupted and then recovers - the hardest kind of fault to
-    // attribute later.
-    if (!dev_->beginBulkStream(hackrf::kRxEndpoint, hackrf::kTransferBufferBytes,
-                               hackrf::kTransferCount)) {
-        noteTransportFault("queueing the sample transfers", dev_->lastError());
+    // ORDER MATTERS, AND IT IS libhackrf's: hackrf_start_rx (hackrf.c:2339-2352
+    // at greatscottgadgets/hackrf 7f96cc8, and the same in every release back
+    // to 2018.01.1) sends SET_TRANSCEIVER_MODE RECEIVE and only then
+    // prepare_setup_transfers submits the bulk transfers.
+    //
+    // UP TO 0.99.31 THIS QUEUED THE RING FIRST, on the theory that a
+    // transceiver receiving into nothing overruns. On current firmware that
+    // order is harmless, but on firmware 2018.01.1 and every release before
+    // it, it breaks the first read. That firmware DISABLES bulk endpoint 0x81
+    // on every mode change and re-enables it only for RECEIVE
+    // (firmware/hackrf_usb/usb_api_transceiver.c set_transceiver_mode at
+    // v2018.01.1: usb_endpoint_disable(&usb_endpoint_bulk_in), then
+    // usb_endpoint_init for RX only; the endpoint is not enabled at all
+    // between SET_CONFIGURATION and the first RECEIVE). So reads queued first
+    // meet a disabled endpoint, or one that is disabled under them - the Airspy
+    // firmware (a HackRF derivative, same usb.c) does exactly this, and on real
+    // Airspy R2s it was "a bulk read failed (Windows error 31)" on the first
+    // read. The endpoint stopped being disabled on a mode change in firmware
+    // commit d8250c6396 (2020-02-10), first released in v2021.03.1; from then
+    // on a mode change only flushes it, and either order streams.
+    if (!setTransceiverModeLocked(hackrf::TransceiverMode::Receive, "starting the receiver")) {
         return false;
     }
-    if (!setTransceiverModeLocked(hackrf::TransceiverMode::Receive, "starting the receiver")) {
-        dev_->endBulkStream();
+    if (!dev_->beginBulkStream(hackrf::kRxEndpoint, hackrf::kTransferBufferBytes,
+                               hackrf::kTransferCount)) {
+        const std::string why = dev_->lastError();
+        // The transceiver is in RECEIVE with nothing to take its samples.
+        // Switched off again directly - controlOutLocked would refuse, because
+        // the fault noted below makes the device dead - so the radio is not
+        // left streaming into a host that is not listening.
+        dev_->controlOut(cascade::usb::kRequestTypeVendorOut,
+                         hackrf::requestByte(hackrf::VendorRequest::SetTransceiverMode),
+                         static_cast<std::uint16_t>(hackrf::TransceiverMode::Off), 0, nullptr, 0,
+                         hackrf::kControlTimeoutMs);
+        noteTransportFault("queueing the sample transfers", why);
         return false;
     }
     {
@@ -574,9 +597,20 @@ void HackRfSource::stopStreamingLocked() {
         return;
     }
 
-    if (dev_ != nullptr && !deviceDead()) {
-        setTransceiverModeLocked(hackrf::TransceiverMode::Off, "stopping the receiver");
-    }
+    // THE READER FIRST, THE RING SECOND, THE TRANSCEIVER LAST - libhackrf's
+    // hackrf_stop_rx order since v2021.03.1 (hackrf.c:2369-2378 at 7f96cc8:
+    // cancel_transfers, which clears `streaming` first, then hackrf_stop_cmd).
+    //
+    // Up to 0.99.31 this sent TRANSCEIVER_MODE OFF first and lowered the
+    // reader's flag after it had been acknowledged. On firmware 2018.01.1 and
+    // earlier OFF disables bulk endpoint 0x81 (see startStreamingLocked) while
+    // the ring is still queued on it, and those reads FAIL - inside the ISR,
+    // before the OFF is even acknowledged - so the reader, its flag still up,
+    // recorded a dead radio. That radio then refused the rate change that had
+    // stopped the stream, and every start after it. With the ring torn down
+    // before OFF there is no read on the pipe for the endpoint to fail, on any
+    // firmware, and the host's end of the pipe is left clean for the next
+    // start.
     link_->run.store(false, std::memory_order_relaxed);
     link_->waitCv.notify_all();
 
@@ -600,7 +634,15 @@ void HackRfSource::stopStreamingLocked() {
             // leaked deliberately rather than destroyed under a thread still
             // calling into it, and link_->dev is left pointing at it for the
             // same reason (nulling it would be a data race with the zombie's
-            // very next readBulk). This source never touches the radio again.
+            // very next readBulk). This source never touches the radio again
+            // - after one last OFF, so a radio whose reader is stranded is at
+            // least not left receiving. The transport allows a control
+            // transfer beside a read in flight (usb_device.hpp rule 2); the
+            // ring cannot be torn down with the reader still inside it, so
+            // here, and only here, OFF goes out with reads still queued.
+            if (dev_ != nullptr && !deviceDead()) {
+                setTransceiverModeLocked(hackrf::TransceiverMode::Off, "stopping the receiver");
+            }
             g_readersAbandoned.fetch_add(1, std::memory_order_relaxed);
             noteTransportFault("waiting for the sample reader to stop",
                                "the reader did not return; the radio is left to the operating "
@@ -616,6 +658,10 @@ void HackRfSource::stopStreamingLocked() {
     // inside readBulk, so nothing can be reading a buffer endBulkStream is
     // about to release.
     if (dev_ != nullptr) { dev_->endBulkStream(); }
+    // And only now, with nothing queued on the pipe, the transceiver off.
+    if (dev_ != nullptr && !deviceDead()) {
+        setTransceiverModeLocked(hackrf::TransceiverMode::Off, "stopping the receiver");
+    }
     running_.store(false, std::memory_order_relaxed);
 }
 
@@ -862,8 +908,8 @@ bool HackRfSource::setSampleRateHz(double hz) {
     const hackrf::RateSetting rate = hackrf::computeRate(want);
     const bool wasRunning = running_.load(std::memory_order_relaxed);
     if (wasRunning) {
-        // A QUIET RADIO for the change (see the header): the transceiver is
-        // switched off, our reader is joined and the bulk ring torn down
+        // A QUIET RADIO for the change (see the header): our reader is
+        // joined, the bulk ring torn down and the transceiver switched off
         // before the clock underneath it moves.
         stopStreamingLocked();
     }
