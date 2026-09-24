@@ -5,8 +5,10 @@
 the end of the matter: there is nothing to buy, nothing to register, no key, no
 trial period, and no feature is held back from you.
 
-**Any commercial use requires a separate paid licence.** That is where this
-project earns its keep.
+**Any commercial use requires a separate licence.** It is paid for every tier
+except one: shops that include FoxSDR with the radios they sell are licensed
+free, as [Retail Partners](#retail-partner-free-for-shops). The paid tiers are
+where this project earns its keep.
 
 ## Which one applies to me?
 
@@ -23,7 +25,8 @@ You need a **commercial licence** if you are, for example:
 
 - using it in the course of a business, including purely internally;
 - selling it, or selling a product or device that includes it;
-- bundling it with hardware you sell;
+- bundling it with hardware you sell (free for shops: see
+  [Retail Partner](#retail-partner-free-for-shops) below);
 - using it to deliver a paid service to customers;
 - building a product derived from it that you intend to sell.
 
@@ -45,14 +48,40 @@ during your licence term, and email support.
 
 | Tier | Who it is for | Price |
 | --- | --- | --- |
+| **Retail Partner** | A shop that sells radios and includes FoxSDR with them: a download link or card in the box, a USB stick, or preinstalled on a computer it sells. Unmodified, and under the FoxSDR name. | **Free** |
 | **Internal Business Use** | A company using FoxSDR in its own work — test and measurement, spectrum monitoring, EMC, security research, engineering. Licensed per named user. | £295 per seat per year<br>£245 per seat at 10+ seats<br>50+ seats: contact us |
 | **Service Delivery** | Using FoxSDR to deliver a paid service to your customers — monitoring, surveying, consultancy. Licensed per named user. | £595 per seat per year |
-| **OEM / Bundled** | You ship FoxSDR with hardware you sell, or preinstalled on a device. | From £6,000 per year,<br>or a per-unit royalty from £8/unit |
+| **OEM / Bundled** | You make hardware and ship FoxSDR with it, or preinstalled on a device, optionally under your own product name. | From £1,500 per year,<br>or a per-unit royalty from £1/unit |
 | **Redistribution / Derived Product** | You build and sell a product based on FoxSDR, or redistribute it commercially under your own name. | From £12,000 per year |
 
 *Prices are in GBP and exclude VAT. Rates for the OEM and Redistribution tiers
-depend on volume and on what you are actually building — the figures above are
-the starting point for a conversation, not a rate card.*
+depend on volume, on what you are actually building and, for OEM, on how much
+driver work your hardware needs — the figures above are starting prices, not a
+rate card.*
+
+## Retail Partner: free for shops
+
+A business that sells radios may include FoxSDR with them **free of charge**,
+with no agreement to sign and no invoice. This section is the permission. It
+covers:
+
+- a download link, a printed card or a QR code in the box, on the product
+  page or in the order confirmation;
+- a copy of an official release on a USB stick or disc shipped with the radio;
+- FoxSDR preinstalled on a computer the shop sells.
+
+On three conditions: the copy is an unmodified official release, it keeps the
+FoxSDR name and the licence notices, and it is not sold or charged for
+separately from the hardware. Rebranding it, modifying it or preinstalling it
+on hardware you manufacture is the OEM / Bundled tier.
+
+The permission runs for 12 months at a time and renews automatically, at no
+charge. If it is ever changed, that will be announced on this page at least 90
+days ahead and apply only to later terms; every copy a shop has already
+distributed stays licensed permanently.
+
+We would be glad of a one-line email to <sales@foxsdr.com> saying you are doing
+it, so we know and can thank you, but it is a request and not a condition.
 
 ## What a commercial licence gives you
 
@@ -62,6 +91,10 @@ the starting point for a conversation, not a rate card.*
 - Email support, with a target first response of two working days.
 - For OEM and Redistribution licensees: input into the roadmap, and reasonable
   notice before anything that would break a shipped integration.
+- For OEM licensees: support for your hardware. FoxSDR's driver for it is kept
+  working with every release during your term, and new firmware revisions and
+  new models you tell us about are supported with reasonable efforts. This is
+  part of what the fee pays for.
 
 ## What happens if I stop paying?
 
@@ -108,9 +141,13 @@ invoice. Nothing is hidden behind a sales process.
 - **Plugins are not covered by this licence.** Each plugin carries its own
   terms, stated in the plugin catalogue and displayed in the application before
   installation.
-- **We do not police hobbyists.** There is no telemetry, no activation, and no
-  licence check in the application. The commercial tiers work on
-  self-certification, the same way every source-available business does.
+- **We do not police hobbyists.** There is no activation and no licence check
+  in the application, and nothing reports who you are or what you use it for.
+  The anonymous usage report described in the
+  [privacy notice](https://foxsdr.com/privacy.html) counts launches, modes and
+  plugins, carries no identity, and can be switched off. The commercial tiers
+  work on self-certification, the same way every source-available business
+  does.
 
 ## Contact
 

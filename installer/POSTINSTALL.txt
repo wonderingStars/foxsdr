@@ -216,8 +216,10 @@ FoxSDR is licensed under the PolyForm Noncommercial License 1.0.0 — see
 LICENSE.txt in the install folder for the full terms. If you are a
 hobbyist, an amateur radio operator, a student, a charity, a school or a
 public body, it is free, permanently and unconditionally: no trial, no
-registration, no licence key, no activation, no telemetry, and nothing
-withheld. Using it in a business, selling it, bundling it with hardware
+registration, no licence key, no activation, and nothing withheld. Its
+anonymous usage and crash reports carry no identity and can be switched
+off (SYSTEM > Usage reporting, SYSTEM > Diagnostics). Using it in a
+business, selling it, bundling it with hardware
 or building a product from it requires a commercial licence.
 
 Two deliberate exceptions: the plugin interface header

@@ -126,6 +126,12 @@ failure to meet it.
 90 days' notice of any change to the Software that the Licensor reasonably
 expects to break the Licensee's shipped integration.
 
+5.4 Where the Schedule states an OEM–Bundled tier, the Licensor shall, during
+the Term, maintain the Software's support for the hardware named in the Scope:
+keeping that hardware working with each Update, and using reasonable efforts
+to support new firmware revisions and new models of it that the Licensee
+notifies in writing. This is part of what the Annual Fee pays for.
+
 ## 6. Term and renewal
 
 6.1 This agreement begins on the Start Date and continues for the Initial Term.
