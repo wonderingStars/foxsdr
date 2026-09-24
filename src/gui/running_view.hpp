@@ -36,6 +36,8 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"
+
 namespace cascade::gui {
 
 // One decoder as the rail sees it. `stopped` is the user's own switch (the
@@ -91,7 +93,7 @@ inline std::vector<RunnableDecoder> runningDecoders(const std::vector<RunnableDe
 inline bool rowOffersStop(const RunnableDecoder& d) { return !d.stopped; }
 
 inline const char* rowKeyLabel(const RunnableDecoder& d) {
-    return rowOffersStop(d) ? "STOP" : "START";
+    return rowOffersStop(d) ? cascade::i18n::trId("STOP") : cascade::i18n::trId("START");
 }
 
 // STOP THE OTHERS is only worth a key when there ARE others: with one decoder
@@ -100,8 +102,13 @@ inline const char* rowKeyLabel(const RunnableDecoder& d) {
 inline bool showStopAll(int running) { return running >= 2; }
 
 inline std::string stopAllLabel(int running) {
+    // A dynamic label handed straight to ImGui::Button, so it is also the
+    // button's id: the format TEMPLATE goes through tr() (never trId(), which
+    // would append "###" plus the untranslated template and leave a second
+    // unmatched %d in the string snprintf then fills). The finished, numbered
+    // string is what the button reads as its id, exactly as before.
     char buf[48];
-    std::snprintf(buf, sizeof(buf), "STOP ALL %d RUNNING", running);
+    std::snprintf(buf, sizeof(buf), cascade::i18n::tr("STOP ALL %d RUNNING"), running);
     return std::string(buf);
 }
 
@@ -111,8 +118,9 @@ inline std::string runningCostNote(int running) {
     if (running < 2) { return std::string(); }
     char buf[160];
     std::snprintf(buf, sizeof(buf),
-                  "%d decoders are running at once. They share one machine, and several "
-                  "at a time is what makes the audio stutter.",
+                  cascade::i18n::tr(
+                      "%d decoders are running at once. They share one machine, and several "
+                      "at a time is what makes the audio stutter."),
                   running);
     return std::string(buf);
 }

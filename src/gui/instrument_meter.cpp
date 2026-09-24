@@ -91,6 +91,7 @@
 #include <cstring>
 #include <string>
 
+#include "core/i18n.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_face.hpp"
 #include "gui/instrument_meter_math.hpp"
@@ -100,6 +101,7 @@
 namespace cascade::gui {
 
 using cascade::core::HostInstrument;
+using cascade::i18n::tr;
 
 namespace {
 
@@ -292,11 +294,11 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     ImFont* leg = fonts::legend();
     ImFont* uiF = fonts::ui();
     const meter::Commodity comm = meter::commodity(in.have ? in.state.text[1] : "");
-    const char* nameplate = "UTILITY METER";
+    const char* nameplate = tr("UTILITY METER");
     switch (comm) {
-        case meter::Commodity::Electric: nameplate = "ELECTRICITY METER"; break;
-        case meter::Commodity::Gas: nameplate = "GAS METER"; break;
-        case meter::Commodity::Water: nameplate = "WATER METER"; break;
+        case meter::Commodity::Electric: nameplate = tr("ELECTRICITY METER"); break;
+        case meter::Commodity::Gas: nameplate = tr("GAS METER"); break;
+        case meter::Commodity::Water: nameplate = tr("WATER METER"); break;
         case meter::Commodity::Unknown: break;
     }
     {
@@ -349,7 +351,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // put it against and dark otherwise, because "kWh" beside no figure
         // is a claim about a measurement that was not made.
         const float annPx = std::clamp(r * 0.115f, 7.5f, capPx);
-        const char* unit = meter::unitWord(comm);
+        const char* unit = tr(meter::unitWord(comm));
         const bool unitLit = reg.status == meter::Reading::Ok;
         dialText(dl, leg, annPx,
                  ImVec2(lcdBR.x - pad - textW(leg, annPx, unit),
@@ -359,7 +361,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // that will not fit in eight cells, which is a fact worth showing and
         // is not the same as no figure.
         if (reg.status == meter::Reading::Over) {
-            dialText(dl, leg, annPx, ImVec2(lcdTL.x + pad, lcdTL.y + pad * 0.4f), "OVER",
+            dialText(dl, leg, annPx, ImVec2(lcdTL.x + pad, lcdTL.y + pad * 0.4f), tr("OVER"),
                      kLcdLit);
         }
     }
@@ -371,9 +373,10 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         dl->AddRectFilled(lTL, lBR, kLabelPaper, 1.0f);
         dl->AddRect(lTL, lBR, theme::withAlpha(theme::kVoid, 0.35f), 1.0f, 0, 1.0f);
         const float labPx = std::clamp((lBR.y - lTL.y) * 0.60f, 7.5f, readPx);
-        const float capW = textW(leg, labPx, "METER No.");
+        const char* meterNoCap = tr("METER No.");
+        const float capW = textW(leg, labPx, meterNoCap);
         dialText(dl, leg, labPx, ImVec2(lTL.x + 4.0f, (lTL.y + lBR.y) * 0.5f - labPx * 0.62f),
-                 "METER No.", theme::withAlpha(kLabelInk, 0.75f));
+                 meterNoCap, theme::withAlpha(kLabelInk, 0.75f));
         // The number itself: the plugin's text[0], in the monospaced reading
         // face so a changing id does not shuffle sideways, in ink on paper -
         // about 13:1, which is what a live figure is owed.
@@ -415,8 +418,8 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             bool lit;
         };
         const Ind pair[2] = {
-            {"NEW", theme::kGold, cue.unread},
-            {"ALERT", theme::kAlarmHot, alert && blinkOn},
+            {tr("NEW"), theme::kGold, cue.unread},
+            {tr("ALERT"), theme::kAlarmHot, alert && blinkOn},
         };
         for (int i = 0; i < 2; ++i) {
             const ImVec2 lc(c.x + r * (i == 0 ? -0.20f : 0.20f), c.y + r * 0.60f);
@@ -474,7 +477,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // commodities this instrument can report; with no reading all three
         // are dark, which is the only honest picture of "we have not heard
         // this meter".
-        addBenchGroupCaption(dl, ImVec2(x0, y), colW, "COMMODITY");
+        addBenchGroupCaption(dl, ImVec2(x0, y), colW, tr("COMMODITY"));
         y += capH;
         {
             ImGui::PushFont(leg, capPx);
@@ -489,9 +492,9 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             // brass tint for water. Colour alone never carries it - the word
             // is lettered under every one of them, lit or not.
             const Lamp lamps[3] = {
-                {"ELECTRIC", meter::Commodity::Electric, theme::kPhosphor},
-                {"GAS", meter::Commodity::Gas, theme::kGold},
-                {"WATER", meter::Commodity::Water, theme::kBrassTint},
+                {tr("ELECTRIC"), meter::Commodity::Electric, theme::kPhosphor},
+                {tr("GAS"), meter::Commodity::Gas, theme::kGold},
+                {tr("WATER"), meter::Commodity::Water, theme::kBrassTint},
             };
             for (int i = 0; i < 3; ++i) {
                 const bool lit = in.have && comm == lamps[i].kind;
@@ -507,11 +510,11 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // is the warning and the cell beside it is the number, in the bench's
         // two different colours for exactly that reason.
         const meter::Tamper tp = meter::tamper(in.have, in.state.values[1]);
-        addBenchGroupCaption(dl, ImVec2(x0, y), colW, "TAMPER");
+        addBenchGroupCaption(dl, ImVec2(x0, y), colW, tr("TAMPER"));
         y += capH;
         {
             const float halfW = (colW - 8.0f * s) * 0.5f;
-            const char* words[2] = {"PHYSICAL", "ENCODER"};
+            const char* words[2] = {tr("PHYSICAL"), tr("ENCODER")};
             const int counts[2] = {tp.physical, tp.encoder};
             for (int i = 0; i < 2; ++i) {
                 const float cx0 = x0 + (halfW + 8.0f * s) * static_cast<float>(i);
@@ -546,7 +549,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // underneath, so the two can never disagree; blank when the roster
         // does not carry it.
         if (y + capH + cellH < bBR.y + 4.0f) {
-            addBenchGroupCaption(dl, ImVec2(x0, y), colW, "LAST HEARD");
+            addBenchGroupCaption(dl, ImVec2(x0, y), colW, tr("LAST HEARD"));
             y += capH;
             const std::string heard =
                 meter::heardText(in.headings, in.rows, in.have ? in.state.text[0] : "");
@@ -560,9 +563,9 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // has to be readable off the dial itself. One word, under the glass,
         // lettered only when there is a reading to letter it for.
         if (in.have && comm != meter::Commodity::Unknown) {
-            const char* word = (comm == meter::Commodity::Electric)  ? "ELECTRIC"
-                               : (comm == meter::Commodity::Gas)     ? "GAS"
-                                                                     : "WATER";
+            const char* word = (comm == meter::Commodity::Electric)  ? tr("ELECTRIC")
+                               : (comm == meter::Commodity::Gas)     ? tr("GAS")
+                                                                     : tr("WATER");
             const float px = std::clamp(r * 0.11f, 7.5f, capPx);
             const float tw = textW(uiF, px, word);
             dialText(dl, uiF, px, ImVec2(c.x - tw * 0.5f, c.y + r * 0.86f - px), word,

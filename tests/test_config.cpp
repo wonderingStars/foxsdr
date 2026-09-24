@@ -144,6 +144,11 @@ AppConfig junkConfig() {
     // Not a style name the painter knows, so a load path that forgets the
     // assignment leaves this junk in place instead of the default face.
     c.tunerDisplayStyle = "bogus";
+    // Language and country: away from "auto" and "" (not chosen), and not
+    // the round-trip fixture's values either, so a load path that forgot
+    // either field leaves this junk behind and fails.
+    c.language = "garbage";
+    c.country = "ZZ";
     // Both trail switches default ON, so false is the away-from-default value
     // a load path that forgets to assign them would have to overwrite.
     c.mapTrails = false;
@@ -290,6 +295,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bandPlanSize == b.bandPlanSize);
     CHECK(a.bandPlanPalette == b.bandPlanPalette);
     CHECK(a.tunerDisplayStyle == b.tunerDisplayStyle);
+    CHECK(a.language == b.language);
+    CHECK(a.country == b.country);
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
@@ -507,6 +514,10 @@ int main() {
         // what came back rather than either end's fallback - and proves the
         // unknown-name guard did not "correct" a style the user actually chose.
         in.tunerDisplayStyle = "neon";
+        // Neither default ("auto", "") nor junkConfig()'s value, so the
+        // roundtrip proves the file is what came back.
+        in.language = "pt-BR";
+        in.country = "BR";
         // The two trail switches. A bool has only one value that is not its
         // default, so these necessarily match junkConfig()'s - the same
         // position bandPlanOverlay is in above. What proves the SAVE half is
@@ -1284,6 +1295,52 @@ int main() {
                 CHECK(!cascade::gui::configsEqual(other, base));
             }
         }
+    }
+
+    // --- language and country (documented in config.hpp) ---------------------
+    {
+        const std::string path = p("language_country.json");
+        AppConfig out;
+        std::string err;
+
+        // DEFAULTS: follow the operating system, and no country chosen. An
+        // upgraded install must not wake up in a language nobody picked, nor
+        // with a band plan changed on behalf of a country nobody named.
+        const AppConfig d;
+        CHECK(d.language == "auto");
+        CHECK(d.country.empty());
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.language == "auto");
+        CHECK(out.country.empty());
+
+        // CARRIED AS WRITTEN, like bandPlanSelection: whether "de" or "BR"
+        // means anything is decided by the tables of the build that applies
+        // them, so the loader does not second-guess a code a newer build wrote.
+        CHECK(writeText(path, "{\"language\":\"de\",\"country\":\"AT\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.language == "de");
+        CHECK(out.country == "AT");
+
+        // Wrong JSON type: absent, per the header's rule for string fields.
+        CHECK(writeText(path, "{\"language\":7,\"country\":[\"BR\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.language == "auto");
+        CHECK(out.country.empty());
+
+        // THE SAVE DEBOUNCE HAS TO SEE BOTH, or a choice made in the SYSTEM
+        // bank reaches the file only if something else changes the same
+        // session - see the tunerDisplayStyle block above for why that is the
+        // subtlest way a setting is lost.
+        const AppConfig base;
+        AppConfig lang = base;
+        lang.language = "pl";
+        CHECK(!cascade::gui::configsEqual(base, lang));
+        CHECK(!cascade::gui::configsEqual(lang, base));
+        AppConfig ctry = base;
+        ctry.country = "PL";
+        CHECK(!cascade::gui::configsEqual(base, ctry));
+        CHECK(!cascade::gui::configsEqual(ctry, base));
     }
 
     // --- the two map trail switches (documented in config.hpp) ---------------

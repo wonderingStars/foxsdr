@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
 #include "core/user_presets.hpp"
@@ -662,7 +663,8 @@ inline constexpr int kTunerStyleCount = 3;
 inline const char* kTunerStyleNames[kTunerStyleCount] = {"nixie", "neon", "plain"};
 // What the picker LABELS them. Separate from the stored names because the
 // stored name is a token in a file and the label is prose on a bench panel.
-inline const char* kTunerStyleLabels[kTunerStyleCount] = {"Nixie tubes", "Neon", "Plain"};
+inline const char* kTunerStyleLabels[kTunerStyleCount] = {
+    FOX_TR_NOOP("Nixie tubes"), FOX_TR_NOOP("Neon"), FOX_TR_NOOP("Plain")};
 
 // EVERY NUMBER ONE CELL IS PAINTED WITH, for one style. Kept here, with no
 // ImGui dependency, so a later edit to the drawing cannot silently change a

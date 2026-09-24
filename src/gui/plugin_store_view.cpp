@@ -23,16 +23,22 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_repo.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
+using cascade::i18n::tr;
+using cascade::i18n::trId;
 namespace {
 
 // --- measurement --------------------------------------------------------------
@@ -335,8 +341,13 @@ void drawCountLine(ImDrawList* dl, const ImVec2& at, int n, int m, const char* t
     // of numbers about nothing.
     dl->AddText(rf, px, ImVec2(x, base), theme::kAmber, nBuf);
     x += textW(rf, px, nBuf);
-    dl->AddText(uf, px, ImVec2(x, uOff), theme::kInkMuted, " OF ");
-    x += textW(uf, px, " OF ");
+    // THE ONE FRAGMENT KEY IN THIS FILE, and deliberately: the two figures
+    // are drawn in the reading face and the word between them in the ui
+    // face, so the line cannot be one format string. "N <word> M" is the
+    // order in every language the bench is translated into.
+    const char* of = tr(" OF ");
+    dl->AddText(uf, px, ImVec2(x, uOff), theme::kInkMuted, of);
+    x += textW(uf, px, of);
     dl->AddText(rf, px, ImVec2(x, base), theme::kAmber, mBuf);
     x += textW(rf, px, mBuf);
     dl->AddText(uf, px, ImVec2(x + 4.0f, uOff), theme::kInkMuted, trail);
@@ -415,7 +426,7 @@ PlateState plateState(const ModulePlate& m) {
 // licence copied out (plugin_host.cpp:232-249), so all four arrive here empty
 // - and "not stated" and "none declared" would report the maker's silence
 // where the truth is our own ignorance. One phrase, used for every such cell.
-const char* kNotRead = "not read";
+const char* kNotRead = FOX_TR_NOOP("not read");
 
 std::vector<PlateFact> collectFacts(const ModulePlate& m) {
     std::vector<PlateFact> f;
@@ -423,13 +434,13 @@ std::vector<PlateFact> collectFacts(const ModulePlate& m) {
     // whatever the cell would otherwise have said.
     const bool read = m.haveDescriptor;
 
-    PlateFact maker{"MAKER", m.maker, false, theme::kIvory};
+    PlateFact maker{tr("MAKER"), m.maker, false, theme::kIvory};
     if (!read) {
-        maker.value = kNotRead;
+        maker.value = tr(kNotRead);
         maker.hatched = true;
         maker.tone = theme::kInkFaint;
     } else if (m.maker.empty()) {
-        maker.value = "not stated";
+        maker.value = tr("not stated");
         maker.hatched = true;
     }
     f.push_back(maker);
@@ -439,51 +450,51 @@ std::vector<PlateFact> collectFacts(const ModulePlate& m) {
     // catalogue entry without one. "No licence" is a decision, not a blank -
     // but only where a licence was actually looked for. On a refused file the
     // gold "none declared" would be an accusation nobody checked.
-    PlateFact lic{"LICENCE", m.licence, false, theme::kIvory};
+    PlateFact lic{tr("LICENCE"), m.licence, false, theme::kIvory};
     if (!read) {
-        lic.value = kNotRead;
+        lic.value = tr(kNotRead);
         lic.hatched = true;
         lic.tone = theme::kInkFaint;
     } else if (m.licence.empty()) {
-        lic.value = "none declared";
+        lic.value = tr("none declared");
         lic.hatched = true;
         lic.tone = theme::kGold;
     }
     f.push_back(lic);
 
-    PlateFact ver{"VERSION", m.version, false, theme::kAmber};
+    PlateFact ver{tr("VERSION"), m.version, false, theme::kAmber};
     if (!read || m.version.empty()) {
-        ver.value = read ? "not stated" : kNotRead;
+        ver.value = read ? tr("not stated") : tr(kNotRead);
         ver.hatched = true;
         ver.tone = read ? theme::kIvory : theme::kInkFaint;
     }
     f.push_back(ver);
 
-    PlateFact size{"DOWNLOAD", {}, false, theme::kAmber};
+    PlateFact size{tr("DOWNLOAD"), {}, false, theme::kAmber};
     if (m.haveSizeBytes) {
         size.value = bytesText(m.sizeBytes);
     } else {
         // The catalogue's size is advisory and OPTIONAL, and there is no
         // published-date field anywhere in the record, so neither is invented.
-        size.value = "not stated";
+        size.value = tr("not stated");
         size.hatched = true;
         size.tone = theme::kIvory;
     }
     f.push_back(size);
 
-    PlateFact abi{"PLUGIN ABI", {}, false, theme::kIvory};
+    PlateFact abi{tr("PLUGIN ABI"), {}, false, theme::kIvory};
     if (!m.haveAbi) {
         // abiVersion 0 in a manifest means "not recorded", which the retirement
         // predicate treats as UNKNOWN and never as a mismatch. Same rule here.
-        abi.value = "not recorded";
+        abi.value = tr("not recorded");
         abi.hatched = true;
     } else {
         char buf[64];
         if (m.abiVersion == m.hostAbiVersion) {
-            std::snprintf(buf, sizeof buf, "%u, matches this build", m.abiVersion);
+            cascade::core::formatUtf8(buf, sizeof buf, tr("%u, matches this build"), m.abiVersion);
             abi.tone = theme::kIvory;
         } else {
-            std::snprintf(buf, sizeof buf, "%u, this build needs %u", m.abiVersion,
+            cascade::core::formatUtf8(buf, sizeof buf, tr("%u, this build needs %u"), m.abiVersion,
                           m.hostAbiVersion);
             abi.tone = theme::kGold;
         }
@@ -500,30 +511,32 @@ std::vector<PlateFact> collectFacts(const ModulePlate& m) {
     // working light on a decoder that might be fed nothing at all - a claim
     // this side cannot test, because it is handed no runner and no receiver.
     // It says what it knows, in the same five words the row and the lamp use.
-    PlateFact state{"ON THIS MACHINE", {}, false, theme::kInkMuted};
+    PlateFact state{tr("ON THIS MACHINE"), {}, false, theme::kInkMuted};
     state.tone = moduleStateColour(m);
     switch (plateState(m)) {
-        case PlateState::NotFitted: state.value = "not fitted"; break;
-        case PlateState::Refused: state.value = "fitted, refused"; break;
-        case PlateState::Stopped: state.value = "fitted, stopped"; break;
-        case PlateState::NoSignal: state.value = "fitted, takes no signal"; break;
+        case PlateState::NotFitted: state.value = tr("not fitted"); break;
+        case PlateState::Refused: state.value = tr("fitted, refused"); break;
+        case PlateState::Stopped: state.value = tr("fitted, stopped"); break;
+        case PlateState::NoSignal: state.value = tr("fitted, takes no signal"); break;
         case PlateState::Started:
             // STARTED, NOT DECODING. Whether anything reaches it is on the
             // FITTED MODULES window, which is handed the runner and the
             // receiver; saying more here would be the two windows disagreeing.
-            state.value = "fitted and started";
+            state.value = tr("fitted and started");
             break;
     }
     f.push_back(state);
 
-    if (!m.fileName.empty()) { f.push_back({"FILE", m.fileName, false, theme::kInkMuted}); }
+    if (!m.fileName.empty()) {
+        f.push_back({tr("FILE"), m.fileName, false, theme::kInkMuted});
+    }
     if (!m.platforms.empty()) {
-        f.push_back({"BUILDS FOR", m.platforms, false, theme::kInkMuted});
+        f.push_back({tr("BUILDS FOR"), m.platforms, false, theme::kInkMuted});
     }
     if (!m.retirementFloor.empty()) {
         // Empty is the normal case and means NO floor. It is only ever drawn
         // when the catalogue positively published one.
-        f.push_back({"RETIRED BELOW", m.retirementFloor, false, theme::kGold});
+        f.push_back({tr("RETIRED BELOW"), m.retirementFloor, false, theme::kGold});
     }
     return f;
 }
@@ -533,15 +546,16 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
     if (!m.haveCapabilities) { return r; }
     const std::uint32_t c = m.capabilities;
     if ((c & CASCADE_CAP_DECODER) != 0u) {
-        r.push_back({"Audio decoder", "Fed the demodulated audio the speakers get.", false});
+        r.push_back({tr("Audio decoder"), tr("Fed the demodulated audio the speakers get."),
+                     false});
     }
     if ((c & CASCADE_CAP_IQ_DECODER) != 0u) {
-        r.push_back({"I/Q decoder", "Fed complex baseband straight from the receiver.",
-                     false});
+        r.push_back({tr("I/Q decoder"),
+                     tr("Fed complex baseband straight from the receiver."), false});
     }
     if ((c & CASCADE_CAP_IMAGE_DECODER) != 0u) {
-        r.push_back({"Image decoder", "Fed samples; returns pictures the host displays.",
-                     false});
+        r.push_back({tr("Image decoder"),
+                     tr("Fed samples; returns pictures the host displays."), false});
     }
     if ((c & CASCADE_CAP_AUDIO_OUT) != 0u) {
         // REPLACES, and the word is the whole row. This is not a module that
@@ -550,39 +564,39 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         // there at all - which is exactly what a user who has just fitted a
         // DAB decoder and can no longer hear the band needs to have been told
         // before it happens.
-        r.push_back({"Plays sound through FoxSDR",
-                     "Replaces the receiver's audio while it is decoding.", false});
+        r.push_back({tr("Plays sound through FoxSDR"),
+                     tr("Replaces the receiver's audio while it is decoding."), false});
     }
     if ((c & CASCADE_CAP_TRACK_SOURCE) != 0u) {
-        r.push_back({"Map targets", "Publishes positions the host draws on its map.",
-                     false});
+        r.push_back({tr("Map targets"),
+                     tr("Publishes positions the host draws on its map."), false});
     }
     if ((c & CASCADE_CAP_PANEL) != 0u) {
-        r.push_back({"A window of its own", "Rows and controls the host draws for it.",
-                     false});
+        r.push_back({tr("A window of its own"),
+                     tr("Rows and controls the host draws for it."), false});
     }
     if ((c & CASCADE_CAP_INSTRUMENT) != 0u) {
-        r.push_back({"An instrument of its own",
-                     "A face the host draws as a piece of equipment, fed by the module.",
+        r.push_back({tr("An instrument of its own"),
+                     tr("A face the host draws as a piece of equipment, fed by the module."),
                      false});
     }
     if ((c & CASCADE_CAP_PRESET) != 0u) {
         // Worth its own row precisely because it looks like tuning and is not.
-        r.push_back({"Presets", "Publishes where it listens. A suggestion - pressing one "
-                                "is the user tuning, not the module.",
+        r.push_back({tr("Presets"), tr("Publishes where it listens. A suggestion - pressing "
+                                       "one is the user tuning, not the module."),
                      false});
     }
     if ((c & CASCADE_CAP_HOST_CLIENT) != 0u) {
         std::string d;
         if (!m.haveTuneGrant) {
-            d = "Refused unless you grant it, per module. This grant is the one "
-                "permission the console actually enforces.";
+            d = tr("Refused unless you grant it, per module. This grant is the one "
+                   "permission the console actually enforces.");
         } else if (m.tuneGranted) {
-            d = "GRANTED. It may retune the receiver on its own, without asking again.";
+            d = tr("GRANTED. It may retune the receiver on its own, without asking again.");
         } else {
-            d = "Not granted, so every request to retune is answered DENIED.";
+            d = tr("Not granted, so every request to retune is answered DENIED.");
         }
-        r.push_back({"Can ask to move the receiver", d, true});
+        r.push_back({tr("Can ask to move the receiver"), d, true});
     }
     if ((c & CASCADE_CAP_BASEMAP) != 0u) {
         // NOT "a server you point it at", which is what this row used to say.
@@ -592,14 +606,15 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         // likes. Handing the user a control they have not got, on the one row
         // whose job is to warn them this capability reaches outward, is the
         // worst place in the console to do it.
-        r.push_back({"Map imagery", "Supplies the map tiles from whatever source it chose "
-                                    "- which may be an online tile server. Nothing here "
-                                    "points it at one.",
+        r.push_back({tr("Map imagery"),
+                     tr("Supplies the map tiles from whatever source it chose - which may "
+                        "be an online tile server. Nothing here points it at one."),
                      true});
     }
     if ((c & CASCADE_CAP_TRACK_INFO) != 0u) {
-        r.push_back({"Target look-up", "Looks up who a target is, from whatever source it "
-                                        "chose - which may be an online service.",
+        r.push_back({tr("Target look-up"),
+                     tr("Looks up who a target is, from whatever source it chose - which "
+                        "may be an online service."),
                      true});
     }
     if (r.empty()) {
@@ -608,11 +623,11 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
         // all, or only bits this build has never heard of. They are different
         // facts and get different words rather than one shrug.
         if (m.capabilities == 0u) {
-            r.push_back({"Declares nothing", "The record carries no capability bits.",
+            r.push_back({tr("Declares nothing"), tr("The record carries no capability bits."),
                          false});
         } else {
-            r.push_back({"Declares a capability this build does not know",
-                         "The module was built against a newer host.", true});
+            r.push_back({tr("Declares a capability this build does not know"),
+                         tr("The module was built against a newer host."), true});
         }
     }
     return r;
@@ -627,15 +642,15 @@ std::vector<ReachRow> collectReach(const ModulePlate& m) {
 // take. Printing the mock's sentence would hand the user a guarantee on the
 // exact card - unverified maker, no licence - where they would lean on it
 // hardest.
-const char* kReachLead =
+const char* kReachLead = FOX_TR_NOOP(
     "Declared by the maker, not enforced. A fitted module is loaded into this "
     "application's own process and runs with every privilege the application has: "
     "there is no sandbox and no permission model. This list is what the module says "
-    "it PROVIDES, not a limit on what it can take.";
+    "it PROVIDES, not a limit on what it can take.");
 
-const char* kReachUnknown =
+const char* kReachUnknown = FOX_TR_NOOP(
     "The catalogue index carries no capability field, so what this module declares is "
-    "not known until it is fitted. Fitting it is what fills this in.";
+    "not known until it is fitted. Fitting it is what fills this in.");
 
 // AN EMPTY LIST MEANS TWO DIFFERENT THINGS AND MUST NOT BE DRAWN ONE WAY.
 // Above: a catalogue row nobody has fitted, whose declaration has never been
@@ -649,18 +664,18 @@ const char* kReachUnknown =
 // some refusals - a module the duplicate resolver turned off was read in full
 // first. What is true of every one of them is that no capability list reached
 // this panel and none of the module is loaded.
-const char* kReachRefused =
+const char* kReachRefused = FOX_TR_NOOP(
     "Not known here, and nothing is routed to it. This file is fitted and the host did "
     "not accept it, so no capability list reached this panel and none of the module is "
-    "loaded. That is not the same as a module which declares nothing.";
+    "loaded. That is not the same as a module which declares nothing.");
 
-const char* kReachTuneNote =
+const char* kReachTuneNote = FOX_TR_NOOP(
     "The tune grant above is the one permission this console does enforce: without it "
-    "every request to retune is refused. Nothing else in the list is a gate.";
+    "every request to retune is refused. Nothing else in the list is a gate.");
 
-const char* kReachNoTuneNote =
+const char* kReachNoTuneNote = FOX_TR_NOOP(
     "The one permission this console enforces is the per-module tune grant, and this "
-    "module does not ask for it. Nothing else in the list is a gate.";
+    "module does not ask for it. Nothing else in the list is a gate.");
 
 // One pass that both measures and draws, so the two can never drift apart.
 float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePlate& m,
@@ -687,14 +702,14 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
     // child that holds the plate simply CUT it - the plate's heading read "406
     // MHz Distress Beacon Decoder (EPIR". Measured here so the box that
     // contains it is the height the name actually takes.
-    const char* plateName = m.name.empty() ? "(unnamed module)" : m.name.c_str();
+    const char* plateName = m.name.empty() ? tr("(unnamed module)") : m.name.c_str();
     const float nameH = wrapH(lf, uiPx, inner, plateName);
 
     const std::vector<PlateFact> facts = collectFacts(m);
     const std::vector<ReachRow> reach = collectReach(m);
     // WHICH KIND OF "NOT KNOWN" THIS IS. Chosen once, so the pass that
     // measures the box and the pass that letters it cannot pick differently.
-    const char* unknownReach = (m.fitted && !m.loaded) ? kReachRefused : kReachUnknown;
+    const char* unknownReach = tr((m.fitted && !m.loaded) ? kReachRefused : kReachUnknown);
     const float colW = (inner - 14.0f) * 0.5f;
 
     // --- box 1: identity ----------------------------------------------------
@@ -704,10 +719,10 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
     // missing version number, when the truth is that nobody has opened it.
     char meta[256];
     if (!m.haveDescriptor) {
-        std::snprintf(meta, sizeof meta, "nothing was read out of this file");
+        cascade::core::formatUtf8(meta, sizeof meta, "%s", tr("nothing was read out of this file"));
     } else {
-        std::snprintf(meta, sizeof meta, "%s  \xc2\xb7  v%s",
-                      m.maker.empty() ? "maker not stated" : m.maker.c_str(),
+        cascade::core::formatUtf8(meta, sizeof meta, tr("%s  \xc2\xb7  v%s"),
+                      m.maker.empty() ? tr("maker not stated") : m.maker.c_str(),
                       m.version.empty() ? "?" : m.version.c_str());
     }
     const float blurbH = m.blurb.empty() ? 0.0f : (wrapH(uf, tiny, inner, m.blurb.c_str()) + 8.0f);
@@ -733,7 +748,7 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
 
     // --- box 2: what this module reaches -------------------------------------
     const float markW = 18.0f;
-    float box2H = kBoxPad + legH + 8.0f + wrapH(uf, tiny, inner, kReachLead) + 10.0f;
+    float box2H = kBoxPad + legH + 8.0f + wrapH(uf, tiny, inner, tr(kReachLead)) + 10.0f;
     if (reach.empty()) {
         box2H += noteHeight(inner, unknownReach);
     } else {
@@ -742,9 +757,9 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
                      wrapH(uf, tiny, inner - markW, r.detail.c_str()) + 8.0f;
         }
         box2H += 3.0f;
-        box2H += noteHeight(inner, (m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u
-                                       ? kReachTuneNote
-                                       : kReachNoTuneNote);
+        box2H += noteHeight(inner, tr((m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u
+                                          ? kReachTuneNote
+                                          : kReachNoTuneNote));
     }
     box2H += kBoxPad;
 
@@ -797,7 +812,20 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
             // to be read: muted ink on the plate's dark ground is about 6:1
             // where the faint it used to take is about 4:1, and the value
             // under it still carries the emphasis in its own tone.
-            dl->AddText(lf, tiny, ImVec2(cx, cy), theme::kInkMuted, f.key);
+            //
+            // FITTED TO ITS COLUMN (gui/text_fit.hpp): "AUF DIESEM RECHNER"
+            // ran past the plate's edge and lost its last letters. A key that
+            // fits is drawn exactly as before; one that does not is drawn
+            // smaller, centred on the same line, and cut at the column only
+            // if it will not fit even at the floor.
+            const float keyPx = fitTextPx(lf, tiny, f.key, colW, fitFloorFor(tiny));
+            const ImVec2 keyAt(cx, cy + (tiny - keyPx) * 0.5f);
+            if (keyPx == tiny) {
+                dl->AddText(lf, tiny, keyAt, theme::kInkMuted, f.key);
+            } else {
+                const ImVec4 keyClip(cx, cy, cx + colW, cy + legH + 2.0f);
+                dl->AddText(lf, keyPx, keyAt, theme::kInkMuted, f.key, nullptr, 0.0f, &keyClip);
+            }
             const ImVec2 vAt(cx, cy + legH + 2.0f);
             if (f.hatched) {
                 addHatch(dl, ImVec2(vAt.x, vAt.y + 1.0f),
@@ -825,10 +853,10 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
         addPlateBox(dl, bTL, bBR);
         const float x = bTL.x + kBoxPad;
         float y = bTL.y + kBoxPad;
-        addBenchGroupCaption(dl, ImVec2(x, y), inner, "WHAT THIS MODULE REACHES");
+        addBenchGroupCaption(dl, ImVec2(x, y), inner, tr("WHAT THIS MODULE REACHES"));
         y += legH + 8.0f;
-        dl->AddText(uf, tiny, ImVec2(x, y), theme::kInkMuted, kReachLead, nullptr, inner);
-        y += wrapH(uf, tiny, inner, kReachLead) + 10.0f;
+        dl->AddText(uf, tiny, ImVec2(x, y), theme::kInkMuted, tr(kReachLead), nullptr, inner);
+        y += wrapH(uf, tiny, inner, tr(kReachLead)) + 10.0f;
 
         if (reach.empty()) {
             drawNote(dl, ImVec2(x, y), inner, theme::kGold, unknownReach);
@@ -858,8 +886,8 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
             }
             y += 3.0f;
             drawNote(dl, ImVec2(x, y), inner, theme::kGold,
-                     (m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u ? kReachTuneNote
-                                                                      : kReachNoTuneNote);
+                     tr((m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u ? kReachTuneNote
+                                                                         : kReachNoTuneNote));
         }
         boxTop = bBR.y + kBoxGap;
     }
@@ -871,7 +899,7 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
         addPlateBox(dl, bTL, bBR);
         const float x = bTL.x + kBoxPad;
         float y = bTL.y + kBoxPad;
-        addBenchGroupCaption(dl, ImVec2(x, y), inner, "LEGAL NOTICE");
+        addBenchGroupCaption(dl, ImVec2(x, y), inner, tr("LEGAL NOTICE"));
         y += legH + 8.0f;
         // VERBATIM. Some decoders demodulate transmissions whose interception
         // is an offence in some countries; this is the author saying so, and
@@ -887,7 +915,7 @@ float layoutPlate(ImDrawList* dl, const ImVec2& tl, float width, const ModulePla
         addPlateBox(dl, bTL, bBR);
         const float x = bTL.x + kBoxPad;
         float y = bTL.y + kBoxPad;
-        addBenchGroupCaption(dl, ImVec2(x, y), inner, "WHY IT IS NOT RUNNING");
+        addBenchGroupCaption(dl, ImVec2(x, y), inner, tr("WHY IT IS NOT RUNNING"));
         y += legH + 8.0f;
         // PluginHost's own reason, word for word. "My plugin does not appear"
         // with no explanation is the support ticket the host was written to
@@ -1001,20 +1029,20 @@ const char* moduleKindTag(const ModulePlate& m) {
         // not accept has no kind on this panel at all, and tagging it "NOT
         // DECLARED" would put the silence on the module rather than on the
         // refusal.
-        return (m.fitted && !m.loaded) ? "NOT KNOWN" : "NOT DECLARED";
+        return (m.fitted && !m.loaded) ? tr("NOT KNOWN") : tr("NOT DECLARED");
     }
     const std::uint32_t c = m.capabilities;
     if ((c & (CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER)) !=
         0u) {
-        return "DECODER";
+        return tr("DECODER");
     }
     if ((c & (CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) !=
         0u) {
-        return "MAP";
+        return tr("MAP");
     }
-    if ((c & (CASCADE_CAP_PANEL | CASCADE_CAP_INSTRUMENT)) != 0u) { return "PANEL"; }
-    if ((c & (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_PRESET)) != 0u) { return "CONTROL"; }
-    return "MODULE";
+    if ((c & (CASCADE_CAP_PANEL | CASCADE_CAP_INSTRUMENT)) != 0u) { return tr("PANEL"); }
+    if ((c & (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_PRESET)) != 0u) { return tr("CONTROL"); }
+    return tr("MODULE");
 }
 
 // See plugin_store_view.hpp. Every word moduleKindTag can return, measured in
@@ -1022,16 +1050,74 @@ const char* moduleKindTag(const ModulePlate& m) {
 // side of it. The list is written out rather than derived, because a tag
 // missing from it is a chip that overflows in exactly the state nobody tests.
 float moduleKindTagWidth() {
-    static const char* const kTags[] = {"NOT KNOWN", "NOT DECLARED", "DECODER",
-                                        "MAP",       "PANEL",        "CONTROL",
-                                        "MODULE"};
+    static const char* const kTags[] = {
+        FOX_TR_NOOP("NOT KNOWN"), FOX_TR_NOOP("NOT DECLARED"), FOX_TR_NOOP("DECODER"),
+        FOX_TR_NOOP("MAP"),       FOX_TR_NOOP("PANEL"),        FOX_TR_NOOP("CONTROL"),
+        FOX_TR_NOOP("MODULE")};
     ImFont* f = fonts::ui();
     const float px = fonts::kTinySize;
     float w = 0.0f;
-    for (const char* t : kTags) { w = std::max(w, textW(f, px, t)); }
+    for (const char* t : kTags) { w = std::max(w, textW(f, px, tr(t))); }
     // The floor is the width the store's card used before this was measured,
     // so a narrow face cannot shrink the chip out of the design.
     return std::max(84.0f, w + 14.0f);
+}
+
+// --- a reason kept in English, drawn in the language in force -----------------
+//
+// The two formats the valued reasons are made from. ONE STRING SERVES THREE
+// JOBS: it makes the English (pluginAbiMismatchReason), it is the pattern that
+// sentence is recognised by (trStoredReason), and it is the catalogue key the
+// translation is found under - so the three cannot drift apart.
+namespace {
+constexpr const char* kAbiReasonFormat =
+    FOX_TR_NOOP("not compatible with this version (built for plugin ABI %u, this build "
+                "requires exactly %u)");
+constexpr const char* kNoBuildReasonFormat = FOX_TR_NOOP("no build for %s");
+}  // namespace
+
+std::string pluginAbiMismatchReason(unsigned builtFor, unsigned required) {
+    char buf[192];
+    std::snprintf(buf, sizeof buf, kAbiReasonFormat, builtFor, required);
+    return buf;
+}
+
+std::string pluginNoBuildReason(const std::string& platform) {
+    // Built as a string: the platform is the host's own "os/arch" and short,
+    // but there is no length that makes a fixed buffer the right tool.
+    const std::string_view fmt(kNoBuildReasonFormat);
+    const std::size_t at = fmt.find("%s");
+    return std::string(fmt.substr(0, at)) + platform + std::string(fmt.substr(at + 2));
+}
+
+std::string trStoredReason(const std::string& english) {
+    if (english.empty()) { return english; }
+    // tr() hands back its own argument when nothing translates it, so a
+    // different pointer is a catalogue hit.
+    const char* hit = tr(english.c_str());
+    if (hit != english.c_str()) { return hit; }
+
+    unsigned builtFor = 0;
+    unsigned required = 0;
+    if (std::sscanf(english.c_str(), kAbiReasonFormat, &builtFor, &required) == 2 &&
+        pluginAbiMismatchReason(builtFor, required) == english) {
+        char buf[320];
+        cascade::core::formatUtf8(buf, sizeof buf, tr(kAbiReasonFormat), builtFor, required);
+        return buf;
+    }
+
+    const std::string_view fmt(kNoBuildReasonFormat);
+    const std::string_view lead = fmt.substr(0, fmt.find("%s"));
+    if (english.size() > lead.size() && english.compare(0, lead.size(), lead) == 0) {
+        const std::string platform = english.substr(lead.size());
+        if (pluginNoBuildReason(platform) == english) {
+            const char* local = tr(kNoBuildReasonFormat);
+            std::vector<char> buf(std::strlen(local) + platform.size() + 8);
+            cascade::core::formatUtf8(buf.data(), buf.size(), local, platform.c_str());
+            return buf.data();
+        }
+    }
+    return english;
 }
 
 std::string moduleReachSummary(const ModulePlate& m) {
@@ -1042,12 +1128,12 @@ std::string moduleReachSummary(const ModulePlate& m) {
         // A refused file IS fitted, so "until it is fitted" would be false of
         // it - and it is silent because the host would not have it, not
         // because it asks for nothing.
-        return (m.fitted && !m.loaded) ? "not known: the host did not accept this file"
-                                       : "not declared until it is fitted";
+        return (m.fitted && !m.loaded) ? tr("not known: the host did not accept this file")
+                                       : tr("not declared until it is fitted");
     }
     if ((m.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u) {
-        return m.haveTuneGrant && m.tuneGranted ? "granted: may move the receiver"
-                                                : "asks to move the receiver";
+        return m.haveTuneGrant && m.tuneGranted ? tr("granted: may move the receiver")
+                                                : tr("asks to move the receiver");
     }
     if ((m.capabilities & (CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
         // "a server you choose" was false of both: neither capability takes a
@@ -1055,9 +1141,9 @@ std::string moduleReachSummary(const ModulePlate& m) {
         // choice and the console never learns what it was. "may" because
         // nothing here can tell whether the source is on the network at all -
         // the reach list below says the same thing at length.
-        return "may fetch from a server it chose";
+        return tr("may fetch from a server it chose");
     }
-    return "publishes to the host only";
+    return tr("publishes to the host only");
 }
 
 ImU32 moduleReachColour(const ModulePlate& m) {
@@ -1078,13 +1164,13 @@ ImU32 moduleReachColour(const ModulePlate& m) {
 
 const char* moduleStateWord(const ModulePlate& m) {
     switch (plateState(m)) {
-        case PlateState::NotFitted: return "NOT FITTED";
-        case PlateState::Refused: return "REFUSED";
-        case PlateState::Stopped: return "STOPPED";
-        case PlateState::NoSignal: return "TAKES NO SIGNAL";
-        case PlateState::Started: return "STARTED";
+        case PlateState::NotFitted: return tr("NOT FITTED");
+        case PlateState::Refused: return tr("REFUSED");
+        case PlateState::Stopped: return tr("STOPPED");
+        case PlateState::NoSignal: return tr("TAKES NO SIGNAL");
+        case PlateState::Started: return tr("STARTED");
     }
-    return "NOT FITTED";
+    return tr("NOT FITTED");
 }
 
 ImU32 moduleStateColour(const ModulePlate& m) {
@@ -1114,9 +1200,9 @@ bool moduleStateLampLit(const ModulePlate& m) {
 
 const char* storeSortLabel(int index) {
     switch (index) {
-        case 1: return "MAKER";
-        case 2: return "VERSION";
-        default: return "NAME";
+        case 1: return tr("MAKER");
+        case 2: return tr("VERSION");
+        default: return tr("NAME");
     }
 }
 
@@ -1159,13 +1245,13 @@ StoreInstallState storeInstallState(const StoreModule& sm) {
 
 const char* storeInstallWord(StoreInstallState s) {
     switch (s) {
-        case StoreInstallState::NotInstalled: return "NOT INSTALLED";
-        case StoreInstallState::CannotFit: return "CANNOT FIT";
-        case StoreInstallState::Installed: return "INSTALLED";
-        case StoreInstallState::UpdateAvailable: return "UPDATE";
-        case StoreInstallState::Refused: return "REFUSED";
+        case StoreInstallState::NotInstalled: return tr("NOT INSTALLED");
+        case StoreInstallState::CannotFit: return tr("CANNOT FIT");
+        case StoreInstallState::Installed: return tr("INSTALLED");
+        case StoreInstallState::UpdateAvailable: return tr("UPDATE");
+        case StoreInstallState::Refused: return tr("REFUSED");
     }
-    return "NOT INSTALLED";
+    return tr("NOT INSTALLED");
 }
 
 ImU32 storeInstallColour(StoreInstallState s) {
@@ -1200,7 +1286,7 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
     for (int i = 0; i < static_cast<int>(model.modules.size()); ++i) {
         const StoreModule& sm = model.modules[static_cast<std::size_t>(i)];
         const std::string& name = sm.plate.name;
-        const std::string shown = name.empty() ? std::string("(unnamed module)") : name;
+        const std::string shown = name.empty() ? std::string(tr("(unnamed module)")) : name;
         if (sm.plate.fitted) {
             // A FITTED MODULE IS ONLY EVER AN UPDATE HERE. It is never listed
             // as skipped: "already installed" is the outcome the user pressed
@@ -1230,25 +1316,30 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
     const int n = static_cast<int>(plan.install.size());
     const int m = static_cast<int>(plan.update.size());
     char buf[96];
+    // Singular and plural are whole keys, never an English "S" handed in by
+    // %s: a translation has to be able to write its own plural.
     if (n > 0 && m > 0) {
-        std::snprintf(buf, sizeof buf, "ADD %d PLUGIN%s, UPDATE %d", n, n == 1 ? "" : "S",
-                      m);
+        cascade::core::formatUtf8(buf, sizeof buf,
+                      n == 1 ? tr("ADD %d PLUGIN, UPDATE %d") : tr("ADD %d PLUGINS, UPDATE %d"),
+                      n, m);
         plan.label = buf;
     } else if (n > 0) {
         // "ALL" ONLY WHEN IT REALLY IS ALL. A key engraved ADD ALL PLUGINS
         // that quietly passes over seven of them is the kind of copy this
         // window exists to refuse.
         if (plan.skipped.empty()) {
-            plan.label = "ADD ALL PLUGINS";
+            plan.label = tr("ADD ALL PLUGINS");
         } else {
-            std::snprintf(buf, sizeof buf, "ADD %d PLUGIN%s", n, n == 1 ? "" : "S");
+            cascade::core::formatUtf8(buf, sizeof buf, n == 1 ? tr("ADD %d PLUGIN") : tr("ADD %d PLUGINS"),
+                          n);
             plan.label = buf;
         }
     } else if (m > 0) {
-        std::snprintf(buf, sizeof buf, "UPDATE %d PLUGIN%s", m, m == 1 ? "" : "S");
+        cascade::core::formatUtf8(buf, sizeof buf, m == 1 ? tr("UPDATE %d PLUGIN") : tr("UPDATE %d PLUGINS"),
+                      m);
         plan.label = buf;
     } else {
-        plan.label = "ADD ALL PLUGINS";
+        plan.label = tr("ADD ALL PLUGINS");
     }
 
     // --- and why it may not be pressed --------------------------------------
@@ -1259,28 +1350,28 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
     // CHECK NOW is telling them to do again the thing that did not work.
     if (!model.haveCatalogue) {
         if (!model.sourceStatus.empty()) {
-            plan.blockedReason = "the catalogue was read and it lists no modules at all";
+            plan.blockedReason = tr("the catalogue was read and it lists no modules at all");
         } else if (!model.sourceError.empty()) {
             plan.blockedReason =
-                "the last check did not return a catalogue - its reason is under "
-                "CATALOGUE SOURCE";
+                tr("the last check did not return a catalogue - its reason is under "
+                   "CATALOGUE SOURCE");
         } else {
             plan.blockedReason =
-                "no catalogue has been read yet - press CHECK NOW and this application "
-                "asks the source once";
+                tr("no catalogue has been read yet - press CHECK NOW and this application "
+                   "asks the source once");
         }
     } else if (model.busy) {
         // One transfer at a time is what the downloader actually does, so a
         // second run started over the first would be two operations sharing
         // one progress bar and one CANCEL.
-        plan.blockedReason = "a transfer is already in progress";
+        plan.blockedReason = tr("a transfer is already in progress");
     } else if (n == 0 && m == 0) {
         plan.blockedReason =
             plan.skipped.empty()
-                ? "every module in the catalogue is already fitted, and none has a "
-                  "newer build"
-                : "nothing in the catalogue can be fitted on this machine - each "
-                  "module's own reason is on its row";
+                ? tr("every module in the catalogue is already fitted, and none has a "
+                     "newer build")
+                : tr("nothing in the catalogue can be fitted on this machine - each "
+                     "module's own reason is on its row");
     }
     return plan;
 }
@@ -1313,8 +1404,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // into their counts.
     if (width < 640.0f || height < 260.0f) {
         const char* small =
-            "This window is too narrow to lay out the catalogue. Widen it and the deck, "
-            "the module list and the data plate come back.";
+            tr("This window is too narrow to lay out the catalogue. Widen it and the deck, "
+               "the module list and the data plate come back.");
         if (width > 80.0f) {
             drawNote(dl, origin, std::max(60.0f, width - 8.0f), theme::kGold, small);
         }
@@ -1366,10 +1457,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // one of these was a literal, and a key whose word no longer fits does not
     // wrap or clip - drawDeckKey CENTRES its label, so the word simply hangs
     // out over both machined edges.
-    const float kClearW = std::max(60.0f, textW(uf, tiny, "CLEAR") + 22.0f);
-    const float kCheckW = std::max({92.0f, textW(uf, tiny, "CHECK NOW") + 22.0f,
-                                    textW(uf, tiny, "CHECK AGAIN") + 22.0f});
-    const float kUpdKeyW = std::max(96.0f, textW(uf, tiny, "UPDATE") + 22.0f);
+    const float kClearW = std::max(60.0f, textW(uf, tiny, tr("CLEAR")) + 22.0f);
+    const float kCheckW = std::max({92.0f, textW(uf, tiny, tr("CHECK NOW")) + 22.0f,
+                                    textW(uf, tiny, tr("CHECK AGAIN")) + 22.0f});
+    const float kUpdKeyW = std::max(96.0f, textW(uf, tiny, tr("UPDATE")) + 22.0f);
     // The banner's caption column: a lamp, then the longest of the five
     // headings it can show, then the "n MODULES" line under it. Sized for the
     // widest so the divider and the note beside it do not move when the
@@ -1377,11 +1468,11 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float kBannerCapW =
         std::max({178.0f,
                   6.0f * 2.0f + 8.0f +
-                      std::max({textW(lf, tiny, "CATALOGUE NOT READ"),
-                                textW(lf, tiny, "LAST CHECK FAILED"),
-                                textW(lf, tiny, "CATALOGUE IS EMPTY"),
-                                textW(lf, tiny, "UPDATES AVAILABLE"),
-                                textW(lf, tiny, "NO UPDATES")}) +
+                      std::max({textW(lf, tiny, tr("CATALOGUE NOT READ")),
+                                textW(lf, tiny, tr("LAST CHECK FAILED")),
+                                textW(lf, tiny, tr("CATALOGUE IS EMPTY")),
+                                textW(lf, tiny, tr("UPDATES AVAILABLE")),
+                                textW(lf, tiny, tr("NO UPDATES"))}) +
                       kPad * 2.0f});
 
     // --- which rows are on screen, and in what order -------------------------
@@ -1457,7 +1548,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         if (!sm.blockedReasonIfAcknowledged.empty()) { continue; }
         ++noticeModules;
         if (!noticeNames.empty()) { noticeNames += ", "; }
-        noticeNames += sm.plate.name.empty() ? "(unnamed module)" : sm.plate.name;
+        noticeNames += sm.plate.name.empty() ? tr("(unnamed module)") : sm.plate.name;
     }
 
     // The key is measured from the longest engraving it can ever carry, not
@@ -1465,7 +1556,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // not clip, so a key too narrow does not shorten the word - it hangs it
     // out over both machined edges.
     const float addKeyW = std::max({320.0f, textW(uf, tiny, plan.label.c_str()) + 40.0f,
-                                    textW(uf, tiny, "ADD ALL PLUGINS") + 40.0f});
+                                    textW(uf, tiny, tr("ADD ALL PLUGINS")) + 40.0f});
     const float addKeyH = std::max(54.0f, tinyH * 2.0f + 18.0f);
     const float addNoteW = width - kPad * 3.0f - addKeyW - 12.0f;
 
@@ -1473,20 +1564,23 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     ImU32 addAccent = theme::kInkMuted;
     if (model.addAllRunning) {
         addLead = model.addAllProgress.empty()
-                      ? std::string("Working through the catalogue, one module at a time.")
+                      ? std::string(
+                            tr("Working through the catalogue, one module at a time."))
                       : model.addAllProgress;
         addAccent = theme::kGold;
     } else if (!plan.blockedReason.empty()) {
         // A DEAD KEY ALWAYS SAYS WHY - the rule this whole window is built on.
-        addLead = "Cannot add all: " + plan.blockedReason;
+        char buf[512];
+        cascade::core::formatUtf8(buf, sizeof buf, tr("Cannot add all: %s"), plan.blockedReason.c_str());
+        addLead = buf;
         addAccent = theme::kGold;
     } else {
         char lead[512];
-        std::snprintf(lead, sizeof lead,
-                      "%d to fetch and %d to update, one after another. Each is fetched "
-                      "over https and refused unless its bytes hash to the sha256 the "
-                      "catalogue published - the same gate a single FIT goes through. A "
-                      "module that fails does not stop the rest.",
+        cascade::core::formatUtf8(lead, sizeof lead,
+                      tr("%d to fetch and %d to update, one after another. Each is fetched "
+                         "over https and refused unless its bytes hash to the sha256 the "
+                         "catalogue published - the same gate a single FIT goes through. A "
+                         "module that fails does not stop the rest."),
                       static_cast<int>(plan.install.size()),
                       static_cast<int>(plan.update.size()));
         addLead = lead;
@@ -1500,13 +1594,42 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // on the one note whose job is to say exactly what is being consented
         // to. There is no length that is safely enough here, so there is no
         // length.
-        addSkipLine = std::to_string(noticeModules) +
-                      " of these carry a legal notice from their maker: " + noticeNames +
-                      ". Each notice is on that module's DATA PLATE below.";
+        // ONE FORMAT STRING, sized to the actual name list rather than a fixed
+        // buffer: seven module names can run past three hundred characters,
+        // and a translation cannot reorder %d and %s, so both sit in the same
+        // sentence rather than being concatenated around a middle fragment.
+        const char* fmt =
+            tr("%d of these carry a legal notice from their maker: %s. Each notice is on "
+               "that module's DATA PLATE below.");
+        std::vector<char> buf(noticeNames.size() + std::strlen(fmt) + 32);
+        std::snprintf(buf.data(), buf.size(), fmt, noticeModules, noticeNames.c_str());
+        addSkipLine = buf.data();
     }
 
     const bool addAckRow = noticeModules > 0 && !model.addAllRunning;
-    const float addAckH = addAckRow ? (tinyH + 12.0f) : 0.0f;
+    // THE CONSENT'S WORDS STAY IN THE KEY'S COLUMN. The tick sits under the
+    // ADD ALL key and its label was lettered to the right of it unbounded; in
+    // German, "Ich akzeptiere die obigen Rechtshinweise von 7 Plugins" ran
+    // across the gold note beside the key and the two sentences overprinted.
+    // Words that fit beside the tick are the same Checkbox call as before;
+    // words that do not are wrapped inside the column, and the row grows.
+    char ack[192] = "";
+    float ackWrapH = 0.0f;  // > 0: the label is wrapped, and this tall
+    const ImGuiStyle& ackStyle = ImGui::GetStyle();
+    const float ackBox = tiny + ackStyle.FramePadding.y * 2.0f;  // the square, at tiny
+    const float ackTextX = ackBox + ackStyle.ItemInnerSpacing.x;
+    const float ackColW = addKeyW - 4.0f;
+    if (addAckRow) {
+        cascade::core::formatUtf8(ack, sizeof ack,
+                      noticeModules == 1 ? tr("I accept the %d legal notice above")
+                                         : tr("I accept the %d legal notices above"),
+                      noticeModules);
+        if (ackTextX + textW(uf, tiny, ack) > ackColW + 0.5f) {
+            ackWrapH = uf->CalcTextSizeA(tiny, FLT_MAX, ackColW - ackTextX, ack).y;
+        }
+    }
+    const float addAckH =
+        addAckRow ? (std::max(tinyH, ackWrapH + ackStyle.FramePadding.y) + 12.0f) : 0.0f;
     float addTextH = noteHeight(addNoteW, addLead.c_str());
     if (!addSkipLine.empty()) { addTextH += 4.0f + noteHeight(addNoteW, addSkipLine.c_str()); }
     if (!model.addAllSummary.empty()) {
@@ -1534,10 +1657,21 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             ImGui::SetCursorScreenPos(ImVec2(kTL.x + 2.0f, kTL.y + addKeyH + 6.0f));
             ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
             ImGui::PushFont(uf, tiny);
-            char ack[96];
-            std::snprintf(ack, sizeof ack, "I accept the %d legal notice%s above",
-                          noticeModules, noticeModules == 1 ? "" : "s");
-            ImGui::Checkbox(ack, &deck.addAllAck);
+            if (ackWrapH <= 0.0f) {
+                ImGui::Checkbox(ack, &deck.addAllAck);
+            } else {
+                // The box alone, then its words wrapped beside it in the
+                // key's column - and the words still tick it, as a label's do.
+                const ImVec2 boxAt = ImGui::GetCursorScreenPos();
+                ImGui::Checkbox("##addallack", &deck.addAllAck);
+                const ImVec2 textAt(boxAt.x + ackTextX, boxAt.y + ackStyle.FramePadding.y);
+                dl->AddText(uf, tiny, textAt, theme::kCream, ack, nullptr, ackColW - ackTextX);
+                ImGui::SetCursorScreenPos(textAt);
+                if (ImGui::InvisibleButton("##addallackwords",
+                                           ImVec2(ackColW - ackTextX, ackWrapH))) {
+                    deck.addAllAck = !deck.addAllAck;
+                }
+            }
             ImGui::PopFont();
             ImGui::PopStyleColor();
         }
@@ -1583,43 +1717,43 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     ImU32 bannerLamp;
     bool bannerLit;
     if (catState == CatalogueState::NeverAsked) {
-        bannerCaption = "CATALOGUE NOT READ";
+        bannerCaption = tr("CATALOGUE NOT READ");
         bannerLamp = theme::kGold;
         bannerLit = false;
         bannerNote =
-            "Nothing has been fetched, so nothing here is a count of what exists. The "
-            "catalogue is read the first time this window opens in a session, and again "
-            "whenever you press CHECK NOW - never at startup.";
+            tr("Nothing has been fetched, so nothing here is a count of what exists. The "
+               "catalogue is read the first time this window opens in a session, and again "
+               "whenever you press CHECK NOW - never at startup.");
     } else if (catState == CatalogueState::Failed) {
         // ASKED, AND IT DID NOT ANSWER. Telling this user to press CHECK NOW
         // is telling them to do again the thing that just failed, so the
         // banner says what happened and points at the reason instead.
-        bannerCaption = "LAST CHECK FAILED";
+        bannerCaption = tr("LAST CHECK FAILED");
         bannerLamp = theme::kAlarm;
         bannerLit = true;
         bannerNote =
-            "The last check did not return a catalogue, so nothing here is a count of "
-            "what exists. The reason it gave is printed under CATALOGUE SOURCE, word for "
-            "word. Nothing is retried on its own.";
+            tr("The last check did not return a catalogue, so nothing here is a count of "
+               "what exists. The reason it gave is printed under CATALOGUE SOURCE, word for "
+               "word. Nothing is retried on its own.");
     } else if (catState == CatalogueState::ReadEmpty) {
         // ANSWERED, AND THE ANSWER WAS NONE. That is a fact about the
         // catalogue, not a state to keep pressing CHECK NOW against.
-        bannerCaption = "CATALOGUE IS EMPTY";
+        bannerCaption = tr("CATALOGUE IS EMPTY");
         bannerLamp = theme::kGold;
         bannerLit = true;
         bannerNote =
-            "The catalogue was read and it lists no modules at all. Nothing is hidden by "
-            "the switches below - there is nothing to hide - and this is the whole answer "
-            "until the catalogue itself changes.";
+            tr("The catalogue was read and it lists no modules at all. Nothing is hidden by "
+               "the switches below - there is nothing to hide - and this is the whole answer "
+               "until the catalogue itself changes.");
     } else if (updateCount == 0) {
-        bannerCaption = "NO UPDATES";
+        bannerCaption = tr("NO UPDATES");
         bannerLamp = theme::kPhosphor;
         bannerLit = true;
         bannerNote =
-            "The catalogue was read and no fitted module has a newer build in it. Nothing "
-            "updates on its own, so this is the whole answer until you check again.";
+            tr("The catalogue was read and no fitted module has a newer build in it. Nothing "
+               "updates on its own, so this is the whole answer until you check again.");
     } else {
-        bannerCaption = "UPDATES AVAILABLE";
+        bannerCaption = tr("UPDATES AVAILABLE");
         bannerLamp = theme::kGold;
         bannerLit = true;
         // WHAT ACTUALLY HAPPENS TO THE BYTES. This sentence said the key
@@ -1629,13 +1763,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // least afford to. What PluginRepo::install does is listed instead,
         // including the one thing the sha256 does NOT prove.
         bannerNote =
-            "Available, not held: nothing defers an update here, and nothing applies one "
-            "unasked. Each key below fetches that build over https, refuses it unless the "
-            "bytes hash to the sha256 the catalogue published, and only then moves it into "
-            "the modules folder and reloads - one at a time, because one transfer at a "
-            "time is all the downloader does. That digest comes from the same catalogue "
-            "as the file: it proves the download arrived unaltered, and it is not a "
-            "signature and vouches for nobody.";
+            tr("Available, not held: nothing defers an update here, and nothing applies one "
+               "unasked. Each key below fetches that build over https, refuses it unless the "
+               "bytes hash to the sha256 the catalogue published, and only then moves it into "
+               "the modules folder and reloads - one at a time, because one transfer at a "
+               "time is all the downloader does. That digest comes from the same catalogue "
+               "as the file: it proves the download arrived unaltered, and it is not a "
+               "signature and vouches for nobody.");
     }
 
     const float capW = kBannerCapW;
@@ -1687,7 +1821,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             dl->AddText(uf, tiny,
                         ImVec2(lampC.x + lampR + 8.0f + textW(rf, tiny, n) + 4.0f,
                                lampC.y - legH * 0.5f + legH + 3.0f),
-                        theme::kInkMuted, updateCount == 1 ? "MODULE" : "MODULES");
+                        theme::kInkMuted, updateCount == 1 ? tr("MODULE") : tr("MODULES"));
         }
         addBenchDivider(dl, tl.x + kPad + capW - 10.0f, tl.y + kPad,
                         tl.y + kPad + bannerHeadH);
@@ -1711,8 +1845,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kInkMuted,
                         sm.plate.version.c_str());
             vx += textW(rf, tiny, sm.plate.version.c_str()) + 8.0f;
-            dl->AddText(uf, tiny, ImVec2(vx, ry), theme::kInkFaint, "to");
-            vx += textW(uf, tiny, "to") + 8.0f;
+            dl->AddText(uf, tiny, ImVec2(vx, ry), theme::kInkFaint, tr("to"));
+            vx += textW(uf, tiny, tr("to")) + 8.0f;
             dl->AddText(rf, tiny, ImVec2(vx, ry), theme::kAmber,
                         sm.updateToVersion.c_str());
             ry += tinyH + 3.0f;
@@ -1726,7 +1860,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             char keyId[24];
             std::snprintf(keyId, sizeof keyId, "upd%d", idx);
             const ImVec2 kTL(rBR.x - 10.0f - updKeyW, rTL.y + (updRowH[k] - kKeyH) * 0.5f);
-            if (drawDeckKey(dl, kTL, ImVec2(kTL.x + updKeyW, kTL.y + kKeyH), "UPDATE",
+            if (drawDeckKey(dl, kTL, ImVec2(kTL.x + updKeyW, kTL.y + kKeyH), tr("UPDATE"),
                             nullptr, !model.busy, keyId)) {
                 updateIndex_ = idx;
             }
@@ -1742,14 +1876,14 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float fieldH = uiPx + style.FramePadding.y * 2.0f + 6.0f;
-    const char* searchLegend = "Searches name, maker and description.";
+    const char* searchLegend = tr("Searches name, maker and description.");
     const float deckAH = kPad + legH + 8.0f + fieldH + 9.0f + tinyH + 4.0f +
                          countLineHeight() + kPad;
 
     const char* showNote =
-        "Three states and three kinds, and every module is in exactly one of each. NOT "
-        "DECLARED is not a gap in this window: the catalogue index carries no capability "
-        "field, so a module's kind is only known once it is fitted.";
+        tr("Three states and three kinds, and every module is in exactly one of each. NOT "
+           "DECLARED is not a gap in this window: the catalogue index carries no capability "
+           "field, so a module's kind is only known once it is fitted.");
     // TWO COLUMNS WHEN THEY FIT, ONE WHEN THEY DO NOT. A rocker whose label
     // plate has been squeezed off the row is a switch nobody can read, so the
     // well grows taller rather than letting that happen.
@@ -1762,12 +1896,12 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     // column before its count, so 74 was already the wrong side of the line
     // and said so nowhere.
     const float showRockerMinW = 16.0f + 7.0f +
-                                 std::max({textW(uf, tiny, "NOT DECLARED"),
-                                           textW(uf, tiny, "OTHER KINDS"),
-                                           textW(uf, tiny, "NOT FITTED"),
-                                           textW(uf, tiny, "CANNOT FIT"),
-                                           textW(uf, tiny, "DECODERS"),
-                                           textW(uf, tiny, "FITTED")}) +
+                                 std::max({textW(uf, tiny, tr("NOT DECLARED")),
+                                           textW(uf, tiny, tr("OTHER KINDS")),
+                                           textW(uf, tiny, tr("NOT FITTED")),
+                                           textW(uf, tiny, tr("CANNOT FIT")),
+                                           textW(uf, tiny, tr("DECODERS")),
+                                           textW(uf, tiny, tr("FITTED"))}) +
                                  12.0f + 6.0f + textW(rf, tiny, "000");
     const float showColW = (wellInner - 12.0f) * 0.5f;
     const bool showTwoCols = showColW >= showRockerMinW;
@@ -1776,7 +1910,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                          noteHeight(wellInner, showNote) + kPad;
 
     const std::string sourceLine =
-        model.sourceUrl.empty() ? std::string("no catalogue source set") : model.sourceUrl;
+        model.sourceUrl.empty() ? std::string(tr("no catalogue source set")) : model.sourceUrl;
     const float srcTextW = wellInner - kCheckW - 8.0f;
     const float srcLineH = std::max(kKeyH, wrapH(uf, tiny, srcTextW, sourceLine.c_str()));
     float deckCH = kPad + legH + 8.0f + kSegH + 12.0f + 1.0f + 10.0f + legH + 8.0f +
@@ -1800,7 +1934,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "CATALOGUE SEARCH");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("CATALOGUE SEARCH"));
         y += legH + 8.0f;
 
         const float clearW = kClearW;
@@ -1820,13 +1954,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // gives before anything is typed - muted rather than faint for that.
         ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::vec(theme::kInkMuted));
         ImGui::PushFont(uf, uiPx);
-        ImGui::InputTextWithHint("##search", "type to narrow the catalogue", deck.search,
+        ImGui::InputTextWithHint("##search", tr("type to narrow the catalogue"), deck.search,
                                  sizeof deck.search);
         ImGui::PopFont();
         ImGui::PopStyleColor(5);
 
         if (drawDeckKey(dl, ImVec2(fBR.x + 8.0f, y),
-                        ImVec2(fBR.x + 8.0f + clearW, y + fieldH), "CLEAR", nullptr,
+                        ImVec2(fBR.x + 8.0f + clearW, y + fieldH), tr("CLEAR"), nullptr,
                         deck.search[0] != '\0', "clear")) {
             deck.search[0] = '\0';
         }
@@ -1838,7 +1972,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         // a short catalogue from a filter that is hiding most of it.
         drawCountLine(dl, ImVec2(tl.x + kPad, y), static_cast<int>(visible.size()),
                       static_cast<int>(model.modules.size()),
-                      catState == CatalogueState::Read ? "MODULES SHOWN" : "MODULES KNOWN");
+                      catState == CatalogueState::Read ? tr("MODULES SHOWN")
+                                                        : tr("MODULES KNOWN"));
         dl->PopClipRect();
     }
 
@@ -1850,7 +1985,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "SHOW");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("SHOW"));
         y += legH + 8.0f;
 
         int nFitted = 0;
@@ -1879,12 +2014,12 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             const char* id;
         };
         const Row rows[6] = {
-            {"FITTED", &deck.showFitted, nFitted, "sf"},
-            {"DECODERS", &deck.showDecoders, nDec, "sd"},
-            {"NOT FITTED", &deck.showAvailable, nAvail, "sa"},
-            {"OTHER KINDS", &deck.showOtherKinds, nOther, "so"},
-            {"CANNOT FIT", &deck.showBlocked, nBlocked, "sb"},
-            {"NOT DECLARED", &deck.showUndeclared, nUndec, "su"},
+            {tr("FITTED"), &deck.showFitted, nFitted, "sf"},
+            {tr("DECODERS"), &deck.showDecoders, nDec, "sd"},
+            {tr("NOT FITTED"), &deck.showAvailable, nAvail, "sa"},
+            {tr("OTHER KINDS"), &deck.showOtherKinds, nOther, "so"},
+            {tr("CANNOT FIT"), &deck.showBlocked, nBlocked, "sb"},
+            {tr("NOT DECLARED"), &deck.showUndeclared, nUndec, "su"},
         };
         for (int i = 0; i < 6; ++i) {
             const float rx =
@@ -1911,7 +2046,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "SORT");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("SORT"));
         y += legH + 8.0f;
         // THREE SEGMENTS, NOT A MENU: the whole option set visible at once, so
         // the current order is legible without opening anything.
@@ -1928,7 +2063,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         y += kSegH + 12.0f;
         addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
         y += 10.0f;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, "CATALOGUE SOURCE");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellInner, tr("CATALOGUE SOURCE"));
         y += legH + 8.0f;
 
         // WHERE THE MODULES WOULD COME FROM, printed before the key that goes
@@ -1942,8 +2077,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                         // back. A failed check and an empty catalogue have
                         // both been asked, and a key still saying NOW invites
                         // the user to do again what they just did.
-                        catState == CatalogueState::NeverAsked ? "CHECK NOW"
-                                                               : "CHECK AGAIN",
+                        catState == CatalogueState::NeverAsked ? tr("CHECK NOW")
+                                                               : tr("CHECK AGAIN"),
                         nullptr,
                         !model.busy && !model.sourceUrl.empty(), "checknow")) {
             checkNow_ = true;
@@ -1971,7 +2106,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             }
             y += 14.0f + 4.0f;
             if (drawDeckKey(dl, ImVec2(tl.x + kPad, y), ImVec2(br.x - kPad, y + kKeyH),
-                            "CANCEL", nullptr, true, "cancel")) {
+                            tr("CANCEL"), nullptr, true, "cancel")) {
                 cancel_ = true;
             }
             y += kKeyH;
@@ -2026,17 +2161,17 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         const ImVec2 br(tl.x + listW, tl.y + bodyH);
         addDeckWell(dl, tl, br);
         float y = tl.y + kPad;
-        dl->AddText(lf, uiPx, ImVec2(tl.x + kPad, y), theme::kIvory, "MODULES");
+        dl->AddText(lf, uiPx, ImVec2(tl.x + kPad, y), theme::kIvory, tr("MODULES"));
         {
             char cnt[24];
             std::snprintf(cnt, sizeof cnt, "%d", static_cast<int>(visible.size()));
-            const float cw = textW(rf, tiny, cnt) + 6.0f + textW(uf, tiny, "SHOWN");
+            const float cw = textW(rf, tiny, cnt) + 6.0f + textW(uf, tiny, tr("SHOWN"));
             dl->AddText(rf, tiny, ImVec2(br.x - kPad - cw, y + nameH - faceH(rf, tiny)),
                         theme::kAmber, cnt);
             dl->AddText(uf, tiny,
                         ImVec2(br.x - kPad - cw + textW(rf, tiny, cnt) + 6.0f,
                                y + nameH - faceH(uf, tiny)),
-                        theme::kInkMuted, "SHOWN");
+                        theme::kInkMuted, tr("SHOWN"));
         }
         y += nameH + 6.0f;
         addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
@@ -2058,24 +2193,24 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const char* why = "";
                 switch (catState) {
                     case CatalogueState::NeverAsked:
-                        why = "No catalogue has been read yet. Press CHECK NOW above and "
-                              "this application asks the source once.";
+                        why = tr("No catalogue has been read yet. Press CHECK NOW above and "
+                                 "this application asks the source once.");
                         break;
                     case CatalogueState::Failed:
-                        why = "The last check did not return a catalogue, so there is "
-                              "nothing to list. The reason it gave is under CATALOGUE "
-                              "SOURCE above, word for word.";
+                        why = tr("The last check did not return a catalogue, so there is "
+                                 "nothing to list. The reason it gave is under CATALOGUE "
+                                 "SOURCE above, word for word.");
                         break;
                     case CatalogueState::ReadEmpty:
-                        why = "The catalogue was read and it lists no modules at all. "
-                              "Nothing here is hidden by the switches above.";
+                        why = tr("The catalogue was read and it lists no modules at all. "
+                                 "Nothing here is hidden by the switches above.");
                         break;
                     case CatalogueState::Read:
                         why = (hiddenByShow > 0 || deck.search[0] != '\0')
-                                  ? "Every module is hidden by the SHOW switches or the "
-                                    "search above. The counts on the switches say how many "
-                                    "each holds."
-                                  : "No module in the catalogue matches.";
+                                  ? tr("Every module is hidden by the SHOW switches or the "
+                                       "search above. The counts on the switches say how "
+                                       "many each holds.")
+                                  : tr("No module in the catalogue matches.");
                         break;
                 }
                 drawNote(cdl, at, cw - 8.0f, theme::kGold, why);
@@ -2097,11 +2232,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             // to row.
             const float kTagW = moduleKindTagWidth();
             const float kActW = std::max(
-                {150.0f, textW(uf, tiny, "FIT") + 28.0f, textW(uf, tiny, "UPDATE") + 28.0f,
-                 textW(uf, tiny, "FITTED") + 28.0f,
-                 textW(uf, tiny, "NOT INSTALLED") + 18.0f,
-                 textW(uf, tiny, "CANNOT FIT") + 18.0f,
-                 textW(uf, tiny, "INSTALLED") + 18.0f, textW(uf, tiny, "REFUSED") + 18.0f});
+                {150.0f, textW(uf, tiny, tr("FIT")) + 28.0f,
+                 textW(uf, tiny, tr("UPDATE")) + 28.0f,
+                 textW(uf, tiny, tr("FITTED")) + 28.0f,
+                 textW(uf, tiny, tr("NOT INSTALLED")) + 18.0f,
+                 textW(uf, tiny, tr("CANNOT FIT")) + 18.0f,
+                 textW(uf, tiny, tr("INSTALLED")) + 18.0f,
+                 textW(uf, tiny, tr("REFUSED")) + 18.0f});
             constexpr float kCardPad = 14.0f;
             for (int idx : visible) {
                 const StoreModule& sm = model.modules[static_cast<std::size_t>(idx)];
@@ -2125,9 +2262,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // BESIDE it decides the row's height. Measuring from one string
                 // and drawing another is how a row comes to clip itself.
                 char foot[192];
-                std::snprintf(foot, sizeof foot, "%s  \xc2\xb7  %s",
-                              p.maker.empty() ? "maker not stated" : p.maker.c_str(),
-                              p.licence.empty() ? "no licence declared" : p.licence.c_str());
+                cascade::core::formatUtf8(foot, sizeof foot, tr("%s  \xc2\xb7  %s"),
+                              p.maker.empty() ? tr("maker not stated") : p.maker.c_str(),
+                              p.licence.empty() ? tr("no licence declared")
+                                                : p.licence.c_str());
                 const bool reachBeside =
                     textW(uf, tiny, foot) + 14.0f + textW(uf, tiny, reach.c_str()) <
                     midW + 6.0f;
@@ -2138,10 +2276,16 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // blockedReason with nothing to explain it - the plate said
                 // why, one selection away, for whichever module happened to be
                 // on it. The reason belongs on the row that refuses.
-                const std::string blockedLine =
-                    (!p.fitted && !sm.blockedReason.empty())
-                        ? ("Cannot fit: " + sm.blockedReason)
-                        : std::string();
+                std::string blockedLine;
+                if (!p.fitted && !sm.blockedReason.empty()) {
+                    // The reason is English in the model (it is compared and
+                    // logged), and translated here, where it is drawn.
+                    const std::string why = trStoredReason(sm.blockedReason);
+                    const char* fmt = tr("Cannot fit: %s");
+                    std::vector<char> buf(why.size() + std::strlen(fmt) + 8);
+                    std::snprintf(buf.data(), buf.size(), fmt, why.c_str());
+                    blockedLine = buf.data();
+                }
 
                 // THE NAME WRAPS NOW, and that is the truncation this change
                 // set out to remove. It used to be laid end to end with the
@@ -2152,7 +2296,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // the card a user matches against what they were looking for,
                 // so it is the last one that may be cut.
                 const char* nameText =
-                    p.name.empty() ? "(unnamed module)" : p.name.c_str();
+                    p.name.empty() ? tr("(unnamed module)") : p.name.c_str();
                 const float rowNameH = wrapH(lf, uiPx, midW, nameText);
                 const float idLineH = std::max(faceH(rf, tiny), tinyH);
                 const float rowsH =
@@ -2165,7 +2309,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 // column, because "NOT INSTALLED" and "TAKES NO SIGNAL" do not
                 // fit on one line there and a word running out over the card's
                 // edge is worse than a word on two lines.
-                const char* stateWord = moduleStateWord(p);
+                const char* stateWord = moduleStateWord(p);  // already translated
                 const float stateWordW = std::max(40.0f, kActW - 18.0f);
                 const float actH = kKeyH + 8.0f + wrapH(uf, tiny, stateWordW, instWord) +
                                    6.0f + wrapH(uf, tiny, stateWordW, stateWord);
@@ -2288,12 +2432,12 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     const bool hasUpdate = !sm.updateToVersion.empty();
                     if (!p.fitted) {
                         if (drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                        "FIT", nullptr, sm.blockedReason.empty(), "fit")) {
+                                        tr("FIT"), nullptr, sm.blockedReason.empty(), "fit")) {
                             fitIndex_ = idx;
                         }
                     } else if (hasUpdate) {
                         if (drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                        "UPDATE", nullptr, !model.busy, "upd")) {
+                                        tr("UPDATE"), nullptr, !model.busy, "upd")) {
                             updateIndex_ = idx;
                         }
                     } else {
@@ -2303,7 +2447,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                         // two windows offering the same control is how they come
                         // to disagree about what it did.
                         drawDeckKey(cdl, ImVec2(ax, ay), ImVec2(ax + kActW, ay + kKeyH),
-                                    "FITTED", nullptr, false, "fitted");
+                                    tr("FITTED"), nullptr, false, "fitted");
                     }
                     // THE STATE WORD AND ITS LAMP, from the shared component,
                     // so this row and the plate beside it cannot describe one
@@ -2342,7 +2486,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
         const ImVec2 br(tl.x + plateW, tl.y + bodyH);
         addDeckWell(dl, tl, br);
         float y = tl.y + kPad;
-        dl->AddText(lf, uiPx, ImVec2(tl.x + kPad, y), theme::kIvory, "DATA PLATE");
+        dl->AddText(lf, uiPx, ImVec2(tl.x + kPad, y), theme::kIvory, tr("DATA PLATE"));
         y += nameH + 6.0f;
         addBenchRail(dl, tl.x + kPad, br.x - kPad, y);
         y += 8.0f;
@@ -2359,20 +2503,20 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const char* none = "";
                 switch (catState) {
                     case CatalogueState::NeverAsked:
-                        none = "Nothing to describe yet. Press CHECK NOW to read the "
-                               "catalogue.";
+                        none = tr("Nothing to describe yet. Press CHECK NOW to read the "
+                                  "catalogue.");
                         break;
                     case CatalogueState::Failed:
-                        none = "Nothing to describe: the last check did not return a "
-                               "catalogue. Its reason is under CATALOGUE SOURCE.";
+                        none = tr("Nothing to describe: the last check did not return a "
+                                  "catalogue. Its reason is under CATALOGUE SOURCE.");
                         break;
                     case CatalogueState::ReadEmpty:
-                        none = "Nothing to describe: the catalogue was read and it lists "
-                               "no modules.";
+                        none = tr("Nothing to describe: the catalogue was read and it lists "
+                                  "no modules.");
                         break;
                     case CatalogueState::Read:
-                        none = "Nothing selected. Pick a module on the left and its plate "
-                               "is drawn here.";
+                        none = tr("Nothing selected. Pick a module on the left and its "
+                                  "plate is drawn here.");
                         break;
                 }
                 drawNote(pdl, ImGui::GetCursorScreenPos(), pw - 6.0f, theme::kInkMuted,
@@ -2389,8 +2533,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 if (!sm.plate.legalNotice.empty() && !sm.plate.fitted) {
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(theme::kCream));
                     ImGui::PushFont(uf, uiPx);
-                    ImGui::Checkbox("I have read the notice above and accept responsibility",
-                                    &deck.legalAck);
+                    ImGui::Checkbox(
+                        trId("I have read the notice above and accept responsibility"),
+                        &deck.legalAck);
                     ImGui::PopFont();
                     ImGui::PopStyleColor();
                 }
@@ -2404,23 +2549,25 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 std::string blocked = sm.blockedReason;
                 if (blocked.empty() && !sm.plate.legalNotice.empty() && !sm.plate.fitted &&
                     !deck.legalAck) {
-                    blocked = "the legal notice must be acknowledged first";
+                    // The predicate's own English words, translated with the
+                    // rest where the sentence is drawn below.
+                    blocked = FOX_TR_NOOP("the legal notice must be acknowledged first");
                 }
                 if (!sm.plate.fitted) {
                     if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
-                                    "FIT MODULE", nullptr, blocked.empty(), "platefit")) {
+                                    tr("FIT MODULE"), nullptr, blocked.empty(), "platefit")) {
                         fitIndex_ = deck.selected;
                     }
                 } else if (hasUpdate) {
                     char to[96];
-                    std::snprintf(to, sizeof to, "TO v%s", sm.updateToVersion.c_str());
+                    cascade::core::formatUtf8(to, sizeof to, tr("TO v%s"), sm.updateToVersion.c_str());
                     if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
-                                    "UPDATE MODULE", to, !model.busy, "plateupd")) {
+                                    tr("UPDATE MODULE"), to, !model.busy, "plateupd")) {
                         updateIndex_ = deck.selected;
                     }
                 } else {
                     drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),
-                                "ALREADY FITTED", nullptr, false, "platefitted");
+                                tr("ALREADY FITTED"), nullptr, false, "platefitted");
                 }
                 ImGui::SetCursorScreenPos(ImVec2(kTL.x, kTL.y + kPlateKeyH + 8.0f));
                 ImGui::Dummy(ImVec2(pw, 0.0f));
@@ -2430,13 +2577,17 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // A DEAD KEY ALWAYS SAYS WHY. A greyed control with no
                     // sentence beside it is the fault this whole redesign
                     // exists to remove.
-                    const std::string why = "Cannot fit: " + blocked;
+                    const std::string shownWhy = trStoredReason(blocked);
+                    const char* whyFmt = tr("Cannot fit: %s");
+                    std::vector<char> whyBuf(shownWhy.size() + std::strlen(whyFmt) + 8);
+                    std::snprintf(whyBuf.data(), whyBuf.size(), whyFmt, shownWhy.c_str());
+                    const std::string why = whyBuf.data();
                     drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kGold, why.c_str());
                     ny += noteHeight(pw - 6.0f, why.c_str()) + 8.0f;
                 } else if (sm.plate.fitted && !hasUpdate) {
                     const char* note =
-                        "Fitted. Starting, stopping and removing it are on the FITTED "
-                        "MODULES window - this one is the catalogue.";
+                        tr("Fitted. Starting, stopping and removing it are on the FITTED "
+                           "MODULES window - this one is the catalogue.");
                     drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kPhosphor, note);
                     ny += noteHeight(pw - 6.0f, note) + 8.0f;
                 }
@@ -2445,9 +2596,16 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     // digests, and paraphrasing it would throw away the only
                     // evidence the user has that the bytes were not the bytes
                     // the catalogue vouched for.
+                    //
+                    // The refusals the store itself makes ("already
+                    // installed", a notice not yet accepted) come through
+                    // here as well, in English, and are drawn translated;
+                    // PluginRepo's own sentences are not in any catalogue and
+                    // come back exactly as written.
+                    const std::string resultError = trStoredReason(model.resultError);
                     drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kAlarm,
-                             model.resultError.c_str());
-                    ny += noteHeight(pw - 6.0f, model.resultError.c_str()) + 8.0f;
+                             resultError.c_str());
+                    ny += noteHeight(pw - 6.0f, resultError.c_str()) + 8.0f;
                 }
                 if (!model.resultReport.empty()) {
                     drawNote(pdl, ImVec2(kTL.x, ny), pw - 6.0f, theme::kPhosphor,

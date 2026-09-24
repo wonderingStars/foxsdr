@@ -70,6 +70,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/i18n.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_fax_math.hpp"
 #include "gui/scope_face.hpp"
@@ -78,6 +79,7 @@
 namespace cascade::gui {
 
 using cascade::core::HostInstrument;
+using cascade::i18n::tr;
 namespace fx = cascade::gui::faxmath;
 
 namespace {
@@ -161,7 +163,7 @@ float drawSelector(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
 void drawLineCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                      int digits, bool have, double lines) {
     const float capPx = fonts::kTinySize * 0.82f;
-    engrave(dl, tl, "LINES", capPx);
+    engrave(dl, tl, tr("LINES"), capPx);
     const float y = tl.y + capPx + 4.0f;
     // THE DRUMS ARE BUTTED, THE SELECTORS ARE SPACED, and that is the whole
     // difference between a counter and a ladder of positions at a glance:
@@ -206,7 +208,7 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
     ImFont* cf = fonts::legend();
     ImFont* vf = fonts::ui();
     const float tiny = fonts::kTinySize;
-    const char* cap = "TUNING";
+    const char* cap = tr("TUNING");
     const char* val = (valueLine != nullptr) ? valueLine : "";
     const float cpx = fitPx(cf, tiny, cap, width - 4.0f);
     const float vpx = fitPx(vf, tiny, val, width - 4.0f);
@@ -457,7 +459,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float leftW = leftX1 - ix0;
 
     if (L.groupCaption && leftW > 60.0f) {
-        addBenchGroupCaption(dl, ImVec2(ix0, iy), leftW, "RECEPTION");
+        addBenchGroupCaption(dl, ImVec2(ix0, iy), leftW, tr("RECEPTION"));
         iy += fonts::kTinySize + 6.0f;
     }
 
@@ -482,9 +484,9 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             ImGui::PushFont(fonts::ui(), capPx);
             float widest = 0.0f;
             for (int i = 0; i < fx::kPhaseCount; ++i) {
-                widest = std::max(widest, ImGui::CalcTextSize(fx::phaseName(i)).x);
+                widest = std::max(widest, ImGui::CalcTextSize(tr(fx::phaseName(i))).x);
             }
-            widest = std::max(widest, ImGui::CalcTextSize("LOCK").x);
+            widest = std::max(widest, ImGui::CalcTextSize(tr("LOCK")).x);
             ImGui::PopFont();
             const float room = pitch - 6.0f;
             if (widest > room && widest > 0.0f) {
@@ -498,17 +500,17 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             // PICTURE is the phosphor one: it is the only position on the
             // ladder that means the radio is putting a picture on paper.
             const ImU32 col = (i == fx::kPhasePicture) ? theme::kPhosphor : theme::kGold;
-            drawBenchLamp(dl, c, lampR, col, i == phase, fx::phaseName(i));
+            drawBenchLamp(dl, c, lampR, col, i == phase, tr(fx::phaseName(i)));
         }
         if (statusCols > 0) {
             addBenchDivider(dl, ix0 + pitch * static_cast<float>(fx::kPhaseCount), iy,
                             iy + rowH);
             const ImVec2 cn(ix0 + pitch * (static_cast<float>(fx::kPhaseCount) + 0.5f),
                             iy + lampR + 2.0f);
-            drawBenchLamp(dl, cn, lampR, theme::kGold, cue.unread, "NEW");
+            drawBenchLamp(dl, cn, lampR, theme::kGold, cue.unread, tr("NEW"));
             const ImVec2 cl(ix0 + pitch * (static_cast<float>(fx::kPhaseCount) + 1.5f),
                             iy + lampR + 2.0f);
-            drawBenchLamp(dl, cl, lampR, theme::kPhosphor, lock, "LOCK");
+            drawBenchLamp(dl, cl, lampR, theme::kPhosphor, lock, tr("LOCK"));
         }
         ImGui::PopFont();
         iy += rowH + 4.0f;
@@ -523,7 +525,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         drawFreqDrumWell(dl, wTL, wBR);
         if (phase != fx::kPhaseUnknown) {
             ImFont* f = fonts::ui();
-            const char* s = fx::phaseName(phase);
+            const char* s = tr(fx::phaseName(phase));
             const float px = fitPx(f, wellH * 0.62f, s, wBR.x - wTL.x - 8.0f);
             const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, s);
             dl->AddText(f, px,
@@ -536,9 +538,9 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const float capPx = fonts::kTinySize * 0.82f;
             ImGui::PushFont(fonts::ui(), capPx);
             drawBenchLamp(dl, ImVec2(wBR.x + 32.0f, iy + lampR + 2.0f), lampR,
-                          theme::kGold, cue.unread, "NEW");
+                          theme::kGold, cue.unread, tr("NEW"));
             drawBenchLamp(dl, ImVec2(wBR.x + 88.0f, iy + lampR + 2.0f), lampR,
-                          theme::kPhosphor, lock, "LOCK");
+                          theme::kPhosphor, lock, tr("LOCK"));
             ImGui::PopFont();
         }
         iy += wellH + 6.0f;

@@ -14,6 +14,8 @@
 
 #include <imgui.h>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
@@ -34,6 +36,8 @@
 #endif
 
 namespace cascade::gui {
+
+using cascade::i18n::tr;
 
 namespace {
 
@@ -311,7 +315,7 @@ int layoutDbTicks(ImFont* nf, float px, float barSpan, double dbFloor, double db
             continue;  // would collide with the label before it
         }
         out[count].x = x;
-        std::snprintf(out[count].text, sizeof(out[count].text), "%s", vb);
+        cascade::core::formatUtf8(out[count].text, sizeof(out[count].text), "%s", vb);
         ++count;
         lastRight = static_cast<double>(x + tw);
     }
@@ -460,7 +464,8 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     }
 
     char buf[32];
-    float widest = textWidth(cf, px, "AGO");
+    const char* agoWord = tr("AGO");
+    float widest = textWidth(cf, px, agoWord);
     for (int k = 0; k < ticks.count; ++k) {
         formatElapsed(ticks.age[k], buf, sizeof(buf));
         widest = std::max(widest, textWidth(lf, px, buf));
@@ -500,7 +505,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // side of a picture; with it they read "16s ago".
     const float capY = tl.y + 3.0f;
     dl->AddText(cf, px, ImVec2(tl.x + kChromePad, capY),
-                theme::withAlpha(theme::kPhosphorDim, 0.85f), "AGO");
+                theme::withAlpha(theme::kPhosphorDim, 0.85f), agoWord);
 
     const float firstY = capY + px + 4.0f;
     const float rowH = h / static_cast<float>(totalRows);
@@ -590,8 +595,8 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
     ImFont* nf = fonts::reading();
     const float px = fonts::kTinySize;
 
-    const char* title = "STRENGTH KEY - dB";
-    const char* pairCap = "FLOOR / CEILING";
+    const char* title = tr("STRENGTH KEY - dB");
+    const char* pairCap = tr("FLOOR / CEILING");
     char pairText[48];
     std::snprintf(pairText, sizeof(pairText), "%.0f / %.0f",
                   static_cast<double>(dbFloor), static_cast<double>(dbCeiling));
@@ -601,11 +606,11 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
     // a line saying so on every ordinary frame is noise that would teach the
     // reader to stop looking at it.
     const bool partial = (coveredRows > 0 && historyRows > 0 && coveredRows < historyRows);
-    const char* coverCap = "APPLIES TO";
+    const char* coverCap = tr("APPLIES TO");
     char coverText[48];
     coverText[0] = '\0';
     if (partial) {
-        std::snprintf(coverText, sizeof(coverText), "TOP %d LINES", coveredRows);
+        cascade::core::formatUtf8(coverText, sizeof(coverText), tr("TOP %d LINES"), coveredRows);
     }
 
     const float gap = 10.0f;
@@ -746,7 +751,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
 void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
     ImFont* cf = fonts::legend();
     const float px = fonts::kTinySize;
-    const char* cap = "RANGE CHANGED";
+    const char* cap = tr("RANGE CHANGED");
     const float tw = textWidth(cf, px, cap);
     addBenchRail(dl, x0, x1, y);
     // BELOW the rail, not above it. Above, the caption lands in the strip of
@@ -790,10 +795,10 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
         // the fraction is the difference between a live pipeline and a
         // struggling one, so it is kept.
         if (linesPerSecond >= 10.0f) {
-            std::snprintf(rateText, sizeof(rateText), "SCROLL %.0f line/s",
+            cascade::core::formatUtf8(rateText, sizeof(rateText), tr("SCROLL %.0f line/s"),
                           static_cast<double>(linesPerSecond));
         } else {
-            std::snprintf(rateText, sizeof(rateText), "SCROLL %.1f line/s",
+            cascade::core::formatUtf8(rateText, sizeof(rateText), tr("SCROLL %.1f line/s"),
                           static_cast<double>(linesPerSecond));
         }
     }
@@ -802,13 +807,13 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
     if (heldSeconds > 0.0) {
         char elapsed[32];
         formatElapsed(heldSeconds, elapsed, sizeof(elapsed));
-        std::snprintf(spanText, sizeof(spanText), "%s VISIBLE", elapsed);
+        cascade::core::formatUtf8(spanText, sizeof(spanText), tr("%s VISIBLE"), elapsed);
     }
     char scrollText[112];
     if (rateText[0] != '\0' && spanText[0] != '\0') {
-        std::snprintf(scrollText, sizeof(scrollText), "%s  -  %s", rateText, spanText);
+        cascade::core::formatUtf8(scrollText, sizeof(scrollText), "%s  -  %s", rateText, spanText);
     } else {
-        std::snprintf(scrollText, sizeof(scrollText), "%s%s", rateText, spanText);
+        cascade::core::formatUtf8(scrollText, sizeof(scrollText), "%s%s", rateText, spanText);
     }
     const bool haveDecode = (decoding != nullptr && decoding[0] != '\0');
     if (scrollText[0] == '\0' && !haveDecode) {

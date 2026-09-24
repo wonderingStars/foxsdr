@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/problem_report.hpp"
 
+#include "core/i18n.hpp"
+
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
@@ -60,7 +62,8 @@ const std::vector<std::string>& problemReportFieldNames() {
 
 std::string validateProblemReportKind(const std::string& kind) {
     if (isProblemReportKind(kind)) { return std::string(); }
-    return "Please choose whether something is broken or something you dislike.";
+    // Marked for the catalogue; the report page translates it where it is drawn.
+    return FOX_TR_NOOP("Please choose whether something is broken or something you dislike.");
 }
 
 std::string problemReportEndpoint() {

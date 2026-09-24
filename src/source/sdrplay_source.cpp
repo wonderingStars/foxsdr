@@ -4,6 +4,8 @@
 #include "source/sdrplay_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -236,17 +238,23 @@ const sdrplay_abi::Api& processSdrPlayApi() {
     return api;
 }
 
+// USER COPY, in the user's language: it is drawn under the Source row and
+// given as the reason a device would not open. With English in force tr()
+// answers the English these sentences always were.
 std::string sdrPlayApiAdvice(bool resolved, float version) {
     if (!resolved) {
-        return "SDRplay radios need the SDRplay API from sdrplay.com, version 3.x - install it "
-               "and restart FoxSDR.";
+        return cascade::i18n::tr(
+            "SDRplay radios need the SDRplay API from sdrplay.com, version 3.x - install it "
+            "and restart FoxSDR.");
     }
     if (version > 0.0f && !abi::versionAtLeast(version, abi::kMinApiVersion)) {
-        char buf[224];
-        std::snprintf(buf, sizeof(buf),
-                      "The installed SDRplay API is version %.2f; FoxSDR needs %.2f or newer - "
-                      "update it from sdrplay.com and restart FoxSDR.",
-                      static_cast<double>(version), static_cast<double>(abi::kMinApiVersion));
+        char buf[320];
+        cascade::core::formatUtf8(
+            buf, sizeof(buf),
+            cascade::i18n::tr(
+                "The installed SDRplay API is version %.2f; FoxSDR needs %.2f or newer - "
+                "update it from sdrplay.com and restart FoxSDR."),
+            static_cast<double>(version), static_cast<double>(abi::kMinApiVersion));
         return std::string(buf);
     }
     return std::string();

@@ -6,6 +6,7 @@
 #include "core/transmitter.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/i18n.hpp"  // FOX_TR_NOOP: the input names are drawn through trId()
 
 #include <algorithm>
 #include <cmath>
@@ -22,8 +23,8 @@ struct InputRow {
 };
 
 constexpr InputRow kInputs[kTxInputCount] = {
-    {TxInput::Microphone, "MIC"},
-    {TxInput::Tone, "TONE"},
+    {TxInput::Microphone, FOX_TR_NOOP("MIC")},
+    {TxInput::Tone, FOX_TR_NOOP("TONE")},
 };
 
 std::int64_t nowMs() {

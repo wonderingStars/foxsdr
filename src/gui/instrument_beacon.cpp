@@ -81,6 +81,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_beacon_math.hpp"
 #include "gui/scope_face.hpp"
@@ -89,6 +91,8 @@
 namespace cascade::gui {
 
 using cascade::core::HostInstrument;
+using cascade::i18n::tr;
+using cascade::i18n::trId;
 
 namespace {
 
@@ -140,15 +144,15 @@ void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float room, ImU32 
     char cut[CASCADE_INSTRUMENT_TEXT_CHARS + 4];
     const char* draw = s;
     if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x > room) {
-        std::snprintf(cut, sizeof cut, "%s", s);
+        cascade::core::formatUtf8(cut, sizeof cut, "%s", s);
         std::size_t n = std::strlen(cut);
         while (n > 2u) {
             cut[n - 1] = '\0';
             cut[n - 2] = '.';
             char probe[CASCADE_INSTRUMENT_TEXT_CHARS + 6];
-            std::snprintf(probe, sizeof probe, "%s.", cut);
+            cascade::core::formatUtf8(probe, sizeof probe, "%s.", cut);
             if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, probe).x <= room) {
-                std::snprintf(cut, sizeof cut, "%s.", probe);
+                cascade::core::formatUtf8(cut, sizeof cut, "%s.", probe);
                 break;
             }
             --n;
@@ -461,8 +465,9 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     drawDistressLamp(dl, ImVec2(L.lampCx, L.lampCy), L.lampR, alert, blinkOn);
     {
         ImFont* f = fonts::legend();
-        const float px = fitPx(f, fonts::kTinySize, "DISTRESS", L.lampR * 2.6f);
-        const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, "DISTRESS");
+        const char* distressWord = tr("DISTRESS");
+        const float px = fitPx(f, fonts::kTinySize, distressWord, L.lampR * 2.6f);
+        const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, distressWord);
         const ImVec2 at(L.lampCx - sz.x * 0.5f, L.lampCy + L.lampR * 1.2f + 3.0f);
         if (at.y + sz.y < L.readY1 + 2.0f) {
             // Clipped to the lamp's own column: at the smallest lamp this word
@@ -471,8 +476,8 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             dl->PushClipRect(ImVec2(tl.x, at.y - 2.0f),
                              ImVec2(L.wellX0 - 2.0f, at.y + px + 6.0f), true);
             dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
-                        theme::withAlpha(theme::kVoid, 0.6f), "DISTRESS");
-            dl->AddText(f, px, at, alert ? theme::kIvory : theme::kCream, "DISTRESS");
+                        theme::withAlpha(theme::kVoid, 0.6f), distressWord);
+            dl->AddText(f, px, at, alert ? theme::kIvory : theme::kCream, distressWord);
             dl->PopClipRect();
         }
     }
@@ -480,15 +485,16 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         drawBenchLamp(dl, ImVec2(L.newCx, L.newCy), L.newR, theme::kGold, cue.unread,
                       nullptr);
         ImFont* f = fonts::legend();
-        const float px = fitPx(f, fonts::kTinySize, "NEW", L.newR * 4.0f);
-        const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, "NEW");
+        const char* newWord = tr("NEW");
+        const float px = fitPx(f, fonts::kTinySize, newWord, L.newR * 4.0f);
+        const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, newWord);
         const ImVec2 at(L.newCx - sz.x * 0.5f, L.newCy + L.newR + 4.0f);
         dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
-                    theme::withAlpha(theme::kVoid, 0.6f), "NEW");
-        dl->AddText(f, px, at, cue.unread ? theme::kIvory : theme::kCream, "NEW");
+                    theme::withAlpha(theme::kVoid, 0.6f), newWord);
+        dl->AddText(f, px, at, cue.unread ? theme::kIvory : theme::kCream, newWord);
     }
 
-    engrave(dl, ImVec2(L.wellX0 + 2.0f, L.readY0), "BEACON 15 HEX ID",
+    engrave(dl, ImVec2(L.wellX0 + 2.0f, L.readY0), tr("BEACON 15 HEX ID"),
             L.wellX1 - L.wellX0 - 4.0f);
     const float glassTop = L.readY0 + fonts::kTinySize + 3.0f;
     if (L.readY1 - glassTop > 10.0f) {
@@ -516,13 +522,13 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const float wp = (w - gap * 2.0f) * 0.34f;
         const float wq = (w - gap * 2.0f) - wc - wp;
         float x = L.x0;
-        drawPlateCell(dl, ImVec2(x, L.plateY0), ImVec2(x + wc, L.plateY1), "COUNTRY",
+        drawPlateCell(dl, ImVec2(x, L.plateY0), ImVec2(x + wc, L.plateY1), tr("COUNTRY"),
                       in.have ? s.text[1] : "");
         x += wc + gap;
-        drawPlateCell(dl, ImVec2(x, L.plateY0), ImVec2(x + wp, L.plateY1), "PROTOCOL",
+        drawPlateCell(dl, ImVec2(x, L.plateY0), ImVec2(x + wp, L.plateY1), tr("PROTOCOL"),
                       in.have ? s.text[2] : "");
         x += wp + gap;
-        drawPlateCell(dl, ImVec2(x, L.plateY0), ImVec2(x + wq, L.plateY1), "POSITION",
+        drawPlateCell(dl, ImVec2(x, L.plateY0), ImVec2(x + wq, L.plateY1), tr("POSITION"),
                       in.have ? s.text[3] : "");
     }
 
@@ -548,13 +554,13 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // the first photograph of this panel showed. The bay keeps its width;
         // the meter takes only what it can use.
         const float meterW = std::min(bay, (h - 42.0f) * 3.4f + 40.0f);
-        drawCentreZeroMeter(dl, ImVec2(L.x0, L.gaugeY0), meterW, h, "CARRIER ERROR",
+        drawCentreZeroMeter(dl, ImVec2(L.x0, L.gaugeY0), meterW, h, tr("CARRIER ERROR"),
                             static_cast<float>(beacon::errorFraction(s.values[0])),
                             haveErr, errLine);
 
         if (n >= 2) {
             const float x = L.x0 + bay + gap;
-            engrave(dl, ImVec2(x, L.gaugeY0), "SINCE LAST BURST", bay);
+            engrave(dl, ImVec2(x, L.gaugeY0), tr("SINCE LAST BURST"), bay);
             const ImVec2 gTL(x, L.gaugeY0 + fonts::kTinySize + 3.0f);
             const ImVec2 gBR(x + bay, L.gaugeY1 - 2.0f);
             if (gBR.y - gTL.y > 14.0f) {
@@ -575,7 +581,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         }
         if (n >= 3) {
             const float x = L.x0 + (bay + gap) * 2.0f;
-            engrave(dl, ImVec2(x, L.gaugeY0), "BURSTS LOGGED", bay);
+            engrave(dl, ImVec2(x, L.gaugeY0), tr("BURSTS LOGGED"), bay);
             const float dy = L.gaugeY0 + fonts::kTinySize + 6.0f;
             const float dh = std::min(L.gaugeY1 - dy - 4.0f, 44.0f);
             if (dh > 12.0f) {

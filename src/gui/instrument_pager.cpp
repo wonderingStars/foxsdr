@@ -68,6 +68,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_pager_math.hpp"
 #include "gui/scope_face.hpp"
@@ -76,6 +78,7 @@
 namespace cascade::gui {
 
 using cascade::core::HostInstrument;
+using cascade::i18n::tr;
 
 namespace {
 
@@ -243,7 +246,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float lampR = std::max(3.0f, shoulderH * 0.22f);
     const ImVec2 lampC(caseTL.x + sideInset + lampR, caseTL.y + shoulderH * 0.55f);
     drawBenchLamp(dl, lampC, lampR, theme::kAlarmHot, ringing && blink, nullptr);
-    engrave(dl, ImVec2(lampC.x + lampR + 5.0f, lampC.y - fonts::kTinySize * 0.52f), "MSG",
+    engrave(dl, ImVec2(lampC.x + lampR + 5.0f, lampC.y - fonts::kTinySize * 0.52f), tr("MSG"),
             theme::kCream, std::min(fonts::kTinySize, shoulderH * 0.72f));
     {
         const float gw = std::min(cs.w * 0.30f, 60.0f);
@@ -420,7 +423,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             engrave(dl, ImVec2(pTL.x + 6.0f, pTL.y + (ph - px) * 0.5f - 1.0f), "FOXSDR",
                     kCasePlate, px);
             ImFont* f = fonts::legend();
-            const char* model = "ALPHANUMERIC PAGER";
+            const char* model = tr("ALPHANUMERIC PAGER");
             const float mw = f->CalcTextSizeA(px * 0.86f, FLT_MAX, 0.0f, model).x;
             if (mw < (pBR.x - pTL.x) * 0.62f) {
                 engrave(dl, ImVec2(pBR.x - 6.0f - mw, pTL.y + (ph - px) * 0.5f), model,
@@ -458,13 +461,13 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const float pitch = std::min(colW / 4.0f, 78.0f);
             float lx = colX + pitch * 0.5f;
             const float ly = y + r + 2.0f;
-            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kAlarmHot, alert && blink, "ALERT");
+            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kAlarmHot, alert && blink, tr("ALERT"));
             lx += pitch;
-            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kGold, cue.unread, "NEW");
+            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kGold, cue.unread, tr("NEW"));
             lx += pitch;
-            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kPhosphor, lock, "SYNC");
+            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kPhosphor, lock, tr("SYNC"));
             lx += pitch;
-            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kAmber, lowBatt, "BATT");
+            drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kAmber, lowBatt, tr("BATT"));
             ImGui::PopFont();
             y = ly + r + fonts::kTinySize + 7.0f;
         }
@@ -483,10 +486,10 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (rowH >= 14.0f) {
             const float cellW = rowH * 0.66f;
             const float capW = cellW * 7.0f;
-            engrave(dl, ImVec2(colX, y), "CAPCODE");
+            engrave(dl, ImVec2(colX, y), tr("CAPCODE"));
             const float uCapX = colX + capW + 22.0f;
             const bool roomForUnread = uCapX + cellW * 2.0f + 8.0f < bayBR.x - 10.0f;
-            if (roomForUnread) { engrave(dl, ImVec2(uCapX, y), "UNREAD"); }
+            if (roomForUnread) { engrave(dl, ImVec2(uCapX, y), tr("UNREAD")); }
             y += fonts::kTinySize + 3.0f;
             char cap[8];
             pager::drumCells(have ? in.state.text[1] : "", cap, 7);
@@ -523,8 +526,8 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const char* value;
         };
         const Pair pairs[2] = {
-            {"TYPE", have ? in.state.text[3] : ""},
-            {"RECEIVED", have ? in.state.text[2] : ""},
+            {tr("TYPE"), have ? in.state.text[3] : ""},
+            {tr("RECEIVED"), have ? in.state.text[2] : ""},
         };
         for (int i = 0; i < 2; ++i) {
             if (y + lineH > bayBR.y - (fonts::kTinySize + 6.0f)) { break; }
@@ -551,13 +554,13 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // What the face is counting from: the plugin's own event number.
         if (have) {
             char seq[32];
-            std::snprintf(seq, sizeof seq, "EVENT %u",
+            cascade::core::formatUtf8(seq, sizeof seq, tr("EVENT %u"),
                           static_cast<unsigned>(in.state.seq));
             engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f), seq,
                     theme::kInkFaint);
         } else {
             engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f),
-                    "NO PAGE RECEIVED", theme::kInkFaint);
+                    tr("NO PAGE RECEIVED"), theme::kInkFaint);
         }
     }
 

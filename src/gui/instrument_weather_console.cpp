@@ -100,12 +100,16 @@
 #include <cstring>
 #include <ctime>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_weather_console_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 
 namespace cascade::gui {
+
+using cascade::i18n::tr;
 
 namespace {
 
@@ -503,7 +507,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // above it there is only the glass bezel, and that is where it was
         // being drawn and clipped.
         ImFont* lf = fonts::legend();
-        const char* cap = "READINGS";
+        const char* cap = tr("READINGS");
         const float capW = lf->CalcTextSizeA(fonts::kTinySize, FLT_MAX, 0.0f, cap).x;
         const float wy0 = stripTop + 5.0f;
         const float wy1 = wy0 + 24.0f;
@@ -540,9 +544,9 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         float lx = hx1 - caseInset - lampR - 12.0f;
         const float ly = stripTop + 8.0f;
         ImGui::PushFont(fonts::legend(), fonts::kTinySize);
-        drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, "BATT");
+        drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, tr("BATT"));
         lx -= 64.0f;
-        drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kGold, cue.unread, "NEW");
+        drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kGold, cue.unread, tr("NEW"));
         ImGui::PopFont();
     }
 
@@ -586,7 +590,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         bool colonOn = true;
         const char* clock = consoleClock(cue.nowSec, &colonOn);
         char shown[8];
-        std::snprintf(shown, sizeof shown, "%s", clock);
+        cascade::core::formatUtf8(shown, sizeof shown, "%s", clock);
         if (!colonOn) {
             for (char& c : shown) {
                 if (c == ':') { c = ' '; }
@@ -639,7 +643,7 @@ float drawWeatherConsoleFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // the sentence explaining them.
     if (!in.have && st.headerPx > 0.0f) {
         ImFont* f = fonts::ui();
-        const char* msg = "NO SENSOR HEARD YET";
+        const char* msg = tr("NO SENSOR HEARD YET");
         const float px = fonts::kTinySize;
         const float mw = f->CalcTextSizeA(px, FLT_MAX, 0.0f, msg).x;
         if (mw < ix1 - ix0) {

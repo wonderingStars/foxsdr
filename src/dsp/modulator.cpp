@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP: the captions are drawn through tr()
+
 namespace cascade::dsp {
 
 namespace {
@@ -23,23 +25,25 @@ struct ModeRow {
 };
 
 constexpr ModeRow kModes[kTxModeCount] = {
+    // The captions are MARKED for the catalogue (the transmit page draws them
+    // through tr()); the mode names are radio vocabulary and are not.
     {TxMode::CW, "CW",
-     "A keyed carrier. The tone you hear is the receiver's, not this one's - what\n"
-     "goes out is the oscillator, switched on and off with a shaped edge so it\n"
-     "does not click across the band."},
+     FOX_TR_NOOP("A keyed carrier. The tone you hear is the receiver's, not this one's - what\n"
+                 "goes out is the oscillator, switched on and off with a shaped edge so it\n"
+                 "does not click across the band.")},
     {TxMode::AM, "AM",
-     "Carrier and both sidebands. The oldest mode there is, and the widest of\n"
-     "these for the voice it carries."},
+     FOX_TR_NOOP("Carrier and both sidebands. The oldest mode there is, and the widest of\n"
+                 "these for the voice it carries.")},
     {TxMode::NFM, "NFM",
-     "Narrow-band FM at 2.5 kHz deviation, with the pre-emphasis a receiver's\n"
-     "de-emphasis expects. What a handheld on a repeater uses."},
+     FOX_TR_NOOP("Narrow-band FM at 2.5 kHz deviation, with the pre-emphasis a receiver's\n"
+                 "de-emphasis expects. What a handheld on a repeater uses.")},
     {TxMode::USB, "USB",
-     "Upper sideband: no carrier, one sideband, everything above the dial\n"
-     "frequency. The efficient way to put a voice on HF, and what is used above\n"
-     "10 MHz by convention."},
+     FOX_TR_NOOP("Upper sideband: no carrier, one sideband, everything above the dial\n"
+                 "frequency. The efficient way to put a voice on HF, and what is used above\n"
+                 "10 MHz by convention.")},
     {TxMode::LSB, "LSB",
-     "Lower sideband: the same thing mirrored below the dial frequency, which is\n"
-     "the convention below 10 MHz."},
+     FOX_TR_NOOP("Lower sideband: the same thing mirrored below the dial frequency, which is\n"
+                 "the convention below 10 MHz.")},
 };
 
 }  // namespace

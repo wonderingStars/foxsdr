@@ -45,6 +45,7 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP: marked here, translated where drawn
 #include "core/plugin_ui.hpp"
 #include "gui/aircraft_icons.hpp"
 #include "gui/track_metrics.hpp"
@@ -553,8 +554,13 @@ inline std::string scopeRingLabel(int fullScaleNm, int ring) {
 // instrument changing rather than the sky. A negative count cannot arise from
 // the draw loop; it is floored anyway, because a readout is the wrong place to
 // discover one.
-inline std::string scopeTracksReadout(int count) {
-    return detail::scopePrintf("%d PLOTTED", count < 0 ? 0 : count);
+//
+// THE FORMAT IS AN ARGUMENT so the tube can letter it in the user's language
+// (tr(kScopeTracksFormat) where it is drawn) while the tests keep pinning the
+// English; the default is the English itself.
+inline constexpr const char* kScopeTracksFormat = FOX_TR_NOOP("%d PLOTTED");
+inline std::string scopeTracksReadout(int count, const char* format = kScopeTracksFormat) {
+    return detail::scopePrintf(format, count < 0 ? 0 : count);
 }
 
 // The top-right readout: the scale the scope is set to, which is what makes
@@ -833,7 +839,8 @@ private:
 // ============================================================================
 
 inline const char* scopeUnavailableNote() {
-    return "No squawk, route or airline mark: the track interface does not carry them.";
+    return FOX_TR_NOOP(
+        "No squawk, route or airline mark: the track interface does not carry them.");
 }
 
 inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput& in) {
@@ -844,7 +851,7 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
     // Never dimmed and never empty: the caller substitutes the id when there is
     // no callsign, so a row that said nothing would mean the caller was broken
     // rather than that the aircraft was anonymous.
-    out.push_back({"FLIGHT", in.flight, true, false});
+    out.push_back({FOX_TR_NOOP("FLIGHT"), in.flight, true, false});
 
     // --- what the registry knows ----------------------------------------------
     // THREE STATES, NOT TWO. With nothing looking anything up, these three
@@ -872,8 +879,8 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
     // the diagnosis to the window that owns it. The two states that CAN be told
     // apart still are: a lookup in flight and a source that answered with
     // nothing are different facts and keep different words.
-    const char* registryMiss = in.infoActive ? (in.infoPending ? "LOOKING UP" : "NO DATA")
-                                             : "NO LOOKUP RUNNING";
+    const char* registryMiss = in.infoActive ? (in.infoPending ? FOX_TR_NOOP("LOOKING UP") : FOX_TR_NOOP("NO DATA"))
+                                             : FOX_TR_NOOP("NO LOOKUP RUNNING");
     const auto registryRow = [&](const char* label, const std::string& value) {
         if (in.infoActive && !in.infoPending && !value.empty()) {
             out.push_back({label, value, true, false});
@@ -881,9 +888,9 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
             out.push_back({label, registryMiss, false, false});
         }
     };
-    registryRow("OPERATOR", in.operatorName);
-    registryRow("TYPE", in.typeName);
-    registryRow("REG", in.registration);
+    registryRow(FOX_TR_NOOP("OPERATOR"), in.operatorName);
+    registryRow(FOX_TR_NOOP("TYPE"), in.typeName);
+    registryRow(FOX_TR_NOOP("REG"), in.registration);
 
     // --- the state a squawk would have carried ---------------------------------
     // WHERE THE SQUAWK WOULD SIT, which is with the identity block and not down
@@ -896,7 +903,7 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
     // else, so it is the one row that carries `alert` and is drawn in a hue
     // nothing else on the scope uses. "NORMAL" is not a claim that a squawk was
     // read: it is the honest reading of a flag that is not set.
-    out.push_back({"STATUS", in.emergency ? "EMERGENCY" : "NORMAL", true, in.emergency});
+    out.push_back({FOX_TR_NOOP("STATUS"), in.emergency ? FOX_TR_NOOP("EMERGENCY") : FOX_TR_NOOP("NORMAL"), true, in.emergency});
 
     // --- what the radio heard ---------------------------------------------------
     // FEET AND KNOTS, not metres and metres per second. Every altitude and
@@ -905,26 +912,26 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
     // against speaks in them, and the ABI's metric units are an internal
     // convention rather than a thing to show anybody.
     if (std::isfinite(in.altM)) {
-        out.push_back({"ALTITUDE", detail::scopePrintf("%.0f FT", in.altM * 3.28084), true,
+        out.push_back({FOX_TR_NOOP("ALTITUDE"), detail::scopePrintf("%.0f FT", in.altM * 3.28084), true,
                        false});
     } else {
-        out.push_back({"ALTITUDE", "NO DATA", false, false});
+        out.push_back({FOX_TR_NOOP("ALTITUDE"), FOX_TR_NOOP("NO DATA"), false, false});
     }
 
     if (std::isfinite(in.speedMps)) {
         out.push_back(
-            {"SPEED", detail::scopePrintf("%.0f KT", in.speedMps * 1.94384), true, false});
+            {FOX_TR_NOOP("SPEED"), detail::scopePrintf("%.0f KT", in.speedMps * 1.94384), true, false});
     } else {
-        out.push_back({"SPEED", "NO DATA", false, false});
+        out.push_back({FOX_TR_NOOP("SPEED"), FOX_TR_NOOP("NO DATA"), false, false});
     }
 
     if (std::isfinite(in.courseDeg)) {
         out.push_back(
-            {"HEADING",
+            {FOX_TR_NOOP("HEADING"),
              detail::scopePrintf("%03.0f DEG", detail::scopeWrapBearing(in.courseDeg)), true,
              false});
     } else {
-        out.push_back({"HEADING", "NO DATA", false, false});
+        out.push_back({FOX_TR_NOOP("HEADING"), FOX_TR_NOOP("NO DATA"), false, false});
     }
 
     // --- where it is, from here -------------------------------------------------
@@ -935,15 +942,15 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
     // reaches - but a builder that quietly printed "NO DATA" here would be
     // blaming the aircraft for the host's missing setting.
     if (!in.hasRx) {
-        out.push_back({"RANGE", "NO RX POSITION", false, false});
-        out.push_back({"BEARING", "NO RX POSITION", false, false});
+        out.push_back({FOX_TR_NOOP("RANGE"), FOX_TR_NOOP("NO RX POSITION"), false, false});
+        out.push_back({FOX_TR_NOOP("BEARING"), FOX_TR_NOOP("NO RX POSITION"), false, false});
         return out;
     }
 
     if (std::isfinite(in.rangeNm)) {
-        out.push_back({"RANGE", detail::scopePrintf("%.1f NM", in.rangeNm), true, false});
+        out.push_back({FOX_TR_NOOP("RANGE"), detail::scopePrintf("%.1f NM", in.rangeNm), true, false});
     } else {
-        out.push_back({"RANGE", "NO DATA", false, false});
+        out.push_back({FOX_TR_NOOP("RANGE"), FOX_TR_NOOP("NO DATA"), false, false});
     }
 
     // OVERHEAD IS AN ANSWER, NOT A GAP. A bearing is undefined for a target at
@@ -957,14 +964,14 @@ inline std::vector<ScopeDetailLine> buildScopeDetailLines(const ScopeDetailInput
         // inputs reach it: a target a little west of due north from the
         // receiver bears 359.65, and an ADS-B heading is quantised in steps
         // that land there routinely.
-        out.push_back({"BEARING",
+        out.push_back({FOX_TR_NOOP("BEARING"),
                        detail::scopePrintf("%03.0f DEG",
                                            detail::scopeWrapBearing(in.bearingDeg)),
                        true, false});
     } else if (std::isfinite(in.rangeNm)) {
-        out.push_back({"BEARING", "OVERHEAD", true, false});
+        out.push_back({FOX_TR_NOOP("BEARING"), FOX_TR_NOOP("OVERHEAD"), true, false});
     } else {
-        out.push_back({"BEARING", "NO DATA", false, false});
+        out.push_back({FOX_TR_NOOP("BEARING"), FOX_TR_NOOP("NO DATA"), false, false});
     }
 
     return out;

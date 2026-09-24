@@ -18,6 +18,8 @@
 
 #include <cstddef>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP: txLampText is drawn through tr()
+
 namespace cascade::gui {
 
 // THE SENTENCE ON THE PAGE.
@@ -112,10 +114,10 @@ inline TxLamp txLampState(bool haveRadio, bool faulted, bool transmitting) {
 // The word on the glass. Short, because it is lettered beside the key.
 inline const char* txLampText(TxLamp l) {
     switch (l) {
-        case TxLamp::NoRadio: return "NO RADIO";
-        case TxLamp::Ready: return "READY";
-        case TxLamp::Transmitting: return "ON AIR";
-        case TxLamp::Fault: return "FAULT";
+        case TxLamp::NoRadio: return FOX_TR_NOOP("NO RADIO");
+        case TxLamp::Ready: return FOX_TR_NOOP("READY");
+        case TxLamp::Transmitting: return FOX_TR_NOOP("ON AIR");
+        case TxLamp::Fault: return FOX_TR_NOOP("FAULT");
     }
     return "";
 }

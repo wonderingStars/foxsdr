@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_beacon_math.hpp"
 #include "gui/instrument_meter_math.hpp"
@@ -19,6 +21,7 @@
 namespace cascade::gui {
 
 using cascade::core::HostInstrument;
+using cascade::i18n::tr;
 
 float drawInstrumentFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                          const HostInstrument& in, const InstrumentCue& cue) {
@@ -82,13 +85,13 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // A ringing lamp blinks at 2 Hz, which is what tells it apart from one
     // that is simply on.
     const bool blinkOn = std::fmod(cue.nowSec, 0.5) < 0.25;
-    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAlarmHot, alert && blinkOn, "ALERT");
+    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAlarmHot, alert && blinkOn, tr("ALERT"));
     lx -= lampPitch;
-    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kGold, cue.unread, "NEW");
+    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kGold, cue.unread, tr("NEW"));
     lx -= lampPitch;
-    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kPhosphor, lock, "LOCK");
+    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kPhosphor, lock, tr("LOCK"));
     lx -= lampPitch;
-    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, "BATT");
+    drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, tr("BATT"));
     y = ly + lampR + fonts::kTinySize + 10.0f;
 
     // The glass: every filled slot, labelled by its number, texts down the
@@ -103,7 +106,7 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float lineH = fonts::kUiSize + 4.0f;
     float ty = gtl.y + 8.0f;
     if (!in.have) {
-        engrave(dl, ImVec2(gtl.x + 10.0f, ty), "NO READING YET");
+        engrave(dl, ImVec2(gtl.x + 10.0f, ty), tr("NO READING YET"));
     } else {
         const float split = gtl.x + (gbr.x - gtl.x) * 0.62f;
         float vy = ty;
@@ -126,7 +129,7 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             vy += lineH;
         }
         char seq[32];
-        std::snprintf(seq, sizeof seq, "EVENT %u", static_cast<unsigned>(in.state.seq));
+        cascade::core::formatUtf8(seq, sizeof seq, tr("EVENT %u"), static_cast<unsigned>(in.state.seq));
         engrave(dl, ImVec2(gtl.x + 8.0f, gbr.y - fonts::kTinySize - 6.0f), seq);
     }
     dl->PopClipRect();
@@ -186,7 +189,7 @@ void instrumentChip(const HostInstrument& in, bool unread, char* out, std::size_
             // sent no phase at all are different claims, and the second is one
             // this host was never told: see rule 2 in instrument_face.hpp.
             if (s.text[0][0] != '\0') {
-                std::snprintf(out, cap, "%s", s.text[0]);
+                cascade::core::formatUtf8(out, cap, "%s", s.text[0]);
             } else {
                 std::snprintf(out, cap, "FAX");
             }

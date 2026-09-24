@@ -19,9 +19,12 @@
 
 #include <cstdio>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/theme.hpp"
 
 namespace cascade::gui::patch {
+using cascade::i18n::tr;
 
 using core::patch::Connect;
 using core::patch::Graph;
@@ -47,15 +50,15 @@ Vec2 vv(ImVec2 v) { return Vec2{v.x, v.y}; }
 
 const char* kindCaption(NodeKind k) {
     switch (k) {
-        case NodeKind::Radio: return "RADIO";
-        case NodeKind::Channel: return "CHANNEL";
-        case NodeKind::Demod: return "DEMOD";
-        case NodeKind::Decoder: return "DECODER";
-        case NodeKind::Display: return "DISPLAY";
-        case NodeKind::Sink: return "SINK";
-        case NodeKind::Map: return "MAP";
+        case NodeKind::Radio: return tr("RADIO");
+        case NodeKind::Channel: return tr("CHANNEL");
+        case NodeKind::Demod: return tr("DEMOD");
+        case NodeKind::Decoder: return tr("DECODER");
+        case NodeKind::Display: return tr("DISPLAY");
+        case NodeKind::Sink: return tr("SINK");
+        case NodeKind::Map: return tr("MAP");
     }
-    return "NODE";
+    return tr("NODE");
 }
 
 // A node is drawn as a brass plate: a vertical gradient, a hairline edge, and
@@ -71,15 +74,15 @@ void drawNodePlate(ImDrawList* dl, ImVec2 a, ImVec2 b, bool selected) {
 const char* refusalText(Connect why) {
     switch (why) {
         case Connect::Ok: return "";
-        case Connect::UnknownNode: return "that node is gone";
-        case Connect::NoSuchPort: return "there is no port there";
-        case Connect::TypeMismatch: return "those two carry different things";
-        case Connect::InputOccupied: return "that input already has a wire";
-        case Connect::AlreadyWired: return "those are already wired together";
-        case Connect::SelfLoop: return "a node cannot feed itself";
-        case Connect::WouldCycle: return "that would make a loop";
+        case Connect::UnknownNode: return tr("that node is gone");
+        case Connect::NoSuchPort: return tr("there is no port there");
+        case Connect::TypeMismatch: return tr("those two carry different things");
+        case Connect::InputOccupied: return tr("that input already has a wire");
+        case Connect::AlreadyWired: return tr("those are already wired together");
+        case Connect::SelfLoop: return tr("a node cannot feed itself");
+        case Connect::WouldCycle: return tr("that would make a loop");
     }
-    return "that connection was refused";
+    return tr("that connection was refused");
 }
 
 ImU32 portColour(PortType t) {
@@ -99,6 +102,9 @@ ImU32 portColour(PortType t) {
 
 void seedDefaultPatch(Graph& g, const char* radioName) {
     if (!g.nodes().empty()) { return; }
+    // NOT WRAPPED: this is the default value handed to a new node's NAME
+    // field, which is stored in the graph (and persisted with the patch) as
+    // plain data from this point on, not re-read as a literal on every draw.
     g.addNode(NodeKind::Radio, radioName != nullptr ? radioName : "Radio", PortType::Iq,
               60.0f, 80.0f);
 }
@@ -241,7 +247,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         const float cap = 11.0f * v.zoom;
         if (cap >= 5.0f) {
             char title[96];
-            std::snprintf(title, sizeof(title), "%s  %s", kindCaption(n.kind), n.name.c_str());
+            cascade::core::formatUtf8(title, sizeof(title), "%s  %s", kindCaption(n.kind), n.name.c_str());
             // Clipped short of the close key, so a long name never runs
             // under it.
             const Rect ck = closeKeyRect(n);
@@ -302,7 +308,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                     dl->AddText(font, fs, at, theme::kAmber, txt);
                 } else {
                     char txt[32];
-                    std::snprintf(txt, sizeof(txt), "%llu line%s",
+                    cascade::core::formatUtf8(txt, sizeof(txt), "%llu line%s",
                                   static_cast<unsigned long long>(r.lines),
                                   r.lines == 1 ? "" : "s");
                     dl->AddText(font, fs, at, theme::kAmber, txt);

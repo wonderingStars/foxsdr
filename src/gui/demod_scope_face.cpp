@@ -30,11 +30,16 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 
 namespace cascade::gui {
+
+using cascade::i18n::tr;
+
 namespace {
 
 // --- the tube's own optics ---------------------------------------------------
@@ -177,16 +182,20 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
     const float px = fonts::kTinySize;
     const float y = b.y - px - 5.0f;
 
-    glassText(dl, legend, px, ImVec2(a.x + 7.0f, y), theme::kIvory,
-              scopeSignalCaption(signal));
+    // scopeSignalCaption() is pure prose, safe to translate here where it is
+    // drawn. scopeDisplayKey() is pinned by test_scope_memory.cpp against
+    // exact English ("AVG", "PERSIST"), so it stays untranslated at its
+    // definition and is translated here instead, at the point it is drawn.
+    const char* sigCaption = tr(scopeSignalCaption(signal));
+    glassText(dl, legend, px, ImVec2(a.x + 7.0f, y), theme::kIvory, sigCaption);
     // THE DISPLAY MODE ON THE GLASS, beside the caption, whenever it is not
     // the live trace - a screenshot of an averaged spectrum that did not say
     // so would be read as the signal itself.
     const ScopeDisplay disp = scopeDisplayFromIndex(state.display);
     if (disp != ScopeDisplay::Normal) {
-        const float capW = textWidth(legend, px, scopeSignalCaption(signal));
+        const float capW = textWidth(legend, px, sigCaption);
         glassText(dl, legend, px, ImVec2(a.x + 7.0f + capW + 10.0f, y), theme::kAmber,
-                  scopeDisplayKey(disp));
+                  tr(scopeDisplayKey(disp)));
     }
 
     const bool spectral = (signal == ScopeSignal::Spectrum || signal == ScopeSignal::Mpx);
@@ -231,7 +240,7 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
     if (feed.audioFrom != nullptr && feed.audioFrom[0] != '\0' &&
         signal != ScopeSignal::Baseband && signal != ScopeSignal::Vector) {
         char via[96];
-        std::snprintf(via, sizeof(via), "AUDIO FROM %s", feed.audioFrom);
+        cascade::core::formatUtf8(via, sizeof(via), tr("AUDIO FROM %s"), feed.audioFrom);
         glassText(dl, legend, px, ImVec2(a.x + 7.0f, a.y + 5.0f), theme::kAmber, via);
     }
 }
@@ -314,6 +323,11 @@ void drawMpxLabels(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
         if (!mpxBandInSpan(band, span)) { continue; }
         const ImU32 ink = band.optional ? inkFaint : inkStrong;
         const ImU32 text = band.optional ? textFaint : textStrong;
+        // kMpxBands is a constexpr table pinned by test_fm_mpx_plan.cpp
+        // against exact English labels (bandNamed does strcmp), so the label
+        // stays untranslated in the table and is translated here, where it is
+        // drawn.
+        const char* label = tr(band.label);
 
         if (band.loHz == band.hiHz) {
             // A TONE: one rule, floor to ceiling, and its name beside the
@@ -321,11 +335,11 @@ void drawMpxLabels(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
             // sit astride the very line it is naming.
             const float x = a.x + w * static_cast<float>(mpxFraction(band.loHz, span));
             dl->AddLine(ImVec2(x, a.y + 2.0f), ImVec2(x, b.y - 2.0f), ink, 1.0f);
-            const float tw = textWidth(reading, px, band.label);
+            const float tw = textWidth(reading, px, label);
             if (tw + 6.0f <= mpxLabelRoomPx(band, span, w)) {
                 float tx = x + 3.0f;
                 if (tx + tw > b.x - 2.0f) { tx = x - 3.0f - tw; }
-                glassText(dl, reading, px, ImVec2(tx, toneTextY), text, band.label);
+                glassText(dl, reading, px, ImVec2(tx, toneTextY), text, label);
             }
             continue;
         }
@@ -338,10 +352,10 @@ void drawMpxLabels(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
         dl->AddLine(ImVec2(x0, bracketY), ImVec2(x0, bracketY + 4.0f), ink, 1.0f);
         dl->AddLine(ImVec2(x1, bracketY), ImVec2(x1, bracketY + 4.0f), ink, 1.0f);
 
-        const float tw = textWidth(reading, px, band.label);
+        const float tw = textWidth(reading, px, label);
         if (tw + 4.0f <= (x1 - x0)) {
             glassText(dl, reading, px, ImVec2((x0 + x1) * 0.5f - tw * 0.5f, bandTextY), text,
-                      band.label);
+                      label);
         }
     }
 }
@@ -391,7 +405,7 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float fullRange = unitsPerDiv * static_cast<float>(kScopeDivY);
 
     if (!feed.live) {
-        addNoSignal(dl, a, b, "NO SAMPLES - RECEIVER STOPPED");
+        addNoSignal(dl, a, b, tr("NO SAMPLES - RECEIVER STOPPED"));
     } else {
         switch (signal) {
             case ScopeSignal::Audio: {
@@ -411,15 +425,15 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                     addTrace(dl, lo, hi, cols, a.x, unitsPerDiv, yCentre, divPx, kBeam,
                              kBeamGlow);
                 } else {
-                    addNoSignal(dl, a, b, "NO AUDIO IN THE TAP");
+                    addNoSignal(dl, a, b, tr("NO AUDIO IN THE TAP"));
                 }
                 break;
             }
             case ScopeSignal::Spectrum:
             case ScopeSignal::Mpx: {
                 const char* empty = (signal == ScopeSignal::Mpx)
-                                        ? "NO MULTIPLEX IN THE TAP"
-                                        : "NO AUDIO IN THE TAP";
+                                        ? tr("NO MULTIPLEX IN THE TAP")
+                                        : tr("NO AUDIO IN THE TAP");
                 if (feed.spectrumDb == nullptr || feed.spectrumBins < 2 ||
                     !(feed.spectrumBinHz > 0.0)) {
                     addNoSignal(dl, a, b, empty);
@@ -490,7 +504,7 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             case ScopeSignal::Baseband: {
                 if (feed.iqI == nullptr || feed.iqQ == nullptr || feed.iqCount == 0 ||
                     lo == nullptr || hi == nullptr) {
-                    addNoSignal(dl, a, b, "NO BASEBAND IN THE TAP");
+                    addNoSignal(dl, a, b, tr("NO BASEBAND IN THE TAP"));
                     break;
                 }
                 // TWO TRACES, TWO HALVES OF THE TUBE. I above the axis and Q
@@ -544,7 +558,7 @@ void drawDemodScopeFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             }
             case ScopeSignal::Vector: {
                 if (feed.iqI == nullptr || feed.iqQ == nullptr || feed.iqCount == 0) {
-                    addNoSignal(dl, a, b, "NO BASEBAND IN THE TAP");
+                    addNoSignal(dl, a, b, tr("NO BASEBAND IN THE TAP"));
                     break;
                 }
                 const float cx = scopeGridLine(kScopeDivX / 2, kScopeDivX, a.x, b.x);

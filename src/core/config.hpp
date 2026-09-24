@@ -251,6 +251,23 @@ struct AppConfig {
     // where the cells are painted.
     std::string tunerDisplayStyle = "nixie";
 
+    // --- Language and country (core/i18n.hpp, core/countries.hpp) -----------
+    // The interface language as the user chose it: "auto" follows the
+    // operating system's language when the build carries a catalogue for it,
+    // "en" is English, anything else a catalogue code ("pt-BR", "de").
+    // Stored AS CHOSEN, not as resolved - "auto" must stay "auto" so that a
+    // later catalogue for the user's own language is picked up without them
+    // asking - and validated where it is applied, like bandPlanSelection:
+    // i18n::resolve answers English for a code this build does not carry.
+    std::string language = "auto";
+    // ISO 3166-1 alpha-2 code of the country the user says they are in, or ""
+    // for not chosen. Choosing one sets bandPlanSelection to that country's
+    // plan at the moment of choosing; it is not re-applied at start-up, so a
+    // plan picked by hand in Display afterwards stays picked. Never sent
+    // anywhere: the usage report's payload is listed field by field in
+    // PRIVACY.md and this is not one of them.
+    std::string country;
+
     // --- Map trails -----------------------------------------------------------
     // TWO SWITCHES, because the request behind them was ambiguous and both
     // readings deserve an answer. A beta tester asked for the flight trail to

@@ -9,15 +9,20 @@
 #include <cfloat>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "core/plugin_abi.h"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 
 namespace cascade::gui {
+using cascade::i18n::tr;
+using cascade::i18n::trId;
 
 // ============================================================================
 // What the window SAYS. No ImGui below this line until the drawing section.
@@ -58,13 +63,13 @@ FittedState fittedState(const FittedModule& m, bool receiverRunning) {
 
 const char* fittedStateWord(FittedState s) {
     switch (s) {
-        case FittedState::Fed: return "FED";
-        case FittedState::NotFed: return "NOT FED";
-        case FittedState::NoSignal: return "TAKES NO SIGNAL";
-        case FittedState::Stopped: return "STOPPED BY YOU";
-        case FittedState::Refused: return "REFUSED";
+        case FittedState::Fed: return tr("FED");
+        case FittedState::NotFed: return tr("NOT FED");
+        case FittedState::NoSignal: return tr("TAKES NO SIGNAL");
+        case FittedState::Stopped: return tr("STOPPED BY YOU");
+        case FittedState::Refused: return tr("REFUSED");
     }
-    return "UNKNOWN";
+    return tr("UNKNOWN");
 }
 
 std::string fittedStateSentence(const FittedModule& m, bool receiverRunning) {
@@ -75,19 +80,20 @@ std::string fittedStateSentence(const FittedModule& m, bool receiverRunning) {
             // ("expected 3, plugin reports 2"). The framing that introduces it
             // is drawn separately, so nothing is added to the host's words.
             return m.error.empty()
-                       ? std::string("The host refused this file and recorded no reason.")
+                       ? std::string(
+                             tr("The host refused this file and recorded no reason."))
                        : m.error;
         case FittedState::Stopped:
-            return "You stopped this module. It stays installed and its code stays "
-                   "mapped, and it is given no decoders, no map targets and no panels of "
-                   "its own until you start it again.";
+            return tr("You stopped this module. It stays installed and its code stays "
+                      "mapped, and it is given no decoders, no map targets and no panels of "
+                      "its own until you start it again.");
         case FittedState::NoSignal:
-            return "Fitted, and it takes no signal. This module declares no decoder, so "
-                   "nothing is routed to it and nothing should be - it works through the "
-                   "capabilities listed above.";
+            return tr("Fitted, and it takes no signal. This module declares no decoder, so "
+                      "nothing is routed to it and nothing should be - it works through the "
+                      "capabilities listed above.");
         case FittedState::Fed:
-            return "Fitted and being fed. The receiver is running and this module has a "
-                   "decoder matched to the rate it is producing.";
+            return tr("Fitted and being fed. The receiver is running and this module has a "
+                      "decoder matched to the rate it is producing.");
         case FittedState::NotFed:
             break;
     }
@@ -102,16 +108,19 @@ std::string fittedStateSentence(const FittedModule& m, bool receiverRunning) {
     // receiver and be back where they were with no new information.
     if (!receiverRunning) {
         if (m.fed) {
-            return "Fitted, and fed nothing because the receiver is stopped. It has a "
-                   "decoder matched to the rate the receiver is set to, so starting the "
-                   "receiver is all this needs.";
+            return tr("Fitted, and fed nothing because the receiver is stopped. It has a "
+                      "decoder matched to the rate the receiver is set to, so starting the "
+                      "receiver is all this needs.");
         }
-        std::string s = "Fitted, and fed nothing because the receiver is stopped.";
         if (!m.idleDetail.empty()) {
-            s += " There is a second reason as well: ";
-            s += m.idleDetail;
+            const char* fmt =
+                tr("Fitted, and fed nothing because the receiver is stopped. There is a "
+                   "second reason as well: %s");
+            std::vector<char> buf(m.idleDetail.size() + std::strlen(fmt) + 8);
+            std::snprintf(buf.data(), buf.size(), fmt, m.idleDetail.c_str());
+            return std::string(buf.data());
         }
-        return s;
+        return tr("Fitted, and fed nothing because the receiver is stopped.");
     }
     if (!m.idleDetail.empty()) {
         // The runner's own ready-to-display sentence, quoted rather than
@@ -120,7 +129,7 @@ std::string fittedStateSentence(const FittedModule& m, bool receiverRunning) {
         // description in the wrong place.
         return m.idleDetail;
     }
-    return "Fitted, and not being fed. No reason was recorded for it.";
+    return tr("Fitted, and not being fed. No reason was recorded for it.");
 }
 
 ModulePlate makeModulePlate(const FittedModule& m) {
@@ -512,7 +521,7 @@ float drawOperatingWell(ImDrawList* dl, float x, float y, float width,
 
     const FittedState st = fittedState(m, receiverRunning);
     const std::string sentence = fittedStateSentence(m, receiverRunning);
-    const std::string path = m.path.empty() ? std::string("not recorded") : m.path;
+    const std::string path = m.path.empty() ? std::string(tr("not recorded")) : m.path;
     const float pathH = uf->CalcTextSizeA(tiny, FLT_MAX, inner, path.c_str()).y;
 
     const float wellH = pad + capH + 6.0f + noteHeight(inner, sentence.c_str()) + 12.0f +
@@ -525,14 +534,14 @@ float drawOperatingWell(ImDrawList* dl, float x, float y, float width,
     // THE CAPTION CARRIES THE STATE WORD, so the well says which of the five
     // answers this is before the sentence is read - and so a greyscale
     // screenshot still says it, which a coloured note alone would not.
-    char caption[64];
-    std::snprintf(caption, sizeof caption, "WHAT IT IS DOING - %s", fittedStateWord(st));
+    char caption[128];
+    cascade::core::formatUtf8(caption, sizeof caption, tr("WHAT IT IS DOING - %s"), fittedStateWord(st));
     addBenchGroupCaption(dl, ImVec2(x + pad, ty), inner, caption);
     ty += capH + 6.0f;
     drawNote(dl, ImVec2(x + pad, ty), inner, stateInk(st), sentence.c_str());
     ty += noteHeight(inner, sentence.c_str()) + 12.0f;
 
-    addBenchGroupCaption(dl, ImVec2(x + pad, ty), inner, "LOADED FROM");
+    addBenchGroupCaption(dl, ImVec2(x + pad, ty), inner, tr("LOADED FROM"));
     ty += capH + 4.0f;
     dl->AddText(uf, tiny, ImVec2(x + pad, ty),
                 m.path.empty() ? theme::kInkFaint : theme::kInkMuted, path.c_str(), nullptr,
@@ -555,7 +564,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     if (avail.x < 240.0f || avail.y < 160.0f) {
         // Too small to letter honestly. Say why rather than drawing a clipped
         // panel that looks broken.
-        ImGui::TextDisabled("Too narrow to draw. Widen the window.");
+        ImGui::TextDisabled("%s", tr("Too narrow to draw. Widen the window."));
         ImGui::PopID();
         return act;
     }
@@ -583,7 +592,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         std::max(40.0f, faceH(cascade::gui::fonts::legend(),
                               cascade::gui::fonts::kLegendSize) + 24.0f);
     addBenchPlate(dl, origin, ImVec2(origin.x + avail.x, origin.y + titlePlateH),
-                  "FITTED MODULES");
+                  tr("FITTED MODULES"));
     float y = origin.y + titlePlateH + 10.0f;
 
     // ======================= THE STRIP ======================================
@@ -592,16 +601,16 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // "is anything working" without opening a single row.
     const char* rxNote =
         model.receiverRunning
-            ? "The receiver is running, so a module with a matched decoder is being fed."
-            : "The receiver is stopped, so NOTHING is being fed to any module however it "
-              "is set. That is why no module below reads FED.";
+            ? tr("The receiver is running, so a module with a matched decoder is being fed.")
+            : tr("The receiver is stopped, so NOTHING is being fed to any module however it "
+                 "is set. That is why no module below reads FED.");
     const float stripInner = avail.x - 24.0f;
     // MEASURED FROM THE WORDS ON IT. drawDeckKey CENTRES its label and does
     // not clip, so a key too narrow for its word does not shorten it - the
     // word hangs out over both machined edges and, here, over the engraved
     // caption to its left.
-    const float rescanW = std::max(96.0f, textW(uf, tiny, "SCAN AGAIN") + 22.0f);
-    const float resetW = std::max(96.0f, textW(uf, tiny, "RESET WINDOW SIZES") + 22.0f);
+    const float rescanW = std::max(96.0f, textW(uf, tiny, tr("SCAN AGAIN")) + 22.0f);
+    const float resetW = std::max(96.0f, textW(uf, tiny, tr("RESET WINDOW SIZES")) + 22.0f);
     const float stripNoteW = stripInner;
     constexpr int kGroups = 5;
     const float groupW = stripInner / static_cast<float>(kGroups);
@@ -621,11 +630,11 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         bool lit;
     };
     const Group groups[kGroups] = {
-        {counts.fed, "FED", theme::kPhosphor, counts.fed > 0},
-        {counts.notFed, "NOT DECODING", theme::kGold, counts.notFed > 0},
-        {counts.noSignal, "TAKES NO SIGNAL", theme::kBrassTint, false},
-        {counts.stopped, "STOPPED", theme::kBrassTint, false},
-        {counts.refused, "REFUSED", theme::kAlarm, counts.refused > 0},
+        {counts.fed, tr("FED"), theme::kPhosphor, counts.fed > 0},
+        {counts.notFed, tr("NOT DECODING"), theme::kGold, counts.notFed > 0},
+        {counts.noSignal, tr("TAKES NO SIGNAL"), theme::kBrassTint, false},
+        {counts.stopped, tr("STOPPED"), theme::kBrassTint, false},
+        {counts.refused, tr("REFUSED"), theme::kAlarm, counts.refused > 0},
     };
     // THE WORDS ARE WRAPPED INSIDE THEIR OWN GROUP AND THE ROW IS SIZED FROM
     // THE TALLEST. The user can narrow this window until "NOT DECODING" needs
@@ -647,13 +656,13 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         float ty = tl.y + 12.0f;
         addBenchGroupCaption(dl, ImVec2(tl.x + 12.0f, ty),
                              std::max(0.0f, stripInner - rescanW - resetW - 20.0f),
-                             "WHAT IS FITTED");
+                             tr("WHAT IS FITTED"));
 
         // SCAN AGAIN, on the strip because it is the one action that is about
         // the whole folder rather than about one module.
         const ImVec2 rtl(br.x - 12.0f - rescanW, ty - 4.0f);
-        if (drawDeckKey(dl, rtl, ImVec2(rtl.x + rescanW, rtl.y + oneLineKeyH()), "SCAN AGAIN",
-                        true, "rescan")) {
+        if (drawDeckKey(dl, rtl, ImVec2(rtl.x + rescanW, rtl.y + oneLineKeyH()),
+                        tr("SCAN AGAIN"), true, "rescan")) {
             act.kind = FittedModulesAction::Kind::Rescan;
         }
 
@@ -666,12 +675,13 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         // it moves, because "reset" on its own could mean the modules.
         const ImVec2 wtl(rtl.x - 10.0f - resetW, ty - 4.0f);
         if (drawDeckKey(dl, wtl, ImVec2(wtl.x + resetW, wtl.y + oneLineKeyH()),
-                        "RESET WINDOW SIZES", true, "resetwindows")) {
+                        tr("RESET WINDOW SIZES"), true, "resetwindows")) {
             act.kind = FittedModulesAction::Kind::ResetWindows;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Puts every decoder, panel, instrument and map window back "
-                              "to its default size and position.");
+            ImGui::SetTooltip("%s",
+                              tr("Puts every decoder, panel, instrument and map window back "
+                                 "to its default size and position."));
         }
         ty += capH + 8.0f;
 
@@ -702,10 +712,11 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         // module having been dropped into the other one of the two directories
         // PluginHost chooses between.
         const std::string dir =
-            model.directory.empty() ? std::string("No directory has been scanned yet.")
-                                    : model.directory;
+            model.directory.empty()
+                ? std::string(tr("No directory has been scanned yet."))
+                : model.directory;
         addBenchGroupCaption(dl, ImVec2(origin.x + 2.0f, y), avail.x - 4.0f,
-                             "MODULES ARE READ FROM");
+                             tr("MODULES ARE READ FROM"));
         y += capH + 3.0f;
         // WRAPPED, not truncated. An installed copy under Program Files puts
         // the modules under %LOCALAPPDATA% instead (see
@@ -722,9 +733,13 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
     // Whatever the last install or remove said, verbatim and in its own
     // colour, because a Remove that FAILED is exactly when the user needs
     // telling and the row it acted on has already gone.
+    // A refusal the store made itself arrives here in English (it is compared
+    // and logged where it is made) and is translated for the page;
+    // PluginRepo's own sentences come back as written (trStoredReason).
     if (!model.error.empty()) {
-        const float h = noteHeight(avail.x, model.error.c_str());
-        drawNote(dl, ImVec2(origin.x, y), avail.x, theme::kAlarm, model.error.c_str());
+        const std::string error = trStoredReason(model.error);
+        const float h = noteHeight(avail.x, error.c_str());
+        drawNote(dl, ImVec2(origin.x, y), avail.x, theme::kAlarm, error.c_str());
         y += h + 8.0f;
     } else if (!model.report.empty()) {
         const float h = noteHeight(avail.x, model.report.c_str());
@@ -747,11 +762,11 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         // shoulder are inside the measurement because the word starts after
         // them.
         const float lampRun = 9.0f + 3.5f + 6.0f;
-        const float widestLabel = std::max({textW(uf, tiny, "TAKES NO SIGNAL"),
-                                            textW(uf, tiny, "NOT DECODING"),
-                                            textW(uf, tiny, "STOPPED"),
-                                            textW(uf, tiny, "REFUSED"),
-                                            textW(uf, tiny, "FED")});
+        const float widestLabel = std::max({textW(uf, tiny, tr("TAKES NO SIGNAL")),
+                                            textW(uf, tiny, tr("NOT DECODING")),
+                                            textW(uf, tiny, tr("STOPPED")),
+                                            textW(uf, tiny, tr("REFUSED")),
+                                            textW(uf, tiny, tr("FED"))});
         const float keyW =
             std::min(std::max(150.0f, lampRun + widestLabel + 10.0f),
                      (avail.x - gap * static_cast<float>(kFilters - 1)) /
@@ -766,11 +781,11 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         // as well, which is a key that does not do what it says: a basemap is
         // not a decoder that has stopped decoding.
         const Filter filters[kFilters] = {
-            {"FED", &deck.showFed, theme::kPhosphor},
-            {"NOT DECODING", &deck.showIdle, theme::kGold},
-            {"TAKES NO SIGNAL", &deck.showNoSignal, theme::kBrassTint},
-            {"STOPPED", &deck.showStopped, theme::kBrassTint},
-            {"REFUSED", &deck.showRefused, theme::kAlarm},
+            {tr("FED"), &deck.showFed, theme::kPhosphor},
+            {tr("NOT DECODING"), &deck.showIdle, theme::kGold},
+            {tr("TAKES NO SIGNAL"), &deck.showNoSignal, theme::kBrassTint},
+            {tr("STOPPED"), &deck.showStopped, theme::kBrassTint},
+            {tr("REFUSED"), &deck.showRefused, theme::kAlarm},
         };
         for (int i = 0; i < kFilters; ++i) {
             const ImVec2 tl(origin.x + (keyW + gap) * static_cast<float>(i), y);
@@ -842,13 +857,13 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // "no module file was found" told that user their folder was bare.
             const char* why =
                 model.modules.empty()
-                    ? "No module the host can load was found in the folder above, so "
-                      "nothing is fitted. A module the version policy has retired is "
-                      "renamed aside and stops being scanned - it is still a file in "
-                      "that folder, and the rail's Plugins section lists it under "
-                      "Disabled."
-                    : "Every fitted module is hidden by the keys above. Press one to show "
-                      "it again.";
+                    ? tr("No module the host can load was found in the folder above, so "
+                         "nothing is fitted. A module the version policy has retired is "
+                         "renamed aside and stops being scanned - it is still a file in "
+                         "that folder, and the rail's Plugins section lists it under "
+                         "Disabled.")
+                    : tr("Every fitted module is hidden by the keys above. Press one to "
+                         "show it again.");
             drawNote(ldl, lo, innerW, theme::kBrassShade, why);
             ImGui::SetCursorScreenPos(ImVec2(lo.x, lo.y + noteHeight(innerW, why)));
             ImGui::Dummy(ImVec2(innerW, 0.0f));
@@ -863,8 +878,8 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             const float tagW = moduleKindTagWidth() + 16.0f;
             // START and STOP, measured across both, so the key does not change
             // width when it is pressed and drag the row's title with it.
-            const float keyW = std::max({78.0f, textW(uf, tiny, "START") + 26.0f,
-                                         textW(uf, tiny, "STOP") + 26.0f});
+            const float keyW = std::max({78.0f, textW(uf, tiny, tr("START")) + 26.0f,
+                                         textW(uf, tiny, tr("STOP")) + 26.0f});
             const float bodyX = tagW + 12.0f;
             const float bodyW = innerW - bodyX - keyW - 20.0f;
             float ry = lo.y;
@@ -1002,7 +1017,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 if (m.loaded) {
                     const ImVec2 ktl(br.x - keyW - 8.0f, tl.y + 9.0f + faceH(uf, uiPx) + 6.0f);
                     if (drawDeckKey(ldl, ktl, ImVec2(ktl.x + keyW, ktl.y + oneLineKeyH()),
-                                    m.stopped ? "START" : "STOP", true, "rowstop")) {
+                                    m.stopped ? tr("START") : tr("STOP"), true, "rowstop")) {
                         act.kind = m.stopped ? FittedModulesAction::Kind::Start
                                              : FittedModulesAction::Kind::Stop;
                         act.file = m.file;
@@ -1030,10 +1045,9 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
         const float innerW = ImGui::GetContentRegionAvail().x;
 
         if (visible.empty()) {
-            drawNote(pdl, po, innerW, theme::kBrassShade,
-                     "Select a module to see its plate.");
-            ImGui::SetCursorScreenPos(
-                ImVec2(po.x, po.y + noteHeight(innerW, "Select a module to see its plate.")));
+            const char* none = tr("Select a module to see its plate.");
+            drawNote(pdl, po, innerW, theme::kBrassShade, none);
+            ImGui::SetCursorScreenPos(ImVec2(po.x, po.y + noteHeight(innerW, none)));
             ImGui::Dummy(ImVec2(innerW, 0.0f));
         } else {
             const FittedModule& m =
@@ -1064,7 +1078,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             const float half = (innerW - 8.0f) * 0.5f;
             if (m.loaded) {
                 if (drawDeckKey(pdl, ImVec2(po.x, py), ImVec2(po.x + half, py + keyH),
-                                m.stopped ? "START MODULE" : "STOP MODULE", true,
+                                m.stopped ? tr("START MODULE") : tr("STOP MODULE"), true,
                                 "platestop")) {
                     act.kind = m.stopped ? FittedModulesAction::Kind::Start
                                          : FittedModulesAction::Kind::Stop;
@@ -1074,7 +1088,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
                 // A refused file has no instances to start. A key here would
                 // imply the reason it is silent is something the user did.
                 drawDeckKey(pdl, ImVec2(po.x, py), ImVec2(po.x + half, py + keyH),
-                            "NOTHING TO START", false, "platestopdead");
+                            tr("NOTHING TO START"), false, "platestopdead");
             }
 
             // TWO-STEP REMOVE. Deleting a module deletes a file the user
@@ -1082,7 +1096,7 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // must not do it.
             const bool armed = (deck.confirmRemove == m.file);
             if (drawDeckKey(pdl, ImVec2(po.x + half + 8.0f, py), ImVec2(po.x + innerW, py + keyH),
-                            armed ? "CONFIRM DELETE" : "REMOVE MODULE", true,
+                            armed ? tr("CONFIRM DELETE") : tr("REMOVE MODULE"), true,
                             "plateremove")) {
                 if (armed) {
                     act.kind = FittedModulesAction::Kind::Remove;
@@ -1095,11 +1109,11 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             py += keyH + 8.0f;
 
             if (armed) {
-                static const char* kArmed =
+                static const char* kArmed = FOX_TR_NOOP(
                     "Press CONFIRM DELETE again to delete this file from the modules "
-                    "folder. Selecting another module cancels it.";
-                drawNote(pdl, ImVec2(po.x, py), innerW, theme::kAlarm, kArmed);
-                py += noteHeight(innerW, kArmed) + 8.0f;
+                    "folder. Selecting another module cancels it.");
+                drawNote(pdl, ImVec2(po.x, py), innerW, theme::kAlarm, tr(kArmed));
+                py += noteHeight(innerW, tr(kArmed)) + 8.0f;
             }
 
             // THE ONE REACH THAT IS ENFORCED, and therefore the one that gets a
@@ -1115,8 +1129,8 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // lies about having done something.
             if (m.loaded && m.tuneCapable) {
                 if (drawDeckKey(pdl, ImVec2(po.x, py), ImVec2(po.x + innerW, py + keyH),
-                                m.tuneAllowed ? "REVOKE RECEIVER CONTROL"
-                                              : "GRANT RECEIVER CONTROL",
+                                m.tuneAllowed ? tr("REVOKE RECEIVER CONTROL")
+                                              : tr("GRANT RECEIVER CONTROL"),
                                 true, "plategrant")) {
                     act.kind = FittedModulesAction::Kind::SetTune;
                     act.file = m.file;
@@ -1145,15 +1159,15 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // again by that same file and by nothing else. The map page keys
             // on the module's own display name instead, which is why it is
             // stated separately rather than lumped in with "them".
-            static const char* kKept =
+            static const char* kKept = FOX_TR_NOOP(
                 "Removing deletes the file and nothing else. The stop, the "
                 "receiver-control grant and the mute setting are all remembered against "
                 "this module's FILE NAME, and any map page's position against the name "
                 "the module calls itself, so fitting this same file again finds every one "
                 "of them as it was. A build that arrives under a different file name is a "
-                "different key, and starts from the defaults.";
-            drawNote(pdl, ImVec2(po.x, py), innerW, theme::kBrassShade, kKept);
-            py += noteHeight(innerW, kKept) + 8.0f;
+                "different key, and starts from the defaults.");
+            drawNote(pdl, ImVec2(po.x, py), innerW, theme::kBrassShade, tr(kKept));
+            py += noteHeight(innerW, tr(kKept)) + 8.0f;
 
             ImGui::PopID();
             ImGui::SetCursorScreenPos(ImVec2(po.x, py));

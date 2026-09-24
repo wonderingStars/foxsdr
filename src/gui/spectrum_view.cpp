@@ -11,11 +11,16 @@
 
 #include <imgui.h>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 
 namespace cascade::gui {
+
+using cascade::i18n::tr;
 
 namespace {
 
@@ -144,11 +149,11 @@ float binValueAt(const float* bins, int n, double bin) {
 //
 // Letter-spacing is drawn a glyph at a time because Dear ImGui has no tracking
 // parameter, and an engraved instrument legend without it reads as a word
-// rather than as a machined caption. ASCII ONLY, deliberately: a byte at a time
-// is the wrong unit for UTF-8, and every caption on this face is a machine
-// legend in capitals. (scope_view.cpp has the same pair for the cabinet; they
-// are four lines each and live in their own file's anonymous namespace so
-// neither panel can silently retune the other's lettering.)
+// rather than as a machined caption. trackedWidth and addTrackedText are
+// gui/text_fit.hpp's: the copies that stood here stepped a BYTE at a time,
+// which was right while every caption was ASCII and drew "SPECTRUM" as
+// "??P????TR??M" the moment it was translated. Each panel still passes its own
+// tracking, so neither can retune the other's lettering.
 float textWidth(ImFont* font, float px, const char* text) {
     if (font == nullptr || text == nullptr) { return 0.0f; }
     return font->CalcTextSizeA(px, FLT_MAX, 0.0f, text).x;
@@ -157,30 +162,6 @@ float textWidth(ImFont* font, float px, const char* text) {
 float lineHeight(ImFont* font, float px) {
     if (font == nullptr) { return px; }
     return font->CalcTextSizeA(px, FLT_MAX, 0.0f, "0").y;
-}
-
-float trackedWidth(ImFont* font, float px, const char* text, float tracking) {
-    if (font == nullptr || text == nullptr) { return 0.0f; }
-    float w = 0.0f;
-    int glyphs = 0;
-    for (const char* p = text; *p != '\0'; ++p) {
-        const char one[2] = {*p, '\0'};
-        w += font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x;
-        ++glyphs;
-    }
-    if (glyphs > 1) { w += tracking * static_cast<float>(glyphs - 1); }
-    return w;
-}
-
-void addTrackedText(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, ImU32 col,
-                    const char* text, float tracking) {
-    if (dl == nullptr || font == nullptr || text == nullptr) { return; }
-    float x = at.x;
-    for (const char* p = text; *p != '\0'; ++p) {
-        const char one[2] = {*p, '\0'};
-        dl->AddText(font, px, ImVec2(x, at.y), col, one);
-        x += font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x + tracking;
-    }
 }
 
 // One frequency-ish figure with its unit, for the SPAN box. The unit is chosen
@@ -372,7 +353,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
     // Line 1 names the picture and its parameters. The bin count is counted
     // here from what was handed over; the averaging weight only appears when
     // the caller supplied one that IS an average.
-    const char* title = "SPECTRUM";
+    const char* title = tr("SPECTRUM");
     if (chrome != nullptr && chrome->title != nullptr && chrome->title[0] != '\0') {
         title = chrome->title;
     }
@@ -386,15 +367,15 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
     // is a caller bug, and printing its number would dress that up as a
     // measurement of something.
     if (dbBins != nullptr && n > 0) {
-        std::snprintf(binPart, sizeof(binPart), " - %d BIN", n);
+        cascade::core::formatUtf8(binPart, sizeof(binPart), tr(" - %d BIN"), n);
     }
     char emaPart[24] = {'\0'};
     if (averaged) {
-        std::snprintf(emaPart, sizeof(emaPart), " - EMA %.2f",
+        cascade::core::formatUtf8(emaPart, sizeof(emaPart), tr(" - EMA %.2f"),
                       static_cast<double>(chrome->emaAlpha));
     }
     char line1[128];
-    std::snprintf(line1, sizeof(line1), "%s%s%s", title, binPart, emaPart);
+    cascade::core::formatUtf8(line1, sizeof(line1), "%s%s%s", title, binPart, emaPart);
 
     const float headX = p0.x + kChromePad;
     float headY = p0.y + kChromePad * 0.75f;
@@ -407,7 +388,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
     // demodulated, and saying so is the point of the line — but printing it
     // over an UNaveraged trace would be a false statement about the picture.
     if (averaged) {
-        static const char kCaveat[] = "AVERAGE - COMPUTED, NOT HEARD";
+        const char* kCaveat = tr("AVERAGE - COMPUTED, NOT HEARD");
         addTrackedText(dl, uiFont, tinyPx, ImVec2(headX, headY), kFaint, kCaveat, 0.4f);
         const float caveatRight = headX + trackedWidth(uiFont, tinyPx, kCaveat, 0.4f);
         if (caveatRight > headRight) { headRight = caveatRight; }
@@ -425,7 +406,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
         float peakDb = 0.0f;
         if (SpectrumView::peakInBand(dbBins, n, firstBin, lastBin, *chrome->passband,
                                      peakDb)) {
-            static const char kPeakCaption[] = "PEAK IN PASSBAND";
+            const char* kPeakCaption = tr("PEAK IN PASSBAND");
             char figure[24];
             std::snprintf(figure, sizeof(figure), "%.1f", static_cast<double>(peakDb));
             // The unit comes from the header, where the scale it names is
@@ -442,10 +423,10 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
                 // the peak is taken off the same averaged trace the line above
                 // has just called a computed picture.
                 if (chrome->dataAgeSec < 10.0) {
-                    std::snprintf(ageLine, sizeof(ageLine), "MEASURED %.1f s AGO",
+                    cascade::core::formatUtf8(ageLine, sizeof(ageLine), tr("MEASURED %.1f s AGO"),
                                   chrome->dataAgeSec);
                 } else {
-                    std::snprintf(ageLine, sizeof(ageLine), "MEASURED %.0f s AGO",
+                    cascade::core::formatUtf8(ageLine, sizeof(ageLine), tr("MEASURED %.0f s AGO"),
                                   chrome->dataAgeSec);
                 }
             }
@@ -551,7 +532,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
 
     // --- SPAN box, bottom right ----------------------------------------------
     if (chrome->spanHz > 0.0 && std::isfinite(chrome->spanHz)) {
-        static const char kSpanCaption[] = "SPAN";
+        const char* kSpanCaption = tr("SPAN");
         char spanText[32];
         formatSpan(chrome->spanHz, spanText, sizeof(spanText));
         const float capW = trackedWidth(legendFont, tinyPx, kSpanCaption, 0.7f);

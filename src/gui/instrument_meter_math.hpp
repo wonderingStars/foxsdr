@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP: unitWord is drawn through tr()
 #include "core/plugin_abi.h"
 
 namespace cascade::gui::meter {
@@ -170,9 +171,9 @@ inline const char* unitWord(Commodity c) {
         case Commodity::Electric: return "kWh";
         case Commodity::Gas:
         case Commodity::Water:
-        case Commodity::Unknown: return "UNITS";
+        case Commodity::Unknown: return FOX_TR_NOOP("UNITS");
     }
-    return "UNITS";
+    return FOX_TR_NOOP("UNITS");
 }
 
 // --- tamper -----------------------------------------------------------------

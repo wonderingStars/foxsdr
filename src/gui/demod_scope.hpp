@@ -35,6 +35,8 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "core/i18n.hpp"
+
 namespace cascade::gui {
 
 // --- the tube ----------------------------------------------------------------
@@ -89,10 +91,12 @@ inline constexpr int kScopeSignalCount = 5;
 // The word engraved on the key. Short, because four keys share one row.
 inline const char* scopeSignalKey(ScopeSignal s) {
     switch (s) {
-        case ScopeSignal::Audio: return "AUDIO";
-        case ScopeSignal::Spectrum: return "SPEC";
+        // Marked, not translated: the key is drawn through trId(), and a
+        // literal nobody marked is a key no catalogue can ever carry.
+        case ScopeSignal::Audio: return FOX_TR_NOOP("AUDIO");
+        case ScopeSignal::Spectrum: return FOX_TR_NOOP("SPEC");
         case ScopeSignal::Baseband: return "I/Q";
-        case ScopeSignal::Vector: return "VECTOR";
+        case ScopeSignal::Vector: return FOX_TR_NOOP("VECTOR");
         case ScopeSignal::Mpx: return "MPX";
     }
     return "";
@@ -102,11 +106,11 @@ inline const char* scopeSignalKey(ScopeSignal s) {
 // is where somebody finds out what they are looking at.
 inline const char* scopeSignalCaption(ScopeSignal s) {
     switch (s) {
-        case ScopeSignal::Audio: return "DEMODULATED AUDIO";
-        case ScopeSignal::Spectrum: return "AUDIO SPECTRUM";
-        case ScopeSignal::Baseband: return "BASEBAND I/Q";
-        case ScopeSignal::Vector: return "VECTOR I-Q";
-        case ScopeSignal::Mpx: return "FM MULTIPLEX";
+        case ScopeSignal::Audio: return FOX_TR_NOOP("DEMODULATED AUDIO");
+        case ScopeSignal::Spectrum: return FOX_TR_NOOP("AUDIO SPECTRUM");
+        case ScopeSignal::Baseband: return FOX_TR_NOOP("BASEBAND I/Q");
+        case ScopeSignal::Vector: return FOX_TR_NOOP("VECTOR I-Q");
+        case ScopeSignal::Mpx: return FOX_TR_NOOP("FM MULTIPLEX");
     }
     return "";
 }
@@ -243,24 +247,28 @@ inline ScopeDisplay scopeDisplayFromIndex(int index) {
 
 inline const char* scopeDisplayKey(ScopeDisplay d) {
     switch (d) {
-        case ScopeDisplay::Average: return "AVG";
-        case ScopeDisplay::Persist: return "PERSIST";
+        // Marked for the catalogue and translated where drawn: the English
+        // itself is pinned by test_scope_memory.
+        case ScopeDisplay::Average: return FOX_TR_NOOP("AVG");
+        case ScopeDisplay::Persist: return FOX_TR_NOOP("PERSIST");
         case ScopeDisplay::Normal:
-        default: return "NORM";
+        default: return FOX_TR_NOOP("NORM");
     }
 }
 
 inline const char* scopeDisplayTip(ScopeDisplay d) {
     switch (d) {
         case ScopeDisplay::Average:
-            return "Average successive traces. A spectrum settles into its steady shape;\n"
-                   "a waveform sheds its noise if it repeats (a tone), and fades towards\n"
-                   "the centre if it does not (speech) - that is what averaging does.";
+            return cascade::i18n::tr(
+                "Average successive traces. A spectrum settles into its steady shape;\n"
+                "a waveform sheds its noise if it repeats (a tone), and fades towards\n"
+                "the centre if it does not (speech) - that is what averaging does.");
         case ScopeDisplay::Persist:
-            return "Keep a fading memory of the trace behind the live one, like a\n"
-                   "long-persistence tube: peaks and excursions stay visible for a moment.";
+            return cascade::i18n::tr(
+                "Keep a fading memory of the trace behind the live one, like a\n"
+                "long-persistence tube: peaks and excursions stay visible for a moment.");
         case ScopeDisplay::Normal:
-        default: return "The live trace, nothing kept between frames.";
+        default: return cascade::i18n::tr("The live trace, nothing kept between frames.");
     }
 }
 

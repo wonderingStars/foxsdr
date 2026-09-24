@@ -22,6 +22,8 @@
 #include <cstddef>
 #include <cstdio>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP: phaseName is drawn through tr()
+
 namespace cascade::gui::faxmath {
 
 // --- the phase ladder --------------------------------------------------------
@@ -41,11 +43,11 @@ inline constexpr int kPhaseUnknown = -1;
 
 inline const char* phaseName(int index) {
     switch (index) {
-        case kPhaseIdle: return "IDLE";
-        case kPhaseStart: return "START";
-        case kPhasePhasing: return "PHASING";
-        case kPhasePicture: return "PICTURE";
-        case kPhaseStop: return "STOP";
+        case kPhaseIdle: return FOX_TR_NOOP("IDLE");
+        case kPhaseStart: return FOX_TR_NOOP("START");
+        case kPhasePhasing: return FOX_TR_NOOP("PHASING");
+        case kPhasePicture: return FOX_TR_NOOP("PICTURE");
+        case kPhaseStop: return FOX_TR_NOOP("STOP");
         default: return "";
     }
 }

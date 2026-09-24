@@ -31,6 +31,13 @@ foreach(src ${CASCADE_TESTS})
         # generated from - the typefaces against third_party/fonts - so it
         # needs the repository root on its command line.
         add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
+    elseif(name STREQUAL "test_i18n" OR name STREQUAL "test_i18n_glyphs" OR
+           name STREQUAL "test_countries")
+        # The translation tests read resources/lang, resources/bandplans and
+        # scan src/ for the keys the code asks for, so they take the
+        # repository root too. Run by hand without it, each walks up from its
+        # working directory instead.
+        add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
     elseif(name STREQUAL "test_json_dump_policy")
         # The only test in this loop that takes an argument: it scans src/
         # for nlohmann `.dump(` sites missing the error_handler_t::replace

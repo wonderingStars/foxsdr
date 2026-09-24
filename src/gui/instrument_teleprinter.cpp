@@ -72,6 +72,7 @@
 #include <cstring>
 #include <string>
 
+#include "core/i18n.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_teleprinter_math.hpp"
 #include "gui/scope_face.hpp"
@@ -80,6 +81,7 @@
 namespace cascade::gui {
 
 using cascade::core::HostInstrument;
+using cascade::i18n::tr;
 namespace tp = cascade::gui::teleprinter;
 
 namespace {
@@ -312,7 +314,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const float capW = colW - 20.0f;
         float cy = bodyTL.y + 2.0f;
 
-        addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, "STATUS");
+        addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, tr("STATUS"));
         cy += fonts::kTinySize + 8.0f;
 
         // The lamps, TWO TO A ROW and in the legend face at the engraving
@@ -331,12 +333,12 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             bool lit;
             const char* caption;
         };
-        const Lamp lamps[4] = {{theme::kAmber, havePrint, "PAPER"},
-                               {theme::kPhosphor, in.have, "READY"},
-                               {theme::kGold, cue.unread, "NEW"},
+        const Lamp lamps[4] = {{theme::kAmber, havePrint, tr("PAPER")},
+                               {theme::kPhosphor, in.have, tr("READY")},
+                               {theme::kGold, cue.unread, tr("NEW")},
                                // An alerting lamp BLINKS. One that is merely
                                // on is a lamp somebody has stopped seeing.
-                               {theme::kAlarmHot, alert && blinkOn, "ALERT"}};
+                               {theme::kAlarmHot, alert && blinkOn, tr("ALERT")}};
         ImGui::PushFont(fonts::legend(), fonts::kTinySize - 3.0f);
         const float lampR = 6.0f;
         const float lampPitch = capW * 0.5f;
@@ -356,7 +358,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         cy += 3.0f;
 
         if (cy + fonts::kTinySize + 34.0f < bodyBR.y) {
-            addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, "MESSAGES");
+            addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, tr("MESSAGES"));
             cy += fonts::kTinySize + 9.0f;
             const float cellW = std::min(26.0f, (capW - 14.0f) / 4.0f);
             const float cellH = std::min(30.0f, bodyBR.y - cy - 6.0f);
@@ -388,13 +390,13 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const float lampR = 5.0f;
         float lx = bayBR.x - 26.0f;
         drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kAlarmHot,
-                      alert && blinkOn, "ALERT");
+                      alert && blinkOn, tr("ALERT"));
         lx -= 46.0f;
         drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kGold, cue.unread,
-                      "NEW");
+                      tr("NEW"));
         lx -= 46.0f;
         drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kPhosphor, in.have,
-                      "READY");
+                      tr("READY"));
         ImGui::PopFont();
         bayTop += lampR * 2.0f + fonts::kTinySize + 2.0f;
     }
@@ -511,7 +513,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         }
         dl->PopClipRect();
     } else {
-        const char* legend = in.have ? "NO MESSAGE PRINTED" : "PRINTER IDLE";
+        const char* legend = in.have ? tr("NO MESSAGE PRINTED") : tr("PRINTER IDLE");
         const float ly = paperBottom + 10.0f;
         if (ly + fonts::kTinySize < bayBR.y) {
             ImFont* lf = fonts::legend();

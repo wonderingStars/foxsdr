@@ -246,6 +246,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
     getString(j, "patch", out.patch);
     getString(j, "bandPlanSelection", out.bandPlanSelection);
+    // Carried as written, like bandPlanSelection: which codes are real is a
+    // question for the catalogue and country tables of THIS build, answered
+    // where they are applied (see config.hpp).
+    getString(j, "language", out.language);
+    getString(j, "country", out.country);
     // Both are a closed set of three spellings, unlike bandPlanSelection
     // (which is validated against whatever is actually installed, elsewhere,
     // by BandPlan::loadSelection). A hand-edited or future-build value this
@@ -698,6 +703,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     j["patch"] = cfg.patch;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
+    j["language"] = cfg.language;
+    j["country"] = cfg.country;
     j["bandPlanSize"] = cfg.bandPlanSize;
     j["bandPlanPalette"] = cfg.bandPlanPalette;
     j["tunerDisplayStyle"] = cfg.tunerDisplayStyle;

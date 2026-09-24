@@ -11,9 +11,12 @@
 #include <cstdio>
 #include <set>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
 #include "gui/fonts.hpp"
+#include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
 #include "gui/aircraft_icons.hpp"
@@ -21,6 +24,9 @@
 #include "imgui.h"
 
 namespace cascade::gui {
+
+using cascade::i18n::tr;
+
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -107,33 +113,9 @@ constexpr ImU32 kAlert = IM_COL32(255, 45, 45, 255);
 // drawn wrong, and the size comes back from a measurement of the actual glyphs
 // at the actual face - never from a literal that happened to fit last time.
 // Text that already fits is returned untouched, so this only ever costs
-// something where the alternative was a collision.
-//
-// THE FLOOR IS DELIBERATE. Below about nine pixels an engraved capital is not
-// a smaller caption, it is dirt on the panel - drawBenchStopButton says the
-// same thing about its own word - so a box that small gets the floor and the
-// caller's own width guard decides whether to draw at all.
-// IT MEASURES AGAIN AFTER SHRINKING, and that is not belt and braces. A glyph's
-// advance is rasterised at the size it is asked for and lands on a whole
-// pixel, so the width of a word is very nearly - but not exactly - linear in
-// the size, and the one division that ought to land on the answer can leave a
-// caption a pixel or two over its room. A pixel or two is one letter of a
-// tracked title, which is the difference between a caption that fits and a
-// caption with its last letter cut off. Four passes is far more than the
-// rounding ever needs and cannot loop.
-float fitTextPx(ImFont* font, float px, const char* text, float room) {
-    if (font == nullptr || text == nullptr || text[0] == '\0') { return px; }
-    if (!(room > 0.0f) || !(px > 0.0f)) { return px; }
-    float out = px;
-    for (int pass = 0; pass < 4; ++pass) {
-        const float w = font->CalcTextSizeA(out, FLT_MAX, 0.0f, text).x;
-        if (!(w > room) || !(w > 0.0f)) { break; }
-        const float next = std::max(9.0f, out * room / w - 0.05f);
-        if (!(next < out)) { break; }  // at the floor, and the cut takes over
-        out = next;
-    }
-    return out;
-}
+// something where the alternative was a collision. fitTextPx itself is
+// gui/text_fit.hpp's now, shared with every other surface a translation can
+// overfill; this panel still passes the absolute nine-pixel floor.
 
 // The floor's other half, and the reason fitTextPx may return a size that still
 // does not fit: what cannot be drawn legibly at nine pixels is CUT OFF at the
@@ -367,7 +349,10 @@ void textColoured(ImU32 col, const char* s) {
 //
 // Returns the screen index chosen this frame, or `current` when none was.
 int drawLcdTabs(const ImVec2& tl, float width, int current) {
-    static const char* kNames[3] = {"HOME", "FLIGHT", "SYS"};
+    // Marked for the catalogue: translated where drawn below, while the
+    // English stays the button's id.
+    static const char* kNames[3] = {FOX_TR_NOOP("HOME"), FOX_TR_NOOP("FLIGHT"),
+                                    FOX_TR_NOOP("SYS")};
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float gap = 8.0f;
     const float w = (width - gap * 2.0f) / 3.0f;
@@ -394,14 +379,18 @@ int drawLcdTabs(const ImVec2& tl, float width, int current) {
         // in, and a word wider than its own key is drawn over the key beside
         // it. Measured and drawn at ONE size, so the centring cannot be
         // computed against a size the glyphs are not laid at.
+        // kNames[i] is also the InvisibleButton's id above, which must stay
+        // stable across languages, so the label drawn here is the translation
+        // of it rather than the id itself.
+        const char* label = tr(kNames[i]);
         ImFont* tf = ImGui::GetFont();
-        const float tpx = fitTextPx(tf, ImGui::GetFontSize(), kNames[i], w - 10.0f);
-        const ImVec2 sz = tf->CalcTextSizeA(tpx, FLT_MAX, 0.0f, kNames[i]);
+        const float tpx = fitTextPx(tf, ImGui::GetFontSize(), label, w - 10.0f);
+        const ImVec2 sz = tf->CalcTextSizeA(tpx, FLT_MAX, 0.0f, label);
         addClippedText(dl, tf, tpx,
                        ImVec2((a.x + b.x) * 0.5f - sz.x * 0.5f,
                               (a.y + b.y) * 0.5f - sz.y * 0.5f),
                        on ? IM_COL32(220, 240, 182, 255) : IM_COL32(141, 147, 121, 255),
-                       kNames[i], a.x, b.x);
+                       label, a.x, b.x);
     }
     return chosen;
 }
@@ -475,7 +464,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
         // repeats it - so counting the register here instead would have put a
         // number on the panel that no mark on the face agrees with. The
         // register gets a caption of its own further down, saying what IT is.
-        textColoured(kPanelLabel, "CONTACTS PLOTTED");
+        textColoured(kPanelLabel, tr("CONTACTS PLOTTED"));
         {
             char big[16];
             std::snprintf(big, sizeof(big), "%d", plotted);
@@ -493,12 +482,12 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             // fell with no stated reason reads as a decoder losing targets.
             // The SYS screen owns the switch - this line only says it is
             // thrown, and says nothing at all when it is not.
-            static const char* const kFilterSuffix[3] = {"", "   ALERT ONLY",
-                                                         "   NAMED ONLY"};
+            static const char* const kFilterSuffix[3] = {"", FOX_TR_NOOP("   ALERT ONLY"),
+                                                         FOX_TR_NOOP("   NAMED ONLY")};
             const int f = (opts.filter >= 0 && opts.filter <= 2) ? opts.filter : 0;
             char sub[96];
-            std::snprintf(sub, sizeof(sub), "of %d tracked   %d NM%s", tracked, rangeNm,
-                          kFilterSuffix[f]);
+            cascade::core::formatUtf8(sub, sizeof(sub), tr("of %d tracked   %d NM%s"), tracked, rangeNm,
+                          tr(kFilterSuffix[f]));
             textColoured(kPanelDim, sub);
         }
         ImGui::Separator();
@@ -548,23 +537,31 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             // contradicting itself while it sent the user to change an antenna
             // that was doing nothing wrong.
             if (tracked > 0) {
-                textColoured(kPanelDim, "NOTHING CURRENT");
+                textColoured(kPanelDim, tr("NOTHING CURRENT"));
                 ImGui::Spacing();
                 char aged[320];
-                std::snprintf(
+                // Singular and plural as two whole sentences: the English
+                // "has" / "have" handed in through %s was a word no catalogue
+                // could translate.
+                cascade::core::formatUtf8(
                     aged, sizeof(aged),
-                    "%d aircraft %s been heard and none has reported inside the last "
-                    "%llu seconds, which is the age the host drops a target at. They "
-                    "have gone out of range, or the decoder has stopped being fed - the "
-                    "Fitted modules window says whether it is still being fed.",
-                    tracked, tracked == 1 ? "has" : "have",
+                    tracked == 1
+                        ? tr("%d aircraft has been heard and none has reported inside the last "
+                             "%llu seconds, which is the age the host drops a target at. They "
+                             "have gone out of range, or the decoder has stopped being fed - the "
+                             "Fitted modules window says whether it is still being fed.")
+                        : tr("%d aircraft have been heard and none has reported inside the last "
+                             "%llu seconds, which is the age the host drops a target at. They "
+                             "have gone out of range, or the decoder has stopped being fed - the "
+                             "Fitted modules window says whether it is still being fed."),
+                    tracked,
                     static_cast<unsigned long long>(cascade::core::kTrackDropMsAircraft /
                                                     1000ull));
                 ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
                 ImGui::TextWrapped("%s", aged);
                 ImGui::PopStyleColor();
             } else {
-                textColoured(kPanelDim, "NOTHING BEING HEARD");
+                textColoured(kPanelDim, tr("NOTHING BEING HEARD"));
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
                 // NO CLAIM THAT A DECODER IS RUNNING. This renderer is handed
@@ -573,9 +570,10 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 // a user who may have no 1090 MHz decoder fitted at all. The
                 // window that can tell those apart is named instead.
                 ImGui::TextWrapped(
-                    "No aircraft position has reached this face. If a 1090 MHz decoder "
-                    "is fitted and being fed, check the antenna and try more gain; the "
-                    "Fitted modules window says whether it is.");
+                    "%s",
+                    tr("No aircraft position has reached this face. If a 1090 MHz decoder "
+                       "is fitted and being fed, check the antenna and try more gain; the "
+                       "Fitted modules window says whether it is."));
                 ImGui::PopStyleColor();
             }
         } else {
@@ -595,7 +593,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             // past the edge would be cut in the exact configuration it matters
             // in. "ALL" against the "PLOTTED" above it is the whole distinction
             // and it survives the trim.
-            textColoured(kPanelDim, "ALL CONTACTS");
+            textColoured(kPanelDim, tr("ALL CONTACTS"));
             ImGui::BeginChild("##homelist", ImVec2(0.0f, 0.0f), false);
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 const Row& r = rows[i];
@@ -629,7 +627,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                     std::snprintf(altTxt, sizeof(altTxt), "FL%03d",
                                   static_cast<int>(ht.t.altM * 3.28084 / 100.0));
                 } else {
-                    std::snprintf(altTxt, sizeof(altTxt), "NO ALT");
+                    cascade::core::formatUtf8(altTxt, sizeof(altTxt), "%s", tr("NO ALT"));
                 }
                 const ImVec2 asz = ImGui::CalcTextSize(altTxt);
                 // THE NAME STOPS WHERE THE ALTITUDE STARTS. Both are placed
@@ -655,7 +653,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                     std::snprintf(sub, sizeof(sub), "%.0f NM   %03d deg", r.rangeNm,
                                   static_cast<int>(r.bearingDeg + 0.5) % 360);
                 } else {
-                    std::snprintf(sub, sizeof(sub), "no receiver position");
+                    cascade::core::formatUtf8(sub, sizeof(sub), "%s", tr("no receiver position"));
                 }
                 d->AddText(ImVec2(tl.x + 4.0f, tl.y + ImGui::GetTextLineHeight() + 3.0f),
                            kPanelDim, sub);
@@ -672,12 +670,16 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
         // clicked. A settings screen of read-only facts would be a worse lie
         // than no settings screen: it looks like a place where things can be
         // changed and is not one.
-        textColoured(kPanelLabel, "SYSTEM OPTIONS");
+        textColoured(kPanelLabel, tr("SYSTEM OPTIONS"));
         ImGui::Spacing();
         // One clickable row: the name on the left, the current value as a pill
         // on the right. Returns true on the frame it was clicked.
+        // `k` is also the ImGui id (PushID) and must stay in English so the
+        // id is stable across languages; only the drawn copy is translated.
         const auto option = [](const char* k, const char* v, bool on) {
             ImGui::PushID(k);
+            const char* label = tr(k);
+            v = tr(v);
             const ImVec2 tl = ImGui::GetCursorScreenPos();
             const float w = ImGui::GetContentRegionAvail().x;
             const float rowH = ImGui::GetTextLineHeight() + 10.0f;
@@ -687,7 +689,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 d->AddRectFilled(tl, ImVec2(tl.x + w, tl.y + rowH),
                                  IM_COL32(134, 214, 74, 18), 3.0f);
             }
-            d->AddText(ImVec2(tl.x + 2.0f, tl.y + 5.0f), kPanelLabel, k);
+            d->AddText(ImVec2(tl.x + 2.0f, tl.y + 5.0f), kPanelLabel, label);
             const ImVec2 vs = ImGui::CalcTextSize(v);
             const ImVec2 pTL(tl.x + w - vs.x - 16.0f, tl.y + 3.0f);
             const ImVec2 pBR(tl.x + w - 2.0f, tl.y + rowH - 3.0f);
@@ -702,42 +704,53 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             return hit;
         };
 
-        if (option("PHOSPHOR", opts.phosphor ? "ON" : "OFF", opts.phosphor)) {
+        // The names are MARKED (FOX_TR_NOOP) because `option` translates what
+        // it draws: an unmarked literal is one no catalogue can carry, and
+        // these four stayed English in every language until they were.
+        if (option(FOX_TR_NOOP("PHOSPHOR"), opts.phosphor ? FOX_TR_NOOP("ON") : FOX_TR_NOOP("OFF"),
+                   opts.phosphor)) {
             opts.phosphor = !opts.phosphor;
         }
-        if (option("SWEEP", opts.sweep ? "ON" : "OFF", opts.sweep)) {
+        if (option(FOX_TR_NOOP("SWEEP"), opts.sweep ? FOX_TR_NOOP("ON") : FOX_TR_NOOP("OFF"),
+                   opts.sweep)) {
             opts.sweep = !opts.sweep;
         }
-        static const char* kTrailNames[3] = {"OFF", "LINE", "RIBBON"};
-        if (option("TRAILS", kTrailNames[opts.trail], opts.trail != 0)) {
+        static const char* kTrailNames[3] = {FOX_TR_NOOP("OFF"), FOX_TR_NOOP("LINE"),
+                                             FOX_TR_NOOP("RIBBON")};
+        if (option(FOX_TR_NOOP("TRAILS"), kTrailNames[opts.trail], opts.trail != 0)) {
             opts.trail = (opts.trail + 1) % 3;
         }
-        static const char* kFilterNames[3] = {"ALL", "ALERT", "NAMED"};
-        if (option("FILTER", kFilterNames[opts.filter], opts.filter != 0)) {
+        static const char* kFilterNames[3] = {FOX_TR_NOOP("ALL"), FOX_TR_NOOP("ALERT"),
+                                              FOX_TR_NOOP("NAMED")};
+        if (option(FOX_TR_NOOP("FILTER"), kFilterNames[opts.filter], opts.filter != 0)) {
             opts.filter = (opts.filter + 1) % 3;
         }
         ImGui::Spacing();
         ImGui::Spacing();
+        // `k` here is only ever drawn, never an id (no PushID in this lambda),
+        // so it is translated at each call site below instead.
         const auto fact = [](const char* k, const char* v) {
             textColoured(kPanelLabel, k);
             textColoured(kPanelValue, v);
         };
         char buf[48];
         std::snprintf(buf, sizeof(buf), "%d NM", rangeNm);
-        fact("RANGE", buf);
+        fact(tr("RANGE"), buf);
         if (hasRx) {
             std::snprintf(buf, sizeof(buf), "%.3f %.3f", rxLat, rxLon);
-            fact("ANTENNA", buf);
+            fact(tr("ANTENNA"), buf);
         } else {
-            fact("ANTENNA", "NOT SET");
+            fact(tr("ANTENNA"), tr("NOT SET"));
         }
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
-        ImGui::TextWrapped("Drag the face to move the view, double-click to recentre, "
-                           "and the wheel steps the range. FILTER hides everything but "
-                           "emergencies, or everything without a callsign. A trail "
-                           "starts when the scope is opened, not when the aircraft was "
-                           "first heard.");
+        ImGui::TextWrapped(
+            "%s",
+            tr("Drag the face to move the view, double-click to recentre, "
+               "and the wheel steps the range. FILTER hides everything but "
+               "emergencies, or everything without a callsign. A trail "
+               "starts when the scope is opened, not when the aircraft was "
+               "first heard."));
         ImGui::PopStyleColor();
     } else {
 
@@ -758,10 +771,10 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             // TYPE and the rest with nothing beside any of them reads as a
             // receiver that failed to decode them; saying there is no
             // selection, and how to make one, is the only honest thing here.
-            textColoured(kPanelDim, "NOTHING SELECTED");
+            textColoured(kPanelDim, tr("NOTHING SELECTED"));
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
-            ImGui::TextWrapped("Click an aircraft on the scope to see its details.");
+            ImGui::TextWrapped("%s", tr("Click an aircraft on the scope to see its details."));
             ImGui::PopStyleColor();
         } else {
             // THE SELECTION IS KEPT, NOT CLEARED. The aircraft has gone stale,
@@ -769,11 +782,11 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             // silently emptied itself would look like a fault, and holding the
             // id means the details come back by themselves if the aircraft
             // does.
-            textColoured(kPanelDim, "TARGET LOST");
+            textColoured(kPanelDim, tr("TARGET LOST"));
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
-            ImGui::TextWrapped("%s is no longer being plotted - it has gone quiet or "
-                               "left the selected range.",
+            ImGui::TextWrapped(tr("%s is no longer being plotted - it has gone quiet or "
+                                  "left the selected range."),
                                selectedId.c_str());
             ImGui::PopStyleColor();
         }
@@ -784,25 +797,34 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
         // hold the longest label actually present, and a constant here is a
         // promise about a font the host chooses at runtime - which is how the
         // map's altitude legend came to clip half its own labels.
+        // l.label and l.value are built by buildScopeDetailLines() in
+        // scope_view.hpp, which tests/test_scope_view.cpp pins against exact
+        // English (labels and fixed strings like "NO DATA"); some values are
+        // registry data or formatted figures with no catalogue entry, so they
+        // are translated here, at the point they are drawn, not in the header
+        // - tr() is a safe no-op for anything not in the catalogue.
         float labelW = 0.0f;
         for (const ScopeDetailLine& l : lines) {
-            labelW = std::max(labelW, ImGui::CalcTextSize(l.label.c_str()).x);
+            labelW = std::max(labelW, ImGui::CalcTextSize(tr(l.label.c_str())).x);
         }
         labelW += 12.0f;
         for (const ScopeDetailLine& l : lines) {
-            textColoured(kPanelLabel, l.label.c_str());
+            textColoured(kPanelLabel, tr(l.label.c_str()));
             ImGui::SameLine(labelW);
             // An emergency outranks the known/unknown styling, which is the
             // same precedence the colour rule at the top of this file states.
             const ImU32 col = l.alert ? kAlert : (l.known ? kPanelValue : kPanelDim);
-            textColoured(col, l.value.c_str());
+            textColoured(col, tr(l.value.c_str()));
         }
     }
 
         ImGui::EndChild();
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
-        ImGui::TextWrapped("%s", scopeUnavailableNote());
+        // scopeUnavailableNote() is pinned by test_scope_view.cpp against
+        // English substrings, so it is left untranslated at its definition
+        // and translated here, at the point it is drawn.
+        ImGui::TextWrapped("%s", tr(scopeUnavailableNote()));
         ImGui::PopStyleColor();
     }
 
@@ -1077,78 +1099,10 @@ ImU32 mixCol(ImU32 a, ImU32 b, float t) {
     return out;
 }
 
-// LETTER-SPACING, WHICH DEAR IMGUI HAS NOT. Several of the bench's captions are
-// tracked out - FUNCTION SELECT, SIGNAL PATH, TUNED - HERTZ - and tracking is
-// most of what separates an engraved legend from a word in a label. There is no
-// style var for it, so the glyphs are drawn one at a time with the advance
-// added by hand.
-//
-// ASCII ONLY, deliberately. A byte at a time is the wrong unit for UTF-8, and
-// every caption on this panel is a machine legend in capitals; anything else
-// would need the whole run measured and is not what these are for.
-float trackedWidth(ImFont* font, float px, const char* text, float tracking) {
-    if (font == nullptr || text == nullptr) { return 0.0f; }
-    float w = 0.0f;
-    int glyphs = 0;
-    for (const char* p = text; *p != '\0'; ++p) {
-        const char one[2] = {*p, '\0'};
-        w += font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x;
-        ++glyphs;
-    }
-    if (glyphs > 1) { w += tracking * static_cast<float>(glyphs - 1); }
-    return w;
-}
-
-// The tracked half of fitTextPx: the size at which this caption, WITH its
-// tracking, fits `room`. Tracking is expressed as a fraction of the size so
-// that both halves of the width scale together and one division is exact.
-//
-// A PLATE TITLE THAT DOES NOT FIT ITS PLATE IS NOT A SMALLER FAULT THAN A
-// CLIPPED ONE. Tracked capitals are the widest thing this panel draws - the
-// spacing that makes them read as engraving adds a fifth of the size between
-// every pair of letters - so FUNCTION SELECT on a narrow rail is exactly where
-// a font bump lands first.
-float fitTrackedPx(ImFont* font, float px, const char* text, float trackingFrac,
-                   float room) {
-    if (font == nullptr || text == nullptr || text[0] == '\0') { return px; }
-    if (!(room > 0.0f) || !(px > 0.0f)) { return px; }
-    // Re-measured after each pass, for the reason fitTextPx spells out: glyph
-    // advances are rounded per size, so one division is close and not exact.
-    float out = px;
-    for (int pass = 0; pass < 4; ++pass) {
-        const float w = trackedWidth(font, out, text, out * trackingFrac);
-        if (!(w > room) || !(w > 0.0f)) { break; }
-        const float next = std::max(9.0f, out * room / w - 0.05f);
-        if (!(next < out)) { break; }
-        out = next;
-    }
-    return out;
-}
-
-// `maxX` IS THE END OF THE THING THE CAPTION IS WRITTEN ON, and the run stops
-// there rather than carrying on past it. It is the floor's other half: fitting
-// shrinks a caption until it fits, but nothing may be drawn below about nine
-// pixels, so a box small enough to defeat that has to be handled by a rule
-// rather than by hope. Truncating spoils the caption; overflowing spoils the
-// control standing next to it, and only one of those is the caption's own
-// business.
-void addTrackedText(ImDrawList* dl, ImFont* font, float px, const ImVec2& at, ImU32 col,
-                    const char* text, float tracking, float maxX = FLT_MAX) {
-    if (dl == nullptr || font == nullptr || text == nullptr) { return; }
-    float x = at.x;
-    for (const char* p = text; *p != '\0'; ++p) {
-        const char one[2] = {*p, '\0'};
-        const float adv = font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x;
-        // Half a pixel of slack, because the shadow pass is drawn one pixel
-        // right of the cut it sits under and a caption fitted exactly to its
-        // room lands exactly on this edge. Without it the last letter of every
-        // fitted title is dropped from one of the two passes, which is the
-        // truncation this limit exists to make unnecessary.
-        if (x + adv > maxX + 1.5f) { break; }
-        dl->AddText(font, px, ImVec2(x, at.y), col, one);
-        x += adv + tracking;
-    }
-}
+// LETTER-SPACING, trackedWidth / fitTrackedPx / addTrackedText, is
+// gui/text_fit.hpp's. It used to be here, ASCII only, stepping a byte at a
+// time - which drew each half of an accented capital as a missing glyph the
+// moment a caption was translated.
 
 // An ImGui id taken from where the thing is drawn. A rail carries a dozen keys
 // and they must not share an id - two of them cannot occupy the same point, so
@@ -1328,7 +1282,7 @@ bool drawBenchStopButton(ImDrawList* dl, const ImVec2& centre, float radius,
     // THE WORD SAYS WHAT PRESSING IT DOES. See the header: the artboard only
     // ever shows a running machine, and a button lettered STOP that starts the
     // receiver would be the one kind of lie this panel cannot afford.
-    const char* word = running ? "STOP" : "START";
+    const char* word = running ? tr("STOP") : tr("START");
     ImFont* f = cascade::gui::fonts::legend();
     float px = std::max(cascade::gui::fonts::kTinySize, radius * 0.36f);
     float track = px * 0.12f;
@@ -2739,7 +2693,7 @@ void ScopeView::draw(float width, float height,
             return leftW + rightW + 24.0f <= span;
         };
         const float span = sqBR.x - sqTL.x;
-        const std::string tracksText = scopeTracksReadout(plotted_);
+        const std::string tracksText = scopeTracksReadout(plotted_, tr(kScopeTracksFormat));
         const std::string rangeText = scopeRangeReadout(rangeNm_);
         const ImVec2 tracksSize = ImGui::CalcTextSize(tracksText.c_str());
         const ImVec2 rangeSize = ImGui::CalcTextSize(rangeText.c_str());
@@ -2752,13 +2706,14 @@ void ScopeView::draw(float width, float height,
         // where the design puts them and where they stay out of the way of the
         // range ladder along the top.
         char pos[48];
-        std::snprintf(pos, sizeof(pos), "%.1f%c %05.1f%c", std::fabs(rxLat_),
-                      rxLat_ >= 0.0 ? 'N' : 'S', std::fabs(rxLon_),
-                      rxLon_ >= 0.0 ? 'E' : 'W');
-        const ImVec2 modeSize = ImGui::CalcTextSize("MODE ADS-B");
+        cascade::core::formatUtf8(pos, sizeof(pos), "%.1f%s %05.1f%s", std::fabs(rxLat_),
+                      cascade::i18n::hemisphereLetter(true, rxLat_ >= 0.0), std::fabs(rxLon_),
+                      cascade::i18n::hemisphereLetter(false, rxLon_ >= 0.0));
+        const char* modeLabel = tr("MODE ADS-B");
+        const ImVec2 modeSize = ImGui::CalcTextSize(modeLabel);
         const ImVec2 posSize = ImGui::CalcTextSize(pos);
         const float bottomY = sqBR.y - 6.0f - ImGui::GetTextLineHeight();
-        dl->AddText(ImVec2(sqTL.x + 8.0f, bottomY), kChromeDim, "MODE ADS-B");
+        dl->AddText(ImVec2(sqTL.x + 8.0f, bottomY), kChromeDim, modeLabel);
         if (pairFits(modeSize.x, posSize.x, span)) {
             dl->AddText(ImVec2(sqBR.x - 8.0f - posSize.x, bottomY), kChromeDim, pos);
         }
@@ -2823,7 +2778,10 @@ void ScopeView::draw(float width, float height,
                     ImVec2(cx + sx * radius, cy + sy * radius), kTick,
                     cardinal ? 1.8f : 1.0f);
         if (!cardinal && !numberTicks) { continue; }
-        const std::string lbl = scopeBearingLabel(b);
+        // tr(): the four cardinal letters are the same keys the hemisphere
+        // letters use (i18n::hemisphereLetter); a figure passes through.
+        const char* lblText = tr(scopeBearingLabel(b).c_str());
+        const std::string lbl = lblText;
         const ImVec2 sz = ImGui::CalcTextSize(lbl.c_str());
         // Centred on its own tick at a fixed inset, so the twelve labels sit on
         // one circle rather than drifting with the length of the text.

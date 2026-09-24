@@ -57,6 +57,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_tone_alert_math.hpp"
 #include "gui/scope_face.hpp"
@@ -64,6 +66,7 @@
 
 namespace cascade::gui {
 
+using cascade::i18n::tr;
 namespace ta = cascade::gui::tone_alert;
 
 namespace {
@@ -302,7 +305,7 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // The event counter first, so the maker's legend beside it is fitted
         // to what is actually left rather than to the whole case.
         char ev[32];
-        std::snprintf(ev, sizeof ev, "EVENT %u", static_cast<unsigned>(s.seq));
+        cascade::core::formatUtf8(ev, sizeof ev, tr("EVENT %u"), static_cast<unsigned>(s.seq));
         const float ew = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, ev).x;
         cut(dl, ImVec2(br.x - 12.0f - ew, legendY), capPx, ev, theme::kInkFaint);
         legendRoom -= ew + 12.0f;
@@ -310,9 +313,9 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // The maker's legend, cut into the case the way the equipment letters its
     // own front: what signalling it answers to, and what it is.
     {
-        const char* mark = "TWO-TONE SEQUENTIAL - SELECTIVE CALL ALERT MONITOR";
+        const char* mark = tr("TWO-TONE SEQUENTIAL - SELECTIVE CALL ALERT MONITOR");
         const float w0 = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, mark).x;
-        if (w0 > legendRoom) { mark = "TWO-TONE SEQUENTIAL"; }
+        if (w0 > legendRoom) { mark = tr("TWO-TONE SEQUENTIAL"); }
         const float w1 = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, mark).x;
         cut(dl, ImVec2(tl.x + 12.0f, legendY), ta::fitPx(capPx, w1, legendRoom), mark);
     }
@@ -365,11 +368,11 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
         // THE ALERT LAMP BLINKS, it is not merely on: a steady red lamp on a
         // station wall is a fault indicator, a blinking one is a call.
-        drawStationLamp(dl, ImVec2(cx, top + R), R, theme::kAlarmHot, ringing, "ALERT",
+        drawStationLamp(dl, ImVec2(cx, top + R), R, theme::kAlarmHot, ringing, tr("ALERT"),
                         capPx);
         if (withNew) {
             const float ny = top + 2.0f * R + capBlock + gap + smallR;
-            drawStationLamp(dl, ImVec2(cx, ny), smallR, theme::kGold, cue.unread, "NEW",
+            drawStationLamp(dl, ImVec2(cx, ny), smallR, theme::kGold, cue.unread, tr("NEW"),
                             capPx);
         }
     }
@@ -402,8 +405,8 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const float xB0 = xS1;
             const float xB1 = xB0 + bars.barW;
 
-            cutCentred(dl, (xA0 + xA1) * 0.5f, capY, capPx, "TONE A", bars.barW);
-            cutCentred(dl, (xB0 + xB1) * 0.5f, capY, capPx, "TONE B", bars.barW);
+            cutCentred(dl, (xA0 + xA1) * 0.5f, capY, capPx, tr("TONE A"), bars.barW);
+            cutCentred(dl, (xB0 + xB1) * 0.5f, capY, capPx, tr("TONE B"), bars.barW);
 
             // EVERY SLOT THROUGH slotOrNone, the bars included. Gating the
             // readouts on `have` and not the bars is exactly the fault the
@@ -428,7 +431,7 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 char sb[32];
                 ta::formatSec(sb, sizeof sb, sec);
                 char line[40];
-                std::snprintf(line, sizeof line, "%s s", sb);
+                cascade::core::formatUtf8(line, sizeof line, "%s s", sb);
                 figureCentred(dl, cx, wellBot + 3.0f + figH, readPx * 0.82f, line,
                               bars.barW,
                               ta::haveDuration(sec) ? theme::kAmber : theme::kCream);
@@ -454,10 +457,10 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (!have) {
             // RULE 2. No page has been received, so the glass says so - one
             // flag, no cells, no zeroes, no invented code.
-            cut(dl, ImVec2(x0, gy + (gBR.y - gTL.y) * 0.42f), uiPx, "NO PAGE",
+            cut(dl, ImVec2(x0, gy + (gBR.y - gTL.y) * 0.42f), uiPx, tr("NO PAGE"),
                 theme::kInkMuted);
         } else {
-            cut(dl, ImVec2(x0, gy), capPx, "CODE");
+            cut(dl, ImVec2(x0, gy), capPx, tr("CODE"));
             gy += capPx + 2.0f;
             if (s.text[0][0] != '\0') {
                 ImFont* rf = fonts::reading();
@@ -476,7 +479,7 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 gy += readPx + 4.0f;
             }
 
-            cut(dl, ImVec2(x0, gy), capPx, "FORMAT");
+            cut(dl, ImVec2(x0, gy), capPx, tr("FORMAT"));
             gy += capPx + 2.0f;
             if (s.text[1][0] != '\0') {
                 // Words, so the UI face - and wrapped inside the glass rather
@@ -520,7 +523,7 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 const ImVec2 rBR(x0 + tsz.x + 7.0f, ty + tsz.y + 3.0f);
                 if (rBR.y < gBR.y && rBR.x < gBR.x) {
                     if (ty - capPx - 3.0f > gy) {
-                        cut(dl, ImVec2(x0, ty - capPx - 4.0f), capPx, "RESULT");
+                        cut(dl, ImVec2(x0, ty - capPx - 4.0f), capPx, tr("RESULT"));
                     }
                     dl->AddRectFilled(rTL, rBR, theme::withAlpha(ink, 0.14f), 3.0f);
                     dl->AddRect(rTL, rBR, theme::withAlpha(ink, 0.55f), 3.0f, 0, 1.0f);

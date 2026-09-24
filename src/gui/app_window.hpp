@@ -15,6 +15,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Forward-declared rather than including GLFW here: this header is included
@@ -26,6 +27,7 @@ struct GLFWwindow;
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
 #include "core/gps_reader.hpp"
+#include "core/i18n.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
@@ -50,6 +52,7 @@ struct GLFWwindow;
 #include "gui/page_geometry.hpp"
 #include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
+#include "gui/bench_rail.hpp"
 #include "gui/audio_open.hpp"
 #include "gui/config_writer.hpp"
 #include "gui/shell_open.hpp"
@@ -256,13 +259,14 @@ inline void formatBandwidth(double hz, char* out, std::size_t n) {
 // nothing found. Singular/plural rather than always "PORTS" because "1
 // PORTS" is the kind of thing a person notices and a test can pin without
 // a registry in the room.
+// Drawn and nothing else, so it is written in the interface language.
 inline void formatSerialPortsChip(std::size_t count, char* out, std::size_t n) {
     if (count == 0) {
-        std::snprintf(out, n, "NONE");
+        std::snprintf(out, n, "%s", cascade::i18n::tr("NONE"));
     } else if (count == 1) {
-        std::snprintf(out, n, "1 PORT");
+        std::snprintf(out, n, "%s", cascade::i18n::tr("1 PORT"));
     } else {
-        std::snprintf(out, n, "%zu PORTS", count);
+        std::snprintf(out, n, cascade::i18n::tr("%zu PORTS"), count);
     }
 }
 
@@ -653,6 +657,27 @@ private:
     void drawDisplaySection();
     // The trail width slider (0.99.26), in Display and in the map deck alike.
     void drawTrailWidthControl(const char* label);
+
+    // --- LANGUAGE & COUNTRY (app_window_language.cpp) ------------------------
+    //
+    // The first section of the SYSTEM bank. The language is applied only by
+    // applyPendingLanguage(), called before each frame begins - never in the
+    // middle of one, where half the frame would be drawn in each language and
+    // widget labels would change under ImGui mid-submission. It starts
+    // pending, so the first frame applies whatever applyConfig restored (or
+    // FOXSDR_LANGUAGE, which overrides the saved setting for that first
+    // application only and is never written back).
+    void drawLanguageSection();
+    void applyPendingLanguage();
+    std::string languageSetting_ = "auto";  // AppConfig::language, as chosen
+    std::string countrySetting_;            // AppConfig::country, "" = not set
+    bool languageApplyPending_ = true;
+    bool languageEnvConsumed_ = false;
+    std::string countryFilter_;  // the Country combo's type-to-narrow text
+    // The country list in the order the active language reads it, rebuilt
+    // when the language changes rather than sorted every frame.
+    std::vector<std::size_t> countryOrder_;
+    std::string countryOrderLanguage_;
     void drawDecodeBank();
     // FOXSDR_OPEN_DECODERS: puts the rail on DECODE for a self-capture.
     void selectDecodeBankForCapture();
@@ -2282,6 +2307,9 @@ private:
     cascade::core::FeatureRequestState featureRequestLastLoggedState_ =
         cascade::core::FeatureRequestState::Idle;
     std::size_t featureRequestSentChars_ = 0;
+    // The height of everything under the page's text box on the last frame,
+    // so the box can give way to it (gui::boxGivingWay). 0 until measured.
+    float featureRequestBelowBoxH_ = 0.0f;
     void drawFeatureRequestPage();
 
     // --- REPORT A BUG / DISLIKE (see core/problem_report.hpp) ----------------
@@ -2306,6 +2334,8 @@ private:
     std::size_t problemReportSentChars_ = 0;
     // The kind the send in flight carried, for its one log line.
     std::string problemReportSentKind_;
+    // As featureRequestBelowBoxH_, for this page's box.
+    float problemReportBelowBoxH_ = 0.0f;
     void drawProblemReportPage();
     // "Serial ports" settings section: the machine's ports as a table, and
     // the GPS row (drawGpsPositionControl) that used to be findable only
@@ -3192,8 +3222,10 @@ private:
         std::size_t next = 0;  // the next id to start
         int installed = 0;
         int failed = 0;
-        // "NAME: reason", verbatim from whatever refused it.
-        std::vector<std::string> failures;
+        // {name, reason}, the reason verbatim and in English from whatever
+        // refused it. Kept apart so the log gets the English and the panel a
+        // translation of the same words (gui::trStoredReason).
+        std::vector<std::pair<std::string, std::string>> failures;
         std::string currentName;  // what is moving right now
         std::size_t total = 0;
     };

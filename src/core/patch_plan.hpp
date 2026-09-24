@@ -31,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP: problemText is drawn through tr()
 #include "core/patch_devices.hpp"
 #include "core/patch_graph.hpp"
 
@@ -73,27 +74,27 @@ inline bool isAdvisory(Problem p) {
 
 inline const char* problemText(Problem p) {
     switch (p) {
-        case Problem::NothingFeedsIt: return "nothing feeds this";
-        case Problem::NotFedByARadio: return "no radio upstream of this";
-        case Problem::NoFrequency: return "no frequency set";
-        case Problem::OutOfBand: return "outside the band the radio is receiving";
+        case Problem::NothingFeedsIt: return FOX_TR_NOOP("nothing feeds this");
+        case Problem::NotFedByARadio: return FOX_TR_NOOP("no radio upstream of this");
+        case Problem::NoFrequency: return FOX_TR_NOOP("no frequency set");
+        case Problem::OutOfBand: return FOX_TR_NOOP("outside the band the radio is receiving");
         case Problem::RateUnreachable:
-            return "no whole division of this sample rate lands in the audio band";
-        case Problem::NothingListens: return "nothing is listening to this";
-        case Problem::NoPlugin: return "no plugin chosen for this decoder";
-        case Problem::PluginMissing: return "that plugin is not installed or did not load";
+            return FOX_TR_NOOP("no whole division of this sample rate lands in the audio band");
+        case Problem::NothingListens: return FOX_TR_NOOP("nothing is listening to this");
+        case Problem::NoPlugin: return FOX_TR_NOOP("no plugin chosen for this decoder");
+        case Problem::PluginMissing: return FOX_TR_NOOP("that plugin is not installed or did not load");
         case Problem::PluginWrongFeed:
-            return "that plugin takes a different input from the one wired here";
+            return FOX_TR_NOOP("that plugin takes a different input from the one wired here");
         case Problem::DecoderTooFast:
-            return "that plugin needs a faster sample rate than its source produces";
-        case Problem::PluginRefused: return "the plugin refused to start - it may need a different rate";
-        case Problem::NoDevice: return "no device chosen for this radio";
+            return FOX_TR_NOOP("that plugin needs a faster sample rate than its source produces");
+        case Problem::PluginRefused: return FOX_TR_NOOP("the plugin refused to start - it may need a different rate");
+        case Problem::NoDevice: return FOX_TR_NOOP("no device chosen for this radio");
         case Problem::DeviceTwice:
-            return "another radio in this patch already uses that device - one device, one radio";
-        case Problem::RadioFailed: return "the device would not open";
-        case Problem::NoTracks: return "this decoder puts nothing on a map";
+            return FOX_TR_NOOP("another radio in this patch already uses that device - one device, one radio");
+        case Problem::RadioFailed: return FOX_TR_NOOP("the device would not open");
+        case Problem::NoTracks: return FOX_TR_NOOP("this decoder puts nothing on a map");
     }
-    return "this cannot run";
+    return FOX_TR_NOOP("this cannot run");
 }
 
 // --- decoders ----------------------------------------------------------------

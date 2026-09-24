@@ -5,6 +5,8 @@
 #include "core/feature_request.hpp"
 
 #include "core/crash_upload.hpp"
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 
 #include <cstdlib>
 
@@ -113,25 +115,43 @@ std::size_t featureRequestContactCharCount(const std::string& contact) {
         stripControlCharsForCount(trimFeatureWhitespace(contact), /*keepNewlineAndTab=*/false));
 }
 
+// THE SENTENCES ARE WHOLE FORMAT STRINGS, TRANSLATED HERE. They used to be
+// built by joining fragments around the numbers, which no catalogue can
+// translate: a key has to be the whole sentence, and a language that puts the
+// number first cannot be served pieces. They are only ever shown to the user
+// (the report pages draw them; nothing sends or compares the words), and with
+// English in force tr() hands back the English exactly as it was.
+namespace {
+// `format` arrives already translated: the tr() is at each call so the key
+// extractor (tools/i18n_keys.py, test_i18n) sees the literal.
+std::string sentence(const char* format, std::size_t a, std::size_t b) {
+    char buf[320];
+    formatUtf8(buf, sizeof(buf), format, a, b);
+    return buf;
+}
+}  // namespace
+
 std::string validateFeatureRequestText(const std::string& text) {
+    using cascade::i18n::tr;
     const std::size_t chars = featureRequestTextCharCount(text);
     if (chars < kFeatureRequestMinChars) {
-        return "Please write at least " + std::to_string(kFeatureRequestMinChars) +
-               " characters (" + std::to_string(chars) + " so far).";
+        return sentence(tr("Please write at least %zu characters (%zu so far)."),
+                        kFeatureRequestMinChars, chars);
     }
     if (chars > kFeatureRequestMaxChars) {
-        return "Please keep it to " + std::to_string(kFeatureRequestMaxChars) +
-               " characters or fewer (it is currently " + std::to_string(chars) + ").";
+        return sentence(tr("Please keep it to %zu characters or fewer (it is currently %zu)."),
+                        kFeatureRequestMaxChars, chars);
     }
     return std::string();
 }
 
 std::string validateFeatureRequestContact(const std::string& contact) {
+    using cascade::i18n::tr;
     const std::size_t chars = featureRequestContactCharCount(contact);
     if (chars > kFeatureRequestMaxContactChars) {
-        return "Please keep the contact line to " +
-               std::to_string(kFeatureRequestMaxContactChars) +
-               " characters or fewer (it is currently " + std::to_string(chars) + ").";
+        return sentence(
+            tr("Please keep the contact line to %zu characters or fewer (it is currently %zu)."),
+            kFeatureRequestMaxContactChars, chars);
     }
     return std::string();
 }
@@ -260,15 +280,20 @@ bool FeatureRequestSender::sendJson(const std::string& url, const std::string& j
             // blank.
             msg = extractServerError(raw.body);
             if (msg.empty()) {
-                msg = "The server would not accept the request (HTTP " +
-                      std::to_string(raw.status) + ").";
+                // One format string, not fragments, so it can be translated
+                // (the page shows this line as it is stored).
+                char buf[160];
+                formatUtf8(buf, sizeof(buf),
+                           cascade::i18n::tr("The server would not accept the request (HTTP %d)."),
+                           raw.status);
+                msg = buf;
             }
         } else {
             // No status at all: the connection was refused, the name did not
             // resolve, or the server accepted the connection and never
             // answered - the one case the contract names explicitly that an
             // HTTP status code cannot describe.
-            msg = "Could not reach foxsdr.com. Check your connection and try again.";
+            msg = FOX_TR_NOOP("Could not reach foxsdr.com. Check your connection and try again.");
         }
 
         {

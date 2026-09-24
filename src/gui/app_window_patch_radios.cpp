@@ -33,6 +33,8 @@
 #include <imgui.h>
 
 #include "core/diag_log.hpp"
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "core/mp3_writer.hpp"
 #include "core/patch_audio.hpp"
 #include "core/patch_devices.hpp"
@@ -44,6 +46,8 @@
 namespace pc = cascade::core::patch;
 
 namespace cascade::gui {
+using cascade::i18n::tr;
+using cascade::i18n::trId;
 
 namespace {
 
@@ -90,7 +94,7 @@ std::unique_ptr<cascade::source::SigGenSource> makePatchGenerator(double rateHz,
 
 std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const {
     std::vector<PatchDeviceChoice> out;
-    out.push_back({pc::kGeneratorKey, "Signal generator"});
+    out.push_back({pc::kGeneratorKey, tr("Signal generator")});
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // A Pluto needs its address typed in the Source panel; the patch has
         // no field for it, so it is not offered here rather than failing.
@@ -98,6 +102,8 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
         out.push_back({pc::makeDeviceKey(d.driver, d.args), d.label});
     }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+        // NOT WRAPPED: "(SoapySDR)" is only the excluded product name in
+        // parentheses, nothing else to translate.
         out.push_back({pc::makeDeviceKey("soapy", d.args), d.label + " (SoapySDR)"});
     }
     // The receiver's own radio, even when no list currently shows it (a
@@ -107,13 +113,18 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
         const bool listed = std::any_of(out.begin(), out.end(), [&](const PatchDeviceChoice& c) {
             return c.key == key || pc::sameDevice(c.key, key);
         });
-        if (!listed) { out.push_back({key, patchMainKeep_.label + " (the receiver's radio)"}); }
+        if (!listed) {
+            char buf[256];
+            cascade::core::formatUtf8(buf, sizeof buf, tr("%s (the receiver's radio)"),
+                          patchMainKeep_.label.c_str());
+            out.push_back({key, buf});
+        }
     }
     return out;
 }
 
 std::string AppWindow::patchDeviceLabel(const std::string& key) const {
-    if (key.empty()) { return "No device chosen"; }
+    if (key.empty()) { return tr("No device chosen"); }
     for (const PatchDeviceChoice& c : patchDeviceChoices()) {
         if (c.key == key) { return c.label; }
     }
@@ -123,8 +134,14 @@ std::string AppWindow::patchDeviceLabel(const std::string& key) const {
     const std::string own = pc::argField(args, "label");
     if (!own.empty()) { return own; }
     const std::string serial = pc::argField(args, "serial");
-    return pc::deviceDriver(key) + (serial.empty() ? std::string{} : " " + serial) +
-           " (not listed)";
+    char buf[256];
+    if (serial.empty()) {
+        cascade::core::formatUtf8(buf, sizeof buf, tr("%s (not listed)"), pc::deviceDriver(key).c_str());
+    } else {
+        cascade::core::formatUtf8(buf, sizeof buf, tr("%s %s (not listed)"), pc::deviceDriver(key).c_str(),
+                      serial.c_str());
+    }
+    return buf;
 }
 
 std::string AppWindow::patchDefaultDeviceKey() const {
@@ -589,8 +606,12 @@ void AppWindow::patchStopAll(bool restoreMain) {
         }
     }
     if (row < 0) {
-        sourceError_ = "the radio the patch page was using (" + keep.label +
-                       ") is not listed any more - choose it again in Source";
+        char buf[256];
+        cascade::core::formatUtf8(buf, sizeof buf,
+                      tr("the radio the patch page was using (%s) is not listed any more - "
+                         "choose it again in Source"),
+                      keep.label.c_str());
+        sourceError_ = buf;
         cascade::core::diagWarnf("patch: could not hand %s back to the receiver - not listed",
                                  keep.label.c_str());
         return;
@@ -646,11 +667,12 @@ void AppWindow::drawPatchTransport() {
     const ImVec2 centre(at.x + kR * 1.1f, at.y + kR * 1.1f);
     if (drawBenchStopButton(dl, centre, kR, patchRunning_)) { patchPressStart(); }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(patchRunning_
-                              ? "Stop the patch: every patch radio closes, recordings are\n"
-                                "finished, and the receiver gets its radio back."
-                              : "Start the patch: every radio switched on opens. The receiver\n"
-                                "hands its radio over and runs on the signal generator.");
+        ImGui::SetTooltip(
+            "%s", patchRunning_
+                      ? tr("Stop the patch: every patch radio closes, recordings are\n"
+                           "finished, and the receiver gets its radio back.")
+                      : tr("Start the patch: every radio switched on opens. The receiver\n"
+                           "hands its radio over and runs on the signal generator."));
     }
 
     // ALL OFF: larger, red, and always there. Every radio's switch goes off
@@ -660,11 +682,13 @@ void AppWindow::drawPatchTransport() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, cascade::gui::theme::kAlarmHot);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, cascade::gui::theme::kAlarmHot);
     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::kIvory);
-    if (ImGui::Button("ALL OFF###patchalloff", ImVec2(150.0f, kR * 1.7f))) { patchAllOff(); }
+    if (ImGui::Button(trId("ALL OFF###patchalloff"), ImVec2(150.0f, kR * 1.7f))) {
+        patchAllOff();
+    }
     ImGui::PopStyleColor(4);
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Switch every radio off and stop the patch. START switches\n"
-                          "them all on again.");
+        ImGui::SetTooltip("%s", tr("Switch every radio off and stop the patch. START switches\n"
+                                   "them all on again."));
     }
 
     // What is running, in words.
@@ -677,14 +701,20 @@ void AppWindow::drawPatchTransport() {
     ImGui::SameLine();
     ImGui::SetCursorScreenPos(
         ImVec2(ImGui::GetCursorScreenPos().x + 8.0f, at.y + kR * 1.1f - ImGui::GetTextLineHeight() * 0.5f));
-    char line[96];
+    char line[128];
     if (patchRunning_) {
-        std::snprintf(line, sizeof(line), "RUNNING - %zu of %zu radio%s open", patchRadios_.size(),
-                      radios, radios == 1 ? "" : "s");
+        // Singular and plural as whole keys: an English "s" handed in by %s
+        // is a word no catalogue can translate.
+        cascade::core::formatUtf8(line, sizeof(line),
+                      radios == 1 ? tr("RUNNING - %zu of %zu radio open")
+                                  : tr("RUNNING - %zu of %zu radios open"),
+                      patchRadios_.size(), radios);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
     } else {
-        std::snprintf(line, sizeof(line), "STOPPED - %zu of %zu radio%s switched on", on, radios,
-                      radios == 1 ? "" : "s");
+        cascade::core::formatUtf8(line, sizeof(line),
+                      radios == 1 ? tr("STOPPED - %zu of %zu radio switched on")
+                                  : tr("STOPPED - %zu of %zu radios switched on"),
+                      on, radios);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
     }
     ImGui::TextUnformatted(line);
@@ -705,17 +735,19 @@ void AppWindow::drawPatchRadioSwitch(pc::Node& n) {
     ImGui::PushStyleColor(ImGuiCol_Button, face);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                           cascade::gui::theme::withAlpha(cascade::gui::theme::kIvory, 0.25f));
-    if (ImGui::SmallButton(n.on ? "ON###radioOn" : "OFF###radioOn")) {
+    if (ImGui::SmallButton(n.on ? trId("ON###radioOn") : trId("OFF###radioOn"))) {
         n.on = !n.on;
         patchUi_.dirty = true;
         cascade::core::diagLogf("patch: radio '%s' switched %s", n.name.c_str(), n.on ? "on" : "off");
     }
     ImGui::PopStyleColor(2);
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(n.on ? "This radio is switched on. Press to close it alone - the rest\n"
-                                 "of the patch keeps running."
-                               : "This radio is switched off. Press to switch it on; it opens\n"
-                                 "while the patch is running.");
+        ImGui::SetTooltip(
+            "%s",
+            n.on ? tr("This radio is switched on. Press to close it alone - the rest\n"
+                      "of the patch keeps running.")
+                 : tr("This radio is switched off. Press to switch it on; it opens\n"
+                      "while the patch is running."));
     }
 }
 
@@ -761,7 +793,7 @@ void AppWindow::drawPatchMapInspector(pc::Node& n) {
     for (const pc::Wire& w : patchGraph_.wires()) {
         if (w.to == n.id) { ++wired; }
     }
-    ImGui::Text("%zu of %zu inputs wired", wired, pc::kMapInputs);
+    ImGui::Text(tr("%zu of %zu inputs wired"), wired, pc::kMapInputs);
     patchCollectMapTargets(n.id);
     for (const std::string& src : pc::mapSources(patchGraph_, n.id, patchCatalogue_)) {
         std::size_t count = 0;
@@ -776,18 +808,18 @@ void AppWindow::drawPatchMapInspector(pc::Node& n) {
     }
     const auto view = patchMapViews_.find(n.id);
     if (view != patchMapViews_.end() && view->second) {
-        if (ImGui::Button("Fit to targets", ImVec2(-FLT_MIN, 0.0f))) {
+        if (ImGui::Button(trId("Fit to targets"), ImVec2(-FLT_MIN, 0.0f))) {
             view->second->requestFitToTracks();
         }
-        if (ImGui::Button("Whole world", ImVec2(-FLT_MIN, 0.0f))) {
+        if (ImGui::Button(trId("Whole world"), ImVec2(-FLT_MIN, 0.0f))) {
             view->second->requestWholeWorld();
         }
     }
     ImGui::PushStyleColor(ImGuiCol_Text, muted);
     ImGui::TextWrapped(
-        "Wire the map output of up to %zu decoders here - aircraft from one radio, ships from "
-        "another - and they share this map. Drag it to pan; zoom with the + and - keys in its "
-        "corner, or the mouse wheel.",
+        tr("Wire the map output of up to %zu decoders here - aircraft from one radio, ships "
+           "from another - and they share this map. Drag it to pan; zoom with the + and - "
+           "keys in its corner, or the mouse wheel."),
         pc::kMapInputs);
     ImGui::PopStyleColor();
 }
@@ -805,14 +837,16 @@ void AppWindow::patchPushSquelch() {
 
 void AppWindow::drawPatchSquelch(pc::Node& n, float width) {
     bool on = n.squelch;
-    if (ImGui::Checkbox("Squelch##sq", &on)) {
+    if (ImGui::Checkbox(trId("Squelch##sq"), &on)) {
         n.squelch = on;
         patchUi_.dirty = true;
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Silences this demodulator's sound while the channel is quieter\n"
-                          "than the threshold - so a speaker or a recording hears signals,\n"
-                          "not the noise between them. Decoders are still given every sample.");
+        ImGui::SetTooltip(
+            "%s",
+            tr("Silences this demodulator's sound while the channel is quieter\n"
+               "than the threshold - so a speaker or a recording hears signals,\n"
+               "not the noise between them. Decoders are still given every sample."));
     }
     if (n.squelch) {
         float db = n.squelchDb;
@@ -836,11 +870,11 @@ void AppWindow::drawPatchSquelch(pc::Node& n, float width) {
         if (!n.squelch || open) {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
-            ImGui::TextUnformatted(n.squelch ? "open" : "no squelch");
+            ImGui::TextUnformatted(n.squelch ? tr("open") : tr("no squelch"));
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
-            ImGui::TextUnformatted("closed");
+            ImGui::TextUnformatted(tr("closed"));
         }
         ImGui::PopStyleColor();
     }
@@ -851,7 +885,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     const auto amber = cascade::gui::theme::vec(cascade::gui::theme::kAmber);
 
     ImGui::Spacing();
-    ImGui::TextUnformatted("Device");
+    ImGui::TextUnformatted(tr("Device"));
     ImGui::SetNextItemWidth(-FLT_MIN);
     const std::vector<PatchDeviceChoice> choices = patchDeviceChoices();
     if (ImGui::BeginCombo("##patchdevice", patchDeviceLabel(n.device).c_str())) {
@@ -869,15 +903,23 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             }
             ImGui::PushID(static_cast<int>(i));
             std::string text = c.label;
-            if (holder != nullptr) { text += "  (used by " + holder->name + ")"; }
+            if (holder != nullptr) {
+                char buf[256];
+                cascade::core::formatUtf8(buf, sizeof buf, tr("  (used by %s)"), holder->name.c_str());
+                text += buf;
+            }
             // IN USE BY THE RECEIVER IS NOT "NOT AVAILABLE" (2026-09-23): the
             // receiver lends its radio to the patch when the patch starts, so
             // the row is offered, and says what will happen to it.
             else if (device_ != nullptr &&
                      pc::sameDevice(c.key, pc::makeDeviceKey(sourceKind_, deviceArgs_))) {
-                text += "  (the receiver's - lent to the patch when it starts)";
+                text += tr("  (the receiver's - lent to the patch when it starts)");
             }
             ImGui::BeginDisabled(holder != nullptr);
+            // Not trId(): text is composed at runtime (a device's own label
+            // plus an already-translated suffix), not a fixed English key, and
+            // this Selectable's id is already made unique by the PushID(i)
+            // above rather than by its label text.
             if (ImGui::Selectable(text.c_str(), c.key == n.device)) {
                 n.device = c.key;
                 patchUi_.dirty = true;
@@ -891,7 +933,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     // a radio plugged in after the page opened, or one a scan beside an open
     // radio had to leave out, is one press away (2026-09-23).
     ImGui::BeginDisabled(soapyScanPending_);
-    if (ImGui::SmallButton("Look for radios")) {
+    if (ImGui::SmallButton(trId("Look for radios"))) {
         scanNative();
         scanSoapy();
     }
@@ -899,12 +941,12 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     if (soapyScanPending_) {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, muted);
-        ImGui::TextUnformatted("looking...");
+        ImGui::TextUnformatted(tr("looking..."));
         ImGui::PopStyleColor();
     }
 
     ImGui::Spacing();
-    ImGui::TextUnformatted("Centre (MHz)");
+    ImGui::TextUnformatted(tr("Centre (MHz)"));
     double mhz = n.freqHz / 1e6;
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::InputDouble("##patchcentre", &mhz, 0.1, 1.0, "%.6f",
@@ -915,7 +957,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     }
 
     ImGui::Spacing();
-    ImGui::TextUnformatted("Sample rate");
+    ImGui::TextUnformatted(tr("Sample rate"));
     char rateText[32];
     std::snprintf(rateText, sizeof(rateText), "%.3f MS/s", radioRate(n) / 1e6);
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -936,12 +978,12 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     const auto run = patchRadios_.find(n.id);
     if (run != patchRadios_.end()) {
         ImGui::PushStyleColor(ImGuiCol_Text, amber);
-        ImGui::Text("running %.3f MS/s", run->second->rateHz() / 1e6);
-        ImGui::Text("at %.6f MHz", run->second->centreHz() / 1e6);
+        ImGui::Text(tr("running %.3f MS/s"), run->second->rateHz() / 1e6);
+        ImGui::Text(tr("at %.6f MHz"), run->second->centreHz() / 1e6);
         ImGui::PopStyleColor();
     } else if (patchRadioPending_.count(n.id) != 0) {
         ImGui::PushStyleColor(ImGuiCol_Text, muted);
-        ImGui::TextUnformatted("opening the device...");
+        ImGui::TextUnformatted(tr("opening the device..."));
         ImGui::PopStyleColor();
     }
     const auto err = patchRadioError_.find(n.id);
@@ -951,39 +993,41 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
         ImGui::PopStyleColor();
     }
     ImGui::PushStyleColor(ImGuiCol_Text, muted);
-    ImGui::TextWrapped("Up to %zu radios, each its own device. While this page is open the "
-                       "receiver runs on the signal generator; closing it gives the radio back.",
-                       pc::kMaxRadios);
+    ImGui::TextWrapped(
+        tr("Up to %zu radios, each its own device. While this page is open the receiver runs "
+           "on the signal generator; closing it gives the radio back."),
+        pc::kMaxRadios);
     ImGui::PopStyleColor();
 }
 
 void AppWindow::drawPatchSinkInspector(pc::Node& n) {
     const auto muted = cascade::gui::theme::vec(cascade::gui::theme::kInkMuted);
     ImGui::Spacing();
-    ImGui::TextUnformatted("Sound goes to");
+    ImGui::TextUnformatted(tr("Sound goes to"));
     const std::string key = n.device.empty() ? std::string("wav") : n.device;
     std::string current;
     switch (pc::outputKind(key)) {
-        case pc::OutputKind::Wav: current = "A WAV file"; break;
-        case pc::OutputKind::Mp3: current = "An MP3 file"; break;
-        case pc::OutputKind::Speakers: current = "The speakers"; break;
+        case pc::OutputKind::Wav: current = tr("A WAV file"); break;
+        case pc::OutputKind::Mp3: current = tr("An MP3 file"); break;
+        case pc::OutputKind::Speakers: current = tr("The speakers"); break;
         case pc::OutputKind::Device: current = pc::outputDeviceName(key); break;
     }
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##patchoutput", current.c_str())) {
-        if (ImGui::Selectable("A WAV file", pc::outputKind(key) == pc::OutputKind::Wav)) {
+        if (ImGui::Selectable(trId("A WAV file"), pc::outputKind(key) == pc::OutputKind::Wav)) {
             n.device = "wav";
             patchUi_.dirty = true;
         }
         const bool mp3 = cascade::core::Mp3Writer::available();
         ImGui::BeginDisabled(!mp3);
-        if (ImGui::Selectable(mp3 ? "An MP3 file" : "An MP3 file (needs Windows)",
+        if (ImGui::Selectable(mp3 ? trId("An MP3 file") : trId("An MP3 file (needs Windows)"),
                               pc::outputKind(key) == pc::OutputKind::Mp3)) {
             n.device = "mp3";
             patchUi_.dirty = true;
         }
         ImGui::EndDisabled();
-        if (ImGui::Selectable("The speakers", pc::outputKind(key) == pc::OutputKind::Speakers)) {
+        if (ImGui::Selectable(trId("The speakers"),
+                              pc::outputKind(key) == pc::OutputKind::Speakers)) {
             n.device = "speakers";
             patchUi_.dirty = true;
         }
@@ -1019,7 +1063,8 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
     }
     ImGui::PushStyleColor(ImGuiCol_Text, muted);
     if (pc::outputKind(key) == pc::OutputKind::Wav || pc::outputKind(key) == pc::OutputKind::Mp3) {
-        ImGui::TextWrapped("Files go in %s, one per speaker, named after it.", recordDir_.c_str());
+        ImGui::TextWrapped(tr("Files go in %s, one per speaker, named after it."),
+                           recordDir_.c_str());
     }
     ImGui::PopStyleColor();
 }

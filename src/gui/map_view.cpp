@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
 #include "gui/fonts.hpp"
@@ -24,6 +26,9 @@
 #include "imgui.h"
 
 namespace cascade::gui {
+
+using cascade::i18n::tr;
+
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -1801,12 +1806,12 @@ void MapView::draw(float width, float height,
         // two ladders measure separately, because "850-1200 km" is longer than
         // any aviation label.
         if (anyOrbitBanded) {
-            drawLadder("ORBITAL ALTITUDE - km", kOrbitBandCount, &orbitBandStyle,
+            drawLadder(tr("ORBITAL ALTITUDE - km"), kOrbitBandCount, &orbitBandStyle,
                        orbitLegendWidth(
                            [](const char* s) { return ImGui::CalcTextSize(s).x; }));
         }
         if (anyBanded) {
-            drawLadder("ALTITUDE - kft", kAltBandCount, &altBandStyle,
+            drawLadder(tr("ALTITUDE - kft"), kAltBandCount, &altBandStyle,
                        altLegendWidth(
                            [](const char* s) { return ImGui::CalcTextSize(s).x; }));
         }
@@ -1856,11 +1861,13 @@ void MapView::draw(float width, float height,
             dl->AddLine(ImVec2(a.x, a.y - 4.0f), ImVec2(a.x, a.y + 4.0f), barCol, 2.0f);
             dl->AddLine(ImVec2(b.x, b.y - 4.0f), ImVec2(b.x, b.y + 4.0f), barCol, 2.0f);
             char buf[64];
+            // Whole sentences for the catalogue, with the hemisphere letter
+            // in the language in force (i18n::hemisphereLetter).
             if (std::fabs(refLat) < 0.5) {
-                std::snprintf(buf, sizeof buf, "%.0f km at the equator", barKm);
+                cascade::core::formatUtf8(buf, sizeof buf, tr("%.0f km at the equator"), barKm);
             } else {
-                std::snprintf(buf, sizeof buf, "%.0f km at %.0f %c", barKm,
-                              std::fabs(refLat), (refLat < 0.0) ? 'S' : 'N');
+                cascade::core::formatUtf8(buf, sizeof buf, tr("%.0f km at %.0f %s"), barKm,
+                              std::fabs(refLat), cascade::i18n::hemisphereLetter(true, refLat >= 0.0));
             }
             // ABOVE THE RULE IT DESCRIBES, by a whole line. At -15 an 18 px
             // line box reaches three pixels below the bar - so the one figure
@@ -1918,10 +1925,13 @@ void MapView::draw(float width, float height,
         key(zoomKeys.outX0, zoomKeys.outY0, zoomKeys.outX1, zoomKeys.outY1, false, overZoomOut,
             pressOnZoomOut, liveOut);
         if ((overZoomIn || overZoomOut) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            ImGui::SetTooltip(overZoomIn ? (liveIn ? "Zoom in - or turn the mouse wheel over the map"
-                                                   : "Zoomed in as far as the map goes")
-                                         : (liveOut ? "Zoom out - or turn the mouse wheel over the map"
-                                                    : "Zoomed out as far as the map goes"));
+            ImGui::SetTooltip(
+                "%s",
+                overZoomIn
+                    ? (liveIn ? tr("Zoom in - or turn the mouse wheel over the map")
+                              : tr("Zoomed in as far as the map goes"))
+                    : (liveOut ? tr("Zoom out - or turn the mouse wheel over the map")
+                               : tr("Zoomed out as far as the map goes")));
         }
     }
 
@@ -2355,11 +2365,11 @@ TrackSortKey satelliteSortKey(int index) {
 
 const char* satelliteSortKeyLabel(int index) {
     switch (index) {
-        case 0: return "CALLSIGN";
+        case 0: return tr("CALLSIGN");
         case 1: return "NORAD";
-        case 2: return "ALT";
-        case 3: return "AGE";
-        default: return "CALLSIGN";
+        case 2: return tr("ALT");
+        case 3: return tr("AGE");
+        default: return tr("CALLSIGN");
     }
 }
 
@@ -2464,14 +2474,14 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     // lines and not over the pair showing this frame - a key that resized when
     // it latched would move the coordinate wells beside it.
     const float kDeckKeyMinW =
-        std::max({textW(uiF, tinyPx, "SET FROM"), textW(uiF, tinyPx, "MAP CLICK"),
-                  textW(uiF, tinyPx, "CLICK THE"), textW(uiF, tinyPx, "MAP NOW")}) +
+        std::max({textW(uiF, tinyPx, tr("SET FROM")), textW(uiF, tinyPx, tr("MAP CLICK")),
+                  textW(uiF, tinyPx, tr("CLICK THE")), textW(uiF, tinyPx, tr("MAP NOW"))}) +
         16.0f;
     // RESET and its note. The key was 64 px and the note began at 74, two
     // literals whose only relationship was that somebody had subtracted them
     // correctly once; the gap between them is what the note is INSET by, so it
     // is written as that and the key is measured from the word on it.
-    const float kResetKeyW = std::max(64.0f, textW(uiF, tinyPx, "RESET") + 22.0f);
+    const float kResetKeyW = std::max(64.0f, textW(uiF, tinyPx, tr("RESET")) + 22.0f);
     const float kResetNoteX = kResetKeyW + 10.0f;
 
     // Whether the position that everything else here is measured FROM exists.
@@ -2510,13 +2520,13 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     // code would be a claim about a plugin the host cannot check and would be
     // wrong for every other tracker.
     const char* rxNote =
-        haveRx ? "Position set. This window measures every DISTANCE, BEARING and the "
-                 "COVERAGE ring from it. A plugin that predicts passes keeps its own "
-                 "observer position in its own configuration - its panel names the file."
-               : "No position set. DISTANCE, BEARING and the coverage overlay on this "
-                 "window stay blank until one is - none of them can be computed without "
-                 "it. A plugin that predicts passes keeps its observer position "
-                 "separately, in its own configuration.";
+        haveRx ? tr("Position set. This window measures every DISTANCE, BEARING and the "
+                    "COVERAGE ring from it. A plugin that predicts passes keeps its own "
+                    "observer position in its own configuration - its panel names the file.")
+               : tr("No position set. DISTANCE, BEARING and the coverage overlay on this "
+                    "window stay blank until one is - none of them can be computed without "
+                    "it. A plugin that predicts passes keeps its observer position "
+                    "separately, in its own configuration.");
     // WHAT THE ACCUMULATOR ACTUALLY HOLDS, decided here rather than at the
     // point it is drawn, because the deck's height is measured from the
     // sentence that will be in it - and a note sized from a different string
@@ -2537,17 +2547,17 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     const char* covNote;
     if (!haveRx) {
         covNote =
-            "Coverage measures distances from the receiver, so it needs a position "
-            "first. Set one on the left.";
+            tr("Coverage measures distances from the receiver, so it needs a position "
+               "first. Set one on the left.");
     } else if (coverage == nullptr || coverage->empty()) {
         covNote =
-            "Nothing plotted yet. The ring records how far out a target has been PLOTTED "
-            "on each of 72 bearings - from every plugin, and from computed positions as "
-            "well as received ones.";
+            tr("Nothing plotted yet. The ring records how far out a target has been PLOTTED "
+               "on each of 72 bearings - from every plugin, and from computed positions as "
+               "well as received ones.");
     } else {
-        std::snprintf(covMeasured, sizeof covMeasured,
-                      "%d of %d bearings reached, furthest %.0f km. Plotted positions, "
-                      "computed or received. RESET clears the ring and starts again.",
+        cascade::core::formatUtf8(covMeasured, sizeof covMeasured,
+                      tr("%d of %d bearings reached, furthest %.0f km. Plotted positions, "
+                         "computed or received. RESET clears the ring and starts again."),
                       coverage->filledBuckets(), CoverageMap::kBuckets,
                       coverage->peakKm());
         covNote = covMeasured;
@@ -2557,7 +2567,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         !(deck.latInput >= -90.0 && deck.latInput <= 90.0 && deck.lonInput >= -180.0 &&
           deck.lonInput <= 180.0);
     const char* rxShown =
-        coordInvalid ? "Refused: latitude must be -90 to 90 and longitude -180 to 180."
+        coordInvalid ? tr("Refused: latitude must be -90 to 90 and longitude -180 to 180.")
                      : rxNote;
 
     // HOW THE RECEIVER WELL ARRANGES ITSELF, decided from what it is actually
@@ -2603,7 +2613,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                          true);
         float y = tl.y + kPad;
         addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f,
-                             "RECEIVER POSITION");
+                             tr("RECEIVER POSITION"));
         y += tinyH + 8.0f;
 
         // Wide enough for two lines of lettering, and CAPPED: on a wide window
@@ -2616,9 +2626,9 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // EVERY CONTROL IS CAPTIONED. Two fields showing 0.00000 with nothing
         // to say which was which is the exact defect this window was redrawn
         // for; the words are part of the control, not an optional label.
-        dl->AddText(uiF, tinyPx, ImVec2(tl.x + kPad, y), theme::kInkMuted, "LATITUDE");
+        dl->AddText(uiF, tinyPx, ImVec2(tl.x + kPad, y), theme::kInkMuted, tr("LATITUDE"));
         dl->AddText(uiF, tinyPx, ImVec2(tl.x + kPad + latW + 6.0f + 12.0f, y),
-                    theme::kInkMuted, "LONGITUDE");
+                    theme::kInkMuted, tr("LONGITUDE"));
         y += smallH + 3.0f;
 
         // The two wells, and the click-to-type they carry. A machined aperture
@@ -2671,7 +2681,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 coordEditFocus_ = true;
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Click to type this coordinate, then press Enter.");
+                ImGui::SetTooltip("%s", tr("Click to type this coordinate, then press Enter."));
             }
             ImGui::PopID();
         };
@@ -2685,8 +2695,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                            keyBeside ? y : (y + cellRowH + 6.0f));
         const float keyH = keyBeside ? cellRowH : kKeyH;
         if (drawDeckKey(dl, keyTL, ImVec2(keyTL.x + keyW, keyTL.y + keyH),
-                        pickHomeArmed_ ? "CLICK THE" : "SET FROM",
-                        pickHomeArmed_ ? "MAP NOW" : "MAP CLICK", true, "setrx")) {
+                        pickHomeArmed_ ? tr("CLICK THE") : tr("SET FROM"),
+                        pickHomeArmed_ ? tr("MAP NOW") : tr("MAP CLICK"), true, "setrx")) {
             pickHomeArmed_ = !pickHomeArmed_;
         }
         y += cellRowH + (keyBeside ? 0.0f : (6.0f + kKeyH)) + 10.0f;
@@ -2705,26 +2715,27 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f, "MAP OVERLAYS");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f,
+                             tr("MAP OVERLAYS"));
         y += tinyH + 8.0f;
         const float rowW = wellW - kPad * 2.0f;
 
         // COVERAGE is blocked with its reason attached, never merely greyed.
-        if (drawRockerRow(dl, ImVec2(tl.x + kPad, y), rowW, kRockerH, "COVERAGE",
-                          haveRx ? "furthest plotted, by bearing"
-                                 : "needs a receiver position",
+        if (drawRockerRow(dl, ImVec2(tl.x + kPad, y), rowW, kRockerH, tr("COVERAGE"),
+                          haveRx ? tr("furthest plotted, by bearing")
+                                 : tr("needs a receiver position"),
                           deck.coverage && haveRx, !haveRx, "ovcov")) {
             deck.coverage = !deck.coverage;
         }
         y += kRockerH;
-        if (drawRockerRow(dl, ImVec2(tl.x + kPad, y), rowW, kRockerH, "GROUND TRACKS",
-                          "the paths the tracker publishes", deck.groundTracks, false,
+        if (drawRockerRow(dl, ImVec2(tl.x + kPad, y), rowW, kRockerH, tr("GROUND TRACKS"),
+                          tr("the paths the tracker publishes"), deck.groundTracks, false,
                           "ovtrk")) {
             deck.groundTracks = !deck.groundTracks;
         }
         y += kRockerH;
-        if (drawRockerRow(dl, ImVec2(tl.x + kPad, y), rowW, kRockerH, "ALTITUDE COLOURS",
-                          "keyed on the map", deck.altitudeColours, false, "ovalt")) {
+        if (drawRockerRow(dl, ImVec2(tl.x + kPad, y), rowW, kRockerH, tr("ALTITUDE COLOURS"),
+                          tr("keyed on the map"), deck.altitudeColours, false, "ovalt")) {
             deck.altitudeColours = !deck.altitudeColours;
         }
         dl->PopClipRect();
@@ -2738,7 +2749,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         dl->PushClipRect(ImVec2(tl.x + 2.0f, tl.y + 2.0f), ImVec2(br.x - 2.0f, br.y - 2.0f),
                          true);
         float y = tl.y + kPad;
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f, "TRAIL STYLE");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f, tr("TRAIL STYLE"));
         y += tinyH + 8.0f;
 
         // THREE BUTTONS, NOT A MENU: the whole option set visible at once. The
@@ -2751,7 +2762,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // lettering a button DOTS that produced a ribbon would be a control
         // that lies about what it does.
         const float segW = (wellW - kPad * 2.0f - 8.0f) / 3.0f;
-        const char* segs[3] = {"LINE", "RIBBON", "OFF"};
+        const char* segs[3] = {tr("LINE"), tr("RIBBON"), tr("OFF")};
         const int current = !deck.groundTracks ? 2 : (deck.trailStyle == 1 ? 1 : 0);
         for (int i = 0; i < 3; ++i) {
             const ImVec2 sTL(tl.x + kPad + (segW + 4.0f) * static_cast<float>(i), y);
@@ -2769,11 +2780,11 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         }
         y += kSegH + 12.0f;
 
-        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f, "COVERAGE");
+        addBenchGroupCaption(dl, ImVec2(tl.x + kPad, y), wellW - kPad * 2.0f, tr("COVERAGE"));
         y += tinyH + 8.0f;
         const bool canReset = coverage != nullptr && !coverage->empty();
         if (drawDeckKey(dl, ImVec2(tl.x + kPad, y),
-                        ImVec2(tl.x + kPad + kResetKeyW, y + kKeyH), "RESET", nullptr,
+                        ImVec2(tl.x + kPad + kResetKeyW, y + kKeyH), tr("RESET"), nullptr,
                         canReset, "covreset")) {
             coverageResetRequest_ = true;
         }
@@ -2799,11 +2810,11 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     // appeared.
     const float noradW =
         std::max(textW(lgF, tinyPx, "NORAD"), textW(uiF, tinyPx, "00000")) + 6.0f;
-    const float altW = std::max({textW(lgF, tinyPx, "ALT km"), textW(lgF, tinyPx, "ALT"),
+    const float altW = std::max({textW(lgF, tinyPx, tr("ALT km")), textW(lgF, tinyPx, tr("ALT")),
                                  textW(uiF, tinyPx, "000000 ft")}) +
                        6.0f;
     const float ageW =
-        std::max(textW(lgF, tinyPx, "AGE"), textW(uiF, tinyPx, "00.0 min")) + 6.0f;
+        std::max(textW(lgF, tinyPx, tr("AGE")), textW(uiF, tinyPx, "00.0 min")) + 6.0f;
     const float dotW = 16.0f;
 
     // AND THE REGISTER CANNOT BE NARROWER THAN THEM. Its width was clamped
@@ -2833,10 +2844,10 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         float y = tl.y + kPad;
 
         // --- header: what it is, and how many of them there are ------------
-        dl->AddText(lgF, legPx, ImVec2(innerL, y), theme::kIvory, "TARGETS");
+        dl->AddText(lgF, legPx, ImVec2(innerL, y), theme::kIvory, tr("TARGETS"));
         const std::size_t shown = cascade::core::visibleTrackCount(tracks);
         char countText[32];
-        std::snprintf(countText, sizeof countText, "%d TRACKED", static_cast<int>(shown));
+        cascade::core::formatUtf8(countText, sizeof countText, tr("%d TRACKED"), static_cast<int>(shown));
         dl->AddText(uiF, tinyPx,
                     ImVec2(innerR - textW(uiF, tinyPx, countText),
                            y + faceH(lgF, legPx) - smallH),
@@ -2847,13 +2858,14 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
 
         // --- sort: four visible keys and a direction ------------------------
         if (deck.sortKey < 0 || deck.sortKey >= kSatelliteSortKeyCount) { deck.sortKey = 0; }
-        const float sortCapW = textW(lgF, tinyPx, "SORT") + 8.0f;
-        dl->AddText(lgF, tinyPx, ImVec2(innerL, y + 4.0f), theme::kInkMuted, "SORT");
+        const char* sortCap = tr("SORT");
+        const float sortCapW = textW(lgF, tinyPx, sortCap) + 8.0f;
+        dl->AddText(lgF, tinyPx, ImVec2(innerL, y + 4.0f), theme::kInkMuted, sortCap);
         // Both words this key can carry, not the one it is showing: a key that
         // resized when it was pressed would shuffle the four sort keys beside
         // it every time the order was reversed.
-        const float dirW = std::max({42.0f, textW(uiF, tinyPx, "ASC") + 18.0f,
-                                     textW(uiF, tinyPx, "DESC") + 18.0f});
+        const float dirW = std::max({42.0f, textW(uiF, tinyPx, tr("ASC")) + 18.0f,
+                                     textW(uiF, tinyPx, tr("DESC")) + 18.0f});
         const float keysW = innerW - sortCapW - dirW - 6.0f;
         const float keyW = (keysW - 3.0f * 3.0f) / static_cast<float>(kSatelliteSortKeyCount);
         for (int i = 0; i < kSatelliteSortKeyCount; ++i) {
@@ -2868,7 +2880,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         {
             const ImVec2 dTL(innerR - dirW, y);
             if (drawDeckKey(dl, dTL, ImVec2(dTL.x + dirW, dTL.y + kRockerH),
-                            deck.sortAscending ? "ASC" : "DESC", nullptr, true, "sortdir")) {
+                            deck.sortAscending ? tr("ASC") : tr("DESC"), nullptr, true,
+                            "sortdir")) {
                 deck.sortAscending = !deck.sortAscending;
             }
         }
@@ -2907,7 +2920,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // which is what makes a column of altitudes scan. The moment anything
         // that is not a satellite appears, one head cannot name both units, so
         // every cell carries its own.
-        const char* altHead = allOrbital ? "ALT km" : "ALT";
+        const char* altHead = allOrbital ? tr("ALT km") : tr("ALT");
 
         // --- what has to fit UNDER the rows, measured before they are sized --
         const cascade::core::HostTrack* sel = nullptr;
@@ -2925,17 +2938,17 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // can only ever over-reserve, which shows as a few spare pixels.
         const float measureW = innerW - ImGui::GetStyle().ScrollbarSize;
         const char* notReported =
-            "INCLINATION, ORBITAL PERIOD and the age of the element set are not part of "
-            "what a track source reports, so nothing here can show them - and no receiver "
-            "position will change that.";
+            tr("INCLINATION, ORBITAL PERIOD and the age of the element set are not part of "
+               "what a track source reports, so nothing here can show them - and no receiver "
+               "position will change that.");
         const char* passNote =
-            "A pass prediction needs the orbit itself. A track source reports a position, "
-            "not the elements it came from, so these cannot be computed here - a receiver "
-            "position alone would not be enough.";
+            tr("A pass prediction needs the orbit itself. A track source reports a position, "
+               "not the elements it came from, so these cannot be computed here - a receiver "
+               "position alone would not be enough.");
         const char* noRxNote =
-            "DISTANCE and BEARING are hatched because no receiver position is set. Set "
-            "one on the deck above and both fill in.";
-        const char* noSelPrompt = "Click a row above, or a marker on the map.";
+            tr("DISTANCE and BEARING are hatched because no receiver position is set. Set "
+               "one on the deck above and both fill in.");
+        const char* noSelPrompt = tr("Click a row above, or a marker on the map.");
         const float detailRowH = smallH + faceH(uiF, tinyPx) + 9.0f;
         // BOTH NOTES, WHEN BOTH ARE TRUE, and they very often are. What stood
         // here picked one or the other: the "not reported" note appeared only
@@ -3022,7 +3035,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         dl->AddRectFilled(ImVec2(innerL, y), ImVec2(innerR, y + tinyH + 8.0f), theme::kWell);
         {
             float cx = innerL + 6.0f;
-            dl->AddText(lgF, tinyPx, ImVec2(cx, y + 4.0f), theme::kInkMuted, "CALLSIGN");
+            dl->AddText(lgF, tinyPx, ImVec2(cx, y + 4.0f), theme::kInkMuted, tr("CALLSIGN"));
             cx = innerL + dotW + callW + 6.0f;
             dl->AddText(lgF, tinyPx,
                         ImVec2(cx + noradW - textW(lgF, tinyPx, "NORAD") - 6.0f, y + 4.0f),
@@ -3033,8 +3046,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                         theme::kInkMuted, altHead);
             cx += altW;
             dl->AddText(lgF, tinyPx,
-                        ImVec2(cx + ageW - textW(lgF, tinyPx, "AGE") - 6.0f, y + 4.0f),
-                        theme::kInkMuted, "AGE");
+                        ImVec2(cx + ageW - textW(lgF, tinyPx, tr("AGE")) - 6.0f, y + 4.0f),
+                        theme::kInkMuted, tr("AGE"));
         }
         y += tinyH + 8.0f;
 
@@ -3059,7 +3072,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 // thing on the register when a new install opens it, and the
                 // faint ink it used to take is about 4:1 on the well.
                 rdl->AddText(uiF, tinyPx, ImVec2(at.x + 6.0f, at.y + 4.0f), theme::kInkMuted,
-                             "No targets. Decoded and propagated tracks appear here.",
+                             tr("No targets. Decoded and propagated tracks appear here."),
                              nullptr, tableW - 12.0f);
                 // Reserved so the cards below start where the rows would have
                 // ended, rather than riding up under the column head.
@@ -3168,7 +3181,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 // rather than ornament - the heading says what state the card
                 // is in and the line under it says what to do about it.
                 rdl->AddText(uiF, uiPx, ImVec2(cTL.x + 8.0f, cy), theme::kInkMuted,
-                            "NO TARGET SELECTED");
+                            tr("NO TARGET SELECTED"));
                 cy += uiH + 4.0f;
                 // The SAME sentence the height above was measured from, and it
                 // is a named constant precisely so the two cannot drift.
@@ -3179,8 +3192,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                     (sel->t.label[0] != '\0') ? sel->t.label : sel->t.id;
                 rdl->AddText(uiF, uiPx, ImVec2(cTL.x + 8.0f, cy), theme::kIvory, name);
                 char idLine[48];
-                std::snprintf(idLine, sizeof idLine, "%s %s",
-                              orbitalLadder(sel->t.kind) ? "NORAD" : "ID", sel->t.id);
+                cascade::core::formatUtf8(idLine, sizeof idLine, "%s %s",
+                              orbitalLadder(sel->t.kind) ? "NORAD" : tr("ID"), sel->t.id);
                 rdl->AddText(uiF, tinyPx,
                             ImVec2(cBR.x - 8.0f - textW(uiF, tinyPx, idLine),
                                    cy + uiH - smallH),
@@ -3201,7 +3214,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 };
                 Cell cells[6];
                 cells[0].value[0] = '\0';
-                cells[0].key = "ALTITUDE";
+                cells[0].key = tr("ALTITUDE");
                 cells[0].known = std::isfinite(sel->t.altM);
                 if (cells[0].known) {
                     if (orbitalLadder(sel->t.kind)) {
@@ -3212,12 +3225,14 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                                       sel->t.altM * 3.28084);
                     }
                 }
-                cells[1].key = "SUB-POINT";
+                cells[1].key = tr("SUB-POINT");
                 cells[1].known = true;
-                std::snprintf(cells[1].value, sizeof cells[1].value, "%.2f %c  %.2f %c",
-                              std::fabs(sel->t.latDeg), sel->t.latDeg >= 0.0 ? 'N' : 'S',
-                              std::fabs(sel->t.lonDeg), sel->t.lonDeg >= 0.0 ? 'E' : 'W');
-                cells[2].key = "VELOCITY";
+                cascade::core::formatUtf8(cells[1].value, sizeof cells[1].value, "%.2f %s  %.2f %s",
+                              std::fabs(sel->t.latDeg),
+                              cascade::i18n::hemisphereLetter(true, sel->t.latDeg >= 0.0),
+                              std::fabs(sel->t.lonDeg),
+                              cascade::i18n::hemisphereLetter(false, sel->t.lonDeg >= 0.0));
+                cells[2].key = tr("VELOCITY");
                 cells[2].known = std::isfinite(sel->t.speedMps);
                 cells[2].value[0] = '\0';
                 if (cells[2].known) {
@@ -3232,13 +3247,13 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                                       sel->t.speedMps * 1.943844);
                     }
                 }
-                cells[3].key = "FIX AGE";
+                cells[3].key = tr("FIX AGE");
                 cells[3].known = true;
                 formatAge(sel->t.ageMs, cells[3].value, sizeof cells[3].value);
-                cells[4].key = "DISTANCE";
+                cells[4].key = tr("DISTANCE");
                 cells[4].value[0] = '\0';
                 cells[4].known = false;
-                cells[5].key = "BEARING";
+                cells[5].key = tr("BEARING");
                 cells[5].value[0] = '\0';
                 cells[5].known = false;
                 if (hasHome_) {
@@ -3265,12 +3280,12 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                     const bool orbitalSel = orbitalLadder(sel->t.kind);
                     const double slantKm = orbitalSel ? slantRangeKm(km, sel->t.altM) : 0.0;
                     if (orbitalSel && std::isfinite(slantKm)) {
-                        cells[4].key = "SLANT RANGE";
+                        cells[4].key = tr("SLANT RANGE");
                         std::snprintf(cells[4].value, sizeof cells[4].value, "%.0f km",
                                       slantKm);
                         cells[4].known = true;
                     } else if (std::isfinite(km)) {
-                        if (orbitalSel) { cells[4].key = "GROUND DIST"; }
+                        if (orbitalSel) { cells[4].key = tr("GROUND DIST"); }
                         std::snprintf(cells[4].value, sizeof cells[4].value, "%.0f km", km);
                         cells[4].known = true;
                     }
@@ -3357,7 +3372,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
             rdl->PushClipRect(ImVec2(cTL.x + 1.0f, cTL.y + 1.0f),
                              ImVec2(cBR.x - 1.0f, cBR.y - 1.0f), true);
             addBenchGroupCaption(rdl, ImVec2(cTL.x + 8.0f, cTL.y + 8.0f), cardW - 16.0f,
-                                 "NEXT PASSES - THIS TARGET");
+                                 tr("NEXT PASSES - THIS TARGET"));
             drawNote(rdl, ImVec2(cTL.x + 8.0f, cTL.y + 8.0f + tinyH + 6.0f), cardW - 16.0f,
                      theme::kInkMuted, passNote);
             rdl->PopClipRect();
@@ -3371,7 +3386,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // the hatching, which is a mark the user is expected to look up, so it
         // is lettered to be read rather than to be part of the metalwork.
         dl->AddText(lgF, tinyPx, ImVec2(innerL, br.y - kPad - tinyH), theme::kInkMuted,
-                    "HATCHED VALUE - CANNOT BE COMPUTED");
+                    tr("HATCHED VALUE - CANNOT BE COMPUTED"));
         dl->PopClipRect();
     }
 
@@ -3430,8 +3445,8 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
             // outline, because an equirectangular page draws no tiles. The
             // design's second line also carried the age of the element set,
             // which nothing here measures - so it is not there.
-            const char* chart[2] = {"EQUIRECTANGULAR - WGS 84",
-                                    "NATURAL EARTH 1:110m COASTLINE"};
+            const char* chart[2] = {tr("EQUIRECTANGULAR - WGS 84"),
+                                    tr("NATURAL EARTH 1:110m COASTLINE")};
             overlay(ImVec2(mTL.x + 10.0f, mTL.y + 10.0f), chart, 2, false);
 
             // The two marks the altitude legend cannot explain, and only when
@@ -3445,10 +3460,10 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
             }
             const char* keyLines[2];
             int keyCount = 0;
-            if (!selectedId_.empty()) { keyLines[keyCount++] = "RINGED MARK - SELECTED"; }
+            if (!selectedId_.empty()) { keyLines[keyCount++] = tr("RINGED MARK - SELECTED"); }
             if (deck.groundTracks && !paths.empty()) {
-                keyLines[keyCount++] =
-                    anyDashed ? "DASHED LINE - PREDICTED TRACK" : "LINE - GROUND TRACK";
+                keyLines[keyCount++] = anyDashed ? tr("DASHED LINE - PREDICTED TRACK")
+                                                 : tr("LINE - GROUND TRACK");
             }
             if (keyCount > 0) {
                 float kh = static_cast<float>(keyCount) * (tinyH + 3.0f) + 9.0f;

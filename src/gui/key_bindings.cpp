@@ -11,6 +11,9 @@
 // translation unit that needs the enumerators themselves.
 #include <imgui.h>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
+
 namespace cascade::gui {
 
 static_assert(kChordKeyNone == ImGuiKey_None,
@@ -29,43 +32,56 @@ struct ActionRow {
 // and in order at the bottom of this file - a row added to the enum without a
 // row here would otherwise surface as an empty name in the settings list
 // rather than as a build failure.
+// The `name` and `group` columns are shown to the user in the settings list
+// (app_window.cpp draws them); `id` is the config.json key and must stay
+// exactly as written. FOX_TR_NOOP marks name/group for the catalogue - the
+// site that draws them calls tr() on the stored pointer.
 constexpr ActionRow kActions[kKeyActionCount] = {
-    {KeyAction::StartStop, "startStop", "Start / stop the receiver", "Receiver"},
-    {KeyAction::Mute, "mute", "Mute the sound", "Receiver"},
-    {KeyAction::VolumeUp, "volumeUp", "Volume up", "Receiver"},
-    {KeyAction::VolumeDown, "volumeDown", "Volume down", "Receiver"},
-    {KeyAction::SquelchUp, "squelchUp", "Squelch up", "Receiver"},
-    {KeyAction::SquelchDown, "squelchDown", "Squelch down", "Receiver"},
-    {KeyAction::ModeNFM, "modeNFM", "Mode: NFM (narrow FM)", "Mode"},
-    {KeyAction::ModeWFM, "modeWFM", "Mode: WFM (broadcast FM)", "Mode"},
-    {KeyAction::ModeAM, "modeAM", "Mode: AM", "Mode"},
-    {KeyAction::ModeDSB, "modeDSB", "Mode: DSB", "Mode"},
-    {KeyAction::ModeUSB, "modeUSB", "Mode: USB", "Mode"},
-    {KeyAction::ModeCW, "modeCW", "Mode: CW", "Mode"},
-    {KeyAction::ModeLSB, "modeLSB", "Mode: LSB", "Mode"},
-    {KeyAction::ModeRAW, "modeRAW", "Mode: RAW", "Mode"},
-    {KeyAction::TuneStepUp, "tuneStepUp", "Tune up one step (10 kHz)", "Tuning"},
-    {KeyAction::TuneStepDown, "tuneStepDown", "Tune down one step (10 kHz)", "Tuning"},
-    {KeyAction::TuneSpanUp, "tuneSpanUp", "Tune up one screen width", "Tuning"},
-    {KeyAction::TuneSpanDown, "tuneSpanDown", "Tune down one screen width", "Tuning"},
-    {KeyAction::QuickTune, "quickTune", "Type a frequency", "Tuning"},
-    {KeyAction::ZoomIn, "zoomIn", "Zoom the spectrum in", "Picture"},
-    {KeyAction::ZoomOut, "zoomOut", "Zoom the spectrum out", "Picture"},
-    {KeyAction::ZoomReset, "zoomReset", "Zoom back to the full span", "Picture"},
-    {KeyAction::Record, "record", "Record the audio", "Picture"},
+    {KeyAction::StartStop, "startStop", FOX_TR_NOOP("Start / stop the receiver"),
+     FOX_TR_NOOP("Receiver")},
+    {KeyAction::Mute, "mute", FOX_TR_NOOP("Mute the sound"), FOX_TR_NOOP("Receiver")},
+    {KeyAction::VolumeUp, "volumeUp", FOX_TR_NOOP("Volume up"), FOX_TR_NOOP("Receiver")},
+    {KeyAction::VolumeDown, "volumeDown", FOX_TR_NOOP("Volume down"), FOX_TR_NOOP("Receiver")},
+    {KeyAction::SquelchUp, "squelchUp", FOX_TR_NOOP("Squelch up"), FOX_TR_NOOP("Receiver")},
+    {KeyAction::SquelchDown, "squelchDown", FOX_TR_NOOP("Squelch down"), FOX_TR_NOOP("Receiver")},
+    {KeyAction::ModeNFM, "modeNFM", FOX_TR_NOOP("Mode: NFM (narrow FM)"), FOX_TR_NOOP("Mode")},
+    {KeyAction::ModeWFM, "modeWFM", FOX_TR_NOOP("Mode: WFM (broadcast FM)"), FOX_TR_NOOP("Mode")},
+    {KeyAction::ModeAM, "modeAM", FOX_TR_NOOP("Mode: AM"), FOX_TR_NOOP("Mode")},
+    {KeyAction::ModeDSB, "modeDSB", FOX_TR_NOOP("Mode: DSB"), FOX_TR_NOOP("Mode")},
+    {KeyAction::ModeUSB, "modeUSB", FOX_TR_NOOP("Mode: USB"), FOX_TR_NOOP("Mode")},
+    {KeyAction::ModeCW, "modeCW", FOX_TR_NOOP("Mode: CW"), FOX_TR_NOOP("Mode")},
+    {KeyAction::ModeLSB, "modeLSB", FOX_TR_NOOP("Mode: LSB"), FOX_TR_NOOP("Mode")},
+    {KeyAction::ModeRAW, "modeRAW", FOX_TR_NOOP("Mode: RAW"), FOX_TR_NOOP("Mode")},
+    {KeyAction::TuneStepUp, "tuneStepUp", FOX_TR_NOOP("Tune up one step (10 kHz)"),
+     FOX_TR_NOOP("Tuning")},
+    {KeyAction::TuneStepDown, "tuneStepDown", FOX_TR_NOOP("Tune down one step (10 kHz)"),
+     FOX_TR_NOOP("Tuning")},
+    {KeyAction::TuneSpanUp, "tuneSpanUp", FOX_TR_NOOP("Tune up one screen width"),
+     FOX_TR_NOOP("Tuning")},
+    {KeyAction::TuneSpanDown, "tuneSpanDown", FOX_TR_NOOP("Tune down one screen width"),
+     FOX_TR_NOOP("Tuning")},
+    {KeyAction::QuickTune, "quickTune", FOX_TR_NOOP("Type a frequency"), FOX_TR_NOOP("Tuning")},
+    {KeyAction::ZoomIn, "zoomIn", FOX_TR_NOOP("Zoom the spectrum in"), FOX_TR_NOOP("Picture")},
+    {KeyAction::ZoomOut, "zoomOut", FOX_TR_NOOP("Zoom the spectrum out"), FOX_TR_NOOP("Picture")},
+    {KeyAction::ZoomReset, "zoomReset", FOX_TR_NOOP("Zoom back to the full span"),
+     FOX_TR_NOOP("Picture")},
+    {KeyAction::Record, "record", FOX_TR_NOOP("Record the audio"), FOX_TR_NOOP("Picture")},
     // Its own group, because it is the only action in this list that puts RF
     // out of a connector and filing it under "Receiver" beside the mute would
     // be the panel's own list understating it.
-    {KeyAction::TransmitPtt, "transmitPtt", "Transmit (hold, on the TRANSMIT page)",
-     "Transmit"},
-    {KeyAction::Screenshot, "screenshot", "Save a screenshot", "Picture"},
-    {KeyAction::Fullscreen, "fullscreen", "Maximise / restore the window", "Picture"},
-    {KeyAction::BankSignal, "bankSignal", "Bank: SIGNAL PATH", "Rail"},
-    {KeyAction::BankDecode, "bankDecode", "Bank: DECODE", "Rail"},
-    {KeyAction::BankView, "bankView", "Bank: VIEW", "Rail"},
-    {KeyAction::BankExtend, "bankExtend", "Bank: EXTEND", "Rail"},
-    {KeyAction::BankSystem, "bankSystem", "Bank: SYSTEM", "Rail"},
-    {KeyAction::OpenSettings, "openSettings", "Settings and key bindings", "Rail"},
+    {KeyAction::TransmitPtt, "transmitPtt",
+     FOX_TR_NOOP("Transmit (hold, on the TRANSMIT page)"), FOX_TR_NOOP("Transmit")},
+    {KeyAction::Screenshot, "screenshot", FOX_TR_NOOP("Save a screenshot"),
+     FOX_TR_NOOP("Picture")},
+    {KeyAction::Fullscreen, "fullscreen", FOX_TR_NOOP("Maximise / restore the window"),
+     FOX_TR_NOOP("Picture")},
+    {KeyAction::BankSignal, "bankSignal", FOX_TR_NOOP("Bank: SIGNAL PATH"), FOX_TR_NOOP("Rail")},
+    {KeyAction::BankDecode, "bankDecode", FOX_TR_NOOP("Bank: DECODE"), FOX_TR_NOOP("Rail")},
+    {KeyAction::BankView, "bankView", FOX_TR_NOOP("Bank: VIEW"), FOX_TR_NOOP("Rail")},
+    {KeyAction::BankExtend, "bankExtend", FOX_TR_NOOP("Bank: EXTEND"), FOX_TR_NOOP("Rail")},
+    {KeyAction::BankSystem, "bankSystem", FOX_TR_NOOP("Bank: SYSTEM"), FOX_TR_NOOP("Rail")},
+    {KeyAction::OpenSettings, "openSettings", FOX_TR_NOOP("Settings and key bindings"),
+     FOX_TR_NOOP("Rail")},
 };
 
 struct KeyRow {
@@ -276,7 +292,7 @@ void formatChord(const Chord& c, char* out, std::size_t cap) {
         std::snprintf(out, cap, "None");
         return;
     }
-    std::snprintf(out, cap, "%s%s%s%s", c.ctrl ? "Ctrl+" : "", c.shift ? "Shift+" : "",
+    cascade::core::formatUtf8(out, cap, "%s%s%s%s", c.ctrl ? "Ctrl+" : "", c.shift ? "Shift+" : "",
                   c.alt ? "Alt+" : "", key);
 }
 

@@ -29,6 +29,8 @@
 #ifndef CASCADE_GUI_RAIL_BANKS_HPP
 #define CASCADE_GUI_RAIL_BANKS_HPP
 
+#include "core/i18n.hpp"
+
 namespace cascade::gui {
 
 // The five banks, in the order the rail's captions always had them: what the
@@ -42,11 +44,11 @@ inline constexpr int kRailBankCount = 5;
 // a fault (see test_app_rail.cpp for the same argument about the rows).
 inline const char* railBankLabel(RailBank b) {
     switch (b) {
-        case RailBank::SignalPath: return "SIGNAL";
-        case RailBank::Decode: return "DECODE";
-        case RailBank::View: return "VIEW";
-        case RailBank::Extend: return "EXTEND";
-        case RailBank::System: return "SYSTEM";
+        case RailBank::SignalPath: return FOX_TR_NOOP("SIGNAL");
+        case RailBank::Decode: return FOX_TR_NOOP("DECODE");
+        case RailBank::View: return FOX_TR_NOOP("VIEW");
+        case RailBank::Extend: return FOX_TR_NOOP("EXTEND");
+        case RailBank::System: return FOX_TR_NOOP("SYSTEM");
     }
     return "";
 }
@@ -55,11 +57,11 @@ inline const char* railBankLabel(RailBank b) {
 // always carried, kept so the group the user is looking at is named in full.
 inline const char* railBankCaption(RailBank b) {
     switch (b) {
-        case RailBank::SignalPath: return "SIGNAL PATH";
-        case RailBank::Decode: return "DECODE";
-        case RailBank::View: return "VIEW";
-        case RailBank::Extend: return "EXTEND";
-        case RailBank::System: return "SYSTEM";
+        case RailBank::SignalPath: return FOX_TR_NOOP("SIGNAL PATH");
+        case RailBank::Decode: return FOX_TR_NOOP("DECODE");
+        case RailBank::View: return FOX_TR_NOOP("VIEW");
+        case RailBank::Extend: return FOX_TR_NOOP("EXTEND");
+        case RailBank::System: return FOX_TR_NOOP("SYSTEM");
     }
     return "";
 }

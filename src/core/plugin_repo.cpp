@@ -7,6 +7,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_repo.hpp"
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -1797,6 +1800,17 @@ std::string PluginRepo::pluginBlockMessage(const InstalledPlugin& installed,
     const std::string versioned =
         installed.version.empty() ? label : (label + " " + installed.version);
 
+    // USER COPY, SO EACH SENTENCE IS ONE TRANSLATABLE FORMAT STRING. These
+    // were joined from fragments around the plugin's name, which no catalogue
+    // can translate; with English in force tr() hands back the English and the
+    // text is exactly what it was. The sentences are joined with a space, and
+    // a whole sentence is the smallest thing ever handed to a translator.
+    using cascade::i18n::tr;
+    const auto fill = [](const char* format, const std::string& a, const std::string& b) {
+        char buf[512];
+        formatUtf8(buf, sizeof(buf), format, a.c_str(), b.c_str());
+        return std::string(buf);
+    };
     switch (r) {
         case PluginBlockReason::None:
             return std::string();
@@ -1806,22 +1820,25 @@ std::string PluginRepo::pluginBlockMessage(const InstalledPlugin& installed,
             // instruction to update: if the author has not published a build
             // for this release, updating cannot possibly help, and sending
             // someone round that loop is worse than telling them the truth.
-            return versioned + " was built for a different version of FoxSDR and has been " +
-                   "disabled. It needs a new build from the plugin's author before it can be " +
-                   "used again.";
+            return fill(tr("%s was built for a different version of FoxSDR and has been "
+                           "disabled. It needs a new build from the plugin's author before it "
+                           "can be used again."),
+                        versioned, std::string());
 
         case PluginBlockReason::BelowMinimumVersion: {
-            std::string m = versioned + " is out of date and has been disabled. Version " +
-                            policy.minSupportedVersion + " or newer is required.";
+            std::string m = fill(tr("%s is out of date and has been disabled. Version %s or "
+                                    "newer is required."),
+                                 versioned, policy.minSupportedVersion);
+            m += ' ';
             if (!policy.catalogueVersion.empty() &&
                 compareVersions(policy.catalogueVersion, installed.version) > 0) {
                 // The one-click case, and the only one where "Update it" is
                 // true: the last catalogue we saw really did have a newer build.
-                m += " Version " + policy.catalogueVersion +
-                     " is available - update it to use it again.";
+                m += fill(tr("Version %s is available - update it to use it again."),
+                          policy.catalogueVersion, std::string());
             } else {
-                m += " No newer version was in the last plugin catalogue seen, so check for "
-                     "updates or ask the plugin's author for a current build.";
+                m += tr("No newer version was in the last plugin catalogue seen, so check for "
+                        "updates or ask the plugin's author for a current build.");
             }
             return m;
         }

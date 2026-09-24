@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.26** (September 2026), in open beta and free for
+The current release is **0.99.27** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1260,6 +1260,33 @@ uses Windows' own encoder; on Linux the MP3 choice is unavailable and WAV is
 written instead. A decoder module that can decode straight from the radio's I/Q
 is offered only that way - its audio variant, which needs a demodulator in
 front of it, is not shown.
+
+## Language and country
+
+The interface is available in English, Português (Brasil), Español,
+Français, Deutsch, Italiano and Polski. **SYSTEM → Language & country** chooses
+one; **Automatic**, the default, follows the language Windows (or, on Linux,
+`LC_MESSAGES`/`LANG`) is set to, and falls back to English when there is no
+translation for it. A change applies at once. The six translations are machine
+translations and say so in the list; **SUGGEST A BETTER TRANSLATION** opens the
+bug-report page with the language already filled in.
+
+Choosing your **country** in the same section picks the band plan for it - the
+country's own plan where FoxSDR has one (UK, US, Canada, Australia, Japan), the
+ITU region's plan everywhere else. Nothing about either setting leaves your
+machine.
+
+What is not translated: text a plugin draws itself (plugins ship their own
+words), device and product names, units, and the names of modes and protocols.
+
+For translators: the catalogues are `resources/lang/<code>.json`, keyed by the
+English text. `py -3.14 tools/i18n_keys.py` reports what each one is missing,
+`--skeleton <code>` starts a new language, and a catalogue can be tried without
+rebuilding by starting FoxSDR with `FOXSDR_LANG_FILE=<path to the json>` and
+`FOXSDR_LANGUAGE=<code>`. `py -3.14 tools/embed-lang.py` compiles the catalogues
+into the program; `test_i18n` checks every catalogue covers every string, keeps
+every `%` conversion in order, and `test_i18n_glyphs` that the fonts can draw
+every letter.
 
 ## Keyboard
 

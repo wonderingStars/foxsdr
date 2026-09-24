@@ -54,7 +54,10 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
 #include "gui/instrument_nav_bearing_math.hpp"
 #include "gui/scope_face.hpp"
@@ -63,6 +66,7 @@
 namespace cascade::gui {
 
 using cascade::core::HostInstrument;
+using cascade::i18n::tr;
 namespace nb = cascade::gui::navbearing;
 
 namespace {
@@ -133,11 +137,12 @@ void drawNavFlag(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
     ImFont* f = fonts::legend();
     const float px = std::min(fonts::kTinySize, h * 0.72f);
     if (px < 8.0f) { return; }
-    const float tw = textW(f, px, "NAV");
+    const char* navWord = tr("NAV");
+    const float tw = textW(f, px, navWord);
     const ImVec2 at(tl.x + (w - tw) * 0.5f, tl.y + (h - px) * 0.5f - 1.0f);
     dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f), theme::withAlpha(theme::kVoid, 0.85f),
-                "NAV");
-    dl->AddText(f, px, at, theme::kIvory, "NAV");
+                navWord);
+    dl->AddText(f, px, at, theme::kIvory, navWord);
 }
 
 // --- the omni bearing selector ----------------------------------------------
@@ -247,6 +252,9 @@ void drawCard(ImDrawList* dl, const ImVec2& c, float r, double underIndex) {
         if (!major) { continue; }
         char lab[4];
         if (!nb::cardLabel(deg, lab, sizeof lab)) { continue; }
+        // The four cardinal letters in the language in force (the keys
+        // i18n::hemisphereLetter uses); a figure passes through tr() as is.
+        cascade::core::formatUtf8(lab, sizeof lab, "%s", std::string(tr(lab)).c_str());
         const ImVec2 sz = nf->CalcTextSizeA(npx, FLT_MAX, 0.0f, lab);
         const ImVec2 at = onDial(c, r * 0.68f, screen);
         const ImVec2 tp(at.x - sz.x * 0.5f, at.y - sz.y * 0.5f);
@@ -287,9 +295,9 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (haveRadial) {
             char b[4];
             nb::formatBearing(radial, b, sizeof b);
-            std::snprintf(line, sizeof line, "RADIAL %s", b);
+            cascade::core::formatUtf8(line, sizeof line, tr("RADIAL %s"), b);
         } else {
-            std::snprintf(line, sizeof line, "NO SIGNAL");
+            cascade::core::formatUtf8(line, sizeof line, "%s", tr("NO SIGNAL"));
         }
         engrave(dl, ImVec2(tl.x + 10.0f, bodyTop + 4.0f), line, fonts::kTinySize);
         return bodyTop + fonts::kTinySize + 10.0f - tl.y;
@@ -464,10 +472,12 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // dial. Set beside them they reached the card's numeral ring and ran
         // through whichever bearing happened to be there - and the numeral a
         // legend is sitting on is the one you were trying to read.
-        const float tw = textW(f, px, "TO");
-        const float fw = textW(f, px, "FROM");
-        dl->AddText(f, px, ImVec2(caseC.x - tw * 0.5f, ty + s * 0.9f), toCol, "TO");
-        dl->AddText(f, px, ImVec2(caseC.x - fw * 0.5f, fy - s * 0.9f - px), fromCol, "FROM");
+        const char* toWord = tr("TO");
+        const char* fromWord = tr("FROM");
+        const float tw = textW(f, px, toWord);
+        const float fw = textW(f, px, fromWord);
+        dl->AddText(f, px, ImVec2(caseC.x - tw * 0.5f, ty + s * 0.9f), toCol, toWord);
+        dl->AddText(f, px, ImVec2(caseC.x - fw * 0.5f, fy - s * 0.9f - px), fromCol, fromWord);
     }
 
     // --- the NAV flag --------------------------------------------------------
@@ -533,7 +543,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 nb::formatBearing(nb::reciprocal(nb::roundedDeg(radial)), inb, sizeof inb);
             }
             nb::formatBearing(course, crs, sizeof crs);
-            const char* caps[3] = {"RADIAL FROM", "INBOUND CRS", "OBS COURSE"};
+            const char* caps[3] = {tr("RADIAL FROM"), tr("INBOUND CRS"), tr("OBS COURSE")};
             const char* vals[3] = {rad, inb, crs};
             const bool litv[3] = {haveRadial, haveRadial, true};
             for (int i = 0; i < 3; ++i) {
@@ -560,13 +570,14 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             drawFreqDrumWell(dl, iTL, iBR);
             const char* ident = in.have ? in.state.text[0] : "";
             const float capPx = fonts::kTinySize;
+            const char* identCap = tr("IDENT");
             engrave(dl, ImVec2(iTL.x + 8.0f, iTL.y + (iBR.y - iTL.y - capPx) * 0.5f),
-                    "IDENT", capPx);
-            const float x0 = iTL.x + 8.0f + textW(fonts::legend(), capPx, "IDENT") + 12.0f;
+                    identCap, capPx);
+            const float x0 = iTL.x + 8.0f + textW(fonts::legend(), capPx, identCap) + 12.0f;
             if (ident[0] == '\0') {
                 // NO STATION IS DRAWN AS NO STATION. Not "---", which on a dial
                 // full of three-figure bearings reads as one of them.
-                engrave(dl, ImVec2(x0, iTL.y + (iBR.y - iTL.y - capPx) * 0.5f), "NO IDENT",
+                engrave(dl, ImVec2(x0, iTL.y + (iBR.y - iTL.y - capPx) * 0.5f), tr("NO IDENT"),
                         capPx);
             } else {
                 ImFont* uf = fonts::ui();
@@ -608,11 +619,11 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const float lampR = 6.0f;
         const ImVec2 lockAt(gx0 + (gx1 - gx0) * 0.28f, gy + lampR + 2.0f);
         const ImVec2 newAt(gx0 + (gx1 - gx0) * 0.72f, gy + lampR + 2.0f);
-        drawBenchLamp(dl, lockAt, lampR, theme::kPhosphor, lock, "LOCK");
-        drawBenchLamp(dl, newAt, lampR, theme::kGold, cue.unread, "NEW");
+        drawBenchLamp(dl, lockAt, lampR, theme::kPhosphor, lock, tr("LOCK"));
+        drawBenchLamp(dl, newAt, lampR, theme::kGold, cue.unread, tr("NEW"));
         gy += lampR * 2.0f + 4.0f + ImGui::GetTextLineHeight() + 8.0f;
 
-        addBenchGroupCaption(dl, ImVec2(gx0, gy), gx1 - gx0, "SIGNAL");
+        addBenchGroupCaption(dl, ImVec2(gx0, gy), gx1 - gx0, tr("SIGNAL"));
         gy += fonts::kTinySize + 8.0f;
 
         const float gh = bodyBottom - gy;
@@ -626,7 +637,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const struct {
                 const char* cap;
                 double v;
-            } bays[3] = {{"CONF", conf}, {"REF", ref}, {"VAR", var}};
+            } bays[3] = {{tr("CONF"), conf}, {tr("REF"), ref}, {tr("VAR"), var}};
             const float bw = (gx1 - gx0 - 8.0f) / 3.0f;
             for (int i = 0; i < 3; ++i) {
                 const float x = gx0 + (bw + 4.0f) * static_cast<float>(i);

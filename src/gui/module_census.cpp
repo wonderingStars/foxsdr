@@ -3,9 +3,13 @@
 
 #include <cstdio>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
+
 namespace cascade::gui {
 
 using cascade::core::LoadedPlugin;
+using cascade::i18n::tr;
 
 bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
     // A record that did not load carries no tables at all - the host nulls
@@ -93,11 +97,16 @@ namespace {
 void appendUnreadClause(std::string& s, int unread) {
     if (unread <= 0) { return; }
     char buf[320];
-    std::snprintf(buf, sizeof(buf),
-                  " %d file%s in the plugin folder %s refused before the host could "
-                  "read what %s - the Fitted modules window prints why.",
-                  unread, unread == 1 ? "" : "s", unread == 1 ? "was" : "were",
-                  unread == 1 ? "it was" : "they were");
+    // SINGULAR AND PLURAL ARE TWO WHOLE SENTENCES, not one with the English
+    // "s" / "was" / "it was" filled in by %s - no catalogue can translate an
+    // English word handed to it at run time.
+    cascade::core::formatUtf8(buf, sizeof(buf),
+                  unread == 1
+                      ? tr(" %d file in the plugin folder was refused before the host could "
+                           "read what it was - the Fitted modules window prints why.")
+                      : tr(" %d files in the plugin folder were refused before the host could "
+                           "read what they were - the Fitted modules window prints why."),
+                  unread);
     s += buf;
 }
 
@@ -112,20 +121,20 @@ std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
     if (c.stopped > 0) {
         std::string s;
         if (c.stopped == 1 && !c.stoppedName.empty()) {
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is publishing %s: \"%s\" is a track source and you "
-                          "stopped it.",
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          tr("Nothing is publishing %s: \"%s\" is a track source and you "
+                             "stopped it."),
                           subject, c.stoppedName.c_str());
             s = buf;
         } else {
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is publishing %s: %d fitted track sources are "
-                          "stopped.",
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          tr("Nothing is publishing %s: %d fitted track sources are "
+                             "stopped."),
                           subject, c.stopped);
             s = buf;
         }
-        s += " A stopped module stays fitted and is given no track source until you "
-             "start it again - the key is on its own plate in the Fitted modules window.";
+        s += tr(" A stopped module stays fitted and is given no track source until you "
+                "start it again - the key is on its own plate in the Fitted modules window.");
         return s;
     }
     if (c.refused > 0) {
@@ -133,33 +142,33 @@ std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
         if (c.refused == 1 && !c.refusedName.empty()) {
             // REFUSED, which is the word the Fitted modules window letters this
             // state in, rather than a second one meaning the same thing.
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is publishing %s: \"%s\" is a track source and the "
-                          "host refused it.",
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          tr("Nothing is publishing %s: \"%s\" is a track source and the "
+                             "host refused it."),
                           subject, c.refusedName.c_str());
             s = buf;
         } else {
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is publishing %s: %d fitted track sources were "
-                          "refused.",
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          tr("Nothing is publishing %s: %d fitted track sources were "
+                             "refused."),
                           subject, c.refused);
             s = buf;
         }
-        s += " It is fitted already, so there is nothing to fetch: the Fitted modules "
-             "window prints the host's own reason for refusing it, verbatim.";
+        s += tr(" It is fitted already, so there is nothing to fetch: the Fitted modules "
+                "window prints the host's own reason for refusing it, verbatim.");
         return s;
     }
     if (c.live > 0) {
-        std::snprintf(buf, sizeof(buf),
-                      "Nothing is publishing %s: a fitted track source did not start - "
-                      "the host asked it for one and was given none. Nothing needs "
-                      "fetching; the module itself failed.",
+        cascade::core::formatUtf8(buf, sizeof(buf),
+                      tr("Nothing is publishing %s: a fitted track source did not start - "
+                         "the host asked it for one and was given none. Nothing needs "
+                         "fetching; the module itself failed."),
                       subject);
         return buf;
     }
-    std::snprintf(buf, sizeof(buf),
-                  "No fitted module publishes tracks of any kind, so there are no %s "
-                  "here. %s",
+    cascade::core::formatUtf8(buf, sizeof(buf),
+                  tr("No fitted module publishes tracks of any kind, so there are no %s "
+                     "here. %s"),
                   subject, installRemedy);
     std::string s = buf;
     appendUnreadClause(s, c.unread);
@@ -177,9 +186,9 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
             // "carries a decoder", never "decodes ADS-B": the descriptor
             // declares the capability and says nothing whatever about what the
             // module decodes. See the header.
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is decoding: \"%s\" carries a decoder and you "
-                          "stopped it.",
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          tr("Nothing is decoding: \"%s\" carries a decoder and you "
+                             "stopped it."),
                           c.stoppedName.c_str());
             s = buf;
         } else {
@@ -187,33 +196,37 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
             // descriptor carried no name. A loaded record always has one, since
             // MissingName is a refusal, so the singular is written out for
             // correctness rather than for a state anyone will see.
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is decoding: %d fitted decoder%s %s stopped.", c.stopped,
-                          c.stopped == 1 ? "" : "s", c.stopped == 1 ? "is" : "are");
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          c.stopped == 1
+                              ? tr("Nothing is decoding: %d fitted decoder is stopped.")
+                              : tr("Nothing is decoding: %d fitted decoders are stopped."),
+                          c.stopped);
             s = buf;
         }
-        s += " A stopped module stays fitted and is fed no signal until you start it "
-             "again - the Fitted modules window letters it STOPPED BY YOU and the key "
-             "is on its plate.";
+        s += tr(" A stopped module stays fitted and is fed no signal until you start it "
+                "again - the Fitted modules window letters it STOPPED BY YOU and the key "
+                "is on its plate.");
         return s;
     }
     if (c.refused > 0) {
         std::string s;
         if (c.refused == 1 && !c.refusedName.empty()) {
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is decoding: \"%s\" carries a decoder and the host "
-                          "refused it.",
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          tr("Nothing is decoding: \"%s\" carries a decoder and the host "
+                             "refused it."),
                           c.refusedName.c_str());
             s = buf;
         } else {
-            std::snprintf(buf, sizeof(buf),
-                          "Nothing is decoding: %d fitted decoder%s %s refused.", c.refused,
-                          c.refused == 1 ? "" : "s", c.refused == 1 ? "was" : "were");
+            cascade::core::formatUtf8(buf, sizeof(buf),
+                          c.refused == 1
+                              ? tr("Nothing is decoding: %d fitted decoder was refused.")
+                              : tr("Nothing is decoding: %d fitted decoders were refused."),
+                          c.refused);
             s = buf;
         }
-        s += " It is on the disk already, so there is nothing to fetch: the Fitted "
-             "modules window letters it REFUSED and prints the host's own reason, "
-             "verbatim.";
+        s += tr(" It is on the disk already, so there is nothing to fetch: the Fitted "
+                "modules window letters it REFUSED and prints the host's own reason, "
+                "verbatim.");
         return s;
     }
     if (c.live > 0) {
@@ -221,13 +234,13 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
         // filled only by rebuild(), so a fitted decoder that is loaded, not
         // stopped and absent from that list means the list predates the module.
         // Nothing is wrong with the module and nothing needs fetching.
-        return "Nothing is decoding: a fitted decoder is not in the receiver's decoder "
-               "list. That list is built when the receiver's source or rate changes and "
-               "after a rescan of the plugin folder, so nothing here needs fetching.";
+        return tr("Nothing is decoding: a fitted decoder is not in the receiver's decoder "
+                  "list. That list is built when the receiver's source or rate changes and "
+                  "after a rescan of the plugin folder, so nothing here needs fetching.");
     }
     std::string s =
-        "No fitted module carries a decoder of any kind, so there is nothing here to "
-        "decode with. The Plugin store row above is where one is fitted from.";
+        tr("No fitted module carries a decoder of any kind, so there is nothing here to "
+           "decode with. The Plugin store row above is where one is fitted from.");
     appendUnreadClause(s, c.unread);
     return s;
 }
