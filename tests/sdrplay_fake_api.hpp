@@ -96,7 +96,10 @@ public:
         table.SwapRspDuoActiveTuner = &thunkSwap;
     }
 
-    ~FakeSdrPlayApi() { instance() = nullptr; }
+    ~FakeSdrPlayApi() {
+        stopService();
+        instance() = nullptr;
+    }
 
     FakeSdrPlayApi(const FakeSdrPlayApi&) = delete;
     FakeSdrPlayApi& operator=(const FakeSdrPlayApi&) = delete;
@@ -192,6 +195,80 @@ public:
     std::atomic<bool> releaseReleaseDeviceHang{false};
     std::atomic<bool> insideReleaseDevice{false};
     std::atomic<bool> leftReleaseDevice{false};
+
+    // THE SERVICE'S OWN THREAD, AND A SERVICE THAT WEDGES WHEN IT IS KEPT
+    // WAITING (0.99.32).
+    //
+    // Everything above delivers blocks on the TEST's thread, synchronously,
+    // which is exactly why no test could ever see a stream callback that
+    // blocked: the test was the one calling it. The real API calls the
+    // callback from a thread of its own, at the radio's pace, and two field
+    // logs (0.97.0 RSPdx, 0.99.27 RSP2) show what the service does when that
+    // callback is held - the last health window holds exactly ten blocks, the
+    // stream never comes back, and the next Uninit answers
+    // sdrplay_api_ServiceNotResponding (14) and the next Init
+    // sdrplay_api_AlreadyInitialised (9).
+    //
+    // startService() models that. A block of `blockSamples` every `period`,
+    // delivered on a thread the fake owns; every call into the driver's
+    // callback is timed, and one that takes longer than `wedgeAfter` wedges
+    // the service for good: nothing more is delivered, Uninit and Update
+    // answer ServiceNotResponding and Init answers AlreadyInitialised. The
+    // real service's tolerance is NOT known - the field logs say "about ten
+    // blocks", a few milliseconds at the rates involved - so the threshold a
+    // test picks is a stand-in, chosen far above scheduling noise.
+    //
+    // The callback pointer and context are read under serviceMutex_, which
+    // Init and a successful Uninit also take: the API's contract is that
+    // Uninit returns with the callbacks stopped, so it must wait for one that
+    // is in progress.
+    void startService(unsigned int blockSamples, std::chrono::microseconds period,
+                      std::chrono::milliseconds wedgeAfter) {
+        stopService();
+        serviceStop_.store(false);
+        serviceThread_ = std::thread([this, blockSamples, period, wedgeAfter]() {
+            std::vector<short> xi(blockSamples);
+            std::vector<short> xq(blockSamples);
+            for (unsigned int k = 0; k < blockSamples; ++k) {
+                xi[k] = static_cast<short>((k % 64u) * 256u);
+                xq[k] = static_cast<short>(((k + 16u) % 64u) * 256u);
+            }
+            using clock = std::chrono::steady_clock;
+            auto next = clock::now();
+            unsigned int sampleNum = 0;
+            while (!serviceStop_.load()) {
+                next += period;
+                std::this_thread::sleep_until(next);
+                if (clock::now() - next > std::chrono::milliseconds(50)) { next = clock::now(); }
+                if (serviceWedged.load()) { continue; }
+                std::lock_guard<std::mutex> lk(serviceMutex_);
+                if (streamA == nullptr) { continue; }
+                abi::StreamCbParamsT p{};
+                p.firstSampleNum = sampleNum;
+                p.numSamples = blockSamples;
+                sampleNum += blockSamples;
+                const auto t0 = clock::now();
+                streamA(xi.data(), xq.data(), &p, blockSamples, 0, cbContext);
+                const auto us =
+                    std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0)
+                        .count();
+                if (us > longestCallbackUs.load()) { longestCallbackUs.store(us); }
+                serviceBlocks.fetch_add(1);
+                if (us > std::chrono::duration_cast<std::chrono::microseconds>(wedgeAfter).count()) {
+                    serviceWedged.store(true);
+                }
+            }
+        });
+    }
+
+    void stopService() {
+        serviceStop_.store(true);
+        if (serviceThread_.joinable()) { serviceThread_.join(); }
+    }
+
+    std::atomic<bool> serviceWedged{false};
+    std::atomic<long long> longestCallbackUs{0};
+    std::atomic<unsigned long long> serviceBlocks{0};
 
     // --- what the tests observe ------------------------------------------
 
@@ -356,6 +433,11 @@ private:
     // Any non-null value; the driver only ever passes it back to us.
     void* handle = reinterpret_cast<void*>(static_cast<std::uintptr_t>(0xD1A1));
 
+    // See startService().
+    std::mutex serviceMutex_;
+    std::thread serviceThread_;
+    std::atomic<bool> serviceStop_{true};
+
     // --- the thunks -------------------------------------------------------
 
     static abi::ErrT thunkOpen() {
@@ -462,6 +544,7 @@ private:
             case abi::Fail: return "Fail";
             case abi::HwVerError: return "HwVerError";
             case abi::ServiceNotResponding: return "ServiceNotResponding";
+            case abi::AlreadyInitialised: return "AlreadyInitialised";
             default: break;
         }
         return "Error";
@@ -487,12 +570,18 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr || cbs == nullptr) { return abi::Fail; }
         f->note("Init");
+        // A WEDGED SERVICE still holds the stream it stopped delivering, so a
+        // second Init is refused exactly as both field logs show it.
+        if (f->serviceWedged.load()) { return abi::AlreadyInitialised; }
         if (f->initResult != abi::Success) { return f->initResult; }
         if (dev != f->handle) { return abi::InvalidParam; }
-        f->streamA = cbs->StreamACbFn;
-        f->streamB = cbs->StreamBCbFn;
-        f->eventCb = cbs->EventCbFn;
-        f->cbContext = ctx;
+        {
+            std::lock_guard<std::mutex> lk(f->serviceMutex_);
+            f->streamA = cbs->StreamACbFn;
+            f->streamB = cbs->StreamBCbFn;
+            f->eventCb = cbs->EventCbFn;
+            f->cbContext = ctx;
+        }
         f->initialised = true;
 
         InitSnapshot s;
@@ -520,6 +609,7 @@ private:
         // Noted first, then queued behind a wedged device - so the call is on
         // the record even when it never comes back out. See updateHangDepth.
         queueBehindWedgedDevice(f, f->uninitEnteredWhileWedged);
+        if (f->serviceWedged.load()) { return abi::ServiceNotResponding; }
         if (f->uninitResult != abi::Success) {
             // A REFUSAL, NOT A HANG: the service answered - the same shape
             // sdrplay_api_Update refuses with (updateResult) - so the
@@ -529,11 +619,15 @@ private:
             // sdrplay_api_ServiceNotResponding, not a hang.
             return f->uninitResult;
         }
-        // The API's contract: Uninit returns with the callbacks stopped.
-        f->streamA = nullptr;
-        f->streamB = nullptr;
-        f->eventCb = nullptr;
-        f->cbContext = nullptr;
+        // The API's contract: Uninit returns with the callbacks stopped - so
+        // it waits for a service-thread callback that is in progress.
+        {
+            std::lock_guard<std::mutex> lk(f->serviceMutex_);
+            f->streamA = nullptr;
+            f->streamB = nullptr;
+            f->eventCb = nullptr;
+            f->cbContext = nullptr;
+        }
         f->initialised = false;
         return abi::Success;
     }
@@ -558,6 +652,7 @@ private:
             f->leftUpdate.store(true);
             return f->updateResult;
         }
+        if (f->serviceWedged.load()) { return abi::ServiceNotResponding; }
         if (f->updateResult != abi::Success) { return f->updateResult; }
 
         if (f->autoAck && f->streamA != nullptr) {

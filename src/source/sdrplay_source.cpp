@@ -856,36 +856,65 @@ std::string SdrPlaySource::serialNo() const {
 
 // --- the callbacks --------------------------------------------------------
 
+namespace {
+
+std::int64_t steadyNowNs() {
+    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count());
+}
+
+}  // namespace
+
 void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
-    std::lock_guard<std::mutex> lk(link.healthMutex);
-    StreamHealth& h = link.health;
-    const auto now = std::chrono::steady_clock::now();
-    if (!h.windowOpen) {
-        h.windowOpen = true;
-        h.windowStart = now;
-        h.lastSamples = now;
+    // THE SERVICE'S THREAD: atomics and nothing else. See Link::cbReads for
+    // why this is not the StreamHealth-under-a-mutex it used to be.
+    const std::int64_t now = steadyNowNs();
+    std::int64_t closed = 0;
+    if (link.cbWindowStartNs.compare_exchange_strong(closed, now, std::memory_order_acq_rel)) {
+        // This block opens the window, so no gap is measured into it.
+        link.cbLastSamplesNs.store(now, std::memory_order_relaxed);
     }
-    ++h.reads;
+    link.cbReads.fetch_add(1, std::memory_order_relaxed);
     if (samples > 0) {
-        ++h.withSamples;
-        h.samples += samples;
-        const auto gap =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - h.lastSamples).count();
-        if (gap > h.longestGapMs) { h.longestGapMs = gap; }
-        h.lastSamples = now;
+        link.cbWithSamples.fetch_add(1, std::memory_order_relaxed);
+        link.cbSamples.fetch_add(samples, std::memory_order_relaxed);
+        const std::int64_t prev = link.cbLastSamplesNs.exchange(now, std::memory_order_relaxed);
+        if (prev != 0 && now > prev) {
+            const std::int64_t gapMs = (now - prev) / 1000000;
+            // The only writer apart from the reader's reset to zero, so a
+            // compare-exchange loop is only ever retried against that reset.
+            std::int64_t seen = link.cbLongestGapMs.load(std::memory_order_relaxed);
+            while (gapMs > seen && !link.cbLongestGapMs.compare_exchange_weak(
+                                       seen, gapMs, std::memory_order_relaxed)) {
+            }
+        }
     }
-    if (dropped) { ++h.overflows; }
+    if (dropped) { link.cbOverflows.fetch_add(1, std::memory_order_relaxed); }
 }
 
 std::string SdrPlaySource::healthLineLocked(Link& link) {
+    // CLOSED FIRST, then emptied: a block the callback lands in between opens
+    // the next window and is counted in one of the two, never lost and never
+    // counted twice.
+    const std::int64_t start = link.cbWindowStartNs.exchange(0, std::memory_order_acq_rel);
+    const std::int64_t last = link.cbLastSamplesNs.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t reads = link.cbReads.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t withSamples = link.cbWithSamples.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t samples = link.cbSamples.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t overflows = link.cbOverflows.exchange(0, std::memory_order_relaxed);
+    std::int64_t longestGapMs = link.cbLongestGapMs.exchange(0, std::memory_order_relaxed);
     StreamHealth& h = link.health;
-    if (!h.windowOpen || h.reads == 0) { return std::string(); }
-    const auto now = std::chrono::steady_clock::now();
-    const auto openGap =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - h.lastSamples).count();
-    if (openGap > h.longestGapMs) { h.longestGapMs = openGap; }
-    const auto windowMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - h.windowStart).count();
+    const StreamHealth mine = h;
+    h = StreamHealth{};
+    if (start == 0 || reads == 0) { return std::string(); }
+
+    const std::int64_t now = steadyNowNs();
+    if (last != 0 && now > last) {
+        const std::int64_t openGap = (now - last) / 1000000;
+        if (openGap > longestGapMs) { longestGapMs = openGap; }
+    }
+    const std::int64_t windowMs = (now > start) ? (now - start) / 1000000 : 0;
     char buf[192];
     // THE SAME FORMAT SoapySource::streamHealthLine WRITES, word for word, so
     // a reader of the diagnostic log does not have to know which driver was
@@ -893,42 +922,65 @@ std::string SdrPlaySource::healthLineLocked(Link& link) {
     std::snprintf(buf, sizeof(buf),
                   "source: stream health - reads %llu, with samples %llu, timeouts %llu, "
                   "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s",
-                  static_cast<unsigned long long>(h.reads),
-                  static_cast<unsigned long long>(h.withSamples),
-                  static_cast<unsigned long long>(h.timeouts),
-                  static_cast<unsigned long long>(h.overflows),
-                  static_cast<unsigned long long>(h.errors),
-                  static_cast<long long>(h.longestGapMs),
-                  static_cast<unsigned long long>(h.samples),
+                  static_cast<unsigned long long>(reads),
+                  static_cast<unsigned long long>(withSamples),
+                  static_cast<unsigned long long>(mine.timeouts),
+                  static_cast<unsigned long long>(overflows),
+                  static_cast<unsigned long long>(mine.errors),
+                  static_cast<long long>(longestGapMs),
+                  static_cast<unsigned long long>(samples),
                   static_cast<long long>((windowMs + 500) / 1000));
-    h = StreamHealth{};
     return std::string(buf);
 }
 
 void SdrPlaySource::maybeWriteHealth(Link& link) {
+    // THE PIPELINE'S SOURCE THREAD, from read(). Writing the log here can wait
+    // behind a slow disk or another thread's line, and that is fine: this
+    // thread's lateness is absorbed by the ring (a quarter of a second at the
+    // fastest rate), where the SERVICE's lateness was a wedged service.
+    const std::int64_t start = link.cbWindowStartNs.load(std::memory_order_acquire);
+    if (start == 0) { return; }
     std::string line;
     bool warn = false;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
-        StreamHealth& h = link.health;
-        if (!h.windowOpen) { return; }
-        const auto now = std::chrono::steady_clock::now();
-        if (now - h.windowStart < link.healthWindow) { return; }
-        warn = h.overflows > 0 || h.errors > 0;
+        const std::int64_t windowNs =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(link.healthWindow).count();
+        if (steadyNowNs() - start < windowNs) { return; }
+        warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
         const bool first = !link.healthEverWritten;
-        const bool nominal = !warn;
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         // A line ALWAYS for the first window after a start, so a healthy radio
         // leaves one proving it; after that only for a window with something
         // to report.
-        if (!(warn || first || !nominal)) { return; }
+        if (!(warn || first)) { return; }
         link.healthEverWritten = true;
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
     } else {
         core::diagLogf("%s", line.c_str());
+    }
+}
+
+void SdrPlaySource::drainEventLogs(Link& link) {
+    const unsigned int bits = link.pendingEventLogs.exchange(0, std::memory_order_acq_rel);
+    if (bits == 0) { return; }
+    if ((bits & kEventLogOverload) != 0) {
+        core::diagWarnf("source: SDRplay ADC OVERLOAD - reduce the gain or add attenuation");
+    }
+    if ((bits & kEventLogOverloadCorrected) != 0) {
+        core::diagWarnf("source: SDRplay ADC overload corrected");
+    }
+    if ((bits & kEventLogRemoved) != 0) {
+        core::diagWarnf("source: SDRplay device removed - stopping");
+    }
+    if ((bits & kEventLogFailure) != 0) {
+        core::diagWarnf("source: SDRplay device failure - stopping");
+    }
+    if ((bits & kEventLogMasterLost) != 0) {
+        core::diagWarnf("source: SDRplay RSPduo master disappeared - stopping");
     }
 }
 
@@ -986,13 +1038,19 @@ void SdrPlaySource::streamCallbackA(short* xi, short* xq, abi::StreamCbParamsT* 
         i += static_cast<unsigned int>(chunk);
     }
 
+    // THIS THREAD IS THE SERVICE'S, AND IT WAITS ON NOTHING OF OURS (0.99.32).
+    // No lock another thread can hold, no log line, no file - the health
+    // window is atomics (noteBlock) and read() writes its line. Until 0.99.32
+    // the block that closed a window wrote the line from here, through the
+    // diagnostic log's lock and an fflush, and two field reports (0.97.0
+    // RSPdx, 0.99.27 RSP2) each show exactly ten more blocks after that write
+    // and then a service that never delivered again. See
+    // tests/test_sdrplay_stall.cpp.
     noteBlock(*link, written, dropped);
-    maybeWriteHealth(*link);
 
     if (written > 0) {
-        {
-            std::lock_guard<std::mutex> lk(link->waitMutex);
-        }
+        // Notified WITHOUT waitMutex: see Link::waitCv. Taking it here was the
+        // other lock this thread could be made to wait on.
         link->waitCv.notify_one();
     }
     link->inCallback.fetch_sub(1, std::memory_order_acq_rel);
@@ -1036,9 +1094,11 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
                 params != nullptr &&
                 params->powerOverloadParams.powerOverloadChangeType == abi::Overload_Detected;
             if (detected) { link.overloads.fetch_add(1, std::memory_order_relaxed); }
-            core::diagWarnf("source: SDRplay %s",
-                            detected ? "ADC OVERLOAD - reduce the gain or add attenuation"
-                                     : "ADC overload corrected");
+            // Logged by the next read(), not here: the same rule as the stream
+            // callback (0.99.32) - this thread is the service's, and the log's
+            // lock and file are not ours to make it wait on.
+            link.pendingEventLogs.fetch_or(detected ? kEventLogOverload : kEventLogOverloadCorrected,
+                                           std::memory_order_acq_rel);
             // THE ACKNOWLEDGEMENT IS NOT OPTIONAL. The service keeps
             // re-reporting an overload until it is acknowledged, so an
             // application that only logs the event gets a log full of it and
@@ -1053,12 +1113,12 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
 
         case abi::DeviceRemoved:
             noteFaultOn(link, "device removed", "the RSP was unplugged or the service released it");
-            core::diagWarnf("source: SDRplay device removed - stopping");
+            link.pendingEventLogs.fetch_or(kEventLogRemoved, std::memory_order_acq_rel);
             break;
 
         case abi::DeviceFailure:
             noteFaultOn(link, "device failure", "the SDRplay service reported a device failure");
-            core::diagWarnf("source: SDRplay device failure - stopping");
+            link.pendingEventLogs.fetch_or(kEventLogFailure, std::memory_order_acq_rel);
             break;
 
         case abi::RspDuoModeChange:
@@ -1066,7 +1126,7 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
                 params->rspDuoModeParams.modeChangeType == abi::MasterDllDisappeared) {
                 noteFaultOn(link, "master stream lost",
                             "the RSPduo master application closed");
-                core::diagWarnf("source: SDRplay RSPduo master disappeared - stopping");
+                link.pendingEventLogs.fetch_or(kEventLogMasterLost, std::memory_order_acq_rel);
             }
             break;
 
@@ -1424,6 +1484,9 @@ bool SdrPlaySource::startStreamingLocked() {
 }
 
 void SdrPlaySource::stopStreamingLocked() {
+    // Whatever the event callback left unlogged goes in before the stop's own
+    // lines, in the order it happened.
+    drainEventLogs(*link_);
     if (!initialised_) {
         link_->accepting.store(false, std::memory_order_relaxed);
         running_.store(false, std::memory_order_relaxed);
@@ -1561,6 +1624,32 @@ bool SdrPlaySource::start() {
         return false;
     }
     if (initialised_) { return true; }
+    // A START AFTER THE SERVICE STOPPED ANSWERING NEVER ENTERS Init (0.99.32).
+    //
+    // 0.99.28's latch refuses open() and the scan once the session is lost,
+    // but a radio that is still OPEN is started with neither: the user's STOP
+    // after a dead stream is stop()'s Uninit answering
+    // sdrplay_api_ServiceNotResponding, and every START after it went
+    // straight into sdrplay_api_Init on the same dead service - an unbounded
+    // call like every other into that DLL - and was told
+    // sdrplay_api_AlreadyInitialised. That is the tail of the 0.97.0 RSPdx log
+    // and of the 0.99.27 RSP2 log, and the user read "Init failed:
+    // AlreadyInitialised (9)" where the one thing that helps is restarting the
+    // service. The radio stays dead (faulted, so the pipeline says so) and
+    // the sentence it gives is the one that says what to do.
+    if (vendorUnreachableLocked() || sessionIsLost(api())) {
+        {
+            std::lock_guard<std::mutex> ek(link_->errorMutex);
+            link_->lastError = sdrPlaySessionLostSentence();
+            link_->faulted = true;
+            link_->deviceDead = true;
+            if (link_->deadWhat.empty()) { link_->deadWhat = "start"; }
+        }
+        // Shorter than the sentence: a log line is cut at 191 bytes.
+        core::diagWarnf("source: SDRplay start refused - the service stopped answering; restart "
+                        "the SDRplay API service, then FoxSDR");
+        return false;
+    }
     return startStreamingLocked();
 }
 
@@ -1571,6 +1660,11 @@ void SdrPlaySource::stop() {
 
 std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
     if (dst == nullptr || n == 0) { return 0; }
+    // What the service's thread may not do itself (0.99.32): the log lines
+    // its callbacks left, and closing a health window that has run out -
+    // here, on the pipeline's source thread, whose lateness the ring absorbs.
+    drainEventLogs(*link_);
+    maybeWriteHealth(*link_);
     std::size_t got = link_->ring.read(dst, n);
     if (got > 0) { return got; }
     if (faulted()) { return 0; }
@@ -1583,7 +1677,9 @@ std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
     got = link_->ring.read(dst, n);
     if (got == 0) {
         std::lock_guard<std::mutex> hl(link_->healthMutex);
-        if (link_->health.windowOpen) { ++link_->health.timeouts; }
+        if (link_->cbWindowStartNs.load(std::memory_order_acquire) != 0) {
+            ++link_->health.timeouts;
+        }
     }
     return got;
 }

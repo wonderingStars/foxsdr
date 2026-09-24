@@ -110,6 +110,14 @@ public:
     // application.
     void resetForTest();
 
+    // Test hook: holds the lock every write() takes, for as long as the
+    // returned lock lives - which is what a write stuck behind a slow disk
+    // looks like to every OTHER thread that wants to log. Exists so a test can
+    // prove that a thread which must never wait (a vendor driver's stream
+    // callback, tests/test_sdrplay_stall.cpp) does not wait on the log. Never
+    // called by the application.
+    std::unique_lock<std::mutex> lockForTest() { return std::unique_lock<std::mutex>(mutex_); }
+
 private:
     DiagLog() = default;
 
