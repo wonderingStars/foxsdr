@@ -827,8 +827,14 @@ bool RtlSdrSource::setSampleRateHz(double hz) {
     } else {
         setError("the radio refused that sample rate: " + link_->rtl->lastError());
     }
-    if (wasStreaming) {
-        if (!startStreamLocked()) { ok = false; }
+    if (wasStreaming && !startStreamLocked()) {
+        // A STREAM THAT WILL NOT COME BACK IS A FAULT, not merely a failed
+        // call. The reader thread wakes to a closed pipe and leaves; without
+        // this the source would say running() and not faulted() while
+        // delivering nothing, and faulted() is the one thing the pipeline's
+        // source loop polls.
+        noteFault(*link_, lastError(), "restarting the stream after a rate change");
+        ok = false;
     }
     return ok;
 }

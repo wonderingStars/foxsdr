@@ -125,6 +125,13 @@ public:
     int failControlAfter = -1;
     int controlCalls = 0;
 
+    // After this many beginBulkStream() calls, every later one fails and
+    // leaves the pipe closed, as the WinUSB transport does when it cannot
+    // queue its transfers. -1 disables. This is how "the stream would not
+    // come back after a restart" is staged.
+    int failBeginBulkAfter = -1;
+    int beginBulkCalls = 0;
+
     // --- UsbDevice ----------------------------------------------------------
 
     int controlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
@@ -256,6 +263,12 @@ public:
         // dongle would rather than passing against the fake.
         if (bufferBytes == 0 || (bufferBytes % 512) != 0 || bufferCount == 0) {
             lastError_ = "fake: illegal bulk ring";
+            return false;
+        }
+        ++beginBulkCalls;
+        if (failBeginBulkAfter >= 0 && beginBulkCalls > failBeginBulkAfter) {
+            lastError_ = "fake: the bulk pipe would not start";
+            streaming_ = false;
             return false;
         }
         endpoint_ = endpoint;

@@ -379,7 +379,10 @@ bool TunerR82xx::setPll(std::uint32_t loHz) {
     // wrong moves the divider by one step and tunes to half or double.
     const std::uint8_t vcoPowerRef = (cfg_.chip == Chip::R828D) ? 1 : 2;
     const std::uint8_t vcoFineTune = static_cast<std::uint8_t>((data[4] & 0x30) >> 4);
-    if (vcoFineTune > vcoPowerRef) {
+    // There is no divider below 0: at mix_div 2 (every LO from ~885 MHz up)
+    // an unguarded step down wrapped the uint8_t to 255 and wrote divider
+    // field 7, one the search never chose.
+    if (vcoFineTune > vcoPowerRef && divNum > 0) {
         divNum = static_cast<std::uint8_t>(divNum - 1);
     } else if (vcoFineTune < vcoPowerRef) {
         divNum = static_cast<std::uint8_t>(divNum + 1);
@@ -448,10 +451,15 @@ bool TunerR82xx::applyVgaIndex() {
 }
 
 bool TunerR82xx::setFreqHz(std::uint32_t rfHz) {
-    // THE BLOG V4's UPCONVERTER. Below 28.8 MHz the antenna goes through a
-    // mixer that adds exactly the crystal frequency, so the tuner is asked
-    // for rf + 28.8 MHz and the user still sees the frequency they typed.
-    const bool useUpconverter = cfg_.blogV4 && rfHz < kBlogV4UpconvertHz;
+    // THE BLOG V4's UPCONVERTER. Up to and including 28.8 MHz the antenna
+    // goes through a mixer that adds exactly the crystal frequency, so the
+    // tuner is asked for rf + 28.8 MHz and the user still sees the frequency
+    // they typed. ONE decision, used for both the PLL here and the input
+    // switch below (and matching antenna()'s readout): if they disagree, the
+    // tuner listens to the upconverter's output tuned as if it were the
+    // antenna, which is what exactly 28,800,000 Hz used to do.
+    const bool hfPath = cfg_.blogV4 && rfHz <= kBlogV4UpconvertHz;
+    const bool useUpconverter = hfPath;
     const std::uint32_t tunerRfHz = useUpconverter ? (rfHz + kBlogV4UpconvertHz) : rfHz;
     const std::uint32_t loHz = tunerRfHz + ifFreqHz_;
 
@@ -469,7 +477,7 @@ bool TunerR82xx::setFreqHz(std::uint32_t rfHz) {
                                  (rfHz >= 172000000u && rfHz <= 242000000u);
         if (!writeMask(0x17, insideNotch ? 0x00 : 0x08, 0x08)) { return false; }
 
-        const int band = (rfHz <= kBlogV4UpconvertHz)
+        const int band = hfPath
                              ? kInputHf
                              : ((rfHz < 250000000u) ? kInputVhf : kInputUhf);
 

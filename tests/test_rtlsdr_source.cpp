@@ -1117,5 +1117,172 @@ int main() {
         again.closeDevice();
     }
 
+    // =======================================================================
+    // 17. A BLOG V4 AT EXACTLY 28.8 MHz - where the input switch and the PLL
+    //     must agree about which path the signal is on.
+    //
+    // Two decisions move together on a V4: which physical input is wired in
+    // (register 0x06 bit 3 plus GPIO 5 - the upconverter-fed HF input, or the
+    // direct one), and what frequency the tuner is asked for on that path
+    // (rf + 28.8 MHz behind the upconverter, rf itself otherwise). Before
+    // this block the switch said "HF" at exactly 28,800,000 Hz (<=) while the
+    // PLL was programmed for the raw path (<), so a V4 parked on its own
+    // crystal frequency listened to the upconverter's output tuned as if it
+    // were the antenna - and heard nothing.
+    //
+    // The boundary belongs to the HF side, as antenna() has always reported
+    // it. The PLL bytes are the evidence, worked by the oracle's arithmetic
+    // with the 1,815,000 Hz IF block 12 uses:
+    //
+    //   28,800,000 on the HF path: LO = 28.8 + 28.8 + 1.815 = 59,415,000
+    //     mix_div = 32 (59,415 kHz * 32 = 1,901,280 kHz, in the VCO window)
+    //     div_num = 4, MINUS ONE for the R828D's reference -> bits 7:5 = 0x60
+    //     nint    = 1,901,280,000 / 57,600,000 = 33; ni = 5, si = 0 -> 0x05
+    //     vco_fra = 480 kHz -> sdm = 512 + 32 + 2 = 546 = 0x0222
+    //   28,800,001 on the direct path: LO = 30,615,001
+    //     mix_div = 64, div_num 5 - 1 = 4 -> bits 7:5 = 0x80
+    //     nint    = 1,959,360,064 / 57,600,000 = 34; ni = 5, si = 1 -> 0x45
+    // The defect wrote 0x80 / 0x45 at 28,800,000 with the switch on HF.
+    // =======================================================================
+    {
+        struct PllBytes {
+            int divider = -1;  // register 0x10 bits 7:5, as written before 0x14
+            int integer = -1;  // register 0x14
+            int sdmHi = -1;    // register 0x16
+            int sdmLo = -1;    // register 0x15
+            int cable2 = -1;   // register 0x06 bit 3, if the switch moved
+        };
+        auto pllOf = [](const std::vector<TunerWrite>& t) {
+            PllBytes p;
+            int last10 = -1;
+            for (const TunerWrite& x : t) {
+                if (x.reg == 0x10) { last10 = x.value; }
+                if (x.reg == 0x14) {
+                    p.integer = x.value;
+                    p.divider = last10 < 0 ? -1 : (last10 & 0xe0);
+                }
+                if (x.reg == 0x16) { p.sdmHi = x.value; }
+                if (x.reg == 0x15) { p.sdmLo = x.value; }
+                if (x.reg == 0x06) { p.cable2 = x.value & 0x08; }
+            }
+            return p;
+        };
+
+        RtlSdrSource v4;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsBlogV4(*fake);
+        FakeUsbDevice* f = fake.get();
+        CHECK(v4.openWithTransport(std::move(fake), "fake Blog V4"));
+
+        f->clear();
+        CHECK(v4.setCenterFrequencyHz(28800000.0));
+        const PllBytes at = pllOf(tunerWrites(f->writes(), 0x74));
+        std::printf("V4 at 28,800,000 Hz: divider %02X, 0x14 %02X, sdm %02X%02X, cable2 %d\n",
+                    at.divider, at.integer, at.sdmHi, at.sdmLo, at.cable2);
+        CHECK(at.cable2 == 0x08);          // the switch: HF, the upconverter's output
+        CHECK(v4.antenna() == "HF");       // ...and the readout agrees with it
+        CHECK(at.divider == 0x60);         // the PLL: the UPCONVERTED frequency
+        CHECK(at.integer == 0x05);
+        CHECK(at.sdmHi == 0x02);
+        CHECK(at.sdmLo == 0x22);
+
+        // One hertz above, both decisions flip together.
+        f->clear();
+        CHECK(v4.setCenterFrequencyHz(28800001.0));
+        const PllBytes above = pllOf(tunerWrites(f->writes(), 0x74));
+        std::printf("V4 at 28,800,001 Hz: divider %02X, 0x14 %02X, cable2 %d\n", above.divider,
+                    above.integer, above.cable2);
+        CHECK(above.cable2 == 0x00);
+        CHECK(v4.antenna() == "RX");
+        CHECK(above.divider == 0x80);
+        CHECK(above.integer == 0x45);
+        v4.closeDevice();
+    }
+
+    // =======================================================================
+    // 18. A STREAM THAT WILL NOT COME BACK AFTER A RATE CHANGE FAULTS THE
+    //     SOURCE.
+    //
+    // A rate change is made on a quiet stream (block 9): the pipe is closed,
+    // the resampler reprogrammed, the pipe reopened. If the reopen fails, the
+    // reader thread wakes to a closed pipe and leaves - and before this block
+    // it left WITHOUT a fault, so the source said running() and not
+    // faulted() while delivering nothing, forever. faulted() is the one
+    // thing the pipeline's source loop polls; a dead source that never sets
+    // it is a frozen spectrum under a lit RECEIVING. Staged
+    // deterministically: the fake refuses the second beginBulkStream(), and
+    // everything asserted is decided inside setSampleRateHz() itself.
+    // =======================================================================
+    {
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        FakeUsbDevice* f = fake.get();
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        CHECK(src.start());
+        CHECK(src.running());
+        f->failBeginBulkAfter = f->beginBulkCalls;  // the restart is refused
+
+        CHECK(!src.setSampleRateHz(1024000.0));
+        std::printf("rate change with a refused restart: faulted %d, dead %d, while '%s': %s\n",
+                    src.faulted() ? 1 : 0, src.deviceDead() ? 1 : 0,
+                    src.faultedWhile().c_str(), src.lastError());
+        CHECK(src.faulted());
+        CHECK(src.deviceDead());
+        CHECK(src.faultedWhile() == "restarting the stream after a rate change");
+        CHECK(std::string(src.lastError()).find("would not start") != std::string::npos);
+
+        // And the rest of the contract a faulted source keeps: stop() is
+        // prompt, and a condemned radio will not pretend to start again.
+        const auto t0 = std::chrono::steady_clock::now();
+        src.stop();
+        const double stopMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                .count();
+        CHECK(stopMs < 500.0);
+        CHECK(!src.running());
+        CHECK(!src.start());
+        src.closeDevice();
+    }
+
+    // =======================================================================
+    // 19. THE DIVIDER CORRECTION CANNOT WRAP BELOW ZERO.
+    //
+    // Above 885 MHz the divider search lands on mix_div 2, div_num 0. The
+    // correction then moves div_num one step against the VCO autotune
+    // report, and on an R820T (reference 2) a report of 3 asks for one step
+    // DOWN - from 0, which in a uint8_t is 255, and register 0x10 bits 7:5
+    // took 255 << 5 = 0xE0: divider field 7, a divider the search never
+    // chose. There is no divider below 0, so the correction stops there.
+    //
+    // The report is raw[4]: 0xAC reversed is 0x35, bits 5:4 = 3, and the
+    // calibration nibble stays 5. Set after the open, so only the tune under
+    // test sees it. Everything else is block 7's 1090 MHz sequence, byte for
+    // byte, including the divider at 0x00.
+    // =======================================================================
+    {
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        FakeUsbDevice* f = fake.get();
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        f->answerIn(0, 0x0034, 0x0600, {0x69, 0x00, 0x02, 0x00, 0xAC});
+        f->clear();
+        CHECK(src.setCenterFrequencyHz(1090000000.0));
+        const std::vector<FakeControl> w = f->writes();
+        dump("tune to 1090 MHz with a VCO report of 3", w);
+        expectTunerSequence("tune to 1090 MHz with a VCO report of 3", tunerWrites(w, 0x34),
+                            {
+                                {0x17, 0x00, 0x08}, {0x1a, 0x40, 0xc3}, {0x1b, 0x00, 0xff},
+                                {0x10, 0x00, 0x0b}, {0x08, 0x00, 0x3f}, {0x09, 0x00, 0x3f},
+                                {0x0c, 0x08, 0x9f}, {0x10, 0x00, 0x10}, {0x1a, 0x00, 0x0c},
+                                {0x12, 0x06, 0xff},
+                                {0x10, 0x00, 0xe0},  // divider 0, NOT 7
+                                {0x14, 0x06, 0xff}, {0x12, 0x00, 0x08}, {0x16, 0xE9, 0xff},
+                                {0x15, 0x06, 0xff}, {0x1a, 0x08, 0x08},
+                            });
+        src.closeDevice();
+    }
+
     return testSummary("test_rtlsdr_source");
 }

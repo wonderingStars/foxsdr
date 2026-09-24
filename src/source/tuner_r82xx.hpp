@@ -28,7 +28,7 @@
 // oracle's; the dB conversions here are derived from them.
 //
 // THE RTL-SDR BLOG V4 is an R828D with two things bolted on: a 28.8 MHz
-// upconverter in front of an HF input, and switchable notch filters. Below
+// upconverter in front of an HF input, and switchable notch filters. Up to
 // 28.8 MHz the tuner is asked for rf + 28.8 MHz and the dongle's own GPIO 5
 // plus tuner input registers route the antenna through the upconverter. It is
 // not an optional extra here: sixteen of this product's users have one, and
@@ -60,8 +60,9 @@ constexpr std::uint32_t kR82xxIfFreqHz = 3570000;
 // crystal rather than the demodulator's 28.8 MHz one.
 constexpr std::uint32_t kR828dXtalHz = 16000000;
 
-// The 28.8 MHz the Blog V4's upconverter adds, and the frequency below which
-// it is switched in.
+// The 28.8 MHz the Blog V4's upconverter adds, and the frequency at and below
+// which it is switched in - the PLL offset, the input switch and antenna()
+// all take this boundary inclusively.
 constexpr std::uint32_t kBlogV4UpconvertHz = 28800000;
 
 class TunerR82xx {
