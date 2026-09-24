@@ -767,6 +767,7 @@
   "Not listening.": "Nu ascultă.",
   "Not now": "Nu acum",
   "Not saved: no usable frequency to save": "Nesalvat: nicio frecvență utilizabilă de salvat",
+  "Not scanned again this session: %s (it crashed the device scan)": "Nu mai este scanat în această sesiune: %s (a blocat căutarea dispozitivelor)",
   "Not set": "Nesetat",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Nu s-a descărcat nimic, deci nimic de aici nu este o numărătoare a ce există. Catalogul este citit prima dată când se deschide această fereastră într-o sesiune și din nou de fiecare dată când apăsați VERIFICĂ ACUM - niciodată la pornire.",

@@ -767,6 +767,7 @@
   "Not listening.": "未在监听。",
   "Not now": "以后再说",
   "Not saved: no usable frequency to save": "未保存: 没有可保存的有效频率",
+  "Not scanned again this session: %s (it crashed the device scan)": "本次会话中不再扫描: %s (它导致设备扫描崩溃)",
   "Not set": "未设置",
   "Notch": "陷波",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "尚未获取任何内容，因此这里的数字都不代表实际存在的数量。目录在一次会话中首次打开此窗口时读取，此后每次按“立即检查”时再读取——启动时从不读取。",

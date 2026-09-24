@@ -767,6 +767,7 @@
   "Not listening.": "Не прослуховує.",
   "Not now": "Не зараз",
   "Not saved: no usable frequency to save": "Не збережено: немає придатної частоти для збереження",
+  "Not scanned again this session: %s (it crashed the device scan)": "Більше не сканується в цьому сеансі: %s (спричинив збій пошуку пристроїв)",
   "Not set": "Не задано",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Нічого не завантажено, тож ніщо тут не є підрахунком того, що існує. Каталог читається, коли це вікно вперше відкривається за сеанс, і знову щоразу, коли ви натискаєте ПЕРЕВІРИТИ, - ніколи під час запуску.",

@@ -486,7 +486,23 @@ invisible. It produces three reports, all of `kind: crash`:
 |---|---|---|---|
 | `fault in a third-party SDR module, absorbed…` | a vendor driver faulting on our own calling thread | `src/source/vendor_guard.cpp`, from its `__except` **filter** — `EXCEPTION_POINTERS` are dead by the time the handler body runs | the fault's |
 | `access violation` (or any ordinary fatal reason) | the helper process faulting in **cascade's own** code, which the guard deliberately refuses to absorb | the helper's own crash handler, installed by `armEnumerateHelperProcess` into the directory the parent passed down | the fault's |
-| `SDR device enumeration child process died…` | the helper process dying by any route the parent can only see from outside — the libusb fault on a UHD thread, or the timeout kill | `src/source/soapy_enum_proc.cpp`, in the parent, with the child's exit code as `code` | the parent's, which is not the fault's |
+| `SDR device enumeration child process died…` | the helper process dying by any route the parent can only see from outside — the libusb fault on a UHD thread, a heap corruption (`0xC0000374`), or the timeout kill | `src/source/soapy_enum_proc.cpp`, in the parent, with the child's exit code as `code` | none — the stack section says the fault was in another process |
+
+**Which driver (0.99.34).** SoapySDR runs every driver's find function at once,
+on a thread each, so a whole-bus helper that dies has no single driver to
+blame. The helper therefore writes a probe log to the parent as it goes
+(`cascade-probe: begin <driver>` / `end <driver>`), and the whole-bus report's
+reason ends with the drivers **still probing when it died** — a shortlist, not a
+verdict, since a heap corruption is detected at a later allocation, possibly on
+another driver's thread. The per-driver sweep that follows two whole-bus deaths
+is what names a culprit: its report reads `…died probing driver=<name>`, and
+that driver is then left out of every scan for the rest of the session (the
+Source panel says so in one line). Each report's signature hashes
+`enumerate-child:whole-bus` or `enumerate-child:driver=<name>` in place of the
+faulting module; before 0.99.34 it hashed `"?"`, so every contained death of one
+exit code was one crash group (`650B88A1735695DB` = `0xC0000005`,
+`91965660116CF497` = `0xC0000374`), and the per-driver report was dropped by
+the uploader's 24-hour de-duplication as a repeat of the whole-bus one.
 
 They are filed as `kind: crash` rather than a new kind on purpose:
 `src/core/crash_upload.cpp` forwards `crash` and `hang` and **refuses anything

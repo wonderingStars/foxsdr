@@ -767,6 +767,7 @@
   "Not listening.": "Не принимает подключения.",
   "Not now": "Не сейчас",
   "Not saved: no usable frequency to save": "Не сохранено: нет пригодной частоты для сохранения",
+  "Not scanned again this session: %s (it crashed the device scan)": "Больше не сканируется в этом сеансе: %s (вызвал сбой поиска устройств)",
   "Not set": "Не задано",
   "Notch": "Режекция",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Ничего не загружено, поэтому ни одно число здесь не отражает того, что существует. Каталог читается при первом открытии этого окна в сеансе и снова каждый раз, когда вы нажимаете ПРОВЕРИТЬ, - никогда при запуске.",

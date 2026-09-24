@@ -767,6 +767,7 @@
   "Not listening.": "Tidak mendengarkan.",
   "Not now": "Jangan sekarang",
   "Not saved: no usable frequency to save": "Tidak disimpan: tidak ada frekuensi yang bisa disimpan",
+  "Not scanned again this session: %s (it crashed the device scan)": "Tidak dipindai lagi pada sesi ini: %s (membuat pemindaian perangkat mogok)",
   "Not set": "Belum diatur",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Belum ada yang diambil, jadi tidak ada angka di sini yang menunjukkan apa yang tersedia. Katalog dibaca saat jendela ini pertama kali dibuka dalam satu sesi, dan lagi setiap kali Anda menekan CEK SEKARANG - tidak pernah saat startup.",

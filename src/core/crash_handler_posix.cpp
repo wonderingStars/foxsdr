@@ -298,6 +298,9 @@ int captureFramesCurrentThread(unsigned long* frames, int maxFrames) {
 struct ChildFault {
     unsigned long exitCode = 0;
     int attempt = 0;
+    // The signature's stand-in for the absent faulting module; see the
+    // Windows writer's ChildFault.
+    const char* signatureTag = nullptr;
 };
 
 // The whole report, written incrementally exactly as crash_handler.cpp's
@@ -323,7 +326,11 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     std::uintptr_t foff = 0;
     const bool resolved = resolveAddress(faultAddr, fm, foff);
     char sig[17];
-    crashSignatureRaw(code, resolved ? fm.name : "?", foff, sig);
+    const char* sigModule = resolved ? fm.name : "?";
+    if (child != nullptr && child->signatureTag != nullptr && child->signatureTag[0] != '\0') {
+        sigModule = child->signatureTag;
+    }
+    crashSignatureRaw(code, sigModule, foff, sig);
 
     // THE HEADER. Same inventory crash_handler.cpp's Windows writer emits
     // (crashReportFieldNames(), asserted in both directions by
@@ -616,7 +623,8 @@ void reportAbsorbed(const char* reason, unsigned long code, const void* faultAdd
     g_inAbsorbed.store(0, std::memory_order_release);
 }
 
-void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int attempt) {
+void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int attempt,
+                         const char* signatureTag) {
     int expected = 0;
     if (!g_inAbsorbedChild.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) {
         return;
@@ -624,6 +632,7 @@ void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int at
     ChildFault child;
     child.exitCode = childExitCode;
     child.attempt = attempt;
+    child.signatureTag = signatureTag;
     writeReport(reason != nullptr ? reason : "child process fault (contained)", childExitCode, 0u,
                 nullptr, false, &child);
     g_inAbsorbedChild.store(0, std::memory_order_release);

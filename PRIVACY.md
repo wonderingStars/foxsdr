@@ -179,6 +179,12 @@ happened to it, including when the search then succeeded on a second try. When t
 report carries NO call stack at all, and says so: the fault was in the other
 process, and this one has nothing to show. It adds the two `child-` lines in
 the process block below and nothing else, and no memory dump is written for it.
+Since 0.99.34 its `reason` line also names the radio driver that was being
+asked when the process died (an installed driver's short name, such as `uhd` or
+`sdrplay` - never a device, a serial number or anything about you), or, for the
+search that asks every driver at once, the drivers still being asked when it
+stopped; and its `signature` is derived from that driver name in place of a
+faulting module, so each driver's failures group on their own.
 That
 small process can also write a report of its own, into the same folder and with
 the same fields, and only when diagnostics are switched on: it is handed the

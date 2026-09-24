@@ -767,6 +767,7 @@
   "Not listening.": "Nesiklausoma.",
   "Not now": "Ne dabar",
   "Not saved: no usable frequency to save": "Neišsaugota: nėra tinkamo dažnio išsaugoti",
+  "Not scanned again this session: %s (it crashed the device scan)": "Šioje sesijoje nebeskenuojama: %s (sukėlė įrenginių paieškos strigtį)",
   "Not set": "Nenustatyta",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Niekas neatsisiųsta, todėl nė vienas skaičius čia nerodo, kas egzistuoja. Katalogas nuskaitomas pirmą kartą seanse atidarius šį langą ir vėl kiekvieną kartą paspaudus TIKRINTI DABAR - niekada paleidžiant.",

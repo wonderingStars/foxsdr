@@ -93,6 +93,7 @@
 #include "gui/win_frame.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
+#include "source/soapy_enum_proc.hpp"
 
 #ifdef _WIN32
 // ShellExecuteW, for handing the verified installer to the shell so its
@@ -6765,6 +6766,24 @@ void AppWindow::drawSourceSection() {
             busyLine = tr("Scanning for devices...");
         }
         ImGui::TextColored(cascade::gui::theme::warning(), "%s", busyLine.c_str());
+    }
+    // A DRIVER THAT CRASHED THE DEVICE SCAN IS NAMED HERE, once, for the rest
+    // of the session (0.99.33): it is no longer asked on a rescan, so any
+    // radio of its kind will not appear, and the list would otherwise just be
+    // shorter with nothing to say why. See source::sessionFaultedDrivers.
+    {
+        const auto faulted = cascade::source::sessionFaultedDrivers();
+        if (!faulted.empty()) {
+            std::string names;
+            for (const auto& f : faulted) { names += (names.empty() ? "" : ", ") + f.driver; }
+            std::string note;
+            cascade::core::formatUtf8(
+                note, tr("Not scanned again this session: %s (it crashed the device scan)"),
+                names.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+            ImGui::TextWrapped("%s", note.c_str());
+            ImGui::PopStyleColor();
+        }
     }
     ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);

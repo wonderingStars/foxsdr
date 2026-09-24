@@ -499,6 +499,10 @@ int captureFramesGuarded(EXCEPTION_POINTERS* ep, bool mayWalkCurrentThread) {
 struct ChildFault {
     unsigned long exitCode = 0;
     int attempt = 0;
+    // Hashed into the signature in place of the (absent) faulting module, so
+    // one child death does not group with every other of its exit code. Null
+    // keeps the old "?". See reportAbsorbedChildFault.
+    const char* signatureTag = nullptr;
 };
 
 // The whole report, written incrementally so a deadlock in the unwinder still
@@ -519,7 +523,11 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     std::uintptr_t foff = 0;
     const bool resolved = resolveAddress(faultAddr, fm, foff);
     char sig[17];
-    crashSignatureRaw(code, resolved ? fm.name : "?", foff, sig);
+    const char* sigModule = resolved ? fm.name : "?";
+    if (child != nullptr && child->signatureTag != nullptr && child->signatureTag[0] != '\0') {
+        sigModule = child->signatureTag;
+    }
+    crashSignatureRaw(code, sigModule, foff, sig);
 
     // THE HEADER. Every "name: value" line below is inventoried in
     // crashReportFieldNames() and documented in PRIVACY.md, and
@@ -898,7 +906,8 @@ void reportAbsorbedFault(const char* reason, unsigned long code, const void* fau
 #endif
 }
 
-void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, int attempt) {
+void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, int attempt,
+                              const char* signatureTag) {
 #if defined(_WIN32)
     // The same latch reportAbsorbedFault uses, and for the same reason: a real
     // crash landing mid-write must not be turned into a silent TerminateProcess
@@ -908,6 +917,7 @@ void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, i
     ChildFault child;
     child.exitCode = childExitCode;
     child.attempt = attempt;
+    child.signatureTag = signatureTag;
     // faultAddr 0 and ep nullptr, deliberately: the address that faulted is in
     // another process's address space and means nothing in this one. The
     // signature therefore groups on the reason and the code, which is what
@@ -916,11 +926,12 @@ void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, i
                 0u, nullptr, &child);
     ::InterlockedExchange(&inAbsorbedChild, 0);
 #elif defined(__linux__)
-    posix_detail::reportAbsorbedChild(reason, childExitCode, attempt);
+    posix_detail::reportAbsorbedChild(reason, childExitCode, attempt, signatureTag);
 #else
     (void)reason;
     (void)childExitCode;
     (void)attempt;
+    (void)signatureTag;
 #endif
 }
 

@@ -767,6 +767,7 @@
   "Not listening.": "Ei kuula.",
   "Not now": "Mitte praegu",
   "Not saved: no usable frequency to save": "Ei salvestatud: pole kasutatavat sagedust, mida salvestada",
+  "Not scanned again this session: %s (it crashed the device scan)": "Selles seansis uuesti ei skannita: %s (see jooksutas seadmete otsingu kokku)",
   "Not set": "Määramata",
   "Notch": "Sälkfilter",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Midagi pole toodud, seega pole miski siin olemasoleva loendus. Kataloog loetakse, kui see aken seansi jooksul esimest korda avaneb, ja uuesti iga kord, kui vajutad KONTROLLI NÜÜD - mitte kunagi käivitumisel.",

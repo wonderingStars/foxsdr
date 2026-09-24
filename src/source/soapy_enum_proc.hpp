@@ -213,6 +213,27 @@ struct EnumResult {
     // The drivers a skipDrivers scan left out, lower-cased, in the order the
     // listing gave them - see EnumOptions::skipDrivers.
     std::vector<std::string> skippedDrivers;
+
+    // WHICH DRIVERS WERE STILL PROBING when the most recent whole-bus child
+    // that died or was killed went, lower-cased, in the order their probes
+    // began - kept through a retry that then succeeded, like childDeaths.
+    // Empty when that child died before any probe began (a module that faults
+    // as it LOADS), and when no whole-bus child died or timed out.
+    //
+    // Field report 91965660116CF497 (0.99.31, Windows 10.0.28000): a whole-bus
+    // child died with 0xC0000374 and the report could name nothing, because
+    // SoapySDR runs every driver's find function AT ONCE on its own thread
+    // (Factory.cpp, std::launch::async) - there is no single "driver being
+    // probed" in that walk. The child now writes a line to the parent as each
+    // probe begins and ends (probeMarkerLine), so a death leaves behind the
+    // set that was still running. That set is a SHORTLIST, not a verdict: a
+    // heap corruption is detected at the next allocation, which can be on
+    // another driver's thread than the one that did the damage.
+    std::vector<std::string> inFlightDrivers;
+
+    // Drivers left out of this scan because a child already DIED asking them
+    // earlier in this session - see sessionFaultedDrivers(). Lower-cased.
+    std::vector<std::string> sessionSkippedDrivers;
 };
 
 struct EnumOptions {
@@ -282,7 +303,49 @@ struct EnumOptions {
 };
 
 // Enumerates in a child process. Never throws.
+//
+// A DRIVER THAT KILLED A CHILD IS NOT ASKED AGAIN THIS SESSION. When a
+// per-driver child dies (the sweep after a whole-bus death, or the scan beside
+// an open radio), the driver is remembered - see sessionFaultedDrivers() - and
+// every later call leaves it out: the whole-bus child is handed it as --skip,
+// and no per-driver child is started for it. A death is deterministic by the
+// time it reaches that list (it took the whole bus twice and then its own
+// child), so re-asking it on every Refresh only costs a crash each time.
 EnumResult enumerateIsolated(const EnumOptions& options = EnumOptions{});
+
+// A driver whose own enumeration child died in this process's lifetime, and
+// what it died of. Names are lower-cased, in the order they were found.
+struct FaultedDriver {
+    std::string driver;
+    unsigned long exitCode = 0;
+};
+
+// The session's list, for the device panel's one-line note. Thread-safe.
+std::vector<FaultedDriver> sessionFaultedDrivers();
+
+// Back to the start-of-session state (empty). Tests only: the list starts
+// empty and nothing else fills it, so this IS the initial state.
+void clearSessionFaultedDriversForTest();
+
+// THE GROUPING TAG of a contained child death, hashed into the report's
+// signature in place of a module name (there is no faulting module in this
+// process - the fault was in another one). Empty `driver` is the whole-bus
+// walk.
+//
+// Before 0.99.33 every child death hashed as (exit code, "?", 0), so every
+// contained death with one exit code - any driver, whole bus or per driver -
+// was ONE crash group: 650B88A1735695DB is 0xC0000005, 91965660116CF497 is
+// 0xC0000374. Worse, the uploader drops a report whose signature it already
+// sent in the last 24 hours (crash_upload.cpp kDedupSeconds), so the per-driver
+// report that NAMED the faulting driver was always discarded as a duplicate of
+// the whole-bus report filed a moment earlier. A tag per driver gives each one
+// its own group and gets it through the uploader.
+std::string childFaultSignatureTag(const std::string& driver);
+
+// ONE LINE OF THE CHILD'S PROBE LOG, the exact bytes written to the parent as
+// a driver's probe begins and ends, so the writer and the reader cannot drift
+// apart - and so a test's fake helper speaks the real format. Ends in '\n'.
+std::string probeMarkerLine(bool begin, const std::string& driver);
 
 // The helper this process would run, or empty if it cannot find one. In order:
 //
@@ -338,9 +401,11 @@ void armEnumerateHelperProcess(const char* crashDir);
 // information than a corpse.
 // `driver` restricts the walk to one driver name (null or empty: the whole
 // bus). `listDrivers` makes the child answer with the machine's driver NAMES
-// and no devices, which is how the parent knows what to sweep.
+// and no devices, which is how the parent knows what to sweep. `skip` is a
+// comma-separated list of drivers the whole-bus walk leaves out (null or
+// empty: none) - the session's faulted drivers, see enumerateIsolated.
 int runEnumerateHelper(const char* crashDir = nullptr, const char* driver = nullptr,
-                       bool listDrivers = false);
+                       bool listDrivers = false, const char* skip = nullptr);
 
 // The child's ONE serialisation step, as a named function: everything between
 // "the walk produced these devices" and "this is the line on stdout". It

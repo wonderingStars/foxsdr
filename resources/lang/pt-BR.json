@@ -767,6 +767,7 @@
   "Not listening.": "Não está escutando.",
   "Not now": "Agora não",
   "Not saved: no usable frequency to save": "Não salvo: nenhuma frequência utilizável para salvar",
+  "Not scanned again this session: %s (it crashed the device scan)": "Não será verificado novamente nesta sessão: %s (travou a busca de dispositivos)",
   "Not set": "Não definido",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Nada foi baixado, então nada aqui é uma contagem do que existe. O catálogo é lido na primeira vez que esta janela abre em uma sessão, e de novo sempre que você pressiona CHECAR AGORA - nunca na inicialização.",

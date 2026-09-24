@@ -767,6 +767,7 @@
   "Not listening.": "Không lắng nghe.",
   "Not now": "Để sau",
   "Not saved: no usable frequency to save": "Chưa lưu: không có tần số dùng được để lưu",
+  "Not scanned again this session: %s (it crashed the device scan)": "Không quét lại trong phiên này: %s (đã làm hỏng quá trình quét thiết bị)",
   "Not set": "Chưa đặt",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Chưa tải gì về, nên không con số nào ở đây là số đếm của những gì đang tồn tại. Danh mục được đọc lần đầu cửa sổ này mở trong một phiên, và mỗi lần bạn nhấn KIỂM TRA NGAY - không bao giờ lúc khởi động.",

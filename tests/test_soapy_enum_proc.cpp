@@ -49,6 +49,7 @@
 #include "source/soapy_enum_proc.hpp"
 
 #include "core/crash_handler.hpp"
+#include "core/diag_report.hpp"
 
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Registry.hpp>
@@ -188,6 +189,57 @@ bool askedToListDrivers(int argc, char** argv) {
     return false;
 }
 
+// The comma-separated --skip= list this child was handed, or empty.
+std::string skipArg(int argc, char** argv) {
+    const char* flag = "--skip=";
+    const std::size_t n = std::strlen(flag);
+    for (int i = 1; i < argc; ++i) {
+        if (std::strncmp(argv[i], flag, n) == 0) { return std::string(argv[i] + n); }
+    }
+    return std::string();
+}
+
+bool listNames(const std::string& csv, const std::string& name) {
+    std::size_t start = 0;
+    while (start <= csv.size()) {
+        const std::size_t comma = csv.find(',', start);
+        const std::size_t end = (comma == std::string::npos) ? csv.size() : comma;
+        if (csv.compare(start, end - start, name) == 0) { return true; }
+        if (comma == std::string::npos) { break; }
+        start = comma + 1;
+    }
+    return false;
+}
+
+// The probe log the REAL child writes, in the real format, straight to the
+// pipe - flushed, because the next thing this process may do is die.
+void probeLine(bool begin, const char* driver) {
+    const std::string line = cascade::source::probeMarkerLine(begin, driver);
+    std::fwrite(line.data(), 1, line.size(), stdout);
+    std::fflush(stdout);
+}
+
+// THE DEATH IN FIELD REPORT 91965660116CF497: STATUS_HEAP_CORRUPTION, which
+// Windows raises from inside the heap manager and which no user-mode filter
+// sees - so the exit code is all the parent ever gets. Linux has no such
+// status: glibc's heap checks abort(), which the parent reads as 128 + SIGABRT.
+#ifdef _WIN32
+constexpr unsigned long kHeapCorruptionExit = 0xC0000374ul;
+#else
+constexpr unsigned long kHeapCorruptionExit = 128ul + SIGABRT;
+#endif
+
+[[noreturn]] void dieOfHeapCorruption() {
+    std::fflush(stdout);
+#ifdef _WIN32
+    ::TerminateProcess(::GetCurrentProcess(), static_cast<UINT>(kHeapCorruptionExit));
+#else
+    std::signal(SIGABRT, SIG_DFL);
+    std::raise(SIGABRT);
+#endif
+    std::_Exit(99);  // unreachable
+}
+
 #ifdef _WIN32
 std::wstring selfExePathW() {
     std::wstring buf(1024, L'\0');
@@ -271,6 +323,33 @@ int fakeHelper(int argc, char** argv) {
         // "bad", and the whole-bus probe, die the same way the field does.
         return 7;
     }
+    if (mode == "heapdriver") {
+        // THE MACHINE IN FIELD REPORT 91965660116CF497, faked. Two drivers:
+        // "good" answers, "sdrplay" dies with 0xC0000374 whenever it is asked.
+        // The whole-bus walk logs its probes the way the real child does -
+        // both begin, "good" finishes, "sdrplay" is still running when the
+        // process dies - and, when told to --skip sdrplay, never starts it and
+        // answers with good's radio.
+        const std::string driver = driverArg(argc, argv);
+        const char* cap = gotCrashDir ? "true" : "false";
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"good\",\"sdrplay\"],\"devices\":[]}\n", cap);
+            return 0;
+        }
+        if (driver == "sdrplay") { dieOfHeapCorruption(); }
+        const bool skipBad = listNames(skipArg(argc, argv), "sdrplay");
+        if (driver.empty()) {
+            probeLine(true, "good");
+            if (!skipBad) { probeLine(true, "sdrplay"); }
+            probeLine(false, "good");
+            if (!skipBad) { dieOfHeapCorruption(); }
+        }
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":2,\"capture\":%s,"
+                    "\"devices\":[{\"label\":\"good radio\",\"args\":\"driver=good,serial=9\"}]}\n",
+                    cap);
+        return 0;
+    }
     if (mode == "tworadios") {
         // A STREAMING RTL-SDR BESIDE A B200 (2026-09-23). The whole bus lists
         // both; each driver lists its own; and the rtlsdr driver, asked on its
@@ -348,6 +427,9 @@ int fakeHelper(int argc, char** argv) {
         return 0;
     }
     if (mode == "hang") {
+        // A probe that began and never ended is the one that wedged - the
+        // parent names it from this line when the budget runs out.
+        probeLine(true, "wedged");
 #ifdef _WIN32
         ::Sleep(60000);
 #else
@@ -896,6 +978,16 @@ int main(int argc, char** argv) {
         CHECK(r.sweepChildren == 3);
         // Every death is still counted: two whole-bus, one driver.
         CHECK(r.childDeaths == 3);
+        // ...and the driver that died in its own child is remembered for the
+        // session (see the 91965660116CF497 block for what that buys).
+        const auto session = cascade::source::sessionFaultedDrivers();
+        CHECK(session.size() == 1u);
+        for (const auto& f : session) {
+            CHECK(f.driver == "bad");
+            CHECK(f.exitCode == 7ul);
+        }
+        cascade::source::clearSessionFaultedDriversForTest();
+        CHECK(cascade::source::sessionFaultedDrivers().empty());
     }
     {
         // A MACHINE WHERE EVEN THE DRIVER LIST DIES is left exactly where it
@@ -1131,6 +1223,10 @@ int main(int argc, char** argv) {
 #endif
         // NOT retried: a timeout has already cost the full budget.
         CHECK(r.attempts == 1);
+        // AND THE WEDGED PROBE IS NAMED: its begin line reached the parent and
+        // no end line ever did.
+        const std::vector<std::string> wantWedged{"wedged"};
+        CHECK(r.inFlightDrivers == wantWedged);
     }
 
     // --- A WEDGED CHILD DOES NOT OUTLIVE ITS PARENT -------------------------
@@ -1375,6 +1471,141 @@ int main(int argc, char** argv) {
 
             std::filesystem::remove(counter, ec);
             setEnvVar(kCounterVar, "");
+            // A WHOLE-BUS DEATH BLAMES NOBODY. Every driver probes at once in
+            // that walk, so a death there - here one the retry recovered from -
+            // must not put any driver on the session's do-not-ask list.
+            CHECK(cascade::source::sessionFaultedDrivers().empty());
+        }
+
+        // --- FIELD REPORT 91965660116CF497: THE DEATH NAMES ITS DRIVER -------
+        //
+        // 0.99.31 on Windows 10.0.28000: a whole-bus enumeration child died
+        // with 0xC0000374 (heap corruption) while the SDRplay service was not
+        // answering. The report named nothing, and it landed in a hex group
+        // shared with every other child death of that exit code, because the
+        // signature was hashed from (code, "?", 0). Worse, the per-driver
+        // report that DOES name the driver hashed to the same signature and so
+        // was dropped by the uploader as a 24-hour duplicate of the whole-bus
+        // one filed seconds before it.
+        //
+        // Pinned here: each report carries its own signature (per driver, and
+        // one for the whole bus), the whole-bus report lists the probes still
+        // running when it died, the faulting driver is remembered for the
+        // session and never asked again - not by the next whole-bus child, and
+        // not by a scan beside an open radio - and the healthy driver keeps
+        // being asked throughout.
+        {
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode("heapdriver");
+            EnumOptions o;
+            o.helperPath = self;
+            o.allowInProcessFallback = false;
+            const Rows wantRows{{"good radio", "driver=good,serial=9"}};
+            const std::vector<std::string> wantSdrplay{"sdrplay"};
+            const std::vector<std::string> wantGood{"good"};
+
+#ifdef _WIN32
+            // THE FIELD SIGNATURE, reproduced from its inputs: this is exactly
+            // what every contained 0xC0000374 child death hashed to before.
+            CHECK(cascade::core::crashSignature(0xC0000374ul, "?", 0) == "91965660116CF497");
+#endif
+            const std::string oldSig = cascade::core::crashSignature(kHeapCorruptionExit, "?", 0);
+            const std::string wholeTag = cascade::source::childFaultSignatureTag("");
+            const std::string driverTag = cascade::source::childFaultSignatureTag("sdrplay");
+            const std::string wholeSig =
+                cascade::core::crashSignature(kHeapCorruptionExit, wholeTag.c_str(), 0);
+            const std::string driverSig =
+                cascade::core::crashSignature(kHeapCorruptionExit, driverTag.c_str(), 0);
+            CHECK(wholeSig != oldSig);
+            CHECK(driverSig != oldSig);
+            CHECK(driverSig != wholeSig);
+            CHECK(driverTag.find("sdrplay") != std::string::npos);
+            // Another driver, another group.
+            CHECK(cascade::source::childFaultSignatureTag("uhd") != driverTag);
+            // A driver name is third-party text, and a report is "name: value"
+            // lines: one newline in a registry key must not split the reason
+            // and forge a field. Case is folded, so one driver is one group.
+            CHECK(cascade::source::childFaultSignatureTag("Evil\nkind: hang") ==
+                  "enumerate-child:driver=evil?kind??hang");
+            CHECK(cascade::source::childFaultSignatureTag("SDRplay") == driverTag);
+
+            // FIRST SCAN: both whole-bus children die, the sweep asks each
+            // driver alone, "good" answers and "sdrplay" dies again.
+            const EnumResult r = enumerateIsolated(o);
+            std::printf("heap-corruption driver: outcome=%s attempts=%d deaths=%d faulted=%zu "
+                        "inflight=%zu reports=%zu\n",
+                        enumOutcomeName(r.outcome), r.attempts, r.childDeaths,
+                        r.faultedDrivers.size(), r.inFlightDrivers.size(),
+                        crashReports(dir).size());
+            CHECK(r.outcome == EnumOutcome::Ok);
+            CHECK(rowsOf(r) == wantRows);
+            CHECK(r.attempts == 2);
+            CHECK(r.childDeaths == 3);
+            CHECK(r.deathExitCode == kHeapCorruptionExit);
+            CHECK(r.faultedDrivers == wantSdrplay);
+            // The whole-bus child's probe log: good finished, sdrplay did not.
+            CHECK(r.inFlightDrivers == wantSdrplay);
+
+            const std::string body = allReportText(dir);
+            CHECK(crashReports(dir).size() == 3u);  // two whole-bus, one per driver
+            CHECK(body.find("died probing driver=sdrplay") != std::string::npos);
+            CHECK(body.find("still probing when it died: sdrplay") != std::string::npos);
+            CHECK(body.find("signature: " + driverSig) != std::string::npos);
+            CHECK(body.find("signature: " + wholeSig) != std::string::npos);
+            CHECK(body.find("signature: " + oldSig) == std::string::npos);
+
+            const auto session = cascade::source::sessionFaultedDrivers();
+            CHECK(session.size() == 1u);
+            for (const auto& f : session) {
+                CHECK(f.driver == "sdrplay");
+                CHECK(f.exitCode == kHeapCorruptionExit);
+            }
+
+            // RESCAN: one whole-bus child, told to leave sdrplay out, and no
+            // death at all - the Refresh button no longer costs a crash.
+            clearReports();
+            const EnumResult again = enumerateIsolated(o);
+            CHECK(again.outcome == EnumOutcome::Ok);
+            CHECK(rowsOf(again) == wantRows);
+            CHECK(again.attempts == 1);
+            CHECK(again.childDeaths == 0);
+            CHECK(!again.sweptPerDriver);
+            CHECK(again.sessionSkippedDrivers == wantSdrplay);
+            CHECK(crashReports(dir).empty());
+
+            // BESIDE AN OPEN RADIO the per-driver walk leaves it out too.
+            EnumOptions beside = o;
+            beside.skipDrivers = {"someotherfamily"};
+            const EnumResult b = enumerateIsolated(beside);
+            CHECK(b.outcome == EnumOutcome::Ok);
+            CHECK(rowsOf(b) == wantRows);
+            CHECK(b.childDeaths == 0);
+            CHECK(b.sweptDrivers == wantGood);
+            CHECK(b.sessionSkippedDrivers == wantSdrplay);
+            CHECK(crashReports(dir).empty());
+
+            // A DEATH IN THE SCAN BESIDE AN OPEN RADIO IS REMEMBERED TOO: a
+            // fresh session, "good" left out as the open radio's family, so
+            // sdrplay is asked alone - and dies, and is then not asked again.
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+            EnumOptions besideGood = o;
+            besideGood.skipDrivers = {"good"};
+            const EnumResult c = enumerateIsolated(besideGood);
+            CHECK(c.faultedDrivers == wantSdrplay);
+            CHECK(c.childDeaths == 1);
+            CHECK(allReportText(dir).find("died probing driver=sdrplay") != std::string::npos);
+            const EnumResult c2 = enumerateIsolated(besideGood);
+            CHECK(c2.childDeaths == 0);
+            CHECK(c2.sessionSkippedDrivers == wantSdrplay);
+
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
         }
 
         // --- THE DURABILITY PROPERTY, against the real binary ---------------

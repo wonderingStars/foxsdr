@@ -35,7 +35,8 @@ std::string activeDir();
 // own, exactly as reportAbsorbedFault(..., exceptionPointers=nullptr) does on
 // Windows.
 void reportAbsorbed(const char* reason, unsigned long code, const void* faultAddress);
-void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int attempt);
+void reportAbsorbedChild(const char* reason, unsigned long childExitCode, int attempt,
+                         const char* signatureTag);
 
 // TEST HOOK mirror of captureFramesForTest. There is no POSIX analogue of "a
 // supplied-but-empty EXCEPTION_POINTERS", so this takes only the

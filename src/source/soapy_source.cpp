@@ -14,12 +14,14 @@
 #include <SoapySDR/Version.hpp>
 #include <SoapySDR/Errors.hpp>
 #include <SoapySDR/Formats.h>
+#include <SoapySDR/Logger.hpp>
 #include <SoapySDR/Types.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <future>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -487,6 +489,127 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess() {
     return enumerateInProcess(std::string());
 }
 
+namespace {
+
+// One enumeration answer as a Source-menu row. Shared by both walks so the
+// label rule cannot drift between them.
+SoapyDeviceInfo rowFromKwargs(const SoapySDR::Kwargs& kw) {
+    SoapyDeviceInfo info;
+    // Modules put a display string under "label"; fall back to the driver key
+    // so the menu never shows a blank row.
+    const auto label = kw.find("label");
+    if (label != kw.end() && !label->second.empty()) {
+        info.label = label->second;
+    } else {
+        const auto driver = kw.find("driver");
+        info.label = (driver != kw.end() && !driver->second.empty()) ? driver->second
+                                                                      : "unknown device";
+    }
+    // The FULL kwargs, not just the driver key: serial/index keys are what pick
+    // the same physical unit out of several identical ones.
+    info.args = SoapySDR::KwargsToString(kw);
+    return info;
+}
+
+std::string lowerCopy(std::string s) {
+    for (char& c : s) {
+        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    return s;
+}
+
+}  // namespace
+
+std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
+    const std::vector<std::string>& skip,
+    const std::function<void(bool begin, const std::string& driver)>& onProbe) {
+    std::vector<SoapyDeviceInfo> out;
+    if (!runtimeAvailable()) { return out; }
+    // The same refusal as the walk below, for the same reason.
+    if (anyDeviceOpen()) {
+        core::diagWarnf(
+            "soapy: in-process device scan refused while a radio is open - "
+            "close the source and rescan");
+        return out;
+    }
+
+    std::vector<std::string> skipLower;
+    for (const std::string& s : skip) { skipLower.push_back(lowerCopy(s)); }
+
+    struct Walk {
+        std::vector<SoapyDeviceInfo>* out;
+        const std::vector<std::string>* skip;
+        const std::function<void(bool, const std::string&)>* onProbe;
+    } walk{&out, &skipLower, &onProbe};
+
+    const bool completed = callGuardingVendorFaults(
+        [](void* p) noexcept {
+            auto* w = static_cast<Walk*>(p);
+            try {
+                // What SoapySDR::Device::enumerate() does first (its one-shot
+                // automaticLoadModules); loadModules() skips what is loaded.
+                SoapySDR::loadModules();
+                // ONE THREAD PER DRIVER, all at once, in the registry's order -
+                // SoapySDR's own walk, reproduced so that it can be told what
+                // to leave out and can say what it is doing.
+                std::vector<std::pair<std::string, std::future<SoapySDR::KwargsList>>> probes;
+                for (const auto& entry : SoapySDR::Registry::listFindFunctions()) {
+                    const std::string name = entry.first;
+                    if (name.empty()) { continue; }
+                    if (std::find(w->skip->begin(), w->skip->end(), lowerCopy(name)) !=
+                        w->skip->end()) {
+                        continue;
+                    }
+                    const SoapySDR::FindFunction find = entry.second;
+                    const auto* onProbe = w->onProbe;
+                    probes.emplace_back(
+                        name, std::async(std::launch::async, [name, find, onProbe]() {
+                            if (*onProbe) { (*onProbe)(true, name); }
+                            // The end line is written however the probe
+                            // leaves - a find function that THROWS has ended,
+                            // and must not be reported as still running.
+                            struct End {
+                                const std::function<void(bool, const std::string&)>* cb;
+                                const std::string* name;
+                                ~End() {
+                                    if (*cb) { (*cb)(false, *name); }
+                                }
+                            } end{onProbe, &name};
+                            return find(SoapySDR::Kwargs());
+                        }));
+                }
+                for (auto& probe : probes) {
+                    try {
+                        for (SoapySDR::Kwargs kw : probe.second.get()) {
+                            kw["driver"] = probe.first;
+                            w->out->push_back(rowFromKwargs(kw));
+                        }
+                    } catch (const std::exception& ex) {
+                        // Word for word what SoapySDR logs for the same case.
+                        SoapySDR::logf(SOAPY_SDR_ERROR, "SoapySDR::Device::enumerate(%s) %s",
+                                       probe.first.c_str(), ex.what());
+                    } catch (...) {
+                        SoapySDR::logf(SOAPY_SDR_ERROR,
+                                       "SoapySDR::Device::enumerate(%s) unknown error",
+                                       probe.first.c_str());
+                    }
+                }
+            } catch (...) {
+                w->out->clear();
+            }
+        },
+        &walk);
+
+    if (!completed) {
+        out.clear();
+        core::diagWarnf(
+            "soapy: enumerate faulted inside a vendor module (code 0x%08X) - no devices "
+            "listed; a driver install on this machine is faulty",
+            static_cast<unsigned>(vendorGuardLastFaultCode()));
+    }
+    return out;
+}
+
 std::vector<std::string> SoapySource::driverNames() {
     if (!runtimeAvailable()) { return {}; }
     // LOADED, THEN LISTED, and no further. loadModules() brings each module's
@@ -560,23 +683,7 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess(const std::string& 
                 SoapySDR::Kwargs ask;
                 if (!w->driver->empty()) { ask["driver"] = *w->driver; }
                 for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate(ask)) {
-                    SoapyDeviceInfo info;
-                    // Modules put a display string under "label"; fall back to
-                    // the driver key so the menu never shows a blank row.
-                    const auto label = kw.find("label");
-                    if (label != kw.end() && !label->second.empty()) {
-                        info.label = label->second;
-                    } else {
-                        const auto driver = kw.find("driver");
-                        info.label = (driver != kw.end() && !driver->second.empty())
-                                         ? driver->second
-                                         : "unknown device";
-                    }
-                    // The FULL kwargs, not just the driver key: serial/index
-                    // keys are what pick the same physical unit out of several
-                    // identical ones.
-                    info.args = SoapySDR::KwargsToString(kw);
-                    w->out->push_back(std::move(info));
+                    w->out->push_back(rowFromKwargs(kw));
                 }
             } catch (...) {
                 // "Never throws; empty on none/no modules": a probe failure in

@@ -767,6 +767,7 @@
   "Not listening.": "대기하지 않음.",
   "Not now": "나중에",
   "Not saved: no usable frequency to save": "저장 안 됨: 저장할 수 있는 주파수가 없습니다",
+  "Not scanned again this session: %s (it crashed the device scan)": "이번 세션에서는 다시 검색하지 않음: %s (장치 검색을 중단시켰습니다)",
   "Not set": "설정 안 됨",
   "Notch": "노치",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "아무것도 가져오지 않았으므로 여기의 어떤 숫자도 실제로 존재하는 것의 개수가 아닙니다. 카탈로그는 세션에서 이 창을 처음 열 때, 그리고 지금 확인을 누를 때마다 읽으며, 시작할 때는 읽지 않습니다.",

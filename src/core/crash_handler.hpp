@@ -176,7 +176,13 @@ void reportAbsorbedFault(const char* reason, unsigned long code, const void* fau
 // fault was in another process. No minidump is written either - a dump of the
 // process that SURVIVED cannot document the fault and is the most revealing
 // artefact this product can put on a user's disk.
-void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, int attempt);
+//
+// `signatureTag` stands in for the faulting module in the report's signature
+// (the fault's module is in another process, so this one has none to give).
+// Null keeps the pre-0.99.33 "?" - one group per exit code, whatever died -
+// which is what source::childFaultSignatureTag exists to end.
+void reportAbsorbedChildFault(const char* reason, unsigned long childExitCode, int attempt,
+                              const char* signatureTag = nullptr);
 
 // TEST HOOK for the frame-capture policy above. The two properties that matter
 // cannot be reached any other way - captureFramesGuarded is internal, and

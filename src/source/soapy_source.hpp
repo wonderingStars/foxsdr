@@ -80,6 +80,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -178,6 +179,20 @@ public:
     //
     // `driver` is a name from driverNames(). Empty means the unrestricted walk.
     static std::vector<SoapyDeviceInfo> enumerateInProcess(const std::string& driver);
+
+    // THE CHILD'S WHOLE-BUS WALK (0.99.33). It differs from the one above in
+    // two ways and no others. It leaves the `skip` drivers out (case ignored),
+    // which SoapySDR::Device::enumerate() cannot do - it asks every driver or
+    // exactly one. And it calls onProbe(true, name) as each driver's probe
+    // begins and onProbe(false, name) as it ends, so that the parent can say
+    // which probes were still running if this process dies (field report
+    // 91965660116CF497, where it could say nothing). Every find function still
+    // runs AT ONCE on a thread of its own, exactly as SoapySDR's walk does
+    // (Factory.cpp: std::launch::async per driver), so the scan takes as long
+    // as it always did. `onProbe` is called from those threads concurrently.
+    static std::vector<SoapyDeviceInfo> enumerateInProcessEach(
+        const std::vector<std::string>& skip,
+        const std::function<void(bool begin, const std::string& driver)>& onProbe);
 
     // The driver names this machine has modules for, loaded but not probed:
     // listing them touches each module's registration, never its find

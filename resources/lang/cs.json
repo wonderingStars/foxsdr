@@ -767,6 +767,7 @@
   "Not listening.": "Nenaslouchá.",
   "Not now": "Teď ne",
   "Not saved: no usable frequency to save": "Neuloženo: není použitelná frekvence k uložení",
+  "Not scanned again this session: %s (it crashed the device scan)": "V této relaci se znovu neprohledává: %s (shodil hledání zařízení)",
   "Not set": "Nenastaveno",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Nic nebylo staženo, takže nic zde není počtem toho, co existuje. Katalog se čte při prvním otevření tohoto okna v relaci a znovu při každém stisku OVĚŘIT TEĎ - nikdy při spuštění.",

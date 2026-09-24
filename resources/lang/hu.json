@@ -767,6 +767,7 @@
   "Not listening.": "Nem figyel.",
   "Not now": "Most nem",
   "Not saved: no usable frequency to save": "Nincs mentve: nincs menthető frekvencia",
+  "Not scanned again this session: %s (it crashed the device scan)": "Ebben a munkamenetben nem keresi újra: %s (összeomlasztotta az eszközkeresést)",
   "Not set": "Nincs megadva",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Semmi sem lett letöltve, így az itteni számok egyike sem mutatja, mi létezik. A katalógust akkor olvassuk be, amikor ez az ablak egy munkamenetben először megnyílik, majd valahányszor megnyomja az ELLENŐRZÉS MOST gombot - indításkor soha.",

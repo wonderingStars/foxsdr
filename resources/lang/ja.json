@@ -767,6 +767,7 @@
   "Not listening.": "待ち受けていません。",
   "Not now": "後で",
   "Not saved: no usable frequency to save": "保存されません: 保存できる有効な周波数がありません",
+  "Not scanned again this session: %s (it crashed the device scan)": "このセッションでは再スキャンしません: %s (デバイスのスキャンをクラッシュさせました)",
   "Not set": "未設定",
   "Notch": "ノッチ",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "何も取得していないため、ここにある数字は実在するものの数ではありません。カタログは、セッション中にこのウィンドウを初めて開いたときと、「今すぐ確認」を押したときに読み込まれます。起動時には読み込みません。",

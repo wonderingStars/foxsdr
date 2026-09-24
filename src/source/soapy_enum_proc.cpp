@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -52,6 +53,9 @@ constexpr const char* kKeyDevices = "devices";
 constexpr const char* kKeyLabel = "label";
 constexpr const char* kKeyArgs = "args";
 constexpr const char* kKeyDrivers = "drivers";
+
+// Defined with the probe log's writer, below.
+std::vector<std::string> probesStillRunning(const std::string& text);
 
 #ifdef _WIN32
 
@@ -373,9 +377,13 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     // the job kills nothing that is still wanted.
     if (job != nullptr) { ::CloseHandle(job); }
 
-    if (out.outcome == EnumOutcome::ChildTimedOut) { return; }
+    if (out.outcome == EnumOutcome::ChildTimedOut) {
+        out.inFlightDrivers = probesStillRunning(text);
+        return;
+    }
     if (exitCode != 0) {
         out.outcome = EnumOutcome::ChildDied;
+        out.inFlightDrivers = probesStillRunning(text);
         return;
     }
     if (!parseChildOutput(text, out)) {
@@ -527,9 +535,13 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     }
     out.exitCode = exitCode;
 
-    if (out.outcome == EnumOutcome::ChildTimedOut) { return; }
+    if (out.outcome == EnumOutcome::ChildTimedOut) {
+        out.inFlightDrivers = probesStillRunning(text);
+        return;
+    }
     if (exitCode != 0) {
         out.outcome = EnumOutcome::ChildDied;
+        out.inFlightDrivers = probesStillRunning(text);
         return;
     }
     if (!parseChildOutput(text, out)) {
@@ -542,6 +554,130 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 }
 
 }  // namespace
+
+std::string lowerAscii(std::string s);
+
+namespace {
+
+// THE SESSION'S DO-NOT-ASK LIST. Filled only by a PER-DRIVER child dying, so
+// every name on it has already killed a process of its own with no other
+// driver running beside it; a whole-bus death blames nobody (every driver
+// probes at once there). Read by every scan and by the device panel's note.
+std::mutex& sessionMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::vector<FaultedDriver>& sessionList() {
+    static std::vector<FaultedDriver> list;
+    return list;
+}
+
+void rememberFaultedDriver(const std::string& driver, unsigned long exitCode) {
+    const std::string name = lowerAscii(driver);
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    for (const FaultedDriver& f : sessionList()) {
+        if (f.driver == name) { return; }
+    }
+    sessionList().push_back(FaultedDriver{name, exitCode});
+}
+
+std::vector<std::string> sessionFaultedNames() {
+    std::vector<std::string> out;
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    for (const FaultedDriver& f : sessionList()) { out.push_back(f.driver); }
+    return out;
+}
+
+// The --skip= argument: only names a command line can carry unquoted and
+// unsplit, which every SoapySDR driver key is. Anything else is left off the
+// list rather than risking a mangled argument - it is then asked, which is
+// what every build before this one did.
+bool skippableName(const std::string& s) {
+    if (s.empty()) { return false; }
+    for (char c : s) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
+                        c == '-' || c == '.';
+        if (!ok) { return false; }
+    }
+    return true;
+}
+
+// A driver name as it may appear in a REPORT LINE: the name comes from a
+// third-party module, and a report is "name: value" lines - one newline in a
+// registry key would split the reason and forge a field. Lower-cased, with
+// anything outside the driver-key alphabet shown as '?'.
+std::string reportSafeName(const std::string& driver) {
+    std::string out = lowerAscii(driver);
+    for (char& c : out) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
+                        c == '-' || c == '.';
+        if (!ok) { c = '?'; }
+    }
+    if (out.size() > 48) { out.resize(48); }
+    return out;
+}
+
+constexpr const char* kProbeMarker = "cascade-probe: ";
+
+// WHICH PROBES WERE STILL RUNNING, read off the child's probe log (see
+// probeMarkerLine) - begun and never ended, in the order they began. The
+// marker is looked for ANYWHERE in a line, not only at its start: a vendor
+// module printing to stdout without a newline would otherwise glue its text
+// to the front of ours and hide it.
+std::vector<std::string> probesStillRunning(const std::string& text) {
+    std::vector<std::string> running;
+    std::size_t pos = 0;
+    const std::string marker(kProbeMarker);
+    while ((pos = text.find(marker, pos)) != std::string::npos) {
+        pos += marker.size();
+        const std::size_t eol = text.find_first_of("\r\n", pos);
+        const std::string rest =
+            text.substr(pos, (eol == std::string::npos ? text.size() : eol) - pos);
+        const std::size_t sp = rest.find(' ');
+        if (sp == std::string::npos) { continue; }
+        const std::string verb = rest.substr(0, sp);
+        const std::string name = reportSafeName(rest.substr(sp + 1));
+        if (name.empty()) { continue; }
+        const auto it = std::find(running.begin(), running.end(), name);
+        if (verb == "begin" && it == running.end()) {
+            running.push_back(name);
+        } else if (verb == "end" && it != running.end()) {
+            running.erase(it);
+        }
+    }
+    return running;
+}
+
+std::string joinNames(const std::vector<std::string>& names, std::size_t most) {
+    std::string out;
+    for (std::size_t i = 0; i < names.size() && i < most; ++i) {
+        out += (i == 0 ? "" : ", ") + names[i];
+    }
+    if (names.size() > most) { out += " and " + std::to_string(names.size() - most) + " more"; }
+    return out;
+}
+
+}  // namespace
+
+std::vector<FaultedDriver> sessionFaultedDrivers() {
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    return sessionList();
+}
+
+void clearSessionFaultedDriversForTest() {
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    sessionList().clear();
+}
+
+std::string childFaultSignatureTag(const std::string& driver) {
+    if (driver.empty()) { return "enumerate-child:whole-bus"; }
+    return "enumerate-child:driver=" + reportSafeName(driver);
+}
+
+std::string probeMarkerLine(bool begin, const std::string& driver) {
+    return std::string(kProbeMarker) + (begin ? "begin " : "end ") + driver + "\n";
+}
 
 const char* enumOutcomeName(EnumOutcome outcome) noexcept {
     switch (outcome) {
@@ -629,13 +765,29 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
 
     std::vector<std::string> skip;
     for (const std::string& s : options.skipDrivers) { skip.push_back(lowerAscii(s)); }
+    // A driver that already killed a child of its own this session is not
+    // asked again, beside an open radio or after a whole-bus death alike.
+    const std::vector<std::string> faultedBefore = sessionFaultedNames();
     std::vector<std::string> asked;
     for (const std::string& d : listing.drivers) {
-        if (std::find(skip.begin(), skip.end(), lowerAscii(d)) != skip.end()) {
-            result.skippedDrivers.push_back(lowerAscii(d));
+        const std::string low = lowerAscii(d);
+        if (std::find(skip.begin(), skip.end(), low) != skip.end()) {
+            result.skippedDrivers.push_back(low);
+        } else if (std::find(faultedBefore.begin(), faultedBefore.end(), low) !=
+                   faultedBefore.end()) {
+            // Already listed when the whole-bus child was told to skip it.
+            if (std::find(result.sessionSkippedDrivers.begin(), result.sessionSkippedDrivers.end(),
+                          low) == result.sessionSkippedDrivers.end()) {
+                result.sessionSkippedDrivers.push_back(low);
+            }
         } else {
             asked.push_back(d);
         }
+    }
+    if (!result.sessionSkippedDrivers.empty()) {
+        core::diagWarnf(
+            "soapy: not asking %s - it crashed a device scan earlier in this session",
+            joinNames(result.sessionSkippedDrivers, 8).c_str());
     }
 
     result.sweptPerDriver = true;
@@ -652,13 +804,22 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         if (one.outcome == EnumOutcome::ChildDied) {
             result.childDeaths += 1;
             result.deathExitCode = one.exitCode;
-            // FILED PER DRIVER, because the driver NAME is the one thing the
-            // whole-bus death could never say and the only thing that tells a
-            // user which install to fix.
-            core::reportAbsorbedChildFault(
-                "SDR device enumeration child process died probing one driver "
-                "(contained: every other driver was still probed)",
-                one.exitCode, 1);
+            // FILED PER DRIVER, NAMED, AND UNDER ITS OWN SIGNATURE, because
+            // the driver name is the one thing the whole-bus death could never
+            // say and the only thing that tells a user which install to fix.
+            // Until 0.99.33 this report said "one driver" without saying
+            // which, and hashed to the same signature as the whole-bus death
+            // filed moments before it - so the uploader dropped it as a
+            // duplicate and the name never left the machine.
+            const std::string reason =
+                "SDR device enumeration child process died probing driver=" +
+                reportSafeName(driver) + " (contained: every other driver was still probed)";
+            core::reportAbsorbedChildFault(reason.c_str(), one.exitCode, 1,
+                                           childFaultSignatureTag(driver).c_str());
+            // Deterministic by now: the driver died with nothing else running
+            // in its process. Asking it again on every Refresh only costs a
+            // crash each time.
+            rememberFaultedDriver(driver, one.exitCode);
         }
         result.faultedDrivers.push_back(driver);
         core::diagWarnf(
@@ -689,14 +850,13 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     // drivers that worked, and the ones that did not are named in the log and
     // in faultedDrivers. Only a sweep that produced nothing at all stays a
     // death, so the caller's "no devices" message is still reached.
-    if (!result.devices.empty() ||
-        result.faultedDrivers.size() < listing.drivers.size()) {
+    if (!result.devices.empty() || result.faultedDrivers.size() < asked.size()) {
         result.outcome = EnumOutcome::Ok;
         result.exitCode = 0;
         core::diagWarnf(
             "soapy: the whole-bus scan died, so each driver was asked separately - "
             "%d driver(s) asked, %d faulted, %d device(s) listed",
-            static_cast<int>(listing.drivers.size()),
+            static_cast<int>(asked.size()),
             static_cast<int>(result.faultedDrivers.size()),
             static_cast<int>(result.devices.size()));
     }
@@ -718,6 +878,22 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         // cannot touch it, each in its own child. See EnumOptions::skipDrivers.
         sweepEachDriver(helper, options, childCrashDir, result, true);
     } else if (!helper.empty()) {
+        // THE SESSION'S FAULTED DRIVERS ARE LEFT OUT OF THE WHOLE BUS TOO, by
+        // the child itself (runEnumerateHelper's `skip`): one child, as ever,
+        // and no Refresh that re-runs a probe known to kill it.
+        std::vector<std::string> sessionSkip;
+        for (const std::string& d : sessionFaultedNames()) {
+            if (skippableName(d)) { sessionSkip.push_back(d); }
+        }
+        std::string skipArg;
+        for (const std::string& d : sessionSkip) { skipArg += (skipArg.empty() ? "" : ",") + d; }
+        if (!skipArg.empty()) {
+            skipArg = "--skip=" + skipArg;
+            core::diagWarnf(
+                "soapy: not asking %s - it crashed a device scan earlier in this session",
+                joinNames(sessionSkip, 8).c_str());
+        }
+
         const int maxAttempts = (options.attempts > 0) ? options.attempts : 1;
         for (int i = 0; i < maxAttempts; ++i) {
             EnumResult attempt;
@@ -726,8 +902,13 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // not erase the death that made it necessary.
             attempt.childDeaths = result.childDeaths;
             attempt.deathExitCode = result.deathExitCode;
-            runOneChild(helper, options.timeoutMs, childCrashDir, attempt);
+            runOneChild(helper, options.timeoutMs, childCrashDir, attempt, skipArg);
+            // ...and neither must it erase which probes that death interrupted.
+            if (attempt.outcome == EnumOutcome::Ok || attempt.outcome == EnumOutcome::Malformed) {
+                attempt.inFlightDrivers = result.inFlightDrivers;
+            }
             result = attempt;
+            result.sessionSkippedDrivers = sessionSkip;
             // Only a DEATH is worth another child; see EnumOptions::attempts
             // for why a timeout is not.
             if (result.outcome != EnumOutcome::ChildDied) { break; }
@@ -754,16 +935,33 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // spent worker stack, which no __try can catch. The frames of the
             // thread that NOTICED a child die describe the noticing; the exit
             // code and the attempt number are the fault.
-            core::reportAbsorbedChildFault(
+            //
+            // WHAT IT WAS DOING, since 0.99.33 (field report 91965660116CF497,
+            // which could say nothing). Every driver probes at once in this
+            // walk, so no single one can be blamed from here - the reason says
+            // which probes were still running, and the per-driver sweep that
+            // follows a second death is what names a culprit. Its own
+            // signature, so it is not one group with every other child death
+            // of the same exit code.
+            const std::string running =
+                result.inFlightDrivers.empty()
+                    ? std::string(" - no driver's probe had begun (it died while the driver "
+                                  "modules were loading)")
+                    : " - every driver probes at once in this walk; still probing when it "
+                      "died: " +
+                          joinNames(result.inFlightDrivers, 8);
+            const std::string reason =
                 "SDR device enumeration child process died (contained: the parent "
-                "survived and re-probed)",
-                result.exitCode, i + 1);
+                "survived and re-probed)" +
+                running;
+            core::reportAbsorbedChildFault(reason.c_str(), result.exitCode, i + 1,
+                                           childFaultSignatureTag(std::string()).c_str());
 
             if (i + 1 < maxAttempts) {
                 core::diagWarnf(
-                    "soapy: enumeration child died with exit 0x%08lX (attempt %d of %d) - "
-                    "this is the known libusb fault, contained; retrying",
-                    result.exitCode, i + 1, maxAttempts);
+                    "soapy: enumeration child died with exit 0x%08lX (attempt %d of %d)%s - "
+                    "contained; retrying",
+                    result.exitCode, i + 1, maxAttempts, running.c_str());
             }
         }
         // EVERY ATTEMPT DIED. One bad driver must not hide the rest.
@@ -784,7 +982,12 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             "soapy: no enumeration helper could be started ('%s') - walking the bus "
             "in-process instead, which is not crash-isolated",
             helper.c_str());
-        result.devices = SoapySource::enumerateInProcess();
+        // In THIS process a driver that killed a child would kill the session,
+        // so the session's faulted drivers are certainly not asked here.
+        const std::vector<std::string> faulted = sessionFaultedNames();
+        result.devices = faulted.empty() ? SoapySource::enumerateInProcess()
+                                         : SoapySource::enumerateInProcessEach(faulted, {});
+        result.sessionSkippedDrivers = faulted;
         result.fellBackInProcess = true;
     }
 
@@ -816,8 +1019,10 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         case EnumOutcome::ChildTimedOut:
             core::diagWarnf(
                 "soapy: enumeration timed out after %lu ms and the child was killed - "
-                "a device on this machine is not answering its probe",
-                options.timeoutMs);
+                "a device on this machine is not answering its probe (still probing: %s)",
+                options.timeoutMs,
+                result.inFlightDrivers.empty() ? "no driver reported"
+                                               : joinNames(result.inFlightDrivers, 8).c_str());
             break;
         case EnumOutcome::Malformed:
             core::diagWarnf(
@@ -940,7 +1145,8 @@ std::string enumerationReportJson(bool runtimeAvailable,
     return line;
 }
 
-int runEnumerateHelper(const char* crashDir, const char* driver, bool listDrivers) {
+int runEnumerateHelper(const char* crashDir, const char* driver, bool listDrivers,
+                       const char* skip) {
     armEnumerateHelperProcess(crashDir);
     const bool captureArmed = !core::activeCrashDir().empty();
 #ifdef _WIN32
@@ -957,10 +1163,36 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
     // that sweep. Both are otherwise the ordinary walk, guard and all.
     const std::vector<std::string> names =
         listDrivers ? SoapySource::driverNames() : std::vector<std::string>();
+
+    // THE WHOLE BUS WRITES ITS PROBE LOG to the parent as it goes (0.99.33):
+    // one line as each driver's probe begins and one as it ends, flushed
+    // straight into the pipe, so a death leaves the parent the list of probes
+    // that were still running. Serialised here because the probes run on a
+    // thread each.
+    std::vector<std::string> skipList;
+    if (skip != nullptr) {
+        std::string csv(skip);
+        std::size_t start = 0;
+        while (start <= csv.size()) {
+            const std::size_t comma = csv.find(',', start);
+            const std::size_t end = (comma == std::string::npos) ? csv.size() : comma;
+            if (end > start) { skipList.push_back(csv.substr(start, end - start)); }
+            if (comma == std::string::npos) { break; }
+            start = comma + 1;
+        }
+    }
+    std::mutex logMutex;
+    const auto onProbe = [&logMutex](bool begin, const std::string& name) {
+        const std::string line = probeMarkerLine(begin, name);
+        std::lock_guard<std::mutex> lk(logMutex);
+        std::fwrite(line.data(), 1, line.size(), stdout);
+        std::fflush(stdout);
+    };
+    const bool oneDriver = driver != nullptr && *driver != '\0';
     const std::vector<SoapyDeviceInfo> devices =
-        listDrivers ? std::vector<SoapyDeviceInfo>()
-                    : SoapySource::enumerateInProcess(
-                          (driver != nullptr) ? std::string(driver) : std::string());
+        listDrivers  ? std::vector<SoapyDeviceInfo>()
+        : oneDriver  ? SoapySource::enumerateInProcess(std::string(driver))
+                     : SoapySource::enumerateInProcessEach(skipList, onProbe);
 
     const std::string line = enumerationReportJson(
         runtime, static_cast<unsigned long long>(vendorGuardCallCount() - before),

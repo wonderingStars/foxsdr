@@ -767,6 +767,7 @@
   "Not listening.": "Ne sluša.",
   "Not now": "Ne sada",
   "Not saved: no usable frequency to save": "Nije spremljeno: nema upotrebljive frekvencije za spremanje",
+  "Not scanned again this session: %s (it crashed the device scan)": "Neće se ponovno skenirati u ovoj sesiji: %s (srušio je traženje uređaja)",
   "Not set": "Nije postavljeno",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Ništa nije dohvaćeno, pa ništa ovdje nije broj onoga što postoji. Katalog se čita kad se ovaj prozor prvi put otvori u sesiji i ponovno svaki put kad pritisnete PROVJERI SAD - nikad pri pokretanju.",

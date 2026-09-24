@@ -767,6 +767,7 @@
   "Not listening.": "Не слуша.",
   "Not now": "Не сега",
   "Not saved: no usable frequency to save": "Не е запазено: няма използваема честота за запазване",
+  "Not scanned again this session: %s (it crashed the device scan)": "Не се сканира отново в тази сесия: %s (срина сканирането за устройства)",
   "Not set": "Не е зададено",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Нищо не е изтеглено, затова нищо тук не е броене на това, което съществува. Каталогът се чете при първото отваряне на този прозорец в сесията и отново всеки път, когато натиснете ПРОВЕРИ - никога при стартиране.",

@@ -767,6 +767,7 @@
   "Not listening.": "Neklausās.",
   "Not now": "Ne tagad",
   "Not saved: no usable frequency to save": "Nav saglabāts: nav derīgas frekvences, ko saglabāt",
+  "Not scanned again this session: %s (it crashed the device scan)": "Šajā sesijā vairs netiek skenēts: %s (tas izraisīja ierīču meklēšanas avāriju)",
   "Not set": "Nav iestatīts",
   "Notch": "Notch",
   "Nothing has been fetched, so nothing here is a count of what exists. The catalogue is read the first time this window opens in a session, and again whenever you press CHECK NOW - never at startup.": "Nekas nav iegūts, tāpēc nekas šeit nav skaits tam, kas eksistē. Katalogs tiek nolasīts, kad šis logs sesijā tiek atvērts pirmo reizi, un atkal ikreiz, kad nospiežat PĀRBAUDĪT - nekad startējot.",
