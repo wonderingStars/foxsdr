@@ -388,7 +388,12 @@ void Transmitter::tick() {
         return;
     }
     if (!want && have) {
-        stopThread();
+        // THE TAIL IS PLAYED BEFORE THE THREAD IS STOPPED. Stopping it first
+        // (as this did until 0.99.35) meant the thread never processed a
+        // single block with the key up, so every transmission ended with the
+        // radio silenced at full envelope - the step the ramp exists to
+        // remove, on every PTT release, latch expiry and remote expiry.
+        stopThread(true);
         std::lock_guard<std::mutex> lk(stateMutex_);
         keyUpLocked(nullptr);
         return;
@@ -397,7 +402,7 @@ void Transmitter::tick() {
         // The TX thread let go on its own - a fault, or the dead-man's
         // handle. It has already silenced the radio; this is the bookkeeping
         // and the panel catching up with it.
-        stopThread();
+        stopThread(false);
         std::lock_guard<std::mutex> lk(stateMutex_);
         keyUpLocked("the transmitter stopped on its own");
         latched_.store(false, std::memory_order_relaxed);
@@ -486,19 +491,46 @@ void Transmitter::startThread() {
     thread_ = std::thread(&Transmitter::threadBody, this);
 }
 
-void Transmitter::stopThread() {
-    run_.store(false, std::memory_order_relaxed);
-    waitCv_.notify_all();
-    if (!thread_.joinable()) { return; }
+void Transmitter::stopThread(bool playTail) {
+    if (playTail) {
+        // KEY UP, AND LET THE THREAD FINISH ON ITS OWN. Lowering the key is
+        // all it takes: the next block the thread modulates carries the
+        // raised-cosine ramp to zero (kCwRampMs, half of one kAudioBlock),
+        // modulator_.idle() then trips the thread's `tailDone`, and the
+        // thread silences the radio itself on the way out. run_ is left alone
+        // so the ramp is played rather than skipped. Under stateMutex_
+        // because the thread reads the modulator under it - so a block is
+        // either wholly before the key-up or wholly after it.
+        std::lock_guard<std::mutex> lk(stateMutex_);
+        modulator_.setKeyed(false);
+    } else {
+        run_.store(false, std::memory_order_relaxed);
+        waitCv_.notify_all();
+    }
+    if (!thread_.joinable()) {
+        run_.store(false, std::memory_order_relaxed);
+        return;
+    }
     // A BOUNDED JOIN, and stateMutex_ IS NOT HELD ACROSS IT. The TX thread's
     // last act takes that mutex to silence the radio, so a join underneath it
     // would be a deadlock - and a deadlock here is a keyed transmitter and a
     // window that will not close.
+    //
+    // THE TAIL IS SPENT INSIDE THIS SAME BOUND, not as a second wait in front
+    // of it, so the shutdown budget's one charge of kThreadJoinWait still
+    // covers the whole of it. In practice the tail is one block - about ten
+    // milliseconds - plus the sink's finish() letting its queue reach the air
+    // (on the Pluto at most its ring and two buffers of zeros, about 20 ms at
+    // its slowest rate), and a thread that has not finished it by the bound is
+    // inside a sink write, which is itself bounded; run_ is then dropped so it
+    // leaves after that write rather than modulating another block.
     bool exited = false;
     {
         std::unique_lock<std::mutex> lk(waitMutex_);
         exited = waitCv_.wait_for(lk, kThreadJoinWait, [this] { return exited_; });
     }
+    run_.store(false, std::memory_order_relaxed);
+    waitCv_.notify_all();
     if (!exited) {
         // NOT ABANDONED, AND THAT IS DELIBERATE - this is the one bounded
         // wait in the product that is followed by a real join, so it is worth
@@ -526,7 +558,10 @@ void Transmitter::stop() {
     // key too - a browser's assertion must not be inherited by the next board
     // any more than a latch is.
     releaseRemote("the transmitter was shut down");
-    stopThread();
+    // With the tail, for the same reason tick()'s key-up has one: a radio
+    // swapped out or a window closed mid-transmission must not end it with a
+    // step either. The ramp costs one block inside the same bounded wait.
+    stopThread(true);
     std::lock_guard<std::mutex> lk(stateMutex_);
     if (was) { keyUpLocked("the transmitter was shut down"); }
     transmitting_.store(false, std::memory_order_relaxed);
@@ -542,6 +577,9 @@ void Transmitter::threadBody() {
     const auto blockPeriod = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::duration<double>(static_cast<double>(kAudioBlock) / kAudioRate));
     auto next = std::chrono::steady_clock::now();
+    // Set only when the loop ends because the ramp reached zero - the one
+    // exit after which the radio is FINISHED rather than stopped.
+    bool rampedDown = false;
 
     while (run_.load(std::memory_order_relaxed)) {
         next += blockPeriod;
@@ -606,7 +644,10 @@ void Transmitter::threadBody() {
             }
         }
 
-        if (tailDone) { break; }
+        if (tailDone) {
+            rampedDown = true;
+            break;
+        }
 
         std::unique_lock<std::mutex> lk(waitMutex_);
         waitCv_.wait_until(lk, next, [this] { return !run_.load(std::memory_order_relaxed); });
@@ -615,9 +656,24 @@ void Transmitter::threadBody() {
     // THE LAST ACT: SILENCE THE RADIO, from this thread. Not from whoever
     // joins us - the whole point of the dead-man's handle is that there may
     // be nobody left to join us.
+    //
+    // FINISHED WHEN THE RAMP IS IN, STOPPED OTHERWISE. write() handing the
+    // ramp to the sink is not the ramp reaching the air: the Pluto queues up
+    // to its ring plus the DAC's buffers behind write(), and stop() throws
+    // that queue away and steps the attenuator at full carrier - so until
+    // 0.99.35 the ramp this thread had just written never left the board.
+    // finish() lets the queue play out first. Every other exit (a fault, the
+    // dead-man's handle, run_ dropped by the bounded wait) has no ramp at the
+    // end of the queue, only carrier nobody is keying, and is stopped at once.
     {
         std::lock_guard<std::mutex> lk(stateMutex_);
-        if (sink_ != nullptr) { sink_->stop(); }
+        if (sink_ != nullptr) {
+            if (rampedDown) {
+                sink_->finish();
+            } else {
+                sink_->stop();
+            }
+        }
     }
     // transmitting_ IS NOT CLEARED HERE, and the first draft of this file
     // cleared it - which quietly broke the recovery path. tick() notices a

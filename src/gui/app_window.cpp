@@ -2968,8 +2968,12 @@ void AppWindow::drawUi() {
     // drawTransmitPage runs; a page that is not drawn at all sets nothing, so
     // closing the window, switching banks or losing focus releases the key
     // rather than leaving it where it was. That is the shape the hard rule in
-    // core/transmitter.hpp needs from this end of it.
+    // core/transmitter.hpp needs from this end of it. The LATCH press and the
+    // page's own "my controls are on screen" flag are rebuilt the same way,
+    // and all three reach the transmitter together just before its tick.
     transmitPttHeld_ = false;
+    transmitLatchPressed_ = false;
+    transmitPageLive_ = false;
     // Before anything is drawn: the decoders' output is bounded in the runner
     // and must be collected whether or not the panel that shows it is open.
     pumpDecoderOutput();
@@ -3029,6 +3033,22 @@ void AppWindow::drawUi() {
     // At the frame rates this application runs at that is between one and
     // sixteen milliseconds of monitor audio, which is shorter than the
     // transmitter's own envelope ramp.
+    //
+    // THE PAGE'S KEY IS APPLIED HERE, EVERY FRAME, and not inside the page
+    // (0.99.35). A page that is closed or rolled up is not drawn, so a write
+    // from its body simply stopped: a LATCH left the radio keyed for up to a
+    // minute with no control on screen, and a PTT held at that moment stayed
+    // held. Here a page that was not live asks for nothing, which releases
+    // both. And the latch is read from the TRANSMITTER, not remembered by the
+    // page - it clears the latch itself on its failsafe, a fault and the
+    // frozen-window handle, and the page writing its own copy back re-keyed
+    // the radio on the very next frame (gui/transmit_page.hpp, txPageKey).
+    {
+        const cascade::gui::TxPageKey key = cascade::gui::txPageKey(
+            transmitPageLive_, transmitter_.latched(), transmitLatchPressed_, transmitPttHeld_);
+        transmitter_.setLatched(key.latched);
+        transmitter_.setPttHeld(key.pttHeld);
+    }
     transmitter_.tick();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
@@ -17628,9 +17648,11 @@ void AppWindow::drawDecoderWindow() {
 //      top of drawUi and set here only while something is actually holding
 //      the key down. A page that is not drawn sets nothing, so closing it,
 //      switching banks, or the window losing focus all release the key -
-//      which is the behaviour those things should have and is not behaviour
-//      that has to be written anywhere, because it falls out of clearing the
-//      flag rather than remembering it.
+//      which is the behaviour those things should have. It falls out of
+//      clearing the flag rather than remembering it ONLY because the frame
+//      loop, not this page, hands the request to the transmitter (0.99.35):
+//      when the hand-off lived in the page body, a page that stopped being
+//      drawn stopped handing anything over, and the last request stood.
 //
 //   3. THE LATCH IS A SEPARATE SWITCH WITH A SEPARATE LOOK. It is the one
 //      control here that keeps a radio keyed with nobody touching anything,
@@ -17735,6 +17757,10 @@ void AppWindow::drawTransmitPage() {
         endPage();
         return;
     }
+    // THE KEY'S CONTROLS ARE ON SCREEN THIS FRAME - set only past beginPage,
+    // which returns false for a page that is rolled up. The frame loop
+    // releases the latch and the PTT on any frame this is not set.
+    transmitPageLive_ = true;
 
     cascade::source::IqSink* sink = transmitter_.sink();
     const bool have = sink != nullptr;
@@ -18026,28 +18052,26 @@ void AppWindow::drawTransmitPage() {
         // THE LATCH: the one control here that keeps a radio keyed with
         // nobody touching anything.
         ImGui::BeginDisabled(!have);
-        if (transmitLatched_) {
+        // THE TRANSMITTER OWNS THE LATCH, and it clears it itself on a fault,
+        // on its own failsafe and on the frozen-window handle - so the key is
+        // drawn from what the transmitter says, and a click is only a PRESS,
+        // applied by the frame loop beside the PTT (see drawUi, txPageKey).
+        const bool latchedNow = transmitter_.latched();
+        if (latchedNow) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   cascade::gui::theme::vec(cascade::gui::theme::kAlarm));
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kIvory));
         }
         if (ImGui::Button(trId("LATCH##txlatch"), ImVec2(100.0f, 56.0f))) {
-            transmitLatched_ = !transmitLatched_;
+            transmitLatchPressed_ = true;
         }
-        if (transmitLatched_) { ImGui::PopStyleColor(2); }
+        if (latchedNow) { ImGui::PopStyleColor(2); }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             ImGui::SetTooltip("%s", tr("Holds the key down with no hand on it. It releases itself\n"
                                        "after a minute, and any fault releases it at once."));
         }
         ImGui::EndDisabled();
-
-        // The latch is owned by the page but enforced by the transmitter,
-        // which also clears it on a fault and on its own failsafe - so the
-        // page follows it rather than the other way round.
-        transmitter_.setLatched(transmitLatched_);
-        transmitLatched_ = transmitter_.latched();
-        transmitter_.setPttHeld(transmitPttHeld_);
 
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(lampColour));
@@ -23212,9 +23236,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.transmitToneHz = transmitToneHz_;
     cfg.transmitMonitor = transmitMonitor_;
     cfg.transmitArgs = transmitArgs_;
-    // AND NOTHING FOR THE KEY: transmitPttHeld_ and transmitLatched_ are not
-    // written, because AppConfig has nowhere to put them and must not grow
-    // one. A saved key is a radio that comes up transmitting.
+    // AND NOTHING FOR THE KEY: transmitPttHeld_, transmitLatchPressed_ and
+    // the transmitter's latch are not written, because AppConfig has nowhere
+    // to put them and must not grow one. A saved key is a radio that comes up transmitting.
     cfg.railBank = railBank_;
     // Only the keys that DIFFER from the shipped table, so a user who never
     // rebound anything writes nothing and still gets a later build's improved

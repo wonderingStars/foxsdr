@@ -61,6 +61,19 @@ public:
     // from when a caller forgets.
     virtual void stop() = 0;
 
+    // THE ORDINARY END OF A TRANSMISSION, as opposed to an emergency one.
+    // Called by the transmitter only once the modulation it has written has
+    // ALREADY been ramped down to zero (the modulator's raised-cosine
+    // key-up): everything write() accepted is let through to the air, then
+    // the radio is made quiet exactly as stop() makes it. stop() instead
+    // silences at once and throws away whatever is still queued - which is
+    // right for a fault, a frozen window or a destructor, and wrong here,
+    // because on a board with a queue between write() and the DAC it drops
+    // the very ramp that exists to stop a transmission ending in a step.
+    // BOUNDED like stop(); a sink with nothing queued has nothing to let
+    // through, so the default is simply stop().
+    virtual void finish() { stop(); }
+
     virtual bool running() const = 0;
 
     // --- what the board will accept ----------------------------------------

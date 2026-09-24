@@ -16,6 +16,9 @@
 //   - the step that keys it is the LAST step of start(), so every failure
 //     before it leaves a silent radio;
 //   - stopping SILENCES BEFORE IT TIDIES, in that order;
+//   - FINISHING a transmission lets the queued ramp and a queue's worth of
+//     zeros reach the wire BEFORE the attenuator moves, while stop() - the
+//     emergency - still drops the queue and silences at once;
 //   - the destructor does it too, for a caller who forgot;
 //   - a refused write anywhere in start() leaves the board quiet;
 //   - a board that vanishes mid-transmission faults, stops, and is silenced
@@ -667,6 +670,240 @@ int main() {
         CHECK(!tx.start());
         CHECK(!tx.running());
         tx.stop();
+    }
+
+    // =====================================================================
+    // 13. FINISHING A TRANSMISSION PLAYS THE RAMP OUT BEFORE THE ATTENUATOR
+    //     MOVES
+    //
+    //     The transmitter ends every ordinary transmission by writing the
+    //     modulator's raised-cosine ramp to zero and then calling finish().
+    //     Until 0.99.35 that went through stop(), and stop() dropped `run`
+    //     at once: the writer left its loop without sending what was still
+    //     in the ring - the ramp among it - and stepped the attenuation to
+    //     maximum at full carrier. The ramp existed in the sample stream and
+    //     never reached the air (bug hunt 2026-09-24, transmit-1, round 2).
+    //
+    //     DETERMINISTIC, not a race against a loopback socket: the fake holds
+    //     the writer INSIDE its first WRITEBUF while the ring is filled with
+    //     five buffers of carrier and the ramp, so when finish() lands every
+    //     sample of it is provably still queued. The gate is opened 100 ms
+    //     after finish() is entered; finish() lowers `run` in its first
+    //     microseconds, so that wait only has to be longer than nothing.
+    // =====================================================================
+    {
+        FakeTxIiod d;
+        std::string err;
+        CHECK(d.start(err));
+        cascade::test::stockTxBoard(d);
+
+        PlutoTx tx;
+        CHECK(tx.open(uriFor(d.port())));
+        CHECK(tx.setGainDb(-10.0));
+        d.holdWriteBufAcks.store(true);
+        CHECK(tx.start());
+        // The writer is parked inside WRITEBUF number one (a buffer of
+        // silence, padded because nothing had been written yet).
+        CHECK(waitFor([&d] { return d.writeBufCount() >= 1; }, std::chrono::seconds(3)));
+
+        // Five buffers of carrier, then the ramp to exactly zero. A rotating
+        // phase so the sequence can be found in the stream by content.
+        constexpr std::size_t kCarrier = 5 * kTxSamplesPerBuffer;
+        constexpr std::size_t kRamp = 2400;
+        const double kTwoPi = 6.283185307179586;
+        std::vector<std::complex<float>> seq(kCarrier + kRamp);
+        for (std::size_t k = 0; k < seq.size(); ++k) {
+            double env = 0.7;
+            if (k >= kCarrier) {
+                const double t = static_cast<double>(k - kCarrier + 1) / static_cast<double>(kRamp);
+                env = 0.7 * 0.5 * (1.0 + std::cos(0.5 * kTwoPi * t));  // 0 at the last sample
+            }
+            const double ph = kTwoPi * static_cast<double>(k) / 37.0;
+            seq[k] = std::complex<float>(static_cast<float>(env * std::cos(ph)),
+                                         static_cast<float>(env * std::sin(ph)));
+        }
+        std::size_t wrote = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (wrote < seq.size() && std::chrono::steady_clock::now() < deadline) {
+            wrote += tx.write(seq.data() + wrote, seq.size() - wrote);
+        }
+        CHECK(wrote == seq.size());
+        CHECK(d.writeBufCount() == 1);  // still parked: none of it has gone yet
+
+        const unsigned long long abandonedBefore = PlutoTx::writersAbandoned();
+        std::thread opener([&d] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            d.holdWriteBufAcks.store(false);
+        });
+        const auto t0 = std::chrono::steady_clock::now();
+        tx.finish();
+        const double finishMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                .count();
+        opener.join();
+        CHECK(!tx.running());
+        CHECK(PlutoTx::writersAbandoned() == abandonedBefore);
+        std::printf("finish() took %.1f ms including the 100 ms gate (bound %lld ms)\n", finishMs,
+                    static_cast<long long>(PlutoTx::kWriterJoinWait.count()));
+        CHECK(finishMs < static_cast<double>(PlutoTx::kWriterJoinWait.count()));
+
+        iiod::SampleFormat fmt;
+        CHECK(iiod::parseSampleFormat("le:S16/16>>0", fmt));
+        const std::vector<std::uint8_t> raw = d.transmitted();
+        std::vector<std::complex<float>> got(raw.size() / 4);
+        for (std::size_t i = 0; i < got.size(); ++i) {
+            got[i] = std::complex<float>(iiod::convertSample(&raw[i * 4], fmt),
+                                         iiod::convertSample(&raw[i * 4 + 2], fmt));
+        }
+        const float tol = 1.0f / 16384.0f;
+        std::size_t found = got.size();
+        for (std::size_t s = 0; s + seq.size() <= got.size() && found == got.size(); ++s) {
+            bool all = true;
+            for (std::size_t i = 0; i < seq.size() && all; ++i) {
+                if (std::fabs(got[s + i].real() - seq[i].real()) > tol ||
+                    std::fabs(got[s + i].imag() - seq[i].imag()) > tol) {
+                    all = false;
+                }
+            }
+            if (all) { found = s; }
+        }
+        std::size_t trailingZeros = 0;
+        for (std::size_t i = got.size(); i > 0 && got[i - 1] == std::complex<float>(0.0f, 0.0f);
+             --i) {
+            ++trailingZeros;
+        }
+        std::printf("finish: %zu samples in %zu WRITEBUFs; carrier+ramp %s (at %zu); %zu zero "
+                    "samples before the attenuator moved\n",
+                    got.size(), d.writeBufCount(),
+                    found < got.size() ? "ALL SENT" : "NOT SENT", found, trailingZeros);
+        // THE CHECK THIS BLOCK EXISTS FOR: every sample of the carrier AND
+        // the ramp reached the wire, in order.
+        CHECK(found < got.size());
+        // ...and nothing after the ramp but zeros...
+        if (found < got.size()) {
+            float worstAfter = 0.0f;
+            for (std::size_t i = found + seq.size(); i < got.size(); ++i) {
+                worstAfter = std::max(worstAfter, std::abs(got[i]));
+            }
+            CHECK(worstAfter == 0.0f);
+        }
+        // ...at least the daemon's whole buffer queue of them, so the ramp's
+        // last sample has been pushed out of the DAC's queue by silence
+        // before the attenuation is stepped. The last kTxBuffersCount
+        // WRITEBUFs are therefore entirely zero.
+        CHECK(trailingZeros >= static_cast<std::size_t>(cascade::source::kTxBuffersCount) *
+                                   kTxSamplesPerBuffer);
+
+        // And THEN the board was silenced: the quieting write comes after
+        // the last WRITEBUF on the writer's connection.
+        const std::vector<std::string> s = d.commands(1);
+        std::size_t lastBuf = std::string::npos;
+        for (std::size_t i = 0; i < s.size(); ++i) {
+            if (s[i].rfind("WRITEBUF", 0) == 0) { lastBuf = i; }
+        }
+        std::size_t quietAt = std::string::npos;
+        for (std::size_t i = (lastBuf == std::string::npos ? 0 : lastBuf); i < s.size(); ++i) {
+            if (s[i] == kQuietGain) {
+                quietAt = i;
+                break;
+            }
+        }
+        if (lastBuf == std::string::npos || quietAt == std::string::npos) { dump("stream", s); }
+        CHECK(lastBuf != std::string::npos);
+        CHECK(quietAt != std::string::npos);
+        CHECK(d.attr("ad9361-phy/out/voltage0/hardwaregain") == "-89.750000");
+        CHECK(d.attr("ad9361-phy/out/altvoltage1/powerdown") == "1");
+    }
+
+    // =====================================================================
+    // 14. stop() IS STILL THE EMERGENCY: IT DOES NOT PLAY THE QUEUE OUT
+    //
+    //     stop() is what a fault, a frozen window and the destructor call,
+    //     and none of them has a ramp at the end of the ring - what is queued
+    //     there is carrier nobody is keying any more. The same parked writer
+    //     and the same full ring as 13, and this time none of it may go.
+    // =====================================================================
+    {
+        FakeTxIiod d;
+        std::string err;
+        CHECK(d.start(err));
+        cascade::test::stockTxBoard(d);
+
+        PlutoTx tx;
+        CHECK(tx.open(uriFor(d.port())));
+        CHECK(tx.setGainDb(-10.0));
+        d.holdWriteBufAcks.store(true);
+        CHECK(tx.start());
+        CHECK(waitFor([&d] { return d.writeBufCount() >= 1; }, std::chrono::seconds(3)));
+
+        std::vector<std::complex<float>> carrier(5 * kTxSamplesPerBuffer,
+                                                 std::complex<float>(0.7f, 0.0f));
+        std::size_t wrote = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (wrote < carrier.size() && std::chrono::steady_clock::now() < deadline) {
+            wrote += tx.write(carrier.data() + wrote, carrier.size() - wrote);
+        }
+        CHECK(wrote == carrier.size());
+
+        std::thread opener([&d] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            d.holdWriteBufAcks.store(false);
+        });
+        tx.stop();
+        opener.join();
+        CHECK(!tx.running());
+        std::printf("stop(): %zu WRITEBUF(s) in all, the parked one included\n",
+                    d.writeBufCount());
+        // The parked buffer was the only one: the queued carrier was dropped
+        // and the board silenced straight after it.
+        CHECK(d.writeBufCount() == 1);
+        CHECK(d.attr("ad9361-phy/out/voltage0/hardwaregain") == "-89.750000");
+        CHECK(d.attr("ad9361-phy/out/altvoltage1/powerdown") == "1");
+    }
+
+    // =====================================================================
+    // 15. finish() ON A BOARD THAT HAS GONE DOES NOT WAIT FOR IT
+    //
+    //     The drain is for a board that is answering. One whose stream died
+    //     mid-transmission has already been silenced as far as it can be;
+    //     finish() must come straight back and send nothing more.
+    // =====================================================================
+    {
+        FakeTxIiod d;
+        std::string err;
+        CHECK(d.start(err));
+        cascade::test::stockTxBoard(d);
+        d.dieAfterWriteBufs.store(3);
+
+        const unsigned long long abandonedBefore = PlutoTx::writersAbandoned();
+        {
+            PlutoTx tx;
+            CHECK(tx.open(uriFor(d.port())));
+            CHECK(tx.setGainDb(-5.0));
+            CHECK(tx.start());
+            std::vector<std::complex<float>> block(1024, std::complex<float>(0.2f, -0.2f));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (!tx.faulted() && std::chrono::steady_clock::now() < deadline) {
+                tx.write(block.data(), block.size());
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            CHECK(tx.faulted());
+            const std::size_t bufsAtFault = d.writeBufCount();
+
+            const auto t0 = std::chrono::steady_clock::now();
+            tx.finish();
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                    .count();
+            std::printf("finish() after the board vanished took %.1f ms\n", ms);
+            CHECK(ms < 500.0);
+            CHECK(!tx.running());
+            CHECK(d.writeBufCount() == bufsAtFault);
+            CHECK(std::string(tx.lastError()).find("transmit buffer") != std::string::npos);
+        }
+        CHECK(PlutoTx::writersAbandoned() == abandonedBefore);
+        CHECK(d.attr("ad9361-phy/out/voltage0/hardwaregain") == "-89.750000");
+        CHECK(d.attr("ad9361-phy/out/altvoltage1/powerdown") == "1");
     }
 
     return testSummary("test_pluto_tx");

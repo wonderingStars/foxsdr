@@ -2905,12 +2905,16 @@ private:
     // own key and from the spacebar while the page has focus, and it is reset
     // to false at the top of every frame - so a page that stops being drawn
     // stops asking, which is the behaviour a window losing focus should have.
-    // The LATCH is a deliberate switch and has its own failsafe inside
-    // Transmitter. Neither is persisted; core/config.hpp says why at length.
+    // The LATCH is a deliberate switch whose state lives in Transmitter (with
+    // its own failsafe); the page only records a PRESS. All three per-frame
+    // flags reach the transmitter together, in drawUi just before its tick,
+    // through gui::txPageKey - so a page that is not live releases the key.
+    // None is persisted; core/config.hpp says why at length.
     cascade::core::Transmitter transmitter_;
-    bool transmitOpen_ = false;    // is the PAGE on screen
+    bool transmitOpen_ = false;    // is the PAGE open
     bool transmitPttHeld_ = false; // this frame's key request, rebuilt each frame
-    bool transmitLatched_ = false;
+    bool transmitLatchPressed_ = false;  // LATCH clicked this frame, rebuilt each frame
+    bool transmitPageLive_ = false;  // page drawn with its controls THIS frame (not rolled up)
     bool transmitSplit_ = false;
     double transmitSplitHz_ = 145.5e6;
     int transmitModeIndex_ = 0;    // dsp::TxMode

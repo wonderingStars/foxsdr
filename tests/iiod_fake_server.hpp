@@ -46,6 +46,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -298,6 +299,14 @@ public:
     // board unplugged in the middle of a transmission.
     std::atomic<int> dieAfterWriteBufs{-1};
 
+    // While set, a WRITEBUF's payload is taken but its byte count is NOT sent
+    // back, so the driver's writer sits inside that one writeBuf - the way it
+    // sits inside one on a real board while the DAC works through its queue.
+    // What it lets a test do deterministically is put stop()/finish() in
+    // front of a writer that is known to be mid-buffer with the ring full
+    // behind it, instead of racing a loopback socket to get there first.
+    std::atomic<bool> holdWriteBufAcks{false};
+
 private:
     void acceptLoop() {
         while (run_.load()) {
@@ -465,6 +474,9 @@ private:
                     // count. A keyed radio and a dead socket is the state the
                     // driver's fault path exists for.
                     break;
+                }
+                while (holdWriteBufAcks.load() && run_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
                 sendText(s, std::to_string(count) + "\n");
                 continue;
