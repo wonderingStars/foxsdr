@@ -279,10 +279,12 @@ public:
 
     // --- the key -------------------------------------------------------------
 
-    // The PTT, held. Called every frame from the page with whatever the
-    // pointer or the key is doing; false is the resting state and a page that
-    // stops calling it releases the key, which is the behaviour a window
-    // losing focus should have.
+    // The PTT, held. Called every frame by the frame loop in drawUi (through
+    // gui::txPageKey), with what the Transmit page's key is doing, or false when
+    // the page is closed or rolled up; false is the resting state. This object
+    // does no staleness detection of its own - the frame loop is what releases
+    // the key when the page goes away, and tests/test_transmit_page.cpp pins
+    // that wiring.
     void setPttHeld(bool held);
     bool pttHeld() const;
 
