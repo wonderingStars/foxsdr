@@ -100,6 +100,7 @@ public:
         std::lock_guard<std::mutex> lk(mutex_);
         samples_ += n;
         if (peekFirst_.empty() && n > 0) { peekFirst_.assign(s, s + std::min<std::size_t>(n, 64)); }
+        if (n > 0) { lastMag_ = std::abs(s[n - 1]); }
         if (faultAfter > 0 && static_cast<long long>(samples_) >= faultAfter) {
             faulted_ = true;
             error_ = "this test radio was told to fault";
@@ -114,6 +115,12 @@ public:
     std::size_t samples() const {
         std::lock_guard<std::mutex> lk(mutex_);
         return samples_;
+    }
+    // The magnitude of the LAST sample the radio was handed - which, once the
+    // radio has been silenced, is the level the carrier was cut at.
+    float lastMagnitude() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return lastMag_;
     }
 
     std::atomic<int> starts{0};
@@ -133,6 +140,7 @@ private:
     bool faulted_ = false;
     std::string error_;
     std::size_t samples_ = 0;
+    float lastMag_ = 0.0f;
     std::vector<std::complex<float>> peekFirst_;
 };
 
@@ -366,6 +374,81 @@ int main() {
         CHECK(raw->samples() == after);
         // And the operator opened it, so there is no automatic reason to show.
         CHECK(tx.lastAutoUnkeyReason().empty());
+    }
+
+    // =====================================================================
+    // 5b. LETTING GO RAMPS THE CARRIER DOWN - IT DOES NOT CUT IT
+    //
+    //     The modulator's raised-cosine key-up exists so that a transmission
+    //     does not END with a step function, whose spectrum is everywhere:
+    //     key clicks and splatter heard kilohertz away. Before 0.99.35 every
+    //     key-up stopped the TX thread FIRST and lowered the key afterwards,
+    //     so the thread never processed a single block with the key up and
+    //     the radio was silenced at full envelope. Measured in CW, where the
+    //     steady carrier is a constant 1.0 and the level the radio was cut at
+    //     is simply the last sample it was handed.
+    //
+    //     The sink rate is 480 kS/s, so one 10 ms audio block is 4800 radio
+    //     samples. The tail after the key opens is that block's ramp, plus
+    //     whatever blocks were ALREADY DUE when the key went up: a TX thread
+    //     running late writes its overdue blocks back to back, and on a
+    //     loaded build machine that was measured at up to two before the
+    //     ramp (tails of 4800, 9600 and 14400 samples across 20 runs). Six
+    //     blocks is the bound - a tail past that is a transmitter that kept
+    //     going, not one catching up - and after it, nothing at all.
+    // =====================================================================
+    {
+        constexpr std::size_t kBlockAtSink = 4800;
+        // Both ways a key opens on the GUI thread: the PTT released and
+        // ticked, and stop() (a radio swapped out, the window closing).
+        for (int route = 0; route < 2; ++route) {
+            Transmitter tx;
+            auto sink = std::make_unique<RecordingSink>(480000.0);
+            RecordingSink* raw = sink.get();
+            tx.setSink(std::move(sink));
+            tx.setInput(TxInput::Tone);
+            tx.setMode(TxMode::CW);
+
+            if (route == 0) {
+                tx.setPttHeld(true);
+            } else {
+                tx.setLatched(true);
+            }
+            tx.tick();
+            CHECK(tx.transmitting());
+            CHECK(waitTicking(tx, [raw] { return raw->samples() > 48000; },
+                              std::chrono::seconds(2)));
+            // THE CONTROL: a full carrier is going out, so a quiet last sample
+            // below can only be the ramp and not a carrier that was never up.
+            const float steady = raw->lastMagnitude();
+            CHECK(steady > 0.9f);
+
+            const std::size_t before = raw->samples();
+            if (route == 0) {
+                tx.setPttHeld(false);
+                tx.tick();
+            } else {
+                tx.stop();
+            }
+            CHECK(!tx.transmitting());
+            CHECK(!raw->running());
+            const std::size_t tail = raw->samples() - before;
+            const float cutAt = raw->lastMagnitude();
+            std::printf("key-up by %s: carrier %.4f, cut at %.6f after a %zu-sample tail\n",
+                        route == 0 ? "PTT release" : "stop()", steady, cutAt, tail);
+            // THE CHECK THIS BLOCK EXISTS FOR: the radio is silenced at the
+            // bottom of the ramp, not at the top of the carrier.
+            CHECK(cutAt < 0.01f);
+            // ...and the tail that got it there is one ramp, not a
+            // transmitter that kept going when it felt like it.
+            CHECK(tail > 0);
+            CHECK(tail <= 6 * kBlockAtSink + 16);
+            const std::size_t after = raw->samples();
+            tickFor(tx, 60);
+            CHECK(raw->samples() == after);
+            // The operator let go, so there is no automatic reason to show.
+            if (route == 0) { CHECK(tx.lastAutoUnkeyReason().empty()); }
+        }
     }
 
     // =====================================================================

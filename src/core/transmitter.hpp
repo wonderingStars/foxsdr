@@ -344,7 +344,12 @@ public:
 
 private:
     void startThread();
-    void stopThread();
+    // Stops and joins the TX thread, bounded by kThreadJoinWait. playTail
+    // lowers the key and lets the thread play the modulator's ramp down and
+    // silence the radio itself (every key-up the operator makes); without it
+    // the thread is told to stop at once (a thread that already let go).
+    // stateMutex_ must NOT be held.
+    void stopThread(bool playTail);
     bool keyDownLocked();   // stateMutex_ held
     void keyUpLocked(const char* reason);
     void threadBody();
