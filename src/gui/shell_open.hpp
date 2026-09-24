@@ -59,6 +59,11 @@
 
 #include <functional>
 
+#if defined(_WIN32)
+#include <filesystem>
+#include <string>
+#endif
+
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -101,6 +106,27 @@ inline bool runShellOpen(const ShellPauseHooks& hooks, const std::function<bool(
     if (!call) { return false; }
     return call();
 }
+
+#if defined(_WIN32)
+// The downloaded installer's path as ShellExecuteW wants it, WIDENED THE WAY IT
+// WAS NARROWED. core::downloadUpdate returns fs::path::string(), which MSVC
+// narrows through the ANSI code page, and PluginRepo::fetchVerifiedFile wrote
+// the file through fs::path(thatString) - so fs::path's own decoding is the one
+// conversion guaranteed to name the file that was written. A byte-for-byte copy
+// into wchar_t (what launchInstaller did until 2026-09-24) turns every
+// non-ASCII byte into a garbage code unit - char is signed, so 0xE9 became
+// U+FFE9 - and "Install now and restart" failed for any account whose profile
+// folder is not plain ASCII. EMPTY when the string cannot be decoded, which the
+// caller reports as "could not start the installer" rather than launching
+// nothing.
+inline std::wstring installerPathWide(const std::string& narrowPath) {
+    try {
+        return std::filesystem::path(narrowPath).wstring();
+    } catch (...) {
+        return std::wstring();
+    }
+}
+#endif
 
 #if !defined(_WIN32)
 // Hands `target` to xdg-open (or, when FOXSDR_SHELL_OPEN_EXE names one, a

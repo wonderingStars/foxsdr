@@ -19,9 +19,22 @@
 
 #include "test_check.hpp"
 
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -113,6 +126,47 @@ void checkWatchdogPauseCounting() {
     CHECK(w.pausesTaken() == before + 3u);
 }
 
+#if defined(_WIN32)
+// THE INSTALLER'S PATH MUST NAME THE FILE THAT WAS DOWNLOADED (bug hunt
+// 2026-09-24, updater-installer-2). core::downloadUpdate returns
+// fs::path::string() - narrowed through the ANSI code page - and
+// launchInstaller used to widen it by copying each byte into a wchar_t, so any
+// non-ASCII character in %TEMP% (the profile folder is named after the
+// account: "Jose" with an acute e, "Muller" with an umlaut) became a garbage
+// code unit and ShellExecuteW was handed a path that names nothing.
+//
+// A REAL FILE, narrowed exactly the way downloadUpdate narrows it, so the check
+// is "does the widened path open the file that is there" rather than a
+// comparison against a string this test invented.
+void checkInstallerPathNonAscii() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path dir = fs::temp_directory_path(ec) /
+                         (L"foxsdr_shellpath_Jos\u00e9_M\u00fcller_" +
+                          std::to_wstring(::GetCurrentProcessId()));
+    fs::create_directories(dir, ec);
+    const fs::path file = dir / L"foxsdr-setup-9.9.9.exe";
+    { std::ofstream(file, std::ios::binary) << "not really an installer"; }
+    CHECK(fs::exists(file, ec));
+
+    // What downloadUpdate hands back in outPath (updater.cpp: dest.string()).
+    const std::string narrow = file.string();
+    const std::wstring wide = cascade::gui::installerPathWide(narrow);
+    CHECK(wide == file.wstring());
+    const bool found = ::GetFileAttributesW(wide.c_str()) != INVALID_FILE_ATTRIBUTES;
+    CHECK(found);
+    if (!found) { std::printf("  the widened installer path names no file on disk\n"); }
+
+    // ASCII is unchanged, and an empty path is empty - which launchInstaller
+    // answers with "could not start" rather than a ShellExecuteW of nothing.
+    CHECK(cascade::gui::installerPathWide("C:\\Temp\\foxsdr-setup-1.0.0.exe") ==
+          L"C:\\Temp\\foxsdr-setup-1.0.0.exe");
+    CHECK(cascade::gui::installerPathWide("").empty());
+
+    fs::remove_all(dir, ec);
+}
+#endif
+
 }  // namespace
 
 int main() {
@@ -120,5 +174,8 @@ int main() {
     checkResultPassesThrough();
     checkResumeOnThrow();
     checkWatchdogPauseCounting();
+#if defined(_WIN32)
+    checkInstallerPathNonAscii();
+#endif
     return testSummary("test_shell_open");
 }

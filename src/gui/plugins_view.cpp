@@ -1071,6 +1071,16 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck,
             // path the module was loaded from.
             py = drawOperatingWell(pdl, po.x, py, innerW, m, model.receiverRunning) + 10.0f;
 
+            // THE FILE IS NOT THE ONE THAT WAS INSTALLED. PluginRepo re-hashes
+            // every recorded module on each scan; this is the one place its
+            // finding reaches a person. In alarm ink, loaded or not, and in
+            // PluginRepo's own words - the file and the module it names are
+            // the evidence, and nothing on this plate should paraphrase them.
+            if (!m.integrityNote.empty()) {
+                drawNote(pdl, ImVec2(po.x, py), innerW, theme::kAlarm, m.integrityNote.c_str());
+                py += noteHeight(innerW, m.integrityNote.c_str()) + 8.0f;
+            }
+
             // ---- the actions ---------------------------------------------
             // Taller than a row key because these are the consequential ones -
             // and measured, because "consequential" is no protection against a

@@ -1695,6 +1695,19 @@ bool PluginRepo::loadInventory(const std::string& pluginsDir, PluginInventory& o
     return ok;
 }
 
+std::string PluginRepo::changedSinceInstallNote(const std::vector<InstalledPlugin>& records,
+                                                const std::string& file) {
+    if (file.empty()) { return {}; }
+    for (const InstalledPlugin& r : records) {
+        if (!r.digestMismatch || !iequalsAscii(r.file, file)) { continue; }
+        return "\"" + r.file + "\" is not the file that was installed for \"" + r.id +
+               "\": its bytes no longer match the sha256 recorded when it was installed. "
+               "If you did not replace it yourself, remove it and fit it again from the "
+               "plugin store.";
+    }
+    return {};
+}
+
 // ---------------------------------------------------------------------------
 // Cached catalogue policy
 // ---------------------------------------------------------------------------

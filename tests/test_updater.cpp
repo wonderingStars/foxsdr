@@ -12,8 +12,13 @@
 #include "core/updater.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "test_check.hpp"
 
@@ -368,6 +373,113 @@ void testDownloadHonoursACancelFlag() {
     CHECK(p2.empty());
 }
 
+// A STALLED CHECK, as a fake: the work blocks on a gate the test holds, which
+// is what a GET stuck inside WinHttpReceiveResponse looks like from outside.
+// The gate also opens by itself after kFailsafe, so the UNFIXED code - whose
+// owner waits for the worker - finishes the test red instead of hanging it.
+struct CheckGate {
+    std::mutex m;
+    std::condition_variable cv;
+    bool open = false;
+    std::atomic<bool> returned{false};
+};
+constexpr auto kFailsafe = std::chrono::milliseconds(3000);
+
+cascade::core::UpdateCheckTask::Work gatedCheck(const std::shared_ptr<CheckGate>& g) {
+    return [g]() {
+        {
+            std::unique_lock<std::mutex> lk(g->m);
+            g->cv.wait_for(lk, kFailsafe, [&g] { return g->open; });
+        }
+        cascade::core::UpdateCheckOutcome o;
+        o.ok = true;
+        o.info.newer = true;
+        o.info.version = "9.9.9";
+        g->returned.store(true);
+        return o;
+    };
+}
+
+void openGate(CheckGate& g) {
+    {
+        std::lock_guard<std::mutex> lk(g.m);
+        g.open = true;
+    }
+    g.cv.notify_all();
+}
+
+void testAStalledCheckDoesNotHoldTeardown() {
+    // THE FAILURE THIS GUARDS (bug hunt 2026-09-24, updater-installer-1). The
+    // once-per-launch check ran in a std::async future that was an AppWindow
+    // member; that future's destructor waits for the worker, and nothing could
+    // make a GET stalled in WinHTTP return early. Quitting while foxsdr.com was
+    // slow therefore sat in ~AppWindow for WinHTTP's own timeouts.
+    //
+    // DETERMINISTIC: the worker cannot return before the test opens the gate,
+    // and the test opens it only after the owner is gone - so a destructor that
+    // waits for the worker is caught every time, by the failsafe's full length.
+    using clock = std::chrono::steady_clock;
+    const auto gate = std::make_shared<CheckGate>();
+    auto t0 = clock::now();
+    {
+        cascade::core::UpdateCheckTask task;
+        task.start(gatedCheck(gate));
+        CHECK(task.running());
+        t0 = clock::now();
+    }  // the application quits here, with the check still stalled
+    const auto heldMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count();
+    const bool stillStalled = !gate->returned.load();
+    std::printf("  teardown with a stalled check took %lld ms (grace %lld ms)%s\n",
+                static_cast<long long>(heldMs),
+                static_cast<long long>(cascade::core::UpdateCheckTask::kQuitGrace.count()),
+                stillStalled ? "" : " - it waited for the worker");
+    CHECK(stillStalled);
+    CHECK(heldMs < 1500);
+    CHECK(heldMs >= cascade::core::UpdateCheckTask::kQuitGrace.count() - 20);
+
+    // THE ABANDONED WORKER STILL FINISHES, on its own, into its own result -
+    // nothing it touches went with the owner.
+    openGate(*gate);
+    const auto deadline = clock::now() + std::chrono::seconds(5);
+    while (!gate->returned.load() && clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(gate->returned.load());
+}
+
+void testACheckThatFinishesIsHandedOver() {
+    // The ordinary path: poll() hands the outcome over exactly once and never
+    // blocks while the work is still running.
+    const auto gate = std::make_shared<CheckGate>();
+    cascade::core::UpdateCheckTask task;
+    cascade::core::UpdateCheckOutcome out;
+    CHECK(!task.poll(out));  // nothing started
+    task.start(gatedCheck(gate));
+    CHECK(!task.poll(out));  // started, still stalled: no answer, no wait
+    // A second start while one is in flight is ignored, not a second request.
+    std::atomic<bool> secondRan{false};
+    task.start([&secondRan] {
+        secondRan.store(true);
+        return cascade::core::UpdateCheckOutcome{};
+    });
+    openGate(*gate);
+    bool got = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!got && std::chrono::steady_clock::now() < deadline) {
+        got = task.poll(out);
+        if (!got) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    }
+    CHECK(got);
+    CHECK(out.ok);
+    CHECK(out.info.version == "9.9.9");
+    CHECK(!task.running());
+    CHECK(!task.poll(out));  // once
+    CHECK(!secondRan.load());
+    // Nothing running: reap is immediate and says so.
+    CHECK(task.reap());
+}
+
 void testEndpointIsHttpsAndOnTheProjectsDomain() {
     const std::string url = cascade::core::updateEndpoint();
     CHECK(url.rfind("https://", 0) == 0);
@@ -391,6 +503,8 @@ int main() {
     testNotesSurviveAndMalformedOnesAreDropped();
     testDownloadRefusesWithoutAnUpdate();
     testDownloadHonoursACancelFlag();
+    testACheckThatFinishesIsHandedOver();
+    testAStalledCheckDoesNotHoldTeardown();
     testEndpointIsHttpsAndOnTheProjectsDomain();
     return testSummary("test_updater");
 }

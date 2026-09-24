@@ -36,6 +36,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -90,7 +91,9 @@ public:
 
     // Consumer side, called from the TX thread. Returns how many samples were
     // available (< n when the microphone has not produced them yet - the
-    // caller pads or waits; it is never made to block here).
+    // caller pads or waits; it is never made to wait for audio here). The one
+    // thing it can wait for is a drain() in progress on another thread, which
+    // is a bounded in-memory copy of at most one ring (consumerMutex_).
     std::size_t read(float* dst, std::size_t n);
 
     // How many samples are waiting. The TX thread uses it to decide whether a
@@ -131,6 +134,14 @@ private:
     static constexpr std::size_t kRingCapacity = std::size_t{1} << 15;
 
     dsp::SpscRing<float> ring_;
+    // THE RING HAS ONE PRODUCER AND TWO WOULD-BE CONSUMERS: the TX thread's
+    // read(), and drain() - called by the Transmitter (under its own state
+    // lock) and by open(), which since 2026-09-24 runs on a gui::AudioOpen
+    // worker while the frame loop, and therefore the key, stays live. An SPSC
+    // ring read from two threads at once can move its read index past the
+    // write index, so the two are serialised here. The realtime PRODUCER
+    // (pushBlock) never takes it.
+    std::mutex consumerMutex_;
     std::atomic<std::uint64_t> overruns_{0};
     // Written by the realtime callback, exchanged to 0 by takePeak().
     std::atomic<float> peak_{0.0f};

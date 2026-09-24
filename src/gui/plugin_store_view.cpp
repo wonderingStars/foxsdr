@@ -1328,6 +1328,12 @@ ImU32 storeInstallColour(StoreInstallState s) {
     return theme::kCream;
 }
 
+void forgetCatalogueConsent(PluginStoreDeck& deck) {
+    deck.selected = -1;
+    deck.legalAck = false;
+    deck.addAllAck = false;
+}
+
 // ===========================================================================
 // ADD ALL - what it picks, and what the key says
 // ===========================================================================

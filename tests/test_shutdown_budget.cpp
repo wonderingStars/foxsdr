@@ -438,6 +438,17 @@ const KnownWait kKnownWaits[] = {
      "AudioOpen::reap()'s grace before a still-blocked open is abandoned: called from "
      "~AppWindow after watchdog_.stop(), outside the budgeted stretch, exactly like "
      "app_window.cpp's kQuitGrace"},
+    // THE UPDATE CHECK (bug hunt 2026-09-24, updater-installer-1). Its grace
+    // is spent by UpdateCheckTask::reap(), which ~AppWindow calls beside
+    // audioOpen_.reap() - after watchdog_.stop(), outside the budgeted stretch -
+    // and it is what replaced a std::async future whose destructor waited out
+    // WinHTTP's timeouts there instead.
+    {"src/core/updater.hpp", "kQuitGrace", 0,
+     "UpdateCheckTask::reap()'s grace before a still-stalled update check is abandoned: "
+     "called from ~AppWindow after watchdog_.stop(), outside the budgeted stretch, exactly "
+     "like app_window.cpp's kQuitGrace"},
+    {"src/core/updater.hpp", "kNoWait", 0,
+     "zero by construction - UpdateCheckTask::poll()'s once-a-frame ready-poll, not a wait"},
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},

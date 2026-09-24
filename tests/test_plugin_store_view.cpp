@@ -825,6 +825,48 @@ void testEveryLanguageStoreWords() {
     CHECK(oneColumn == 0);
 }
 
+// A CATALOGUE REPLACED TAKES EVERY CONSENT WITH IT (bug hunt 2026-09-24,
+// plugin-store-1). The ADD ALL tick used to survive CHECK NOW for the life of
+// the process, so a tick given against one catalogue's notices silently covered
+// a module - or a reworded notice - that arrived in the next one, and the key
+// read ADD ALL PLUGINS over a notice nobody had read.
+void testCatalogueConsentForgotten() {
+    // The first catalogue: one plain module, one with a maker's notice. The
+    // user reads the notice and ticks the ADD ALL box.
+    std::vector<StoreModule> first = {row(), row()};
+    first[1].plate.name = "406 MHz Distress Beacon Decoder";
+    first[1].plate.legalNotice = "Interception may be an offence where you are.";
+    first[1].blockedReason = "the legal notice must be acknowledged first";
+    first[1].blockedReasonIfAcknowledged.clear();
+    cascade::gui::PluginStoreDeck deck;
+    deck.selected = 1;
+    deck.legalAck = true;
+    deck.addAllAck = true;
+    CHECK(planAddAll(readCatalogue(first), deck.addAllAck).label == "ADD ALL PLUGINS");
+
+    // CHECK NOW: the catalogue is replaced.
+    cascade::gui::forgetCatalogueConsent(deck);
+    CHECK(deck.selected == -1);
+    CHECK(!deck.legalAck);
+    CHECK(!deck.addAllAck);
+
+    // The next catalogue carries a NEW module with a notice of its own. The
+    // plan drawn from the deck as it now stands must hold it back and name it.
+    std::vector<StoreModule> second = first;
+    second.push_back(row());
+    second[2].plate.name = "Pager Decoder";
+    second[2].plate.legalNotice = "Reading pager traffic may be unlawful where you are.";
+    second[2].blockedReason = "the legal notice must be acknowledged first";
+    second[2].blockedReasonIfAcknowledged.clear();
+    const AddAllPlan p = planAddAll(readCatalogue(second), deck.addAllAck);
+    CHECK(p.heldByNotice == 2);
+    CHECK(hasNaming(p.skipped, "Pager Decoder"));
+    CHECK(p.label == "ADD 1 PLUGIN");
+    if (p.label != "ADD 1 PLUGIN") {
+        std::printf("  after a catalogue refresh the key reads \"%s\"\n", p.label.c_str());
+    }
+}
+
 int main() {
     testKindTag();
     testReachSummary();
@@ -835,6 +877,7 @@ int main() {
     testProseSize();
     testInstallState();
     testAddAllPlan();
+    testCatalogueConsentForgotten();
 
     // THE REAL FACES for the measured half, as test_bench_text_fits loads them.
     IMGUI_CHECKVERSION();

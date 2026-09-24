@@ -71,8 +71,10 @@ bool AudioIn::open(int deviceIndex, double sampleRateHz) {
     if (info == nullptr || info->maxInputChannels < 1) { return false; }
 
     // Drop anything left from a previous session, so a reopen starts from
-    // silence rather than from something said before the device changed.
-    // Safe single-threaded consumption: no callback exists yet.
+    // silence rather than from something said before the device changed. No
+    // callback exists yet, so nothing is PRODUCING - but the TX thread may be
+    // CONSUMING (the transmitter can be keyed while the GUI's worker is in
+    // here), which is why drain() and read() share consumerMutex_.
     drain();
 
     PaStreamParameters in{};
@@ -126,10 +128,12 @@ bool AudioIn::streamAlive() const {
 
 std::size_t AudioIn::read(float* dst, std::size_t n) {
     if (dst == nullptr || n == 0) { return 0; }
+    std::lock_guard<std::mutex> lk(consumerMutex_);
     return ring_.read(dst, n);
 }
 
 void AudioIn::drain() {
+    std::lock_guard<std::mutex> lk(consumerMutex_);
     float scratch[256];
     while (ring_.read(scratch, sizeof(scratch) / sizeof(scratch[0])) != 0) {}
 }

@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "core/plugin_repo.hpp"
@@ -316,6 +318,47 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     }
     outPath = dest.string();
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// UpdateCheckTask
+// ---------------------------------------------------------------------------
+
+// A member future of std::async blocks in its destructor, so the destructor
+// reaps first: the future is either taken or handed to a drainer by the time
+// the member itself is destroyed.
+UpdateCheckTask::~UpdateCheckTask() { (void)reap(); }
+
+void UpdateCheckTask::start(Work work) {
+    if (future_.valid() || !work) { return; }
+    future_ = std::async(std::launch::async, std::move(work));
+}
+
+bool UpdateCheckTask::poll(UpdateCheckOutcome& out) {
+    if (!future_.valid()) { return false; }
+    if (future_.wait_for(kNoWait) != std::future_status::ready) { return false; }
+    out = future_.get();
+    return true;
+}
+
+bool UpdateCheckTask::reap(std::chrono::milliseconds grace) {
+    if (!future_.valid()) { return true; }
+    if (future_.wait_for(grace) == std::future_status::ready) {
+        (void)future_.get();
+        return true;
+    }
+    // Still inside the network call. The drainer owns the future now, so its
+    // blocking destructor runs on a thread nobody is waiting for; the outcome
+    // it takes is discarded, because nobody is left to show it to.
+    // An exception out of a detached thread is std::terminate, so the drainer
+    // swallows one: there is no caller left for it to reach.
+    std::thread([f = std::move(future_)]() mutable {
+        try {
+            (void)f.get();
+        } catch (...) {
+        }
+    }).detach();
+    return false;
 }
 
 }  // namespace cascade::core
