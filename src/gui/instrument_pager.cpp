@@ -553,10 +553,10 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
         // What the face is counting from: the plugin's own event number.
         if (have) {
-            char seq[32];
-            cascade::core::formatUtf8(seq, sizeof seq, tr("EVENT %u"),
+            std::string seq;
+            cascade::core::formatUtf8(seq, tr("EVENT %u"),
                           static_cast<unsigned>(in.state.seq));
-            engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f), seq,
+            engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f), seq.c_str(),
                     theme::kInkFaint);
         } else {
             engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f),

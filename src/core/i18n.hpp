@@ -113,16 +113,39 @@ std::string systemLocale();
 // primary language subtag ("pt-PT" finds "pt-BR" when that is the only
 // Portuguese) - and falls back to "en". Any other setting is a code from
 // languages(), matched case-insensitively and returned in its canonical
-// spelling, or "en" when no catalogue has it.
+// spelling, or "en" when no catalogue has it. Either way a catalogue that is
+// not drawable() here resolves to "en".
 std::string resolveFor(const std::string& setting, const std::string& locale);
 
 // The catalogue a language tag would pick by the auto rule above, or "" when
 // none would (English included: "en-GB" answers ""). The settings page uses
-// it to ask "is there a catalogue for the chosen country's language".
+// it to ask "is there a catalogue for the chosen country's language". A
+// catalogue that is not drawable() here is not offered.
 std::string matchCatalogue(const std::string& tag);
 
 // The entry in languages() for `code` (exact spelling), or null.
 const Language* findLanguage(const std::string& code);
+
+// --- Whether this machine can DRAW a language --------------------------------
+//
+// A catalogue can exist and still be unreadable here: Chinese, Japanese and
+// Korean are drawn in a typeface from the operating system (core/scripts.hpp
+// says why), and a Linux desktop without one would letter the whole interface
+// in boxes. So the font layer installs a predicate, and the language rules
+// above consult it: "auto" never resolves to a language this machine cannot
+// draw - it falls back to English - and neither does a saved choice, which
+// is KEPT (the fonts may be installed tomorrow) but not applied.
+//
+// With no predicate installed every catalogue is drawable - the state the
+// tests of the rules above run in, and what a build with no fonts layer gets.
+using DrawablePredicate = bool (*)(const std::string& code);
+void setDrawablePredicate(DrawablePredicate p);
+bool drawable(const std::string& code);
+
+// Every distinct code point (>= U+0020) the catalogue for `code` draws - its
+// name and every translation - in ascending order. Empty for English and for
+// a code with no catalogue. What the font layer checks a typeface against.
+std::vector<unsigned int> codePoints(const std::string& code);
 
 // Adds a catalogue from the text of a resources/lang/<code>.json file:
 //     {"code":"pt-BR","name":"Português (Brasil)","englishName":"Portuguese

@@ -21,6 +21,7 @@
 namespace {
 
 using cascade::core::copyVisibleUtf8;
+using cascade::core::formatText;
 using cascade::core::formatUtf8;
 using cascade::core::upperLegend;
 using cascade::core::utf8CharLen;
@@ -120,6 +121,62 @@ void testFormat() {
     CHECK(formatUtf8(nullptr, 0, "%d-%d", 10, 20) == 5);
 }
 
+// THE STRING FORM IS NEVER CUT. A translated sentence takes two or three bytes
+// a letter in Russian, Greek or Chinese, so a line that fitted its English
+// buffer comfortably lost its end on exactly those screens. The std::string
+// overloads size the result to the text, so the check is the whole sentence,
+// byte for byte, with every kind of conversion in it - and a length well past
+// any buffer the interface ever sized for English.
+void testFormatWhole() {
+    std::printf("  formatUtf8(std::string&) / formatText: a long translation arrives whole\n");
+    const char* ru =
+        "Воздушное судно %s не передавало своё положение уже %.1f с, а всего за "
+        "последний час от него было принято %d сообщений; если так будет "
+        "продолжаться, отметка будет удалена с карты, и её след исчезнет вместе с "
+        "ней, поэтому проверьте антенну, кабель и выбранную частоту приёмника.";
+    const std::string want =
+        "Воздушное судно G-ABCD не передавало своё положение уже 12.5 с, а всего за "
+        "последний час от него было принято 42 сообщений; если так будет "
+        "продолжаться, отметка будет удалена с карты, и её след исчезнет вместе с "
+        "ней, поэтому проверьте антенну, кабель и выбранную частоту приёмника.";
+    CHECK(want.size() > 400);  // the premise: longer than any fixed buffer it replaces
+    std::string got = "stale text that must be replaced";
+    const int r = formatUtf8(got, ru, "G-ABCD", 12.5, 42);
+    if (got != want) {
+        std::printf("      got %zu bytes, want %zu: \"%s\"\n", got.size(), want.size(), got.c_str());
+    }
+    CHECK(got == want);
+    CHECK(r == static_cast<int>(want.size()));
+    CHECK(wellFormed(got.c_str()));
+    CHECK(formatText(ru, "G-ABCD", 12.5, 42) == want);
+
+    // Chinese: three bytes a character, and %u / %s between them.
+    const std::string zh = formatText(
+        "已收到 %u 条来自 %s 的报文，其中 %u 条校验失败；请检查天线、馈线和接收机的增益设置，"
+        "并确认所选频率与当地的航空无线电频率规划一致，然后再次尝试接收。",
+        17u, "ACARS", 3u);
+    const std::string zhWant =
+        "已收到 17 条来自 ACARS 的报文，其中 3 条校验失败；请检查天线、馈线和接收机的增益设置，"
+        "并确认所选频率与当地的航空无线电频率规划一致，然后再次尝试接收。";
+    CHECK(zh == zhWant);
+
+    // An empty format is an empty string, and clears what was there.
+    std::string empty = "was here";
+    CHECK(formatUtf8(empty, "") == 0);
+    CHECK(empty.empty());
+    CHECK(formatText("").empty());
+    // %% is one percent sign.
+    CHECK(formatText("100%% %s", "ok") == "100% ok");
+    std::string pct;
+    CHECK(formatUtf8(pct, "%d%%", 50) == 3);
+    CHECK(pct == "50%");
+    // The destination may be an argument: the arguments are read before it
+    // is written.
+    std::string grow = "ab";
+    formatUtf8(grow, "%s+%s", grow.c_str(), "x");
+    CHECK(grow == "ab+x");
+}
+
 void testCopyVisible() {
     std::printf("  copyVisibleUtf8: stops at ##, never splits a character\n");
     char buf[96];
@@ -137,7 +194,112 @@ void testCopyVisible() {
     }
 }
 
+// THE NEXT ALPHABETS (0.99.28): the catalogues being translated now are
+// written in Cyrillic, Greek, Vietnamese, Turkish, Romanian, the Baltic and
+// Central European alphabets, and CJK. Each case below is a word a legend in
+// that language could really carry.
+void testUpperScripts() {
+    std::printf("  upperLegend: Cyrillic, Greek, Vietnamese, Turkish and the rest\n");
+    auto expect = [](const char* in, const char* want, const char* lang = "") {
+        const std::string got = upperLegend(in, lang);
+        if (got != want) {
+            std::printf("      upperLegend(\"%s\", \"%s\") = \"%s\", want \"%s\"\n", in, lang,
+                        got.c_str(), want);
+        }
+        CHECK(got == want);
+    };
+    // Cyrillic: Russian, Ukrainian, Bulgarian, and the Serbian / Macedonian
+    // letters that sit in the U+0450 row rather than beside their capitals.
+    expect("Настройки приёмника", "НАСТРОЙКИ ПРИЁМНИКА");
+    expect("ґанок, їжак, єнот", "ҐАНОК, ЇЖАК, ЄНОТ");
+    expect("ѝ ђ љ њ ћ џ ѓ ќ ѕ", "Ѝ Ђ Љ Њ Ћ Џ Ѓ Ќ Ѕ");
+    // Greek: capitals, the final sigma, and the tonos that all-caps drops.
+    expect("Ρυθμίσεις", "ΡΥΘΜΙΣΕΙΣ");
+    expect("λόγος", "ΛΟΓΟΣ");
+    expect("Έξοδος", "ΕΞΟΔΟΣ");  // an accented CAPITAL loses it too
+    expect("Ευρώπη", "ΕΥΡΩΠΗ");
+    expect("ΐ ΰ ϊ ϋ", "Ϊ Ϋ Ϊ Ϋ");  // the dialytika stays
+    expect("προϊόν", "ΠΡΟΪΟΝ");
+    // A dropped tonos must not create a diphthong the word does not have.
+    expect("Μάιος", "ΜΑΪΟΣ");
+    expect("άυλος", "ΑΫΛΟΣ");
+    expect("ρολόι", "ΡΟΛΟΪ");
+    expect("είναι", "ΕΙΝΑΙ");  // a real diphthong, unaccented: left alone
+    expect("α\xCC\x81", "Α");  // decomposed: alpha + combining acute
+    expect("e\xCC\x81", "E\xCC\x81");  // ...which is kept after a Latin letter
+    // Vietnamese: the vowels with two marks, and ơ / ư from Latin Extended-B.
+    expect("Tiếng Việt", "TIẾNG VIỆT");
+    expect("Người dùng", "NGƯỜI DÙNG");
+    expect("ạ ả ấ ầ ẩ ẫ ậ ắ ặ ẻ ẽ ế ệ ỉ ị ọ ỏ ố ồ ổ ỗ ộ ớ ờ ở ỡ ợ ụ ủ ứ ừ ử ữ ự ỳ ỵ ỷ ỹ đ",
+           "Ạ Ả Ấ Ầ Ẩ Ẫ Ậ Ắ Ặ Ẻ Ẽ Ế Ệ Ỉ Ị Ọ Ỏ Ố Ồ Ổ Ỗ Ộ Ớ Ờ Ở Ỡ Ợ Ụ Ủ Ứ Ừ Ử Ữ Ự Ỳ Ỵ Ỷ Ỹ Đ");
+    // Romanian (comma-below, Latin Extended-B), Czech, Slovak, Hungarian,
+    // the Baltic languages, Catalan, Croatian digraphs, and ÿ.
+    expect("setări: ș ț", "SETĂRI: Ș Ț");
+    expect("řeč ůl ěž ľ ĺ ŕ ô", "ŘEČ ŮL ĚŽ Ľ Ĺ Ŕ Ô");
+    expect("őrző űr", "ŐRZŐ ŰR");
+    expect("ų į ė ū ģ ķ ļ ņ õ", "Ų Į Ė Ū Ģ Ķ Ļ Ņ Õ");
+    expect("col·lecció ŀ", "COL·LECCIÓ Ŀ");
+    expect("ǆ ǉ ǌ ǅ", "Ǆ Ǉ Ǌ Ǆ");
+    expect("ÿ", "Ÿ");
+    // Turkish and Azerbaijani keep the dot on i; nobody else does. Dotless ı
+    // is I everywhere.
+    expect("istasyon", "İSTASYON", "tr");
+    expect("Bilgi", "BİLGİ", "tr-TR");
+    expect("bilgi", "BİLGİ", "az-Latn");
+    expect("istasyon", "ISTASYON");
+    expect("istasyon", "ISTASYON", "tri");  // a different language that starts "tr"
+    expect("ılık", "ILIK", "tr");
+    expect("ılık", "ILIK");
+    // Han, kana and Hangul have no case.
+    expect("设置 繁體 ひらがな カタカナ 한국어", "设置 繁體 ひらがな カタカナ 한국어");
+}
+
+// THE COUNTRY LIST'S SEARCH. What the reader types is folded the same way as
+// every name, so case and the usual accents never stop a match - in Cyrillic
+// and Greek as much as in Latin. And the Latin keys are what they were, so the
+// six shipped languages sort their country lists exactly as before.
+void testFoldForSearch() {
+    std::printf("  foldForSearch: case and accents off in Latin, Cyrillic, Greek, Vietnamese\n");
+    using cascade::core::foldForSearch;
+    auto finds = [](const char* typed, const char* name) {
+        const bool hit = foldForSearch(name).find(foldForSearch(typed)) != std::string::npos;
+        if (!hit) {
+            std::printf("      \"%s\" does not find \"%s\" (\"%s\" in \"%s\")\n", typed, name,
+                        foldForSearch(typed).c_str(), foldForSearch(name).c_str());
+        }
+        return hit;
+    };
+    // Latin: unchanged from the key the list always used.
+    CHECK(foldForSearch("\xC3\x96sterreich") == "osterreich");
+    CHECK(foldForSearch("C\xC3\xB4te d'Ivoire") == "cote d'ivoire");
+    CHECK(foldForSearch("BRASIL") == "brasil");
+    CHECK(finds("osterreich", "\xC3\x96sterreich"));
+    // Cyrillic, either case typed.
+    CHECK(finds("россия", "Россия"));
+    CHECK(finds("РОССИЯ", "Россия"));
+    CHECK(finds("україна", "Україна"));
+    CHECK(finds("ЁЛКА", "ёлка"));
+    CHECK(finds("бълг", "България"));
+    // Greek: case and the tonos.
+    CHECK(finds("ελλαδα", "Ελλάδα"));
+    CHECK(finds("ΕΛΛΆΔΑ", "Ελλάδα"));
+    CHECK(finds("κυπρος", "Κύπρος"));
+    // Vietnamese, Romanian and Turkish letters beyond Latin Extended-A.
+    CHECK(finds("viet nam", "Việt Nam"));
+    CHECK(finds("VIỆT", "Việt Nam"));
+    CHECK(finds("romania", "România"));
+    CHECK(finds("tara", "Țara"));
+    CHECK(finds("turkiye", "Türkiye"));
+    // And a mismatch is still a mismatch.
+    CHECK(foldForSearch("россия").find(foldForSearch("польша")) == std::string::npos);
+    // Han and Hangul pass through, so a CJK name still finds itself.
+    CHECK(finds("中国", "中国"));
+    CHECK(finds("한민", "대한민국"));
+}
+
 void testUpper() {
+    testUpperScripts();
+    testFoldForSearch();
     std::printf("  upperLegend: Latin-1 and Latin Extended-A capitals, ASCII unchanged\n");
     CHECK(upperLegend("Satellites MAP") == "SATELLITES MAP");
     CHECK(upperLegend("Portugu\xC3\xAAs (Brasil)") == "PORTUGU\xC3\x8AS (BRASIL)");
@@ -155,6 +317,7 @@ int main() {
     testCharLen();
     testFloor();
     testFormat();
+    testFormatWhole();
     testCopyVisible();
     testUpper();
     return testSummary("test_utf8_text");

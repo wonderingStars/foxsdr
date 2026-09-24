@@ -248,14 +248,11 @@ std::string sdrPlayApiAdvice(bool resolved, float version) {
             "and restart FoxSDR.");
     }
     if (version > 0.0f && !abi::versionAtLeast(version, abi::kMinApiVersion)) {
-        char buf[320];
-        cascade::core::formatUtf8(
-            buf, sizeof(buf),
+        return cascade::core::formatText(
             cascade::i18n::tr(
                 "The installed SDRplay API is version %.2f; FoxSDR needs %.2f or newer - "
                 "update it from sdrplay.com and restart FoxSDR."),
             static_cast<double>(version), static_cast<double>(abi::kMinApiVersion));
-        return std::string(buf);
     }
     return std::string();
 }
@@ -310,6 +307,13 @@ bool sessionAcquire(const abi::Api& api, std::string& error) {
         return false;
     }
     std::lock_guard<std::mutex> lk(api.sessionMutex);
+    // A LOST SESSION IS NOT HANDED OUT AGAIN - see markSessionLost. Checked
+    // before the count, because the count is exactly what keeps the stale
+    // session "open": an orphaned reference is never released.
+    if (api.sessionLost) {
+        error = sdrPlaySessionLostSentence();
+        return false;
+    }
     if (api.sessions > 0) {
         ++api.sessions;
         return true;
@@ -345,6 +349,39 @@ void sessionRelease(const abi::Api& api) {
         api.Close();
         api.version = 0.0f;
     }
+}
+
+// THE PROCESS'S SESSION IS FINISHED, NOT JUST THIS DEVICE'S (0.99.28).
+//
+// The file header has always said that once a worker is abandoned inside the
+// vendor DLL, or the service declares itself gone, "this process's SDRplay
+// session is finished until FoxSDR is restarted" - but only the device that saw
+// it obeyed. Its session is ORPHANED rather than released (closing it would be
+// another unbounded call into a DLL still holding our thread), so the process
+// table's count never returns to zero and every later sessionAcquire handed
+// the SAME stale session to the next scan and the next open(). The 0.99.27
+// crash report is that scan: an access violation inside the vendor's own
+// GetDevices copy (sdrplay_api.dll +7098 -> VCRUNTIME140), minutes after the
+// log said a retune had been abandoned and the radio closed without
+// ReleaseDevice. Latched on the table, so it is process-wide in the field and
+// per-fake in the tests, and logged once.
+void markSessionLost(const abi::Api& api, const char* why) {
+    bool first = false;
+    {
+        std::lock_guard<std::mutex> lk(api.sessionMutex);
+        first = !api.sessionLost;
+        api.sessionLost = true;
+    }
+    if (first) {
+        core::diagWarnf("source: SDRplay API session lost - %s; no further SDRplay API calls are "
+                        "made until FoxSDR is restarted",
+                        why);
+    }
+}
+
+bool sessionIsLost(const abi::Api& api) {
+    std::lock_guard<std::mutex> lk(api.sessionMutex);
+    return api.sessionLost;
 }
 
 }  // namespace
@@ -614,6 +651,12 @@ const char* sdrPlayControlHungSentence() {
            "then open the radio again";
 }
 
+const char* sdrPlaySessionLostSentence() {
+    return "the SDRplay service stopped answering while FoxSDR was using it, so FoxSDR will not "
+           "call the SDRplay API again until it is restarted - restart the SDRplay API service, "
+           "then restart FoxSDR";
+}
+
 bool sdrPlayEnumerationHeldOff() {
     return enumerationHeldOffAt(std::chrono::steady_clock::now());
 }
@@ -624,7 +667,16 @@ void sdrPlayClearEnumerationHoldOffForTest() {
 }
 
 std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
-    // THE HOLD-OFF FIRST, and it touches the API not at all. A service that
+    // A LOST SESSION BEFORE ANYTHING, and no worker either: nothing is going
+    // to be asked, so there is nothing to bound. The 0.99.27 crash was this
+    // scan's GetDevices running through a session the driver had already
+    // orphaned - see markSessionLost. Unlike the hold-off this never expires.
+    if (sessionIsLost(api)) {
+        setEnumerationSkip(sdrPlaySessionLostSentence());
+        return {};
+    }
+
+    // THE HOLD-OFF NEXT, and it touches the API not at all. A service that
     // wedged a moment ago is still wedged, and the source combo scans every
     // time it opens - so without this, each of those would spend another
     // kEnumerateWait of GUI thread and abandon another worker inside it.
@@ -735,6 +787,9 @@ bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
     // own Uninit (0.97.1) - every caller holds devMutex_, which every
     // *Locked helper requires.
     serviceGone_ = true;
+    // ...and so does nothing else in the process: this device's session is
+    // about to be orphaned, and it is the process's one session.
+    markSessionLost(api(), "the service answered sdrplay_api_ServiceNotResponding");
     // The same sentence the enumeration skip uses, because it is the same
     // problem and the same remedy: the service, not the radio, is what has to
     // be restarted. Said once here rather than left to the caller's generic
@@ -1318,7 +1373,11 @@ void SdrPlaySource::closeDevice() {
         // The cost is that the process never closes its connection to the
         // service - which is exactly what the abandoned worker means anyway,
         // and the reason the log above says this process cannot use the radio
-        // again.
+        // again. The TABLE is told so as well (normally already, by the
+        // abandonment or the refusal that set `unreachable`): an orphaned
+        // reference means the count never reaches zero, and without the latch
+        // the next scan or open() would be handed this same dead session.
+        markSessionLost(api(), "the radio was closed with its session orphaned");
         sessionHeld_ = false;
         apiVersion_.store(0.0f, std::memory_order_relaxed);
     } else {
@@ -1588,6 +1647,9 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
         // harmlessly.
         worker.detach();
         controlAbandoned_ = true;
+        // A thread of ours is inside the vendor DLL for good, so the process's
+        // session is finished too - not only this device's controls.
+        markSessionLost(a, "a control was abandoned inside sdrplay_api_Update");
         // A DEAD RECEIVER, through the same path a returned
         // ServiceNotResponding takes, so Pipeline's source thread latches the
         // fault and stops rather than reading a service that is gone.

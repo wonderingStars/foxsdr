@@ -5524,6 +5524,55 @@ void ImTextInitClassifiers()
     ImTextClassifierSetCharClass(g_CharClassifierIsSeparator_3000_300f, 0x3000, 0x300F, ImWcharClass_Punct, 0x3002);
 }
 
+// FOXSDR PATCH BEGIN (cjk-wrap) - see third_party/imgui/FOXSDR-PATCHES.md.
+// Chinese and Japanese have no spaces between words: a line may break between
+// any two characters, except before a closing mark or after an opening one.
+// Hangul is not included: Korean breaks at its spaces, as upstream does.
+static bool ImFoxWrapIsCjk(unsigned int c)
+{
+    return (c >= 0x2E80 && c <= 0x2FFF) || (c >= 0x3000 && c <= 0x303F) || (c >= 0x3040 && c <= 0x30FF)
+        || (c >= 0x3100 && c <= 0x312F) || (c >= 0x3190 && c <= 0x31FF) || (c >= 0x3200 && c <= 0x4DBF)
+        || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F)
+        || (c >= 0xFF00 && c <= 0xFFEF);
+}
+static bool ImFoxWrapIsCjkClosing(unsigned int c) // never starts a line
+{
+    switch (c)
+    {
+    case 0x3001: case 0x3002: case 0x3009: case 0x300B: case 0x300D: case 0x300F: case 0x3011: case 0x3015:
+    case 0x3017: case 0x3019: case 0xFF01: case 0xFF09: case 0xFF0C: case 0xFF0E: case 0xFF1A: case 0xFF1B:
+    case 0xFF1F: case 0xFF3D: case 0xFF5D: return true;
+    default: return false;
+    }
+}
+static bool ImFoxWrapIsOpening(unsigned int c) // never ends a line; ASCII ( [ { too, which catalogues set before CJK: "NFM (窄带调频)"
+{
+    switch (c)
+    {
+    case 0x3008: case 0x300A: case 0x300C: case 0x300E: case 0x3010: case 0x3014: case 0x3016: case 0x3018:
+    case 0xFF08: case 0xFF3B: case 0xFF5B: case 0x201C: case 0x2018: case '(': case '[': case '{': return true;
+    default: return false;
+    }
+}
+static bool ImFoxWrapIsAsciiClosing(unsigned int c) { return c == ',' || c == '.' || c == '!' || c == '?' || c == ')' || c == ';' || c == ':'; }
+static bool ImFoxWrapIsAsciiWord(unsigned int c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+// Whether CJK text follows `s` before the next blank - so the Latin word at `s` is inside CJK text.
+static bool ImFoxWrapCjkAhead(const char* s, const char* text_end)
+{
+    while (s < text_end)
+    {
+        unsigned int c = (unsigned int)*s;
+        const char* next_s = (c < 0x80) ? s + 1 : s + ImTextCharFromUtf8(&c, s, text_end);
+        if (c == ' ' || c == '\t' || c == '\n' || c == 0x3000)
+            return false;
+        if (ImFoxWrapIsCjk(c))
+            return true;
+        s = next_s;
+    }
+    return false;
+}
+// FOXSDR PATCH END (cjk-wrap)
+
 // Simple word-wrapping for English, not full-featured. Please submit failing cases!
 // This will return the next location to wrap from. If no wrapping if necessary, this will fast-forward to e.g. text_end.
 // Refer to imgui_test_suite's "drawlist_text_wordwrap_1" for tests.
@@ -5551,6 +5600,8 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
 
     int prev_type = ImWcharClass_Other;
     const bool keep_blanks = (flags & ImDrawTextFlags_WrapKeepBlanks) != 0;
+    unsigned int fox_prev_c = 0; // FOXSDR PATCH (cjk-wrap): the character before 'c'
+    bool fox_word_cjk = false;   // FOXSDR PATCH (cjk-wrap): a CJK character since the last blank
 
     // Find next wrapping point
     //const char* span_begin = s;
@@ -5591,6 +5642,30 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
         else
             curr_type = ImWcharClass_Other;
 
+        // FOXSDR PATCH BEGIN (cjk-wrap): where CJK text allows or forbids a break before 'c'.
+        // Text with no CJK character never sets fox_break_before or fox_no_break, so it wraps as upstream.
+        const bool fox_curr_cjk = ImFoxWrapIsCjk(c);
+        const bool fox_prev_cjk = ImFoxWrapIsCjk(fox_prev_c);
+        bool fox_break_before = false;
+        bool fox_no_break = false;
+        if (curr_type != ImWcharClass_Blank)
+        {
+            if (ImFoxWrapIsCjkClosing(c) || ImFoxWrapIsOpening(fox_prev_c)
+                || (fox_prev_cjk && (ImFoxWrapIsAsciiClosing(c) || c == 0x201D || c == 0x2019)))
+                fox_no_break = true;
+            else if ((fox_curr_cjk || fox_prev_cjk) && s != text && prev_type != ImWcharClass_Blank)
+                fox_break_before = true;
+            else if (ImFoxWrapIsAsciiWord(c) && prev_type == ImWcharClass_Punct && fox_prev_c < 0x80
+                && (fox_word_cjk || ImFoxWrapCjkAhead(s, text_end)))
+                fox_no_break = true; // "foxsdr.com" inside CJK text is one word
+        }
+        if (curr_type == ImWcharClass_Blank)
+            fox_word_cjk = false;
+        else if (fox_curr_cjk)
+            fox_word_cjk = true;
+        fox_prev_c = c;
+        // FOXSDR PATCH END (cjk-wrap)
+
         if (curr_type == ImWcharClass_Blank)
         {
             // End span: 'A ' or '. '
@@ -5605,7 +5680,7 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
         else
         {
             // End span: '.X' unless X is a digit
-            if (prev_type == ImWcharClass_Punct && curr_type != ImWcharClass_Punct && !(c >= '0' && c <= '9')) // FIXME: Digit checks might be removed if allow custom separators (#8503)
+            if (prev_type == ImWcharClass_Punct && curr_type != ImWcharClass_Punct && !(c >= '0' && c <= '9') && !fox_no_break) // FIXME: Digit checks might be removed if allow custom separators (#8503) // FOXSDR PATCH (cjk-wrap): && !fox_no_break
             {
                 span_end = s;
                 line_width += span_width + blank_width;
@@ -5618,6 +5693,14 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
                 line_width += span_width + blank_width;
                 span_width = blank_width = 0.0f;
             }
+            // FOXSDR PATCH BEGIN (cjk-wrap): End span: between two CJK characters, or CJK and Latin
+            else if (fox_break_before)
+            {
+                span_end = s;
+                line_width += span_width + blank_width;
+                span_width = blank_width = 0.0f;
+            }
+            // FOXSDR PATCH END (cjk-wrap)
             span_width += char_width;
         }
 

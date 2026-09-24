@@ -235,6 +235,15 @@ const char* sdrPlayServiceHungSentence();
 // inside the vendor DLL for good. See SdrPlaySource::kControlWait.
 const char* sdrPlayControlHungSentence();
 
+// WHAT A SCAN AND AN OPEN SAY ONCE THE PROCESS'S SESSION IS LOST (0.99.28).
+// After a worker is abandoned inside the vendor DLL or the service answers
+// sdrplay_api_ServiceNotResponding, the device's session is orphaned and can
+// never be closed, so nothing in the process calls the SDRplay API again - the
+// 0.99.27 crash was a scan's GetDevices through that session. One string,
+// pinned by a test, like the two above; unlike the hold-off it never expires,
+// so it names both restarts the user needs.
+const char* sdrPlaySessionLostSentence();
+
 // True while the hold-off above is still running, i.e. the last enumeration
 // abandoned a wedged service and the next ones are skipping it.
 bool sdrPlayEnumerationHeldOff();

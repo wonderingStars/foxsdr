@@ -59,6 +59,7 @@
 #include <string>
 #include <vector>
 
+#include "gui/text_fit.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -474,6 +475,26 @@ ImU32 storeInstallColour(StoreInstallState s);
 // read"). This is a theme size and not a number invented here; the captions
 // keep theirs.
 float storeProsePx();
+
+// THE SHOW WELL'S SIX ROCKERS keep their two columns in every language. The
+// width one rocker row needs with its longest label lettered at `labelPx`
+// (drawRockerRow's switch, plate padding and a three-figure count around it),
+// and whether a column `colW` wide holds two columns: it does whenever the
+// longest label fits at its FLOOR (seven tenths of storeProsePx), because
+// drawRockerRow draws a label smaller before it lets it run past its plate.
+// English fits at full size, so its well is exactly what it was.
+float storeShowRockerMinWidth(float labelPx);
+bool storeShowTwoColumns(float colW);
+
+// THE CARD'S ACTION COLUMN: the key and, under it, the install word and the
+// running-state word. Its width is measured from every word it can hold. A
+// status word is ONE LINE, drawn smaller to fit the column (down to seven
+// tenths of storeProsePx) and wrapped only when even that cannot hold it -
+// never broken in the middle of the word the way "PAIGALDAMAT / A" was
+// (et, 34-language review).
+float storeActionColumnWidth();
+float storeStatusWordRoom();
+LineFit storeStatusWordFit(const char* word);
 
 // THE LIST IS WHAT THIS WINDOW IS FOR, AND IT HAD NO FLOOR (the owner,
 // 2026-09-18, on 0.99.2: "it's not letting me scroll on the plugin store to see

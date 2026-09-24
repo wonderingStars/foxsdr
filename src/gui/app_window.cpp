@@ -2671,10 +2671,10 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
     // The visible name stops at the id suffix: "Plugins###plugins" is a widget
     // called plugins that shows the word Plugins, and the rail must letter the
     // word rather than the plumbing.
-    // Cut to the buffer on a whole character, never through one: a translated
-    // name that runs past 95 bytes loses its tail, not half of a letter.
-    char shown[96];
-    cascade::core::copyVisibleUtf8(shown, sizeof(shown), label);
+    // A string, never a fixed buffer: a translated name is as long as its
+    // language makes it, and how much of it fits is railPlateLabel's call.
+    std::string shown(label != nullptr ? label : "");
+    if (const std::size_t h = shown.find("##"); h != std::string::npos) { shown.resize(h); }
 
     // A row is a fixed deck like the top bar, not a line of text with padding
     // round it: the reference's rows are all one height whatever is written on
@@ -2768,7 +2768,7 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
         // operates - never amber, which on this panel means a reading. Where
         // the word has to STOP is railPlateLabel's business: it is measured
         // against the chip that is about to be landed on the same plate.
-        railPlateLabel(dl, tl, br, pTL.x, labelPx, shown, chipText,
+        railPlateLabel(dl, tl, br, pTL.x, labelPx, shown.c_str(), chipText,
                        open ? cascade::gui::theme::kIvory : cascade::gui::theme::kCream);
     }
 
@@ -2872,9 +2872,9 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
     benchRailFlush();
     // Same rule as benchSection: the visible name stops at the id suffix, so
     // "Satellites map###satmap:X" letters the words and not the plumbing -
-    // and a name too long for the buffer is cut on a whole character.
-    char shown[96];
-    cascade::core::copyVisibleUtf8(shown, sizeof(shown), label);
+    // and the name is held whole, however long its translation.
+    std::string shown(label != nullptr ? label : "");
+    if (const std::size_t h = shown.find("##"); h != std::string::npos) { shown.resize(h); }
 
     // The same deck height benchSection's header works out to, from the same
     // function, so a switch and a section can never sit at two heights on one
@@ -2935,7 +2935,7 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
         // MOST HERE: a map row's label is "<plugin display name> map", and a
         // plugin names itself. Nothing bounds that string, so nothing but
         // railPlateLabel's measured limit keeps it off the chip.
-        railPlateLabel(dl, tl, br, pTL.x, labelPx, shown, chipText,
+        railPlateLabel(dl, tl, br, pTL.x, labelPx, shown.c_str(), chipText,
                        !enabled ? cascade::gui::theme::kInkFaint
                                 : (on ? cascade::gui::theme::kIvory
                                       : cascade::gui::theme::kCream));
@@ -3446,10 +3446,10 @@ void AppWindow::applyAudioOpenResult() {
         return;
     }
     ++audioRecoveries_;
-    char buf[160];
+    std::string buf;
     // Two whole sentences rather than an "s" glued on: a translation's plural
     // is not a suffix.
-    cascade::core::formatUtf8(buf, sizeof(buf),
+    cascade::core::formatUtf8(buf,
                   audioRecoveries_ == 1
                       ? tr("output device stopped and was restarted (%d time)")
                       : tr("output device stopped and was restarted (%d times)"),
@@ -3509,6 +3509,12 @@ void benchHint(const char* text) {
 struct StatusLine {
     const char* text;
     ImU32 colour;
+    // A DEVICE'S OWN NAME, which is whatever its driver calls it: fitted and
+    // then clipped to the card as it always was, never wrapped - a second line
+    // of somebody's USB descriptor is not worth a card's height. Everything
+    // else on a card is the application's own sentence and wraps rather than
+    // being cut in the middle of a word.
+    bool name = false;
 };
 
 // Letter-spaced width, which Dear ImGui cannot measure for us because it has no
@@ -3720,8 +3726,25 @@ void AppWindow::drawStatusColumn() {
     // has to make the window taller to see.
     const auto card = [&](const char* caption, ImU32 valueCol, const char* value,
                           const StatusLine* lines, int lineCount) {
-        const float h = 6.0f + tinyH + 2.0f + valueH +
-                        static_cast<float>(lineCount) * (tinyH + 1.0f) + 6.0f;
+        // A SUB-LINE TOO LONG EVEN AT ITS FLOOR WRAPS (text_fit.hpp,
+        // fitLine), and the card grows by the lines it takes. It used to be
+        // cut at the well's edge in the middle of a word - "...χωρίς δεδομ"
+        // (el) - which reads as broken; the column has room below.
+        const float room = (cardR - 1.0f) - (cardL + 8.0f) - 2.0f;
+        constexpr int kMaxLines = 4;
+        cascade::gui::LineFit fits[kMaxLines];
+        float linesH = 0.0f;
+        for (int i = 0; i < lineCount && i < kMaxLines; ++i) {
+            fits[i] = cascade::gui::fitLine(legendF, tinyPx, lines[i].text, room,
+                                            cascade::gui::fitFloorFor(tinyPx));
+            if (lines[i].name && fits[i].wrap) {
+                fits[i] = {cascade::gui::fitFloorFor(tinyPx), false};  // clipped, as before
+            }
+            const float lh =
+                cascade::gui::fittedLineHeight(legendF, tinyPx, lines[i].text, room, fits[i]);
+            linesH += 1.0f + std::max(tinyH, lh);
+        }
+        const float h = 6.0f + tinyH + 2.0f + valueH + linesH + 6.0f;
         if (y + h > cardsBottom) { return; }
         const ImVec2 tl(cardL, y);
         const ImVec2 br(cardR, y + h);
@@ -3744,7 +3767,6 @@ void AppWindow::drawStatusColumn() {
         // than the English the column was laid out for), down to seven tenths
         // of its size; only what is still too long meets the clip above. Text
         // that fits is drawn exactly as before - same size, same place.
-        const float room = (br.x - 1.0f) - (tl.x + 8.0f) - 2.0f;
         float ty = tl.y + 6.0f;
         statusCaption(dl, ImVec2(tl.x + 8.0f, ty), caption, room);
         ty += tinyH + 2.0f;
@@ -3754,25 +3776,33 @@ void AppWindow::drawStatusColumn() {
                                             cascade::gui::fitFloorFor(valuePx)),
                     ImVec2(tl.x + 8.0f, ty), valueCol, value);
         ty += valueH;
-        for (int i = 0; i < lineCount; ++i) {
+        for (int i = 0; i < lineCount && i < kMaxLines; ++i) {
             ty += 1.0f;
+            float lh = tinyH;
             if (lines[i].text != nullptr && lines[i].text[0] != '\0') {
-                dl->AddText(legendF,
-                            cascade::gui::fitTextPx(legendF, tinyPx, lines[i].text, room,
-                                                    cascade::gui::fitFloorFor(tinyPx)),
-                            ImVec2(tl.x + 8.0f, ty), lines[i].colour, lines[i].text);
+                // Drawn at the top of its line, as before, when it is not
+                // wrapped: the fitted size is only ever smaller.
+                if (fits[i].wrap) {
+                    dl->AddText(legendF, fits[i].px, ImVec2(tl.x + 8.0f, ty), lines[i].colour,
+                                lines[i].text, nullptr, room);
+                } else {
+                    dl->AddText(legendF, fits[i].px, ImVec2(tl.x + 8.0f, ty), lines[i].colour,
+                                lines[i].text);
+                }
+                lh = std::max(tinyH, cascade::gui::fittedLineHeight(legendF, tinyPx,
+                                                                    lines[i].text, room, fits[i]));
             }
-            ty += tinyH;
+            ty += lh;
         }
         dl->PopClipRect();
         y = br.y + 6.0f;
     };
 
-    char v[96];
-    char l0[128];
-    char l1[128];
-    char l2[128];
-    char l3[128];
+    std::string v;
+    std::string l0;
+    std::string l1;
+    std::string l2;
+    std::string l3;
 
     // WHOSE SOUND THIS IS, asked once and answered on two cards below. A plugin
     // holding CASCADE_CAP_AUDIO_OUT replaces the demodulated audio above the
@@ -3812,15 +3842,15 @@ void AppWindow::drawStatusColumn() {
     liveAudio.gapFrames = static_cast<unsigned long long>(pluginRunner_.audioGapFrames());
     const AudioReadout& shownAudio = audioHold_.value(ImGui::GetTime(), liveAudio);
     const unsigned long long under = shownAudio.underruns;
-    std::snprintf(v, sizeof(v), "%llu", under);
+    cascade::core::formatUtf8(v, "%llu", under);
     {
         const double ringMs = shownAudio.ringMs;
         const double capMs = shownAudio.capMs;
-        cascade::core::formatUtf8(l1, sizeof(l1), tr("ring %.0f of %.0f ms"), ringMs, capMs);
+        cascade::core::formatUtf8(l1, tr("ring %.0f of %.0f ms"), ringMs, capMs);
         StatusLine lines[3] = {
             {under == 0 ? tr("no callback has starved yet") : tr("starved callbacks, since start"),
              under == 0 ? kFaint : cascade::gui::theme::kAlarm},
-            {l1, kFaint},
+            {l1.c_str(), kFaint},
             {nullptr, kFaint}};
         int n = 2;
         if (!audioFrom.empty()) {
@@ -3832,10 +3862,10 @@ void AppWindow::drawStatusColumn() {
             // which of them is happening.
             const unsigned long long gaps = shownAudio.gaps;
             const unsigned long long gapFrames = shownAudio.gapFrames;
-            cascade::core::formatUtf8(l2, sizeof(l2), tr("plugin gaps %llu, %llu frames"), gaps, gapFrames);
-            lines[n++] = {l2, gaps == 0 ? kFaint : cascade::gui::theme::kAlarm};
+            cascade::core::formatUtf8(l2, tr("plugin gaps %llu, %llu frames"), gaps, gapFrames);
+            lines[n++] = {l2.c_str(), gaps == 0 ? kFaint : cascade::gui::theme::kAlarm};
         }
-        card(tr("AUDIO - UNDERRUNS"), cascade::gui::theme::kAmber, v, lines, n);
+        card(tr("AUDIO - UNDERRUNS"), cascade::gui::theme::kAmber, v.c_str(), lines, n);
     }
 
     // --- DECODER OUTPUT ------------------------------------------------------
@@ -3900,12 +3930,12 @@ void AppWindow::drawStatusColumn() {
             // the guard above keeps it between one and two windows, and a
             // caption that rounds 3.9 s to "2 s mean" would be inventing the
             // difference.
-            std::snprintf(v, sizeof(v), "%.1f /s",
+            cascade::core::formatUtf8(v, "%.1f /s",
                           static_cast<double>(decoderLinesPerSec_));
-            cascade::core::formatUtf8(l0, sizeof(l0), tr("output lines, %.1f s mean"),
+            cascade::core::formatUtf8(l0, tr("output lines, %.1f s mean"),
                           decoderRateSpanS_);
-            lines[0] = {l0, kFaint};
-            card(tr("DECODER OUTPUT"), cascade::gui::theme::kAmber, v, lines, 1);
+            lines[0] = {l0.c_str(), kFaint};
+            card(tr("DECODER OUTPUT"), cascade::gui::theme::kAmber, v.c_str(), lines, 1);
         }
     }
 
@@ -3930,20 +3960,20 @@ void AppWindow::drawStatusColumn() {
         // READY, NOT RUNNING. The instances are built and matched; the receiver
         // that would feed them is stopped, so nothing is decoding and the card
         // must not imply that it is.
-        cascade::core::formatUtf8(v, sizeof(v), tr("%zu ready"), matched);
-        cascade::core::formatUtf8(l0, sizeof(l0), tr("of %zu fitted - receiver stopped"), installed);
+        cascade::core::formatUtf8(v, tr("%zu ready"), matched);
+        cascade::core::formatUtf8(l0, tr("of %zu fitted - receiver stopped"), installed);
     } else {
-        cascade::core::formatUtf8(v, sizeof(v), tr("%zu running"), feeding);
+        cascade::core::formatUtf8(v, tr("%zu running"), feeding);
         if (installed > feeding) {
-            cascade::core::formatUtf8(l0, sizeof(l0), tr("of %zu fitted, %zu not fed"), installed,
+            cascade::core::formatUtf8(l0, tr("of %zu fitted, %zu not fed"), installed,
                           installed - feeding);
         } else {
-            cascade::core::formatUtf8(l0, sizeof(l0), tr("of %zu fitted"), installed);
+            cascade::core::formatUtf8(l0, tr("of %zu fitted"), installed);
         }
     }
     {
-        const StatusLine lines[1] = {{l0, kFaint}};
-        card(tr("DECODERS"), feeding > 0 ? cascade::gui::theme::kPhosphor : kMuted, v, lines,
+        const StatusLine lines[1] = {{l0.c_str(), kFaint}};
+        card(tr("DECODERS"), feeding > 0 ? cascade::gui::theme::kPhosphor : kMuted, v.c_str(), lines,
              1);
     }
 
@@ -3972,13 +4002,13 @@ void AppWindow::drawStatusColumn() {
         const char* value = tr("OPEN");
         ImU32 valueCol = cascade::gui::theme::kPhosphor;
         if (!muteBy.empty()) {
-            cascade::core::formatUtf8(l0, sizeof(l0), tr("by %s"), muteBy.c_str());
-            lines[n++] = {l0, kFaint};
+            cascade::core::formatUtf8(l0, tr("by %s"), muteBy.c_str());
+            lines[n++] = {l0.c_str(), kFaint};
             if (muteSinceS_ >= 0.0) {
                 char elapsed[24];
                 statusElapsed(elapsed, sizeof(elapsed), nowS - muteSinceS_);
-                cascade::core::formatUtf8(l1, sizeof(l1), tr("for %s"), elapsed);
-                lines[n++] = {l1, kFaint};
+                cascade::core::formatUtf8(l1, tr("for %s"), elapsed);
+                lines[n++] = {l1.c_str(), kFaint};
             }
             value = tr("MUTED");
             valueCol = cascade::gui::theme::kAmber;
@@ -4001,9 +4031,9 @@ void AppWindow::drawStatusColumn() {
             value = tr("STOPPED");
             valueCol = cascade::gui::theme::kAlarm;
         } else {
-            cascade::core::formatUtf8(l0, sizeof(l0), "%s",
+            cascade::core::formatUtf8(l0, "%s",
                           pipeline_.audio().openedDeviceName().c_str());
-            lines[n++] = {l0, kFaint};
+            lines[n++] = {l0.c_str(), kFaint, true};
         }
         // WHAT IS COMING OUT, when it is not the receiver. In PHOSPHOR, the ink
         // this panel reserves for what the radio actually produced - and not in
@@ -4012,8 +4042,8 @@ void AppWindow::drawStatusColumn() {
         // receiver that has wandered onto a different station are the same
         // picture: the frequency readout names a carrier nobody is hearing.
         if (!audioFrom.empty()) {
-            cascade::core::formatUtf8(l2, sizeof(l2), tr("playing: %s"), audioFrom.c_str());
-            lines[n++] = {l2, cascade::gui::theme::kPhosphor};
+            cascade::core::formatUtf8(l2, tr("playing: %s"), audioFrom.c_str());
+            lines[n++] = {l2.c_str(), cascade::gui::theme::kPhosphor};
         }
         card(tr("SINK"), valueCol, value, lines, n);
     }
@@ -4037,8 +4067,8 @@ void AppWindow::drawStatusColumn() {
         double bytes = 0.0;
         if (iqTaping) { bytes += static_cast<double>(iqRecorder_.bytesWritten()); }
         if (audioTaping) { bytes += static_cast<double>(audioRecorder_.bytesWritten()); }
-        cascade::core::formatUtf8(l0, sizeof(l0), tr("%s elapsed"), elapsed);
-        cascade::core::formatUtf8(l1, sizeof(l1), tr("%.1f MB written"), bytes / (1024.0 * 1024.0));
+        cascade::core::formatUtf8(l0, tr("%s elapsed"), elapsed);
+        cascade::core::formatUtf8(l1, tr("%.1f MB written"), bytes / (1024.0 * 1024.0));
         // A DISK THAT STOPPED TAKING THE FILE IS SAID, NOT LEFT TO BE NOTICED.
         // The recorder latches writeFailed() when stdio refuses a write (full,
         // removed, gone read-only) and stops paying for a dead stream; from
@@ -4047,12 +4077,12 @@ void AppWindow::drawStatusColumn() {
         const bool diskFault = (iqTaping && iqRecorder_.writeFailed()) ||
                                (audioTaping && audioRecorder_.writeFailed());
         if (diskFault) {
-            const StatusLine lines[2] = {{l1, kFaint},
+            const StatusLine lines[2] = {{l1.c_str(), kFaint},
                                          {tr("disk refused the file - nothing more is being kept"),
                                           cascade::gui::theme::kAlarmHot}};
             card(tr("RECORDER"), cascade::gui::theme::kAlarmHot, tr("STALLED"), lines, 2);
         } else {
-            const StatusLine lines[2] = {{l0, kFaint}, {l1, kFaint}};
+            const StatusLine lines[2] = {{l0.c_str(), kFaint}, {l1.c_str(), kFaint}};
             card(tr("RECORDER"), cascade::gui::theme::kAlarm, what, lines, 2);
         }
     } else if (iqRecorder_.sizeLimitReached() || audioRecorder_.sizeLimitReached()) {
@@ -4090,10 +4120,10 @@ void AppWindow::drawStatusColumn() {
     // thing a status column exists to answer without opening a section. Dropping
     // it to match a mock would be losing a fact to gain a resemblance.
     if (webServer_.running()) {
-        cascade::core::formatUtf8(v, sizeof(v), tr("port %d"), webCfg_.port);
-        cascade::core::formatUtf8(l0, sizeof(l0), "%s", webCfg_.bindAddress.c_str());
-        const StatusLine lines[1] = {{l0, kFaint}};
-        card(tr("WEB ACCESS"), cascade::gui::theme::kPhosphor, v, lines, 1);
+        cascade::core::formatUtf8(v, tr("port %d"), webCfg_.port);
+        cascade::core::formatUtf8(l0, "%s", webCfg_.bindAddress.c_str());
+        const StatusLine lines[1] = {{l0.c_str(), kFaint}};
+        card(tr("WEB ACCESS"), cascade::gui::theme::kPhosphor, v.c_str(), lines, 1);
     } else if (!webStartRefusal_.empty()) {
         // SWITCHED ON AND REFUSED IS NOT "OFF". applyWebSettings leaves the
         // setting enabled on purpose when a start fails - the usual cause is a
@@ -4103,8 +4133,8 @@ void AppWindow::drawStatusColumn() {
         // own sentence goes on the card, clipped to the well like every other
         // line here, because naming the thing that refused is worth more than
         // a tidier word for it.
-        cascade::core::formatUtf8(l0, sizeof(l0), "%s", webStartRefusal_.c_str());
-        const StatusLine lines[1] = {{l0, cascade::gui::theme::kAlarm}};
+        cascade::core::formatUtf8(l0, "%s", webStartRefusal_.c_str());
+        const StatusLine lines[1] = {{l0.c_str(), cascade::gui::theme::kAlarm}};
         card(tr("WEB ACCESS"), cascade::gui::theme::kAlarmHot, tr("REFUSED"), lines, 1);
     } else {
         const StatusLine lines[1] = {{tr("not listening"), kFaint}};
@@ -4131,16 +4161,16 @@ void AppWindow::drawStatusColumn() {
         int n = 0;
         // Translated when it is the built-in generator; a driver's own device
         // name is in no catalogue and passes through tr() unchanged.
-        cascade::core::formatUtf8(l0, sizeof(l0), "%s", tr(pipeline_.activeSource().name()));
-        lines[n++] = {l0, cascade::gui::theme::kCream};
+        cascade::core::formatUtf8(l0, "%s", tr(pipeline_.activeSource().name()));
+        lines[n++] = {l0.c_str(), cascade::gui::theme::kCream, true};
         if (device_ != nullptr && !deviceAntenna_.empty()) {
-            cascade::core::formatUtf8(l1, sizeof(l1), tr("ANTENNA %s"), deviceAntenna_.c_str());
-            lines[n++] = {l1, cascade::gui::theme::kCream};
+            cascade::core::formatUtf8(l1, tr("ANTENNA %s"), deviceAntenna_.c_str());
+            lines[n++] = {l1.c_str(), cascade::gui::theme::kCream};
         }
-        l2[0] = '\0';
+        l2.clear();
         if (device_ != nullptr) {
             if (deviceAgc_) {
-                cascade::core::formatUtf8(l2, sizeof(l2), "%s", tr("GAIN AUTO - AGC ON"));
+                cascade::core::formatUtf8(l2, "%s", tr("GAIN AUTO - AGC ON"));
             } else if (!deviceGainNames_.empty() &&
                        deviceGainsDb_.size() == deviceGainNames_.size()) {
                 // The first element by name, and a count of the rest. Summing
@@ -4154,18 +4184,18 @@ void AppWindow::drawStatusColumn() {
                     deviceGainNames_[0], static_cast<double>(deviceGainsDb_[0]),
                     firstGainUnit());
                 if (deviceGainNames_.size() == 1) {
-                    cascade::core::formatUtf8(l2, sizeof(l2), "%s", gainText.c_str());
+                    cascade::core::formatUtf8(l2, "%s", gainText.c_str());
                 } else {
-                    cascade::core::formatUtf8(l2, sizeof(l2), tr("%s +%zu more"), gainText.c_str(),
+                    cascade::core::formatUtf8(l2, tr("%s +%zu more"), gainText.c_str(),
                                   deviceGainNames_.size() - 1);
                 }
             }
-            if (l2[0] != '\0') { lines[n++] = {l2, cascade::gui::theme::kCream}; }
+            if (!l2.empty()) { lines[n++] = {l2.c_str(), cascade::gui::theme::kCream}; }
         }
         const double rate = pipeline_.activeSource().sampleRateHz();
         if (std::isfinite(rate) && rate > 0.0) {
-            std::snprintf(l3, sizeof(l3), "%.3f MS/s", rate / 1.0e6);
-            lines[n++] = {l3, cascade::gui::theme::kAmber};
+            cascade::core::formatUtf8(l3, "%.3f MS/s", rate / 1.0e6);
+            lines[n++] = {l3.c_str(), cascade::gui::theme::kAmber};
         }
         card(tr("RECEIVER"),
              faulted ? cascade::gui::theme::kAlarm
@@ -5350,27 +5380,34 @@ void drawToggleSwitch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool u
     // which every translation of UP / DN longer than two letters did. It is
     // fitted to the cell (gui/text_fit.hpp) and, since nine pixels is already
     // this deck's floor, whatever still does not fit is clipped to the cell.
+    //
+    // WHAT GIVES WAY, IN ORDER (gui/text_fit.hpp, fitCellWords): the size down
+    // to nine pixels, then the tracking, and only then the word - cut at the
+    // last WHOLE glyph that fits a cell kept 2 px clear of its edges, so a word
+    // that cannot fit never runs up to the next tube's stencil. "ВВЕРХ" cut at
+    // the cell's edge left half a letter touching its neighbour and the row
+    // read as one smear (ru, 34-language review); the catalogues now carry
+    // words that fit, and this is the guard for the next one that does not.
     ImFont* f = cascade::gui::fonts::ui();
     const float spx0 = std::max(9.0f, 8.0f * s);
     const float cellRoom = cascade::gui::kFreqCellW * s;
-    const char* upWord = tr("UP");
-    const char* dnWord = tr("DN");
-    const float spx = std::min(cascade::gui::fitTrackedPx(f, spx0, upWord, 0.15f, cellRoom),
-                               cascade::gui::fitTrackedPx(f, spx0, dnWord, 0.15f, cellRoom));
-    const float strack = spx * 0.15f;
+    const char* words[2] = {tr("UP"), tr("DN")};
+    const cascade::gui::CellWordsFit fit = cascade::gui::fitCellWords(
+        spx0, 0.15f, cellRoom, cascade::gui::kFitFloorPx, 2, [&](int i, float z, float tf) {
+            return cascade::gui::trackedWidth(f, z, words[i], z * tf);
+        });
+    const float spx = fit.px;
+    const float strack = spx * fit.trackingFrac;
     const float sh = f->CalcTextSizeA(spx, FLT_MAX, 0.0f, "U").y;
-    const float upW = plateTrackedText(nullptr, f, spx, ImVec2(0.0f, 0.0f), 0u, upWord, strack);
-    const float dnW = plateTrackedText(nullptr, f, spx, ImVec2(0.0f, 0.0f), 0u, dnWord, strack);
-    const bool cut = upW > cellRoom || dnW > cellRoom;
-    if (cut) {
-        dl->PushClipRect(ImVec2(cx - cellRoom * 0.5f, tl.y - sh), ImVec2(cx + cellRoom * 0.5f, br.y + sh),
-                         true);
+    const float keep = fit.fits ? cellRoom : cellRoom - 4.0f;  // the clear edge, when cut
+    for (int i = 0; i < 2; ++i) {
+        const float wordW = std::min(cascade::gui::trackedWidth(f, spx, words[i], strack), keep);
+        const ImVec2 at(cx - wordW * 0.5f, i == 0 ? tl.y : br.y - sh);
+        // addTrackedText stops BEFORE a glyph that would pass maxX, so a cut
+        // word ends on a whole letter, never on a sliver of one.
+        cascade::gui::addTrackedText(dl, f, spx, at, hexCol(0xd8d3b8), words[i], strack,
+                                     fit.fits ? FLT_MAX : at.x + keep - 1.5f);
     }
-    plateTrackedText(dl, f, spx, ImVec2(cx - std::min(upW, cellRoom) * 0.5f, tl.y), hexCol(0xd8d3b8),
-                     upWord, strack);
-    plateTrackedText(dl, f, spx, ImVec2(cx - std::min(dnW, cellRoom) * 0.5f, br.y - sh),
-                     hexCol(0xd8d3b8), dnWord, strack);
-    if (cut) { dl->PopClipRect(); }
 
     // THE COLLAR, 26 units across in the reference and 14 here, centred on
     // the switch area: radial "#d9d9d2 0%, #8f9088 45%, #4a4b45 75%,
@@ -5697,8 +5734,8 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
             } else {
                 // One sentence, one format string, so a translation can place
                 // the typed text where its own grammar wants it.
-                char msg[160];
-                cascade::core::formatUtf8(msg, sizeof(msg), tr("could not read frequency \"%s\""),
+                std::string msg;
+                cascade::core::formatUtf8(msg, tr("could not read frequency \"%s\""),
                               freqEditBuf_);
                 sourceError_ = msg;
             }
@@ -6206,12 +6243,14 @@ void AppWindow::drawDisplaySection() {
             // one plan to choose between: a single-plan install has no
             // decision to offer, and an empty combo would read as breakage.
             if (bandPlanChoices_.size() > 1) {
-                const char* preview = tr("(all installed)");
+                // The plan's NAME IS TRANSLATED WHERE IT IS DRAWN
+                // (core::displayPlanName); the file's own name stays data.
+                std::string preview = tr("(all installed)");
                 for (const cascade::core::PlanInfo& p : bandPlanChoices_) {
-                    if (p.id == bandPlanSelection_) { preview = p.name.c_str(); }
+                    if (p.id == bandPlanSelection_) { preview = cascade::core::displayPlanName(p.name); }
                 }
                 if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Region")),
-                                      preview)) {
+                                      preview.c_str())) {
                     // THE PICK IS RECORDED HERE AND APPLIED BELOW, and that
                     // separation is the whole of a crash. This loop used to be
                     // a range-for whose click handler called loadBandPlan(),
@@ -6227,7 +6266,11 @@ void AppWindow::drawDisplaySection() {
                         bandPlanChoices_,
                         [&](const cascade::core::PlanInfo& p, std::size_t) {
                             const bool selected = (p.id == bandPlanSelection_);
-                            const bool hit = ImGui::Selectable(p.name.c_str(), selected);
+                            // Keyed on the plan's id, so the row's identity
+                            // does not change with the language.
+                            const std::string row =
+                                cascade::core::displayPlanName(p.name) + "###" + p.id;
+                            const bool hit = ImGui::Selectable(row.c_str(), selected);
                             if (selected) { ImGui::SetItemDefaultFocus(); }
                             return hit && !selected;
                         });
@@ -6245,7 +6288,8 @@ void AppWindow::drawDisplaySection() {
             } else if (bandPlan_.entries().empty()) {
                 ImGui::TextDisabled(tr("no band plan installed"));
             } else {
-                ImGui::TextDisabled(tr("%s (%d bands)"), bandPlan_.name().c_str(),
+                ImGui::TextDisabled(tr("%s (%d bands)"),
+                                    cascade::core::displayPlanName(bandPlan_.name()).c_str(),
                                     static_cast<int>(bandPlan_.entries().size()));
             }
         }
@@ -6365,25 +6409,30 @@ static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     }
     // The word, cut into the brass: ink on metal, never amber. Fitted to the
     // key, like benchWordKey's: five keys share the rail's width, and a bank's
-    // name in most languages is longer than SIGNAL or VIEW.
-    cascade::gui::addFittedCentred(dl, cascade::gui::fonts::legend(),
-                                   cascade::gui::fonts::kTinySize, tl, br,
+    // name in most languages is longer than SIGNAL or VIEW. DOWN TO THE
+    // ABSOLUTE FLOOR, not seven tenths: this is the narrowest key on the
+    // bench, and "JÄRJESTELMÄ" (fi) and "РАСШИРЕНИЯ" (ru) were cut at seven
+    // tenths (app_window.hpp, kBankKeyWordFloorPx).
+    ImFont* lf = cascade::gui::fonts::legend();
+    const float padX = cascade::gui::bankKeyWordPadX(
+        lf->CalcTextSizeA(cascade::gui::kBankKeyWordFloorPx, FLT_MAX, 0.0f, label).x,
+        br.x - tl.x);
+    cascade::gui::addFittedCentred(dl, lf, cascade::gui::fonts::kTinySize, tl, br,
                                    on ? cascade::gui::theme::kIvory : cascade::gui::theme::kEnamel,
-                                   label, kKeyWordPadX, down ? 1.0f : 0.0f);
+                                   label, padX, down ? 1.0f : 0.0f,
+                                   cascade::gui::kBankKeyWordFloorPx);
     return pressed;
 }
 
 float AppWindow::drawRailBankKeys(float colX, float colY, float colW, float bodyTop) {
     (void)colY;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    constexpr float kPad = 8.0f;    // the plate's own inset, as the sections use
-    constexpr float kGap = 4.0f;
+    constexpr float kPad = cascade::gui::kBankKeyInset;  // the plate's own inset
+    constexpr float kGap = cascade::gui::kBankKeyGap;
     constexpr float kStrip = 7.0f;  // the lamp strip and its gap, below the key
     const float keyH = std::max(22.0f, cascade::gui::fonts::kTinySize + 9.0f);
     const float x0 = colX + kPad;
-    const float x1 = colX + colW - kPad;
-    const float keyW = (x1 - x0 - kGap * static_cast<float>(cascade::gui::kRailBankCount - 1)) /
-                       static_cast<float>(cascade::gui::kRailBankCount);
+    const float keyW = cascade::gui::bankKeyWidth(colW, cascade::gui::kRailBankCount);
     if (keyW < 24.0f || dl == nullptr) { return bodyTop; }
 
     // THE KEYBOARD'S ROW OF FUNCTION KEYS IS THE SAME ROW, F1 to F5 left to
@@ -6642,8 +6691,8 @@ void AppWindow::drawUpdateBanner() {
             if (launchInstaller(updateReadyPath_)) {
                 requestClose();
             } else {
-                char msg[1024];
-                cascade::core::formatUtf8(msg, sizeof(msg), tr("could not start the installer at %s"),
+                std::string msg;
+                cascade::core::formatUtf8(msg, tr("could not start the installer at %s"),
                               updateReadyPath_.c_str());
                 updateError_ = msg;
             }
@@ -6693,14 +6742,9 @@ void AppWindow::drawSourceSection() {
     // full name and "B200" is the part that identifies it.
     // Translated when it is the built-in generator, and shortened by
     // CHARACTERS: a byte cut would split an accented letter in half.
-    std::string sourceChip = tr(pipeline_.activeSource().name());
-    const std::size_t colon = sourceChip.rfind(": ");
-    if (colon != std::string::npos) { sourceChip = sourceChip.substr(colon + 2); }
-    {
-        const char* end = sourceChip.c_str();
-        for (int i = 0; i < 10 && *end != '\0'; ++i) { end = cascade::core::utf8Next(end); }
-        sourceChip.resize(static_cast<std::size_t>(end - sourceChip.c_str()));
-    }
+    // The built-in generator's chip is its own short key, never cut
+    // (app_window.hpp, sourceChipText).
+    const std::string sourceChip = cascade::gui::sourceChipText(pipeline_.activeSource().name());
     // Rust and lit while the pipeline is faulted, phosphor and lit while it
     // runs: the colour says which state and the lamp says there is one, which
     // is the rule the whole rail keeps.
@@ -6746,14 +6790,14 @@ void AppWindow::drawSourceSection() {
 
     const bool soapyBusy = soapyScanPending_ || deviceOpenPending_;
     if (soapyBusy) {
-        char busyLine[512];
+        std::string busyLine;
         if (deviceOpenPending_) {
-            cascade::core::formatUtf8(busyLine, sizeof(busyLine), tr("Opening %s..."),
+            cascade::core::formatUtf8(busyLine, tr("Opening %s..."),
                           deviceBusyLabel_.c_str());
         } else {
-            cascade::core::formatUtf8(busyLine, sizeof(busyLine), "%s", tr("Scanning for devices..."));
+            busyLine = tr("Scanning for devices...");
         }
-        ImGui::TextColored(cascade::gui::theme::warning(), "%s", busyLine);
+        ImGui::TextColored(cascade::gui::theme::warning(), "%s", busyLine.c_str());
     }
     ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -6771,8 +6815,8 @@ void AppWindow::drawSourceSection() {
     // there would claim the radio was running.
     std::string keepPreviewLabel;
     if (keepPreview) {
-        char keepBuf[512];
-        cascade::core::formatUtf8(keepBuf, sizeof(keepBuf), tr("%s (saved, not open)"),
+        std::string keepBuf;
+        cascade::core::formatUtf8(keepBuf, tr("%s (saved, not open)"),
                       restoreKeepLabel_.c_str());
         keepPreviewLabel = keepBuf;
     }
@@ -6842,23 +6886,21 @@ void AppWindow::drawSourceSection() {
         // deferred only when it cannot vouch for one (device_scan_plan.hpp).
         const cascade::gui::SoapyScanPlan plan = soapyScanPlan();
         std::string why;
-        char whyBuf[1024];
         if (plan.mode == cascade::gui::SoapyScanMode::SkipSome) {
             std::string names;
             for (const std::string& d : plan.skipDrivers) { names += (names.empty() ? "" : ", ") + d; }
-            cascade::core::formatUtf8(whyBuf, sizeof(whyBuf),
+            cascade::core::formatUtf8(why,
                           tr("While %s is open, Refresh looks for every other "
                              "kind of radio but leaves out the %s driver - its probe would "
                              "reset the open radio. Close it to look for more of that kind."),
                           soapyScanGateDevice().c_str(), names.c_str());
         } else {
-            cascade::core::formatUtf8(whyBuf, sizeof(whyBuf),
+            cascade::core::formatUtf8(why,
                           tr("Refreshed the native radios. The SoapySDR scan is deferred while "
                              "%s is open - the vendor probe opens and resets every dongle it "
                              "finds. Close the radio to look for other SoapySDR devices."),
                           soapyScanGateDevice().c_str());
         }
-        why = whyBuf;
         if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", why.c_str()); }
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", why.c_str());
@@ -7172,11 +7214,11 @@ void AppWindow::drawSourceSection() {
         // and the user must both see the rate the hardware really runs at.
         // Beside the combo when it fits the rail, on its own line when a
         // translation makes the pair too wide (gui/text_fit.hpp).
-        char actualRate[96];
-        cascade::core::formatUtf8(actualRate, sizeof(actualRate), tr("actual %.4g MS/s"),
+        std::string actualRate;
+        cascade::core::formatUtf8(actualRate, tr("actual %.4g MS/s"),
                                   device_->sampleRateHz() / 1.0e6);
-        cascade::gui::sameLineIfFits(ImGui::CalcTextSize(actualRate).x);
-        ImGui::TextUnformatted(actualRate);
+        cascade::gui::sameLineIfFits(ImGui::CalcTextSize(actualRate.c_str()).x);
+        ImGui::TextUnformatted(actualRate.c_str());
 
         // ANTENNA. Above the gain controls on purpose: no amount of gain
         // rescues the wrong port, and picking the wrong one gives a receiver
@@ -8329,8 +8371,8 @@ void AppWindow::scanNative() {
         if (d.driver == kPlutoDriverKey) {
             nativeRowLabels_.push_back(tr(d.label.c_str()));  // FOX_TR_NOOP where it is set
         } else {
-            char rowBuf[512];
-            cascade::core::formatUtf8(rowBuf, sizeof(rowBuf), tr("%s (native)"), d.label.c_str());
+            std::string rowBuf;
+            cascade::core::formatUtf8(rowBuf, tr("%s (native)"), d.label.c_str());
             nativeRowLabels_.push_back(rowBuf);
         }
     }
@@ -8880,7 +8922,7 @@ void AppWindow::drawCenterPanels() {
     // WaterfallView reads as "draw no line".
     WaterfallView::Chrome wfChrome;
     wfChrome.linesPerSecond = framesPerSecond_;
-    char decodeLine[192] = "";
+    std::string decodeLine;
     if (std::isfinite(bandCenterAbs) && bandCenterAbs > 0.0) {
         std::string firstDecoder;
         int runningDecoders = 0;
@@ -8894,18 +8936,18 @@ void AppWindow::drawCenterPanels() {
         char freqTxt[32];
         std::snprintf(freqTxt, sizeof(freqTxt), "%.4f MHz", bandCenterAbs / 1.0e6);
         if (runningDecoders == 1) {
-            cascade::core::formatUtf8(decodeLine, sizeof(decodeLine), tr("%s %s - DECODING"), freqTxt,
+            cascade::core::formatUtf8(decodeLine, tr("%s %s - DECODING"), freqTxt,
                           firstDecoder.c_str());
         } else if (runningDecoders > 1) {
-            cascade::core::formatUtf8(decodeLine, sizeof(decodeLine), tr("%s %s +%d - DECODING"), freqTxt,
+            cascade::core::formatUtf8(decodeLine, tr("%s %s +%d - DECODING"), freqTxt,
                           firstDecoder.c_str(), runningDecoders - 1);
         } else {
-            cascade::core::formatUtf8(decodeLine, sizeof(decodeLine), "%s %s - %s", freqTxt,
+            cascade::core::formatUtf8(decodeLine, "%s %s - %s", freqTxt,
                           kModeNames[modeIndex_],
                           pipeline_.running() ? tr("RECEIVING") : tr("STOPPED"));
         }
     }
-    wfChrome.decoding = (decodeLine[0] != '\0') ? decodeLine : nullptr;
+    wfChrome.decoding = !decodeLine.empty() ? decodeLine.c_str() : nullptr;
     waterfall_->draw(width, waterfallHeight, u0, u1, wfChrome);
     const bool wfHovered = ImGui::IsItemHovered();
 
@@ -9048,13 +9090,13 @@ void AppWindow::drawAudioFilterSection() {
     // does not show engaged.
     const int filtersOn = (nrEnabled_ ? 1 : 0) + (notchEnabled_ ? 1 : 0) +
                           (autoNotch_ ? 1 : 0);
-    char filterChip[64];
+    std::string filterChip;
     if (filtersOn == 0) {
-        cascade::core::formatUtf8(filterChip, sizeof(filterChip), "%s", tr("OFF"));
+        filterChip = tr("OFF");
     } else {
-        cascade::core::formatUtf8(filterChip, sizeof(filterChip), tr("%d ON"), filtersOn);
+        cascade::core::formatUtf8(filterChip, tr("%d ON"), filtersOn);
     }
-    if (!benchSection(trId("Audio filters"), false, filterChip,
+    if (!benchSection(trId("Audio filters"), false, filterChip.c_str(),
                       cascade::gui::theme::kPhosphor, filtersOn > 0)) {
         return;
     }
@@ -9383,21 +9425,21 @@ void AppWindow::drawPluginStoreSection() {
     const std::size_t pendingUpdates =
         haveCatalog ? plannedPluginUpdates().size() : 0u;
     const bool storeBusy = catalogPending_ || installPending_;
-    char storeChip[64];
+    std::string storeChip;
     if (storeBusy) {
         // A TRANSFER IS THE MOST IMPORTANT THING THIS ROW CAN SAY, and it
         // outranks the update count: something is moving over the network on
         // the user's behalf and the window that can cancel it is behind this
         // key.
-        cascade::core::formatUtf8(storeChip, sizeof(storeChip), "%s", tr("BUSY"));
+        storeChip = tr("BUSY");
     } else if (!haveCatalog) {
-        cascade::core::formatUtf8(storeChip, sizeof(storeChip), "%s", tr("IDLE"));
+        storeChip = tr("IDLE");
     } else if (pendingUpdates > 0) {
-        cascade::core::formatUtf8(storeChip, sizeof(storeChip), tr("%zu UPD"), pendingUpdates);
+        cascade::core::formatUtf8(storeChip, tr("%zu UPD"), pendingUpdates);
     } else {
-        cascade::core::formatUtf8(storeChip, sizeof(storeChip), "%s", tr("OK"));
+        storeChip = tr("OK");
     }
-    if (benchSwitchRow(trId("Plugin store###pluginstore"), pluginBrowseOpen_, storeChip,
+    if (benchSwitchRow(trId("Plugin store###pluginstore"), pluginBrowseOpen_, storeChip.c_str(),
                        storeBusy      ? cascade::gui::theme::kPhosphor
                        : pendingUpdates > 0 ? cascade::gui::theme::kAmber
                                             : cascade::gui::theme::kPhosphor,
@@ -9422,7 +9464,7 @@ void AppWindow::drawPluginStoreSection() {
     // Committed on deactivate-after-edit rather than per keystroke, so a
     // half-typed host is never what a fetch would use.
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint("##catalogue_url", tr("catalogue index.json URL"),
+    cascade::gui::inputTextWithFittedHint("##catalogue_url", tr("catalogue index.json URL"),
                              pluginUrlBuf_, sizeof(pluginUrlBuf_));
     if (ImGui::IsItemDeactivatedAfterEdit()) { pluginCatalogueUrl_ = pluginUrlBuf_; }
     if (ImGui::IsItemHovered()) {
@@ -9474,15 +9516,15 @@ void AppWindow::drawDecodersSection() {
     // first place. gui/running_view.hpp holds every decision and
     // tests/test_running_view.cpp drives it.
     const std::size_t fed = pipeline_.running() ? fedDecoderCount() : 0u;
-    char decChip[64];
-    cascade::core::formatUtf8(decChip, sizeof(decChip), tr("%zu FED"), fed);
+    std::string decChip;
+    cascade::core::formatUtf8(decChip, tr("%zu FED"), fed);
     // VERIFICATION ONLY, the same house rule as FOXSDR_OPEN_PLUGIN_STORE: this
     // section's open state is ImGui's, kept in no config and reachable by no
     // remote control, so a bounded self-capture could not otherwise photograph
     // the STOP keys inside it. DefaultOpen applies the first time the node is
     // seen, so a session that closes it again is not fought.
     static const bool openForCapture = std::getenv("FOXSDR_OPEN_DECODERS") != nullptr;
-    if (!benchSection(trId("Turn on and off plugins###decoders"), openForCapture, decChip,
+    if (!benchSection(trId("Turn on and off plugins###decoders"), openForCapture, decChip.c_str(),
                       cascade::gui::theme::kPhosphor, fed > 0)) {
         return;
     }
@@ -9643,15 +9685,15 @@ void AppWindow::drawPluginsSection() {
     // the window still has to learn.
     const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
         pluginInventory_.plugins, pluginInventory_.policies);
-    char header[160];
+    std::string header;
     if (blocked == 0u) {
-        cascade::core::formatUtf8(header, sizeof(header), "%s", trId("Plugins###plugins"));
+        header = trId("Plugins###plugins");
     } else {
         // The visible half is translated; the "###plugins" id is not.
-        char shownPart[128];
-        cascade::core::formatUtf8(shownPart, sizeof(shownPart), tr("Plugins (%d disabled)"),
+        std::string shownPart;
+        cascade::core::formatUtf8(shownPart, tr("Plugins (%d disabled)"),
                       static_cast<int>(blocked));
-        cascade::core::formatUtf8(header, sizeof(header), "%s###plugins", shownPart);
+        header = shownPart + "###plugins";
     }
     // FED, OF DECODERS FITTED - the same two numbers the DECODERS card in the
     // status column prints, from the same two places, so the rail and the card
@@ -9668,7 +9710,7 @@ void AppWindow::drawPluginsSection() {
     // The lamp is decoding, and only that. A blocked module is already
     // lettered into this row's own label, and a rust lamp for it would put
     // trouble on a rail row that is at that moment decoding perfectly well.
-    if (benchSwitchRow(header, fittedWindowOpen_, pluginChip,
+    if (benchSwitchRow(header.c_str(), fittedWindowOpen_, pluginChip,
                        cascade::gui::theme::kPhosphor, fedPlugins > 0, true,
                        tr("Opens the fitted modules window: what is installed, which\n"
                        "modules are being fed, which were refused and why, and the\n"
@@ -10010,8 +10052,8 @@ void AppWindow::pollPluginAsync() {
         catalogPending_ = false;
         if (r.ok) {
             catalog_ = std::move(r.entries);
-            char statusBuf[128];
-            cascade::core::formatUtf8(statusBuf, sizeof(statusBuf),
+            std::string statusBuf;
+            cascade::core::formatUtf8(statusBuf,
                           catalog_.size() == 1u ? tr("%zu plugin in the catalogue")
                                                 : tr("%zu plugins in the catalogue"),
                           catalog_.size());
@@ -10051,8 +10093,8 @@ void AppWindow::pollPluginAsync() {
         // the manifest could not be written.
         if (r.ok || !r.installedPath.empty()) { rescanPlugins(); }
         if (r.ok) {
-            char reportBuf[1024];
-            cascade::core::formatUtf8(reportBuf, sizeof(reportBuf),
+            std::string reportBuf;
+            cascade::core::formatUtf8(reportBuf,
                           r.isUpdate ? tr("Updated %s to %s") : tr("Installed %s to %s"),
                           r.name.c_str(), r.installedPath.c_str());
             installReport_ = reportBuf;
@@ -10061,8 +10103,8 @@ void AppWindow::pollPluginAsync() {
                 // plugin is unmanaged until a later install or catalogue fetch
                 // repairs the record — and an unmanaged plugin is never
                 // retired, which is the fail-open rule doing its job.
-                char recordBuf[1024];
-                cascade::core::formatUtf8(recordBuf, sizeof(recordBuf),
+                std::string recordBuf;
+                cascade::core::formatUtf8(recordBuf,
                               tr("%s was installed, but its record could not be written: %s. "
                                  "It will not be version-checked until that is repaired."),
                               r.name.c_str(), r.recordError.c_str());
@@ -10132,11 +10174,11 @@ void AppWindow::startAddAll(bool noticesAcknowledged) {
 
 std::string AppWindow::addAllProgressLine() const {
     if (!addAllRun_.active) { return {}; }
-    char buf[256];
+    std::string buf;
     // "installing 4 of 23: GOES Weather Satellites (HRIT / LRIT)" - the
     // position AND the name, because a bar with no name cannot tell a user
     // which module is the slow one.
-    cascade::core::formatUtf8(buf, sizeof buf, tr("installing %zu of %zu: %s"),
+    cascade::core::formatUtf8(buf, tr("installing %zu of %zu: %s"),
                   std::min(addAllRun_.next + 1u, addAllRun_.total), addAllRun_.total,
                   addAllRun_.currentName.empty() ? tr("starting") : addAllRun_.currentName.c_str());
     return buf;
@@ -10217,9 +10259,8 @@ void AppWindow::pumpAddAll() {
     std::snprintf(buf, sizeof buf, "%d installed, %d failed", addAllRun_.installed,
                   addAllRun_.failed);
     std::string logged = buf;
-    cascade::core::formatUtf8(buf, sizeof buf, tr("%d installed, %d failed"),
+    addAllSummary_ = cascade::core::formatText(tr("%d installed, %d failed"),
                               addAllRun_.installed, addAllRun_.failed);
-    addAllSummary_ = buf;
     addAllFailed_ = addAllRun_.failed > 0;
     if (addAllRun_.failed > 0) {
         // NAMED, WITH THE REASON EACH GAVE. "3 failed" is a number nobody can
@@ -10264,8 +10305,8 @@ void AppWindow::removeInstalledPlugin(const std::string& fileName) {
     detachAndUnloadPlugins();
     std::string err;
     if (pluginRepo_.remove(pluginDir_, fileName, err)) {
-        char removedBuf[512];
-        cascade::core::formatUtf8(removedBuf, sizeof(removedBuf), tr("Removed %s"), fileName.c_str());
+        std::string removedBuf;
+        cascade::core::formatUtf8(removedBuf, tr("Removed %s"), fileName.c_str());
         installReport_ = removedBuf;
     } else {
         installError_ = err;
@@ -11242,22 +11283,22 @@ void AppWindow::drawReceiverPositionOffers() {
     const int heard = cascade::gui::scopeTrafficCentre(pluginUi_.tracks(), tLat, tLon);
     const bool trafficReady = heard >= cascade::gui::kScopeTrafficCentreMinAircraft &&
                               cascade::gui::receiverPositionAcceptable(tLat, tLon);
-    char label[192];
+    std::string label;
     if (trafficReady) {
-        cascade::core::formatUtf8(label, sizeof(label),
+        cascade::core::formatUtf8(label,
                       tr("Use the middle of the %d aircraft heard  (%.2f%s %.2f%s)"), heard,
                       std::fabs(tLat), cascade::i18n::hemisphereLetter(true, tLat >= 0.0),
                       std::fabs(tLon), cascade::i18n::hemisphereLetter(false, tLon >= 0.0));
     } else if (heard > 0) {
-        cascade::core::formatUtf8(label, sizeof(label), tr("Use the middle of the traffic  (%d heard, need %d)"),
+        cascade::core::formatUtf8(label, tr("Use the middle of the traffic  (%d heard, need %d)"),
                       heard, cascade::gui::kScopeTrafficCentreMinAircraft);
     } else {
-        cascade::core::formatUtf8(label, sizeof(label), "%s", tr("Use the middle of the traffic  (none heard yet)"));
+        label = tr("Use the middle of the traffic  (none heard yet)");
     }
     ImGui::BeginDisabled(!trafficReady);
     // The caption is a whole sentence with figures in it; a translation that
     // outgrows the rail is drawn smaller rather than cut (gui/text_fit.hpp).
-    if (cascade::gui::fittedButton(label, ImVec2(-1.0f, 0.0f))) { applyReceiverPosition(tLat, tLon); }
+    if (cascade::gui::fittedButton(label.c_str(), ImVec2(-1.0f, 0.0f))) { applyReceiverPosition(tLat, tLon); }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip(tr("The mean position of the aircraft with a reported position.\n"
@@ -11281,11 +11322,11 @@ void AppWindow::drawReceiverPositionOffers() {
                                                  mapPage->view->viewCentreLonDeg())) {
         const double mLat = mapPage->view->viewCentreLatDeg();
         const double mLon = mapPage->view->viewCentreLonDeg();
-        cascade::core::formatUtf8(label, sizeof(label), tr("Use the %s map's centre  (%.2f%s %.2f%s)"),
+        cascade::core::formatUtf8(label, tr("Use the %s map's centre  (%.2f%s %.2f%s)"),
                       mapPage->plugin.c_str(), std::fabs(mLat),
                       cascade::i18n::hemisphereLetter(true, mLat >= 0.0), std::fabs(mLon),
                       cascade::i18n::hemisphereLetter(false, mLon >= 0.0));
-        if (cascade::gui::fittedButton(label, ImVec2(-1.0f, 0.0f))) {
+        if (cascade::gui::fittedButton(label.c_str(), ImVec2(-1.0f, 0.0f))) {
             applyReceiverPosition(mLat, mLon);
         }
         if (ImGui::IsItemHovered()) {
@@ -12220,18 +12261,18 @@ void AppWindow::drawPatchSection() {
     // whether the page is open or not - and the LAMP is whether the page is
     // showing. An empty patch says EMPTY rather than 0, because "0 nodes" and
     // "nothing built yet" read differently to someone who has never opened it.
-    char chip[16];
+    std::string chip;
     const std::size_t nodes = patchGraph_.nodes().size();
     if (patchRunning_) {
         // Running is the one thing worth saying from the rail: the receiver
         // is on the generator because of it.
-        cascade::core::formatUtf8(chip, sizeof(chip), "%s", tr("RUNNING"));
+        chip = tr("RUNNING");
     } else if (nodes == 0) {
-        cascade::core::formatUtf8(chip, sizeof(chip), "%s", tr("EMPTY"));
+        chip = tr("EMPTY");
     } else {
-        cascade::core::formatUtf8(chip, sizeof(chip), nodes == 1 ? tr("%zu NODE") : tr("%zu NODES"), nodes);
+        cascade::core::formatUtf8(chip, nodes == 1 ? tr("%zu NODE") : tr("%zu NODES"), nodes);
     }
-    if (benchSwitchRow(trId("Patch###patch"), patchOpen_, chip, cascade::gui::theme::kPhosphor,
+    if (benchSwitchRow(trId("Patch###patch"), patchOpen_, chip.c_str(), cascade::gui::theme::kPhosphor,
                        patchOpen_, true,
                        tr("Opens the patch canvas: radios, channels, decoders and\n"
                           "displays wired together by hand. Drag from a port to wire it.\n"
@@ -12431,17 +12472,17 @@ void AppWindow::drawPatchPage() {
                                    : info.feed == cascade::core::patch::PortType::Iq
                                        ? "%s (I/Q)"
                                        : tr("%s (audio)");
-            char shown[128];
-            std::snprintf(shown, sizeof(shown), shownFmt, info.name.c_str());
-            char label[160];
-            cascade::core::formatUtf8(label, sizeof(label), "%s###dec%zu", shown, i);
-            const float keyW = ImGui::CalcTextSize(label, nullptr, true).x +
+            std::string shown;
+            cascade::core::formatUtf8(shown, shownFmt, info.name.c_str());
+            std::string label;
+            cascade::core::formatUtf8(label, "%s###dec%zu", shown.c_str(), i);
+            const float keyW = ImGui::CalcTextSize(label.c_str(), nullptr, true).x +
                                ImGui::GetStyle().FramePadding.x * 2.0f;
             if (!cascade::gui::patch::keyWraps(ImGui::GetItemRectMax().x, keySpacing, keyW,
                                                 rowRight)) {
                 ImGui::SameLine();
             }
-            if (ImGui::Button(label)) { pressedDecoder = static_cast<int>(i); }
+            if (ImGui::Button(label.c_str())) { pressedDecoder = static_cast<int>(i); }
             if (ImGui::IsItemHovered()) {
                 // Four whole sentences rather than one built from fragments,
                 // so each can be translated as a sentence.
@@ -13255,16 +13296,16 @@ void AppWindow::drawScopeMode() {
             break;
         }
     }
-    char altTxt[16];
+    std::string altTxt;
     if (haveAlt) {
-        std::snprintf(altTxt, sizeof(altTxt), "FL%03d",
+        cascade::core::formatUtf8(altTxt, "FL%03d",
                       static_cast<int>(topAltM * 3.28084 / 100.0));
     } else if (!selId.empty()) {
         // Selected, but the aircraft has not reported an altitude - which is a
         // different statement from nothing being selected, and reads as one.
-        cascade::core::formatUtf8(altTxt, sizeof(altTxt), "%s", tr("NO ALT"));
+        altTxt = tr("NO ALT");
     } else {
-        std::snprintf(altTxt, sizeof(altTxt), "--");
+        altTxt = "--";
     }
     // 13,000 m of full scale - a little above the ceiling of everything with a
     // transponder, so an airliner at cruise sits high on the bar without ever
@@ -13272,7 +13313,7 @@ void AppWindow::drawScopeMode() {
     const float deckR = instRight;
     cascade::gui::drawScopeGauge(dl, ImVec2(deckR - kGaugeW, instTop),
                                  ImVec2(deckR, instBot), tr("ALT"),
-                                 haveAlt ? topAltM / 13000.0 : 0.0, haveAlt, altTxt);
+                                 haveAlt ? topAltM / 13000.0 : 0.0, haveAlt, altTxt.c_str());
 
     // The scope and its panel fill everything between the gauges.
 
@@ -13462,18 +13503,16 @@ void AppWindow::drawScopeMode() {
             cascade::gui::drawScopeKnobTicks(dl, knobC, knobR, ticks, 5, sel);
         }
 
-        char gainTxt[24];
+        std::string gainTxt;
         if (!haveGain) {
-            cascade::core::formatUtf8(gainTxt, sizeof(gainTxt), "%s", tr("N/A"));
+            gainTxt = tr("N/A");
         } else if (deviceAgc_) {
-            cascade::core::formatUtf8(gainTxt, sizeof(gainTxt), "%s", tr("AUTO"));
+            gainTxt = tr("AUTO");
         } else {
             // In the first stage's OWN unit: the knob over an Airspy reads
             // "7", the step it is on, not "7 dB" of nothing.
-            cascade::core::formatUtf8(gainTxt, sizeof(gainTxt), "%s",
-                          cascade::gui::formatGainValue(
-                              static_cast<double>(deviceGainsDb_[0]), firstGainUnit())
-                              .c_str());
+            gainTxt = cascade::gui::formatGainValue(
+                              static_cast<double>(deviceGainsDb_[0]), firstGainUnit());
         }
         // Where the gain sits on its own travel, so the pointer shows it.
         float gainFrac = 0.5f;
@@ -13481,7 +13520,7 @@ void AppWindow::drawScopeMode() {
             gainFrac = (deviceGainsDb_[0] - knobLoDb) / (knobHiDb - knobLoDb);
         }
         const int gainSteps = cascade::gui::drawScopeKnob(dl, knobC, knobR, tr("GAIN"),
-                                                          gainTxt, gainLive, gainFrac);
+                                                          gainTxt.c_str(), gainLive, gainFrac);
         if (gainSteps != 0 && gainLive) {
             // Two decibels a detent: fine enough to find the knee between more
             // aircraft and more noise, coarse enough to cross the whole travel
@@ -13631,8 +13670,8 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
     model.progress = pluginRepo_.progress();
     if (installPending_) {
         // One format string, so a translation can put the name where it goes.
-        char busyBuf[512];
-        cascade::core::formatUtf8(busyBuf, sizeof(busyBuf), tr("downloading %s"), installBusyName_.c_str());
+        std::string busyBuf;
+        cascade::core::formatUtf8(busyBuf, tr("downloading %s"), installBusyName_.c_str());
         model.busyLabel = busyBuf;
     } else {
         model.busyLabel = catalogPending_ ? std::string(tr("fetching the catalogue"))
@@ -14193,7 +14232,7 @@ std::string pluginPageLegend(const char* format, const std::string& name) {
     const int n = cascade::core::formatUtf8(nullptr, 0, format, name.c_str());
     std::string s(n > 0 ? static_cast<std::size_t>(n) : 0, '\0');
     if (n > 0) { cascade::core::formatUtf8(s.data(), s.size() + 1, format, name.c_str()); }
-    return cascade::core::upperLegend(s);
+    return cascade::core::upperLegend(s, cascade::i18n::current());
 }
 
 }  // namespace
@@ -14432,9 +14471,9 @@ void AppWindow::drawPluginWindows() {
         // The visible title (a taskbar entry once the page is its own window)
         // is translated; everything after "###" is the id, and stays as it
         // always was so the window keeps its identity in every language.
-        char titleBuf[160];
-        cascade::core::formatUtf8(titleBuf, sizeof(titleBuf), tr("%s Map"), pageIdent.c_str());
-        const std::string pageTitle = std::string(titleBuf) + "###mapPage:" + pageIdent;
+        std::string titleBuf;
+        cascade::core::formatUtf8(titleBuf, tr("%s Map"), pageIdent.c_str());
+        const std::string pageTitle = titleBuf + "###mapPage:" + pageIdent;
         // NO WINDOW PADDING ON THE SATELLITE PAGE, because its content is a
         // CABINET: the brass has to reach the frame the operating system drew,
         // and a four-pixel border of ImGui's window background all the way
@@ -14834,11 +14873,11 @@ void AppWindow::drawPluginWindows() {
                     std::string err;
                     // One format string per sentence, so a translation can
                     // place the path or the reason where its language puts it.
-                    char note[1024];
+                    std::string note;
                     if (cascade::core::writeBmp24(im, out.string(), err)) {
-                        cascade::core::formatUtf8(note, sizeof(note), tr("Saved %s"), out.string().c_str());
+                        cascade::core::formatUtf8(note, tr("Saved %s"), out.string().c_str());
                     } else {
-                        cascade::core::formatUtf8(note, sizeof(note), tr("Save failed: %s"), err.c_str());
+                        cascade::core::formatUtf8(note, tr("Save failed: %s"), err.c_str());
                     }
                     imageSaveNote_ = note;
                     // WHOSE WINDOW SAID IT, AND WHEN. Without these two the
@@ -15046,7 +15085,7 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
         // and the two are different words in most languages. So this key is
         // the map page's own "Fit" (the same zoom-to-fit, same key) in the
         // bench's capitals - "FIT" in English, exactly as before.
-        const std::string fitWord = cascade::core::upperLegend(tr("Fit"));
+        const std::string fitWord = cascade::core::upperLegend(tr("Fit"), cascade::i18n::current());
         const float kFitW = std::max(66.0f, ImGui::CalcTextSize(fitWord.c_str()).x + 24.0f);
         const float kWorldW = std::max(108.0f, ImGui::CalcTextSize(tr("WHOLE WORLD")).x + 24.0f);
         const float kStopW =
@@ -15105,11 +15144,11 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
                         page.view->clearFollow();
                     }
                 }
-                char line[96];
-                cascade::core::formatUtf8(line, sizeof line, tr("FOLLOWING %s"), followed.c_str());
-                const ImVec2 ts = sf->CalcTextSizeA(spx, FLT_MAX, 0.0f, line);
+                std::string line;
+                cascade::core::formatUtf8(line, tr("FOLLOWING %s"), followed.c_str());
+                const ImVec2 ts = sf->CalcTextSizeA(spx, FLT_MAX, 0.0f, line.c_str());
                 dl->AddText(sf, spx, ImVec2(x, stripY + (kStripKeyH - ts.y) * 0.5f),
-                            cascade::gui::theme::kGold, line, nullptr,
+                            cascade::gui::theme::kGold, line.c_str(), nullptr,
                             (textRight > x) ? (textRight - x) : 1.0f);
             } else {
                 dl->AddText(sf, spx,
@@ -15239,9 +15278,9 @@ void AppWindow::drawPluginWindowRows() {
         const char* chip = (im.width == 0u || im.height == 0u) ? tr("WAIT")
                                                                : (im.complete ? tr("IMG") : "RX");
         // The visible half as one format string; the id after ### is unchanged.
-        char rowShown[160];
-        cascade::core::formatUtf8(rowShown, sizeof rowShown, tr("%s image"), ident(im.plugin).c_str());
-        const std::string row = std::string(rowShown) + "###imgrow:" + ident(im.plugin);
+        std::string rowShown;
+        cascade::core::formatUtf8(rowShown, tr("%s image"), ident(im.plugin).c_str());
+        const std::string row = rowShown + "###imgrow:" + ident(im.plugin);
         if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
                            tr("Opens this decoder's picture window. WAIT until the first\n"
                               "picture arrives, RX while one is coming in, IMG when it is\n"
@@ -15254,11 +15293,11 @@ void AppWindow::drawPluginWindowRows() {
     for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
         const std::string id = p.title + "###panel_" + p.plugin;
         const bool on = pluginWindows_.shown(id);
-        char chip[24];
-        cascade::core::formatUtf8(chip, sizeof chip, tr("%d ROW"), static_cast<int>(p.rows.size()));
+        std::string chip;
+        cascade::core::formatUtf8(chip, tr("%d ROW"), static_cast<int>(p.rows.size()));
         const std::string row =
             ident(p.title) + "###panelrow:" + ident(p.plugin) + ":" + ident(p.title);
-        if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
+        if (benchSwitchRow(row.c_str(), on, chip.c_str(), cascade::gui::theme::kPhosphor, on, true,
                            tr("Opens this plugin's own window. Nothing opens it for you;\n"
                               "close it from its key and it stays closed - opening it also\n"
                               "tunes and starts the decoder, just like its preset."))) {
@@ -15313,8 +15352,8 @@ void AppWindow::drawMapPageSections() {
         // window's TARGETS heading cannot report two different numbers. The
         // LAMP is whether the window is open, which is the other half of what
         // a switch has to say about itself.
-        char chip[24];
-        cascade::core::formatUtf8(chip, sizeof chip, tr("%d TGT"), static_cast<int>(pg.visibleCount));
+        std::string chip;
+        cascade::core::formatUtf8(chip, tr("%d TGT"), static_cast<int>(pg.visibleCount));
         // The plugin's own display name, which is what its window is titled
         // with: two track sources installed would otherwise give two rows
         // reading the same word.
@@ -15329,15 +15368,15 @@ void AppWindow::drawMapPageSections() {
             if (idc == '#') { idc = '_'; }
         }
         // The visible half as one format string; the id after ### is unchanged.
-        char rowShown[160];
-        cascade::core::formatUtf8(rowShown, sizeof rowShown, tr("%s map"), ident.c_str());
-        const std::string row = std::string(rowShown) + "###mappage:" + ident;
+        std::string rowShown;
+        cascade::core::formatUtf8(rowShown, tr("%s map"), ident.c_str());
+        const std::string row = rowShown + "###mappage:" + ident;
         // TWO TOOLTIPS, BECAUSE THERE ARE TWO KINDS OF PAGE. The satellites
         // page is a whole instrument and its key is the only way to any of it;
         // every other page is a map with a bar of controls along the top. A
         // single sentence covering both would describe neither.
         const bool wasOpen = pg.open;
-        if (benchSwitchRow(row.c_str(), pg.open, chip, cascade::gui::theme::kPhosphor,
+        if (benchSwitchRow(row.c_str(), pg.open, chip.c_str(), cascade::gui::theme::kPhosphor,
                            pg.open, true,
                            pg.satellite
                                ? tr("Opens the satellites window: receiver position, "
@@ -16033,12 +16072,11 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
         const double hereHz =
             pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
         // The visible words from one format string, then the ## id as before.
-        char saveShown[128];
-        cascade::core::formatUtf8(saveShown, sizeof(saveShown), tr("+ Save %.4f MHz as a preset"),
+        std::string saveShown;
+        cascade::core::formatUtf8(saveShown, tr("+ Save %.4f MHz as a preset"),
                       hereHz / 1.0e6);
-        char save[160];
-        cascade::core::formatUtf8(save, sizeof(save), "%s##upsave", saveShown);
-        if (ImGui::Button(save, ImVec2(-1.0f, 0.0f))) {
+        const std::string save = saveShown + "##upsave";
+        if (ImGui::Button(save.c_str(), ImVec2(-1.0f, 0.0f))) {
             pendingUserPresetEdit_ = {PendingUserPresetEdit::Op::Save, fileKey, 0};
         }
         if (ImGui::IsItemHovered()) {
@@ -16075,8 +16113,8 @@ void AppWindow::consumePendingUserPresetEdit() {
     if (edit.op == PendingUserPresetEdit::Op::Forget) {
         if (cascade::core::removeUserPreset(userPresets_, key, edit.ordinal)) {
             rebuildMuteStates();
-            char forgot[192];
-            cascade::core::formatUtf8(forgot, sizeof(forgot), tr("Forgot a preset for %s"),
+            std::string forgot;
+            cascade::core::formatUtf8(forgot, tr("Forgot a preset for %s"),
                           found->name.c_str());
             presetNote_ = forgot;
         }
@@ -16093,29 +16131,29 @@ void AppWindow::consumePendingUserPresetEdit() {
     u.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
     u.bandwidthHz = vfoBandwidthHz_;
     u.label = cascade::core::defaultUserPresetLabel(u.frequencyHz);
-    char note[192];
+    std::string note;
     switch (cascade::core::addUserPreset(userPresets_, u)) {
         case cascade::core::UserPresetAdd::Added:
             rebuildMuteStates();
-            cascade::core::formatUtf8(note, sizeof(note), tr("Saved %.4f MHz as a preset for %s"),
+            cascade::core::formatUtf8(note, tr("Saved %.4f MHz as a preset for %s"),
                           u.frequencyHz / 1.0e6, found->name.c_str());
             break;
         case cascade::core::UserPresetAdd::AlreadySaved:
-            cascade::core::formatUtf8(note, sizeof(note), tr("%.4f MHz is already a preset for %s"),
+            cascade::core::formatUtf8(note, tr("%.4f MHz is already a preset for %s"),
                           u.frequencyHz / 1.0e6, found->name.c_str());
             break;
         case cascade::core::UserPresetAdd::PluginFull:
-            cascade::core::formatUtf8(note, sizeof(note),
+            cascade::core::formatUtf8(note,
                           tr("%s already has %u presets of yours - forget one to save another"),
                           found->name.c_str(),
                           static_cast<unsigned>(cascade::core::kMaxUserPresetsPerPlugin));
             break;
         case cascade::core::UserPresetAdd::ListFull:
-            cascade::core::formatUtf8(note, sizeof(note), "%s", tr("No room for another preset"));
+            note = tr("No room for another preset");
             break;
         case cascade::core::UserPresetAdd::Invalid:
         default:
-            cascade::core::formatUtf8(note, sizeof(note), "%s", tr("Not saved: no usable frequency to save"));
+            note = tr("Not saved: no usable frequency to save");
             break;
     }
     presetNote_ = note;
@@ -16231,8 +16269,8 @@ void AppWindow::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // is the one drawPluginWindows draws by, built from the same display name.
     openPluginWindowsFor(p);
 
-    char note[192];
-    cascade::core::formatUtf8(note, sizeof(note), tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
+    std::string note;
+    cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
                   p.name.c_str());
     presetNote_ = note;
 }
@@ -16910,9 +16948,9 @@ void AppWindow::drawMutePopup() {
     ImGui::TextWrapped(tr("%s is still running and is muting the audio."), who.c_str());
     ImGui::TextWrapped("%s", tr("Stop it so sound resumes?"));
     ImGui::Spacing();
-    char stopLabel[256];
-    cascade::core::formatUtf8(stopLabel, sizeof(stopLabel), tr("Stop %s and resume sound"), who.c_str());
-    if (ImGui::Button(stopLabel)) {
+    std::string stopLabel;
+    cascade::core::formatUtf8(stopLabel, tr("Stop %s and resume sound"), who.c_str());
+    if (ImGui::Button(stopLabel.c_str())) {
         stopMutingPlugins(mutePopup_.keys);
         ImGui::CloseCurrentPopup();
     }
@@ -17559,7 +17597,11 @@ void AppWindow::drawTransmitPage() {
     const bool haveRange = have && sink->gainRangeDb(quiet, loud);
     char power[32];
     cascade::gui::formatTxPower(power, sizeof(power), transmitPowerDb_, quiet);
-    ImGui::TextUnformatted(tr("POWER"));
+    // "TX POWER", not "POWER": the receiver's lamp on the scope bench is
+    // "POWER" too, and the two are different words in most languages - the
+    // lamp switches the receiver on, this sets how loud the transmitter is.
+    // One key could only ever be right for one of them.
+    ImGui::TextUnformatted(tr("TX POWER"));
     ImGui::SameLine();
     {
         // A SLIDER IN THE BOARD'S OWN SPAN, drawn so that RIGHT IS LOUDER -
@@ -17892,10 +17934,8 @@ void AppWindow::drawFeatureRequestPage() {
         disabledReason = tr(contactError.c_str());
     } else if (cooling) {
         const std::uint64_t left = blockedUntil - nowEpoch;
-        char wait[96];
-        cascade::core::formatUtf8(wait, sizeof(wait), tr("wait %llus before sending another"),
+        cascade::core::formatUtf8(disabledReason, tr("wait %llus before sending another"),
                       static_cast<unsigned long long>(left));
-        disabledReason = wait;
     }
     const bool canSend = disabledReason.empty();
 
@@ -17910,11 +17950,16 @@ void AppWindow::drawFeatureRequestPage() {
         // line (see boxH). The problem-report
         // page below always wraps its reason under the key, because there
         // the kind's own sentence is longer than any of these.
+        //
+        // AND BESIDE IT AT A SMALLER SIZE before it is moved under the key
+        // (text_fit.hpp, sameLineFittedText): "(write at least 10
+        // characters - 0 so far)" in Russian, Ukrainian, Greek and Japanese
+        // was a few pixels too long and dropped under SEND, where it read as a
+        // line of the page rather than as the key's reason. Only a reason
+        // that does not fit even at seven tenths goes below, wrapped.
         std::string shown = "(" + disabledReason + ")";
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
-        if (cascade::gui::sameLineIfFits(ImGui::CalcTextSize(shown.c_str()).x)) {
-            ImGui::TextUnformatted(shown.c_str());
-        } else {
+        if (!cascade::gui::sameLineFittedText(shown.c_str())) {
             ImGui::PushTextWrapPos(0.0f);
             ImGui::TextUnformatted(shown.c_str());
             ImGui::PopTextWrapPos();
@@ -18140,10 +18185,8 @@ void AppWindow::drawProblemReportPage() {
         disabledReason = tr(contactError.c_str());
     } else if (cooling) {
         const std::uint64_t left = blockedUntil - nowEpoch;
-        char wait[96];
-        cascade::core::formatUtf8(wait, sizeof(wait), tr("wait %llus before sending another"),
+        cascade::core::formatUtf8(disabledReason, tr("wait %llus before sending another"),
                       static_cast<unsigned long long>(left));
-        disabledReason = wait;
     }
     const bool canSend = disabledReason.empty();
 
@@ -19495,9 +19538,7 @@ void AppWindow::importBookmarkFile(const std::string& path) {
     const auto t0 = std::chrono::steady_clock::now();
     cascade::core::ImportResult r = cascade::core::importFrequencyFile(p);
     if (!r.error.empty() && r.items.empty()) {
-        std::vector<char> failed(r.error.size() + 256);
-        cascade::core::formatUtf8(failed.data(), failed.size(), tr("Could not import: %s"), r.error.c_str());
-        bookmarkImportNote_ = failed.data();
+        bookmarkImportNote_ = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
         cascade::core::diagWarnf("bookmarks: import of %s failed: %s", p.c_str(), r.error.c_str());
         return;
     }
@@ -19550,7 +19591,7 @@ void AppWindow::drawBookmarksSection() {
     const bool addBeside = cascade::gui::fitsBeside(kKeepField, bmSpacing, addW,
                                                     ImGui::GetContentRegionAvail().x);
     ImGui::SetNextItemWidth(addBeside ? -keyReserve(addW) : -1.0f);
-    ImGui::InputTextWithHint("##bm_name", tr("name"), bookmarkName_,
+    cascade::gui::inputTextWithFittedHint("##bm_name", tr("name"), bookmarkName_,
                              sizeof(bookmarkName_));
     if (addBeside) { ImGui::SameLine(); }
     if (ImGui::Button(trId("Add current"))) {
@@ -19582,8 +19623,12 @@ void AppWindow::drawBookmarksSection() {
     const bool importBeside = cascade::gui::fitsBeside(kKeepField, bmSpacing, importW,
                                                        ImGui::GetContentRegionAvail().x);
     ImGui::SetNextItemWidth(importBeside ? -keyReserve(importW) : -1.0f);
-    ImGui::InputTextWithHint("##bm_import", tr("SDR# frequencies.xml or .csv - or drop it on the window"),
-                             bookmarkImportPath_, sizeof(bookmarkImportPath_));
+    // THE HINT IS FITTED TO THE FIELD (text_fit.hpp): at the field's own size
+    // it was cut mid-word in English ("...- or drop") and in every longer
+    // translation ("... of slee", nl).
+    cascade::gui::inputTextWithFittedHint(
+        "##bm_import", tr("SDR# frequencies.xml or .csv - or drop it on the window"),
+        bookmarkImportPath_, sizeof(bookmarkImportPath_));
     if (importBeside) { ImGui::SameLine(); }
     ImGui::BeginDisabled(bookmarkImportPath_[0] == '\0');
     if (ImGui::Button(trId("Import"), ImVec2(importW, 0.0f))) { importBookmarkFile(bookmarkImportPath_); }
@@ -19602,7 +19647,7 @@ void AppWindow::drawBookmarksSection() {
     // --- the view: search, group, favourites -------------------------------
     rebuildBookmarkView();
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##bm_filter", tr("search names, groups or MHz"), bookmarkFilter_,
+    cascade::gui::inputTextWithFittedHint("##bm_filter", tr("search names, groups or MHz"), bookmarkFilter_,
                              sizeof(bookmarkFilter_));
     if (!bookmarkGroups_.empty()) {
         const char* current = bookmarkGroupSel_ == 0
@@ -19666,16 +19711,14 @@ void AppWindow::drawBookmarksSection() {
             f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
             f.close();
             const std::string shown = recordDir_ + "/" + name;
-            // Sized from the path it carries, which is the only part of the
-            // sentence of unbounded length.
-            std::vector<char> said(shown.size() + 256);
+            std::string said;
             if (f) {
-                cascade::core::formatUtf8(said.data(), said.size(), tr("Exported %zu to %s"), out.size(),
+                cascade::core::formatUtf8(said, tr("Exported %zu to %s"), out.size(),
                               shown.c_str());
             } else {
-                cascade::core::formatUtf8(said.data(), said.size(), tr("Could not write %s"), shown.c_str());
+                cascade::core::formatUtf8(said, tr("Could not write %s"), shown.c_str());
             }
-            bookmarkImportNote_ = said.data();
+            bookmarkImportNote_ = said;
         }
     }
     if (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
@@ -19683,9 +19726,7 @@ void AppWindow::drawBookmarksSection() {
         if (ImGui::SmallButton(trId("Remove this group"))) {
             const std::string g = bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)];
             const std::size_t n = freqMgr_.removeGroup(g);
-            std::vector<char> said(g.size() + 256);
-            cascade::core::formatUtf8(said.data(), said.size(), tr("Removed %zu from \"%s\""), n, g.c_str());
-            bookmarkImportNote_ = said.data();
+            bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, g.c_str());
             bookmarkGroupSel_ = 0;
             saveBookmarks();
             rebuildBookmarkView();
@@ -21121,12 +21162,12 @@ void AppWindow::applyWebSettings() {
     const cascade::net::BindDecision d = webServer_.decision();
     const int port = webServer_.boundPort();
     // Drawn and nothing else, so it is translated as it is written.
-    char note[160];
+    std::string note;
     if (d.reachableOffMachine) {
-        cascade::core::formatUtf8(note, sizeof(note), tr("serving on port %d to every machine on your network"),
+        cascade::core::formatUtf8(note, tr("serving on port %d to every machine on your network"),
                       port);
     } else {
-        cascade::core::formatUtf8(note, sizeof(note), tr("serving at http://127.0.0.1:%d"), port);
+        cascade::core::formatUtf8(note, tr("serving at http://127.0.0.1:%d"), port);
     }
     webNote_ = note;
 }
@@ -21162,21 +21203,21 @@ void AppWindow::drawCatSection() {
     // thing the rail exists to show without opening the section. catStatus_ is
     // the listener's own failure text, so a refused port reads as trouble
     // rather than as OFF.
-    // 48, not the 16 an English chip needs: a translated word is longer, and
-    // what fits on the chip is the chip's business, not this buffer's.
-    char catChip[48];
+    // A string, not a chip-sized buffer: a translated word is longer, and
+    // what fits on the chip is the chip's business, not a byte count's.
+    std::string catChip;
     ImU32 catLamp = cascade::gui::theme::kPhosphor;
     if (!catStatus_.empty()) {
-        cascade::core::formatUtf8(catChip, sizeof(catChip), "%s", tr("FAIL"));
+        catChip = tr("FAIL");
         catLamp = cascade::gui::theme::kAlarm;
     } else if (!catServer_.running()) {
-        cascade::core::formatUtf8(catChip, sizeof(catChip), "%s", tr("OFF"));
+        catChip = tr("OFF");
     } else if (catServer_.clientCount() > 0) {
-        cascade::core::formatUtf8(catChip, sizeof(catChip), tr("%d CLI"), catServer_.clientCount());
+        cascade::core::formatUtf8(catChip, tr("%d CLI"), catServer_.clientCount());
     } else {
-        cascade::core::formatUtf8(catChip, sizeof(catChip), "%s", tr("ON"));
+        catChip = tr("ON");
     }
-    if (!benchSection(trId("CAT control (rigctld)"), false, catChip, catLamp,
+    if (!benchSection(trId("CAT control (rigctld)"), false, catChip.c_str(), catLamp,
                       !catStatus_.empty() || catServer_.running())) {
         return;
     }
@@ -21585,8 +21626,7 @@ void AppWindow::drawSerialPortsSection() {
         serialPortsList_ = cascade::core::enumerateSerialPorts();
         serialPortsListLoaded_ = true;
     }
-    char chip[48];  // room for a translated word, not only the English
-    cascade::gui::formatSerialPortsChip(serialPortsList_.size(), chip, sizeof(chip));
+    const std::string chip = cascade::gui::formatSerialPortsChip(serialPortsList_.size());
 
     // VERIFICATION ONLY, same house rule as FOXSDR_GPS_PORT above: this row's
     // open/closed state is ImGui's own in-memory storage, not AppConfig - so
@@ -21599,7 +21639,7 @@ void AppWindow::drawSerialPortsSection() {
 
     const bool listening = gpsReader_.listening();
     const bool open =
-        benchSection(trId("Serial ports"), false, chip, cascade::gui::theme::kPhosphor, listening);
+        benchSection(trId("Serial ports"), false, chip.c_str(), cascade::gui::theme::kPhosphor, listening);
     // THE SECOND TRIGGER: the row's own OPEN EDGE - closed last frame, open
     // this one, which is a person asking to see this right now. Not "every
     // frame it is open": a registry read (or a /dev scan) at frame rate is
@@ -21706,14 +21746,14 @@ void AppWindow::drawKeyBindingsSection() {
     // the manual says it is, and a count means it is not.
     const std::vector<std::string> changed =
         cascade::gui::keyBindingsToConfig(keyBindings_);
-    // 48 rather than 16: room for a translated word (see drawCatSection).
-    char chip[48];
+    // A string: room for a translated word (see drawCatSection).
+    std::string chip;
     if (changed.empty()) {
-        cascade::core::formatUtf8(chip, sizeof(chip), "%s", tr("STOCK"));
+        chip = tr("STOCK");
     } else {
-        cascade::core::formatUtf8(chip, sizeof(chip), tr("%zu SET"), changed.size());
+        cascade::core::formatUtf8(chip, tr("%zu SET"), changed.size());
     }
-    if (!benchSection(trId("Key bindings"), false, chip, cascade::gui::theme::kPhosphor,
+    if (!benchSection(trId("Key bindings"), false, chip.c_str(), cascade::gui::theme::kPhosphor,
                       !changed.empty())) {
         return;
     }
@@ -21780,20 +21820,31 @@ void AppWindow::drawKeyBindingsSection() {
         // somebody can drag narrower, so a fixed left edge is no use either.
         const float rowX = ImGui::GetCursorPosX();
         const float rowW = ImGui::GetContentRegionAvail().x;
-        // NAME AND CAP ON ONE LINE WHEN BOTH FIT, the cap on the line below
-        // when they do not (gui/text_fit.hpp). A translated action name is
-        // often longer than the English the rail was laid out for, and the cap
-        // used to be pushed past the rail's edge after it and cut in half. The
-        // name wraps, so a name longer than the whole rail is still all there.
+        // NAME AND CAP ON ONE LINE WHEN BOTH FIT (gui/text_fit.hpp,
+        // chipPlacement). A translated action name is often longer than the
+        // English the rail was laid out for. It used to wrap across the whole
+        // row and push its cap onto a line of its own, where the cap sat
+        // between two names and belonged to neither; now the name wraps in the
+        // room LEFT of the cap and the cap stays on its first line. Only a
+        // rail too narrow for one word of the name beside the cap puts the cap
+        // underneath, as before.
         const char* actionName = tr(cascade::gui::keyActionName(action));
         const float spacing = ImGui::GetStyle().ItemSpacing.x;
-        const bool capBeside = cascade::gui::fitsBeside(ImGui::CalcTextSize(actionName).x,
-                                                        spacing, keyW, rowW);
-        ImGui::PushTextWrapPos(0.0f);
+        const cascade::gui::ChipPlace place = cascade::gui::chipPlacement(
+            ImGui::CalcTextSize(actionName).x,
+            cascade::gui::longestUnbreakableWidth(ImGui::GetFont(), ImGui::GetFontSize(),
+                                                  actionName),
+            spacing, keyW, rowW);
+        // ImGui's wrap position is window-local, as GetCursorPosX is.
+        ImGui::PushTextWrapPos(place == cascade::gui::ChipPlace::BesideWrapped
+                                   ? rowX + rowW - keyW - spacing
+                                   : 0.0f);
         ImGui::TextUnformatted(actionName);
         ImGui::PopTextWrapPos();
         // Never back OVER the name: on the same line the cap starts after it.
-        if (capBeside) { ImGui::SameLine(0.0f, spacing); }
+        // After wrapped text SameLine returns to the block's FIRST line, which
+        // is where the cap belongs.
+        if (place != cascade::gui::ChipPlace::Below) { ImGui::SameLine(0.0f, spacing); }
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), rowX + rowW - keyW));
         const ImVec2 tl = ImGui::GetCursorScreenPos();
         const ImVec2 br(tl.x + keyW, tl.y + keyH);
@@ -22047,10 +22098,8 @@ void AppWindow::copyDiagnosticsBundle() {
         if (out) {
             out << bundle;
             out.close();
-            std::vector<char> said(path.size() + 256);
-            cascade::core::formatUtf8(said.data(), said.size(), tr("Copied to the clipboard, and saved as %s"),
+            diagBundleStatus_ = cascade::core::formatText(tr("Copied to the clipboard, and saved as %s"),
                           path.c_str());
-            diagBundleStatus_ = said.data();
         }
     }
     cascade::core::diagLogf("diagnostics bundle produced (%zu bytes)", bundle.size());

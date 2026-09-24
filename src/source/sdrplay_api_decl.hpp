@@ -697,6 +697,14 @@ struct Api {
     mutable std::mutex sessionMutex;
     mutable int sessions = 0;
     mutable float version = 0.0f;  // what ApiVersion answered on the 0 -> 1 acquire
+    // THE SESSION IS LOST FOR THE LIFE OF THE PROCESS. Set when a thread of
+    // ours has been abandoned inside the vendor DLL or the service has
+    // declared itself gone (sdrplay_api_ServiceNotResponding) - the moment the
+    // driver stops entering the DLL for that DEVICE and orphans its session,
+    // which can therefore never be closed. Once set, sessionAcquire refuses
+    // and a scan returns without a vendor call: the 0.99.27 crash was a scan's
+    // GetDevices through exactly such a session. Never cleared.
+    mutable bool sessionLost = false;
 };
 
 }  // namespace cascade::source::sdrplay_abi

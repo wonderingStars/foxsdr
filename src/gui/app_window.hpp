@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <future>
 #include <limits>
@@ -41,6 +42,7 @@ struct GLFWwindow;
 #include "core/plugin_ui.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
+#include "core/utf8_text.hpp"
 #include "core/recorder.hpp"
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
@@ -260,14 +262,38 @@ inline void formatBandwidth(double hz, char* out, std::size_t n) {
 // PORTS" is the kind of thing a person notices and a test can pin without
 // a registry in the room.
 // Drawn and nothing else, so it is written in the interface language.
-inline void formatSerialPortsChip(std::size_t count, char* out, std::size_t n) {
-    if (count == 0) {
-        std::snprintf(out, n, "%s", cascade::i18n::tr("NONE"));
-    } else if (count == 1) {
-        std::snprintf(out, n, "%s", cascade::i18n::tr("1 PORT"));
-    } else {
-        std::snprintf(out, n, cascade::i18n::tr("%zu PORTS"), count);
+// A string rather than a caller's buffer: the chip is a translated word, and
+// a buffer sized for the English one cuts it.
+inline std::string formatSerialPortsChip(std::size_t count) {
+    if (count == 0) { return cascade::i18n::tr("NONE"); }
+    if (count == 1) { return cascade::i18n::tr("1 PORT"); }
+    return cascade::core::formatText(cascade::i18n::tr("%zu PORTS"), count);
+}
+
+// THE SOURCE ROW'S CHIP: the device in use, shortened to what fits. A driver's
+// device name is cut to its last ": " part ("SoapySDR: B200" is "B200") and
+// then to ten CHARACTERS - never a byte count, which would split an accented
+// letter. That cut is for third-party names only.
+//
+// THE BUILT-IN GENERATOR IS OURS, AND IS TRANSLATED - so it is not cut. Its
+// chip was the translation of "Signal generator" cut to ten characters, which
+// is where English "Signal gen" came from, and in Dutch, Swedish and Danish it
+// made "Signaalgen" / "Signalgene": a word hard-clipped with nothing to say so
+// (34-language review). It is now its own key, "Signal gen", whose translation
+// is a short form a translator chose, shown whole.
+inline std::string sourceChipText(const char* sourceName) {
+    if (sourceName != nullptr && std::strcmp(sourceName, "Signal generator") == 0) {
+        return cascade::i18n::tr("Signal gen");
     }
+    // Through tr() as before: "IQ file" is ours too, and a device name is in
+    // no catalogue and comes back unchanged.
+    std::string chip = sourceName != nullptr ? cascade::i18n::tr(sourceName) : "";
+    const std::size_t colon = chip.rfind(": ");
+    if (colon != std::string::npos) { chip = chip.substr(colon + 2); }
+    const char* end = chip.c_str();
+    for (int i = 0; i < 10 && *end != '\0'; ++i) { end = cascade::core::utf8Next(end); }
+    chip.resize(static_cast<std::size_t>(end - chip.c_str()));
+    return chip;
 }
 
 // The square key at the left of the row, and the plate that starts after it.
@@ -353,6 +379,34 @@ inline float railLabelRight(float rowRight, float rowH, float chipTextWidth) {
 // measures every label against the real face.
 inline constexpr float kMenuWidth = 384.0f;   // left column
 inline constexpr float kRailPlatePad = 8.0f;  // plate inset inside that column
+
+// THE FIVE BANK KEYS (drawRailBankKeys): the column's width shared five ways
+// after an 8 px inset each side and 4 px between keys, the word lettered at
+// fonts::kTinySize with 3 px of brass kept clear each side, and drawn smaller
+// down to kBankKeyWordFloorPx before anything is cut. That floor is the bench's
+// absolute nine pixels (text_fit.hpp's kFitFloorPx), not the seven tenths a
+// wider key stops at: at seven tenths "JÄRJESTELMÄ" (fi) lost its last letter
+// and "РАСШИРЕНИЯ" (ru) its last two (34-language review). test_app_rail
+// letters every catalogue's five words at this floor in this key.
+inline constexpr float kBankKeyInset = 8.0f;
+inline constexpr float kBankKeyGap = 4.0f;
+inline constexpr float kBankKeyWordPadX = 3.0f;
+inline constexpr float kBankKeyWordPadMinX = 1.0f;
+inline constexpr float kBankKeyWordFloorPx = 9.0f;
+inline float bankKeyWidth(float colW, int count) {
+    return (colW - 2.0f * kBankKeyInset - kBankKeyGap * static_cast<float>(count - 1)) /
+           static_cast<float>(count);
+}
+// The brass kept clear each side of the word: kBankKeyWordPadX, or - only for
+// a word that does not fit even at the floor with that much - one pixel.
+// "РАСШИРЕНИЯ" (ru) and "РОЗШИРЕННЯ" (uk) are 66.8 px at nine pixels in a
+// 64.4 px room; two more pixels of metal each side hold them whole, and a word
+// a pixel from the bevel is a tight key where a cut one is a broken key.
+// `wordWAtFloor` is the word's width at kBankKeyWordFloorPx.
+inline float bankKeyWordPadX(float wordWAtFloor, float keyW) {
+    return wordWAtFloor + 2.0f * kBankKeyWordPadX <= keyW + 0.5f ? kBankKeyWordPadX
+                                                                  : kBankKeyWordPadMinX;
+}
 
 // How wide ONE ROW ends up: the column, less the plate's inset on both sides,
 // less the scrolling child's own padding, less the scrollbar that child has

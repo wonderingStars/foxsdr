@@ -128,9 +128,9 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             figure(dl, ImVec2(split + 32.0f, vy), num);
             vy += lineH;
         }
-        char seq[32];
-        cascade::core::formatUtf8(seq, sizeof seq, tr("EVENT %u"), static_cast<unsigned>(in.state.seq));
-        engrave(dl, ImVec2(gtl.x + 8.0f, gbr.y - fonts::kTinySize - 6.0f), seq);
+        std::string seq;
+        cascade::core::formatUtf8(seq, tr("EVENT %u"), static_cast<unsigned>(in.state.seq));
+        engrave(dl, ImVec2(gtl.x + 8.0f, gbr.y - fonts::kTinySize - 6.0f), seq.c_str());
     }
     dl->PopClipRect();
     return gbr.y + 10.0f - tl.y;

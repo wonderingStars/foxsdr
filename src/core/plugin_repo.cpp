@@ -1807,9 +1807,7 @@ std::string PluginRepo::pluginBlockMessage(const InstalledPlugin& installed,
     // a whole sentence is the smallest thing ever handed to a translator.
     using cascade::i18n::tr;
     const auto fill = [](const char* format, const std::string& a, const std::string& b) {
-        char buf[512];
-        formatUtf8(buf, sizeof(buf), format, a.c_str(), b.c_str());
-        return std::string(buf);
+        return formatText(format, a.c_str(), b.c_str());
     };
     switch (r) {
         case PluginBlockReason::None:

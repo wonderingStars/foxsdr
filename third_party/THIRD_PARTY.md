@@ -3,7 +3,9 @@
 Every library the application links is vendored here, pinned to the exact
 revision the app was built and tested against, so an upstream change can never
 break or alter this build. Sources are verbatim upstream copies — **no vendored
-file has been modified**. Each subdirectory keeps its upstream license file.
+file has been modified**, with ONE documented exception: a fenced patch to Dear
+ImGui's word wrap for Chinese and Japanese (`imgui/FOXSDR-PATCHES.md`). Each
+subdirectory keeps its upstream license file.
 
 Those license files, plus SoapySDR's, are reproduced verbatim in
 `installer/THIRD-PARTY-LICENSES.txt`, the aggregate notice shipped with the
@@ -33,6 +35,7 @@ support SoapySDR exists to provide. It therefore stays external by design.
 | cpp-httplib | https://github.com/yhirose/cpp-httplib | tag `v0.53.1` (single header `httplib.h`) | `https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.53.1/httplib.h` | `bc69d53636a8757cb24a1deb9880bf7e2fdae3a80bbc759e145b8c80913cbfa3` | MIT (`cpp_httplib/LICENSE`) | `third_party/cpp_httplib/` |
 | Saira Condensed | https://github.com/google/fonts | commit `eda91bff215c766697fcbbcf836a6425e5c167ac` (`ofl/sairacondensed/`, Medium and SemiBold statics) | `https://raw.githubusercontent.com/google/fonts/eda91bff215c766697fcbbcf836a6425e5c167ac/ofl/sairacondensed/SairaCondensed-{Medium,SemiBold}.ttf` | Medium `a02d8fe45b8b7d952cb0dd341683b02ddc1b55dbd0ed89d9d438868be614b66f`, SemiBold `30f8ed4d078211003a9715c80c51ce031bab5c9a17e8771182e4c4599205634b` | SIL OFL 1.1, reserved name "Saira" (`fonts/OFL-SairaCondensed.txt`) | `third_party/fonts/` |
 | Nova Mono | https://github.com/google/fonts | commit `90abd17b4f97671435798b6147b698aa9087612f` (`ofl/novamono/`) | `https://raw.githubusercontent.com/google/fonts/90abd17b4f97671435798b6147b698aa9087612f/ofl/novamono/NovaMono.ttf` | `648eadb6648c0801b186d3dcef60ee6aa84a791b1e09c726935c0712508b4807` | SIL OFL 1.1, reserved name "NovaMono" (`fonts/OFL-NovaMono.txt`) | `third_party/fonts/` |
+| Noto Sans Condensed (Medium, SemiBold) | https://github.com/notofonts/notofonts.github.io (release of https://github.com/notofonts/latin-greek-cyrillic) | commit `28b15b4b43b7bed62b5cf6e6b0b5ff5846270535` (Noto Sans v2.015, tag `NotoSans-v2.015` upstream), `fonts/NotoSans/unhinted/ttf/` | `https://raw.githubusercontent.com/notofonts/notofonts.github.io/28b15b4b43b7bed62b5cf6e6b0b5ff5846270535/fonts/NotoSans/unhinted/ttf/NotoSans-Condensed{Medium,SemiBold}.ttf`; licence `https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/NotoSans-v2.015/OFL.txt` | upstream Medium `f77b058861b9e63d18782e46787f6570a7968aacdf299cbd481a998658a71876`, SemiBold `b41ecd0838ecd17b706432a01c0d63f8bf977d851cc2cf37242324233edb9294`; vendored SUBSETS Medium `7db3cd58a5cbf6129c3cb73ee0fc97255d6449837a53987acca21ce8068bbca0`, SemiBold `caa8702bf3bb10a771d267cf322acb7f1cdcd995bee15dce587000a72976ebeb` | SIL OFL 1.1, NO reserved font name (`fonts/OFL-NotoSans.txt`, sha256 `cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a`) | `third_party/fonts/` |
 
 Integrity cross-check: the SHA512 of each fetched tar.gz was compared against
 the SHA512 recorded in the corresponding vcpkg portfile
@@ -47,6 +50,14 @@ vcpkg fetches the full repo archive instead, so its hash is not comparable.)
 ## Per-library notes
 
 ### Dear ImGui (`third_party/imgui/`)
+**Patched in one place** (0.99.28): `ImFontCalcWordWrapPositionEx` in
+`imgui_draw.cpp` breaks Chinese and Japanese lines between characters and
+keeps closing marks off the start of a line. Every changed line is fenced by
+`FOXSDR PATCH (cjk-wrap)` comments; what it does, why, and how to re-apply it
+on an upgrade are in `imgui/FOXSDR-PATCHES.md`, and `tests/test_cjk_wrap.cpp`
+proves English and Korean still wrap byte for byte as upstream does. The
+archive hash in the table is of the UNPATCHED upstream archive.
+
 Vendored subset per spec: the core sources (`imgui*.cpp/h`, `imconfig.h`,
 `imstb_*.h`), the two backends the app uses
 (`backends/imgui_impl_glfw.*`, `backends/imgui_impl_opengl3.*` +
@@ -169,3 +180,32 @@ binaries lives. The pinned commits are the most recent ones touching those
 directories — both families' static instances have been unchanged there for
 years — and the raw files served at those commits were confirmed
 byte-identical to what is vendored here.
+
+### Noto Sans Condensed (`third_party/fonts/NotoSansCondensed-*-subset.ttf`)
+The FALLBACK behind the three faces above, merged into each role's ImGui font
+so the letters those faces lack are still drawn: Cyrillic and Greek (none of
+Saira, Nova Mono has Cyrillic; Saira has no Greek), Vietnamese and a handful of
+Cyrillic letters Georgia lacks on Windows. When a catalogue's letters are not
+all in the primary pair, the whole language is lettered in this face instead
+(src/gui/fonts.hpp says why). Medium backs the UI and reading roles, SemiBold
+the legend role - the weights of Saira they stand in for.
+
+**These ARE modified - subsetted - and that is allowed for this family only.**
+The copyright line of Noto Sans's OFL declares no Reserved Font Name (read in
+`fonts/OFL-NotoSans.txt`: "Copyright 2022 The Noto Project Authors
+(https://github.com/notofonts/latin-greek-cyrillic)", nothing reserved), so
+OFL clause 3 does not bind a Modified Version to a new name. The subset is cut
+by `tools/subset-noto.py` (fontTools 4.64) from the pinned upstream files
+above: Latin-1, Latin Extended-A/B and Additional, IPA/spacing modifiers and
+combining marks, Greek, Cyrillic and its supplement, punctuation, currency,
+letterlike symbols, arrows and a few mathematical signs; no hinting (the
+upstream files are the unhinted ones) and no layout tables (ImGui never reads
+GSUB/GPOS). Re-running the script on the upstream files reproduces the
+vendored bytes exactly - the hashes above were checked that way. The two
+subsets are about 121 KB each, against 425 KB for the full static faces.
+
+Chinese, Japanese and Korean are NOT embedded: one CJK face is 13-21 MB, so
+they are read from the operating system at run time (Microsoft YaHei /
+JhengHei / Yu Gothic / Malgun Gothic on Windows; Noto Sans CJK, Source Han
+Sans, WenQuanYi, Droid Sans Fallback, IPA, Nanum on Linux) and never shipped.
+See `src/core/scripts.hpp`.

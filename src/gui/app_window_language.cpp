@@ -26,8 +26,10 @@
 #include <imgui_stdlib.h>
 
 #include "core/countries.hpp"
+#include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "gui/fonts.hpp"
 #include "gui/list_pick.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
@@ -42,46 +44,20 @@ namespace {
 // Stepping and capitalising UTF-8 are core/utf8_text.hpp's, shared with the
 // rest of the interface; this file used to carry its own copies of both.
 using cascade::core::upperLegend;
-using cascade::core::utf8Append;
-using cascade::core::utf8Decode;
 
-// The base letter of every Latin-1 and Latin Extended-A letter, lower case,
-// indexed from U+00C0. Enough for the six catalogues' alphabets, so that
-// "Áustria" sorts among the A's and typing "osterreich" finds "Österreich".
-// '*' marks the two signs in the block (multiplication, division).
-constexpr char kLatinBase[] =
-    "aaaaaaaceeeeiiiidnooooo*ouuuuyts"  // U+00C0-U+00DF
-    "aaaaaaaceeeeiiiidnooooo*ouuuuyty"  // U+00E0-U+00FF
-    "aaaaaacccccccc"                    // U+0100-U+010D
-    "ddddeeeeeeeeeegggggggghhhh"        // U+010E-U+0127
-    "iiiiiiiiiiiijjkkk"                 // U+0128-U+0138
-    "llllllllllnnnnnnnnn"               // U+0139-U+014B
-    "oooooooorrrrrrsssssssstttttt"      // U+014C-U+0167
-    "uuuuuuuuuuuuwwyyyzzzzzzs";         // U+0168-U+017F
-static_assert(sizeof(kLatinBase) == 1 + 0x180 - 0xC0, "one entry per code point");
-
-// Lower case, accents off, for sorting and filtering. Not a collation - just
-// what makes a list of country names read in the order a reader expects.
-std::string foldKey(std::string_view s) {
-    std::string out;
-    out.reserve(s.size());
-    std::size_t i = 0;
-    while (i < s.size()) {
-        const unsigned int cp = utf8Decode(s, i);
-        if (cp < 0x80) {
-            out.push_back(static_cast<char>(cp >= 'A' && cp <= 'Z' ? cp - 'A' + 'a' : cp));
-        } else if (cp >= 0xC0 && cp < 0x180 && kLatinBase[cp - 0xC0] != '*') {
-            out.push_back(kLatinBase[cp - 0xC0]);
-        } else {
-            utf8Append(out, cp);
-        }
-    }
-    return out;
-}
+// Case and accents off, for sorting and filtering: core/utf8_text.hpp's, so
+// Cyrillic, Greek and Vietnamese names are found whichever case is typed.
+std::string foldKey(std::string_view s) { return cascade::core::foldForSearch(s); }
 
 // What a language is called in the Language combo: its own name, and a
 // plain statement when nobody has checked the translation.
 std::string languageLabel(const cascade::i18n::Language& l) {
+    // A language this machine cannot draw is named in ENGLISH, with the
+    // reason: its own name is written in the very characters that are
+    // missing, and "□□□" tells nobody which language they could not have.
+    if (const char* why = cascade::gui::fonts::unavailableReason(l.code); why[0] != '\0') {
+        return l.englishName + " - " + tr(why);
+    }
     std::string s = l.name;
     if (l.machine) {
         s += ' ';
@@ -103,6 +79,13 @@ void wrappedHint(const char* text) {
 }  // namespace
 
 void AppWindow::applyPendingLanguage() {
+    // The atlas follows the language, and the language list's names, here and
+    // only here - between frames, the one time ImGui is not holding a font
+    // (gui/fonts.hpp). Every frame, because the list asks for its names from
+    // inside a frame.
+    struct FontsAfter {
+        ~FontsAfter() { cascade::gui::fonts::applyPending(); }
+    } fontsAfter;
     if (!languageApplyPending_) { return; }
     languageApplyPending_ = false;
     std::string setting = languageSetting_;
@@ -126,7 +109,36 @@ void AppWindow::applyPendingLanguage() {
         const char* env = std::getenv("FOXSDR_LANGUAGE");
         if (env != nullptr && env[0] != '\0') { setting = env; }
     }
-    cascade::i18n::setLanguage(setting);
+    const std::string inForce = cascade::i18n::setLanguage(setting);
+    // A language this machine cannot draw resolves to English (i18n.hpp); the
+    // setting is kept, and the log says why the interface is not in it - the
+    // first place anyone looks when a screenshot is not in the language asked
+    // for. The catalogue asked for is found here WITHOUT the drawable rule:
+    // the code itself, or for "auto" the operating system's language.
+    if (inForce == "en") {
+        const bool followsSystem = foldKey(setting).empty() || foldKey(setting) == "auto";
+        const std::string wanted = followsSystem ? cascade::i18n::systemLocale() : setting;
+        const std::string wantedPrimary = foldKey(wanted.substr(0, wanted.find('-')));
+        std::string code;
+        for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+            if (l.code == "en") { continue; }
+            if (foldKey(l.code) == foldKey(wanted)) {
+                code = l.code;
+                break;
+            }
+            if (followsSystem && code.empty() &&
+                foldKey(l.code.substr(0, l.code.find('-'))) == wantedPrimary) {
+                code = l.code;
+            }
+        }
+        if (!code.empty()) {
+            if (const char* why = cascade::gui::fonts::unavailableReason(code); why[0] != '\0') {
+                std::fprintf(stderr, "i18n: %s not applied: %s\n", code.c_str(), why);
+                cascade::core::diagLogf("i18n: %s not applied: %s", code.c_str(), why);
+            }
+        }
+    }
+    cascade::gui::fonts::applyLanguage(inForce);
 }
 
 void AppWindow::drawLanguageSection() {
@@ -143,6 +155,11 @@ void AppWindow::drawLanguageSection() {
                      cascade::gui::theme::kPhosphor, false)) {
         return;
     }
+    // The list below names every language in its own script. Whatever the
+    // chain in force cannot draw of those names is loaded before the next
+    // frame - here, while the section is open, rather than when the combo
+    // opens, so the list is never drawn in boxes for its first frame.
+    cascade::gui::fonts::requestLanguageNames();
 
     // --- LANGUAGE -------------------------------------------------------------
     //
@@ -158,11 +175,11 @@ void AppWindow::drawLanguageSection() {
     // in the middle of a French row. It is the one name said in the language
     // in force - "Automatique (Anglais)" - which is also how the row reads to
     // somebody who does not know the English word for their own language.
-    char autoLabel[160];
+    std::string autoLabel;
     const char* autoName = (autoLang == nullptr || autoLang->code == "en")
                                ? tr("English")
                                : autoLang->name.c_str();
-    cascade::core::formatUtf8(autoLabel, sizeof(autoLabel), tr("Automatic (%s)"), autoName);
+    cascade::core::formatUtf8(autoLabel, tr("Automatic (%s)"), autoName);
 
     const std::vector<cascade::i18n::Language>& langs = cascade::i18n::languages();
     std::string preview;
@@ -185,16 +202,21 @@ void AppWindow::drawLanguageSection() {
     // the rail (gui/text_fit.hpp); the English row is as it was.
     if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Language")), preview.c_str())) {
         const bool autoSelected = followsSystem;
-        if (ImGui::Selectable(autoLabel, autoSelected) && !autoSelected) { picked = "auto"; }
+        if (ImGui::Selectable(autoLabel.c_str(), autoSelected) && !autoSelected) { picked = "auto"; }
         if (autoSelected) { ImGui::SetItemDefaultFocus(); }
         const std::size_t pick = cascade::gui::pickFromList(
             langs, [&](const cascade::i18n::Language& l, std::size_t i) {
                 const bool selected = !autoSelected && l.code == chosenCode;
+                // Listed, so nobody wonders where their language went, but not
+                // selectable: choosing it would only ever show English.
+                const bool drawable = cascade::gui::fonts::canDraw(l.code);
                 ImGui::PushID(static_cast<int>(i));
-                const bool hit = ImGui::Selectable(languageLabel(l).c_str(), selected);
+                const bool hit =
+                    ImGui::Selectable(languageLabel(l).c_str(), selected,
+                                      drawable ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled);
                 ImGui::PopID();
                 if (selected) { ImGui::SetItemDefaultFocus(); }
-                return hit && !selected;
+                return hit && !selected && drawable;
             });
         ImGui::EndCombo();
         if (pick != cascade::gui::kNoPick) { picked = langs[pick].code; }
@@ -299,13 +321,13 @@ void AppWindow::drawLanguageSection() {
 
     if (chosen != nullptr) {
         // Which plan the country chose, by the name the Region picker shows.
-        const char* planName = chosen->bandPlan;
+        std::string planName = chosen->bandPlan;
         for (const cascade::core::PlanInfo& p : bandPlanChoices_) {
-            if (p.id == chosen->bandPlan) { planName = p.name.c_str(); }
+            if (p.id == chosen->bandPlan) { planName = cascade::core::displayPlanName(p.name); }
         }
-        char line[200];
-        cascade::core::formatUtf8(line, sizeof(line), tr("Band plan: %s"), planName);
-        wrappedHint(line);
+        std::string line;
+        cascade::core::formatUtf8(line, tr("Band plan: %s"), planName.c_str());
+        wrappedHint(line.c_str());
         if (bandPlanSelection_ != chosen->bandPlan) {
             wrappedHint(tr("Display has since been set to a different band plan."));
         }
@@ -316,8 +338,8 @@ void AppWindow::drawLanguageSection() {
         if (!suggested.empty() && suggested != inForce) {
             const cascade::i18n::Language* l = cascade::i18n::findLanguage(suggested);
             if (l != nullptr) {
-                char key[200];
-                cascade::core::formatUtf8(key, sizeof(key), tr("USE %s"), upperLegend(l->name).c_str());
+                std::string key;
+                cascade::core::formatUtf8(key, tr("USE %s"), upperLegend(l->name).c_str());
                 std::string label = key;
                 label += "###uselanguage";
                 if (ImGui::Button(label.c_str())) {

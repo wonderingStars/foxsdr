@@ -485,10 +485,10 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             static const char* const kFilterSuffix[3] = {"", FOX_TR_NOOP("   ALERT ONLY"),
                                                          FOX_TR_NOOP("   NAMED ONLY")};
             const int f = (opts.filter >= 0 && opts.filter <= 2) ? opts.filter : 0;
-            char sub[96];
-            cascade::core::formatUtf8(sub, sizeof(sub), tr("of %d tracked   %d NM%s"), tracked, rangeNm,
+            std::string sub;
+            cascade::core::formatUtf8(sub, tr("of %d tracked   %d NM%s"), tracked, rangeNm,
                           tr(kFilterSuffix[f]));
-            textColoured(kPanelDim, sub);
+            textColoured(kPanelDim, sub.c_str());
         }
         ImGui::Separator();
 
@@ -539,12 +539,12 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
             if (tracked > 0) {
                 textColoured(kPanelDim, tr("NOTHING CURRENT"));
                 ImGui::Spacing();
-                char aged[320];
+                std::string aged;
                 // Singular and plural as two whole sentences: the English
                 // "has" / "have" handed in through %s was a word no catalogue
                 // could translate.
                 cascade::core::formatUtf8(
-                    aged, sizeof(aged),
+                    aged,
                     tracked == 1
                         ? tr("%d aircraft has been heard and none has reported inside the last "
                              "%llu seconds, which is the age the host drops a target at. They "
@@ -558,7 +558,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                     static_cast<unsigned long long>(cascade::core::kTrackDropMsAircraft /
                                                     1000ull));
                 ImGui::PushStyleColor(ImGuiCol_Text, kPanelDim);
-                ImGui::TextWrapped("%s", aged);
+                ImGui::TextWrapped("%s", aged.c_str());
                 ImGui::PopStyleColor();
             } else {
                 textColoured(kPanelDim, tr("NOTHING BEING HEARD"));
@@ -622,14 +622,14 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 const char* name = (ht.t.label[0] != '\0') ? ht.t.label : ht.t.id;
                 const bool alert = (ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u;
                 // Altitude beside it, banded by the same rule the face uses.
-                char altTxt[24];
+                std::string altTxt;
                 if (std::isfinite(ht.t.altM)) {
-                    std::snprintf(altTxt, sizeof(altTxt), "FL%03d",
+                    cascade::core::formatUtf8(altTxt, "FL%03d",
                                   static_cast<int>(ht.t.altM * 3.28084 / 100.0));
                 } else {
-                    cascade::core::formatUtf8(altTxt, sizeof(altTxt), "%s", tr("NO ALT"));
+                    altTxt = tr("NO ALT");
                 }
-                const ImVec2 asz = ImGui::CalcTextSize(altTxt);
+                const ImVec2 asz = ImGui::CalcTextSize(altTxt.c_str());
                 // THE NAME STOPS WHERE THE ALTITUDE STARTS. Both are placed
                 // from opposite ends of the row, so a long callsign on a narrow
                 // panel is drawn straight through the flight level - and two
@@ -646,17 +646,17 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
                 d->AddText(ImVec2(tl.x + w - asz.x - 4.0f, tl.y + 2.0f),
                            band < 0 ? kPanelDim
                                     : IM_COL32(bs.r, bs.g, bs.b, 255),
-                           altTxt);
+                           altTxt.c_str());
                 // Range and bearing from the aerial on the second line.
-                char sub[48];
+                std::string sub;
                 if (hasRx) {
-                    std::snprintf(sub, sizeof(sub), "%.0f NM   %03d deg", r.rangeNm,
+                    cascade::core::formatUtf8(sub, "%.0f NM   %03d deg", r.rangeNm,
                                   static_cast<int>(r.bearingDeg + 0.5) % 360);
                 } else {
-                    cascade::core::formatUtf8(sub, sizeof(sub), "%s", tr("no receiver position"));
+                    sub = tr("no receiver position");
                 }
                 d->AddText(ImVec2(tl.x + 4.0f, tl.y + ImGui::GetTextLineHeight() + 3.0f),
-                           kPanelDim, sub);
+                           kPanelDim, sub.c_str());
                 d->AddLine(ImVec2(tl.x, tl.y + rowH), ImVec2(tl.x + w, tl.y + rowH),
                            IM_COL32(134, 214, 74, 28), 1.0f);
                 ImGui::PopID();
@@ -2705,17 +2705,17 @@ void ScopeView::draw(float width, float height,
         // MODE and the receiver's own position, on the bottom corners, which is
         // where the design puts them and where they stay out of the way of the
         // range ladder along the top.
-        char pos[48];
-        cascade::core::formatUtf8(pos, sizeof(pos), "%.1f%s %05.1f%s", std::fabs(rxLat_),
+        std::string pos;
+        cascade::core::formatUtf8(pos, "%.1f%s %05.1f%s", std::fabs(rxLat_),
                       cascade::i18n::hemisphereLetter(true, rxLat_ >= 0.0), std::fabs(rxLon_),
                       cascade::i18n::hemisphereLetter(false, rxLon_ >= 0.0));
         const char* modeLabel = tr("MODE ADS-B");
         const ImVec2 modeSize = ImGui::CalcTextSize(modeLabel);
-        const ImVec2 posSize = ImGui::CalcTextSize(pos);
+        const ImVec2 posSize = ImGui::CalcTextSize(pos.c_str());
         const float bottomY = sqBR.y - 6.0f - ImGui::GetTextLineHeight();
         dl->AddText(ImVec2(sqTL.x + 8.0f, bottomY), kChromeDim, modeLabel);
         if (pairFits(modeSize.x, posSize.x, span)) {
-            dl->AddText(ImVec2(sqBR.x - 8.0f - posSize.x, bottomY), kChromeDim, pos);
+            dl->AddText(ImVec2(sqBR.x - 8.0f - posSize.x, bottomY), kChromeDim, pos.c_str());
         }
     }
 

@@ -53,6 +53,9 @@
 #include <string>
 #include <vector>
 
+#include <cstdio>
+
+#include "core/i18n.hpp"
 #include "core/plugin_abi.h"
 #include "gui/fonts.hpp"
 #include "gui/plugin_store_view.hpp"
@@ -744,6 +747,82 @@ void testAddAllPlan() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// 34-language review: the store's words in every catalogue, in the real faces
+// ---------------------------------------------------------------------------
+
+// Every word the card's action column letters under its key.
+const char* const kStatusWords[] = {"NOT FITTED", "REFUSED",       "STOPPED",   "TAKES NO SIGNAL",
+                                    "STARTED",    "NOT INSTALLED", "CANNOT FIT", "INSTALLED",
+                                    "UPDATE"};
+
+bool useLanguage(const std::string& code) {
+    if (!cascade::gui::fonts::canDraw(code)) { return false; }
+    cascade::i18n::setLanguage(code);
+    cascade::gui::fonts::applyLanguage(code);
+    cascade::gui::fonts::applyPending();
+    return true;
+}
+
+void testEveryLanguageStoreWords() {
+    std::printf("  every language: status words never broken mid-word, SHOW keeps two columns\n");
+    // THE SHOW COLUMN AT THE STORE'S DESIGN SIZE (1480 px wide, as it opens
+    // in a 1600 px main window): the well is 462 px, 442 inside its 10 px
+    // padding, two columns of (442 - 12) / 2 = 215 px - measured off the
+    // 34-language captures. English fits there at its own size. Every
+    // language must keep two columns there too, by drawing its longest label
+    // smaller, because a well that drops to one column of six grows three rows
+    // taller for the sake of one word (pt-PT, lt).
+    //
+    // ONE KNOWN EXCEPTION, asserted rather than skipped so it cannot go stale:
+    // Polish "NIE MOŻNA ZAMONTOWAĆ" (CANNOT FIT) needs about 239 px even at
+    // seven tenths, so the Polish well keeps the one column it always had.
+    // A shorter Polish label is a translator's decision, not a layout one.
+    useLanguage("en");
+    const float englishColW = 215.0f;
+    CHECK(cascade::gui::storeShowRockerMinWidth(storeProsePx()) <= englishColW);
+    CHECK(cascade::gui::storeShowTwoColumns(englishColW));
+    int broken = 0;
+    int wrapped = 0;
+    int oneColumn = 0;
+    int skipped = 0;
+    for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+        if (!useLanguage(l.code)) {
+            ++skipped;
+            continue;
+        }
+        ImFont* uf = cascade::gui::fonts::ui();
+        const float room = cascade::gui::storeStatusWordRoom();
+        for (const char* key : kStatusWords) {
+            const char* word = cascade::i18n::tr(key);
+            const cascade::gui::LineFit fit = cascade::gui::storeStatusWordFit(word);
+            if (!fit.wrap) { continue; }
+            ++wrapped;
+            // Wrapped is allowed; wrapped THROUGH a word is not ("PAIGALDAMAT / A").
+            if (cascade::gui::longestUnbreakableWidth(uf, fit.px, word) > room + 0.5f) {
+                std::printf("      %s: \"%s\" breaks mid-word in a %.1f px column\n", l.code.c_str(),
+                            word, room);
+                ++broken;
+            }
+        }
+        // (Only one way round: in the narrower Linux face Polish may fit.)
+        const bool knownOne = l.code == "pl";
+        if (!cascade::gui::storeShowTwoColumns(englishColW)) {
+            std::printf("      %s: SHOW is one column at %.1f px (needs %.1f at the floor)%s\n",
+                        l.code.c_str(), englishColW,
+                        cascade::gui::storeShowRockerMinWidth(cascade::gui::fitFloorFor(storeProsePx())),
+                        knownOne ? " - the known Polish exception" : "");
+            if (!knownOne) { ++oneColumn; }
+        }
+    }
+    useLanguage("en");
+    std::printf("    %d status words broken mid-word (%d wrapped at a word), %d one-column SHOW wells, "
+                "%d languages not drawable here\n",
+                broken, wrapped, oneColumn, skipped);
+    CHECK(broken == 0);
+    CHECK(oneColumn == 0);
+}
+
 int main() {
     testKindTag();
     testReachSummary();
@@ -754,5 +833,22 @@ int main() {
     testProseSize();
     testInstallState();
     testAddAllPlan();
+
+    // THE REAL FACES for the measured half, as test_bench_text_fits loads them.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1600.0f, 1000.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    const bool loaded = cascade::gui::fonts::load();
+    CHECK(loaded);
+    if (loaded) {
+        ImGui::NewFrame();
+        ImGui::Render();
+        testEveryLanguageStoreWords();
+    }
+    ImGui::DestroyContext();
     return testSummary("test_plugin_store_view");
 }

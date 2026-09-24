@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 
 namespace cascade::gui {
 
@@ -107,22 +108,17 @@ inline std::string stopAllLabel(int running) {
     // would append "###" plus the untranslated template and leave a second
     // unmatched %d in the string snprintf then fills). The finished, numbered
     // string is what the button reads as its id, exactly as before.
-    char buf[48];
-    std::snprintf(buf, sizeof(buf), cascade::i18n::tr("STOP ALL %d RUNNING"), running);
-    return std::string(buf);
+    return cascade::core::formatText(cascade::i18n::tr("STOP ALL %d RUNNING"), running);
 }
 
 // What the rail says about the cost, in the tester's own terms. Silent at one
 // decoder: one running decoder is the normal case and needs no warning.
 inline std::string runningCostNote(int running) {
     if (running < 2) { return std::string(); }
-    char buf[160];
-    std::snprintf(buf, sizeof(buf),
-                  cascade::i18n::tr(
-                      "%d decoders are running at once. They share one machine, and several "
-                      "at a time is what makes the audio stutter."),
-                  running);
-    return std::string(buf);
+    return cascade::core::formatText(
+        cascade::i18n::tr("%d decoders are running at once. They share one machine, and several "
+                          "at a time is what makes the audio stutter."),
+        running);
 }
 
 // STOPPING EVERYTHING MEANS EVERYTHING THAT IS RUNNING, and nothing else: a

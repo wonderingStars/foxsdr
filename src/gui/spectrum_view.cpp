@@ -362,25 +362,24 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
     const bool averaged = chrome != nullptr && chrome->emaAlpha > 0.0f &&
                           chrome->emaAlpha < 1.0f;
 
-    char binPart[24] = {'\0'};
+    std::string binPart;
     // The count describes bins that exist: a null array with a positive count
     // is a caller bug, and printing its number would dress that up as a
     // measurement of something.
     if (dbBins != nullptr && n > 0) {
-        cascade::core::formatUtf8(binPart, sizeof(binPart), tr(" - %d BIN"), n);
+        cascade::core::formatUtf8(binPart, tr(" - %d BIN"), n);
     }
-    char emaPart[24] = {'\0'};
+    std::string emaPart;
     if (averaged) {
-        cascade::core::formatUtf8(emaPart, sizeof(emaPart), tr(" - EMA %.2f"),
+        cascade::core::formatUtf8(emaPart, tr(" - EMA %.2f"),
                       static_cast<double>(chrome->emaAlpha));
     }
-    char line1[128];
-    cascade::core::formatUtf8(line1, sizeof(line1), "%s%s%s", title, binPart, emaPart);
+    const std::string line1 = std::string(title) + binPart + emaPart;
 
     const float headX = p0.x + kChromePad;
     float headY = p0.y + kChromePad * 0.75f;
-    addTrackedText(dl, legendFont, legendPx, ImVec2(headX, headY), kBright, line1, 0.7f);
-    float headRight = headX + trackedWidth(legendFont, legendPx, line1, 0.7f);
+    addTrackedText(dl, legendFont, legendPx, ImVec2(headX, headY), kBright, line1.c_str(), 0.7f);
+    float headRight = headX + trackedWidth(legendFont, legendPx, line1.c_str(), 0.7f);
     headY += legendH + 1.0f;
 
     // THE SECOND LINE IS A CLAIM, so it is only made when it is true. The
@@ -416,17 +415,17 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
             // the caption moved rather than the figure.
             const char* const kUnit = SpectrumView::kPeakUnit;
 
-            char ageLine[32] = {'\0'};
+            std::string ageLine;
             if (chrome->dataAgeSec >= 0.0 && std::isfinite(chrome->dataAgeSec)) {
                 // The age of the data the figure was measured from — not the
                 // age of the GUI frame, and deliberately not "HEARD ... AGO":
                 // the peak is taken off the same averaged trace the line above
                 // has just called a computed picture.
                 if (chrome->dataAgeSec < 10.0) {
-                    cascade::core::formatUtf8(ageLine, sizeof(ageLine), tr("MEASURED %.1f s AGO"),
+                    cascade::core::formatUtf8(ageLine, tr("MEASURED %.1f s AGO"),
                                   chrome->dataAgeSec);
                 } else {
-                    cascade::core::formatUtf8(ageLine, sizeof(ageLine), tr("MEASURED %.0f s AGO"),
+                    cascade::core::formatUtf8(ageLine, tr("MEASURED %.0f s AGO"),
                                   chrome->dataAgeSec);
                 }
             }
@@ -435,7 +434,7 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
             const float figW = textWidth(readFont, readPx, figure);
             const float unitW = textWidth(uiFont, tinyPx, kUnit);
             const float ageW =
-                ageLine[0] == '\0' ? 0.0f : trackedWidth(uiFont, tinyPx, ageLine, 0.4f);
+                ageLine.empty() ? 0.0f : trackedWidth(uiFont, tinyPx, ageLine.c_str(), 0.4f);
             const float blockW = std::max(capW, std::max(figW + unitW, ageW));
 
             const float right = p1.x - kChromePad;
@@ -455,14 +454,14 @@ void drawChrome(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const float*
                 dl->AddText(uiFont, tinyPx, ImVec2(right - unitW, y + (readH - tinyH)),
                             theme::withAlpha(theme::kAmber, 0.85f), kUnit);
                 y += readH + 1.0f;
-                if (ageLine[0] != '\0') {
+                if (!ageLine.empty()) {
                     // kDim, not the caveat's fainter ink: this line carries a
                     // FIGURE, and it is the figure that says whether the peak
                     // above it is worth reading at all. The caveat under the
                     // title is a statement about the picture and stays
                     // engraved-quiet; this is a measurement.
                     addTrackedText(dl, uiFont, tinyPx, ImVec2(right - ageW, y), kDim,
-                                   ageLine, 0.4f);
+                                   ageLine.c_str(), 0.4f);
                 }
             }
         }

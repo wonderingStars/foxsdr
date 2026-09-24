@@ -1860,20 +1860,20 @@ void MapView::draw(float width, float height,
             // wrong.
             dl->AddLine(ImVec2(a.x, a.y - 4.0f), ImVec2(a.x, a.y + 4.0f), barCol, 2.0f);
             dl->AddLine(ImVec2(b.x, b.y - 4.0f), ImVec2(b.x, b.y + 4.0f), barCol, 2.0f);
-            char buf[64];
+            std::string buf;
             // Whole sentences for the catalogue, with the hemisphere letter
             // in the language in force (i18n::hemisphereLetter).
             if (std::fabs(refLat) < 0.5) {
-                cascade::core::formatUtf8(buf, sizeof buf, tr("%.0f km at the equator"), barKm);
+                cascade::core::formatUtf8(buf, tr("%.0f km at the equator"), barKm);
             } else {
-                cascade::core::formatUtf8(buf, sizeof buf, tr("%.0f km at %.0f %s"), barKm,
+                cascade::core::formatUtf8(buf, tr("%.0f km at %.0f %s"), barKm,
                               std::fabs(refLat), cascade::i18n::hemisphereLetter(true, refLat >= 0.0));
             }
             // ABOVE THE RULE IT DESCRIBES, by a whole line. At -15 an 18 px
             // line box reaches three pixels below the bar - so the one figure
             // on this chart that is a MEASUREMENT was set overlapping its own
             // scale, which is where a descender lands.
-            addMapLabel(dl, ImVec2(a.x, a.y - mapLineH - kLabelGap), barCol, buf);
+            addMapLabel(dl, ImVec2(a.x, a.y - mapLineH - kLabelGap), barCol, buf.c_str());
         }
     }
 
@@ -2543,7 +2543,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
     // the window that owns it, from a track vector that does not distinguish
     // the two), so the words are corrected to the measurement that exists: how
     // far out, on each of 72 bearings, anything has been PLOTTED.
-    char covMeasured[200];
+    std::string covMeasured;
     const char* covNote;
     if (!haveRx) {
         covNote =
@@ -2555,12 +2555,12 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                "on each of 72 bearings - from every plugin, and from computed positions as "
                "well as received ones.");
     } else {
-        cascade::core::formatUtf8(covMeasured, sizeof covMeasured,
+        cascade::core::formatUtf8(covMeasured,
                       tr("%d of %d bearings reached, furthest %.0f km. Plotted positions, "
                          "computed or received. RESET clears the ring and starts again."),
                       coverage->filledBuckets(), CoverageMap::kBuckets,
                       coverage->peakKm());
-        covNote = covMeasured;
+        covNote = covMeasured.c_str();
     }
     const bool coordInvalid =
         coordEditing_ >= 0 &&
@@ -2846,12 +2846,12 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         // --- header: what it is, and how many of them there are ------------
         dl->AddText(lgF, legPx, ImVec2(innerL, y), theme::kIvory, tr("TARGETS"));
         const std::size_t shown = cascade::core::visibleTrackCount(tracks);
-        char countText[32];
-        cascade::core::formatUtf8(countText, sizeof countText, tr("%d TRACKED"), static_cast<int>(shown));
+        std::string countText;
+        cascade::core::formatUtf8(countText, tr("%d TRACKED"), static_cast<int>(shown));
         dl->AddText(uiF, tinyPx,
-                    ImVec2(innerR - textW(uiF, tinyPx, countText),
+                    ImVec2(innerR - textW(uiF, tinyPx, countText.c_str()),
                            y + faceH(lgF, legPx) - smallH),
-                    theme::kPhosphor, countText);
+                    theme::kPhosphor, countText.c_str());
         y += faceH(lgF, legPx) + 6.0f;
         addBenchRail(dl, innerL, innerR, y);
         y += 8.0f;
@@ -3191,20 +3191,20 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 const char* name =
                     (sel->t.label[0] != '\0') ? sel->t.label : sel->t.id;
                 rdl->AddText(uiF, uiPx, ImVec2(cTL.x + 8.0f, cy), theme::kIvory, name);
-                char idLine[48];
-                cascade::core::formatUtf8(idLine, sizeof idLine, "%s %s",
+                std::string idLine;
+                cascade::core::formatUtf8(idLine, "%s %s",
                               orbitalLadder(sel->t.kind) ? "NORAD" : tr("ID"), sel->t.id);
                 rdl->AddText(uiF, tinyPx,
-                            ImVec2(cBR.x - 8.0f - textW(uiF, tinyPx, idLine),
+                            ImVec2(cBR.x - 8.0f - textW(uiF, tinyPx, idLine.c_str()),
                                    cy + uiH - smallH),
-                            theme::kInkMuted, idLine);
+                            theme::kInkMuted, idLine.c_str());
                 cy += uiH + 8.0f;
 
                 // Six cells in two columns: what the source reports, then what
                 // this application computes from it and the receiver position.
                 struct Cell {
                     const char* key;
-                    char value[40];
+                    std::string value;  // a string: SUB-POINT carries translated hemisphere letters
                     // False draws the HATCH. It carries both kinds of blank -
                     // "the source does not report this" and "this needs a
                     // receiver position" - because on the card they look the
@@ -3213,48 +3213,48 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                     bool known;
                 };
                 Cell cells[6];
-                cells[0].value[0] = '\0';
                 cells[0].key = tr("ALTITUDE");
                 cells[0].known = std::isfinite(sel->t.altM);
                 if (cells[0].known) {
                     if (orbitalLadder(sel->t.kind)) {
-                        std::snprintf(cells[0].value, sizeof cells[0].value, "%.0f km",
+                        cascade::core::formatUtf8(cells[0].value, "%.0f km",
                                       sel->t.altM / 1000.0);
                     } else {
-                        std::snprintf(cells[0].value, sizeof cells[0].value, "%.0f ft",
+                        cascade::core::formatUtf8(cells[0].value, "%.0f ft",
                                       sel->t.altM * 3.28084);
                     }
                 }
                 cells[1].key = tr("SUB-POINT");
                 cells[1].known = true;
-                cascade::core::formatUtf8(cells[1].value, sizeof cells[1].value, "%.2f %s  %.2f %s",
+                cascade::core::formatUtf8(cells[1].value, "%.2f %s  %.2f %s",
                               std::fabs(sel->t.latDeg),
                               cascade::i18n::hemisphereLetter(true, sel->t.latDeg >= 0.0),
                               std::fabs(sel->t.lonDeg),
                               cascade::i18n::hemisphereLetter(false, sel->t.lonDeg >= 0.0));
                 cells[2].key = tr("VELOCITY");
                 cells[2].known = std::isfinite(sel->t.speedMps);
-                cells[2].value[0] = '\0';
                 if (cells[2].known) {
                     // km/s for an orbital speed, because 7660 m/s is a figure
                     // nobody recognises and 7.66 km/s is the one every source
                     // on the subject prints.
                     if (orbitalLadder(sel->t.kind)) {
-                        std::snprintf(cells[2].value, sizeof cells[2].value, "%.2f km/s",
+                        cascade::core::formatUtf8(cells[2].value, "%.2f km/s",
                                       sel->t.speedMps / 1000.0);
                     } else {
-                        std::snprintf(cells[2].value, sizeof cells[2].value, "%.0f kt",
+                        cascade::core::formatUtf8(cells[2].value, "%.0f kt",
                                       sel->t.speedMps * 1.943844);
                     }
                 }
                 cells[3].key = tr("FIX AGE");
                 cells[3].known = true;
-                formatAge(sel->t.ageMs, cells[3].value, sizeof cells[3].value);
+                {
+                    char age[40];
+                    formatAge(sel->t.ageMs, age, sizeof age);
+                    cells[3].value = age;
+                }
                 cells[4].key = tr("DISTANCE");
-                cells[4].value[0] = '\0';
                 cells[4].known = false;
                 cells[5].key = tr("BEARING");
-                cells[5].value[0] = '\0';
                 cells[5].known = false;
                 if (hasHome_) {
                     const double km = greatCircleKm(homeLat_, homeLon_, sel->t.latDeg,
@@ -3281,19 +3281,19 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                     const double slantKm = orbitalSel ? slantRangeKm(km, sel->t.altM) : 0.0;
                     if (orbitalSel && std::isfinite(slantKm)) {
                         cells[4].key = tr("SLANT RANGE");
-                        std::snprintf(cells[4].value, sizeof cells[4].value, "%.0f km",
+                        cascade::core::formatUtf8(cells[4].value, "%.0f km",
                                       slantKm);
                         cells[4].known = true;
                     } else if (std::isfinite(km)) {
                         if (orbitalSel) { cells[4].key = tr("GROUND DIST"); }
-                        std::snprintf(cells[4].value, sizeof cells[4].value, "%.0f km", km);
+                        cascade::core::formatUtf8(cells[4].value, "%.0f km", km);
                         cells[4].known = true;
                     }
                     // NaN for a target directly overhead, which is a real
                     // answer: there is no direction to it. Hatched rather than
                     // printed as 000, which a user would read as north.
                     if (std::isfinite(brg)) {
-                        std::snprintf(cells[5].value, sizeof cells[5].value, "%.0f deg",
+                        cascade::core::formatUtf8(cells[5].value, "%.0f deg",
                                       brg);
                         cells[5].known = true;
                     }
@@ -3311,9 +3311,9 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                                 cells[i].key);
                     const float vy = py + smallH + 1.0f;
                     if (cells[i].known) {
-                        ImFont* vf = faceForValue(cells[i].value);
+                        ImFont* vf = faceForValue(cells[i].value.c_str());
                         rdl->AddText(vf, tinyPx, ImVec2(px2, vy), theme::kAmber,
-                                    cells[i].value);
+                                    cells[i].value.c_str());
                     } else {
                         // HATCHED, NOT ZEROED. The two blanks here are not the
                         // same fact: DISTANCE and BEARING are hatched because

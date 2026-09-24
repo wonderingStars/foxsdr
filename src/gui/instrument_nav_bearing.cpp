@@ -250,17 +250,19 @@ void drawCard(ImDrawList* dl, const ImVec2& c, float r, double underIndex) {
         dl->AddLine(onDial(c, r * 0.96f, screen), onDial(c, inner, screen),
                     major ? theme::kIvory : theme::kCream, major ? 2.0f : 1.0f);
         if (!major) { continue; }
-        char lab[4];
-        if (!nb::cardLabel(deg, lab, sizeof lab)) { continue; }
+        char card[4];
+        if (!nb::cardLabel(deg, card, sizeof card)) { continue; }
         // The four cardinal letters in the language in force (the keys
         // i18n::hemisphereLetter uses); a figure passes through tr() as is.
-        cascade::core::formatUtf8(lab, sizeof lab, "%s", std::string(tr(lab)).c_str());
-        const ImVec2 sz = nf->CalcTextSizeA(npx, FLT_MAX, 0.0f, lab);
+        // Held as a string: a translated letter need not fit the 4 bytes the
+        // English one does.
+        const std::string lab = tr(card);
+        const ImVec2 sz = nf->CalcTextSizeA(npx, FLT_MAX, 0.0f, lab.c_str());
         const ImVec2 at = onDial(c, r * 0.68f, screen);
         const ImVec2 tp(at.x - sz.x * 0.5f, at.y - sz.y * 0.5f);
         dl->AddText(nf, npx, ImVec2(tp.x + 1.0f, tp.y + 1.0f),
-                    theme::withAlpha(theme::kVoid, 0.75f), lab);
-        dl->AddText(nf, npx, tp, theme::kIvory, lab);
+                    theme::withAlpha(theme::kVoid, 0.75f), lab.c_str());
+        dl->AddText(nf, npx, tp, theme::kIvory, lab.c_str());
     }
 }
 
@@ -291,15 +293,15 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (!L.drawAnything) {
         // Too small to be an instrument. Say what is on the air in words rather
         // than draw a dial nobody can read.
-        char line[32];
+        std::string line;
         if (haveRadial) {
             char b[4];
             nb::formatBearing(radial, b, sizeof b);
-            cascade::core::formatUtf8(line, sizeof line, tr("RADIAL %s"), b);
+            cascade::core::formatUtf8(line, tr("RADIAL %s"), b);
         } else {
-            cascade::core::formatUtf8(line, sizeof line, "%s", tr("NO SIGNAL"));
+            line = tr("NO SIGNAL");
         }
-        engrave(dl, ImVec2(tl.x + 10.0f, bodyTop + 4.0f), line, fonts::kTinySize);
+        engrave(dl, ImVec2(tl.x + 10.0f, bodyTop + 4.0f), line.c_str(), fonts::kTinySize);
         return bodyTop + fonts::kTinySize + 10.0f - tl.y;
     }
 

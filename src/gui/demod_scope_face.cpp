@@ -239,9 +239,9 @@ void addReadouts(ImDrawList* dl, const ImVec2& a, const ImVec2& b,
     // to the discriminator.
     if (feed.audioFrom != nullptr && feed.audioFrom[0] != '\0' &&
         signal != ScopeSignal::Baseband && signal != ScopeSignal::Vector) {
-        char via[96];
-        cascade::core::formatUtf8(via, sizeof(via), tr("AUDIO FROM %s"), feed.audioFrom);
-        glassText(dl, legend, px, ImVec2(a.x + 7.0f, a.y + 5.0f), theme::kAmber, via);
+        std::string via;
+        cascade::core::formatUtf8(via, tr("AUDIO FROM %s"), feed.audioFrom);
+        glassText(dl, legend, px, ImVec2(a.x + 7.0f, a.y + 5.0f), theme::kAmber, via.c_str());
     }
 }
 

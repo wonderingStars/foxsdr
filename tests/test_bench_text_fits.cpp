@@ -31,9 +31,12 @@
 #include <cfloat>
 #include <cstdio>
 
+#include "core/i18n.hpp"
 #include "gui/fonts.hpp"
 #include "gui/map_view.hpp"
 #include "gui/plugin_store_view.hpp"
+#include "gui/text_fit.hpp"
+#include "gui/tune_control.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -173,6 +176,47 @@ void testMeasurementsTrackTheDeclaredSizes() {
     CHECK(cascade::gui::coordCellWidth('0') >= atDeclared + 2.0f);
 }
 
+// --- the tuning deck's UP / DN stencils, in every language ----------------------
+//
+// Each stencil stands in a cell one tube wide (tune_control.hpp, kFreqCellW) at
+// the deck's natural scale, lettered at nine pixels - already the floor - and
+// tracked out. drawToggleSwitch gives up the tracking before it cuts a word
+// (text_fit.hpp, fitCellWords); a word that still does not fit is cut, and a
+// cut stencil is a broken one - the Russian "ВВЕРХ" was, on every screen
+// (34-language review). So every catalogue's pair must fit the cell whole.
+void testUpDnStencilsFitTheirCell() {
+    std::printf("  every language: the UP / DN stencils fit their tube's cell whole\n");
+    int cut = 0;
+    int skipped = 0;
+    for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+        if (!cascade::gui::fonts::canDraw(l.code)) {
+            ++skipped;
+            continue;
+        }
+        cascade::i18n::setLanguage(l.code);
+        cascade::gui::fonts::applyLanguage(l.code);
+        cascade::gui::fonts::applyPending();
+        ImFont* f = cascade::gui::fonts::ui();
+        const char* words[2] = {cascade::i18n::tr("UP"), cascade::i18n::tr("DN")};
+        const float cell = cascade::gui::kFreqCellW;
+        const cascade::gui::CellWordsFit fit = cascade::gui::fitCellWords(
+            9.0f, 0.15f, cell, cascade::gui::kFitFloorPx, 2, [&](int i, float z, float tf) {
+                return cascade::gui::trackedWidth(f, z, words[i], z * tf);
+            });
+        if (!fit.fits) {
+            std::printf("      %s: \"%s\" %.1f px / \"%s\" %.1f px untracked at %.1f px, the cell is %.0f\n",
+                        l.code.c_str(), words[0], textW(f, fit.px, words[0]), words[1],
+                        textW(f, fit.px, words[1]), fit.px, cell);
+            ++cut;
+        }
+    }
+    cascade::i18n::setLanguage("en");
+    cascade::gui::fonts::applyLanguage("en");
+    cascade::gui::fonts::applyPending();
+    std::printf("    %d languages cut a stencil, %d not drawable here\n", cut, skipped);
+    CHECK(cut == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -202,6 +246,8 @@ int main() {
         testEveryTagTheSwitchReturnsFits();
         testMeasurementsTrackTheDeclaredSizes();
         ImGui::Render();
+        // Outside the frame: a language change swaps the atlas's faces.
+        testUpDnStencilsFitTheirCell();
     } else {
         std::printf("fonts::load() failed - the measurements below were not run\n");
     }

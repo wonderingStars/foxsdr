@@ -607,17 +607,16 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
     // reader to stop looking at it.
     const bool partial = (coveredRows > 0 && historyRows > 0 && coveredRows < historyRows);
     const char* coverCap = tr("APPLIES TO");
-    char coverText[48];
-    coverText[0] = '\0';
+    std::string coverText;
     if (partial) {
-        cascade::core::formatUtf8(coverText, sizeof(coverText), tr("TOP %d LINES"), coveredRows);
+        cascade::core::formatUtf8(coverText, tr("TOP %d LINES"), coveredRows);
     }
 
     const float gap = 10.0f;
     float inner = textWidth(cf, px, title);
     inner = std::max(inner, textWidth(cf, px, pairCap) + gap + textWidth(nf, px, pairText));
     if (partial) {
-        inner = std::max(inner, textWidth(cf, px, coverCap) + gap + textWidth(uf, px, coverText));
+        inner = std::max(inner, textWidth(cf, px, coverCap) + gap + textWidth(uf, px, coverText.c_str()));
     }
     inner = std::max(inner, 110.0f);
     const float boxW = inner + kChromePad * 2.0f;
@@ -733,8 +732,8 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
         // face, not three stems of Nova Mono merging into a block.
         const float coverY = pairY + lineH;
         dl->AddText(cf, px, ImVec2(barL, coverY), theme::kInkFaint, coverCap);
-        const float cw = textWidth(uf, px, coverText);
-        dl->AddText(uf, px, ImVec2(barR - cw, coverY), theme::kAmber, coverText);
+        const float cw = textWidth(uf, px, coverText.c_str());
+        dl->AddText(uf, px, ImVec2(barR - cw, coverY), theme::kAmber, coverText.c_str());
     }
     return bBR.y;
 }
@@ -788,47 +787,45 @@ void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
 // not.
 void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float leftInset,
                    float linesPerSecond, double heldSeconds, const char* decoding) {
-    char rateText[48];
-    rateText[0] = '\0';
+    std::string rateText;
     if (linesPerSecond > 0.0f) {
         // A rate of 4.2 line/s is a real reading and rounds to "4"; below ten
         // the fraction is the difference between a live pipeline and a
         // struggling one, so it is kept.
         if (linesPerSecond >= 10.0f) {
-            cascade::core::formatUtf8(rateText, sizeof(rateText), tr("SCROLL %.0f line/s"),
+            cascade::core::formatUtf8(rateText, tr("SCROLL %.0f line/s"),
                           static_cast<double>(linesPerSecond));
         } else {
-            cascade::core::formatUtf8(rateText, sizeof(rateText), tr("SCROLL %.1f line/s"),
+            cascade::core::formatUtf8(rateText, tr("SCROLL %.1f line/s"),
                           static_cast<double>(linesPerSecond));
         }
     }
-    char spanText[48];
-    spanText[0] = '\0';
+    std::string spanText;
     if (heldSeconds > 0.0) {
         char elapsed[32];
         formatElapsed(heldSeconds, elapsed, sizeof(elapsed));
-        cascade::core::formatUtf8(spanText, sizeof(spanText), tr("%s VISIBLE"), elapsed);
+        cascade::core::formatUtf8(spanText, tr("%s VISIBLE"), elapsed);
     }
-    char scrollText[112];
-    if (rateText[0] != '\0' && spanText[0] != '\0') {
-        cascade::core::formatUtf8(scrollText, sizeof(scrollText), "%s  -  %s", rateText, spanText);
+    std::string scrollText;
+    if (!rateText.empty() && !spanText.empty()) {
+        cascade::core::formatUtf8(scrollText, "%s  -  %s", rateText.c_str(), spanText.c_str());
     } else {
-        cascade::core::formatUtf8(scrollText, sizeof(scrollText), "%s%s", rateText, spanText);
+        scrollText = rateText + spanText;
     }
     const bool haveDecode = (decoding != nullptr && decoding[0] != '\0');
-    if (scrollText[0] == '\0' && !haveDecode) {
+    if (scrollText.empty() && !haveDecode) {
         return;
     }
 
     ImFont* sf = fonts::ui();
     const float spx = fonts::kTinySize;
     const float dpx = fonts::kLegendSize;
-    const float sw = textWidth(sf, spx, scrollText);
+    const float sw = textWidth(sf, spx, scrollText.c_str());
     const float dw = haveDecode ? textWidth(sf, dpx, decoding) : 0.0f;
 
     const float lineGap = 2.0f;
     float boxH = kChromePad * 2.0f;
-    if (scrollText[0] != '\0') { boxH += spx + lineGap; }
+    if (!scrollText.empty()) { boxH += spx + lineGap; }
     if (haveDecode) { boxH += dpx + lineGap; }
     const float boxW = std::max(sw, dw) + kChromePad * 2.0f;
 
@@ -842,13 +839,13 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
     addGlassPlate(dl, fTL, fBR);
 
     float y = fTL.y + kChromePad;
-    if (scrollText[0] != '\0') {
+    if (!scrollText.empty()) {
         // A shade under the decode line below it, which keeps the two apart -
         // but not the dim tone it was, which put a line carrying two figures
         // (the rate and the history the picture holds) at 2.5:1 over a bright
         // waterfall. 6.3:1 there now, and still visibly the quieter line.
         dl->AddText(sf, spx, ImVec2(fTL.x + kChromePad, y),
-                    theme::withAlpha(theme::kPhosphor, 0.85f), scrollText);
+                    theme::withAlpha(theme::kPhosphor, 0.85f), scrollText.c_str());
         y += spx + lineGap;
     }
     if (haveDecode) {

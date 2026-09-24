@@ -114,8 +114,8 @@ std::vector<AppWindow::PatchDeviceChoice> AppWindow::patchDeviceChoices() const 
             return c.key == key || pc::sameDevice(c.key, key);
         });
         if (!listed) {
-            char buf[256];
-            cascade::core::formatUtf8(buf, sizeof buf, tr("%s (the receiver's radio)"),
+            std::string buf;
+            cascade::core::formatUtf8(buf, tr("%s (the receiver's radio)"),
                           patchMainKeep_.label.c_str());
             out.push_back({key, buf});
         }
@@ -134,11 +134,11 @@ std::string AppWindow::patchDeviceLabel(const std::string& key) const {
     const std::string own = pc::argField(args, "label");
     if (!own.empty()) { return own; }
     const std::string serial = pc::argField(args, "serial");
-    char buf[256];
+    std::string buf;
     if (serial.empty()) {
-        cascade::core::formatUtf8(buf, sizeof buf, tr("%s (not listed)"), pc::deviceDriver(key).c_str());
+        cascade::core::formatUtf8(buf, tr("%s (not listed)"), pc::deviceDriver(key).c_str());
     } else {
-        cascade::core::formatUtf8(buf, sizeof buf, tr("%s %s (not listed)"), pc::deviceDriver(key).c_str(),
+        cascade::core::formatUtf8(buf, tr("%s %s (not listed)"), pc::deviceDriver(key).c_str(),
                       serial.c_str());
     }
     return buf;
@@ -606,8 +606,8 @@ void AppWindow::patchStopAll(bool restoreMain) {
         }
     }
     if (row < 0) {
-        char buf[256];
-        cascade::core::formatUtf8(buf, sizeof buf,
+        std::string buf;
+        cascade::core::formatUtf8(buf,
                       tr("the radio the patch page was using (%s) is not listed any more - "
                          "choose it again in Source"),
                       keep.label.c_str());
@@ -701,23 +701,23 @@ void AppWindow::drawPatchTransport() {
     ImGui::SameLine();
     ImGui::SetCursorScreenPos(
         ImVec2(ImGui::GetCursorScreenPos().x + 8.0f, at.y + kR * 1.1f - ImGui::GetTextLineHeight() * 0.5f));
-    char line[128];
+    std::string line;
     if (patchRunning_) {
         // Singular and plural as whole keys: an English "s" handed in by %s
         // is a word no catalogue can translate.
-        cascade::core::formatUtf8(line, sizeof(line),
+        cascade::core::formatUtf8(line,
                       radios == 1 ? tr("RUNNING - %zu of %zu radio open")
                                   : tr("RUNNING - %zu of %zu radios open"),
                       patchRadios_.size(), radios);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
     } else {
-        cascade::core::formatUtf8(line, sizeof(line),
+        cascade::core::formatUtf8(line,
                       radios == 1 ? tr("STOPPED - %zu of %zu radio switched on")
                                   : tr("STOPPED - %zu of %zu radios switched on"),
                       on, radios);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
     }
-    ImGui::TextUnformatted(line);
+    ImGui::TextUnformatted(line.c_str());
     ImGui::PopStyleColor();
 
     // Below the dome, for whatever comes next on the page.
@@ -904,8 +904,8 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             ImGui::PushID(static_cast<int>(i));
             std::string text = c.label;
             if (holder != nullptr) {
-                char buf[256];
-                cascade::core::formatUtf8(buf, sizeof buf, tr("  (used by %s)"), holder->name.c_str());
+                std::string buf;
+                cascade::core::formatUtf8(buf, tr("  (used by %s)"), holder->name.c_str());
                 text += buf;
             }
             // IN USE BY THE RECEIVER IS NOT "NOT AVAILABLE" (2026-09-23): the

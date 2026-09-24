@@ -46,9 +46,11 @@
 #include <cstring>
 #include <initializer_list>
 
+#include "core/i18n.hpp"
 #include "gui/app_window.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
@@ -391,6 +393,85 @@ void testBankKeyLabelsFit() {
     }
 }
 
+// --- 5b. ...and in every language the build carries ----------------------------
+//
+// The five keys letter their word down to kBankKeyWordFloorPx before cutting
+// it. At seven tenths (9.8 px) the Finnish "JÄRJESTELMÄ" lost its last letter
+// and the Russian "РАСШИРЕНИЯ" its last two (34-language review); at the
+// absolute floor every catalogue's five words are whole.
+//
+// Also THE SOURCE ROW'S CHIP for the built-in generator (sourceChipText): the
+// translator's own short form, whole - never the ten-character cut of the
+// long name ("Signaalgen", "Signalgene") - and it leaves the row its label
+// at the label's own floor.
+bool useLanguage(const std::string& code) {
+    if (!cascade::gui::fonts::canDraw(code)) { return false; }
+    cascade::i18n::setLanguage(code);
+    cascade::gui::fonts::applyLanguage(code);
+    cascade::gui::fonts::applyPending();
+    return true;
+}
+
+void testEveryLanguageBankWordsAndSourceChip() {
+    std::printf("  every language: the bank keys' words whole, the generator's chip whole\n");
+    const float keyW = cascade::gui::bankKeyWidth(cascade::gui::kMenuWidth, cascade::gui::kRailBankCount);
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float rowW = cascade::gui::railRowWidth(cascade::gui::kMenuWidth, cascade::gui::kRailPlatePad,
+                                                  st.WindowPadding.x, st.ScrollbarSize);
+    const float rowH = cascade::gui::railRowHeight(cascade::gui::fonts::kUiSize);
+    const float left = cascade::gui::railLabelLeft(0.0f, rowH);
+    int cutWords = 0;
+    int badChips = 0;
+    int skipped = 0;
+    for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+        if (!useLanguage(l.code)) {
+            ++skipped;
+            continue;
+        }
+        ImFont* lf = cascade::gui::fonts::legend();
+        for (int i = 0; i < cascade::gui::kRailBankCount; ++i) {
+            const char* word =
+                cascade::i18n::tr(cascade::gui::railBankLabel(cascade::gui::railBankFromIndex(i)));
+            const float room =
+                keyW - 2.0f * cascade::gui::bankKeyWordPadX(
+                                  lf->CalcTextSizeA(cascade::gui::kBankKeyWordFloorPx, FLT_MAX, 0.0f, word).x,
+                                  keyW);
+            const float px = cascade::gui::fitTextPx(lf, cascade::gui::fonts::kTinySize, word, room,
+                                                     cascade::gui::kBankKeyWordFloorPx);
+            const float w = lf->CalcTextSizeA(px, FLT_MAX, 0.0f, word).x;
+            if (w > room + 0.5f) {
+                std::printf("      %s: bank key \"%s\" is %.1f px at %.1f px, the key holds %.1f\n",
+                            l.code.c_str(), word, w, px, room);
+                ++cutWords;
+            }
+        }
+        const std::string chip = cascade::gui::sourceChipText("Signal generator");
+        const bool whole = chip == cascade::i18n::tr("Signal gen");
+        const float chipW = chipWidth(chip.c_str());
+        const float right = cascade::gui::railLabelRight(rowW, rowH, chipW);
+        const char* label = cascade::i18n::tr("Source");
+        const float labelAtFloor =
+            cascade::gui::fonts::ui()
+                ->CalcTextSizeA(cascade::gui::fitFloorFor(cascade::gui::fonts::kUiSize), FLT_MAX, 0.0f, label)
+                .x;
+        if (!whole || left + labelAtFloor > right) {
+            std::printf("      %s: Source chip \"%s\"%s; label \"%s\" needs %.1f of %.1f px\n",
+                        l.code.c_str(), chip.c_str(), whole ? "" : " is not the short form",
+                        label, labelAtFloor, right - left);
+            ++badChips;
+        }
+    }
+    useLanguage("en");
+    std::printf("    %d cut bank words, %d bad Source chips, %d languages not drawable here\n", cutWords,
+                badChips, skipped);
+    CHECK(cutWords == 0);
+    CHECK(badChips == 0);
+    // English is what it always was.
+    CHECK(cascade::gui::sourceChipText("Signal generator") == "Signal gen");
+    CHECK(cascade::gui::sourceChipText("SoapySDR: B200") == "B200");
+    CHECK(cascade::gui::sourceChipText("RTL-SDR Blog V4 (00000001)") == "RTL-SDR Bl");
+}
+
 // --- 6. the Serial ports row's chip names what it counts ---------------------
 //
 // "0" alone would read as "off"; this row is never off, it just sometimes
@@ -399,15 +480,10 @@ void testBankKeyLabelsFit() {
 // trusting "%zu PORTS" to read right at both.
 void testSerialPortsChipNamesItsCount() {
     std::printf("  the Serial ports chip says NONE, 1 PORT, or N PORTS\n");
-    char out[16];
-    cascade::gui::formatSerialPortsChip(0, out, sizeof(out));
-    CHECK(std::strcmp(out, "NONE") == 0);
-    cascade::gui::formatSerialPortsChip(1, out, sizeof(out));
-    CHECK(std::strcmp(out, "1 PORT") == 0);
-    cascade::gui::formatSerialPortsChip(3, out, sizeof(out));
-    CHECK(std::strcmp(out, "3 PORTS") == 0);
-    cascade::gui::formatSerialPortsChip(12, out, sizeof(out));
-    CHECK(std::strcmp(out, "12 PORTS") == 0);
+    CHECK(cascade::gui::formatSerialPortsChip(0) == "NONE");
+    CHECK(cascade::gui::formatSerialPortsChip(1) == "1 PORT");
+    CHECK(cascade::gui::formatSerialPortsChip(3) == "3 PORTS");
+    CHECK(cascade::gui::formatSerialPortsChip(12) == "12 PORTS");
 }
 
 }  // namespace
@@ -438,6 +514,7 @@ int main() {
     testRuntimeChipRowsAreBounded();
     testBankKeyLabelsFit();
     testSerialPortsChipNamesItsCount();
+    testEveryLanguageBankWordsAndSourceChip();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");

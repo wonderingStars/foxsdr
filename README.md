@@ -61,7 +61,7 @@ Internal project/binary name: `cascade`.
 
 ## Where it is now
 
-The current release is **0.99.27** (September 2026), in open beta and free for
+The current release is **0.99.28** (September 2026), in open beta and free for
 noncommercial use, with its decoders and instruments delivered as plugins from
 a catalogue. These are screenshots of an earlier shipping build.
 
@@ -1263,13 +1263,27 @@ front of it, is not shown.
 
 ## Language and country
 
-The interface is available in English, Português (Brasil), Español,
-Français, Deutsch, Italiano and Polski. **SYSTEM → Language & country** chooses
-one; **Automatic**, the default, follows the language Windows (or, on Linux,
+The interface is available in 34 languages: English, Български, Català,
+Čeština, Dansk, Deutsch, Ελληνικά, Español, Eesti, Suomi, Français, Hrvatski,
+Magyar, Bahasa Indonesia, Italiano, 日本語, 한국어, Lietuvių, Latviešu, Norsk
+bokmål, Nederlands, Polski, Português (Brasil), Português (Portugal), Română,
+Русский, Slovenčina, Slovenščina, Svenska, Türkçe, Українська, Tiếng Việt,
+简体中文 and 繁體中文. **SYSTEM → Language & country** chooses one;
+**Automatic**, the default, follows the language Windows (or, on Linux,
 `LC_MESSAGES`/`LANG`) is set to, and falls back to English when there is no
-translation for it. A change applies at once. The six translations are machine
-translations and say so in the list; **SUGGEST A BETTER TRANSLATION** opens the
-bug-report page with the language already filled in.
+translation for it. A change applies at once. The 33 translations are machine
+translations and say so in the list (the Japanese one was checked against a
+second independent translation and a reviewer); **SUGGEST A BETTER
+TRANSLATION** opens the bug-report page with the language already filled in.
+
+Latin, Greek and Cyrillic letters are drawn from the program's own fonts
+(Georgia or Saira, with an embedded Noto Sans subset for what they lack).
+Chinese, Japanese and Korean use the fonts the operating system provides -
+Microsoft YaHei, JhengHei, Yu Gothic and Malgun Gothic on Windows, Noto CJK on
+Linux - and a language whose script no installed font can draw is shown as
+unavailable in the list, with the reason, rather than as empty boxes.
+Right-to-left and Indic scripts are not offered: the interface library draws
+text without the shaping those scripts need.
 
 Choosing your **country** in the same section picks the band plan for it - the
 country's own plan where FoxSDR has one (UK, US, Canada, Australia, Japan), the

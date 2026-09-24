@@ -47,6 +47,7 @@
 
 #include "core/i18n.hpp"  // FOX_TR_NOOP: marked here, translated where drawn
 #include "core/plugin_ui.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/aircraft_icons.hpp"
 #include "gui/track_metrics.hpp"
 
@@ -500,15 +501,15 @@ inline double scopeWrapBearing(double deg) {
     return r;
 }
 
+// Whole, never cut: some formats reaching it are translated (the tube's
+// "%d PLOTTED" readout), and a translation is sized by its own language.
 inline std::string scopePrintf(const char* fmt, ...) {
-    char buf[192];
+    std::string out;
     va_list ap;
     va_start(ap, fmt);
-    const int n = std::vsnprintf(buf, sizeof buf, fmt, ap);
+    cascade::core::vformatUtf8(out, fmt, ap);
     va_end(ap);
-    if (n < 0) { return std::string(); }
-    buf[sizeof buf - 1] = '\0';
-    return std::string(buf);
+    return out;
 }
 
 }  // namespace detail

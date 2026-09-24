@@ -41,6 +41,14 @@ std::size_t legendTtfLen();
 const unsigned char* readingTtf();
 std::size_t readingTtfLen();
 
+// Noto Sans Condensed Medium and SemiBold - the fallback behind the faces
+// above for Cyrillic, Greek and Vietnamese (fonts.hpp). These two ARE a subset
+// (tools/subset-noto.py), which their licence permits: Noto reserves no name.
+const unsigned char* fallbackUiTtf();
+std::size_t fallbackUiTtfLen();
+const unsigned char* fallbackLegendTtf();
+std::size_t fallbackLegendTtfLen();
+
 }  // namespace cascade::gui::fonts
 
 #endif  // CASCADE_GUI_FONT_BLOBS_HPP

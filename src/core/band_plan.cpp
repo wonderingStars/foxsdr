@@ -9,6 +9,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/i18n.hpp"
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -393,6 +395,37 @@ const BandEntry* BandPlan::at(double hz) const {
 void BandPlan::clear() {
     entries_.clear();
     name_.clear();
+}
+
+const std::vector<const char*>& shippedPlanNames() {
+    static const std::vector<const char*> names = {
+        FOX_TR_NOOP("World (global allocations)"),
+        FOX_TR_NOOP("ITU Region 1"),
+        FOX_TR_NOOP("ITU Region 2"),
+        FOX_TR_NOOP("ITU Region 3"),
+        FOX_TR_NOOP("Australia"),
+        FOX_TR_NOOP("Canada"),
+        FOX_TR_NOOP("Japan"),
+        FOX_TR_NOOP("United Kingdom"),
+        FOX_TR_NOOP("United States"),
+    };
+    return names;
+}
+
+std::string displayPlanName(const std::string& name) {
+    static const std::string kJoin = " + ";
+    std::string out;
+    std::size_t from = 0;
+    while (true) {
+        const std::size_t at = name.find(kJoin, from);
+        const std::string part = name.substr(from, at == std::string::npos ? std::string::npos
+                                                                           : at - from);
+        out += cascade::i18n::tr(part.c_str());
+        if (at == std::string::npos) { break; }
+        out += kJoin;
+        from = at + kJoin.size();
+    }
+    return out;
 }
 
 }  // namespace cascade::core

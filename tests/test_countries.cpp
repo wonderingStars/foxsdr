@@ -20,6 +20,10 @@
 #include <set>
 #include <string>
 
+#include <vector>
+
+#include "core/band_plan.hpp"
+#include "core/i18n.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -146,6 +150,35 @@ int main(int argc, char** argv) {
         const Country* c = findCountry(l.code);
         CHECK(c != nullptr && std::strcmp(c->language, l.lang) == 0);
     }
+
+    // THE PLANS' NAMES ARE TRANSLATED WHERE THEY ARE DRAWN (band_plan.hpp,
+    // displayPlanName). Every language showed "World (global allocations)" in
+    // English (34-language review). Every shipped plan's name must be one the
+    // key extractor sees - listed in shippedPlanNames - and a joined chain is
+    // translated part by part.
+    std::printf("  every shipped band plan's name is a translation key\n");
+    const std::vector<cascade::core::PlanInfo> shipped = cascade::core::BandPlan::available(plans.string());
+    CHECK(shipped.size() >= 9);
+    for (const cascade::core::PlanInfo& p : shipped) {
+        bool listed = false;
+        for (const char* n : cascade::core::shippedPlanNames()) { listed = listed || p.name == n; }
+        if (!listed) { std::printf("      %s: \"%s\" is not in shippedPlanNames\n", p.id.c_str(), p.name.c_str()); }
+        CHECK(listed);
+    }
+    std::string error;
+    CHECK(cascade::i18n::addCatalogue(
+        R"({"code": "xx-plan", "name": "Plans", "englishName": "Plans", "strings": {)"
+        R"("ITU Region 1": "R\u00e9gion UIT 1", "United Kingdom": "Royaume-Uni"}})",
+        &error));
+    cascade::i18n::setLanguage("xx-plan");
+    CHECK(cascade::core::displayPlanName("ITU Region 1 + United Kingdom") ==
+          "R\xC3\xA9gion UIT 1 + Royaume-Uni");
+    CHECK(cascade::core::displayPlanName("United Kingdom") == "Royaume-Uni");
+    CHECK(cascade::core::displayPlanName("My own plan") == "My own plan");  // in no catalogue
+    CHECK(cascade::core::displayPlanName("") == "");
+    cascade::i18n::setLanguage("en");
+    CHECK(cascade::core::displayPlanName("ITU Region 1 + United Kingdom") ==
+          "ITU Region 1 + United Kingdom");
 
     return testSummary("test_countries");
 }

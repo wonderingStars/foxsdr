@@ -81,6 +81,14 @@ void testEmbeddedMatchesVendored(const std::string& root) {
              cascade::gui::fontdata::kFontLegendTtfLen);
     checkOne(root, "NovaMono.ttf", cascade::gui::fontdata::kFontReadingTtf,
              cascade::gui::fontdata::kFontReadingTtfLen);
+    // The fallback faces are a SUBSET (tools/subset-noto.py), so "the file in
+    // third_party/fonts" is the subset, not the upstream download.
+    checkOne(root, "NotoSansCondensed-Medium-subset.ttf",
+             cascade::gui::fontdata::kFontFallbackUiTtf,
+             cascade::gui::fontdata::kFontFallbackUiTtfLen);
+    checkOne(root, "NotoSansCondensed-SemiBold-subset.ttf",
+             cascade::gui::fontdata::kFontFallbackLegendTtf,
+             cascade::gui::fontdata::kFontFallbackLegendTtfLen);
 }
 
 // A file that is not a TrueType font at all would still satisfy the comparison
@@ -101,6 +109,10 @@ void testTheyAreActuallyFonts() {
          cascade::gui::fontdata::kFontLegendTtfLen},
         {"reading", cascade::gui::fontdata::kFontReadingTtf,
          cascade::gui::fontdata::kFontReadingTtfLen},
+        {"fallback ui", cascade::gui::fontdata::kFontFallbackUiTtf,
+         cascade::gui::fontdata::kFontFallbackUiTtfLen},
+        {"fallback legend", cascade::gui::fontdata::kFontFallbackLegendTtf,
+         cascade::gui::fontdata::kFontFallbackLegendTtfLen},
     };
     for (const Face& f : faces) {
         // 0x00010000 is the sfnt version of a TrueType outline font; "OTTO"

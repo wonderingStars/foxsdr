@@ -96,11 +96,11 @@ namespace {
 
 void appendUnreadClause(std::string& s, int unread) {
     if (unread <= 0) { return; }
-    char buf[320];
+    std::string buf;
     // SINGULAR AND PLURAL ARE TWO WHOLE SENTENCES, not one with the English
     // "s" / "was" / "it was" filled in by %s - no catalogue can translate an
     // English word handed to it at run time.
-    cascade::core::formatUtf8(buf, sizeof(buf),
+    cascade::core::formatUtf8(buf,
                   unread == 1
                       ? tr(" %d file in the plugin folder was refused before the host could "
                            "read what it was - the Fitted modules window prints why.")
@@ -114,20 +114,20 @@ void appendUnreadClause(std::string& s, int unread) {
 
 std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
                                    const char* installRemedy) {
-    char buf[320];
+    std::string buf;
     // STOPPED FIRST, and ahead of every other answer, exactly as
     // gui::fittedState orders them: the user's own choice is not a fault, and
     // it is the one state where the module they need is already on the disk.
     if (c.stopped > 0) {
         std::string s;
         if (c.stopped == 1 && !c.stoppedName.empty()) {
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           tr("Nothing is publishing %s: \"%s\" is a track source and you "
                              "stopped it."),
                           subject, c.stoppedName.c_str());
             s = buf;
         } else {
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           tr("Nothing is publishing %s: %d fitted track sources are "
                              "stopped."),
                           subject, c.stopped);
@@ -142,13 +142,13 @@ std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
         if (c.refused == 1 && !c.refusedName.empty()) {
             // REFUSED, which is the word the Fitted modules window letters this
             // state in, rather than a second one meaning the same thing.
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           tr("Nothing is publishing %s: \"%s\" is a track source and the "
                              "host refused it."),
                           subject, c.refusedName.c_str());
             s = buf;
         } else {
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           tr("Nothing is publishing %s: %d fitted track sources were "
                              "refused."),
                           subject, c.refused);
@@ -159,14 +159,14 @@ std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
         return s;
     }
     if (c.live > 0) {
-        cascade::core::formatUtf8(buf, sizeof(buf),
+        cascade::core::formatUtf8(buf,
                       tr("Nothing is publishing %s: a fitted track source did not start - "
                          "the host asked it for one and was given none. Nothing needs "
                          "fetching; the module itself failed."),
                       subject);
         return buf;
     }
-    cascade::core::formatUtf8(buf, sizeof(buf),
+    cascade::core::formatUtf8(buf,
                   tr("No fitted module publishes tracks of any kind, so there are no %s "
                      "here. %s"),
                   subject, installRemedy);
@@ -176,7 +176,7 @@ std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
 }
 
 std::string decoderAbsenceNote(const ModuleCensus& c) {
-    char buf[400];
+    std::string buf;
     // THE SAME FOUR ANSWERS IN THE SAME ORDER as the track-source note above,
     // because they are answers to the same question about the same records.
     // Only the last of them mentions fitting anything.
@@ -186,7 +186,7 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
             // "carries a decoder", never "decodes ADS-B": the descriptor
             // declares the capability and says nothing whatever about what the
             // module decodes. See the header.
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           tr("Nothing is decoding: \"%s\" carries a decoder and you "
                              "stopped it."),
                           c.stoppedName.c_str());
@@ -196,7 +196,7 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
             // descriptor carried no name. A loaded record always has one, since
             // MissingName is a refusal, so the singular is written out for
             // correctness rather than for a state anyone will see.
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           c.stopped == 1
                               ? tr("Nothing is decoding: %d fitted decoder is stopped.")
                               : tr("Nothing is decoding: %d fitted decoders are stopped."),
@@ -211,13 +211,13 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
     if (c.refused > 0) {
         std::string s;
         if (c.refused == 1 && !c.refusedName.empty()) {
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           tr("Nothing is decoding: \"%s\" carries a decoder and the host "
                              "refused it."),
                           c.refusedName.c_str());
             s = buf;
         } else {
-            cascade::core::formatUtf8(buf, sizeof(buf),
+            cascade::core::formatUtf8(buf,
                           c.refused == 1
                               ? tr("Nothing is decoding: %d fitted decoder was refused.")
                               : tr("Nothing is decoding: %d fitted decoders were refused."),

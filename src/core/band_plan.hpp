@@ -219,4 +219,20 @@ private:
     std::string name_;
 };
 
+// --- a plan's NAME, in the language on screen ---------------------------------
+//
+// A plan's "name" in its JSON file is DATA - it is what available() sorts by
+// and what a user-added plan calls itself - and it stays English there. It is
+// translated where it is DRAWN: displayPlanName() passes each part of a name
+// through tr(), and a joined chain ("ITU Region 1 + United Kingdom") part by
+// part. A name no catalogue carries (a plan the user added) comes back as it
+// is. Every language used to show "World (global allocations)" in English
+// (34-language review).
+//
+// The names of the plans this build ships in resources/bandplans, listed so
+// tools/i18n_keys.py and test_i18n find them as keys; test_countries fails
+// when a shipped plan's name is missing here.
+const std::vector<const char*>& shippedPlanNames();
+std::string displayPlanName(const std::string& name);
+
 }  // namespace cascade::core

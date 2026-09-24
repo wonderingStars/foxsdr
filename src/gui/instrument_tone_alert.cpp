@@ -304,10 +304,10 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (have) {
         // The event counter first, so the maker's legend beside it is fitted
         // to what is actually left rather than to the whole case.
-        char ev[32];
-        cascade::core::formatUtf8(ev, sizeof ev, tr("EVENT %u"), static_cast<unsigned>(s.seq));
-        const float ew = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, ev).x;
-        cut(dl, ImVec2(br.x - 12.0f - ew, legendY), capPx, ev, theme::kInkFaint);
+        std::string ev;
+        cascade::core::formatUtf8(ev, tr("EVENT %u"), static_cast<unsigned>(s.seq));
+        const float ew = lf->CalcTextSizeA(capPx, FLT_MAX, 0.0f, ev.c_str()).x;
+        cut(dl, ImVec2(br.x - 12.0f - ew, legendY), capPx, ev.c_str(), theme::kInkFaint);
         legendRoom -= ew + 12.0f;
     }
     // The maker's legend, cut into the case the way the equipment letters its

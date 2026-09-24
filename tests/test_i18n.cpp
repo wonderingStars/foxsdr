@@ -46,6 +46,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/utf8_text.hpp"
+
 #include "imgui.h"
 #include "imgui_internal.h"  // ImHashStr: the hash ImGui keys every widget on
 #include "test_check.hpp"
@@ -154,6 +156,7 @@ void appendUtf8(std::string& out, unsigned long cp) {
 struct Token {
     enum Kind { Ident, String, Punct } kind;
     std::string text;
+    std::size_t pos = 0;  // byte offset of the token's first character
 };
 
 bool isIdentStart(char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0 || c == '_'; }
@@ -232,6 +235,7 @@ std::vector<Token> lex(const std::string& src) {
     const std::size_t n = src.size();
     while (i < n) {
         const char c = src[i];
+        const std::size_t tokStart = i;
         if (c == '/' && i + 1 < n && src[i + 1] == '/') {
             while (i < n && src[i] != '\n') {
                 // a backslash at the end of a // comment continues it
@@ -247,13 +251,13 @@ std::vector<Token> lex(const std::string& src) {
         }
         if (c == '"') {
             ++i;
-            toks.push_back({Token::String, readQuoted(src, i, '"')});
+            toks.push_back({Token::String, readQuoted(src, i, '"'), tokStart});
             continue;
         }
         if (c == '\'') {
             ++i;
             (void)readQuoted(src, i, '\'');
-            toks.push_back({Token::Punct, "'"});
+            toks.push_back({Token::Punct, "'", tokStart});
             continue;
         }
         if (std::isdigit(static_cast<unsigned char>(c)) != 0 ||
@@ -292,24 +296,24 @@ std::vector<Token> lex(const std::string& src) {
                     const std::string close = ")" + delim + "\"";
                     const std::size_t end = src.find(close, open + 1);
                     const std::size_t stop = end == std::string::npos ? n : end;
-                    toks.push_back({Token::String, src.substr(open + 1, stop - open - 1)});
+                    toks.push_back({Token::String, src.substr(open + 1, stop - open - 1), tokStart});
                     i = end == std::string::npos ? n : end + close.size();
                     continue;
                 }
                 if (prefix) {
                     ++i;
-                    toks.push_back({Token::String, readQuoted(src, i, '"')});
+                    toks.push_back({Token::String, readQuoted(src, i, '"'), tokStart});
                     continue;
                 }
             }
-            toks.push_back({Token::Ident, id});
+            toks.push_back({Token::Ident, id, tokStart});
             continue;
         }
         if (std::isspace(static_cast<unsigned char>(c)) != 0) {
             ++i;
             continue;
         }
-        toks.push_back({Token::Punct, std::string(1, c)});
+        toks.push_back({Token::Punct, std::string(1, c), tokStart});
         ++i;
     }
     return toks;
@@ -480,7 +484,9 @@ void testResolve() {
     using cascade::i18n::resolveFor;
     std::printf("  resolveFor: exact tag, primary subtag, unknowns to English, any case\n");
     CHECK(resolveFor("auto", "pt-BR") == "pt-BR");
-    CHECK(resolveFor("auto", "pt-PT") == "pt-BR");  // the only Portuguese
+    // pt-PT has its own catalogue since the 27-language release, so it is an
+    // exact match now; the primary-subtag rule is exercised by de-AT below.
+    CHECK(resolveFor("auto", "pt-PT") == "pt-PT");
     CHECK(resolveFor("auto", "PT-br") == "pt-BR");
     CHECK(resolveFor("AUTO", "de-AT") == "de");
     CHECK(resolveFor("", "de-CH") == "de");
@@ -504,7 +510,8 @@ void testResolve() {
     CHECK(cascade::i18n::addCatalogue(es, &err));
     CHECK(resolveFor("auto", "es-AR") == "es");
     CHECK(resolveFor("auto", "es-MX") == "es-MX");
-    CHECK(cascade::i18n::matchCatalogue("pt-PT") == "pt-BR");
+    CHECK(cascade::i18n::matchCatalogue("pt-PT") == "pt-PT");
+    CHECK(cascade::i18n::matchCatalogue("de-AT") == "de");  // primary subtag
     CHECK(cascade::i18n::matchCatalogue("en-US").empty());
     CHECK(cascade::i18n::matchCatalogue("").empty());
 }
@@ -705,6 +712,239 @@ void testExtractor() {
     expectKeys("tr(\"crlf\")\r\n// tr(\"no\")\r\ntr(\"yes\")", V({"crlf", "yes"}));
 }
 
+// --- no translated sentence is formatted into a fixed buffer -----------------
+//
+// A sentence sized for English is cut in Russian: Cyrillic, Greek and
+// Vietnamese take two bytes a letter and Chinese three, so "RUNNING" in a
+// 16-byte chip or an aircraft-timeout sentence in 320 bytes lost its end on
+// exactly the screens the translation was made for. The engine's answer is
+// the std::string form of formatUtf8 (core/utf8_text.hpp), which is sized by
+// the text. This check keeps it that way: an snprintf, std::snprintf,
+// vsnprintf or formatUtf8 whose SECOND argument is a sizeof - the fixed-buffer
+// shape - must not have a tr()/trId() call among its arguments, and its format
+// must be a string literal (or a choice between literals), because a format
+// held in a variable is how a translated one arrives unseen. A buffer sized
+// by the caller instead - snprintf(out, n, ...) into a parameter, formatUtf8
+// into a vector's .size() - must not take a tr() either. The few places that
+// are genuinely fine are named below, each with its reason.
+//
+// What it cannot see: a translated string already sitting in a variable and
+// copied in through "%s". Those were converted by hand; this catches the
+// shapes that can be caught by reading.
+
+struct FixedFormatSite {
+    std::size_t line;
+    std::string function;  // innermost enclosing named function, "" at file scope
+};
+
+bool isKeyword(const std::string& s) {
+    static const std::set<std::string> kw = {"if",       "for",      "while",   "switch",
+                                             "catch",    "return",   "sizeof",  "decltype",
+                                             "noexcept", "alignof",  "alignas", "static_assert"};
+    return kw.count(s) != 0;
+}
+
+// For the '{' at t[k]: the name of the function whose body it opens, or ""
+// when it opens anything else (a namespace, a class, an initialiser, a
+// lambda, an if). Reads back to the ')' of a parameter list and takes the
+// identifier in front of its '('.
+std::string functionOpenedBy(const std::vector<Token>& t, std::size_t k) {
+    std::size_t j = k;
+    for (int steps = 0; j > 0 && steps < 16; ++steps) {
+        --j;
+        const Token& x = t[j];
+        if (x.kind == Token::Punct && x.text == ")") { break; }
+        if (x.kind == Token::Punct && (x.text == ";" || x.text == "{" || x.text == "}" ||
+                                       x.text == "=" || x.text == ",")) {
+            return {};
+        }
+        if (j == 0) { return {}; }
+    }
+    if (t[j].kind != Token::Punct || t[j].text != ")") { return {}; }
+    int depth = 0;
+    for (;;) {
+        if (t[j].kind == Token::Punct && t[j].text == ")") { ++depth; }
+        if (t[j].kind == Token::Punct && t[j].text == "(") {
+            if (--depth == 0) { break; }
+        }
+        if (j == 0) { return {}; }
+        --j;
+    }
+    if (j == 0 || t[j - 1].kind != Token::Ident || isKeyword(t[j - 1].text)) { return {}; }
+    return t[j - 1].text;
+}
+
+// Every fixed-buffer format call in one source text that could carry a
+// translated sentence.
+std::vector<FixedFormatSite> fixedFormatSites(const std::string& src) {
+    std::vector<FixedFormatSite> out;
+    const std::vector<Token> t = lex(src);
+    std::vector<std::string> scope;  // one entry per open brace: its function
+    auto isP = [&](std::size_t k, const char* p) {
+        return k < t.size() && t[k].kind == Token::Punct && t[k].text == p;
+    };
+    for (std::size_t k = 0; k < t.size(); ++k) {
+        if (isP(k, "{")) {
+            std::string fn = functionOpenedBy(t, k);
+            if (fn.empty() && !scope.empty()) { fn = scope.back(); }
+            scope.push_back(fn);
+            continue;
+        }
+        if (isP(k, "}")) {
+            if (!scope.empty()) { scope.pop_back(); }
+            continue;
+        }
+        if (t[k].kind != Token::Ident) { continue; }
+        const std::string& fn = t[k].text;
+        if (fn != "snprintf" && fn != "vsnprintf" && fn != "formatUtf8") { continue; }
+        if (!isP(k + 1, "(")) { continue; }
+        // The arguments, split at top-level commas.
+        std::vector<std::vector<std::size_t>> args(1);
+        int depth = 0;
+        std::size_t j = k + 2;
+        for (; j < t.size(); ++j) {
+            const Token& x = t[j];
+            if (x.kind == Token::Punct && (x.text == "(" || x.text == "[" || x.text == "{")) {
+                ++depth;
+            } else if (x.kind == Token::Punct && (x.text == ")" || x.text == "]" || x.text == "}")) {
+                if (depth == 0) { break; }
+                --depth;
+            } else if (depth == 0 && x.kind == Token::Punct && x.text == ",") {
+                args.emplace_back();
+                continue;
+            }
+            args.back().push_back(j);
+        }
+        if (args.size() < 3) { continue; }
+        // SIZED: the size is a sizeof - a buffer whose length was fixed when
+        // the English was written. BOUNDED: any other caller-sized buffer - an
+        // snprintf into a (char* out, size_t n) parameter, or a formatUtf8 into
+        // a vector's .size(). A bounded buffer may legitimately take a
+        // variable format (the helpers that measure the text first and size
+        // the vector from it), so only a tr() call in it is flagged.
+        bool sized = false;
+        bool bounded = fn != "formatUtf8";
+        for (std::size_t a : args[1]) {
+            sized = sized || (t[a].kind == Token::Ident && t[a].text == "sizeof");
+            bounded = bounded || (t[a].kind == Token::Ident && t[a].text == "size" && isP(a + 1, "("));
+        }
+        if (!sized && !bounded) { continue; }
+        bool translated = false;
+        for (std::size_t n = 2; n < args.size(); ++n) {
+            for (std::size_t a : args[n]) {
+                if (t[a].kind == Token::Ident && (t[a].text == "tr" || t[a].text == "trId") &&
+                    isP(a + 1, "(")) {
+                    translated = true;
+                }
+            }
+        }
+        // A literal format: string literals only, or `cond ? "a" : "b"` whose
+        // branches are.
+        const std::vector<std::size_t>& f = args[2];
+        std::size_t from = 0;
+        for (std::size_t n = 0; n < f.size(); ++n) {
+            if (t[f[n]].kind == Token::Punct && t[f[n]].text == "?") { from = n + 1; }
+        }
+        bool literal = !f.empty() && from < f.size();
+        for (std::size_t n = from; n < f.size(); ++n) {
+            const Token& x = t[f[n]];
+            const bool colon = from > 0 && x.kind == Token::Punct && x.text == ":";
+            literal = literal && (x.kind == Token::String || colon);
+        }
+        if (translated || (sized && !literal)) {
+            const std::size_t line =
+                1 + static_cast<std::size_t>(std::count(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(t[k].pos), '\n'));
+            out.push_back({line, scope.empty() ? std::string() : scope.back()});
+        }
+    }
+    return out;
+}
+
+void testFixedFormatScanner() {
+    std::printf("  the fixed-buffer scanner: finds tr()/variable formats into sizeof'd buffers\n");
+    auto count = [](const std::string& s) { return fixedFormatSites(s).size(); };
+    const auto one = fixedFormatSites("namespace n {\nvoid draw(int x) {\n char b[8];\n"
+                                      " formatUtf8(b, sizeof(b), tr(\"x %d\"), x);\n}\n}");
+    CHECK(one.size() == 1);
+    CHECK(!one.empty() && one[0].line == 4 && one[0].function == "draw");
+    CHECK(count("std::snprintf(b, sizeof b, \"%s\", cascade::i18n::tr(\"x\"));") == 1);
+    CHECK(count("snprintf(b, sizeof b, fmt, 3);") == 1);
+    CHECK(count("snprintf(b, sizeof(b), c ? tr(\"a\") : tr(\"b\"), 3);") == 1);
+    CHECK(count("snprintf(b, sizeof b, \"%d\", 3);") == 0);
+    CHECK(count("snprintf(b, sizeof b, \"%d\" \" joined\", 3);") == 0);
+    CHECK(count("snprintf(b, sizeof(b), u == k ? \"%.0f\" : \"%.0f dB\", v);") == 0);
+    CHECK(count("formatUtf8(s, tr(\"x %d\"), 1);") == 0);             // the string form
+    // Caller-sized buffers: a tr() is flagged, a measured variable format is not.
+    CHECK(count("std::snprintf(out, n, cascade::i18n::tr(\"%zu PORTS\"), c);") == 1);
+    CHECK(count("formatUtf8(buf.data(), buf.size(), tr(\"Removed %s\"), f);") == 1);
+    CHECK(count("formatUtf8(buf.data(), buf.size(), fmt, f);") == 0);
+    CHECK(count("std::snprintf(out, n, \"%.3f\", hz);") == 0);
+    CHECK(count("formatUtf8(s, fmt, 1);") == 0);                      // the string form
+    CHECK(count("formatUtf8(b, 64, tr(\"x %d\"), 1);") == 0);        // a literal size: not this shape
+    CHECK(count("// snprintf(b, sizeof b, fmt, 1);\n/* formatUtf8(b, sizeof b, tr(\"x\")) */") == 0);
+    CHECK(count("const char* s = \"snprintf(b, sizeof b, fmt)\";") == 0);
+    // A lambda's body belongs to the function around it; an if does not name one.
+    const auto lam = fixedFormatSites(
+        "std::string outer(int a) {\n auto f = [](const char* fmt) {\n char b[9];\n"
+        " if (a) { snprintf(b, sizeof b, fmt, 1); }\n };\n}");
+    CHECK(lam.size() == 1 && lam[0].function == "outer");
+}
+
+void testNoTranslatedFixedBuffers() {
+    // file (relative to the root, forward slashes) + function -> why it is fine
+    struct Allowed {
+        const char* file;
+        const char* function;
+        const char* why;
+    };
+    static const Allowed kAllowed[] = {
+        {"src/core/diag_log.cpp", "writef", "the diagnostic log's printf: formats are English log text, never tr()"},
+        {"src/core/diag_log.cpp", "diagLogf", "the diagnostic log's printf: formats are English log text, never tr()"},
+        {"src/core/diag_log.cpp", "diagWarnf", "the diagnostic log's printf: formats are English log text, never tr()"},
+        {"src/core/gps_reader.cpp", "fmt", "English-only status formats, every caller a literal; bounded on purpose"},
+        {"src/gui/track_metrics.hpp", "detailPrintf", "English-only detail lines, every caller a literal; bounded on purpose"},
+    };
+    std::printf("  no tr() text or variable format is printed into a sizeof'd buffer in src/\n");
+    const fs::path src = fs::path(g_root) / "src";
+    std::set<std::string> allowedUsed;
+    std::size_t sites = 0;
+    std::size_t files = 0;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(src, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file()) { continue; }
+        const std::string ext = it->path().extension().string();
+        if (ext != ".cpp" && ext != ".hpp" && ext != ".h") { continue; }
+        std::string text;
+        if (!readExact(it->path(), text)) { continue; }
+        ++files;
+        std::string rel = fs::relative(it->path(), g_root, ec).generic_string();
+        for (const FixedFormatSite& s : fixedFormatSites(text)) {
+            bool allowed = false;
+            for (const Allowed& a : kAllowed) {
+                if (rel == a.file && s.function == a.function) {
+                    allowed = true;
+                    allowedUsed.insert(std::string(a.file) + ":" + a.function);
+                }
+            }
+            if (allowed) { continue; }
+            std::printf("      %s:%zu (in %s): a translated or variable format into a fixed buffer - "
+                        "use formatUtf8(std::string&, ...)\n",
+                        rel.c_str(), s.line, s.function.empty() ? "file scope" : s.function.c_str());
+            ++sites;
+        }
+    }
+    std::printf("      %zu files read, %zu offending sites\n", files, sites);
+    CHECK(files > 100);  // it read the real tree
+    CHECK(sites == 0);
+    // An allow-list entry that matches nothing is stale: the place moved or
+    // was fixed, and the entry would silently excuse whatever lands there next.
+    for (const Allowed& a : kAllowed) {
+        const std::string key = std::string(a.file) + ":" + a.function;
+        if (allowedUsed.count(key) == 0) { std::printf("      stale allow-list entry: %s\n", key.c_str()); }
+        CHECK(allowedUsed.count(key) == 1);
+    }
+}
+
 // --- half 2: the shipped catalogues -----------------------------------------
 
 std::vector<fs::path> catalogueFiles() {
@@ -823,6 +1063,93 @@ void testEmbeddedMatchesFiles() {
     CHECK(same);
 }
 
+// --- half 4: Chinese and Japanese are not set with spaces between words -------
+//
+// A catalogue value is often a TEMPLATE, and a translator writing one leaves a
+// space either side of "%s" by habit - right when the argument is a device name
+// ("%s 已插入"), wrong when it is itself a translated phrase: the census
+// sentence "这里没有 %s。" filled with "飞机位置" put a space in the middle of
+// a Chinese sentence, "没有 飞机位置" (34-language screenshot review). The
+// templates whose FIRST argument is a translated phrase are listed here; in
+// them "%s" meets a CJK neighbour with no space between. And no value may put
+// a space between two CJK characters at all.
+bool cjkChar(unsigned int c) {
+    return (c >= 0x3001 && c <= 0x303F) || (c >= 0x3040 && c <= 0x30FF) ||
+           (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x4E00 && c <= 0x9FFF) ||
+           (c >= 0xFF01 && c <= 0xFF60);
+}
+
+unsigned int cpBeforeByte(const std::string& s, std::size_t i) {
+    if (i == 0) { return 0; }
+    std::size_t k = i - 1;
+    while (k > 0 && (static_cast<unsigned char>(s[k]) & 0xC0u) == 0x80u) { --k; }
+    return cascade::core::utf8Decode(s, k);
+}
+
+unsigned int cpAtByte(const std::string& s, std::size_t i) {
+    if (i >= s.size()) { return 0; }
+    return cascade::core::utf8Decode(s, i);
+}
+
+void testCjkTemplateJoins() {
+    std::printf("  zh-CN / zh-TW / ja: no space between CJK words, nor beside a translated %%s\n");
+    // The keys whose first %s is filled with a TRANSLATED phrase: the census
+    // subject ("aircraft positions", "target positions") and the key-binding
+    // clash ("also <action name>").
+    const char* const kTranslatedArg[] = {
+        "No fitted module publishes tracks of any kind, so there are no %s here. %s",
+        "Nothing is publishing %s: \"%s\" is a track source and you stopped it.",
+        "Nothing is publishing %s: %d fitted track sources are stopped.",
+        "Nothing is publishing %s: \"%s\" is a track source and the host refused it.",
+        "Nothing is publishing %s: %d fitted track sources were refused.",
+        "Nothing is publishing %s: a fitted track source did not start - the host asked it for one "
+        "and was given none. Nothing needs fetching; the module itself failed.",
+        "also %s",
+    };
+    int faults = 0;
+    for (const fs::path& path : catalogueFiles()) {
+        const std::string code = path.stem().string();
+        if (code != "zh-CN" && code != "zh-TW" && code != "ja") { continue; }
+        std::string bytes;
+        CHECK(readExact(path, bytes));
+        const nlohmann::json j = nlohmann::json::parse(bytes, nullptr, false);
+        if (j.is_discarded() || !j.contains("strings")) {
+            CHECK(false);
+            continue;
+        }
+        const auto& strings = j["strings"];
+        for (const char* key : kTranslatedArg) {
+            const auto it = strings.find(key);
+            CHECK(it != strings.end());
+            if (it == strings.end()) { continue; }
+            const std::string v = it->get<std::string>();
+            const std::size_t at = v.find("%s");
+            CHECK(at != std::string::npos);
+            if (at == std::string::npos) { continue; }
+            const bool before = at >= 1 && v[at - 1] == ' ' && cjkChar(cpBeforeByte(v, at - 1));
+            const bool after = at + 3 <= v.size() && v[at + 2] == ' ' && cjkChar(cpAtByte(v, at + 3));
+            if (before || after) {
+                std::printf("      %s: \"%s\" -> \"%s\": a space beside a translated %%s\n", code.c_str(),
+                            key, v.c_str());
+                ++faults;
+            }
+        }
+        for (auto it = strings.begin(); it != strings.end(); ++it) {
+            if (!it->is_string()) { continue; }
+            const std::string v = it->get<std::string>();
+            for (std::size_t i = 1; i + 1 < v.size(); ++i) {
+                if (v[i] == ' ' && cjkChar(cpBeforeByte(v, i)) && cjkChar(cpAtByte(v, i + 1))) {
+                    std::printf("      %s: \"%s\" -> \"%s\": a space between two CJK characters\n",
+                                code.c_str(), it.key().c_str(), v.c_str());
+                    ++faults;
+                    break;
+                }
+            }
+        }
+    }
+    CHECK(faults == 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -844,7 +1171,10 @@ int main(int argc, char** argv) {
     testFormatSpecs();
     testLocale();
     testExtractor();
+    testFixedFormatScanner();
+    testNoTranslatedFixedBuffers();
     testShippedCatalogues();
     testEmbeddedMatchesFiles();
+    testCjkTemplateJoins();
     return testSummary("test_i18n");
 }

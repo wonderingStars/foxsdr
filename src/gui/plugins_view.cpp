@@ -534,9 +534,9 @@ float drawOperatingWell(ImDrawList* dl, float x, float y, float width,
     // THE CAPTION CARRIES THE STATE WORD, so the well says which of the five
     // answers this is before the sentence is read - and so a greyscale
     // screenshot still says it, which a coloured note alone would not.
-    char caption[128];
-    cascade::core::formatUtf8(caption, sizeof caption, tr("WHAT IT IS DOING - %s"), fittedStateWord(st));
-    addBenchGroupCaption(dl, ImVec2(x + pad, ty), inner, caption);
+    std::string caption;
+    cascade::core::formatUtf8(caption, tr("WHAT IT IS DOING - %s"), fittedStateWord(st));
+    addBenchGroupCaption(dl, ImVec2(x + pad, ty), inner, caption.c_str());
     ty += capH + 6.0f;
     drawNote(dl, ImVec2(x + pad, ty), inner, stateInk(st), sentence.c_str());
     ty += noteHeight(inner, sentence.c_str()) + 12.0f;

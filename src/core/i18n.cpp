@@ -69,6 +69,7 @@ std::vector<Catalogue*> gLive;                 // one per code: what lookups see
 std::vector<Language> gLanguages{kEnglish};    // languages()'s answer
 std::atomic<Catalogue*> gActive{nullptr};      // null = English
 std::once_flag gEmbeddedOnce;
+std::atomic<DrawablePredicate> gDrawable{nullptr};  // null = everything draws
 
 std::string lower(std::string_view s) {
     std::string out(s);
@@ -264,22 +265,30 @@ const std::vector<Language>& languages() {
 std::string matchCatalogue(const std::string& tag) {
     ensureEmbedded();
     if (tag.empty()) { return {}; }
-    std::lock_guard<std::mutex> lock(gMutex);
-    for (const Catalogue* c : gLive) {
-        if (iequals(c->info.code, tag)) { return c->info.code; }
+    // The candidates are copied out under the lock and judged outside it: the
+    // drawable predicate belongs to the font layer, which asks this file for
+    // a catalogue's code points - under gMutex, so it must not be called
+    // while this holds it.
+    std::vector<Language> live;
+    {
+        std::lock_guard<std::mutex> lock(gMutex);
+        for (const Catalogue* c : gLive) { live.push_back(c->info); }
+    }
+    for (const Language& l : live) {
+        if (iequals(l.code, tag)) { return drawable(l.code) ? l.code : std::string(); }
     }
     // Same language, other country. A catalogue that IS the bare language
     // ("es" for an "es-MX" desktop) is the better answer when there is one;
     // otherwise the first by English name, so the choice does not depend on
     // the order the catalogues happened to be added in.
     const std::string primary = primarySubtag(tag);
-    const Catalogue* best = nullptr;
-    for (const Catalogue* c : gLive) {
-        if (primarySubtag(c->info.code) != primary) { continue; }
-        if (lower(c->info.code) == primary) { return c->info.code; }
-        if (best == nullptr || c->info.englishName < best->info.englishName) { best = c; }
+    const Language* best = nullptr;
+    for (const Language& l : live) {
+        if (primarySubtag(l.code) != primary || !drawable(l.code)) { continue; }
+        if (lower(l.code) == primary) { return l.code; }
+        if (best == nullptr || l.englishName < best->englishName) { best = &l; }
     }
-    return best != nullptr ? best->info.code : std::string();
+    return best != nullptr ? best->code : std::string();
 }
 
 std::string resolveFor(const std::string& setting, const std::string& locale) {
@@ -291,11 +300,69 @@ std::string resolveFor(const std::string& setting, const std::string& locale) {
         const std::string m = matchCatalogue(locale);
         return m.empty() ? std::string("en") : m;
     }
-    std::lock_guard<std::mutex> lock(gMutex);
-    for (const Catalogue* c : gLive) {
-        if (iequals(c->info.code, s)) { return c->info.code; }
+    std::string code;
+    {
+        std::lock_guard<std::mutex> lock(gMutex);
+        for (const Catalogue* c : gLive) {
+            if (iequals(c->info.code, s)) {
+                code = c->info.code;
+                break;
+            }
+        }
     }
-    return "en";
+    // A saved choice this machine cannot draw is not applied (it is kept in
+    // the config by the caller, which never writes the resolved code back).
+    return !code.empty() && drawable(code) ? code : std::string("en");
+}
+
+void setDrawablePredicate(DrawablePredicate p) { gDrawable.store(p, std::memory_order_release); }
+
+bool drawable(const std::string& code) {
+    if (code == "en") { return true; }
+    const DrawablePredicate p = gDrawable.load(std::memory_order_acquire);
+    return p == nullptr || p(code);
+}
+
+std::vector<unsigned int> codePoints(const std::string& code) {
+    ensureEmbedded();
+    const Catalogue* c = liveByCode(code);
+    std::vector<unsigned int> out;
+    if (c == nullptr) { return out; }
+    // Published catalogues are never modified, so this reads without the lock.
+    std::vector<bool> seen;
+    auto add = [&](const std::string& s) {
+        std::size_t i = 0;
+        while (i < s.size()) {
+            const auto b = static_cast<unsigned char>(s[i]);
+            unsigned int cp = b;
+            std::size_t len = 1;
+            if (b >= 0xC0 && b < 0xE0) {
+                cp = b & 0x1Fu;
+                len = 2;
+            } else if (b >= 0xE0 && b < 0xF0) {
+                cp = b & 0x0Fu;
+                len = 3;
+            } else if (b >= 0xF0 && b < 0xF8) {
+                cp = b & 0x07u;
+                len = 4;
+            }
+            if (i + len > s.size()) { break; }
+            for (std::size_t k = 1; k < len; ++k) {
+                cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3Fu);
+            }
+            i += len;
+            if (cp < 0x20) { continue; }
+            if (cp >= seen.size()) { seen.resize(cp + 1, false); }
+            if (!seen[cp]) {
+                seen[cp] = true;
+                out.push_back(cp);
+            }
+        }
+    };
+    add(c->info.name);
+    for (const auto& [key, value] : c->strings) { add(value); }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 std::string resolve(const std::string& setting) {

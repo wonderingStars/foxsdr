@@ -48,7 +48,9 @@
 #ifndef CASCADE_GUI_FONTS_HPP
 #define CASCADE_GUI_FONTS_HPP
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 #include "imgui.h"
 
@@ -154,6 +156,93 @@ std::string systemFontPath(const char* file);
 // True after load() when both Georgia faces were found and are in use; false
 // on the embedded fallback. The diagnostics log says which at start-up.
 bool usingSystemSerif();
+
+// --- The face CHAIN: every script the catalogues are written in --------------
+//
+// Each of the three roles is not one typeface but a CHAIN of them, merged into
+// one ImFont (ImFontConfig::MergeMode): Dear ImGui 1.92 asks each source in
+// order for a glyph and takes the first that has it. The chain, in order:
+//
+//   1. THE PAIR the language is lettered in - Georgia where the machine has
+//      it, else the embedded Saira Condensed, else the embedded Noto Sans
+//      Condensed: the FIRST of those whose two faces have every letter of the
+//      catalogue in force (CJK aside). English, and every Latin catalogue
+//      Georgia covers, therefore looks exactly as it did; Vietnamese, whose
+//      stacked vowels Georgia lacks, is lettered wholly in Saira; Russian on
+//      Linux, where Saira has no Cyrillic, wholly in Noto Sans - never a word
+//      assembled from two typefaces. (Figures keep Nova Mono in every case.)
+//   2. NOTO SANS CONDENSED, compiled in (third_party/fonts, an OFL subset:
+//      Latin-1, Latin Extended-A/B and Additional, Greek, Cyrillic), for the
+//      odd letter the pair lacks - a country or language name in another
+//      alphabet, a Bulgarian ѝ Georgia does not have.
+//   3. A SYSTEM CJK FACE, only when a Chinese, Japanese or Korean catalogue is
+//      in force (or the language list is on screen and needs one to draw a
+//      language's own name). Read from the operating system and never
+//      shipped - see core/scripts.hpp - and loaded LAZILY, so a user who never
+//      asks for one of those languages carries none of their megabytes.
+//
+// EVERY FACE IN A CHAIN IS DRAWN AT THE EM OF THE FACE ENGLISH IS LETTERED IN
+// on this machine (Georgia, else Saira; Nova Mono for readings). ImGui sizes a
+// face by its ascent-to-descent span, which differs by a third between these
+// families, so without this a Cyrillic fallback letter sat visibly smaller than
+// the Latin beside it, and a whole Russian interface would be lettered at a
+// different size from the English one every width here was measured against.
+//
+// THE ATLAS CHANGES ONLY BETWEEN FRAMES: applyLanguage() and the names request
+// are recorded, and applyPending() - called where the application applies a
+// language, before NewFrame - rebuilds or extends the atlas. A change that
+// only ADDS faces behind the ones in use extends it; one that changes the pair
+// or which CJK face comes first (Japanese after Chinese must put Yu Gothic
+// ahead of YaHei, or the Japanese reader gets Chinese glyph forms) rebuilds it.
+
+// Everything the chain for one language is made of - what applyPending()
+// loads, and what test_i18n_glyphs checks every catalogue against, so the
+// test and the application cannot disagree about which faces there are.
+struct ChainFace {
+    std::string label;  // "Georgia", "Noto Sans Condensed Medium", "msyh.ttc#1"
+    const unsigned char* data = nullptr;  // valid for the life of the process
+    std::size_t len = 0;
+    int index = 0;  // the face inside a collection
+};
+struct Chain {
+    std::string pair;  // "Georgia", "Saira Condensed" or "Noto Sans Condensed"
+    std::vector<ChainFace> ui, legend, reading;
+    // The CJK face the language needs, and whether this machine has one. When
+    // it does not, ui/legend/reading hold no CJK face and the language is not
+    // drawable here.
+    int cjk = 0;  // a core::scripts::CjkFace
+    bool cjkFound = true;
+};
+Chain planChain(const std::string& languageCode);
+
+// Whether `languageCode`'s catalogue can be drawn on this machine: always, for
+// a language the compiled-in faces cover; for a CJK one, when a system face
+// with its characters exists. Installed as i18n's drawable predicate by
+// load(). Reads font files the first time a CJK language is asked about (the
+// answer is kept; the bytes are not, unless the face is put in the atlas).
+bool canDraw(const std::string& languageCode);
+
+// Why not, as an English sentence that is also a translation key (draw it
+// through tr()); "" when canDraw() is true.
+const char* unavailableReason(const std::string& languageCode);
+
+// Record that `languageCode` is now in force; applyPending() puts its chain
+// in the atlas.
+void applyLanguage(const std::string& languageCode);
+
+// Record that the language list is on screen: applyPending() adds, behind the
+// chain in force, the system faces the drawable languages' own names need
+// ("日本語", "한국어") - once, and only for names the chain cannot draw.
+void requestLanguageNames();
+
+// Between frames: make the atlas match what was recorded. Returns true when
+// the atlas changed.
+bool applyPending();
+
+// For the log and the tests: the pair in force, and every face in the UI
+// role's chain in order, by label (a names face marked " (names)").
+const std::string& pairInUse();
+std::vector<std::string> uiChainLabels();
 
 }  // namespace cascade::gui::fonts
 

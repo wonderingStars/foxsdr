@@ -1619,6 +1619,153 @@ void testARefusedUninitStrandsTheLinkBecauseTheServiceStillHoldsTheCallback() {
     }
 }
 
+// --- 12g. a LOST session is never entered again, by anything --------------
+//
+// THE 0.99.27 CRASH REPORT (2026-09-24, an RSP1 on API 3.15, Windows
+// 10.0.26200): "access violation" inside VCRUNTIME140, called from
+// sdrplay_api.dll +7098, called from enumerateSdrPlayVendor +445 on the
+// enumeration worker. Disassembled against the shipped build (id ...E174),
+// +445 is the return from `call [Api+0x50]` - sdrplay_api_GetDevices, handed
+// the worker's own 16 x 96-byte array - and the 0.95.0 hang inside the same
+// vendor function parked at +6914, its wait for the service. So the copy that
+// faulted ran after the service's wait came back, inside the vendor's code.
+//
+// The log is what this driver did before that call:
+//
+//   15:12:35 SDRplay retune abandoned - the service did not answer within 1000 ms
+//   15:13:28 SDRplay stopped without Uninit - ... this process cannot use it again
+//   15:13:48, 15:16:15, 15:20:41 SDRplay enumeration abandoned (each followed
+//            ~17 s later by "GetDevices failed - ServiceNotResponding (14)")
+//   15:18:18 SDRplay closed without ReleaseDevice (the session is ORPHANED)
+//   15:18:38 SDRplay open failed - GetDevices failed: ServiceNotResponding
+//   ...and ~15:22 the next scan's GetDevices is the crash.
+//
+// The file header already says the session is "finished until FoxSDR is
+// restarted" once a worker has been abandoned inside the DLL or the service
+// has declared itself gone - but only the DEVICE that saw it obeyed. The scan
+// and every later open() went straight back through the same process-wide
+// session, which can never be closed again (closing it is one more unbounded
+// call into a DLL still holding our thread). This pins the process-wide rule:
+// once the session is lost, a scan and an open() refuse WITHOUT entering the
+// vendor table at all.
+void testALostSessionIsNeverEnteredAgainByAScanOrAnOpen() {
+    // THE FAKE AND THE SOURCE ARE ON THE HEAP AND NEITHER IS DESTROYED, for the
+    // reason 12d gives: a worker is abandoned inside the fake's Update.
+    FakeSdrPlayApi* fake = new FakeSdrPlayApi();
+    fake->addDevice("1706012345", abi::kRsp1);
+    SdrPlaySource* src = new SdrPlaySource();
+    CHECK(openOn(*src, *fake));
+    CHECK(src->start());
+
+    // 15:12:35 - the retune is abandoned inside a wedged service.
+    fake->hangInUpdate.store(true);
+    std::atomic<bool> retuneReturned{false};
+    std::thread caller([&]() {
+        src->setCenterFrequencyHz(14230000.0);
+        retuneReturned.store(true);
+    });
+    for (int i = 0; i < 400 && !retuneReturned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(retuneReturned.load());
+    if (caller.joinable()) { caller.join(); }
+    CHECK(src->deviceDead());
+    CHECK(fake->insideUpdate.load());
+
+    // 15:13:28 and 15:18:18 - stopped without Uninit, closed without
+    // ReleaseDevice, and the session orphaned rather than closed.
+    src->stop();
+    src->closeDevice();
+    CHECK(fake->closeCount == 0);
+
+    // Minutes later: the scan hold-off (if any) has long run out.
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+
+    // THE CRASHING CALL. A scan must list nothing and enter nothing.
+    const std::size_t callsBefore = fake->calls.size();
+    const int openBefore = fake->openCount;
+    const int getDevicesBefore = fake->countStarting("GetDevices");
+    const std::vector<cascade::source::NativeDeviceInfo> devs =
+        cascade::source::enumerateSdrPlayWith(fake->table);
+    CHECK(devs.empty());
+    // THE DEFECT, IN ONE LINE: before the fix the scan's worker went through
+    // LockDeviceApi and GetDevices on the orphaned session.
+    CHECK(fake->countStarting("GetDevices") == getDevicesBefore);
+    CHECK(fake->calls.size() == callsBefore);
+    CHECK(fake->openCount == openBefore);
+    if (fake->calls.size() != callsBefore) {
+        std::printf("     the scan entered the vendor table: %s\n", fake->joined().c_str());
+    }
+    // The panel says why, verbatim - and names BOTH restarts, because unlike
+    // the hold-off this never expires on its own.
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+          std::string(cascade::source::sdrPlaySessionLostSentence()));
+    CHECK(std::string(cascade::source::sdrPlaySessionLostSentence()).find("restart FoxSDR") !=
+          std::string::npos);
+    // ...and it stays that way when the scan is asked again, hold-off or not.
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+    CHECK(cascade::source::enumerateSdrPlayWith(fake->table).empty());
+    CHECK(fake->calls.size() == callsBefore);
+
+    // 15:18:38 - and an open() from anywhere else (the patch page's radio)
+    // must refuse the same way, without a single vendor call.
+    SdrPlaySource* other = new SdrPlaySource();
+    const std::size_t callsBeforeOpen = fake->calls.size();
+    const bool reopened = openOn(*other, *fake);
+    CHECK(!reopened);
+    CHECK(fake->calls.size() == callsBeforeOpen);
+    if (fake->calls.size() != callsBeforeOpen) {
+        std::printf("     the open entered the vendor table: %s\n", fake->joined().c_str());
+    }
+    CHECK(std::string(other->lastError()).find(cascade::source::sdrPlaySessionLostSentence()) !=
+          std::string::npos);
+
+    // Let the abandoned worker leave before this process does - and only then
+    // tear down anything the unfixed code may have opened, because its
+    // ReleaseDevice would otherwise queue behind the wedged Update.
+    fake->releaseUpdateHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftUpdate.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftUpdate.load());
+    if (reopened) { other->closeDevice(); }
+
+    // THE OTHER WAY IN: nothing abandoned, the service simply ANSWERS
+    // sdrplay_api_ServiceNotResponding (12c's shape, and the log's 15:14:05
+    // line). The device orphans its session all the same, so the table is
+    // just as finished. Nothing is left inside this fake, so it lives on the
+    // stack.
+    {
+        FakeSdrPlayApi gone;
+        gone.addDevice("1706012346", abi::kRsp1);
+        SdrPlaySource dead;
+        CHECK(openOn(dead, gone));
+        CHECK(dead.start());
+        gone.updateResult = abi::ServiceNotResponding;
+        CHECK(dead.setCenterFrequencyHz(101100000.0) == false);
+        dead.stop();
+        dead.closeDevice();
+        cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+        const int getsBefore = gone.countStarting("GetDevices");
+        CHECK(cascade::source::enumerateSdrPlayWith(gone.table).empty());
+        CHECK(gone.countStarting("GetDevices") == getsBefore);
+        CHECK(gone.closeCount == 0);
+    }
+
+    // AND THE LATCH IS THE TABLE'S, NOT THE PROCESS'S BY ACCIDENT: a healthy
+    // table (in the field there is only one; here, a fresh fake) still scans,
+    // lists its radio and leaves the panel empty.
+    {
+        FakeSdrPlayApi healthy;
+        healthy.addDevice("1706012347", abi::kRsp1);
+        cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+        CHECK(cascade::source::enumerateSdrPlayWith(healthy.table).size() == 1);
+        CHECK(healthy.called("GetDevices"));
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip().empty());
+    }
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+}
+
 void testAHealthyControlIsStillSynchronousAndAcknowledged() {
     // The bound must not have changed the ordinary path. A service that
     // answers is updated on the spot, the acknowledgement flag is still
@@ -1792,6 +1939,7 @@ int main() {
     testAWedgedControlIsAbandonedAndTheDeviceIsDead();
     testATeardownAfterAnAbandonedControlNeverEntersTheVendorDll();
     testStopsOwnUninitGoingServiceNotRespondingKeepsCloseDeviceOffTheVendorDll();
+    testALostSessionIsNeverEnteredAgainByAScanOrAnOpen();
     // LAST, and deliberately: it abandons a worker inside its own fake and
     // releases it again, and nothing that follows should have to reason about
     // a thread this one left running.

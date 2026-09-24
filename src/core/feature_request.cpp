@@ -125,9 +125,7 @@ namespace {
 // `format` arrives already translated: the tr() is at each call so the key
 // extractor (tools/i18n_keys.py, test_i18n) sees the literal.
 std::string sentence(const char* format, std::size_t a, std::size_t b) {
-    char buf[320];
-    formatUtf8(buf, sizeof(buf), format, a, b);
-    return buf;
+    return formatText(format, a, b);
 }
 }  // namespace
 
@@ -282,11 +280,8 @@ bool FeatureRequestSender::sendJson(const std::string& url, const std::string& j
             if (msg.empty()) {
                 // One format string, not fragments, so it can be translated
                 // (the page shows this line as it is stored).
-                char buf[160];
-                formatUtf8(buf, sizeof(buf),
-                           cascade::i18n::tr("The server would not accept the request (HTTP %d)."),
+                formatUtf8(msg, cascade::i18n::tr("The server would not accept the request (HTTP %d)."),
                            raw.status);
-                msg = buf;
             }
         } else {
             // No status at all: the connection was refused, the name did not
