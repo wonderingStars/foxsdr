@@ -730,6 +730,7 @@ bool PlutoTx::startWritingLocked() {
     {
         std::lock_guard<std::mutex> lk(link_->waitMutex);
         link_->exited = false;
+        link_->drain = false;
     }
     link_->run.store(true, std::memory_order_relaxed);
     writer_ = std::thread(&PlutoTx::writerThreadBody, link_);
@@ -756,7 +757,7 @@ bool PlutoTx::start() {
     return ok;
 }
 
-void PlutoTx::stopWritingLocked() {
+void PlutoTx::stopWritingLocked(bool drain) {
     if (!writer_.joinable() && !running_.load(std::memory_order_relaxed)) {
         if (stream_ != nullptr) {
             stream_->close();
@@ -767,7 +768,13 @@ void PlutoTx::stopWritingLocked() {
         return;
     }
 
-    link_->run.store(false, std::memory_order_relaxed);
+    {
+        // Under the writer's mutex so the writer, reading `drain` under it
+        // once it has seen `run` fall, cannot see one without the other.
+        std::lock_guard<std::mutex> lk(link_->waitMutex);
+        link_->drain = drain;
+        link_->run.store(false, std::memory_order_relaxed);
+    }
     link_->waitCv.notify_all();
 
     if (writer_.joinable()) {
@@ -826,6 +833,24 @@ void PlutoTx::stop() {
     stopWritingLocked();
     if (was) {
         core::diagLogf("tx: stopped - the board was told to go quiet (%s)",
+                       link_->silenced.load(std::memory_order_relaxed)
+                           ? "confirmed"
+                           : "NOT CONFIRMED - the board did not answer");
+    }
+}
+
+void PlutoTx::finish() {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    const bool was = running_.load(std::memory_order_relaxed);
+    // A FAULTED BOARD IS NOT DRAINED. Its writer has already left its loop on
+    // a failed WRITEBUF and silenced what it could; there is no working
+    // connection to play a queue through, and waiting for one would only
+    // delay the report. Same as stop(), at once.
+    const bool drain = was && !faulted();
+    stopWritingLocked(drain);
+    if (was) {
+        core::diagLogf("tx: %s - the board was told to go quiet (%s)",
+                       drain ? "finished, queue played out" : "stopped",
                        link_->silenced.load(std::memory_order_relaxed)
                            ? "confirmed"
                            : "NOT CONFIRMED - the board did not answer");
@@ -891,12 +916,64 @@ void PlutoTx::silenceOn(WriterLink& link) {
     }
 }
 
+bool PlutoTx::drainOn(WriterLink& link, std::vector<std::complex<float>>& block,
+                      std::size_t pending, std::vector<std::uint8_t>& raw) {
+    if (link.stream == nullptr) { return false; }
+    const std::size_t storage = link.format.storageBytes();
+    const std::size_t bytesPerSample = 2 * storage;
+    const std::size_t samples = link.bufferSamples;
+    auto send = [&link, &block, &raw, storage, bytesPerSample, samples]() {
+        for (std::size_t i = 0; i < samples; ++i) {
+            std::uint8_t* word = raw.data() + i * bytesPerSample;
+            iiod::packSample(block[i].real(), link.format, word);
+            iiod::packSample(block[i].imag(), link.format, word + storage);
+        }
+        if (link.stream->writeBuf(link.dacDevice, raw.data(), raw.size())) { return true; }
+        noteFaultOn(link, "handing the Pluto the end of a transmission",
+                    link.stream->lastError());
+        return false;
+    };
+
+    // EVERYTHING STILL QUEUED, in order: what was already taken into `block`
+    // when `run` fell, then the ring. BOUNDED BY COUNT, not by the ring
+    // emptying, so a caller still writing cannot keep this going: the ring
+    // plus the one partial block is the most there can have been.
+    const std::size_t maxBuffers = link.ring.capacity() / samples + 1;
+    std::size_t got = pending;
+    for (std::size_t n = 0; n < maxBuffers; ++n) {
+        got += link.ring.read(block.data() + got, samples - got);
+        if (got == 0) { break; }
+        std::fill(block.begin() + static_cast<std::ptrdiff_t>(got), block.end(),
+                  std::complex<float>(0.0f, 0.0f));
+        if (!send()) { return false; }
+        got = 0;
+    }
+
+    // THEN THE DAEMON'S WHOLE QUEUE OF ZEROS. WRITEBUF hands a buffer to a
+    // queue of kTxBuffersCount (the BUFFERS_COUNT start() set), not to the
+    // DAC's output, so the ramp's last sample can still be waiting in it when
+    // the last data WRITEBUF returns. That many buffers of silence behind it
+    // push it through, and whatever the DAC plays after its queue runs dry
+    // is silence too - so the attenuation step below lands on a zero signal
+    // rather than on the modulation. (Proven against the fake daemon's
+    // record of the bytes; not measured on a Pluto - there is none here.)
+    std::fill(block.begin(), block.end(), std::complex<float>(0.0f, 0.0f));
+    for (long i = 0; i < kTxBuffersCount; ++i) {
+        if (!send()) { return false; }
+    }
+    return true;
+}
+
 void PlutoTx::writerThreadBody(std::shared_ptr<WriterLink> link) {
     const std::size_t storage = link->format.storageBytes();
     const std::size_t bytesPerSample = 2 * storage;  // I and Q, interleaved
     const std::size_t samples = link->bufferSamples;
     std::vector<std::complex<float>> block(samples);
     std::vector<std::uint8_t> raw(samples * bytesPerSample);
+    // Samples already taken out of the ring into `block` when `run` fell -
+    // kept for finish()'s drain rather than dropped with the rest.
+    std::size_t pending = 0;
+    bool failed = false;
 
     while (link->run.load(std::memory_order_relaxed)) {
         // A WHOLE BUFFER OR NOTHING - WRITEBUF states a byte count and sends
@@ -914,7 +991,10 @@ void PlutoTx::writerThreadBody(std::shared_ptr<WriterLink> link) {
             lk.unlock();
             got += link->ring.read(block.data() + got, samples - got);
         }
-        if (!link->run.load(std::memory_order_relaxed)) { break; }
+        if (!link->run.load(std::memory_order_relaxed)) {
+            pending = got;
+            break;
+        }
         if (got < samples) {
             std::fill(block.begin() + static_cast<std::ptrdiff_t>(got), block.end(),
                       std::complex<float>(0.0f, 0.0f));
@@ -935,6 +1015,7 @@ void PlutoTx::writerThreadBody(std::shared_ptr<WriterLink> link) {
             // chance that the connection recovers enough to carry it.
             noteFaultOn(*link, "handing the Pluto a transmit buffer",
                         link->stream->lastError());
+            failed = true;
             break;
         }
 
@@ -945,6 +1026,21 @@ void PlutoTx::writerThreadBody(std::shared_ptr<WriterLink> link) {
         }
         link->waitCv.notify_all();
     }
+
+    // FINISH, OR STOP. finish() asks for the queue to be played out: the
+    // transmitter has just written the modulator's ramp to zero into the
+    // ring, and silencing now - as this did for every key-up until 0.99.35 -
+    // drops that ramp and steps the attenuator at full carrier, the key click
+    // the ramp exists to prevent. stop() (a fault, a frozen window, the
+    // destructor) has no ramp at the end of the ring, only carrier nobody is
+    // keying, and silences at once. A connection that has already failed is
+    // never drained.
+    bool drain = false;
+    {
+        std::lock_guard<std::mutex> lk(link->waitMutex);
+        drain = link->drain;
+    }
+    if (drain && !failed) { drainOn(*link, block, pending, raw); }
 
     // THE LAST ACT BUT ONE: make the radio quiet. On the ordinary path this
     // is what stop()'s bounded join is waiting for.

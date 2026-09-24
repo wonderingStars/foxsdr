@@ -41,7 +41,16 @@
 //   - stop() SILENCES BEFORE IT TIDIES, in that order: attenuation to
 //     maximum first, then the LO down, then the buffer. The reverse order
 //     would leave a keyed board transmitting whatever the DAC held for as
-//     long as the tidying took.
+//     long as the tidying took. stop() drops whatever is still queued: it
+//     is the emergency (a fault, a frozen window, the destructor).
+//
+//   - finish() IS THE ORDINARY END, and it plays the queue out FIRST. The
+//     transmitter calls it once it has written the modulator's ramp to zero;
+//     the writer sends what is left in the ring and then kTxBuffersCount
+//     buffers of zeros, and only then silences - so the attenuation step
+//     lands on silence, not on carrier. Until 0.99.35 every key-up went
+//     through stop() and the ramp never left the ring. A faulted board is
+//     not drained.
 //
 //   - ~PlutoTx() CALLS IT. A caller who forgets cannot leave a radio keyed.
 //
@@ -189,6 +198,11 @@ public:
 
     bool start() override;
     void stop() override;
+    // The ordinary end of a transmission: the writer sends everything still
+    // in the ring, then kTxBuffersCount buffers of zeros, and only then
+    // silences the board - see IqSink::finish and writerThreadBody. A
+    // faulted sink is silenced at once, exactly as stop() does it.
+    void finish() override;
     bool running() const override { return running_.load(std::memory_order_relaxed); }
 
     double sampleRateHz() const override { return sampleRateHz_.load(std::memory_order_relaxed); }
@@ -270,6 +284,11 @@ private:
         std::mutex waitMutex;
         std::condition_variable waitCv;
         bool exited = false;
+        // Set with `run` lowered, under waitMutex, by finish() and by nothing
+        // else: the writer then sends what is still queued (and a queue's
+        // worth of zeros behind it) before it silences the board, instead of
+        // dropping it. Read by the writer under the same mutex.
+        bool drain = false;
 
         // Set by the writer once the two quieting writes have been accepted.
         // Read by the tests, and by nothing in the product: it is the only
@@ -309,13 +328,20 @@ private:
     bool programGainLocked(double db);
 
     bool startWritingLocked();
-    void stopWritingLocked();
+    // drain: let the writer send the ring and kTxBuffersCount buffers of
+    // zeros before silencing (finish()); otherwise silence at once (stop()).
+    void stopWritingLocked(bool drain = false);
 
     // THE WRITER'S OWN HELPERS ARE STATIC AND TAKE THE LINK, not `this`. An
     // abandoned writer outlives the PlutoTx; a member function reaching for a
     // member of a destroyed object is precisely the defect the link was
     // introduced to prevent.
     static void writerThreadBody(std::shared_ptr<WriterLink> link);
+    // The finish() path: `pending` samples already taken from the ring into
+    // `block`, then the rest of the ring, then zeros. False if a WRITEBUF
+    // failed (the fault is recorded).
+    static bool drainOn(WriterLink& link, std::vector<std::complex<float>>& block,
+                        std::size_t pending, std::vector<std::uint8_t>& raw);
     static void silenceOn(WriterLink& link);
     static void setErrorOn(WriterLink& link, std::string msg);
     static void noteFaultOn(WriterLink& link, const char* what, const std::string& detail);

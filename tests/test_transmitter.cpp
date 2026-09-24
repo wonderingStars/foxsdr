@@ -62,6 +62,13 @@ public:
         }
         running_ = false;
     }
+    // The ORDINARY end of a transmission - the transmitter promises to call
+    // it only after the ramp has reached zero - counted separately from
+    // stop(), which is the emergency.
+    void finish() override {
+        if (running_) { ++finishes; }
+        stop();
+    }
     bool running() const override { return running_; }
 
     double sampleRateHz() const override { return rate_; }
@@ -125,6 +132,7 @@ public:
 
     std::atomic<int> starts{0};
     std::atomic<int> stops{0};
+    std::atomic<int> finishes{0};
     // Optional external ledger for stops, for a test that lets the
     // transmitter destroy this sink and still needs the count afterwards.
     std::atomic<int>* stopsMirror = nullptr;
@@ -443,6 +451,13 @@ int main() {
             // transmitter that kept going when it felt like it.
             CHECK(tail > 0);
             CHECK(tail <= 6 * kBlockAtSink + 16);
+            // AND THE SINK WAS TOLD THE RAMP IS IN. A radio with a queue
+            // between write() and the air (the Pluto's ring and DAC buffers)
+            // only plays the ramp out if it is FINISHED rather than stopped;
+            // stop() throws the queue away. Once, and never stop() instead.
+            std::printf("key-up by %s: finish() x%d\n", route == 0 ? "PTT release" : "stop()",
+                        raw->finishes.load());
+            CHECK(raw->finishes.load() == 1);
             const std::size_t after = raw->samples();
             tickFor(tx, 60);
             CHECK(raw->samples() == after);
@@ -515,6 +530,9 @@ int main() {
         // anybody asking - which is the only thing that could have done it.
         CHECK(!raw->running());
         CHECK(raw->stops.load() >= 1);
+        // STOPPED, NOT FINISHED: there was no ramp, so there is nothing
+        // queued worth letting through - silence at once.
+        CHECK(raw->finishes.load() == 0);
         const std::size_t after = raw->samples();
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         CHECK(raw->samples() == after);
@@ -548,8 +566,10 @@ int main() {
         CHECK(waitTicking(tx, [&tx] { return !tx.transmitting(); }, std::chrono::seconds(3)));
         CHECK(!tx.latched());
         CHECK(!raw->running());
+        // A faulted radio is stopped at once, never finished.
+        CHECK(raw->finishes.load() == 0);
         const std::string why = tx.lastAutoUnkeyReason();
-        std::printf("fault: \"%s\" / \"%s\"\n", why.c_str(), tx.lastError().c_str());
+        std::printf("fault:\"%s\" / \"%s\"\n", why.c_str(), tx.lastError().c_str());
         CHECK(why.find("faulted") != std::string::npos);
         CHECK(tx.lastError().find("told to fault") != std::string::npos);
     }

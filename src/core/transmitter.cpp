@@ -511,7 +511,9 @@ void Transmitter::stopThread(bool playTail) {
     // THE TAIL IS SPENT INSIDE THIS SAME BOUND, not as a second wait in front
     // of it, so the shutdown budget's one charge of kThreadJoinWait still
     // covers the whole of it. In practice the tail is one block - about ten
-    // milliseconds - and a thread that has not finished it by the bound is
+    // milliseconds - plus the sink's finish() letting its queue reach the air
+    // (on the Pluto at most its ring and two buffers of zeros, about 20 ms at
+    // its slowest rate), and a thread that has not finished it by the bound is
     // inside a sink write, which is itself bounded; run_ is then dropped so it
     // leaves after that write rather than modulating another block.
     bool exited = false;
@@ -567,6 +569,9 @@ void Transmitter::threadBody() {
     const auto blockPeriod = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::duration<double>(static_cast<double>(kAudioBlock) / kAudioRate));
     auto next = std::chrono::steady_clock::now();
+    // Set only when the loop ends because the ramp reached zero - the one
+    // exit after which the radio is FINISHED rather than stopped.
+    bool rampedDown = false;
 
     while (run_.load(std::memory_order_relaxed)) {
         next += blockPeriod;
@@ -631,7 +636,10 @@ void Transmitter::threadBody() {
             }
         }
 
-        if (tailDone) { break; }
+        if (tailDone) {
+            rampedDown = true;
+            break;
+        }
 
         std::unique_lock<std::mutex> lk(waitMutex_);
         waitCv_.wait_until(lk, next, [this] { return !run_.load(std::memory_order_relaxed); });
@@ -640,9 +648,24 @@ void Transmitter::threadBody() {
     // THE LAST ACT: SILENCE THE RADIO, from this thread. Not from whoever
     // joins us - the whole point of the dead-man's handle is that there may
     // be nobody left to join us.
+    //
+    // FINISHED WHEN THE RAMP IS IN, STOPPED OTHERWISE. write() handing the
+    // ramp to the sink is not the ramp reaching the air: the Pluto queues up
+    // to its ring plus the DAC's buffers behind write(), and stop() throws
+    // that queue away and steps the attenuator at full carrier - so until
+    // 0.99.35 the ramp this thread had just written never left the board.
+    // finish() lets the queue play out first. Every other exit (a fault, the
+    // dead-man's handle, run_ dropped by the bounded wait) has no ramp at the
+    // end of the queue, only carrier nobody is keying, and is stopped at once.
     {
         std::lock_guard<std::mutex> lk(stateMutex_);
-        if (sink_ != nullptr) { sink_->stop(); }
+        if (sink_ != nullptr) {
+            if (rampedDown) {
+                sink_->finish();
+            } else {
+                sink_->stop();
+            }
+        }
     }
     // transmitting_ IS NOT CLEARED HERE, and the first draft of this file
     // cleared it - which quietly broke the recovery path. tick() notices a
