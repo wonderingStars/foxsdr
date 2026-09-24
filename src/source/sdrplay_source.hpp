@@ -588,21 +588,20 @@ public:
     bool haveCurrentGainDb() const;
 
     // How many overload events the service has reported since start(). The
-    // event is logged as it happens; this is what a test can assert on.
+    // event is logged by the next read() (never on the service's thread, see
+    // Link::pendingEventLogs); this is what a test can assert on.
     std::uint64_t overloadEvents() const;
 
     // --- stream health ---------------------------------------------------
+    //
+    // THE READER'S HALF of the window: what read() counts on the pipeline's
+    // source thread, under healthMutex. The callback's half - blocks, samples,
+    // overflows, gaps, and when the window opened - is lock-free atomics in
+    // the Link (0.99.32), because the callback may not take a lock; see
+    // streamCallbackA.
     struct StreamHealth {
-        std::uint64_t reads = 0;
-        std::uint64_t withSamples = 0;
-        std::uint64_t samples = 0;
         std::uint64_t timeouts = 0;
-        std::uint64_t overflows = 0;
         std::uint64_t errors = 0;
-        std::int64_t longestGapMs = 0;
-        bool windowOpen = false;
-        std::chrono::steady_clock::time_point windowStart{};
-        std::chrono::steady_clock::time_point lastSamples{};
     };
 
     // The line for the window so far, and the window starts again. Empty when
@@ -648,7 +647,10 @@ private:
         std::atomic<bool> accepting{false};
 
         // read() parks here when the ring is empty; the stream callback
-        // signals after every block it writes.
+        // signals after every block it writes - WITHOUT taking waitMutex
+        // (0.99.32). The waiters re-check on a bound of their own (kReadWait,
+        // updateLocked's 1 ms poll), so a notify that races a waiter costs at
+        // most that bound and never a sample.
         std::mutex waitMutex;
         std::condition_variable waitCv;
 
@@ -666,6 +668,33 @@ private:
         bool faulted = false;
         bool deviceDead = false;
         std::string deadWhat;
+
+        // THE CALLBACK'S HALF OF THE HEALTH WINDOW, LOCK-FREE (0.99.32).
+        //
+        // Until 0.99.32 the stream callback counted into StreamHealth under
+        // healthMutex and, when a window ran out, WROTE THE LINE - the
+        // diagnostic log's lock, fwrite and fflush, on the service's thread.
+        // The 0.99.27 RSP2 report and the 0.97.0 RSPdx report both end with a
+        // window holding exactly ten blocks after that write, and then a
+        // service that never delivered again and answered Uninit with
+        // sdrplay_api_ServiceNotResponding. So the callback now only adds to
+        // these, and read() - on the pipeline's own thread - opens, closes
+        // and writes the window. Accurate to a block at a window boundary,
+        // which is the price of not locking and is invisible in a line that
+        // counts a minute of them.
+        //
+        // Times are steady_clock nanoseconds since its epoch; 0 means "none".
+        std::atomic<std::uint64_t> cbReads{0};
+        std::atomic<std::uint64_t> cbWithSamples{0};
+        std::atomic<std::uint64_t> cbSamples{0};
+        std::atomic<std::uint64_t> cbOverflows{0};
+        std::atomic<std::int64_t> cbLongestGapMs{0};
+        std::atomic<std::int64_t> cbWindowStartNs{0};
+        std::atomic<std::int64_t> cbLastSamplesNs{0};
+
+        // What the EVENT callback would have logged, left for read() to log
+        // (0.99.32, the same rule): one bit per kind of line, see kEventLog*.
+        std::atomic<unsigned int> pendingEventLogs{0};
 
         mutable std::mutex healthMutex;
         StreamHealth health;
@@ -763,8 +792,19 @@ private:
 
     void setName(std::string n);
     static std::string healthLineLocked(Link& link);   // link.healthMutex held
+    // Service thread: atomics only. Never a lock, never the log.
     static void noteBlock(Link& link, std::size_t samples, bool dropped);
+    // The pipeline's source thread (read()): closes a window that has run
+    // out and writes its line, and logs what the event callback left.
     static void maybeWriteHealth(Link& link);
+    static void drainEventLogs(Link& link);
+
+    // The bits of Link::pendingEventLogs.
+    static constexpr unsigned int kEventLogOverload = 1u;
+    static constexpr unsigned int kEventLogOverloadCorrected = 2u;
+    static constexpr unsigned int kEventLogRemoved = 4u;
+    static constexpr unsigned int kEventLogFailure = 8u;
+    static constexpr unsigned int kEventLogMasterLost = 16u;
 
     // Serialises API calls against each other and against
     // open/start/stop/close. The service's callbacks do NOT take it: they
