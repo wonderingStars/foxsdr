@@ -165,7 +165,15 @@ void testLabelPlacement() {
 
     // Does not fit: the label is drawn on a line of its own, and what comes
     // back hashes exactly as the original label did - the widget keeps its id.
-    const char* longLabel = "[Fr\xC3\xA9qu\xC3\xA9\xC3\xB1\xC3\xA7y d\xC3\xAD\xC5\x9Bpl\xC3\xA1y ~~~~]";
+    // Long enough to overflow the 120 px beside the widget in ANY face: on
+    // Windows the UI is lettered in the system's Georgia, on Linux in the
+    // embedded Saira Condensed, and a label sized for the wide face fitted the
+    // narrow one (the 0.99.27 Linux run failed here, the Windows run did not).
+    const char* longLabel = "[Fr\xC3\xA9qu\xC3\xA9\xC3\xB1\xC3\xA7y d\xC3\xAD\xC5\x9Bpl\xC3\xA1y "
+                            "\xC3\xA1nd \xC3\xA1 v\xC3\xA9ry l\xC3\xB6ng tr\xC3\xA1il ~~~~~~~~]";
+    // The premise, in this face: wider than all the room left beside the
+    // 180 px widget in a 300 px window.
+    CHECK(ImGui::CalcTextSize(longLabel).x > 300.0f - 180.0f);
     const char* moved = cascade::gui::labelAboveIfNeeded(longLabel);
     CHECK(moved != longLabel);
     CHECK(ImGui::GetCursorPosY() > y0);
@@ -173,7 +181,8 @@ void testLabelPlacement() {
     CHECK(cascade::gui::visibleEnd(moved) == moved);  // shows nothing itself
 
     // A trId-style label keeps ITS id, the part after "###".
-    const char* translated = "[D\xC3\xA9ma\xC3\xB1\xC3\xA7h\xC3\xA9 tr\xC3\xA8s longue ~~~~]###Frequency display";
+    const char* translated = "[D\xC3\xA9ma\xC3\xB1\xC3\xA7h\xC3\xA9 tr\xC3\xA8s longue, "
+                             "vraiment tr\xC3\xA8s longue ~~~~~~~~]###Frequency display";
     const char* movedT = cascade::gui::labelAboveIfNeeded(translated);
     CHECK(std::strcmp(movedT, "###Frequency display") == 0);
     CHECK(ImHashStr(movedT, 0, 0) == ImHashStr("Frequency display", 0, 0));
