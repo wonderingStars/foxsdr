@@ -7,7 +7,15 @@
 # translated 0x0a inside a TrueType table produces a font that fails to
 # rasterise on someone else's clone with nothing in the diff to show it.
 #
-# Everything else in the tree keeps git's default handling.
 *.ttf binary
 *.otf binary
 *.lib binary
+
+# THE TRANSLATION CATALOGUES ARE LF ON EVERY CHECKOUT, for the same reason.
+# tools/embed-lang.py compiles their exact bytes into core/lang_assets.hpp and
+# test_i18n checks the two agree; with autocrlf=true a plain checkout would
+# turn every line ending into CRLF on disk, and a fresh Windows clone would
+# fail that check while the Linux build passed it.
+resources/lang/*.json text eol=lf
+
+# Everything else in the tree keeps git's default handling.
