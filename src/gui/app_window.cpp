@@ -56,6 +56,7 @@
 // startup update check runs at all, and what the Settings > Updates row says.
 #include "core/package_identity.hpp"
 #include "gui/band_plan_style.hpp"
+#include "gui/rate_follow_status.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
@@ -8564,16 +8565,15 @@ std::unique_ptr<cascade::source::DeviceSource> AppWindow::openDeviceSync(
 void AppWindow::followInputRate() {
     const double rate = pipeline_.activeSource().sampleRateHz();
     if (!(rate > 0.0)) { return; }  // never-opened source; nothing to follow
-    if (!pipeline_.setInputRateHz(rate)) {
-        // The chain kept its old rate (fractional channel rate, or out of
-        // the supported range). The display span then reflects the OLD rate,
-        // which is exactly what the DSP is still doing — surface why.
-        char buf[96];
-        std::snprintf(buf, sizeof(buf),
-                      "DSP rate-follow refused %.0f S/s; chain stays at %.0f",
-                      rate, pipeline_.inputRateHz());
-        sourceError_ = buf;
-    }
+    // A refusal (the chain kept its old rate: no decimation gives an exact
+    // channel, or out of the supported range) is said on the device panel,
+    // because the display span then reflects the OLD rate, which is exactly
+    // what the DSP is still doing. The next ACCEPTED rate takes that line away
+    // again - through 0.99.29 nothing did, so going back to a working rate
+    // left "refused" on screen - and leaves any device error on it alone.
+    const bool accepted = pipeline_.setInputRateHz(rate);
+    sourceError_ = cascade::gui::sourceErrorAfterRateFollow(sourceError_, accepted, rate,
+                                                            pipeline_.inputRateHz());
     // An ACCEPTED rate change finalizes an in-flight IQ take: the WAV header
     // rate is fixed at start(), so recording on across a rate switch would
     // produce a file that replays detuned/off-speed. (A refusal above kept

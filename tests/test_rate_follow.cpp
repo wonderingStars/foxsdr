@@ -39,6 +39,8 @@
 //     decoder stayed on the old one (a beta tester's RTL-SDR at 2.56 MS/s).
 //  8. At one of those rates the audio really is on the right time base: the
 //     CW sidetone leg of 3, repeated on a live switch to 2.56 MS/s.
+//  9. The device panel's "rate-follow refused" line clears on the next
+//     accepted rate and leaves device errors alone.
 //
 // Leg 7's lists come from the drivers themselves wherever the list is the
 // driver's own (RTL-SDR, HackRF, Mirics, RX888, SDRplay). The Airspy, Airspy
@@ -60,10 +62,12 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include "core/pipeline.hpp"
+#include "gui/rate_follow_status.hpp"
 #include "source/hackrf_source.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/rtl2832u.hpp"
@@ -407,6 +411,44 @@ int main() {
         std::printf("leg 8: CW sidetone at 2.56 MS/s = %.1f Hz\n", hz);
         CHECK(std::fabs(hz - 700.0) <= 40.0);
         p.stop();
+    }
+
+    // --- 9. The device panel's red line (gui/rate_follow_status.hpp). A
+    //        refusal is shown; the next ACCEPTED rate clears it, so going back
+    //        to a working rate does not leave "refused" on screen under a
+    //        chain that is running fine (a beta tester's screenshot, 0.99.27);
+    //        and a device error on the same line is never cleared by a rate
+    //        change. Driven through a real Pipeline, so `accepted` is the
+    //        chain's own answer.
+    {
+        using cascade::gui::sourceErrorAfterRateFollow;
+        Pipeline::Config c9 = cfg;
+        c9.sampleRateHz = 2048000.0;
+        Pipeline r(c9);
+        std::string line;
+
+        bool ok = r.setInputRateHz(2000001.0);  // no decimation serves it
+        line = sourceErrorAfterRateFollow(line, ok, 2000001.0, r.inputRateHz());
+        CHECK(!ok);
+        CHECK(line == "DSP rate-follow refused 2000001 S/s; chain stays at 2048000");
+
+        ok = r.setInputRateHz(2048000.0);  // back to the rate it was on: a no-op
+        line = sourceErrorAfterRateFollow(line, ok, 2048000.0, r.inputRateHz());
+        CHECK(ok);
+        CHECK(line.empty());
+
+        r.setInputRateHz(2000001.0);
+        line = sourceErrorAfterRateFollow(line, false, 2000001.0, r.inputRateHz());
+        ok = r.setInputRateHz(2560000.0);  // a different, accepted rate
+        line = sourceErrorAfterRateFollow(line, ok, 2560000.0, r.inputRateHz());
+        CHECK(ok);
+        CHECK(line.empty());
+
+        const std::string deviceError = "rtlsdr: setting the bias tee failed";
+        line = sourceErrorAfterRateFollow(deviceError, true, 2048000.0, 2048000.0);
+        CHECK(line == deviceError);
+        line = sourceErrorAfterRateFollow(std::string(), true, 2048000.0, 2048000.0);
+        CHECK(line.empty());
     }
 
     return testSummary("test_rate_follow");
