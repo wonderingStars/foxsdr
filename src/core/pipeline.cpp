@@ -60,10 +60,72 @@ std::size_t ringCapacityFor(const Pipeline::Config& cfg) {
 // the input.
 constexpr double kTargetChannelRateHz = 200000.0;
 
+// WHEN round(rate / 200 kHz) DOES NOT DIVIDE THE RATE EXACTLY. The channel
+// rate has to be an exact integer (acceptedInputRate below), and the nominal
+// decimation often does not give one for rates radios really offer: 2.56 MS/s
+// on an RTL-SDR is 13 x 196923.08, 2.88 MS/s is 14 x 205714.29, 2.5 MS/s on
+// an Airspy R2 is 13 x 192307.69. Through 0.99.28 those rates were simply
+// REFUSED, and a refusal is worse than it sounds: the radio streams at the new
+// rate while the chain, the spectrum span and every decoder stay on the old
+// one (a beta tester's RTL-SDR at 2.56 MS/s).
+//
+// So when the nominal decimation fails, every OTHER decimation whose channel
+// lands in [kMinChannelRateHz, kMaxChannelRateHz) is tried, and one that
+// divides the rate exactly is used:
+//  - the range is the one the rest of the chain already runs in: at least
+//    150 kHz, the narrowest channel the nominal rule has always produced (a
+//    300 kHz input), and under 300 kHz, which the resampler construction in
+//    setInputRateHz states it relies on and which is the widest channel a
+//    decimation-1 input below 300 kHz has always had;
+//  - a channel that passes the default 150 kHz WFM filter unclipped (the Vfo
+//    clamps a bandwidth to 0.9 x the channel rate, so at least 150 k / 0.9 =
+//    166.7 kHz) is preferred over one that does not: 2.56 MS/s could be
+//    16 x 160 kHz, nearer 200 kHz, but that clips broadcast FM to 144 kHz,
+//    and 10 x 256 kHz does not;
+//  - among those, the channel nearest 200 kHz, and on a tie the wider one.
+// A rate whose nominal decimation already divides it exactly is untouched,
+// so every rate accepted before keeps exactly the channel it had.
+constexpr double kMinChannelRateHz = 150000.0;
+constexpr double kMaxChannelRateHz = 300000.0;  // exclusive
+constexpr double kWfmUnclippedChannelHz = 150000.0 / 0.9;
+
+// The input rates setInputRateHz accepts at all (see acceptedInputRate).
+constexpr double kMinInputRateHz = 8000.0;
+constexpr double kMaxInputRateHz = 61.44e6;
+
 unsigned decimationForInputRate(double rateHz) {
     double d = std::round(rateHz / kTargetChannelRateHz);
     if (d < 1.0) { d = 1.0; }
-    return static_cast<unsigned>(d);
+    const unsigned nominal = static_cast<unsigned>(d);
+    const double nominalChan = rateHz / d;
+    if (nominalChan == std::floor(nominalChan)) { return nominal; }
+    // A non-integer rate has no exact integer channel at any decimation, and
+    // one outside the accepted range is refused anyway (the bound also keeps
+    // the search short for whatever a constructor is handed); both keep the
+    // nominal decimation, and acceptedInputRate refuses them.
+    if (!(rateHz >= kMinChannelRateHz && rateHz <= kMaxInputRateHz) ||
+        rateHz != std::floor(rateHz)) {
+        return nominal;
+    }
+    const unsigned lo = static_cast<unsigned>(std::floor(rateHz / kMaxChannelRateHz)) + 1u;
+    const unsigned hi = static_cast<unsigned>(std::floor(rateHz / kMinChannelRateHz));
+    unsigned best = 0;
+    bool bestUnclipped = false;
+    double bestDist = 0.0;
+    for (unsigned k = lo; k <= hi; ++k) {  // ascending: a tie keeps the wider channel
+        if (std::fmod(rateHz, static_cast<double>(k)) != 0.0) { continue; }
+        const double chan = rateHz / static_cast<double>(k);
+        if (!(chan >= kMinChannelRateHz && chan < kMaxChannelRateHz)) { continue; }
+        const bool unclipped = chan >= kWfmUnclippedChannelHz;
+        const double dist = std::fabs(chan - kTargetChannelRateHz);
+        if (best == 0 || (unclipped && !bestUnclipped) ||
+            (unclipped == bestUnclipped && dist < bestDist)) {
+            best = k;
+            bestUnclipped = unclipped;
+            bestDist = dist;
+        }
+    }
+    return best != 0 ? best : nominal;
 }
 
 // Input-rate acceptance for setInputRateHz (documented in the header):
@@ -71,8 +133,8 @@ unsigned decimationForInputRate(double rateHz) {
 // needs an exact integer L/M ratio for channelRate -> 48 kHz — a fractional
 // channel rate could only be approximated, silently detuning all audio.
 // A NaN rate fails the range test (every comparison with NaN is false).
-constexpr double kMinInputRateHz = 8000.0;
-constexpr double kMaxInputRateHz = 61.44e6;
+// (kMinInputRateHz / kMaxInputRateHz are defined above, beside the
+// decimation search that is bounded by them too.)
 
 // A hardware rate readback is a double the device COMPUTED from a master
 // clock and an integer divider, so it is very often not the round number that
@@ -120,6 +182,11 @@ bool acceptedInputRate(double rateHz, unsigned* decimOut, double* chanRateOut,
 // bandwidth of +/-75 kHz deviation with 15 kHz audio is ~180 kHz; 150 kHz is
 // the conventional receiver setting and fits the 200 kHz channel's 0.9x clamp).
 constexpr double kDefaultVfoBandwidthHz = 150000.0;
+// The decimation search above prefers channels this filter fits unclipped;
+// it is declared there, before this constant, so the two are tied here.
+static_assert(kWfmUnclippedChannelHz * 0.9 - kDefaultVfoBandwidthHz < 1e-6 &&
+                  kDefaultVfoBandwidthHz - kWfmUnclippedChannelHz * 0.9 < 1e-6,
+              "kWfmUnclippedChannelHz must be the default WFM bandwidth / 0.9");
 
 // FM discriminator scaling. QuadDemod emits instantaneous frequency in
 // rad/sample, so a full +/-75 kHz broadcast-WFM deviation peaks at
@@ -1039,10 +1106,11 @@ bool Pipeline::setInputRateHz(double rateHz) {
         squelch_.setThresholdDb(squelchDb_);
 
         // Resampler ratio arithmetic: chanRate is proven integral by
-        // acceptedInputRate and is < 300 kHz for every accepted rate, so the
+        // acceptedInputRate and is < 300 kHz for every accepted rate (the
+        // decimation search never leaves [150 kHz, 300 kHz)), so the
         // unsigned casts are exact; RationalResampler reduces L/M by gcd
         // internally, making channelRate -> 48 kHz exact — e.g. 150000 ->
-        // 8/25, 187500 -> 32/125, 200000 -> 6/25.
+        // 8/25, 187500 -> 32/125, 200000 -> 6/25, 256000 -> 3/16.
         resampler_ = cascade::dsp::RationalResampler(
             static_cast<unsigned>(kAudioRateHz + 0.5),
             static_cast<unsigned>(chanRate + 0.5));
@@ -1063,8 +1131,9 @@ bool Pipeline::setInputRateHz(double rateHz) {
 
         // New rate regime: relearn the gain and the S-meter from neutral.
         // (Their per-sample time constants stay tuned for ~200 kHz channels,
-        // which every accepted rate >= 300 kHz lands near; below that the
-        // ballistics merely slow proportionally — an accepted tradeoff.)
+        // which every accepted rate >= 300 kHz lands near - within 150 to
+        // 300 kHz; below that the ballistics merely slow proportionally, and
+        // near 300 kHz they run up to 1.5x faster — an accepted tradeoff.)
         agc_.reset();
         meter_.reset();
 

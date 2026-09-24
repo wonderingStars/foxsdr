@@ -372,6 +372,48 @@ int main() {
     }
 
     // ------------------------------------------------------------------
+    // setSpan: an UNZOOMED view follows the full span when the rate grows.
+    //
+    // A beta tester (RTL-SDR, 0.99.27): "when I change the sample rate the
+    // spectrum width does not change". Reproduced on this desk's RTL-SDR:
+    // 2.048 -> 2.4 MS/s was accepted by the chain (channel 200 kHz) and the
+    // spectrum still said SPAN 2.00 MHz, left over from the generator's
+    // 2 MS/s at startup. The keep-the-zoom rule treated a view that simply
+    // WAS the whole old span as a zoom, because it still fitted inside the
+    // new, wider one - so every rate increase kept the old width.
+    // ------------------------------------------------------------------
+    {
+        FreqScale fs;
+        fs.setSpan(100e6, 2.0e6);  // unzoomed: [99, 101] MHz
+        fs.setSpan(100e6, 2.4e6);  // the rate goes up, nothing was zoomed
+        CHECK_NEAR(fs.viewLowHz(), 98.8e6, 1e-3);
+        CHECK_NEAR(fs.viewHighHz(), 101.2e6, 1e-3);
+
+        // Same after a retune that the wider span still covers.
+        fs.setSpan(100.1e6, 2.56e6);
+        CHECK_NEAR(fs.viewLowHz(), 98.82e6, 1e-3);
+        CHECK_NEAR(fs.viewHighHz(), 101.38e6, 1e-3);
+
+        // A view that zoomAt clamped back to the whole span is unzoomed too.
+        fs.zoomAt(0.5, 4.0);
+        fs.zoomAt(0.3, 0.001);  // zoom right out: clamps to the full span
+        fs.setSpan(100.1e6, 3.2e6);
+        CHECK_NEAR(fs.viewLowHz(), 98.5e6, 1e-3);
+        CHECK_NEAR(fs.viewHighHz(), 101.7e6, 1e-3);
+
+        // A REAL zoom still survives a rate increase: that is what the rule
+        // is for, and the tester's own screenshot (SPAN 250 kHz) was one.
+        fs.setSpan(100e6, 2.0e6);
+        fs.zoomAt(0.5, 8.0);  // 250 kHz around 100 MHz
+        const double zLow = fs.viewLowHz();
+        const double zHigh = fs.viewHighHz();
+        CHECK_NEAR(zHigh - zLow, 250e3, 1e-3);
+        fs.setSpan(100e6, 2.4e6);
+        CHECK_NEAR(fs.viewLowHz(), zLow, 1e-3);
+        CHECK_NEAR(fs.viewHighHz(), zHigh, 1e-3);
+    }
+
+    // ------------------------------------------------------------------
     // setSpan: preserves a still-valid zoom window, resets an invalid one
     // (outside the new span OR below the new minimum span).
     // ------------------------------------------------------------------

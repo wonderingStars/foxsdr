@@ -435,16 +435,23 @@ public:
     // false and changes NOTHING (the chain keeps running at the old rate):
     //  1. rateHz in [8 kHz, 61.44 MHz] (the range SDR front ends this app
     //     targets can actually deliver);
-    //  2. rateHz / decim is an INTEGER, where decim = round(rateHz / 200 kHz)
-    //     clamped to >= 1. The integer requirement is what keeps the audio
-    //     resampler exact: RationalResampler takes an integer L/M ratio
-    //     (channelRate -> 48 kHz, reduced by gcd internally), so a fractional
-    //     channel rate could only be approximated, silently detuning audio.
-    //     Note the bounds are necessary, not sufficient — e.g. 61.44 MHz
-    //     itself is refused (decim 307 gives a fractional channel rate).
-    // The decim policy lands the channel rate in [150 kHz, 250 kHz] for every
-    // accepted rate >= 300 kHz; below 300 kHz decim is 1 and the channel rate
-    // equals the input rate.
+    //  2. rateHz / decim is an INTEGER for some decimation the chain can use.
+    //     decim = round(rateHz / 200 kHz), clamped to >= 1, whenever that
+    //     divides the rate exactly; otherwise the decimation whose channel is
+    //     an exact integer in [150 kHz, 300 kHz), preferring a channel of at
+    //     least 166.7 kHz (the default 150 kHz WFM filter then fits the Vfo's
+    //     0.9x clamp unclipped) and among those the one nearest 200 kHz - so
+    //     2.56 MS/s runs a 256 kHz channel and 2.88 MS/s a 192 kHz one
+    //     (pipeline.cpp, decimationForInputRate). The integer requirement is
+    //     what keeps the audio resampler exact: RationalResampler takes an
+    //     integer L/M ratio (channelRate -> 48 kHz, reduced by gcd
+    //     internally), so a fractional channel rate could only be
+    //     approximated, silently detuning audio. A rate with no such
+    //     decimation (a non-integer rate, or e.g. 2000001 = 3 x 666667) is
+    //     refused.
+    // The channel rate is in [150 kHz, 300 kHz) for every accepted rate
+    // >= 300 kHz (in [150 kHz, 250 kHz] whenever the nominal decimation is
+    // used); below 300 kHz decim is 1 and the channel rate equals the input.
     //
     // Concurrency (mirrors the setSource quiesce handshake, but for the DSP
     // thread — the source thread keeps running throughout): all under

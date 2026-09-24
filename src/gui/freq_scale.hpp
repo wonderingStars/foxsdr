@@ -24,10 +24,12 @@ namespace cascade::gui {
 class FreqScale {
 public:
     // Sets the full baseband span [centerHz - rate/2, centerHz + rate/2].
-    // The current view is PRESERVED when it still satisfies the class
-    // invariant against the new span (entirely inside it, and at least the
-    // new minimum span rate/1000 wide) — so a small retune does not throw
-    // away the user's zoom. Otherwise the view resets to the full span.
+    // A ZOOMED view (narrower than the old full span) is PRESERVED when it
+    // still satisfies the class invariant against the new span (entirely
+    // inside it, and at least the new minimum span rate/1000 wide) — so a
+    // small retune or a rate change does not throw away the user's zoom.
+    // Otherwise, and always when the view was the whole old span, the view
+    // resets to the full span, so an unzoomed display widens with the rate.
     // A non-finite or non-positive rate (or non-finite center) collapses the
     // scale to the inert default state rather than storing a poisoned span.
     void setSpan(double centerHz, double sampleRateHz);

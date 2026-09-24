@@ -165,8 +165,11 @@ std::vector<int> biphaseLevels(const std::vector<std::uint8_t>& dataBits) {
 // the whole transmission costs a few hundred bytes of state.
 class FmStereoSource : public cascade::source::IqSource {
 public:
-    explicit FmStereoSource(std::vector<int> rdsLevels)
-        : levels_(std::move(rdsLevels)) {}
+    // `rateHz` is the rate the transmitter is synthesised at. Every leg but
+    // one uses kInputRateHz; the rate-follow leg at the end runs it at a
+    // radio's own rate, so the chain's decimation is exercised too.
+    explicit FmStereoSource(std::vector<int> rdsLevels, double rateHz = kInputRateHz)
+        : levels_(std::move(rdsLevels)), rate_(rateHz) {}
 
     bool start() override {
         running_ = true;
@@ -175,7 +178,7 @@ public:
     void stop() override { running_ = false; }
     bool running() const override { return running_; }
     bool selfPaced() const override { return false; }
-    double sampleRateHz() const override { return kInputRateHz; }
+    double sampleRateHz() const override { return rate_; }
     bool setSampleRateHz(double) override { return false; }  // fixed-rate
     double centerFrequencyHz() const override { return centerHz_; }
     bool setCenterFrequencyHz(double hz) override {
@@ -185,9 +188,9 @@ public:
 
     std::size_t read(std::complex<float>* dst, std::size_t n) override {
         for (std::size_t i = 0; i < n; ++i) {
-            const double t = static_cast<double>(sample_) / kInputRateHz;
+            const double t = static_cast<double>(sample_) / rate_;
             ++sample_;
-            phase_ += kTwoPi * kPeakDeviationHz * mpx(t) / kInputRateHz;
+            phase_ += kTwoPi * kPeakDeviationHz * mpx(t) / rate_;
             if (phase_ > kTwoPi) { phase_ -= kTwoPi; }
             if (phase_ < -kTwoPi) { phase_ += kTwoPi; }
             dst[i] = std::complex<float>(static_cast<float>(std::cos(phase_)),
@@ -228,6 +231,7 @@ private:
     }
 
     std::vector<int> levels_;
+    double rate_ = kInputRateHz;
     std::uint64_t sample_ = 0;
     double phase_ = 0.0;
     double centerHz_ = 100000000.0;
@@ -940,6 +944,66 @@ int main() {
         // takes behind for autopsy, as the recorder's own tests do.
         std::error_code ec;
         std::filesystem::remove_all(recDir, ec);
+    }
+
+    // --- Stereo and RDS at a radio rate the round-to-200-kHz rule refused ----
+    //
+    // 2.56 MS/s is on every RTL-SDR's rate menu. round(2.56 M / 200 k) = 13
+    // gives a 196923.08 Hz channel, which the exact 48 kHz resampler cannot
+    // take, and through 0.99.28 the chain REFUSED the rate and stayed on the
+    // previous one while the radio streamed at the new one: pilot, subcarrier
+    // and RDS all landed 25% off where the decoders looked for them (a beta
+    // tester's report, "the spectrum width does not change"). The chain now
+    // picks a decimation whose channel is an exact integer (2.56 M / 10 =
+    // 256 kHz), so the same transmitter must decode here exactly as it does at
+    // 250 kHz above. The pipeline is built at 2 MS/s, as the application
+    // builds it, and follows the radio's rate the way followInputRate does.
+    {
+        constexpr double kRadioRateHz = 2560000.0;
+        cascade::core::Pipeline::Config rcfg;
+        rcfg.sampleRateHz = 2000000.0;
+        rcfg.fftSize = 1024;
+        rcfg.averagingAlpha = 0.5f;
+        rcfg.audioEnabled = false;
+        cascade::core::Pipeline rp(rcfg);
+        rp.setVfoBandwidthHz(kVfoBandwidthHz);
+        rp.setSquelchDb(-120.0f);
+        rp.setStereoEnabled(true);
+        rp.setSource(std::make_unique<FmStereoSource>(
+            biphaseLevels(buildRdsBits(kPi, ps, rt, kPty, 200)), kRadioRateHz));
+        const bool followed = rp.setInputRateHz(kRadioRateHz);
+        std::printf("2.56 MS/s: followed=%d input=%.0f channel=%.2f\n", followed ? 1 : 0,
+                    rp.inputRateHz(), rp.channelRateHz());
+        CHECK(followed);
+        CHECK(rp.inputRateHz() == kRadioRateHz);
+        CHECK(rp.channelRateHz() == 256000.0);
+        rp.start();
+        const bool rateDecoded = waitFor(
+            [&] {
+                const cascade::core::RdsSnapshot s = rp.rdsSnapshot();
+                return s.state.psValid && s.state.piValid && rp.pilotLocked() &&
+                       rp.audioSamplesProduced() > 48000;
+            },
+            30000);
+        const cascade::core::RdsSnapshot rs = rp.rdsSnapshot();
+        std::printf("2.56 MS/s rds: synced=%d pi=%04X ps=\"%s\" pilot=%d level=%.2f\n",
+                    rs.synced ? 1 : 0, rs.state.pi, rs.state.ps.c_str(),
+                    rp.pilotLocked() ? 1 : 0, rp.pilotLevel());
+        CHECK(rateDecoded);
+        CHECK(rs.state.pi == kPi);
+        CHECK(rs.state.ps == ps);
+        CHECK(rp.stereoActive());
+        std::vector<float> rl(kWin, 0.0f);
+        std::vector<float> rr(kWin, 0.0f);
+        const std::size_t rgot = rp.audioTapStereo(rl.data(), rr.data(), kWin);
+        CHECK(rgot == kWin);
+        const double rSepDb =
+            20.0 * std::log10((rms(rl, rgot) + 1e-12) / (rms(rr, rgot) + 1e-12));
+        std::printf("2.56 MS/s stereo: L rms=%.5f separation=%.1f dB\n", rms(rl, rgot),
+                    rSepDb);
+        CHECK(rms(rl, rgot) > 0.01);
+        CHECK(rSepDb > 12.0);
+        rp.stop();
     }
 
     return testSummary("test_pipeline_audio");

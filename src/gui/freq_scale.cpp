@@ -71,7 +71,18 @@ void FreqScale::setSpan(double centerHz, double sampleRateHz) {
     // invariant against the NEW span: entirely inside it and no narrower
     // than the new zoom floor. (The floor check also covers the very first
     // setSpan, where the inert zero-width view can never qualify.)
-    const bool keepView = viewLow_ >= newLow && viewHigh_ <= newHigh &&
+    //
+    // ONLY A ZOOM IS KEPT. A view that is the whole old span is not a zoom,
+    // and until this was checked it passed the fit test every time the rate
+    // went UP - the old span always fits inside a wider one - so the spectrum
+    // kept the old width after every increase: a beta tester's RTL-SDR went
+    // 2.048 -> 2.4 MS/s with the chain following and SPAN still read 2.00 MHz
+    // (the generator's width from startup). The tolerance absorbs the
+    // rounding zoomAt leaves when it clamps a zoom-out back to the full span.
+    const double oldFull = fullHigh_ - fullLow_;
+    const bool wasZoomed =
+        (viewHigh_ - viewLow_) < oldFull - std::max(1e-9 * oldFull, 1e-6);
+    const bool keepView = wasZoomed && viewLow_ >= newLow && viewHigh_ <= newHigh &&
                           (viewHigh_ - viewLow_) >= sampleRateHz * kMinSpanFraction;
     fullLow_ = newLow;
     fullHigh_ = newHigh;

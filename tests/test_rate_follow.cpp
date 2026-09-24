@@ -30,6 +30,23 @@
 //     switch is impossible by construction — setInputRateHz holds the same
 //     control mutex stop() takes, per the header contract — so the joinable
 //     boundary case is the instant after the switch returns.)
+//  7. EVERY rate a native driver offers is accepted, with an exact integer
+//     channel rate inside the range the chain is built for. Through 0.99.28
+//     round(rate / 200 kHz) was the only decimation tried, so 2.16, 2.56 and
+//     2.88 MS/s on an RTL-SDR (and 2.5 MS/s on an Airspy R2, 12.5 on a
+//     HackRF, 500 k on an SDRplay, three Pluto rates) were refused: the radio
+//     streamed at the new rate while the chain, the spectrum span and every
+//     decoder stayed on the old one (a beta tester's RTL-SDR at 2.56 MS/s).
+//  8. At one of those rates the audio really is on the right time base: the
+//     CW sidetone leg of 3, repeated on a live switch to 2.56 MS/s.
+//
+// Leg 7's lists come from the drivers themselves wherever the list is the
+// driver's own (RTL-SDR, HackRF, Mirics, RX888, SDRplay). The Airspy, Airspy
+// HF+ and Pluto menus are read from the hardware at open, so those are the
+// values this repository's own fakes and fixtures give them (Airspy R2 and
+// Mini in test_airspy_source, HF+ in airspyhf_fake_usb.hpp, the AD9361 range
+// "[2083333 1 61440000]" in test_pluto_source, turned into the menu
+// PlutoSource::supportedSampleRatesHz builds from it).
 //
 // Every wait loop is deadline-bounded on steady_clock (<= 30 s) so a liveness
 // bug fails the test instead of hanging it; ctest's 120 s per-test timeout is
@@ -47,6 +64,11 @@
 #include <vector>
 
 #include "core/pipeline.hpp"
+#include "source/hackrf_source.hpp"
+#include "source/mirisdr_source.hpp"
+#include "source/rtl2832u.hpp"
+#include "source/rx888_protocol.hpp"
+#include "source/sdrplay_source.hpp"
 #include "source/siggen_source.hpp"
 #include "test_check.hpp"
 
@@ -283,6 +305,108 @@ int main() {
             std::chrono::duration<double>(steady_clock::now() - t0).count();
         CHECK(p.running() == false);
         CHECK(stopSec < 5.0);
+    }
+
+    // --- 7. Every rate every native driver offers is followed. -------------
+    {
+        struct Menu {
+            const char* driver;
+            std::vector<double> rates;
+        };
+        std::vector<Menu> menus;
+        menus.push_back({"RTL-SDR", cascade::source::Rtl2832u::supportedRatesHz()});
+        menus.push_back({"HackRF", cascade::source::HackRfSource().supportedSampleRatesHz()});
+        menus.push_back({"Mirics", cascade::source::MiriSdrSource().supportedSampleRatesHz()});
+        menus.push_back({"RX888", cascade::source::rx888::supportedRatesHz(
+                                      cascade::source::rx888::kDefaultAdcRateHz)});
+        menus.push_back({"SDRplay", cascade::source::sdrPlaySupportedRatesHz()});
+        menus.push_back({"Airspy R2", {2.5e6, 10.0e6}});
+        menus.push_back({"Airspy Mini", {3.0e6, 6.0e6}});
+        menus.push_back({"Airspy HF+", {192000.0, 256000.0, 384000.0, 456000.0, 768000.0,
+                                        912000.0}});
+        menus.push_back({"Pluto", {2083333.0, 2.5e6, 3.0e6, 4.0e6, 5.0e6, 6.0e6, 8.0e6,
+                                   10.0e6, 12.0e6, 15.0e6, 20.0e6, 25.0e6, 30.72e6, 40.0e6,
+                                   50.0e6, 61.44e6}});
+        // The generator, the SoapySDR fallback menu and the B200 through UHD.
+        menus.push_back({"SoapySDR fallback", {1.0e6, 2.0e6, 4.0e6, 8.0e6}});
+
+        Pipeline q(cfg);  // never started: the rebuild path alone
+        int refused = 0;
+        for (const Menu& m : menus) {
+            CHECK(!m.rates.empty());
+            for (const double r : m.rates) {
+                const bool ok = q.setInputRateHz(r);
+                const double chan = q.channelRateHz();
+                const bool integral = chan == std::floor(chan);
+                // Below 300 kHz the channel IS the input (decimation 1); from
+                // 300 kHz up it lies in [150 kHz, 300 kHz), the range every
+                // block after the VFO is built for (pipeline.cpp).
+                const bool inRange = (r < 300000.0) ? (chan == r)
+                                                    : (chan >= 150000.0 && chan < 300000.0);
+                if (!ok || q.inputRateHz() != r || !integral || !inRange) {
+                    ++refused;
+                    std::printf("  %s %.0f S/s: followed=%d chain=%.0f channel=%.2f\n",
+                                m.driver, r, ok ? 1 : 0, q.inputRateHz(), chan);
+                }
+                CHECK(ok);
+                CHECK(q.inputRateHz() == r);
+                CHECK(integral);
+                CHECK(inRange);
+                // A rate the round-to-200-kHz rule already accepted keeps
+                // exactly the channel it has always had.
+                const double nominal = expectedChannelRate(r);
+                if (nominal == std::floor(nominal)) { CHECK(chan == nominal); }
+            }
+        }
+        std::printf("leg 7: %d offered rate(s) not followed\n", refused);
+        CHECK(refused == 0);
+
+        // The three RTL-SDR rates the tester could not use, with the channel
+        // each one is now given: the one nearest 200 kHz among those wide
+        // enough to pass the 150 kHz WFM filter unclipped (>= 150 k / 0.9).
+        CHECK(q.setInputRateHz(2160000.0));
+        CHECK(q.channelRateHz() == 216000.0);
+        CHECK(q.setInputRateHz(2560000.0));
+        CHECK(q.channelRateHz() == 256000.0);  // not 160 kHz, which would clip WFM
+        CHECK(q.setInputRateHz(2880000.0));
+        CHECK(q.channelRateHz() == 192000.0);
+
+        // A rate that no decimation turns into an exact integer channel is
+        // still refused, and still changes nothing.
+        CHECK(q.setInputRateHz(2000001.0) == false);  // 3 x 666667: no divisor fits
+        CHECK(q.setInputRateHz(2560000.5) == false);  // not an integer at all
+        CHECK(q.inputRateHz() == 2880000.0);
+        CHECK(q.channelRateHz() == 192000.0);
+
+        // A pipeline CONSTRUCTED at such a rate builds the same chain the
+        // runtime switch does, rather than a 196923.08 Hz channel.
+        Pipeline::Config c256 = cfg;
+        c256.sampleRateHz = 2560000.0;
+        Pipeline q256(c256);
+        CHECK(q256.channelRateHz() == 256000.0);
+    }
+
+    // --- 8. The time base at 2.56 MS/s: a carrier 100 kHz off the centre,
+    //        tuned by the VFO, must come out as the 700 Hz CW sidetone. A
+    //        chain left at the old rate would put the VFO 21.9 kHz off the
+    //        carrier (100 k * (1 - 2.0/2.56)) and hear nothing near 700 Hz.
+    {
+        auto src = std::make_unique<cascade::source::SigGenSource>(2560000.0);
+        src->sigGen().setTone(0, 100000.0, 0.0f);
+        src->sigGen().setNoiseFloorDb(-300.0f);
+        p.setSource(std::move(src));
+        CHECK(p.setInputRateHz(2560000.0));
+        CHECK(p.channelRateHz() == 256000.0);
+        p.setDemodMode(cascade::dsp::DemodMode::CW);
+        p.setVfoOffsetHz(100000.0);
+        p.start();
+        CHECK(p.running());
+        audioBase = p.audioSamplesProduced();
+        CHECK(waitAudioAdvance(p, audioBase, 3 * 4096));
+        const double hz = dominantTapHz(p);
+        std::printf("leg 8: CW sidetone at 2.56 MS/s = %.1f Hz\n", hz);
+        CHECK(std::fabs(hz - 700.0) <= 40.0);
+        p.stop();
     }
 
     return testSummary("test_rate_follow");
